@@ -8,7 +8,9 @@
     singleSummary: Object.freeze({ base: 800, perUnit: 160, floor: 1024, ceiling: 4096 }),
     batchSummary: Object.freeze({ base: 1400, perUnit: 420, floor: 2048, ceiling: 12288 }),
     figure: Object.freeze({ base: 3200, perUnit: 1400, floor: 6144, ceiling: 24576 }),
-    crossFigure: Object.freeze({ base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 })
+    crossFigure: Object.freeze({ base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 }),
+    articleChat: Object.freeze({ base: 4096, perUnit: 512, floor: 4096, ceiling: 12288 }),
+    panelChat: Object.freeze({ base: 2048, perUnit: 384, floor: 2048, ceiling: 4096 })
   });
 
   function roundUp256(value) {
@@ -45,6 +47,20 @@
     const units = Math.max(1, Number(options.units) || 0);
     const initial = Math.min(ceiling, Math.max(rule.floor, roundUp256(rule.base + rule.perUnit * units)));
     return { initial, ceiling, mode: 'auto' };
+  }
+
+  function computeInputTokenBudget(options = {}) {
+    const contextWindowTokens = Math.max(1, Math.floor(Number(options.contextWindowTokens) || 0));
+    const outputTokens = Math.max(0, Math.floor(Number(options.outputTokens) || 0));
+    const reservedTokens = Math.max(0, Math.floor(Number(options.reservedTokens) || 0));
+    const systemTokens = Math.max(0, Math.floor(Number(options.systemTokens) || 0));
+    return {
+      contextWindowTokens,
+      outputTokens,
+      reservedTokens,
+      systemTokens,
+      available: Math.max(0, contextWindowTokens - outputTokens - reservedTokens - systemTokens)
+    };
   }
 
   function suggestedLimit(error) {
@@ -133,5 +149,10 @@
     });
   }
 
-  return { RULES, computeOutputTokenBudget, createTokenManagedAdapter };
+  return {
+    RULES,
+    computeOutputTokenBudget,
+    computeInputTokenBudget,
+    createTokenManagedAdapter
+  };
 });

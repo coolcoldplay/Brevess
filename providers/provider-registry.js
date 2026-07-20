@@ -6,23 +6,23 @@
   const DEFINITIONS = {
     openai: {
       label: 'OpenAI', defaultModel: 'gpt-5-mini',
-      supportsVision: true, visionInputFormat: 'openai'
+      supportsVision: true, visionInputFormat: 'openai', contextWindowTokens: 128000
     },
     anthropic: {
       label: 'Anthropic Claude', defaultModel: 'claude-sonnet-4-6',
-      supportsVision: true, visionInputFormat: 'anthropic'
+      supportsVision: true, visionInputFormat: 'anthropic', contextWindowTokens: 200000
     },
     gemini: {
       label: 'Google Gemini', defaultModel: 'gemini-3.5-flash',
-      supportsVision: true, visionInputFormat: 'gemini'
+      supportsVision: true, visionInputFormat: 'gemini', contextWindowTokens: 128000
     },
     deepseek: {
       label: 'DeepSeek', defaultModel: 'deepseek-v4-flash',
-      supportsVision: false, visionInputFormat: 'none'
+      supportsVision: false, visionInputFormat: 'none', contextWindowTokens: 65536
     },
     'openai-compatible': {
       label: '国内模型与兼容接口', defaultModel: '', requiresBaseUrl: true,
-      supportsVision: false, visionInputFormat: 'openai'
+      supportsVision: false, visionInputFormat: 'openai', contextWindowTokens: 32768
     }
   };
 
@@ -112,6 +112,18 @@
     };
   }
 
+  function validContextWindowOverride(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 8192 || numeric > 2000000) return null;
+    return Math.round(numeric / 1024) * 1024;
+  }
+
+  function getProviderContextWindowTokens(providerId, _config = {}, override = null) {
+    const explicit = validContextWindowOverride(override);
+    if (explicit) return explicit;
+    return DEFINITIONS[providerId]?.contextWindowTokens || 32768;
+  }
+
   function isHttpUrl(value) {
     try {
       const url = new URL(value);
@@ -142,6 +154,7 @@
     getProviderDefinitions,
     getCompatibleProviderPresets,
     getProviderCapabilities,
+    getProviderContextWindowTokens,
     validateProviderConfig,
     createProviderAdapter
   };

@@ -218,6 +218,13 @@
     };
   }
 
+  function normalizeContextWindowTokens(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 8192 || numeric > 2000000) return null;
+    return Math.round(numeric / 1024) * 1024;
+  }
+
   function normalizeLegacyAutoCap(value) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 ||
         value === 4096) return null;
@@ -268,6 +275,9 @@
     normalized.config = config;
     normalized.capabilities = capabilities;
     normalized.tokenPolicy = createTokenPolicy(value.tokenPolicy);
+    normalized.contextWindowTokens = normalizeContextWindowTokens(
+      value.contextWindowTokens
+    );
     return normalized;
   }
 
@@ -278,6 +288,7 @@
       providerId: 'openai',
       config,
       capabilities: { vision: true },
+      contextWindowTokens: null,
       tokenPolicy: { mode: 'auto', autoCap: null }
     });
   }
@@ -563,6 +574,7 @@
     createDefaultSettings,
     createDefaultViewOverrides,
     createTokenPolicy,
+    normalizeContextWindowTokens,
     normalizeTaskRoutes,
     normalizeProfile,
     legacyProfileId,

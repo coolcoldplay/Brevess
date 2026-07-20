@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   RULES,
   computeOutputTokenBudget,
+  computeInputTokenBudget,
   createTokenManagedAdapter
 } = require('../core/token-budget.js');
 
@@ -13,6 +14,38 @@ test('defines output budget rules for every request kind', () => {
   assert.deepEqual(RULES.batchSummary, { base: 1400, perUnit: 420, floor: 2048, ceiling: 12288 });
   assert.deepEqual(RULES.figure, { base: 3200, perUnit: 1400, floor: 6144, ceiling: 24576 });
   assert.deepEqual(RULES.crossFigure, { base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 });
+  assert.deepEqual(RULES.articleChat, { base: 4096, perUnit: 512, floor: 4096, ceiling: 12288 });
+  assert.deepEqual(RULES.panelChat, { base: 2048, perUnit: 384, floor: 2048, ceiling: 4096 });
+});
+
+test('keeps article chat and Panel output budgets within their independent floors and ceilings', () => {
+  assert.deepEqual(computeOutputTokenBudget('articleChat', { units: 1 }), {
+    initial: 4608, ceiling: 12288, mode: 'auto'
+  });
+  assert.deepEqual(computeOutputTokenBudget('articleChat', { units: 100 }), {
+    initial: 12288, ceiling: 12288, mode: 'auto'
+  });
+  assert.deepEqual(computeOutputTokenBudget('panelChat', { units: 1 }), {
+    initial: 2560, ceiling: 4096, mode: 'auto'
+  });
+  assert.deepEqual(computeOutputTokenBudget('panelChat', { units: 100 }), {
+    initial: 4096, ceiling: 4096, mode: 'auto'
+  });
+});
+
+test('subtracts output and fixed reservations from the model context window', () => {
+  assert.deepEqual(computeInputTokenBudget({
+    contextWindowTokens: 32768,
+    outputTokens: 8192,
+    reservedTokens: 2048,
+    systemTokens: 1024
+  }), {
+    contextWindowTokens: 32768,
+    outputTokens: 8192,
+    reservedTokens: 2048,
+    systemTokens: 1024,
+    available: 21504
+  });
 });
 
 test('computes rounded auto budgets with request floors and ceilings', () => {

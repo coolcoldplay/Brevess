@@ -47,6 +47,7 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   assert.equal(settings.globalProfileId, 'profile_default_openai');
   assert.deepEqual(settings.profileOrder, ['profile_default_openai']);
   assert.equal(settings.profiles.profile_default_openai.config.apiKey, '');
+  assert.equal(settings.profiles.profile_default_openai.contextWindowTokens, null);
   assert.deepEqual(settings.taskRoutes, Object.fromEntries(
     TASK_ROUTE_KEYS.map(taskId => [taskId, { mode: 'global', profileId: null }])
   ));
@@ -60,6 +61,24 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   assert.equal(getEffectiveMode(settings), 'regex');
   settings.consentGranted = true;
   assert.equal(getEffectiveMode(settings), 'llm');
+});
+
+test('normalizes an optional advanced context-window override independently of output policy', () => {
+  const profile = normalizeProfile('profile_context_override', {
+    name: 'Context override',
+    providerId: 'openai-compatible',
+    config: { apiKey: 'key', model: 'custom-model', baseUrl: 'https://example.com/v1' },
+    contextWindowTokens: 131111,
+    tokenPolicy: { mode: 'manual', manualMax: 4096 }
+  });
+  assert.equal(profile.contextWindowTokens, 131072);
+  assert.equal(profile.tokenPolicy.manualMax, 4096);
+
+  const invalid = normalizeProfile('profile_context_invalid', {
+    name: 'Invalid context', providerId: 'deepseek',
+    config: { apiKey: 'key', model: 'model' }, contextWindowTokens: 4096
+  });
+  assert.equal(invalid.contextWindowTokens, null);
 });
 
 test('stores four bounded editable Panel follow-up prompts with defaults for blanks', () => {

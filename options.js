@@ -67,7 +67,7 @@ function bindEvents() {
   });
   ['profileName', 'providerId', 'model', 'apiKey', 'baseUrl', 'authHeader', 'authPrefix',
     'jsonMode', 'supportsVision', 'tokenModeAuto', 'tokenModeManual', 'autoTokenCap',
-    'manualMaxTokens'].forEach(id => {
+    'manualMaxTokens', 'contextWindowTokens'].forEach(id => {
       document.getElementById(id).addEventListener('input', markProfileEditorDirty);
       document.getElementById(id).addEventListener('change', markProfileEditorDirty);
     });
@@ -1369,6 +1369,8 @@ function renderProfileEditor() {
   document.getElementById('tokenModeManual').checked = tokenPolicy.mode === 'manual';
   document.getElementById('autoTokenCap').value = tokenPolicy.autoCap ?? '';
   document.getElementById('manualMaxTokens').value = tokenPolicy.manualMax || 4096;
+  document.getElementById('contextWindowTokens').value =
+    profile?.contextWindowTokens ?? '';
   renderTokenPolicyFields();
   renderProfileList();
   renderFigureRouteWarning();
@@ -1454,12 +1456,14 @@ function collectProfile() {
   const manual = document.getElementById('tokenModeManual').checked;
   const autoCapValue = document.getElementById('autoTokenCap').value;
   const manualValue = Number(document.getElementById('manualMaxTokens').value) || 4096;
+  const contextWindowValue = document.getElementById('contextWindowTokens').value;
   return {
     id: selectedProfileId,
     name: document.getElementById('profileName').value.trim(),
     providerId,
     config,
     capabilities: { vision: providerVisionCapability(providerId, config) },
+    contextWindowTokens: contextWindowValue ? Number(contextWindowValue) : null,
     tokenPolicy: manual
       ? { mode: 'manual', manualMax: manualValue, autoCap: null }
       : { mode: 'auto', autoCap: autoCapValue ? Number(autoCapValue) : null, manualMax: null }

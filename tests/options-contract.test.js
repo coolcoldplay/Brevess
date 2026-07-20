@@ -26,7 +26,7 @@ test('exposes named API profiles, token policy, and task routing controls', () =
     'apiProfileList', 'addApiProfile', 'duplicateApiProfile', 'deleteApiProfile',
     'profileName', 'globalProfileId', 'routeHighlight', 'routeSummary',
     'routeFigure', 'routeCrossFigure', 'tokenModeAuto', 'tokenModeManual',
-    'autoTokenCap', 'manualMaxTokens'
+    'autoTokenCap', 'manualMaxTokens', 'contextWindowTokens'
   ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
   assert.doesNotMatch(html, /id="maxOutputTokens"/);
   const editorStart = html.indexOf('class="api-profile-editor"');
@@ -39,6 +39,8 @@ test('exposes named API profiles, token policy, and task routing controls', () =
     'LLM_DELETE_PROFILE'].forEach(type => assert.match(script, new RegExp(type)));
   assert.match(script, /将只依据图注和正文解读/);
   assert.match(html, /根据任务路由.*第三方模型服务/);
+  assert.match(html, /上下文窗口.*高级/);
+  assert.match(script, /contextWindowTokens/);
 });
 
 test('settings expose four editable Panel follow-up prompts and restore defaults', () => {
