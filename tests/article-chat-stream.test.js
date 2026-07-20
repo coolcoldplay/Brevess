@@ -156,14 +156,25 @@ test('NDJSON parser discards an incomplete block and deduplicates a continuation
   assert.deepEqual(blocks.map(block => block.blockId), ['block-1']);
 });
 
-test('NDJSON parser rejects unfinished Markdown and misplaced evidence markers', () => {
+test('NDJSON parser rejects unfinished Markdown and leading evidence markers', () => {
   const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
   assert.throws(() => parser.push(`${JSON.stringify({
     type: 'answer_block', block_id: 'open-fence', markdown: '```js\nconst x = 1', evidence: []
   })}\n`), error => error.code === 'INVALID_RESPONSE');
   assert.throws(() => parser.push(`${JSON.stringify({
     type: 'answer_block', block_id: 'bad-marker',
-    markdown: '治疗显著改善生存[[1]]',
+    markdown: '[[1]] 治疗显著改善生存',
     evidence: [{ marker: '1', paragraph_id: 'p1' }]
   })}\n`), error => error.code === 'INVALID_RESPONSE');
+});
+
+test('NDJSON parser accepts a citation after an unpunctuated numbered item', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  parser.push(`${JSON.stringify({
+    type: 'answer_block', block_id: 'numbered-item',
+    markdown: '1. 利用神经肽-GAL4品系进行功能筛选 [[1]]',
+    evidence: [{ marker: '1', paragraph_id: 'p1' }]
+  })}\n`);
+
+  assert.equal(parser.snapshot().blocks.length, 1);
 });

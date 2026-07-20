@@ -164,10 +164,17 @@
     return (result >>> 0).toString(16).padStart(8, '0');
   }
 
-  function markerImmediatelyFollowsSentence(markdown, marker) {
+  function markerFollowsAnswerText(markdown, marker) {
     const escaped = String(marker).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`[.!?;:\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A]\\s*\\[\\[${escaped}\\]\\]`, 'u')
-      .test(markdown);
+    const pattern = new RegExp(`\\[\\[${escaped}\\]\\]`, 'gu');
+    let match;
+    while ((match = pattern.exec(markdown)) !== null) {
+      const lineStart = markdown.lastIndexOf('\n', Math.max(0, match.index - 1)) + 1;
+      const prefix = markdown.slice(lineStart, match.index)
+        .replace(/[`*_>#|\[\]()~\\-]/g, '').trim();
+      if (/[\p{L}\p{N}]/u.test(prefix)) return true;
+    }
+    return false;
   }
 
   function normalizeAnswerEvidence(value, snapshot) {
@@ -217,8 +224,8 @@
         evidence.some(item => !markdownMarkers.has(item.marker))) {
       throw invalidStreamResponse('Article chat evidence markers do not match the block');
     }
-    if (evidence.some(item => !markerImmediatelyFollowsSentence(markdown, item.marker))) {
-      throw invalidStreamResponse('Article chat evidence marker is not placed after a sentence');
+    if (evidence.some(item => !markerFollowsAnswerText(markdown, item.marker))) {
+      throw invalidStreamResponse('Article chat evidence marker is not placed after answer text');
     }
     return { type: 'answer_block', blockId, markdown, evidence };
   }

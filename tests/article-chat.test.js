@@ -100,9 +100,10 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
   assert.ok(first.userPrompt.startsWith(first.stablePrefix));
   assert.match(first.systemPrompt, /NDJSON/);
   assert.match(first.systemPrompt, /answer_block/);
-  assert.match(first.systemPrompt, /one answer_block per numbered step/i);
+  assert.match(first.systemPrompt, /one answer_block per fully explained numbered step/i);
   assert.match(first.systemPrompt, /Use your judgment to match the depth/i);
   assert.match(first.systemPrompt, /Use as many answer_block records as the question needs/i);
+  assert.match(first.systemPrompt, /Never emit a heading or numbered label as a block by itself/i);
   assert.match(first.systemPrompt, /Ground every paper-specific factual sentence or list item/i);
   assert.doesNotMatch(first.systemPrompt, /at most 600 Chinese characters|Keep each answer_block compact/i);
   assert.match(first.systemPrompt, /turn_summary/);
@@ -151,7 +152,7 @@ test('retries once with a format-repair instruction after malformed streamed out
   });
 
   assert.equal(requests.length, 2);
-  assert.match(requests[1].userPrompt, /invalid NDJSON/i);
+  assert.match(requests[1].userPrompt, /format or citation validation/i);
   assert.equal(result.message.answerBlocks[0].blockId, 'block-repaired');
   assert.ok(progress.some(event => event.phase === 'chat_repairing_format'));
 });
@@ -194,10 +195,47 @@ test('does not accept a final record after a later answer block failed validatio
   });
 
   assert.equal(requests.length, 2);
-  assert.match(requests[1].userPrompt, /invalid NDJSON/i);
+  assert.match(requests[1].userPrompt, /format or citation validation/i);
+  assert.match(requests[1].userPrompt, /completed_blocks/);
+  assert.match(requests[1].userPrompt, /The evidence chain has several stages/);
   assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
     'block-intro', 'block-step-1'
   ]);
+});
+
+test('reports exhausted format recovery as incomplete instead of an output limit', async () => {
+  let requestCount = 0;
+  const adapter = {
+    generateTextStream() {
+      requestCount += 1;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (requestCount === 1) {
+          yield { type: 'text_delta', text: `${JSON.stringify({
+            type: 'answer_block', block_id: 'block-preserved',
+            markdown: 'A validated introduction remains visible.', evidence: []
+          })}\n` };
+        }
+        yield { type: 'text_delta', text: `${JSON.stringify({
+          type: 'answer_block', block_id: `block-invalid-${requestCount}`,
+          markdown: 'An invalid leading marker follows. [[2]]', evidence: []
+        })}\n` };
+        yield { type: 'text_delta', text: `${JSON.stringify({
+          type: 'turn_summary', summary: 'The response is still incomplete.'
+        })}\n${JSON.stringify({ type: 'final', status: 'completed' })}\n` };
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter
+  });
+
+  assert.equal(requestCount, 8);
+  assert.equal(result.message.status, 'incomplete');
+  assert.match(result.message.limitations, /格式或引用校验/);
+  assert.doesNotMatch(result.message.limitations, /output limit/i);
 });
 
 test('continues an answer that ends with a dangling promise of following steps', async () => {
@@ -239,6 +277,63 @@ test('continues an answer that ends with a dangling promise of following steps',
   assert.match(requests[1].userPrompt, /ended after promising details/i);
   assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
     'block-lead-in', 'block-step'
+  ]);
+});
+
+test('continues until every explicitly promised numbered step is present', async () => {
+  const requests = [];
+  const adapter = {
+    generateTextStream(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (attempt === 1) {
+          yield { type: 'text_delta', text: [
+            JSON.stringify({
+              type: 'answer_block', block_id: 'overview',
+              markdown: '研究过程大致分为四个步骤。', evidence: []
+            }),
+            JSON.stringify({
+              type: 'answer_block', block_id: 'step-1',
+              markdown: '1. 完成第一步筛选', evidence: []
+            }),
+            JSON.stringify({
+              type: 'answer_block', block_id: 'step-2',
+              markdown: '2. 完成第二步定位', evidence: []
+            }),
+            JSON.stringify({
+              type: 'answer_block', block_id: 'step-3',
+              markdown: '3. 完成第三步验证', evidence: []
+            }),
+            JSON.stringify({ type: 'turn_summary', summary: 'Only three of four steps.' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        } else {
+          yield { type: 'text_delta', text: [
+            JSON.stringify({
+              type: 'answer_block', block_id: 'step-4',
+              markdown: '4. 完成第四步机制确认', evidence: []
+            }),
+            JSON.stringify({ type: 'turn_summary', summary: 'All four steps are complete.' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        }
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].userPrompt, /every missing item/i);
+  assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
+    'overview', 'step-1', 'step-2', 'step-3', 'step-4'
   ]);
 });
 

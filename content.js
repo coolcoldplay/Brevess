@@ -4146,7 +4146,7 @@ function publicArticleChatPlan(plan = null) {
 
 function publicArticleChatTurn(turn = {}) {
     const allowedStatuses = new Set([
-        'queued', 'generating', 'interrupted', 'completed', 'truncated', 'cancelled', 'error',
+        'queued', 'generating', 'interrupted', 'completed', 'truncated', 'incomplete', 'cancelled', 'error',
         'unanswered'
     ]);
     const route = turn.route && typeof turn.route === 'object' ? turn.route : {};
@@ -4439,7 +4439,8 @@ function applyArticleChatProgress(progress = {}) {
         turn.error = String(progress.errorCode || 'ARTICLE_CHAT_FAILED').slice(0, 1000);
         changed = true;
     } else if (phase === 'chat_completed') {
-        turn.status = progress.status === 'truncated' ? 'truncated' : 'completed';
+        turn.status = progress.status === 'truncated' ? 'truncated'
+            : progress.status === 'incomplete' ? 'incomplete' : 'completed';
         changed = true;
     }
     if (!changed) return false;
@@ -4588,7 +4589,8 @@ async function runArticleChatTurn(turn) {
         const answer = response.data.message;
         mergeArticleChatAnswerBlocks(turn, answer, snapshot);
         turn.summary = String(answer.summary || '').slice(0, 2000);
-        turn.status = answer.status === 'truncated' ? 'truncated' : 'completed';
+        turn.status = answer.status === 'truncated' ? 'truncated'
+            : answer.status === 'incomplete' ? 'incomplete' : 'completed';
         turn.route = response.data.route || null;
         turn.profileName = String(response.data.route?.effectiveProfileName || '');
         turn.model = String(response.data.route?.model || '');

@@ -191,6 +191,26 @@
     }));
   }
 
+  function completedContinuationBlocks(value) {
+    const blocks = Array.isArray(value) ? value : [];
+    const result = [];
+    let remainingCharacters = 6000;
+    for (const block of blocks) {
+      if (remainingCharacters <= 0) break;
+      const markdown = normalizeMarkdown(
+        block?.markdown,
+        Math.min(1200, remainingCharacters)
+      );
+      if (!markdown) continue;
+      result.push({
+        block_id: normalizeText(block?.blockId, 160),
+        markdown
+      });
+      remainingCharacters -= markdown.length;
+    }
+    return result;
+  }
+
   function compileArticleChatPrompt(input, plan, options = {}) {
     const stablePayload = {
       article: {
@@ -212,14 +232,15 @@
       section_coverage: plan.sectionCoverage,
       continuation: continuation ? {
         continue_after_block_ids: continuation.blockIds,
+        completed_blocks: completedContinuationBlocks(continuation.blocks),
         turn_summary_so_far: continuation.summary || '',
         instruction: continuation.formatRepair
-          ? 'The previous response was invalid NDJSON. Retry using exactly one valid JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
+          ? 'One or more previous records failed format or citation validation. The completed_blocks are already visible and immutable. Continue only from the next missing point using new block IDs, with exactly one valid JSON object per line, then emit a fresh turn_summary and final record. Do not restart, restate an overview, or repeat completed content.'
           : continuation.truncationRecovery
-            ? 'The previous response was truncated before completing the answer. Continue from the next missing step. If no complete block was preserved, restart the answer. Emit one complete answer_block per numbered step so each step is saved before generating the next one. Do not repeat preserved block IDs.'
+            ? 'The previous response was truncated before completing the answer. Treat completed_blocks as already visible and immutable, and continue from the next missing step. If no complete block was preserved, restart the answer. Emit one complete answer_block per numbered step, then a fresh turn_summary and final record. Do not repeat preserved content.'
             : continuation.incompleteAnswer
-              ? 'The previous response ended after promising details, steps, evidence, or a list that it did not provide. Continue immediately with every missing item using new answer_block IDs, then emit a fresh turn_summary and final record. Do not repeat preserved blocks.'
-          : 'Continue with new block IDs. Do not repeat earlier blocks.'
+              ? 'The previous response ended after promising details, steps, evidence, or a list that it did not provide. Treat completed_blocks as already visible and immutable. Continue immediately with every missing item using new answer_block IDs, then emit a fresh turn_summary and final record. Do not repeat the introduction, overview, recap, conclusion, or any preserved block.'
+          : 'Treat completed_blocks as already visible and immutable. Continue at the next logical point with new block IDs, then emit a fresh turn_summary and final record. Do not repeat earlier content.'
       } : null
     };
     return {
@@ -231,7 +252,9 @@
         'For questions about how, why, definitions, criteria, comparisons, methods, or figures, naturally include the relevant conditions, steps, contrasts, measurements, and limitations that are present in the supplied context. Do not force a fixed template when it would not help.',
         'Return newline-delimited JSON (NDJSON) only. Do not wrap lines in Markdown fences and do not emit a JSON array.',
         'Emit one complete answer_block line per complete Markdown paragraph, list, heading section, code block, or table.',
-        'For a numbered or stepwise answer, emit one answer_block per numbered step. Never place the whole chain in one answer_block.',
+        'For a numbered or stepwise answer, emit one answer_block per fully explained numbered step. Never place the whole chain in one answer_block.',
+        'Every answer_block must be substantive and self-contained. Never emit a heading or numbered label as a block by itself; include that section\'s explanation and citations in the same block.',
+        'Use at most one introductory overview and one concluding synthesis. Emit the conclusion only after every promised numbered step or section is complete.',
         'Use as many answer_block records as the question needs. Split a long answer at natural Markdown boundaries so completed portions can be shown progressively; do not shorten the substance merely to reduce the number of blocks.',
         'answer_block schema: {"type":"answer_block","block_id":"block-1","markdown":"...","evidence":[{"marker":"1","paragraph_id":"...","source_key":"...","text_hash":"...","quote":"...","section_path":["..."]}]}',
         'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly.',
@@ -318,7 +341,7 @@
     return Math.min(ceiling, safeHeadroom, next);
   }
 
-  function compatibilityMessage(state, limited) {
+  function compatibilityMessage(state, exhaustionReason = '') {
     const evidence = [];
     const markdownBlocks = state.blocks.map(block => {
       const markerMap = new Map();
@@ -331,14 +354,21 @@
         markerMap.has(marker) ? `[[${markerMap.get(marker)}]]` : match
       );
     });
+    const limitations = {
+      output_truncated: '模型在多次自动续写后仍达到实际输出上限；已保留已完成的回答块。',
+      invalid_response: '部分模型输出连续未通过格式或引用校验；已保留通过校验的回答块。',
+      incomplete_answer: '模型多次续写后仍以未完成的引导句结束；已保留已经完成的回答块。',
+      incomplete_response: '模型多次续写后仍未形成完整回答；已保留已经完成的回答块。'
+    };
     return {
       answer: markdownBlocks.join('\n\n'),
       answerBlocks: state.blocks,
       evidence,
       summary: state.summary || normalizeText(markdownBlocks.join(' '), 1200),
-      limitations: limited
-        ? 'The provider reached its output limit twice. Complete answer blocks were preserved.' : '',
-      status: limited ? 'truncated' : 'completed'
+      limitations: limitations[exhaustionReason] || '',
+      status: exhaustionReason
+        ? (exhaustionReason === 'output_truncated' ? 'truncated' : 'incomplete')
+        : 'completed'
     };
   }
 
@@ -348,6 +378,50 @@
     if (!markdown) return false;
     return /(?:如下|(?:主要)?(?:分为|包括)以下(?:几个|这些|各个|若干)?(?:步骤|阶段|方面|部分|要点)|以下(?:几个|这些|各个|若干)?(?:步骤|阶段|方面|要点|证据|结果|内容))\s*[：:]?\s*$/u.test(markdown) ||
       /\b(?:as follows|the following (?:steps|stages|points|items|lines of evidence|results))\s*[:：]?\s*$/iu.test(markdown);
+  }
+
+  function smallSequenceNumber(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (/^\d{1,2}$/.test(text)) return Number(text);
+    const english = {
+      one: 1, two: 2, three: 3, four: 4, five: 5,
+      six: 6, seven: 7, eight: 8, nine: 9, ten: 10
+    };
+    if (english[text]) return english[text];
+    const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    if (digits[text]) return digits[text];
+    if (text === '十') return 10;
+    const chinese = text.match(/^([一二两三四五六七八九])?十([一二三四五六七八九])?$/u);
+    if (!chinese) return 0;
+    return (chinese[1] ? digits[chinese[1]] : 1) * 10 +
+      (chinese[2] ? digits[chinese[2]] : 0);
+  }
+
+  function hasIncompletePromisedSequence(blocks) {
+    const markdown = (Array.isArray(blocks) ? blocks : [])
+      .map(block => normalizeMarkdown(block?.markdown, 64 * 1024))
+      .filter(Boolean).join('\n');
+    if (!markdown) return false;
+    const promise = markdown.match(
+      /(?:分为|包括|可分成|可归纳为)[^。！？\n]{0,24}?([一二两三四五六七八九十\d]{1,3})\s*个?\s*(?:步骤|阶段|层次|环节)/u
+    ) || markdown.match(
+      /\b(?:divided into|includes?|consists? of|has)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})\s+(?:steps|stages|phases|parts)\b/iu
+    );
+    const expected = smallSequenceNumber(promise?.[1]);
+    if (expected < 2 || expected > 20) return false;
+    const observed = new Set();
+    for (const match of markdown.matchAll(
+      /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?(\d{1,2})\s*[.、．)]/gu
+    )) {
+      observed.add(Number(match[1]));
+    }
+    for (const match of markdown.matchAll(
+      /第\s*([一二两三四五六七八九十\d]{1,3})\s*(?:步|阶段|层|环节)/gu
+    )) {
+      observed.add(smallSequenceNumber(match[1]));
+    }
+    return Array.from({ length: expected }, (_, index) => index + 1)
+      .some(number => !observed.has(number));
   }
 
   async function runArticleChat(options = {}) {
@@ -387,7 +461,7 @@
       onBlock: block => report({ phase: 'chat_answer_block', block })
     });
     let usage = null;
-    let limited = false;
+    let exhaustionReason = '';
     let continuationCount = 0;
     let repairFormat = false;
     let recoverTruncation = false;
@@ -402,6 +476,7 @@
         const prompt = compileArticleChatPrompt(input, prepared.plan, attempt ? {
           continuation: {
             blockIds: current.blocks.map(block => block.blockId),
+            blocks: current.blocks,
             summary: current.summary,
             formatRepair: repairFormat,
             truncationRecovery: recoverTruncation,
@@ -467,8 +542,11 @@
         const validCompleteResponse = finalized && Boolean(after.final) && after.blocks.length > 0;
         const danglingAnswerLeadIn = validCompleteResponse &&
           hasDanglingAnswerLeadIn(after.blocks);
+        const incompletePromisedSequence = validCompleteResponse &&
+          hasIncompletePromisedSequence(after.blocks);
+        const semanticallyIncomplete = danglingAnswerLeadIn || incompletePromisedSequence;
         const needsContinuation = terminalError?.code === 'OUTPUT_TRUNCATED' ||
-          !validCompleteResponse || Boolean(parserError) || danglingAnswerLeadIn;
+          !validCompleteResponse || Boolean(parserError) || semanticallyIncomplete;
         if (!needsContinuation) break;
         parser.discardPending();
         parser.clearFinalRecord?.();
@@ -476,7 +554,7 @@
           continuationCount += 1;
           repairFormat = Boolean(parserError);
           recoverTruncation = terminalError?.code === 'OUTPUT_TRUNCATED';
-          recoverIncomplete = danglingAnswerLeadIn;
+          recoverIncomplete = semanticallyIncomplete;
           if (recoverTruncation) {
             currentOutputTokens = continuationOutputTokens(
               prepared.plan,
@@ -495,7 +573,13 @@
           continue;
         }
         if (terminalError && terminalError.code !== 'OUTPUT_TRUNCATED') throw terminalError;
-        limited = true;
+        exhaustionReason = terminalError?.code === 'OUTPUT_TRUNCATED'
+          ? 'output_truncated'
+          : parserError
+            ? 'invalid_response'
+            : semanticallyIncomplete
+              ? 'incomplete_answer'
+              : 'incomplete_response';
       }
     } catch (error) {
       if (error?.code === 'CANCELLED' || error?.name === 'AbortError') {
@@ -511,11 +595,12 @@
     const state = parser.snapshot();
     if (!state.blocks.length) {
       const error = new Error('Article chat did not produce a complete answer block');
-      error.code = limited ? 'OUTPUT_TRUNCATED' : 'INVALID_RESPONSE';
+      error.code = exhaustionReason === 'output_truncated'
+        ? 'OUTPUT_TRUNCATED' : 'INVALID_RESPONSE';
       report({ phase: 'chat_error', errorCode: error.code });
       throw error;
     }
-    const message = compatibilityMessage(state, limited);
+    const message = compatibilityMessage(state, exhaustionReason);
     report({
       phase: 'chat_completed',
       status: message.status,

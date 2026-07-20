@@ -22,6 +22,7 @@ test('side panel exposes a fifth full-text chat workspace with per-turn model se
 
 test('content sends canonical workspace paragraphs and persists only public chat state', () => {
   const content = read('content.js');
+  const popup = read('popup.js');
   const chat = content.slice(
     content.indexOf('function applyArticleChatProgress'),
     content.indexOf('async function analyzeCrossFigureLogicWithLLM')
@@ -37,6 +38,9 @@ test('content sends canonical workspace paragraphs and persists only public chat
   assert.match(content, /chat:\s*getPublicArticleChatState\(\)/);
   assert.match(content, /function articleChatFailureMessage/);
   assert.match(content, /OUTPUT_TRUNCATED:\s*'模型连续达到输出上限/);
+  assert.match(content, /'completed', 'truncated', 'incomplete'/);
+  assert.match(popup, /turn\.status === 'incomplete'/);
+  assert.doesNotMatch(popup, /已保留完整回答；模型续写后仍达到输出上限/);
 });
 
 test('full-text chat reports when a very long paper used a relevance-bounded context', () => {

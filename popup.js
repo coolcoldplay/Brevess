@@ -2287,7 +2287,8 @@ function articleChatStatusText(turn = {}) {
     if (turn.status === 'queued') return '已排队，等待上一轮完成';
     if (turn.status === 'generating') return turn.answerBlocks?.length
         ? '正在继续生成…' : '正在检索全文并组织回答…';
-    if (turn.status === 'truncated') return '已保留完整回答；模型续写后仍达到输出上限';
+    if (turn.status === 'truncated') return '已保留已完成的回答片段；模型续写后仍达到实际输出上限';
+    if (turn.status === 'incomplete') return '已保留通过校验的回答片段；模型续写后仍未形成完整回答';
     if (turn.status === 'cancelled') return '已取消；已完成的回答块已保留';
     if (turn.status === 'interrupted') return '已中断；已完成的回答块已保留，可手动重新生成';
     if (turn.status === 'error') return turn.error || '回答失败';
@@ -2378,7 +2379,7 @@ function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
     element.classList.toggle('is-queued', turn.status === 'queued');
     element.classList.toggle('is-generating', turn.status === 'generating');
     element.classList.toggle('is-interrupted',
-        ['interrupted', 'cancelled', 'truncated', 'error'].includes(turn.status));
+        ['interrupted', 'cancelled', 'truncated', 'incomplete', 'error'].includes(turn.status));
 
     const actions = element.querySelector('.article-chat-turn-actions');
     if (actions) {
