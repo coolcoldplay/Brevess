@@ -255,6 +255,9 @@ test('Figure progress UI uses the content snapshot and never invents a current P
   assert.match(popup, /recognizedPanelCount/);
   assert.match(popup, /batchRecognizedPanelCount/);
   assert.match(popup, /ignoredUnexpectedPanelCount/);
+  assert.match(popup, /function figureProgressUiSignature/);
+  assert.match(popup, /function updateFigureElapsedLabels/);
+  assert.match(popup, /renderSignature !== figureProgressRenderSignature/);
   assert.match(popup, /startedAt/);
   assert.match(popup, /caption_text_only/);
   assert.match(popup, /figure_model_processing/);

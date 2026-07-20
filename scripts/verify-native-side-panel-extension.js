@@ -431,6 +431,7 @@ async function readDiagnosticDownload(download) {
   const figureIncrementalQa = await sidePanel.evaluate(completeWorkspace => {
     const originalWorkspaceSnapshot = currentWorkspaceSnapshot;
     const originalFigureAnalysisState = figureAnalysisState;
+    const originalFigureProgressRenderSignature = figureProgressRenderSignature;
     const pendingWorkspace = structuredClone(completeWorkspace);
     pendingWorkspace.status = {
       running: true,
@@ -477,11 +478,26 @@ async function readDiagnosticDownload(download) {
       ...currentWorkspaceSnapshot,
       figures: pendingWorkspace
     };
-    figureAnalysisState = pendingWorkspace.status;
-    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    figureProgressRenderSignature = '';
+    applyFigureAnalysisProgress(pendingWorkspace.status, false);
     const cards = Array.from(document.querySelectorAll('.workspace-figure-card'));
     const firstProgressText = cards[0]
       ?.querySelector('.workspace-figure-progress')?.textContent || '';
+    const quickNavItem = document.querySelector('.figure-quick-nav-item');
+    quickNavItem?.classList.add('show-panels');
+    const elapsedOnlyStatus = structuredClone(pendingWorkspace.status);
+    elapsedOnlyStatus.figureProgress[0].elapsedSeconds = 8;
+    applyFigureAnalysisProgress(elapsedOnlyStatus, false);
+    const quickNavAfterElapsed = document.querySelector('.figure-quick-nav-item');
+    const elapsedText = cards[0]
+      ?.querySelector('[data-figure-elapsed="true"]')?.textContent || '';
+    const stablePollingKeepsQuickNavNode =
+      quickNavItem === quickNavAfterElapsed && quickNavItem?.isConnected === true;
+    const stablePollingKeepsHoverState =
+      quickNavAfterElapsed?.classList.contains('show-panels') === true;
+    const changedStatus = structuredClone(elapsedOnlyStatus);
+    changedStatus.figureProgress[0].batchRecognizedPanelCount = 1;
+    applyFigureAnalysisProgress(changedStatus, false);
     const result = {
       cardCount: cards.length,
       summaries: cards.map(card => card.querySelector('summary')?.textContent?.trim() || ''),
@@ -493,11 +509,16 @@ async function readDiagnosticDownload(download) {
       ).filter(button => button.textContent?.includes('重新解读')).length,
       secondHasResult: Boolean(cards[1]?.querySelector('.workspace-figure-field')),
       firstProgressText,
+      stablePollingKeepsQuickNavNode,
+      stablePollingKeepsHoverState,
+      elapsedUpdatedWithoutRebuild: elapsedText === '已用时 8 秒',
+      changedProgressRebuilds: quickNavAfterElapsed?.isConnected === false,
       reportsBatchCount: /本批有效 Panel：2/.test(firstProgressText),
       reportsIgnoredPanels: /已忽略模型重复返回的 2 个批次外 Panel（D、E）/.test(firstProgressText)
     };
     currentWorkspaceSnapshot = originalWorkspaceSnapshot;
     figureAnalysisState = originalFigureAnalysisState;
+    figureProgressRenderSignature = originalFigureProgressRenderSignature;
     renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
     return result;
   }, figureWorkspaceFixture());
@@ -832,9 +853,76 @@ async function readDiagnosticDownload(download) {
     '#exportMigrationBundle,#importMigrationBundle,#confirmMigrationImport'
   ).count();
   const supportEmail = await options.locator('#support a[href^="mailto:"]').textContent();
+  await options.waitForFunction(() =>
+    document.querySelectorAll('#providerId option').length >= 5 &&
+    document.querySelectorAll('#apiProfileList [data-profile-id]').length >= 1
+  );
+  const modelConfigurationQa = await options.evaluate(async () => {
+    const provider = document.getElementById('providerId');
+    const model = document.getElementById('model');
+    const suggestions = () => Array.from(
+      document.querySelectorAll('#modelSuggestions option')
+    ).map(option => option.value);
+    const change = element => element.dispatchEvent(
+      new Event('change', { bubbles: true })
+    );
+    provider.value = 'deepseek';
+    change(provider);
+    const deepseekDefault = model.value;
+    const deepseekSuggestions = suggestions();
+    model.value = 'deepseek-private-science-model';
+    model.dispatchEvent(new Event('input', { bubbles: true }));
+    const customModelAccepted = model.value === 'deepseek-private-science-model';
+
+    provider.value = 'openai-compatible';
+    change(provider);
+    const compatibleFieldsVisible =
+      document.getElementById('compatibleFields')?.hidden === false;
+    const preset = document.getElementById('compatiblePreset');
+    preset.value = 'qwen';
+    change(preset);
+    const presetResult = {
+      model: model.value,
+      baseUrl: document.getElementById('baseUrl').value,
+      suggestions: suggestions()
+    };
+
+    model.value = 'private-compatible-model';
+    model.dispatchEvent(new Event('input', { bubbles: true }));
+    const customCompatibleModelAccepted = model.value === 'private-compatible-model';
+    const sentinel = document.getElementById('articleWorkspacePreviousPage');
+    const sentinelWasDisabled = sentinel?.disabled === true;
+    document.getElementById('baseUrl').value = 'not-a-valid-url';
+    let rejected = false;
+    try {
+      await persistForm(false);
+    } catch (_) {
+      rejected = true;
+    }
+    const failureStatus = document.getElementById('status')?.textContent || '';
+    const result = {
+      deepseekDefault,
+      deepseekSuggestions,
+      customModelAccepted,
+      compatibleFieldsVisible,
+      presetResult,
+      customCompatibleModelAccepted,
+      rejected,
+      failureStatus,
+      saveButtonRecovered: document.getElementById('saveSettings')?.disabled === false,
+      testButtonRecovered: document.getElementById('testProvider')?.disabled === false,
+      preDisabledButtonPreserved: sentinelWasDisabled && sentinel?.disabled === true,
+      saveGuardReleased: profileActionInFlight.save !== true
+    };
+    profileEditorDirty = false;
+    renderProfileEditor();
+    renderRouteOptions();
+    return result;
+  });
   await options.goto(`chrome-extension://${extensionId}/options.html#onboarding`, {
     waitUntil: 'domcontentloaded'
   });
+  await options.reload({ waitUntil: 'domcontentloaded' });
   await options.waitForFunction(() =>
     document.body.dataset.onboardingStep === 'storage' &&
     document.getElementById('onboardingContinue')?.disabled === false
@@ -878,6 +966,7 @@ async function readDiagnosticDownload(download) {
     dynamicParagraphQa,
     migrationControls,
     supportEmail,
+    modelConfigurationQa,
     settingsDatabaseQa,
     adapterDiagnostic: {
       extension: path.extname(firstDiagnostic.filename),
@@ -934,6 +1023,10 @@ async function readDiagnosticDownload(download) {
     results.figureIncrementalQa.firstPanelCatalogSize === 3 &&
     results.figureIncrementalQa.firstAnalyzedPanels === 2 &&
     !results.figureIncrementalQa.secondHasResult &&
+    results.figureIncrementalQa.stablePollingKeepsQuickNavNode &&
+    results.figureIncrementalQa.stablePollingKeepsHoverState &&
+    results.figureIncrementalQa.elapsedUpdatedWithoutRebuild &&
+    results.figureIncrementalQa.changedProgressRebuilds &&
     /Figure 1/.test(results.figureIncrementalQa.summaries[0]) &&
     /当前 Panel 分批已保存/.test(results.figureIncrementalQa.summaries[0]) &&
     /待解读/.test(results.figureIncrementalQa.summaries[1]) &&
@@ -987,6 +1080,22 @@ async function readDiagnosticDownload(download) {
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
     supportEmail?.trim() === 'brevess0729@163.com' &&
+    results.modelConfigurationQa.deepseekDefault === 'deepseek-v4-flash' &&
+    results.modelConfigurationQa.deepseekSuggestions.includes('deepseek-v4-pro') &&
+    results.modelConfigurationQa.deepseekSuggestions.includes('deepseek-v4-flash') &&
+    results.modelConfigurationQa.customModelAccepted &&
+    results.modelConfigurationQa.compatibleFieldsVisible &&
+    results.modelConfigurationQa.presetResult.model === 'qwen-flash' &&
+    results.modelConfigurationQa.presetResult.baseUrl ===
+      'https://dashscope.aliyuncs.com/compatible-mode/v1' &&
+    results.modelConfigurationQa.presetResult.suggestions.includes('qwen-flash') &&
+    results.modelConfigurationQa.customCompatibleModelAccepted &&
+    results.modelConfigurationQa.rejected &&
+    /Base URL 格式不正确/.test(results.modelConfigurationQa.failureStatus) &&
+    results.modelConfigurationQa.saveButtonRecovered &&
+    results.modelConfigurationQa.testButtonRecovered &&
+    results.modelConfigurationQa.preDisabledButtonPreserved &&
+    results.modelConfigurationQa.saveGuardReleased &&
     results.settingsDatabaseQa.moduleAvailable &&
     results.settingsDatabaseQa.directoryStoreAvailable &&
     results.settingsDatabaseQa.continueEnabledAfterNoDirectory &&

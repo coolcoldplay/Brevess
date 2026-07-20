@@ -395,6 +395,7 @@ let figureProgressTimer = null;
 let figureProgressPollingGeneration = 0;
 let figureProgressRefreshSequence = 0;
 let figureWorkspaceProgressSignature = '';
+let figureProgressRenderSignature = '';
 let crossFigureLogicRunning = false;
 const figureExpansionState = new Map();
 const figurePanelExpansionState = new Map();
@@ -513,6 +514,7 @@ function resetPanelArticleState() {
     preferenceMutationCoordinator.beginIntent();
     stopFigureProgressPolling();
     figureWorkspaceProgressSignature = '';
+    figureProgressRenderSignature = '';
     figureExpansionState.clear();
     figurePanelExpansionState.clear();
     figureSectionExpansionState.clear();
@@ -1656,11 +1658,79 @@ function renderFigureProgress(details, progress) {
         'section',
         `workspace-figure-progress${progress.failed ? ' is-error' : ''}${progress.running ? ' is-running' : ''}`
     );
+    block.dataset.figureId = String(progress.figureId || '');
     block.appendChild(createWorkspaceElement('p', 'workspace-figure-progress-phase', display.phaseText));
     display.details.forEach(detail => {
-        block.appendChild(createWorkspaceElement('p', 'workspace-figure-progress-detail', detail));
+        const line = createWorkspaceElement('p', 'workspace-figure-progress-detail', detail);
+        if (detail.startsWith('已用时 ')) line.dataset.figureElapsed = 'true';
+        block.appendChild(line);
     });
     details.appendChild(block);
+}
+
+function figureProgressUiSignature(status = {}) {
+    const progressEntries = getFigureProgressEntries(status).map(progress => {
+        const route = progress?.route && typeof progress.route === 'object'
+            ? progress.route : {};
+        return {
+            figureId: String(progress?.figureId || ''),
+            figureLabel: String(progress?.figureLabel || ''),
+            phase: String(progress?.phase || ''),
+            running: progress?.running === true,
+            failed: progress?.failed === true,
+            completed: progress?.completed === true,
+            cacheHit: progress?.cacheHit === true,
+            expectedPanels: Array.isArray(progress?.expectedPanels)
+                ? progress.expectedPanels.map(String) : [],
+            expectedPanelCount: Number(progress?.expectedPanelCount) || 0,
+            recognizedPanelCount: Number(progress?.recognizedPanelCount) || 0,
+            batchRecognizedPanelCount: Number(progress?.batchRecognizedPanelCount) || 0,
+            unexpectedPanels: Array.isArray(progress?.unexpectedPanels)
+                ? progress.unexpectedPanels.map(String) : [],
+            ignoredUnexpectedPanelCount:
+                Number(progress?.ignoredUnexpectedPanelCount) || 0,
+            completedPanelBatches: Number(progress?.completedPanelBatches) || 0,
+            totalPanelBatches: Number(progress?.totalPanelBatches) || 0,
+            completedFigures: Number(progress?.completedFigures) || 0,
+            totalFigures: Number(progress?.totalFigures) || 0,
+            capabilityMode: String(progress?.capabilityMode || ''),
+            visionFallback: progress?.visionFallback === true,
+            waitMs: Number(progress?.waitMs) || 0,
+            attempt: Number(progress?.attempt) || 0,
+            providerId: String(progress?.providerId || ''),
+            model: String(progress?.model || ''),
+            route: {
+                effectiveProfileName: String(route.effectiveProfileName || ''),
+                name: String(route.name || ''),
+                model: String(route.model || ''),
+                capabilityMode: String(route.capabilityMode || ''),
+                fallbackReason: String(route.fallbackReason || '')
+            }
+        };
+    }).sort((left, right) => left.figureId.localeCompare(right.figureId));
+    return JSON.stringify(progressEntries);
+}
+
+function updateFigureElapsedLabels(status = {}) {
+    const progressById = new Map(getFigureProgressEntries(status)
+        .map(progress => [String(progress?.figureId || ''), progress])
+        .filter(([figureId]) => Boolean(figureId)));
+    document.querySelectorAll('.workspace-figure-progress[data-figure-id]').forEach(block => {
+        const progress = progressById.get(block.dataset.figureId || '');
+        if (!progress) return;
+        const elapsed = formatFigureElapsed(progress);
+        let line = block.querySelector('[data-figure-elapsed="true"]');
+        if (!elapsed) {
+            line?.remove();
+            return;
+        }
+        if (!line) {
+            line = createWorkspaceElement('p', 'workspace-figure-progress-detail');
+            line.dataset.figureElapsed = 'true';
+            block.appendChild(line);
+        }
+        if (line.textContent !== elapsed) line.textContent = elapsed;
+    });
 }
 
 function workspaceAnchorToken(value) {
@@ -3794,7 +3864,13 @@ function applyFigureAnalysisProgress(status, announce = true) {
     };
     updateFigureButton();
     updateReviewOutlineButton();
-    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    const renderSignature = figureProgressUiSignature(figureAnalysisState);
+    if (renderSignature !== figureProgressRenderSignature) {
+        figureProgressRenderSignature = renderSignature;
+        renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    } else {
+        updateFigureElapsedLabels(figureAnalysisState);
+    }
     if (announce && figureAnalysisState.running) {
         const activeProgress = figureProgress.find(item => item?.running === true) ||
             figureProgress[figureProgress.length - 1];

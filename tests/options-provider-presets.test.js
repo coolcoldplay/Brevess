@@ -119,6 +119,8 @@ test('save guard always releases and test action handles a guarded save result',
   const persistEnd = script.indexOf('\nasync function testProvider', persistStart);
   const persistSource = script.slice(persistStart, persistEnd);
   assert.match(persistSource, /finally\s*\{[\s\S]*endProfileAction\(['"]save['"]\)/);
+  assert.match(persistSource, /previousDisabledStates\s*=\s*new Map/);
+  assert.match(persistSource, /previousDisabledStates\.get\(button\)/);
   const testStart = script.indexOf('async function testProvider(');
   const testEnd = script.indexOf('\nfunction friendlyError', testStart);
   const testSource = script.slice(testStart, testEnd);

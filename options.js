@@ -2227,6 +2227,9 @@ async function deleteApiProfile() {
 async function persistForm(silent) {
   if (!beginProfileAction('save')) return null;
   const buttons = [...document.querySelectorAll('.button')];
+  const previousDisabledStates = new Map(
+    buttons.map(button => [button, button.disabled === true])
+  );
   buttons.forEach(button => { button.disabled = true; });
   try {
     const profile = collectProfile();
@@ -2269,7 +2272,9 @@ async function persistForm(silent) {
     throw error;
   } finally {
     endProfileAction('save');
-    buttons.forEach(button => { button.disabled = false; });
+    buttons.forEach(button => {
+      button.disabled = previousDisabledStates.get(button) === true;
+    });
     updateUserDataActionButtons();
     renderOnboarding();
   }
