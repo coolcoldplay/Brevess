@@ -3,8 +3,8 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const DOCUMENT_DATABASE_NAME = 'sci-logic-highlighter-user-data';
-  const DOCUMENT_DATABASE_VERSION = 2;
+  const DOCUMENT_DATABASE_NAME = shared.USER_DATA_DATABASE_NAME || 'sci-logic-highlighter-user-data';
+  const DOCUMENT_DATABASE_VERSION = shared.USER_DATA_DATABASE_VERSION || 3;
   const DOCUMENT_STORE_NAME = 'documents';
   const META_STORE_NAME = 'meta';
   const DIRECTORY_HANDLE_STORE_NAME = 'directoryHandles';
@@ -392,43 +392,11 @@
   }
 
   function createIndexedDbDocumentStore(indexedDbRef) {
-    let databasePromise;
-
     function openDatabase() {
-      if (!databasePromise) {
-        databasePromise = new Promise((resolve, reject) => {
-          const request = indexedDbRef.open(DOCUMENT_DATABASE_NAME, DOCUMENT_DATABASE_VERSION);
-          request.onupgradeneeded = () => {
-            const database = request.result;
-            if (!database.objectStoreNames.contains(DOCUMENT_STORE_NAME)) {
-              const documents = database.createObjectStore(
-                DOCUMENT_STORE_NAME,
-                { keyPath: 'documentId' }
-              );
-              documents.createIndex('updatedAt', 'updatedAt');
-            }
-            if (!database.objectStoreNames.contains(META_STORE_NAME)) {
-              database.createObjectStore(META_STORE_NAME, { keyPath: 'key' });
-            }
-            if (!database.objectStoreNames.contains(DIRECTORY_HANDLE_STORE_NAME)) {
-              database.createObjectStore(DIRECTORY_HANDLE_STORE_NAME, { keyPath: 'key' });
-            }
-            if (!database.objectStoreNames.contains(SYNC_QUEUE_STORE_NAME)) {
-              database.createObjectStore(SYNC_QUEUE_STORE_NAME, { keyPath: 'key' });
-            }
-          };
-          request.onsuccess = () => {
-            const database = request.result;
-            database.onversionchange = () => {
-              database.close?.();
-              databasePromise = undefined;
-            };
-            resolve(database);
-          };
-          request.onerror = () => reject(request.error);
-        });
+      if (typeof shared.openUserDataDatabase !== 'function') {
+        return Promise.reject(new Error('USER_DATA_DATABASE_UNAVAILABLE'));
       }
-      return databasePromise;
+      return shared.openUserDataDatabase(indexedDbRef);
     }
 
     async function runTransaction(mode, operation) {

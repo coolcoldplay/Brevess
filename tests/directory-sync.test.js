@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+require('../core/user-data-database.js');
 const {
   USER_DATA_DATABASE_NAME,
   USER_DATA_DATABASE_VERSION,
@@ -532,15 +533,16 @@ test('IndexedDB handle and coalescing queue adapters survive service-worker recr
   assert.equal(pending.length, 1);
   assert.equal(pending[0].revision, 2);
   assert.equal(USER_DATA_DATABASE_NAME, 'sci-logic-highlighter-user-data');
-  assert.equal(USER_DATA_DATABASE_VERSION, 2);
+  assert.equal(USER_DATA_DATABASE_VERSION, 3);
   assert.equal(DIRECTORY_HANDLE_STORE_NAME, 'directoryHandles');
   assert.equal(SYNC_QUEUE_STORE_NAME, 'syncQueue');
-  assert.ok(fake.openCalls.every(call => call.version === 2));
-  ['documents', 'meta', 'directoryHandles', 'syncQueue']
+  assert.ok(fake.openCalls.every(call => call.version === 3));
+  ['documents', 'meta', 'directoryHandles', 'syncQueue', 'workspaces',
+    'workspaceAssets', 'workspaceTurns', 'workspaceTombstones']
     .forEach(name => assert.equal(fake.stores.has(name), true));
 });
 
-test('v1 document data survives the v2 upgrade in both adapter opening orders', async () => {
+test('v1 document data survives the v3 upgrade in both adapter opening orders', async () => {
   const legacyRecord = {
     schemaVersion: 1,
     documentId: 'sha256:legacy',
@@ -575,8 +577,9 @@ test('v1 document data survives the v2 upgrade in both adapter opening orders', 
 
     assert.equal(fake.stores.get('documents').get('sha256:legacy').title, 'Legacy document');
     assert.equal(fake.stores.get('meta').get('legacy-meta').value, 'preserve-me');
-    assert.ok(fake.openCalls.every(call => call.version === 2));
-    ['documents', 'meta', 'directoryHandles', 'syncQueue']
+    assert.ok(fake.openCalls.every(call => call.version === 3));
+    ['documents', 'meta', 'directoryHandles', 'syncQueue', 'workspaces',
+      'workspaceAssets', 'workspaceTurns', 'workspaceTombstones']
       .forEach(name => assert.equal(fake.stores.has(name), true));
   }
 });

@@ -43,6 +43,9 @@ importScripts(
   'core/review-outline-pipeline.js',
   'core/corpus-store.js',
   'core/manual-annotations.js',
+  'core/user-data-database.js',
+  'core/article-workspace.js',
+  'core/article-workspace-store.js',
   'core/document-store.js',
   'core/directory-sync.js',
   'core/background-router.js'
@@ -182,6 +185,7 @@ syncActiveTabSidePanels().catch(() => {});
 const analysisCache = SciLLM.createIndexedDbAnalysisCache(indexedDB);
 const corpusStore = SciLLM.createIndexedDbCorpusStore(indexedDB);
 const documentStore = SciLLM.createIndexedDbDocumentStore(indexedDB);
+const articleWorkspaceStore = SciLLM.createIndexedDbArticleWorkspaceStore(indexedDB);
 const directorySync = SciLLM.createDirectorySync({
   handleStore: SciLLM.createIndexedDbDirectoryHandleStore(indexedDB),
   queueStore: SciLLM.createIndexedDbSyncQueue(indexedDB),
@@ -195,6 +199,7 @@ const llmRouter = SciLLM.createBackgroundRouter({
   cacheStore: analysisCache,
   corpusStore,
   documentStore,
+  articleWorkspaceStore,
   directorySync
 });
 
