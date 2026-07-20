@@ -379,6 +379,9 @@ body {
 .article-chat-inline-citation:hover, .article-chat-inline-citation:focus-visible { border-color: #0f5d89; color: #fff; background: #0f5d89; transform: scale(1.14); }
 .article-chat-inline-citation:focus-visible { outline: 2px solid rgba(15,93,137,.28); outline-offset: 1px; }
 .article-chat-inline-citation:disabled { cursor: default; opacity: .55; transform: none; }
+.article-chat-inline-citation.is-ambiguous,
+.article-chat-inline-citation.is-missing,
+.article-chat-inline-citation.is-stale { min-width: auto; padding: 0 6px; border-color: #aebbc3; color: #687680; background: #eef1f3; font-size: 8px; opacity: 1; }
 .article-chat-citation-fallback { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; padding-top: 7px; border-top: 1px dashed #cbdbe4; color: #426176; font-size: 10px; }
 .article-chat-citation-fallback .article-chat-inline-citation { vertical-align: baseline; }
 .article-chat-limitations summary { cursor: pointer; font-weight: 700; }

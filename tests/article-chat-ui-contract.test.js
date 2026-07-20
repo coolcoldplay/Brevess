@@ -47,8 +47,10 @@ test('full-text chat reports when a very long paper used a relevance-bounded con
 });
 
 test('full-text chat renders a scrollable multi-turn Markdown stream with paragraph jumps', () => {
+  const html = read('popup.html');
   const popup = read('popup.js');
   const css = read('popup.css');
+  assert.match(html, /core\/article-chat-citations\.js/);
   assert.match(popup, /function renderArticleChatMarkdown/);
   assert.match(popup, /appendArticleChatInlineMarkdown/);
   assert.match(popup, /createWorkspaceElement\('strong'/);
@@ -67,6 +69,24 @@ test('full-text chat renders a scrollable multi-turn Markdown stream with paragr
   assert.match(css, /\.article-chat-messages\s*\{[^}]*flex:\s*1 1 auto[^}]*overflow-y:\s*auto/);
   assert.match(css, /\.article-chat-composer\s*\{[^}]*position:\s*relative/);
   assert.doesNotMatch(css, /\.article-chat-composer\s*\{[^}]*position:\s*sticky/);
+});
+
+test('article chat citations are verified, inline, and expose visible jump failures', () => {
+  const popup = read('popup.js');
+  const css = read('popup.css');
+  const citationStart = popup.indexOf('function resolveArticleChatEvidenceTarget');
+  const citationEnd = popup.indexOf('function appendArticleChatInlineMarkdown', citationStart);
+  const citationWorkflow = popup.slice(citationStart, citationEnd);
+  assert.match(citationWorkflow, /SciLLM\.verifyArticleChatEvidence/);
+  assert.doesNotMatch(citationWorkflow, /paragraphs\.find[\s\S]*candidateTitle === sectionTitle/);
+  assert.match(citationWorkflow, /documentRevision/);
+  assert.match(citationWorkflow, /citationResult/);
+  assert.match(citationWorkflow, /applyArticleChatCitationState/);
+  assert.match(popup, /appendChild\(createArticleChatInlineCitation[\s\S]*citationIndexes\?\.add/);
+  assert.doesNotMatch(popup, /missingEvidence[\s\S]*createArticleChatInlineCitation/);
+  assert.match(css, /\.article-chat-inline-citation\.is-ambiguous/);
+  assert.match(css, /\.article-chat-inline-citation\.is-missing/);
+  assert.match(css, /\.article-chat-inline-citation\.is-stale/);
 });
 
 test('side panel refreshes its shared paragraph snapshot after dynamic article changes', () => {

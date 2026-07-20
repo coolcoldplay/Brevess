@@ -3930,13 +3930,43 @@ function publicArticleChatMessage(message = {}) {
             .map(item => ({
                 paragraphId: String(item?.paragraphId || '').slice(0, 120),
                 sourceKey: String(item?.sourceKey || item?.paragraphId || '').slice(0, 120),
+                textHash: String(item?.textHash || '').slice(0, 120),
                 sectionTitle: String(item?.sectionTitle || '').slice(0, 300),
+                sectionPath: (Array.isArray(item?.sectionPath) ? item.sectionPath : [])
+                    .slice(-12).map(entry => String(
+                        typeof entry === 'string' ? entry : entry?.title || ''
+                    ).slice(0, 300)).filter(Boolean),
                 quote: String(item?.quote || '').slice(0, 2000),
-                support: String(item?.support || '').slice(0, 1600)
+                support: String(item?.support || '').slice(0, 1600),
+                documentRevision: Math.max(0, Number(item?.documentRevision) || 0),
+                verificationStatus: String(item?.verificationStatus || '').slice(0, 32),
+                candidateCount: Math.max(0, Number(item?.candidateCount) || 0),
+                verificationReason: String(item?.verificationReason || '').slice(0, 120)
             })),
         limitations: String(message.limitations || '').slice(0, 4000),
         createdAt: Number(message.createdAt) || Date.now()
     };
+}
+
+function attachArticleChatEvidenceIdentity(evidence, snapshot) {
+    return (Array.isArray(evidence) ? evidence : []).map(item => {
+        const candidate = {
+            ...item,
+            documentRevision: Number(snapshot?.revision) || 0
+        };
+        const verification = SciLLM.verifyArticleChatEvidence(candidate, snapshot);
+        return {
+            ...candidate,
+            paragraphId: verification.target?.paragraphId || candidate.paragraphId || '',
+            sourceKey: verification.target?.sourceKey || candidate.sourceKey || '',
+            textHash: verification.target?.textHash || candidate.textHash || '',
+            sectionTitle: verification.target?.sectionTitle || candidate.sectionTitle || '',
+            sectionPath: verification.target?.sectionPath || candidate.sectionPath || [],
+            verificationStatus: verification.status,
+            candidateCount: verification.candidateCount,
+            verificationReason: verification.reason
+        };
+    });
 }
 
 async function askArticleWithLLM(question, profileId = '') {
@@ -3974,7 +4004,9 @@ async function askArticleWithLLM(question, profileId = '') {
             .map(item => ({
             paragraphId: String(item?.paragraphId || ''),
             sourceKey: String(item?.sourceKey || ''),
+            textHash: String(item?.textHash || ''),
             sectionTitle: String(item?.sectionTitle || ''),
+            sectionPath: Array.isArray(item?.sectionPath) ? item.sectionPath : [],
             text: String(item?.text || '')
         }));
         const response = await chrome.runtime.sendMessage({
@@ -4007,7 +4039,7 @@ async function askArticleWithLLM(question, profileId = '') {
             profileId: route.effectiveProfileId || normalizedProfileId,
             profileName: route.effectiveProfileName || route.name || '',
             model: route.model || '',
-            evidence: answer.evidence,
+            evidence: attachArticleChatEvidenceIdentity(answer.evidence, snapshot),
             limitations: answer.limitations,
             createdAt: Date.now()
         });
@@ -4847,9 +4879,12 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
         paragraphs: canonicalSnapshot.paragraphs.map(paragraph => ({
             paragraphId: String(paragraph.paragraphId || ''),
             sourceKey: String(paragraph.sourceKey || ''),
+            textHash: String(paragraph.textHash || ''),
             navigationRevision: Number(structure.revision) || 0,
             sectionId: String(paragraph.sectionId || ''),
             sectionTitle: normalizeArticleNavigatorText(paragraph.sectionTitle),
+            sectionPath: (Array.isArray(paragraph.headingPath) ? paragraph.headingPath : [])
+                .map(item => normalizeArticleNavigatorText(item?.title)).filter(Boolean),
             text: normalizeArticleNavigatorText(paragraph.text).slice(0, 4000)
         })),
         highlightDistribution,
@@ -5018,9 +5053,18 @@ async function applyArticleArchiveSnapshot(input) {
                     .map(item => ({
                         paragraphId: String(item?.paragraphId || '').slice(0, 120),
                         sourceKey: String(item?.sourceKey || item?.paragraphId || '').slice(0, 120),
+                        textHash: String(item?.textHash || '').slice(0, 120),
                         sectionTitle: String(item?.sectionTitle || '').slice(0, 300),
+                        sectionPath: (Array.isArray(item?.sectionPath) ? item.sectionPath : [])
+                            .slice(-12).map(entry => String(
+                                typeof entry === 'string' ? entry : entry?.title || ''
+                            ).slice(0, 300)).filter(Boolean),
                         quote: String(item?.quote || '').slice(0, 2000),
-                        support: String(item?.support || '').slice(0, 1600)
+                        support: String(item?.support || '').slice(0, 1600),
+                        documentRevision: Math.max(0, Number(item?.documentRevision) || 0),
+                        verificationStatus: String(item?.verificationStatus || '').slice(0, 32),
+                        candidateCount: Math.max(0, Number(item?.candidateCount) || 0),
+                        verificationReason: String(item?.verificationReason || '').slice(0, 120)
                     })),
                 limitations: String(message?.limitations || '').slice(0, 4000),
                 createdAt: Number(message?.createdAt) || Date.now()
@@ -5066,7 +5110,41 @@ function resolveWorkspaceParagraph(target = {}) {
     return paragraph || null;
 }
 
+function verifyAndFocusArticleChatCitation(target = {}) {
+    let snapshot = getCanonicalArticleSnapshot();
+    const requestedRevision = Math.max(
+        0,
+        Number(target?.documentRevision || target?.navigationRevision) || 0
+    );
+    const revisionChanged = Boolean(requestedRevision &&
+        requestedRevision !== Number(snapshot?.revision || 0));
+    if (revisionChanged) snapshot = getCanonicalArticleSnapshot({ forceRefresh: true });
+    const evidence = {
+        ...(target?.evidence || target),
+        documentRevision: Number(snapshot?.revision) || 0
+    };
+    const verification = SciLLM.verifyArticleChatEvidence(evidence, snapshot);
+    if (verification.status !== 'verified' || !verification.target) {
+        return { ...verification, focused: false, revisionChanged };
+    }
+    const paragraph = resolveWorkspaceParagraph(verification.target);
+    if (!paragraph || !focusArticleSource(paragraph.anchor)) {
+        return {
+            ...verification,
+            status: 'missing',
+            reason: 'SOURCE_ANCHOR_MISSING',
+            target: null,
+            focused: false,
+            revisionChanged
+        };
+    }
+    return { ...verification, focused: true, revisionChanged };
+}
+
 function focusArticleWorkspaceSource(target = {}) {
+    if (target.kind === 'article-chat-citation') {
+        return verifyAndFocusArticleChatCitation(target);
+    }
     if (target.kind === 'highlight') {
         return focusHighlightOccurrence({ highlightId: target.highlightId });
     }
@@ -6001,10 +6079,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'focusArticleWorkspaceSource') {
         try {
-            const focused = focusArticleWorkspaceSource(request.target || {});
+            const focusResult = focusArticleWorkspaceSource(request.target || {});
+            const citationResult = focusResult && typeof focusResult === 'object'
+                ? focusResult : null;
             sendResponse({
                 success: true,
-                focused
+                focused: citationResult ? citationResult.focused === true : Boolean(focusResult),
+                citationResult
             });
         } catch (error) {
             sendResponse({ success: false, error: error.message });

@@ -137,6 +137,22 @@ test('workspace paragraph resolution retries one forced structure refresh for st
   assert.match(script, /const paragraph = resolveWorkspaceParagraph\(target\)/);
 });
 
+test('article citation jumps reverify canonical evidence after a document revision change', () => {
+  const script = read('content.js');
+  const messenger = read('core/tab-messenger.js');
+  assert.match(messenger, /core\/article-chat-citations\.js/);
+  assert.match(script, /textHash:\s*String\(paragraph\.textHash/);
+  assert.match(script, /sectionPath:/);
+  const start = script.indexOf('function verifyAndFocusArticleChatCitation');
+  const end = script.indexOf('function focusArticleWorkspaceSource', start);
+  const workflow = script.slice(start, end);
+  assert.match(workflow, /getCanonicalArticleSnapshot/);
+  assert.match(workflow, /forceRefresh:\s*true/);
+  assert.match(workflow, /SciLLM\.verifyArticleChatEvidence/);
+  assert.match(workflow, /DOCUMENT_REVISION_CHANGED|revisionChanged/);
+  assert.match(script, /citationResult/);
+});
+
 test('single paragraph analysis sends current navigation records but scopes the requested paragraph', () => {
   const script = read('content.js');
   assert.match(script, /async function analyzeReviewParagraphWithLLM\(/);

@@ -1965,67 +1965,97 @@ function normalizeArticleChatCitationText(value) {
 }
 
 function resolveArticleChatEvidenceTarget(item, snapshot) {
-    const paragraphs = Array.isArray(snapshot?.paragraphs) ? snapshot.paragraphs : [];
-    const paragraphId = String(item?.paragraphId || '').trim();
-    const sourceKey = String(item?.sourceKey || '').trim();
-    const identifiers = new Set([paragraphId, sourceKey].filter(Boolean));
-    let paragraph = paragraphs.find(candidate => identifiers.has(String(candidate?.paragraphId || '')) ||
-        identifiers.has(String(candidate?.sourceKey || '')));
-    if (!paragraph) {
-        const quote = normalizeArticleChatCitationText(item?.quote);
-        const sectionTitle = normalizeArticleChatCitationText(item?.sectionTitle);
-        paragraph = paragraphs.find(candidate => {
-            const candidateText = normalizeArticleChatCitationText(candidate?.text);
-            const candidateTitle = normalizeArticleChatCitationText(candidate?.sectionTitle);
-            return Boolean(quote && candidateText.includes(quote)) ||
-                Boolean(sectionTitle && candidateTitle === sectionTitle);
-        });
-    }
-    const resolvedParagraphId = String(paragraph?.paragraphId || paragraphId || '').trim();
-    const resolvedSourceKey = String(
-        paragraph?.sourceKey || sourceKey || paragraphId || ''
-    ).trim();
-    if (!resolvedParagraphId && !resolvedSourceKey) return null;
-    return {
-        kind: 'paragraph',
-        paragraphId: resolvedParagraphId,
-        sourceKey: resolvedSourceKey,
-        navigationRevision: Number(snapshot?.revision || 0)
-    };
+    return SciLLM.verifyArticleChatEvidence({
+        ...item,
+        documentRevision: Number(item?.documentRevision || snapshot?.revision) || 0
+    }, snapshot);
+}
+
+function articleChatCitationStatusText(status, reason = '') {
+    if (status === 'ambiguous') return '待核验：原文中存在多个相同或近似位置';
+    if (status === 'stale') return '待核验：正文版本已经变化';
+    if (reason === 'SOURCE_ANCHOR_MISSING') return '跳转失败：原文位置当前不可见';
+    return '待核验：没有找到唯一对应的原文段落';
+}
+
+function applyArticleChatCitationState(button, verification, evidenceIndex = 0, label = '') {
+    const status = verification?.status || 'missing';
+    button.classList.remove('is-verified', 'is-ambiguous', 'is-missing', 'is-stale');
+    button.classList.add(`is-${status}`);
+    button.dataset.verificationStatus = status;
+    button.dataset.candidateCount = String(verification?.candidateCount || 0);
+    button.disabled = status !== 'verified';
+    button.textContent = status === 'verified' ? String(evidenceIndex + 1) : '待核验';
+    const statusText = status === 'verified'
+        ? `参考原文 ${evidenceIndex + 1} · ${label || '正文段落'}`
+        : articleChatCitationStatusText(status, verification?.reason);
+    button.title = statusText;
+    button.setAttribute('aria-label', statusText);
 }
 
 async function focusArticleChatCitation(item, snapshot, button = null) {
-    const target = resolveArticleChatEvidenceTarget(item, snapshot);
-    if (!target) return false;
+    const verification = resolveArticleChatEvidenceTarget(item, snapshot);
+    if (verification.status !== 'verified' || !verification.target) return false;
+    const target = {
+        kind: 'article-chat-citation',
+        evidence: {
+            paragraphId: item?.paragraphId || verification.target.paragraphId,
+            sourceKey: item?.sourceKey || verification.target.sourceKey,
+            textHash: item?.textHash || verification.target.textHash,
+            sectionTitle: item?.sectionTitle || verification.target.sectionTitle,
+            sectionPath: item?.sectionPath || verification.target.sectionPath,
+            quote: item?.quote || '',
+            support: item?.support || ''
+        },
+        documentRevision: Number(snapshot?.revision) || 0
+    };
     const panelContext = capturePanelContext();
     if (button) button.disabled = true;
     try {
-        const focused = await focusWorkspaceSource(target, panelContext);
+        const response = await sendTabMessage(panelContext.tabId, {
+            action: 'focusArticleWorkspaceSource',
+            target
+        });
+        if (!isCurrentPanelContext(panelContext)) return false;
+        const citationResult = response?.citationResult || {
+            status: response?.focused ? 'verified' : 'missing',
+            reason: response?.focused ? '' : 'SOURCE_ANCHOR_MISSING',
+            candidateCount: 0
+        };
+        const focused = Boolean(response?.success && response?.focused);
         if (!focused && isCurrentPanelContext(panelContext)) {
-            showStatus('未找到对应原文段落，请刷新论文页面后重试', 'error');
+            if (button?.isConnected) applyArticleChatCitationState(
+                button, citationResult, Number(button.dataset.evidenceIndex) || 0,
+                item?.sectionTitle || '正文段落'
+            );
+            showStatus(articleChatCitationStatusText(
+                citationResult.status, citationResult.reason
+            ), 'error');
         }
         return focused;
     } finally {
-        if (button?.isConnected) button.disabled = false;
+        if (button?.isConnected && button.dataset.verificationStatus === 'verified') {
+            button.disabled = false;
+        }
     }
 }
 
 function createArticleChatInlineCitation(item, evidenceIndex, snapshot) {
-    const target = resolveArticleChatEvidenceTarget(item, snapshot);
+    const verification = resolveArticleChatEvidenceTarget(item, snapshot);
     const button = createWorkspaceElement(
         'button', 'article-chat-inline-citation', String(evidenceIndex + 1)
     );
     button.type = 'button';
-    button.disabled = !target;
-    button.dataset.paragraphId = target?.paragraphId || '';
-    button.dataset.sourceKey = target?.sourceKey || '';
+    button.dataset.evidenceIndex = String(evidenceIndex);
+    button.dataset.paragraphId = verification.target?.paragraphId || '';
+    button.dataset.sourceKey = verification.target?.sourceKey || '';
     const label = item?.sectionTitle || '正文段落';
     const quote = String(item?.quote || item?.support || '').trim();
-    button.title = target
-        ? `参考原文 ${evidenceIndex + 1} · ${label}${quote ? `\n${quote}` : ''}`
-        : '旧记录未保存可定位的原文段落';
-    button.setAttribute('aria-label', `跳转到参考原文 ${evidenceIndex + 1}：${label}`);
-    if (target) button.addEventListener('click', () => {
+    applyArticleChatCitationState(button, verification, evidenceIndex, label);
+    if (verification.status === 'verified' && quote) {
+        button.title += `\n${quote}`;
+    }
+    if (verification.status === 'verified') button.addEventListener('click', () => {
         void focusArticleChatCitation(item, snapshot, button);
     });
     return button;
@@ -2159,10 +2189,10 @@ function appendArticleChatEvidence(parent, message, snapshot, inlineCitationInde
         .filter(({ evidenceIndex }) => !renderedIndexes.has(evidenceIndex));
     if (missingEvidence.length) {
         const citations = createWorkspaceElement('section', 'article-chat-citation-fallback');
-        citations.appendChild(createWorkspaceElement('span', '', '参考原文'));
-        missingEvidence.forEach(({ item, evidenceIndex }) => {
-            citations.appendChild(createArticleChatInlineCitation(item, evidenceIndex, snapshot));
-        });
+        citations.appendChild(createWorkspaceElement(
+            'span', '',
+            `${missingEvidence.length} 条证据没有绑定到回答中的具体句子，因此未生成跳转点。`
+        ));
         parent.appendChild(citations);
     }
     if (limitations) {

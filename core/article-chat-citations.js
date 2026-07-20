@@ -220,12 +220,214 @@
     };
   }
 
+  function normalizeEvidenceIdentity(value) {
+    return String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  }
+
+  function normalizeSectionKeys(value) {
+    const items = Array.isArray(value) ? value : [value];
+    return new Set(items.map(item => normalizeEvidenceIdentity(
+      typeof item === 'string' ? item : (item?.title || item?.sectionTitle)
+    ).toLowerCase()).filter(Boolean));
+  }
+
+  function paragraphSectionKeys(paragraph) {
+    return normalizeSectionKeys([
+      paragraph?.sectionTitle,
+      ...(Array.isArray(paragraph?.sectionPath) ? paragraph.sectionPath : [])
+    ]);
+  }
+
+  function evidenceSectionKeys(evidence) {
+    return normalizeSectionKeys([
+      evidence?.sectionTitle,
+      ...(Array.isArray(evidence?.sectionPath) ? evidence.sectionPath : [])
+    ]);
+  }
+
+  function sectionsOverlap(evidence, paragraph) {
+    const requested = evidenceSectionKeys(evidence);
+    if (!requested.size) return false;
+    const available = paragraphSectionKeys(paragraph);
+    return [...requested].some(key => available.has(key));
+  }
+
+  function bestAlignedSimilarity(sourceUnits, queryUnits) {
+    if (!sourceUnits.length || !queryUnits.length || sourceUnits.length < queryUnits.length) {
+      return 0;
+    }
+    let best = 0;
+    const queryLength = queryUnits.length;
+    for (let start = 0; start <= sourceUnits.length - queryLength; start += 1) {
+      let matches = 0;
+      for (let offset = 0; offset < queryLength; offset += 1) {
+        if (sourceUnits[start + offset] === queryUnits[offset]) matches += 1;
+      }
+      best = Math.max(best, matches / queryLength);
+      if (best === 1) return best;
+    }
+    return best;
+  }
+
+  function tolerantQuoteSimilarity(text, quote) {
+    const sourceTokens = extractQuoteTextTokens(text);
+    const quoteTokens = extractQuoteTextTokens(quote);
+    let tokenSimilarity = 0;
+    if (quoteTokens.length >= 6 && quoteTokens.length <= 240) {
+      tokenSimilarity = bestAlignedSimilarity(sourceTokens, quoteTokens);
+    }
+    const sourceCharacters = normalizeQuoteTextCanonical(text).replace(/\s+/g, '');
+    const quoteCharacters = normalizeQuoteTextCanonical(quote).replace(/\s+/g, '');
+    let characterSimilarity = 0;
+    if (quoteCharacters.length >= 12 && quoteCharacters.length <= 240) {
+      characterSimilarity = bestAlignedSimilarity(
+        Array.from(sourceCharacters), Array.from(quoteCharacters)
+      );
+    }
+    return Math.max(tokenSimilarity, characterSimilarity);
+  }
+
+  function citationTarget(paragraph, snapshot, quote = '') {
+    const quoteSpan = quote ? findCanonicalQuoteSourceSpan(paragraph?.text, quote) : null;
+    return {
+      paragraphId: normalizeEvidenceIdentity(paragraph?.paragraphId),
+      sourceKey: normalizeEvidenceIdentity(paragraph?.sourceKey),
+      textHash: normalizeEvidenceIdentity(paragraph?.textHash),
+      sectionTitle: normalizeEvidenceIdentity(paragraph?.sectionTitle),
+      sectionPath: (Array.isArray(paragraph?.sectionPath) ? paragraph.sectionPath : [])
+        .map(item => typeof item === 'string' ? item : { ...item }),
+      documentRevision: Math.max(0, Number(snapshot?.revision) || 0),
+      quoteSpan
+    };
+  }
+
+  function verificationResult(status, snapshot, {
+    candidates = [],
+    reason = '',
+    matchMethod = '',
+    quote = ''
+  } = {}) {
+    const uniqueCandidate = status === 'verified' && candidates.length === 1
+      ? candidates[0] : null;
+    return {
+      status,
+      candidateCount: candidates.length,
+      reason,
+      matchMethod,
+      documentRevision: Math.max(0, Number(snapshot?.revision) || 0),
+      target: uniqueCandidate ? citationTarget(uniqueCandidate, snapshot, quote) : null
+    };
+  }
+
+  function verifyUniqueCandidates(candidates, snapshot, options) {
+    if (candidates.length === 1) {
+      return verificationResult('verified', snapshot, { ...options, candidates });
+    }
+    if (candidates.length > 1) {
+      return verificationResult('ambiguous', snapshot, { ...options, candidates });
+    }
+    return null;
+  }
+
+  function verifyArticleChatEvidence(evidence = {}, snapshot = {}) {
+    const paragraphs = (Array.isArray(snapshot?.paragraphs) ? snapshot.paragraphs : [])
+      .filter(paragraph => paragraph && typeof paragraph === 'object');
+    const currentRevision = Math.max(0, Number(snapshot?.revision) || 0);
+    const evidenceRevision = Math.max(
+      0,
+      Number(evidence?.documentRevision || evidence?.navigationRevision) || 0
+    );
+    if (evidenceRevision && currentRevision && evidenceRevision !== currentRevision) {
+      return verificationResult('stale', snapshot, {
+        reason: 'DOCUMENT_REVISION_CHANGED'
+      });
+    }
+
+    const paragraphId = normalizeEvidenceIdentity(evidence?.paragraphId);
+    if (paragraphId) {
+      const candidates = paragraphs.filter(paragraph =>
+        normalizeEvidenceIdentity(paragraph?.paragraphId) === paragraphId
+      );
+      const result = verifyUniqueCandidates(candidates, snapshot, {
+        matchMethod: 'paragraph-id',
+        reason: candidates.length > 1 ? 'PARAGRAPH_ID_MATCHED_MULTIPLE_LOCATIONS' : '',
+        quote: evidence?.quote
+      });
+      if (result) return result;
+    }
+
+    const sourceKey = normalizeEvidenceIdentity(evidence?.sourceKey);
+    const textHash = normalizeEvidenceIdentity(evidence?.textHash).toLowerCase();
+    if (sourceKey && textHash) {
+      const candidates = paragraphs.filter(paragraph =>
+        normalizeEvidenceIdentity(paragraph?.sourceKey) === sourceKey &&
+        normalizeEvidenceIdentity(paragraph?.textHash).toLowerCase() === textHash
+      );
+      const result = verifyUniqueCandidates(candidates, snapshot, {
+        matchMethod: 'source-key-text-hash',
+        reason: candidates.length > 1
+          ? 'SOURCE_KEY_TEXT_HASH_MATCHED_MULTIPLE_LOCATIONS' : '',
+        quote: evidence?.quote
+      });
+      if (result) return result;
+    }
+
+    const quote = normalizeEvidenceIdentity(evidence?.quote || evidence?.support);
+    if (quote) {
+      const exactMatches = [];
+      paragraphs.forEach(paragraph => {
+        const count = countCanonicalTextMatches(paragraph?.text, quote);
+        for (let index = 0; index < count; index += 1) exactMatches.push(paragraph);
+      });
+      if (exactMatches.length === 1) {
+        return verificationResult('verified', snapshot, {
+          candidates: exactMatches,
+          matchMethod: 'unique-quote',
+          quote
+        });
+      }
+      if (exactMatches.length > 1) {
+        return verificationResult('ambiguous', snapshot, {
+          candidates: exactMatches,
+          reason: 'QUOTE_MATCHED_MULTIPLE_LOCATIONS',
+          matchMethod: 'unique-quote',
+          quote
+        });
+      }
+
+      const scopedMatches = paragraphs.filter(paragraph =>
+        sectionsOverlap(evidence, paragraph) &&
+        tolerantQuoteSimilarity(paragraph?.text, quote) >= 0.82
+      );
+      if (scopedMatches.length === 1) {
+        return verificationResult('verified', snapshot, {
+          candidates: scopedMatches,
+          matchMethod: 'section-tolerant-quote',
+          quote
+        });
+      }
+      if (scopedMatches.length > 1) {
+        return verificationResult('ambiguous', snapshot, {
+          candidates: scopedMatches,
+          reason: 'TOLERANT_QUOTE_MATCHED_MULTIPLE_LOCATIONS',
+          matchMethod: 'section-tolerant-quote',
+          quote
+        });
+      }
+    }
+
+    return verificationResult('missing', snapshot, {
+      reason: 'EVIDENCE_NOT_FOUND'
+    });
+  }
+
   return {
     buildQuoteTextIndex,
     normalizeQuoteTextCanonical,
     extractQuoteTextTokens,
     findCanonicalTextMatchStart,
     countCanonicalTextMatches,
-    findCanonicalQuoteSourceSpan
+    findCanonicalQuoteSourceSpan,
+    verifyArticleChatEvidence
   };
 });

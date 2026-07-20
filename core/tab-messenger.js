@@ -10,6 +10,7 @@
     'core/publisher-adapters.js',
     'core/article-structure.js',
     'core/article-extractor.js',
+    'core/article-chat-citations.js',
     'core/publisher-diagnostics.js',
     'core/highlight-distribution.js',
     'core/figure-extractor.js',
