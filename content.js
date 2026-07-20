@@ -636,6 +636,8 @@ let articleWorkspaceEnsurePromise = null;
 let articleWorkspaceMutationTail = Promise.resolve();
 let articleWorkspaceSaveFrozen = false;
 let articleWorkspaceGenerationOverride = 1;
+let articleWorkspaceLifecycleGeneration = 0;
+let pendingExternalWorkspaceDeletionId = '';
 let articleWorkspaceSidePanelUiState = null;
 let restoredWorkspaceLlmTask = null;
 const articleWorkspaceAssetFingerprints = new Map();
@@ -3022,6 +3024,7 @@ async function prepareArticleProfileWithLLM(options = {}) {
 async function analyzeArticleWithLLM(options = {}) {
     if (llmAnalysisPromise) return llmAnalysisPromise;
     const operation = beginLlmHighlightOperation();
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     llmAnalysisPromise = (async () => {
         setLlmErrorDiagnostics(null);
         highlighter.clearHighlight();
@@ -3049,6 +3052,7 @@ async function analyzeArticleWithLLM(options = {}) {
         showLlmPageStatus(`正在使用 LLM 分析 ${paragraphs.length} 个正文单元…`);
         const response = await chrome.runtime.sendMessage({
             type: 'LLM_ANALYZE_DOCUMENT',
+            workspaceLifecycle,
             operationId: operation.operationId,
             document: {
                 documentId: options.documentId,
@@ -3057,6 +3061,7 @@ async function analyzeArticleWithLLM(options = {}) {
                 paragraphs
             }
         });
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success) {
             const error = new Error(response?.error?.message || 'LLM 分析失败');
             error.code = response?.error?.code;
@@ -3095,7 +3100,16 @@ async function analyzeArticleWithLLM(options = {}) {
     try {
         return await llmAnalysisPromise;
     } catch (error) {
+        const staleWorkspace = workspaceLifecycle !== articleWorkspaceLifecycleGeneration;
         llmProgressiveAnalysis = null;
+        if (staleWorkspace) {
+            return {
+                success: false,
+                cancelled: true,
+                code: 'CANCELLED',
+                operationId: operation.operationId
+            };
+        }
         if (error?.code === 'CANCELLED' || operation.cancelled) {
             lastLlmDiagnostics = {
                 ...(lastLlmDiagnostics || {}),
@@ -3722,6 +3736,7 @@ async function analyzeSingleFigureDeep(figureId) {
             }
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURES',
+                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
                 analysisDepth: 'deep',
                 operationId: operation.operationId,
                 document: { title: document.title, paragraphs },
@@ -3791,6 +3806,7 @@ async function analyzeSingleFigureWithLLM(figureId, { forceRefresh = false } = {
             state.figureInputHash = buildFigureInputHash(state.figure, images);
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURES',
+                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
                 analysisDepth: 'standard',
                 forceRefresh: forceRefresh === true,
                 operationId: operation.operationId,
@@ -3943,6 +3959,7 @@ async function analyzeSingleFigurePanelWithLLM(
             await waitForLocalOperation(operation);
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURE_PANEL',
+                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
                 forceRefresh: forceRefresh === true,
                 operationId: operation.operationId,
                 documentHash,
@@ -4006,6 +4023,7 @@ async function analyzeSingleFigurePanelWithLLM(
 }
 
 async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuestion = '') {
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const state = ensureFigureWalkthroughState(figureId);
     const result = getActiveFigureAnalysisForDomino(state);
     const requestedPanel = normalizeRequestedPanelId(panelId);
@@ -4043,6 +4061,7 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
             ? state.panelFollowupHistories[panelKey] : [];
         const response = await chrome.runtime.sendMessage({
             type: 'LLM_ASK_FIGURE_PANEL',
+            workspaceLifecycle,
             documentHash,
             document: { title: document.title, documentHash },
             figure: {
@@ -4058,6 +4077,7 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
             customQuestion: normalizedQuestion,
             history
         });
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success || !response.data?.panelFollowup) {
             const error = new Error(response?.error?.message || 'FIGURE_PANEL_FOLLOWUP_FAILED');
             error.code = response?.error?.code || 'FIGURE_PANEL_FOLLOWUP_FAILED';
@@ -4086,6 +4106,7 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
             route: response.data.route || null
         };
     } catch (error) {
+        if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) throw error;
         state.panelFollowupErrors[panelKey] = error?.message || 'FIGURE_PANEL_FOLLOWUP_FAILED';
         throw error;
     } finally {
@@ -4242,6 +4263,53 @@ function notifyFigureWorkspaceStateChanged(kind, figure = null, extra = {}) {
     chrome.runtime.sendMessage({
         type: 'FIGURE_WORKSPACE_STATE_CHANGED', event
     }).catch(() => {});
+}
+
+function articleWorkspaceLifecycleError() {
+    const error = new Error('ARTICLE_WORKSPACE_LIFECYCLE_CHANGED');
+    error.code = 'CANCELLED';
+    return error;
+}
+
+function assertCurrentArticleWorkspaceLifecycle(generation) {
+    if (generation !== articleWorkspaceLifecycleGeneration) {
+        throw articleWorkspaceLifecycleError();
+    }
+}
+
+function cancelWorkspaceOperation(operation) {
+    if (!operation) return;
+    operation.cancelled = true;
+    operation.paused = false;
+    operation.waiters?.splice(0).forEach(resolve => resolve());
+    if (operation.operationId) {
+        chrome.runtime.sendMessage({
+            type: 'LLM_CONTROL_OPERATION',
+            operationId: operation.operationId,
+            command: 'cancel'
+        }).catch(() => {});
+    }
+}
+
+function invalidateArticleWorkspaceLifecycle() {
+    articleWorkspaceLifecycleGeneration += 1;
+    articleChatGeneration += 1;
+    const chatOperationId = String(articleChatState.operationId || '');
+    cancelWorkspaceOperation(llmOperationState.active);
+    cancelWorkspaceOperation(figureOperationState.active);
+    llmOperationState.generation += 1;
+    figureOperationState.generation += 1;
+    llmOperationState.active = null;
+    figureOperationState.active = null;
+    llmProgressiveAnalysis = null;
+    if (chatOperationId) {
+        chrome.runtime.sendMessage({
+            type: 'LLM_CONTROL_OPERATION',
+            operationId: chatOperationId,
+            command: 'cancel'
+        }).catch(() => {});
+    }
+    return articleWorkspaceLifecycleGeneration;
 }
 
 function attachArticleChatEvidenceIdentity(evidence, snapshot) {
@@ -4575,6 +4643,7 @@ async function runArticleChatTurn(turn) {
         articleChatState.memoryNeedsRebuild = false;
         const response = await chrome.runtime.sendMessage({
             type: 'LLM_ASK_ARTICLE',
+            workspaceLifecycle: articleWorkspaceLifecycleGeneration,
             operationId,
             turnId: turn.turnId,
             profileId: turn.selectedProfileId,
@@ -4588,7 +4657,7 @@ async function runArticleChatTurn(turn) {
                 paragraphs
             }
         });
-        if (turn.operationId !== operationId || generation > articleChatGeneration) {
+        if (turn.operationId !== operationId || generation !== articleChatGeneration) {
             const error = new Error('ARTICLE_CHAT_STALE');
             error.code = 'CANCELLED';
             throw error;
@@ -4616,6 +4685,7 @@ async function runArticleChatTurn(turn) {
         scheduleCurrentArticleArchiveSave();
         notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_completed' });
     } catch (error) {
+        if (generation !== articleChatGeneration) return;
         const cancelled = error?.code === 'CANCELLED' || error?.name === 'AbortError';
         turn.status = cancelled ? 'cancelled' : 'error';
         turn.error = cancelled
@@ -4629,16 +4699,19 @@ async function runArticleChatTurn(turn) {
             phase: cancelled ? 'chat_cancelled' : 'chat_error'
         });
     } finally {
-        if (articleChatState.operationId === operationId) {
+        const currentGeneration = generation === articleChatGeneration;
+        if (currentGeneration && articleChatState.operationId === operationId) {
             articleChatState.loading = false;
             articleChatState.operationId = '';
             articleChatState.activeTurnId = '';
         }
-        turn.operationId = '';
+        if (currentGeneration) turn.operationId = '';
         chrome.runtime.sendMessage({
             type: 'LLM_CONTROL_OPERATION', operationId, command: 'release'
         }).catch(() => {});
-        notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_terminal' });
+        if (currentGeneration) {
+            notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_terminal' });
+        }
     }
 }
 
@@ -4797,6 +4870,7 @@ function clearArticleChat() {
 
 async function analyzeCrossFigureLogicWithLLM({ forceRefresh = false } = {}) {
     if (crossFigureLogicPromise) return crossFigureLogicPromise;
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const figures = buildCrossFigureLogicInput();
     const mainFigures = figures.filter(item => !item.isSupplemental);
     if (mainFigures.length < 2) {
@@ -4813,10 +4887,12 @@ async function analyzeCrossFigureLogicWithLLM({ forceRefresh = false } = {}) {
         try {
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
+                workspaceLifecycle,
                 forceRefresh: forceRefresh === true,
                 document: { title: document.title },
                 figures
             });
+            assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
             if (!response?.success) {
                 const error = new Error(response?.error?.message || 'CROSS_FIGURE_LOGIC_FAILED');
                 error.code = response?.error?.code || 'CROSS_FIGURE_LOGIC_FAILED';
@@ -4834,6 +4910,7 @@ async function analyzeCrossFigureLogicWithLLM({ forceRefresh = false } = {}) {
             scheduleCurrentArticleArchiveSave();
             return { success: true, result, route: response.data.route || null };
         } catch (error) {
+            if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) throw error;
             crossFigureLogicState = {
                 result: crossFigureLogicState.result,
                 loading: false,
@@ -4851,6 +4928,7 @@ async function analyzeFiguresWithLLM(options = {}) {
     if (figureAnalysisPromise) return figureAnalysisPromise;
     const analysisDepth = options.analysisDepth === 'standard' ? 'standard' : 'deep';
     const operation = beginFigureOperation('batch');
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     figureAnalysisPromise = (async () => {
         const startedAt = Date.now();
         const results = [];
@@ -4963,6 +5041,7 @@ async function analyzeFiguresWithLLM(options = {}) {
                     });
                     const response = await chrome.runtime.sendMessage({
                         type: 'LLM_ANALYZE_FIGURES',
+                        workspaceLifecycle,
                         analysisDepth,
                         operationId: operation.operationId,
                         document: { title: document.title, paragraphs },
@@ -5132,24 +5211,26 @@ async function analyzeFiguresWithLLM(options = {}) {
             };
         } catch (error) {
             const cancelled = error?.code === 'CANCELLED' || operation.cancelled;
-            cancelPendingFigureProgress(figures, {
-                completedFigures: results.length,
-                errorCode: cancelled ? 'CANCELLED' : (error?.code || 'FIGURE_BATCH_CANCELLED')
-            });
-            updateFigureAnalysisStatus({
-                running: false,
-                paused: false,
-                phase: cancelled ? 'cancelled' : 'failed',
-                totalFigures: figures.length,
-                completedFigures: results.length,
-                failedFigures: failures.length,
-                message: cancelled
-                    ? 'Figure 解读已取消，已完成结果会保留。'
-                    : (error?.message || '逐图解读失败'),
-                failures,
-                cacheHits,
-                visionFallbacks
-            });
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                cancelPendingFigureProgress(figures, {
+                    completedFigures: results.length,
+                    errorCode: cancelled ? 'CANCELLED' : (error?.code || 'FIGURE_BATCH_CANCELLED')
+                });
+                updateFigureAnalysisStatus({
+                    running: false,
+                    paused: false,
+                    phase: cancelled ? 'cancelled' : 'failed',
+                    totalFigures: figures.length,
+                    completedFigures: results.length,
+                    failedFigures: failures.length,
+                    message: cancelled
+                        ? 'Figure 解读已取消，已完成结果会保留。'
+                        : (error?.message || '逐图解读失败'),
+                    failures,
+                    cacheHits,
+                    visionFallbacks
+                });
+            }
             throw error;
         }
     })();
@@ -5157,7 +5238,9 @@ async function analyzeFiguresWithLLM(options = {}) {
         return await figureAnalysisPromise;
     } catch (error) {
         if (error?.code === 'CANCELLED' || operation.cancelled) {
-            showLlmPageStatus('Figure 解读已取消，已完成结果会保留。', 'success');
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                showLlmPageStatus('Figure 解读已取消，已完成结果会保留。', 'success');
+            }
             return {
                 success: false,
                 cancelled: true,
@@ -5621,10 +5704,12 @@ function articleWorkspaceMetadata() {
 
 async function ensureCurrentArticleWorkspace({ forceRefresh = false } = {}) {
     if (articleWorkspaceSaveFrozen) throw new Error('WORKSPACE_WRITES_FROZEN');
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const snapshot = getCanonicalArticleSnapshot({ forceRefresh });
     const metadata = articleWorkspaceMetadata();
     const content = snapshot.paragraphs.map(paragraph => String(paragraph?.text || '')).join('\n\n');
     const identity = await SciLLM.createArticleWorkspaceIdentity({ ...metadata, content });
+    assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
     identity.workspaceGeneration = Math.max(1, articleWorkspaceGenerationOverride);
     if (!forceRefresh && currentArticleWorkspace?.workspaceId === identity.workspaceId &&
         currentArticleWorkspace?.contentHash === identity.contentHash &&
@@ -5632,10 +5717,11 @@ async function ensureCurrentArticleWorkspace({ forceRefresh = false } = {}) {
         return currentArticleWorkspace;
     }
     if (articleWorkspaceEnsurePromise) return articleWorkspaceEnsurePromise;
-    articleWorkspaceEnsurePromise = chrome.runtime.sendMessage({
+    const ensurePromise = chrome.runtime.sendMessage({
         type: 'ARTICLE_WORKSPACE_ENSURE',
         workspace: identity
     }).then(response => {
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success || !response.data?.workspace) {
             throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_ENSURE_FAILED');
         }
@@ -5646,9 +5732,12 @@ async function ensureCurrentArticleWorkspace({ forceRefresh = false } = {}) {
         );
         return currentArticleWorkspace;
     }).finally(() => {
-        articleWorkspaceEnsurePromise = null;
+        if (articleWorkspaceEnsurePromise === ensurePromise) {
+            articleWorkspaceEnsurePromise = null;
+        }
     });
-    return articleWorkspaceEnsurePromise;
+    articleWorkspaceEnsurePromise = ensurePromise;
+    return ensurePromise;
 }
 
 function articleWorkspaceAssetFingerprint(content) {
@@ -6240,6 +6329,7 @@ async function applyArticleWorkspaceAssets(input = {}) {
 
 async function resetArticleWorkspaceState({ workspaceGeneration = 1 } = {}) {
     articleWorkspaceSaveFrozen = true;
+    invalidateArticleWorkspaceLifecycle();
     clearTimeout(articleArchiveSaveTimer);
     clearTimeout(articleWorkspaceSaveTimer);
     articleArchiveSaveTimer = null;
@@ -6247,15 +6337,19 @@ async function resetArticleWorkspaceState({ workspaceGeneration = 1 } = {}) {
     clearAutomaticHighlights();
     lastRegexHighlightRequest = null;
     lastLlmAnalysis = null;
+    llmProgressiveAnalysis = null;
     lastLlmDiagnostics = null;
     lastReviewOutline = null;
+    standaloneReviewParagraphSummaries.clear();
+    articleSectionOutlines.clear();
+    reviewOutlineStatus = createInitialReviewOutlineStatus();
     restoredWorkspaceLlmTask = null;
     restoredFigureWorkspaceSnapshot = null;
     lastFigureAnalysis = null;
     figureWalkthroughState.clear();
     figureProgressById.clear();
+    figureAnalysisStatus = createInitialFigureAnalysisStatus();
     crossFigureLogicState = { result: null, loading: false, error: '' };
-    articleChatGeneration += 1;
     articleChatState = {
         turns: [], loading: false, error: '', operationId: '', activeTurnId: '',
         coverage: null, memoryNeedsRebuild: true
@@ -6269,7 +6363,41 @@ async function resetArticleWorkspaceState({ workspaceGeneration = 1 } = {}) {
     const workspace = await ensureCurrentArticleWorkspace({ forceRefresh: true });
     await persistArticleWorkspaceArtifacts({ force: true });
     notifyArticleChatStateChanged('workspace_cleared');
+    notifyFigureWorkspaceStateChanged('workspace_cleared');
     return { success: true, workspace };
+}
+
+function prepareExternalArticleWorkspaceDeletion(workspaceId) {
+    const normalizedWorkspaceId = String(workspaceId || '');
+    if (!normalizedWorkspaceId || (
+        currentArticleWorkspace?.workspaceId !== normalizedWorkspaceId &&
+        pendingExternalWorkspaceDeletionId !== normalizedWorkspaceId
+    )) {
+        return { success: true, matched: false };
+    }
+    if (pendingExternalWorkspaceDeletionId !== normalizedWorkspaceId) {
+        pendingExternalWorkspaceDeletionId = normalizedWorkspaceId;
+        articleWorkspaceSaveFrozen = true;
+        clearTimeout(articleWorkspaceSaveTimer);
+        clearTimeout(articleArchiveSaveTimer);
+        articleWorkspaceSaveTimer = null;
+        articleArchiveSaveTimer = null;
+        invalidateArticleWorkspaceLifecycle();
+    }
+    return { success: true, matched: true, frozen: true };
+}
+
+async function finalizeExternalArticleWorkspaceDeletion(workspaceId, workspaceGeneration) {
+    const normalizedWorkspaceId = String(workspaceId || '');
+    if (!normalizedWorkspaceId || (
+        currentArticleWorkspace?.workspaceId !== normalizedWorkspaceId &&
+        pendingExternalWorkspaceDeletionId !== normalizedWorkspaceId
+    )) {
+        return { success: true, matched: false };
+    }
+    const reset = await resetArticleWorkspaceState({ workspaceGeneration });
+    pendingExternalWorkspaceDeletionId = '';
+    return { ...reset, matched: true };
 }
 
 function resolveWorkspaceParagraph(target = {}) {
@@ -6937,6 +7065,7 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
         error.code = 'REVIEW_OUTLINE_BUSY';
         throw error;
     }
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     reviewOutlinePromise = (async () => {
         updateReviewOutlineStatus({
             running: true, phase: 'extracting', completedParagraphs: 0,
@@ -6998,6 +7127,7 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
             );
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_REVIEW_OUTLINE',
+                workspaceLifecycle,
                 forceRefresh: options.forceRefresh === true,
                 paragraphOnly,
                 document: {
@@ -7013,6 +7143,7 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
                 scopeId: options.scopeId || options.sectionId || '',
                 scopeParagraphIds: paragraphs.map(paragraph => paragraph.paragraphId)
             });
+            assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
             if (!response?.success) {
                 const error = new Error(response?.error?.message || '综述大纲生成失败');
                 error.code = response?.error?.code;
@@ -7056,6 +7187,7 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
                 route: response.data.route || null
             };
         } catch (error) {
+            if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) throw error;
             updateReviewOutlineStatus({
                 running: false, phase: 'failed', message: error.message || '综述大纲生成失败'
             });
@@ -7088,6 +7220,11 @@ const highlighter = new SciPaperHighlighter();
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'llmAnalysisProgress') {
         const progress = request.progress || {};
+        if (Number.isInteger(progress.workspaceLifecycle) &&
+            progress.workspaceLifecycle !== articleWorkspaceLifecycleGeneration) {
+            sendResponse({ success: true, ignored: true, reason: 'STALE_WORKSPACE_LIFECYCLE' });
+            return;
+        }
         if (progress.taskType === 'chat' || String(progress.phase || '').startsWith('chat_')) {
             applyArticleChatProgress(progress);
             sendResponse({ success: true });
@@ -7272,12 +7409,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sidePanel: articleWorkspaceSidePanelUiState
         }).then(() => sendResponse({ success: true }))
             .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'prepareExternalArticleWorkspaceDeletion') {
+        sendResponse(prepareExternalArticleWorkspaceDeletion(request.workspaceId));
+    } else if (request.action === 'finalizeExternalArticleWorkspaceDeletion') {
+        finalizeExternalArticleWorkspaceDeletion(
+            request.workspaceId,
+            request.workspaceGeneration
+        ).then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message, matched: true }));
     } else if (request.action === 'freezeArticleWorkspaceWrites') {
         articleWorkspaceSaveFrozen = true;
         clearTimeout(articleWorkspaceSaveTimer);
         clearTimeout(articleArchiveSaveTimer);
         articleWorkspaceSaveTimer = null;
         articleArchiveSaveTimer = null;
+        invalidateArticleWorkspaceLifecycle();
         sendResponse({ success: true, frozen: true });
     } else if (request.action === 'applyArticleWorkspaceAssets') {
         applyArticleWorkspaceAssets(request.restore || request)

@@ -2441,7 +2441,14 @@
         await articleWorkspaceStore.finalizeWorkspaceDeletion(
           workspace.workspaceId, message.tombstoneId
         );
-        return { deleted: true, permission: disk.permission, removedFromDisk: disk.removed };
+        return {
+          deleted: true,
+          permission: disk.permission,
+          removedFromDisk: disk.removed,
+          workspaceGeneration: Math.max(
+            1, Number(workspace.workspaceGeneration) || 1
+          ) + 1
+        };
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_REBUILD_INDEX') {

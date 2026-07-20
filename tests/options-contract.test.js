@@ -454,6 +454,7 @@ test('workspace restore and clear results remain visible after overview refreshe
     actionSource,
     /if \(refreshAfterAction\) await refreshArticleWorkspaceOverview\(\);\s*else renderArticleWorkspaceOverview\(\);\s*if \(finalStatus\) articleWorkspaceStatus\(\.\.\.finalStatus\)/s
   );
+  assert.equal((clearSource.match(/coordinateOpenTabs:\s*true/g) || []).length, 2);
 });
 
 test('settings reuse directory and API controls in a skippable two-step onboarding view', () => {

@@ -2683,6 +2683,7 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
     tombstoneId: begun.data.tombstoneId
   });
   assert.equal(finalized.data.deleted, true);
+  assert.equal(finalized.data.workspaceGeneration, 2);
   assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
   const rejectedResurrection = await router.handle({
     type: 'ARTICLE_WORKSPACE_PROBE', identity: { canonicalUrl: workspace.canonicalUrl }
@@ -2721,6 +2722,7 @@ test('deletes browser-local workspace data when no filesystem directory was conf
 
   assert.equal(finalized.success, true);
   assert.equal(finalized.data.deleted, true);
+  assert.equal(finalized.data.workspaceGeneration, 2);
   assert.equal(finalized.data.permission, 'unconfigured');
   assert.equal(finalized.data.removedFromDisk, false);
   assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);

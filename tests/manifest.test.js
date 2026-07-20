@@ -34,7 +34,8 @@ test('background worker keeps routed LLM operations alive until completion', () 
     /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'2\.4\.0'/
   );
   assert.match(background, /core\/service-worker-keepalive\.js/);
-  assert.match(background, /SciLLM\.keepAliveUntil\(\s*llmRouter\.handle/);
+  assert.match(background, /SciLLM\.keepAliveUntil\(\s*handleRoutedMessage/);
+  assert.match(background, /async function handleRoutedMessage\(/);
   const outlineModule = background.indexOf("'core/review-outline.js'");
   const pipelineModule = background.indexOf("'core/review-outline-pipeline.js'");
   const manualAnnotationsModule = background.indexOf("'core/manual-annotations.js'");

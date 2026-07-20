@@ -276,3 +276,25 @@ test('sentence mode highlights across inline DOM nodes using scientific boundari
   assert.match(script, /findScientificSentenceBounds/);
   assert.match(script, /closest\(['"]p,/);
 });
+
+test('external workspace deletion invalidates stale tasks before rebuilding an empty generation', () => {
+  const script = read('content.js');
+  const background = read('background.js');
+  for (const action of [
+    'prepareExternalArticleWorkspaceDeletion',
+    'finalizeExternalArticleWorkspaceDeletion'
+  ]) {
+    assert.match(script, new RegExp(`request\\.action === '${action}'`));
+    assert.match(background, new RegExp(action));
+  }
+  assert.match(script, /function invalidateArticleWorkspaceLifecycle\(/);
+  assert.match(script, /articleWorkspaceLifecycleGeneration \+= 1/);
+  assert.match(script, /generation !== articleChatGeneration/);
+  assert.match(script, /if \(generation !== articleChatGeneration\) return/);
+  assert.match(script, /STALE_WORKSPACE_LIFECYCLE/);
+  assert.match(script, /standaloneReviewParagraphSummaries\.clear\(\)/);
+  assert.match(script, /articleSectionOutlines\.clear\(\)/);
+  assert.match(script, /notifyFigureWorkspaceStateChanged\('workspace_cleared'\)/);
+  assert.match(background, /coordinateOpenArticleWorkspaceTabs/);
+  assert.match(background, /workspaceLifecycle:\s*Number\.isInteger\(message\.workspaceLifecycle\)/);
+});

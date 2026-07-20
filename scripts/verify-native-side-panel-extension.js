@@ -1002,6 +1002,261 @@ async function readDiagnosticDownload(download) {
   workspaceOverviewQa.clearStatus = await options.locator(
     '#articleWorkspaceOverviewStatus'
   ).textContent();
+  const activeWorkspaceBeforeDeletion = await worker.evaluate(async tabId => {
+    await chrome.tabs.sendMessage(tabId, { action: 'saveArticleWorkspaceNow' });
+    return chrome.tabs.sendMessage(tabId, { action: 'getArticleWorkspaceSnapshot' });
+  }, fixtureTab.id);
+  const activeWorkspaceId = activeWorkspaceBeforeDeletion?.snapshot?.localWorkspace?.workspaceId;
+  const activeWorkspaceGeneration = Number(
+    activeWorkspaceBeforeDeletion?.snapshot?.localWorkspace?.workspaceGeneration
+  ) || 0;
+  if (!activeWorkspaceId) throw new Error('Active article workspace was unavailable before deletion');
+  await options.evaluate(() => {
+    const search = document.getElementById('articleWorkspaceSearch');
+    if (search) search.value = '';
+    articleWorkspaceOverviewUi.query = '';
+    articleWorkspaceOverviewUi.page = 1;
+    return refreshArticleWorkspaceOverview();
+  });
+  await options.waitForFunction(workspaceId =>
+    articleWorkspaceOverviewUi.loading === false &&
+    articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId),
+  activeWorkspaceId);
+  options.once('dialog', dialog => dialog.accept());
+  await options.evaluate(workspaceId => clearArticleWorkspaces([workspaceId]), activeWorkspaceId);
+  await fixture.bringToFront();
+  const deletionSynced = await sidePanel.waitForFunction(previousGeneration => {
+    const workspace = currentWorkspaceSnapshot?.localWorkspace;
+    const figures = currentWorkspaceSnapshot?.figures?.figures || [];
+    return Number(workspace?.workspaceGeneration || 0) > previousGeneration &&
+      Number(currentWorkspaceSnapshot?.chat?.totalTurns || 0) === 0 &&
+      figures.every(figure => !figure.standard && !figure.deep);
+  }, activeWorkspaceGeneration, { timeout: 5000 }).then(() => true).catch(() => false);
+  if (!deletionSynced) {
+    const [contentState] = await worker.evaluate(async tabId => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'ISOLATED',
+        func: () => ({
+          workspaceId: currentArticleWorkspace?.workspaceId || '',
+          workspaceGeneration: Number(currentArticleWorkspace?.workspaceGeneration) || 0,
+          lifecycle: articleWorkspaceLifecycleGeneration,
+          pendingDeletionId: pendingExternalWorkspaceDeletionId,
+          writesFrozen: articleWorkspaceSaveFrozen,
+          chatTurns: articleChatState.turns.length,
+          analyzedFigures: Array.from(figureWalkthroughState.values())
+            .filter(figure => figure.standard || figure.deep).length
+        })
+      });
+      return [result];
+    }, fixtureTab.id);
+    const panelState = await sidePanel.evaluate(() => ({
+      workspaceId: currentWorkspaceSnapshot?.localWorkspace?.workspaceId || '',
+      workspaceGeneration: Number(
+        currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration
+      ) || 0,
+      chatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
+      analyzedFigures: (currentWorkspaceSnapshot?.figures?.figures || [])
+        .filter(figure => figure.standard || figure.deep).length,
+      status: document.getElementById('articleNavigationStatus')?.textContent || ''
+    }));
+    const optionsState = await options.evaluate(workspaceId => ({
+      status: document.getElementById('articleWorkspaceOverviewStatus')?.textContent || '',
+      loading: articleWorkspaceOverviewUi.loading,
+      listed: articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId)
+    }), activeWorkspaceId);
+    throw new Error(`Active workspace deletion did not synchronize: ${JSON.stringify({
+      activeWorkspaceId,
+      activeWorkspaceGeneration,
+      contentState,
+      panelState,
+      optionsState
+    })}`);
+  }
+  const activeWorkspaceAfterDeletion = await worker.evaluate(
+    tabId => chrome.tabs.sendMessage(tabId, { action: 'getArticleWorkspaceSnapshot' }),
+    fixtureTab.id
+  );
+  const paragraphTextsBeforeDeletion = (
+    activeWorkspaceBeforeDeletion?.snapshot?.paragraphs || []
+  ).map(paragraph => paragraph.text);
+  const paragraphTextsAfterDeletion = (
+    activeWorkspaceAfterDeletion?.snapshot?.paragraphs || []
+  ).map(paragraph => paragraph.text);
+  await options.evaluate(() => refreshArticleWorkspaceOverview());
+  await options.waitForFunction(workspaceId =>
+    articleWorkspaceOverviewUi.loading === false &&
+    articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId) &&
+    articleWorkspaceOverviewUi.details.has(workspaceId),
+  activeWorkspaceId);
+  const activeWorkspaceDeletionQa = await options.evaluate((input) => {
+    const detail = articleWorkspaceOverviewUi.details.get(input.workspaceId);
+    return {
+      workspaceIdStable: input.workspaceId === input.afterWorkspaceId,
+      generationBefore: input.generationBefore,
+      generationAfter: input.generationAfter,
+      paragraphCountBefore: input.paragraphCountBefore,
+      paragraphCountAfter: input.paragraphCountAfter,
+      addedParagraphs: input.addedParagraphs,
+      removedParagraphs: input.removedParagraphs,
+      recreatedInOverview: articleWorkspaceOverviewUi.items.some(item =>
+        item.workspaceId === input.workspaceId
+      ),
+      storedChatTurns: Number(detail?.chatTurnCount) || 0,
+      clearStatus: document.getElementById('articleWorkspaceOverviewStatus')?.textContent || ''
+    };
+  }, {
+    workspaceId: activeWorkspaceId,
+    afterWorkspaceId: activeWorkspaceAfterDeletion?.snapshot?.localWorkspace?.workspaceId || '',
+    generationBefore: activeWorkspaceGeneration,
+    generationAfter: Number(
+      activeWorkspaceAfterDeletion?.snapshot?.localWorkspace?.workspaceGeneration
+    ) || 0,
+    paragraphCountBefore: paragraphTextsBeforeDeletion.length,
+    paragraphCountAfter: paragraphTextsAfterDeletion.length,
+    addedParagraphs: paragraphTextsAfterDeletion.filter(text =>
+      !paragraphTextsBeforeDeletion.includes(text)
+    ),
+    removedParagraphs: paragraphTextsBeforeDeletion.filter(text =>
+      !paragraphTextsAfterDeletion.includes(text)
+    )
+  });
+  Object.assign(activeWorkspaceDeletionQa, await sidePanel.evaluate(() => ({
+    sidePanelChatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
+    analyzedFigures: (currentWorkspaceSnapshot?.figures?.figures || [])
+      .filter(figure => figure.standard || figure.deep).length,
+    navigationStatus: document.getElementById('articleNavigationStatus')?.textContent || '',
+    workspaceGeneration: Number(
+      currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration
+    ) || 0
+  })));
+  const lateChatSetup = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+        globalThis.__sciQaOriginalRuntimeSendMessage = original;
+        globalThis.__sciQaResolveLateChat = null;
+        const intercepted = function(message, ...args) {
+          if (message?.type === 'LLM_ASK_ARTICLE' &&
+              message.question === '__SCI_QA_STALE_CHAT__') {
+            return new Promise(resolve => {
+              globalThis.__sciQaResolveLateChat = resolve;
+            });
+          }
+          return original(message, ...args);
+        };
+        chrome.runtime.sendMessage = intercepted;
+        const queued = await askArticleWithLLM(
+          '__SCI_QA_STALE_CHAT__', 'profile_qa_deferred'
+        );
+        const startedAt = Date.now();
+        while (!globalThis.__sciQaResolveLateChat && Date.now() - startedAt < 1500) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        return {
+          patched: chrome.runtime.sendMessage === intercepted,
+          queued: queued?.queued === true,
+          deferred: typeof globalThis.__sciQaResolveLateChat === 'function',
+          generation: Number(currentArticleWorkspace?.workspaceGeneration) || 0,
+          chatTurns: articleChatState.turns.length,
+          loading: articleChatState.loading
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  if (!lateChatSetup.patched || !lateChatSetup.queued || !lateChatSetup.deferred) {
+    throw new Error(`Unable to establish deferred chat QA: ${JSON.stringify(lateChatSetup)}`);
+  }
+  await options.evaluate(() => {
+    articleWorkspaceOverviewUi.query = '';
+    articleWorkspaceOverviewUi.page = 1;
+    return refreshArticleWorkspaceOverview();
+  });
+  await options.waitForFunction(workspaceId =>
+    articleWorkspaceOverviewUi.loading === false &&
+    articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId),
+  activeWorkspaceId);
+  options.once('dialog', dialog => dialog.accept());
+  await options.evaluate(workspaceId => clearArticleWorkspaces([workspaceId]), activeWorkspaceId);
+  const lateChatResolved = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: () => {
+        const resolve = globalThis.__sciQaResolveLateChat;
+        if (typeof resolve !== 'function') return false;
+        resolve({
+          success: true,
+          data: {
+            message: {
+              status: 'completed',
+              summary: 'This stale answer must never survive deletion.',
+              answerBlocks: [{
+                blockId: 'stale-block',
+                markdown: 'STALE ANSWER MUST NOT BE SAVED',
+                evidence: []
+              }]
+            },
+            route: { effectiveProfileName: 'Deferred QA', model: 'qa-model' },
+            plan: {},
+            coverage: {}
+          }
+        });
+        globalThis.__sciQaResolveLateChat = null;
+        return true;
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  await fixture.bringToFront();
+  await sidePanel.waitForFunction(previousGeneration =>
+    Number(currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration || 0) >
+      previousGeneration &&
+    Number(currentWorkspaceSnapshot?.chat?.totalTurns || 0) === 0,
+  activeWorkspaceDeletionQa.generationAfter, { timeout: 5000 });
+  await sidePanel.waitForTimeout(250);
+  const lateChatDeletionQa = await worker.evaluate(async tabId => {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: () => {
+        const state = {
+          chatTurns: articleChatState.turns.length,
+          loading: articleChatState.loading,
+          workspaceGeneration: Number(currentArticleWorkspace?.workspaceGeneration) || 0,
+          staleTextInMemory: JSON.stringify(articleChatState).includes(
+            'STALE ANSWER MUST NOT BE SAVED'
+          )
+        };
+        if (globalThis.__sciQaOriginalRuntimeSendMessage) {
+          chrome.runtime.sendMessage = globalThis.__sciQaOriginalRuntimeSendMessage;
+          delete globalThis.__sciQaOriginalRuntimeSendMessage;
+        }
+        delete globalThis.__sciQaResolveLateChat;
+        return state;
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const lateChatDetail = await options.evaluate(
+    workspaceId => callBackground({ type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId }),
+    activeWorkspaceId
+  );
+  lateChatDeletionQa.storedChatTurns = Number(lateChatDetail?.chatTurnCount) || 0;
+  lateChatDeletionQa.staleTextStored = JSON.stringify(lateChatDetail || {}).includes(
+    'STALE ANSWER MUST NOT BE SAVED'
+  );
+  lateChatDeletionQa.responseReleased = lateChatResolved === true;
+  Object.assign(lateChatDeletionQa, await sidePanel.evaluate(() => ({
+    sidePanelChatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
+    staleTextInSidePanel: document.body.textContent.includes(
+      'STALE ANSWER MUST NOT BE SAVED'
+    )
+  })));
   const modelConfigurationQa = await options.evaluate(async () => {
     const provider = document.getElementById('providerId');
     const model = document.getElementById('model');
@@ -1112,6 +1367,9 @@ async function readDiagnosticDownload(download) {
     dynamicParagraphQa,
     workspaceOverviewFixture,
     workspaceOverviewQa,
+    activeWorkspaceDeletionQa,
+    lateChatSetup,
+    lateChatDeletionQa,
     migrationControls,
     supportEmail,
     modelConfigurationQa,
@@ -1246,6 +1504,32 @@ async function readDiagnosticDownload(download) {
     results.workspaceOverviewQa.restoreWithoutDirectoryExplained &&
     results.workspaceOverviewQa.deletedFromOverview &&
     /已清除 1 篇论文工作区/.test(results.workspaceOverviewQa.clearStatus) &&
+    results.activeWorkspaceDeletionQa.workspaceIdStable &&
+    results.activeWorkspaceDeletionQa.generationAfter >
+      results.activeWorkspaceDeletionQa.generationBefore &&
+    results.activeWorkspaceDeletionQa.paragraphCountAfter ===
+      results.activeWorkspaceDeletionQa.paragraphCountBefore &&
+    results.activeWorkspaceDeletionQa.addedParagraphs.length === 0 &&
+    results.activeWorkspaceDeletionQa.removedParagraphs.length === 0 &&
+    results.activeWorkspaceDeletionQa.workspaceGeneration ===
+      results.activeWorkspaceDeletionQa.generationAfter &&
+    results.activeWorkspaceDeletionQa.recreatedInOverview &&
+    results.activeWorkspaceDeletionQa.storedChatTurns === 0 &&
+    results.activeWorkspaceDeletionQa.sidePanelChatTurns === 0 &&
+    results.activeWorkspaceDeletionQa.analyzedFigures === 0 &&
+    !/读取失败|WORKSPACE_|Cannot access contents/i.test(
+      results.activeWorkspaceDeletionQa.navigationStatus || ''
+    ) &&
+    results.lateChatSetup.loading &&
+    results.lateChatDeletionQa.responseReleased &&
+    results.lateChatDeletionQa.workspaceGeneration >
+      results.activeWorkspaceDeletionQa.generationAfter &&
+    results.lateChatDeletionQa.chatTurns === 0 &&
+    results.lateChatDeletionQa.storedChatTurns === 0 &&
+    results.lateChatDeletionQa.sidePanelChatTurns === 0 &&
+    !results.lateChatDeletionQa.staleTextInMemory &&
+    !results.lateChatDeletionQa.staleTextStored &&
+    !results.lateChatDeletionQa.staleTextInSidePanel &&
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
     supportEmail?.trim() === 'brevess0729@163.com' &&

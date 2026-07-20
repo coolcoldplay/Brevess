@@ -51,6 +51,24 @@ test('deduplicates responsive DOM copies by stable source identity but retains r
   assert.equal(new Set(records.map(item => item.textHash)).size, 1);
 });
 
+test('generated paragraph anchors never turn a repeated extraction into duplicate prose', () => {
+  const sentence = 'A dynamically loaded mechanistic paragraph appears in responsive desktop and mobile markup.';
+  const records = buildParagraphRecords([
+    { kind: 'heading', text: 'Results' },
+    {
+      kind: 'paragraph',
+      text: sentence,
+      dataSelector: '[data-sci-llm-paragraph-id="sec-results-p-001"]',
+      blockFingerprint: ''
+    },
+    { kind: 'paragraph', text: sentence }
+  ]);
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].text, sentence);
+  assert.equal(records[0].dataSelector, '[data-sci-llm-paragraph-id="sec-results-p-001"]');
+});
+
 test('classifies captions and references without mixing them into the body count', () => {
   const records = buildParagraphRecords([
     { kind: 'heading', text: 'Results' },

@@ -162,6 +162,12 @@
     return 'body';
   }
 
+  function stableSourceSelector(value) {
+    const selector = String(value || '').normalize('NFKC').trim();
+    return /^\[data-sci-llm-paragraph-id=(?:"[^"]*"|'[^']*')\]$/i.test(selector)
+      ? '' : selector;
+  }
+
   function summarizeArticleRecords(records) {
     const source = Array.isArray(records) ? records : [];
     const count = type => source.filter(record => record.recordType === type).length;
@@ -250,7 +256,8 @@
       const textHash = hashNormalizedText(text);
       const recordType = recordTypeForBlock(block.kind, referenceListReached);
       const explicitSourceIdentity = String(
-        block.sourceKey || block.blockFingerprint || block.dataSelector || block.domId || ''
+        block.sourceKey || block.blockFingerprint ||
+        stableSourceSelector(block.dataSelector) || block.domId || ''
       ).normalize('NFKC').trim();
       const sectionPathKey = headingStack.map(item => item.title.toLowerCase()).join(' > ') ||
         sectionTitle.toLowerCase();
@@ -477,7 +484,7 @@
         element.getAttribute?.('data-id') ||
         element.id || ''
       ),
-      blockFingerprint: String(element.dataset?.sciLlmParagraphId || element.id || '')
+      blockFingerprint: String(element.id || '')
     }));
     return buildParagraphRecords(blocks);
   }

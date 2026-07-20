@@ -311,6 +311,49 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'USER_DATA_EXPORT_BUNDLE'
 ]);
 
+async function coordinateOpenArticleWorkspaceTabs(action, workspaceId, workspaceGeneration = 1) {
+  const normalizedWorkspaceId = String(workspaceId || '');
+  if (!normalizedWorkspaceId) return { checked: 0, matched: 0, failed: 0 };
+  const tabs = await chrome.tabs.query({});
+  const candidates = tabs.filter(tab => Number.isInteger(tab.id));
+  const responses = await Promise.all(candidates.map(async tab => {
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action,
+        workspaceId: normalizedWorkspaceId,
+        workspaceGeneration: Math.max(1, Number(workspaceGeneration) || 1)
+      });
+      return { matched: response?.matched === true, failed: false };
+    } catch (_) {
+      return { matched: false, failed: false };
+    }
+  }));
+  return {
+    checked: candidates.length,
+    matched: responses.filter(item => item.matched).length,
+    failed: responses.filter(item => item.failed).length
+  };
+}
+
+async function handleRoutedMessage(message, sender, onProgress) {
+  const response = await llmRouter.handle(message, { onProgress });
+  if (!response?.success || message?.coordinateOpenTabs !== true) return response;
+  if (message.type === 'ARTICLE_WORKSPACE_BEGIN_DELETE') {
+    response.data.openTabs = await coordinateOpenArticleWorkspaceTabs(
+      'prepareExternalArticleWorkspaceDeletion',
+      message.workspaceId,
+      Number(response.data.workspaceGeneration) || 1
+    );
+  } else if (message.type === 'ARTICLE_WORKSPACE_FINALIZE_DELETE' && response.data.deleted) {
+    response.data.openTabs = await coordinateOpenArticleWorkspaceTabs(
+      'finalizeExternalArticleWorkspaceDeletion',
+      message.workspaceId,
+      response.data.workspaceGeneration
+    );
+  }
+  return response;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'LLM_FOUNDATION_STATUS') {
     sendResponse({
@@ -403,12 +446,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (ROUTED_MESSAGE_TYPES.has(message?.type)) {
     const onProgress = sender.tab?.id
       ? progress => chrome.tabs.sendMessage(sender.tab.id, {
-          action: 'llmAnalysisProgress',
-          progress
-        }).catch(() => {})
+        action: 'llmAnalysisProgress',
+        progress: {
+          ...progress,
+          workspaceLifecycle: Number.isInteger(message.workspaceLifecycle)
+            ? message.workspaceLifecycle : undefined
+        }
+      }).catch(() => {})
       : undefined;
     SciLLM.keepAliveUntil(
-      llmRouter.handle(message, { onProgress }),
+      handleRoutedMessage(message, sender, onProgress),
       chrome
     ).then(sendResponse);
     return true;

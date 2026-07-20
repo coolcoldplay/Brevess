@@ -957,12 +957,15 @@ async function clearArticleWorkspaces(workspaceIds) {
     let pending = 0;
     for (const item of items) {
       const started = await callBackground({
-        type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: item.workspaceId
+        type: 'ARTICLE_WORKSPACE_BEGIN_DELETE',
+        workspaceId: item.workspaceId,
+        coordinateOpenTabs: true
       });
       const result = await callBackground({
         type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
         workspaceId: item.workspaceId,
-        tombstoneId: started.tombstoneId
+        tombstoneId: started.tombstoneId,
+        coordinateOpenTabs: true
       });
       if (result.deleted) deleted += 1;
       else pending += 1;
