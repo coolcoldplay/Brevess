@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Evidence Lens · 阅读视图交互预览</title>
+  <link rel="stylesheet" href="vendor/phosphor/icons.css">
+  <link rel="stylesheet" href="content.css">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #162235; background: #f7f6f2; font: 15px/1.62 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0) !important; white-space: nowrap !important; border: 0 !important; }
+    .qa-shell { display: grid; grid-template-columns: minmax(640px, 1fr) 393px 103px; min-height: 100vh; background: #fff; }
+    .article { min-width: 0; padding: 35px 40px 110px; border-right: 1px solid #dedbd4; }
+    .article-kicker { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; color: #0b4778; font-size: 14px; font-weight: 700; }
+    .article h1 { max-width: 760px; margin: 0 0 8px; color: #111820; font-size: 28px; line-height: 1.22; letter-spacing: -.015em; }
+    .authors, .journal { max-width: 800px; margin: 0; color: #4f5d70; font-size: 14px; }
+    .journal { margin-top: 3px; font-size: 13px; font-style: italic; }
+    .article h2 { margin: 32px 0 9px; color: #171f28; font-size: 20px; }
+    .article p { max-width: 830px; margin: 0 0 14px; }
+    .manual-yellow { --sci-manual-color: #fff36e; }
+    .manual-teal { --sci-manual-color: #c8f1ec; }
+    .auto-navy { border-bottom-color: #0b4778; }
+    .auto-orange { border-bottom-color: #f49a23; }
+    .article .sci-llm-highlight { padding-inline: 1px; }
+    .article .sci-manual-highlight { padding-inline: .08em; }
+
+    .qa-shell #sci-reading-panel { position: relative; inset: auto; z-index: 2; width: auto; max-height: none; height: 100vh; border: 0; border-right: 1px solid #dedbd4; box-shadow: none; }
+    .qa-shell #sci-reading-panel .sci-reading-header { min-height: 64px; padding: 0 22px; }
+    .qa-shell #sci-reading-panel .sci-reading-header strong { font-size: 20px; }
+    .qa-shell #sci-reading-panel .sci-reading-body { max-height: calc(100vh - 64px); padding: 13px 22px 80px; }
+    .panel-label { margin: 0 0 10px; color: #17212c; font-size: 13px; font-weight: 750; }
+    .panel-label span { color: #6d7580; font-size: 11px; font-weight: 500; }
+    .study-card { display: grid; grid-template-columns: 40px 1fr auto; gap: 11px; align-items: center; margin-bottom: 20px; padding: 14px; border: 1px solid #dedbd4; border-radius: 9px; background: #fff; }
+    .study-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 7px; color: #0b4778; background: #edf3f7; font-size: 20px; }
+    .study-card strong, .study-card small { display: block; }
+    .study-card strong { font-size: 13px; }
+    .study-card small { color: #737b84; font-size: 11px; }
+    .text-link { padding: 5px; border: 0; color: #0b4778; background: transparent; font-size: 12px; font-weight: 700; }
+    .match-stack { margin: 0 0 22px; border: 1px solid #dedbd4; border-radius: 9px; overflow: hidden; }
+    .match-item { display: grid; width: 100%; grid-template-columns: 8px 1fr; gap: 10px; padding: 12px 14px; border: 0; border-bottom: 1px solid #e6e3dd; color: inherit; background: #fff; text-align: left; }
+    .match-item:last-child { border-bottom: 0; }
+    .match-dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: #0b4778; }
+    .match-item p { margin: 0; color: #263345; font-size: 12px; line-height: 1.48; }
+    .match-item small { color: #818791; font-size: 10px; }
+    .note-editor { margin-bottom: 20px; border: 1px solid #d8d5cf; border-radius: 9px; overflow: hidden; background: #fff; }
+    .note-tools { display: flex; gap: 3px; padding: 7px 9px; border-bottom: 1px solid #e2dfd8; }
+    .note-tools button { display: grid; min-width: 28px; height: 28px; padding: 0; place-items: center; border: 0; color: #4b5565; background: transparent; }
+    .note-editor textarea { width: 100%; min-height: 104px; resize: vertical; padding: 11px 12px 3px; border: 0; outline: 0; color: #253245; background: #fff; font-size: 12px; line-height: 1.55; }
+    .note-footer { display: flex; justify-content: flex-end; padding: 0 12px 8px; color: #7a818a; font-size: 10px; }
+    .rule-card { margin-bottom: 14px; padding: 12px 14px; border: 1px solid #e0ddd7; border-radius: 9px; background: #fff; }
+    .rule-card strong { font-size: 12px; }
+    .rule-card p { margin: 5px 0 9px; color: #717985; font-size: 10px; line-height: 1.5; }
+    .rule-card button { float: right; padding: 5px 8px; border: 1px solid #d4d8dc; border-radius: 5px; color: #0b4778; background: #fff; font-size: 10px; font-weight: 700; }
+    .analyze-button { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 7px; color: #fff; background: #0b4778; font-size: 13px; font-weight: 750; }
+    .analyze-button:hover { background: #093d68; }
+
+    .category-rail { display: flex; height: 100vh; flex-direction: column; align-items: stretch; background: #fff; }
+    .rail-option { display: grid; min-height: 106px; padding: 15px 4px; place-items: center; align-content: center; gap: 8px; border: 0; border-bottom: 1px solid #e2dfd9; color: #4d5867; background: #fff; font-size: 11px; font-weight: 650; }
+    .rail-option:hover { background: #f7f8f8; }
+    .rail-option[aria-selected="true"] { color: #0b4778; box-shadow: inset 3px 0 #0b4778, inset -3px 0 #0b4778; }
+    .rail-dot { width: 20px; height: 20px; border-radius: 50%; background: var(--dot); }
+    .rail-more { color: #596574; }
+    .rail-more .ph { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid #d5d8dc; border-radius: 50%; }
+
+    body > #sci-manual-toolbar { top: auto !important; right: auto; bottom: 16px; left: max(18px, calc((100vw - 496px - min(830px, calc(100vw - 560px))) / 2)); display: flex; width: min(790px, calc(100vw - 550px)); align-items: center; gap: 8px; padding: 8px 11px; border-color: #d9d6cf; border-radius: 13px; background: rgba(255,255,255,.97); box-shadow: 0 7px 24px rgba(25,34,46,.14); }
+    body > #sci-manual-toolbar .toolbar-caption { min-width: 76px; padding-right: 10px; border-right: 1px solid #e1ded8; color: #2f3a49; font-size: 11px; font-weight: 700; }
+    body > #sci-manual-toolbar .toolbar-caption small { display: block; margin-top: 2px; color: #7d858e; font-size: 9px; font-weight: 500; }
+    body > #sci-manual-toolbar .sci-manual-primary-row { flex: 1; flex-wrap: nowrap; gap: 3px; }
+    body > #sci-manual-toolbar .sci-manual-secondary-row { flex: none; flex-wrap: nowrap; margin: 0; padding: 0 0 0 6px; border: 0; border-left: 1px solid #e1ded8; }
+    body > #sci-manual-toolbar .sci-manual-category { gap: 7px; padding: 6px 8px; border-color: transparent; background: transparent; white-space: nowrap; }
+    body > #sci-manual-toolbar .sci-manual-category:hover { background: #f1f4f6; }
+    body > #sci-manual-toolbar .sci-manual-category[aria-pressed="true"] { border-color: #0b4778; color: #0b4778; background: #fff; box-shadow: inset 0 0 0 1px #0b4778; }
+    .category-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--dot); }
+    body > #sci-manual-toolbar .sci-manual-text-action { white-space: nowrap; }
+
+    body > #sci-highlight-context-popover { top: auto !important; right: 410px; bottom: 88px; left: auto !important; display: none; border-color: #d8d5cf; background: #fff; }
+    body > #sci-highlight-context-popover.is-open { display: block; }
+    body > #sci-highlight-context-popover .sci-context-section > strong { color: #0b4778; }
+    .preview-status { position: fixed; left: 18px; bottom: 86px; z-index: 2147483647; display: none; padding: 8px 11px; border: 1px solid #bed1c5; border-radius: 7px; color: #286044; background: #f2f8f4; font-size: 11px; }
+    .preview-status.show { display: block; }
+    #qa-console-state { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+    @media (max-width: 1100px) {
+      .qa-shell { grid-template-columns: minmax(500px, 1fr) 350px; }
+      .category-rail { display: none; }
+      body > #sci-manual-toolbar { left: 18px; width: calc(100vw - 386px); overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="qa-shell">
+    <article class="article" aria-label="示例论文正文">
+      <p class="article-kicker"><i class="ph ph-note-pencil" aria-hidden="true"></i> Original Article</p>
+      <h1>Regulation of the TRIM16 – OPTN Axis in Glioblastoma</h1>
+      <p class="authors">Hongbo Chang, Jianbing Hou, Xin Hu, Nana Hou, Minghao Xu, Yi Du, Jingyang Xu, Yongzhao Wang, Zhuohao Xie, Junbo Shi, Yundong Zhang, Hongjuan Cui</p>
+      <p class="journal">Advanced Science. 2025;12(18):e2501234. doi: 10.1002/advs.202501234</p>
+
+      <h2>Abstract</h2>
+      <p>Conversely, inhibiting TET1 correlates with reduced ROS1 expression, attenuation of ERK signaling, and increased genome fragility. Furthermore, <mark class="sci-manual-highlight manual-yellow" tabindex="0">TET1 depletion in tumor cells was associated with altered tumor-associated macrophages biology both in vitro and in vivo, including increased infiltration, differentiation, M1-like polarization, and phagocytic capacity.</mark> Notably, <span class="sci-llm-highlight auto-navy" tabindex="0">combining the TET1 inhibitor Bobcat339 with cisplatin synergistically inhibited TP53mut GBM growth in vitro and in vivo, improving survival without significant toxicity.</span> Our findings suggest that TET1 may serve as a potential mediator of therapy resistance and a promising therapeutic target in TP53mut GBM.</p>
+
+      <h2>1 Introduction</h2>
+      <p>Glioblastoma (GBM) is the most common and aggressive primary intracranial malignant tumor in adults, and patients with GBM have a median survival of less than 2 years [1]. Despite numerous treatment strategies, the therapeutic efficacy remains limited, and survival rates have not yet improved. <span class="sci-llm-highlight auto-navy" tabindex="0">GBM has a high frequency of TP53 mutation (TP53mut), which is reported in more than 50% of cases and is strongly associated with poor overall survival [2].</span> Mutant P53 not only exhibits loss of function owing to the lack of the wild-type protein's tumor suppressor function but also acquires gain-of-function through the activation of noncanonical target genes [3].</p>
+      <p>In addition to promoting GBM growth, <span class="sci-llm-highlight auto-navy" tabindex="0">TP53mut confers resistance to diverse therapeutic modalities.</span> These include cytotoxic agents directed at tumor cells, as well as therapies targeting the tumor microenvironment, such as antiangiogenic agents and immune checkpoint inhibitors [4–6]. Although numerous clinical trials have been conducted, most patients with TP53mut GBM eventually develop acquired resistance. <mark class="sci-manual-highlight manual-yellow" tabindex="0"><span class="sci-llm-highlight auto-orange">Thus, investigating how TP53mut may contribute to therapeutic resistance in GBM is essential for improving treatment outcomes and patient survival.</span></mark></p>
+    </article>
+
+    <aside id="sci-reading-panel" aria-label="局限性阅读面板">
+      <div class="sci-reading-header">
+        <strong id="panelTitle">局限性</strong>
+        <button id="collapsePanel" type="button" aria-expanded="true"><i class="ph ph-x" aria-hidden="true"></i><span class="sr-only">关闭面板</span></button>
+      </div>
+      <div class="sci-reading-body">
+        <p class="panel-label">文献类型 <span>（用户选择）</span></p>
+        <div class="study-card">
+          <span class="study-icon"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i></span>
+          <span><strong>原始研究</strong><small>基础与转化医学</small></span>
+          <button class="text-link" id="editStudyType" type="button">编辑</button>
+        </div>
+
+        <p class="panel-label">匹配的段落 <span id="matchCount">（3）</span></p>
+        <div class="match-stack" id="matchStack">
+          <button class="match-item" type="button"><span class="match-dot"></span><span><p>TP53mut confers resistance to diverse therapeutic modalities, including cytotoxic agents and therapies targeting the TME…</p><small>p.4 ¶2</small></span></button>
+          <button class="match-item" type="button"><span class="match-dot"></span><span><p>Although numerous clinical trials have been conducted, most patients with TP53mut GBM eventually develop acquired resistance.</p><small>p.5 ¶1</small></span></button>
+          <button class="match-item" type="button"><span class="match-dot"></span><span><p>Our findings are based on preclinical models and require validation in clinical settings.</p><small>p.5 ¶3</small></span></button>
+        </div>
+
+        <p class="panel-label">手动备注</p>
+        <div class="note-editor">
+          <div class="note-tools" aria-label="备注格式工具"><button type="button"><b>B</b></button><button type="button"><i>I</i></button><button type="button"><u>U</u></button><button type="button">•</button><button type="button"><i class="ph ph-note-pencil" aria-hidden="true"></i></button></div>
+          <textarea id="noteText" maxlength="500">该研究的疗效与机制均以体外与小鼠模型为主，尚缺乏临床样本验证；主要针对TP53突变亚型，对野生型或其他突变型的外推性有限。</textarea>
+          <div class="note-footer"><span id="noteCount">61 / 500</span></div>
+        </div>
+
+        <p class="panel-label">查看/编辑规则</p>
+        <div class="rule-card">
+          <strong>局限性识别规则 v1.0</strong>
+          <p>识别研究的局限、外推性不足、样本与模型约束、潜在偏倚与控制因素等表达。</p>
+          <button id="viewRule" type="button">查看规则</button>
+          <div style="clear: both"></div>
+        </div>
+        <button class="analyze-button" id="analyzeFull" type="button"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i>分析全文</button>
+      </div>
+    </aside>
+
+    <nav class="category-rail" aria-label="阅读类别">
+      <button class="rail-option" type="button" data-category="证据支持" data-color="#0b4778" aria-selected="false"><span class="rail-dot" style="--dot:#0b4778"></span>证据支持</button>
+      <button class="rail-option" type="button" data-category="研究方法" data-color="#f49a23" aria-selected="false"><span class="rail-dot" style="--dot:#f49a23"></span>研究方法</button>
+      <button class="rail-option" type="button" data-category="结果发现" data-color="#52c4c3" aria-selected="false"><span class="rail-dot" style="--dot:#52c4c3"></span>结果发现</button>
+      <button class="rail-option" type="button" data-category="局限性" data-color="#0b4778" aria-selected="true"><span class="rail-dot" style="--dot:#0b4778"></span>局限性</button>
+      <button class="rail-option" type="button" data-category="临床意义" data-color="#f15182" aria-selected="false"><span class="rail-dot" style="--dot:#f15182"></span>临床意义</button>
+      <button class="rail-option rail-more" type="button" data-category="更多" data-color="#65717e" aria-selected="false"><i class="ph ph-magnifying-glass" aria-hidden="true"></i>更多</button>
+    </nav>
+  </main>
+
+  <div id="sci-manual-toolbar" role="toolbar" aria-label="手动荧光笔高亮">
+    <span class="toolbar-caption">选择文本<small>136 字符</small></span>
+    <div class="sci-manual-primary-row">
+      <button class="sci-manual-category" type="button" aria-pressed="false"><span class="category-dot" style="--dot:#0b4778"></span>证据支持</button>
+      <button class="sci-manual-category" type="button" aria-pressed="false"><span class="category-dot" style="--dot:#f49a23"></span>研究方法</button>
+      <button class="sci-manual-category" type="button" aria-pressed="false"><span class="category-dot" style="--dot:#52c4c3"></span>结果发现</button>
+      <button class="sci-manual-category" type="button" aria-pressed="true"><span class="category-dot" style="--dot:#0b4778"></span>局限性</button>
+      <button class="sci-manual-category" type="button" aria-pressed="false"><span class="category-dot" style="--dot:#f15182"></span>临床意义</button>
+    </div>
+    <div class="sci-manual-secondary-row">
+      <button class="sci-manual-text-action" id="addNote" type="button"><i class="ph ph-note-pencil" aria-hidden="true"></i>添加备注</button>
+      <button class="sci-manual-text-action" type="button" aria-label="更多类别">更多</button>
+    </div>
+  </div>
+
+  <div id="sci-highlight-context-popover" role="dialog" aria-label="高亮详情与编辑">
+    <section class="sci-context-section sci-context-manual">
+      <strong>手动荧光笔标注</strong>
+      <label>类别<select aria-label="手动标注类别"><option>局限性</option><option>证据支持</option><option>研究方法</option></select></label>
+      <label>备注<textarea rows="4">需要临床样本验证，并注意突变亚型的外推边界。</textarea></label>
+      <div class="sci-context-actions"><button class="sci-manual-primary-action" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存修改</button><button class="sci-manual-danger-action" type="button"><i class="ph ph-x" aria-hidden="true"></i>删除标注</button></div>
+    </section>
+    <section class="sci-context-section sci-context-ai"><strong>AI 自动高亮</strong><p>局限性：说明研究外推范围受模型与样本限制。</p><div class="sci-context-actions"><button type="button">准确</button><button type="button">不匹配</button></div></section>
+  </div>
+  <div class="preview-status" id="previewStatus" role="status">已保存</div>
+  <span id="qa-console-state">0 errors</span>
+
+  <script>
+    (() => {
+      const title = document.getElementById('panelTitle');
+      const status = document.getElementById('previewStatus');
+      const popover = document.getElementById('sci-highlight-context-popover');
+      const showStatus = message => {
+        status.textContent = message;
+        status.classList.add('show');
+        window.setTimeout(() => status.classList.remove('show'), 1100);
+      };
+      document.querySelectorAll('.rail-option').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('.rail-option').forEach(item => item.setAttribute('aria-selected', String(item === button)));
+        title.textContent = button.dataset.category;
+        showStatus(`已切换到“${button.dataset.category}”`);
+      }));
+      document.querySelectorAll('#sci-manual-toolbar .sci-manual-category').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('#sci-manual-toolbar .sci-manual-category').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        title.textContent = button.textContent.trim();
+        showStatus(`已绑定类别“${button.textContent.trim()}”`);
+      }));
+      document.querySelectorAll('.sci-manual-highlight,.sci-llm-highlight').forEach(mark => {
+        mark.addEventListener('click', event => { event.stopPropagation(); popover.classList.add('is-open'); });
+        mark.addEventListener('keydown', event => { if (event.key === 'Enter') popover.classList.add('is-open'); });
+      });
+      document.addEventListener('click', event => { if (!event.target.closest('#sci-highlight-context-popover,.sci-manual-highlight,.sci-llm-highlight')) popover.classList.remove('is-open'); });
+      document.getElementById('addNote').addEventListener('click', () => { popover.classList.add('is-open'); popover.querySelector('textarea').focus(); });
+      document.getElementById('noteText').addEventListener('input', event => { document.getElementById('noteCount').textContent = `${event.target.value.length} / 500`; });
+      document.querySelectorAll('.sci-manual-primary-action').forEach(button => button.addEventListener('click', () => showStatus('标注与备注已保存')));
+      document.getElementById('viewRule').addEventListener('click', () => showStatus('将打开“局限性”的提示词与正则规则'));
+      document.getElementById('editStudyType').addEventListener('click', () => showStatus('文献类型由你单选，插件不会自动判断'));
+      document.getElementById('analyzeFull').addEventListener('click', event => { event.currentTarget.innerHTML = '<i class="ph ph-check-circle" aria-hidden="true"></i>分析完成 · 3 条'; showStatus('全文分析已完成'); });
+      document.getElementById('collapsePanel').addEventListener('click', () => showStatus('阅读面板可随时收起'));
+      window.addEventListener('error', () => { document.getElementById('qa-console-state').textContent = 'runtime error'; });
+    })();
+  </script>
+</body>
+</html>

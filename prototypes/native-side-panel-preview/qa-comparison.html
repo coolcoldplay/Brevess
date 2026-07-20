@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>侧栏原型视觉 QA</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #e9eef2; color: #202a33; font: 14px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif; }
+    header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 0 24px; border-bottom: 1px solid #ccd6de; background: rgba(255,255,255,.96); }
+    h1 { margin: 0; font-size: 18px; }
+    .legend { color: #61727f; }
+    main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 18px; }
+    figure { margin: 0; overflow: hidden; border: 1px solid #c9d4dc; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(26, 49, 67, .08); }
+    figcaption { display: flex; gap: 10px; align-items: center; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #d8e0e6; font-weight: 700; }
+    .tag { padding: 3px 8px; border-radius: 999px; background: #eaf2f8; color: #0b4778; font-size: 12px; }
+    img { display: block; width: 100%; height: auto; }
+    @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>论文阅读 UI · 改造前后并排检查</h1>
+    <span class="legend">同一 2048 × 1160 桌面视口</span>
+  </header>
+  <main>
+    <figure>
+      <figcaption><span class="tag">参考现状</span>浮层互相遮挡，页面正文被覆盖</figcaption>
+      <img src="reference-current-overlap.png" alt="当前证据台账与论文导航重叠的界面">
+    </figure>
+    <figure>
+      <figcaption><span class="tag">HTML 原型</span>原生右侧工作区，功能统一收纳</figcaption>
+      <img src="prototype-active-2048x1160.png" alt="新的可调宽右侧栏交互原型">
+    </figure>
+  </main>
+</body>
+</html>

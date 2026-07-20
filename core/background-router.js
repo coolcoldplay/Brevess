@@ -1,0 +1,2569 @@
+(function attach(root, factory) {
+  const api = factory(root.SciLLM || {});
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.SciLLM = Object.assign(root.SciLLM || {}, api);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const RUNTIME_REVISION = '2.3.0-panel-chat-r3';
+  const TASK_TIMEOUTS_MS = Object.freeze({
+    highlight: 180000,
+    summary: 180000,
+    chat: 240000,
+    figure: 300000,
+    crossFigure: 300000
+  });
+  const TASK_CONCURRENCY = Object.freeze({
+    highlight: 3,
+    summary: 2,
+    chat: 1,
+    figure: 3,
+    crossFigure: 1
+  });
+  const PREFERENCE_KEYS = new Set([
+    'mode', 'providerId', 'consentGranted', 'autoAnalyze', 'selectedCategoryIds',
+    'confidenceThreshold', 'readingViewId', 'viewCategoryOverrides',
+    'figurePanelFollowupPrompts'
+  ]);
+
+  function invalidSettings(fields) {
+    const error = new Error('Provider settings are incomplete or invalid');
+    error.code = 'INVALID_SETTINGS';
+    error.fields = fields;
+    return error;
+  }
+
+  function isPlainObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
+  function cloneJsonLike(value) {
+    if (Array.isArray(value)) return value.map(cloneJsonLike);
+    if (!isPlainObject(value)) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, cloneJsonLike(nested)])
+    );
+  }
+
+  function deepMergeJsonLike(base, override) {
+    if (override === undefined) return cloneJsonLike(base);
+    if (!isPlainObject(base) || !isPlainObject(override)) {
+      return cloneJsonLike(override);
+    }
+    const merged = cloneJsonLike(base);
+    Object.entries(override).forEach(([key, value]) => {
+      merged[key] = Object.prototype.hasOwnProperty.call(base, key)
+        ? deepMergeJsonLike(base[key], value)
+        : cloneJsonLike(value);
+    });
+    return merged;
+  }
+
+  function safeError(error) {
+    const allowedCodes = new Set([
+      'INVALID_SETTINGS', 'AUTH_INVALID', 'QUOTA_EXHAUSTED', 'REQUEST_TIMEOUT',
+      'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_REJECTED', 'NETWORK_ERROR',
+      'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'CANCELLED', 'LLM_NOT_READY',
+      'NO_USABLE_PROFILE', 'TOKEN_LIMIT_REJECTED', 'PARAGRAPH_STALE',
+      'STUDY_TYPE_REQUIRED', 'ANNOTATION_LIMIT_REACHED', 'NOTE_TOO_LONG',
+      'INVALID_ARCHIVE_SCHEMA', 'ARCHIVE_IDENTITY_MISMATCH',
+      'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
+      'INVALID_JSON_ASSET', 'DIRECTORY_SYNC_UNAVAILABLE',
+      'INVALID_MIGRATION_SCHEMA', 'INVALID_MIGRATION_SETTINGS',
+      'INVALID_MIGRATION_DOCUMENTS', 'INVALID_MIGRATION_FEEDBACK',
+      'MIGRATION_BUNDLE_TOO_LARGE'
+    ]);
+    const code = allowedCodes.has(error?.code) ? error.code : 'INTERNAL_ERROR';
+    const messages = {
+      INVALID_SETTINGS: 'Provider settings are incomplete or invalid',
+      AUTH_INVALID: 'API authentication failed',
+      QUOTA_EXHAUSTED: 'API quota is exhausted',
+      REQUEST_TIMEOUT: 'Provider request timed out',
+      RATE_LIMITED: 'Provider rate limit reached',
+      PROVIDER_UNAVAILABLE: 'Provider is temporarily unavailable',
+      PROVIDER_REJECTED: 'Provider rejected the request',
+      NETWORK_ERROR: 'Unable to reach the provider',
+      INVALID_RESPONSE: 'Provider returned an invalid response',
+      OUTPUT_TRUNCATED: 'Model output reached its token limit',
+      CANCELLED: 'Provider request was cancelled',
+      LLM_NOT_READY: 'LLM mode requires a configured provider and consent',
+      NO_USABLE_PROFILE: 'No usable API profile is configured',
+      TOKEN_LIMIT_REJECTED: 'Provider rejected the requested output token limit',
+      PARAGRAPH_STALE: 'The requested paragraph is no longer in the document',
+      STUDY_TYPE_REQUIRED: 'Study type must be selected before analysis.',
+      ANNOTATION_LIMIT_REACHED: 'This document has reached the annotation limit.',
+      NOTE_TOO_LONG: 'The annotation note is too long.',
+      INVALID_ARCHIVE_SCHEMA: 'The article archive format is invalid.',
+      ARCHIVE_IDENTITY_MISMATCH: 'The article archive belongs to another document.',
+      ARTICLE_ARCHIVE_TOO_LARGE: 'The article archive is too large.',
+      ARTICLE_ARCHIVE_NOT_FOUND: 'No saved article archive was found.',
+      INVALID_JSON_ASSET: 'The saved article archive is damaged.',
+      DIRECTORY_SYNC_UNAVAILABLE: 'A local archive directory has not been configured.',
+      INVALID_MIGRATION_SCHEMA: 'The migration file format is invalid.',
+      INVALID_MIGRATION_SETTINGS: 'The migration settings are invalid.',
+      INVALID_MIGRATION_DOCUMENTS: 'The migration document records are invalid.',
+      INVALID_MIGRATION_FEEDBACK: 'The migration feedback records are invalid.',
+      MIGRATION_BUNDLE_TOO_LARGE: 'The migration file is too large.',
+      INTERNAL_ERROR: 'Unable to complete the request'
+    };
+    const result = {
+      code,
+      message: messages[code],
+      runtimeRevision: RUNTIME_REVISION,
+      fields: code === 'INVALID_SETTINGS' ? error.fields || [] : undefined
+    };
+    const allowedDiagnosticStages = new Set(['request', 'response-body']);
+    if (allowedDiagnosticStages.has(error?.diagnosticStage)) {
+      result.diagnosticStage = error.diagnosticStage;
+    }
+    if (code !== 'INTERNAL_ERROR' && error?.diagnosticType) {
+      result.diagnosticType = String(error.diagnosticType)
+        .replace(/[^A-Za-z0-9_$-]/g, '').slice(0, 80) || 'Error';
+    }
+    if (Number.isFinite(error?.requestBytes)) {
+      result.requestBytes = Math.max(0, Math.min(1000000, Math.round(error.requestBytes)));
+    }
+    if (Number.isFinite(error?.elapsedMs)) {
+      result.elapsedMs = Math.max(0, Math.min(600000, Math.round(error.elapsedMs)));
+    }
+    if (Number.isFinite(error?.retryAfterMs) && error.retryAfterMs > 0) {
+      result.retryAfterMs = Math.max(0, Math.min(300000, Math.round(error.retryAfterMs)));
+    }
+    if (Number.isFinite(error?.status) && error.status > 0) {
+      result.status = Math.max(0, Math.min(599, Math.round(error.status)));
+    }
+    if (code === 'INTERNAL_ERROR') {
+      const type = String(error?.name || 'Error').replace(/[^A-Za-z0-9_$-]/g, '').slice(0, 80);
+      const diagnosticMessage = String(error?.message || 'Unknown internal error')
+        .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+        .replace(/sk-[A-Za-z0-9_-]{8,}/gi, '[redacted]')
+        .slice(0, 240);
+      result.diagnosticType = type || 'Error';
+      result.diagnosticMessage = diagnosticMessage;
+    }
+    return result;
+  }
+
+  async function testAdapterWithRetry(adapter, request, maxAttempts = 2) {
+    let attempt = 0;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        return await adapter.analyzeChunk(request);
+      } catch (error) {
+        if (!error?.retryable || attempt >= maxAttempts) throw error;
+      }
+    }
+    throw new Error('Provider connection test did not complete');
+  }
+
+  function publicCategory(category) {
+    return {
+      categoryId: category.categoryId,
+      name: category.name,
+      color: category.color,
+      persistence: category.persistence,
+      builtIn: category.builtIn,
+      retired: category.retired === true,
+      enabledEngines: Array.isArray(category.enabledEngines)
+        ? [...category.enabledEngines] : ['llm', 'regex'],
+      claimMode: category.claimMode || 'explicit',
+      minimumConfidence: Number(category.minimumConfidence) || 0.8
+    };
+  }
+
+  function publicStudyProfile(profile) {
+    if (!profile) return null;
+    return {
+      ...profile,
+      primaryTypeName: shared.STUDY_TYPES?.[profile?.primaryType]?.name || profile?.primaryType || ''
+    };
+  }
+
+  function normalizeUnifiedCustomCategory(category) {
+    const normalized = shared.flattenUnifiedCategory(shared.toUnifiedCategory({
+      ...category,
+      builtIn: false
+    }));
+    normalized.categoryId = String(category?.categoryId || normalized.categoryId || '');
+    normalized.persistence = category?.persistence === 'one-off' ? 'one-off' : 'saved';
+    normalized.builtIn = false;
+    return normalized;
+  }
+
+  function createBackgroundRouter({
+    storageArea,
+    sessionStorageArea,
+    fetchImpl,
+    cacheStore = shared.createMemoryAnalysisCache(),
+    corpusStore = shared.createMemoryCorpusStore(),
+    documentStore = shared.createMemoryDocumentStore(),
+    directorySync = null,
+    sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay))
+  }) {
+    let memorySessionCategories = [];
+    const documentIdsByHash = new Map();
+    let documentMutationTail = Promise.resolve();
+    const operationRegistry = shared.createOperationRegistry?.();
+
+    function operationFor(message) {
+      return operationRegistry?.getOrCreate(message?.operationId) || null;
+    }
+
+    async function waitForOperation(operation) {
+      if (!operation) return;
+      await operationRegistry.waitIfPaused(operation);
+      operationRegistry.throwIfCancelled(operation);
+    }
+
+    async function sleepForOperation(delay, operation) {
+      await waitForOperation(operation);
+      const signal = operation?.controller?.signal;
+      if (!signal) return sleepImpl(delay);
+      let onAbort;
+      const cancelled = new Promise((resolve, reject) => {
+        onAbort = () => reject(shared.operationError());
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        await Promise.race([sleepImpl(delay), cancelled]);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+      await waitForOperation(operation);
+    }
+
+    function serializeDocumentMutation(operation) {
+      const pending = documentMutationTail.then(operation, operation);
+      documentMutationTail = pending.catch(() => undefined);
+      return pending;
+    }
+
+    async function loadRouterSessionCategories() {
+      if (sessionStorageArea) {
+        return shared.loadSessionCategories(sessionStorageArea);
+      }
+      return memorySessionCategories.map(cloneJsonLike);
+    }
+
+    async function saveRouterSessionCategories(categories) {
+      if (sessionStorageArea) {
+        return shared.saveSessionCategories(sessionStorageArea, categories);
+      }
+      memorySessionCategories = Array.isArray(categories)
+        ? categories.filter(item => item && typeof item === 'object').map(cloneJsonLike)
+        : [];
+      return memorySessionCategories.map(cloneJsonLike);
+    }
+
+    async function loadAllCategories(settings) {
+      const sessionCustomCategories = await loadRouterSessionCategories();
+      const savedCustomCategories = (settings.customCategories || [])
+        .map(normalizeUnifiedCustomCategory);
+      const normalizedSessionCategories = sessionCustomCategories
+        .map(normalizeUnifiedCustomCategory);
+      const customCategories = [...savedCustomCategories, ...normalizedSessionCategories];
+      const categoryMap = shared.createUnifiedCategoryCatalog(settings.categoryOverrides);
+      customCategories.forEach(category => { categoryMap[category.categoryId] = category; });
+      return {
+        savedCustomCategories,
+        sessionCustomCategories: normalizedSessionCategories,
+        customCategories,
+        categoryMap
+      };
+    }
+
+    async function publicState(settings) {
+      const { customCategories, categoryMap } = await loadAllCategories(settings);
+      return {
+        settings: shared.toPublicSettings(settings),
+        effectiveMode: shared.getEffectiveMode(settings),
+        providers: shared.getProviderDefinitions(),
+        compatibleProviderPresets: shared.getCompatibleProviderPresets(),
+        panelFollowupDefaults: cloneJsonLike(shared.DEFAULT_PANEL_FOLLOWUP_PROMPTS || {}),
+        customCategories,
+        studyTypes: shared.STUDY_TYPES,
+        readingViews: shared.READING_VIEWS,
+        availableCategories: Object.values(categoryMap).map(publicCategory)
+      };
+    }
+
+    async function categoryDetail(settings, categoryId) {
+      if (!/^[a-z][a-z0-9_]*$/.test(categoryId)) {
+        throw invalidSettings(['categoryId']);
+      }
+      const baseCatalog = shared.createUnifiedCategoryCatalog();
+      const baseCategory = baseCatalog[categoryId];
+      const hasOverride = Boolean(baseCategory) && Object.prototype.hasOwnProperty.call(
+        settings.categoryOverrides || {}, categoryId
+      );
+      let category;
+      if (baseCategory) {
+        category = shared.mergeCategoryOverrides(
+          baseCategory,
+          hasOverride ? settings.categoryOverrides[categoryId] : {}
+        );
+      } else {
+        const { customCategories } = await loadAllCategories(settings);
+        category = customCategories.find(item => item.categoryId === categoryId);
+        if (!category) throw invalidSettings(['categoryId']);
+      }
+      const errors = shared.validateUnifiedCategory(category);
+      if (errors.length) throw invalidSettings(errors);
+      return {
+        category,
+        promptPreview: shared.compileCategoryPromptPreview(category),
+        metadata: {
+          builtIn: category.builtIn !== false,
+          overridden: hasOverride
+        }
+      };
+    }
+
+    function requireLlmReady(settings) {
+      if (shared.getEffectiveMode(settings) !== 'llm') {
+        const error = new Error('LLM mode is not ready');
+        error.code = 'LLM_NOT_READY';
+        throw error;
+      }
+    }
+
+    function publicRoute(route) {
+      return {
+        taskType: route.taskType,
+        requestedProfileId: route.requestedProfileId,
+        effectiveProfileId: route.effectiveProfileId,
+        effectiveProfileName: route.publicProfile.name,
+        name: route.publicProfile.name,
+        providerId: route.providerId,
+        model: route.model,
+        capabilityMode: route.capabilityMode,
+        concurrency: TASK_CONCURRENCY[route.taskType] || 1,
+        fallbackReason: route.fallbackReason
+      };
+    }
+
+    function createTaskAdapter(settings, taskType, requirements = {}, context = {}, budgetKind) {
+      const route = shared.resolveTaskProfile(settings, taskType, requirements);
+      const rawAdapter = shared.createProviderAdapter({
+        providerId: route.providerId,
+        config: route.config,
+        fetchImpl
+      });
+      const routePublic = publicRoute(route);
+      const adapter = shared.createTokenManagedAdapter({
+        rawAdapter,
+        kind: budgetKind,
+        tokenPolicy: route.tokenPolicy,
+        adapterCap: rawAdapter.maxOutputTokens,
+        requestTimeoutMs: TASK_TIMEOUTS_MS[taskType] || 180000,
+        onProgress: event => context.onProgress?.({
+          ...event,
+          taskType,
+          effectiveProfileId: route.effectiveProfileId,
+          effectiveProfileName: route.publicProfile.name,
+          route: routePublic
+        })
+      });
+      return { adapter, route, routePublic };
+    }
+
+    function routeProgress(context, routePublic) {
+      return event => context.onProgress?.({
+        ...event,
+        taskType: routePublic.taskType,
+        effectiveProfileId: routePublic.effectiveProfileId,
+        effectiveProfileName: routePublic.effectiveProfileName,
+        route: routePublic
+      });
+    }
+
+    async function composeCategories(settings, profile) {
+      const { customCategories } = await loadAllCategories(settings);
+      return shared.composeReadingView({
+        viewId: settings.readingViewId,
+        studyProfile: profile,
+        override: settings.viewCategoryOverrides?.[settings.readingViewId],
+        customCategories,
+        categoryOverrides: settings.categoryOverrides,
+        engine: 'llm'
+      });
+    }
+
+    async function composeManualCategories(settings, profile) {
+      const { customCategories } = await loadAllCategories(settings);
+      return shared.composeReadingView({
+        viewId: settings.readingViewId,
+        studyProfile: profile,
+        override: settings.viewCategoryOverrides?.[settings.readingViewId],
+        customCategories,
+        categoryOverrides: settings.categoryOverrides
+      });
+    }
+
+    async function prepareStoredDocumentUnsafe(settings, document) {
+      const paragraphs = Array.isArray(document?.paragraphs) ? document.paragraphs : [];
+      if (!paragraphs.length) throw invalidSettings(['paragraphs']);
+      const documentHash = await shared.hashDocument(paragraphs);
+      const computedDocumentId = await shared.createDocumentId({
+        title: document?.title,
+        canonicalUrl: document?.canonicalUrl || document?.url,
+        doi: document?.doi,
+        paragraphs
+      });
+      const requestedDocumentId = String(document?.documentId || '').trim();
+      const previousDocumentHash = String(document?.previousDocumentHash || '').toLowerCase();
+      let documentId = computedDocumentId;
+      if (requestedDocumentId && /^[a-f0-9]{64}$/.test(previousDocumentHash)) {
+        try {
+          const existing = await documentStore.getDocument(requestedDocumentId);
+          const knownHashes = new Set([
+            existing?.documentHash,
+            ...(Array.isArray(existing?.documentHashes) ? existing.documentHashes : [])
+          ].filter(Boolean));
+          if (existing && knownHashes.has(previousDocumentHash)) {
+            documentId = requestedDocumentId;
+          }
+        } catch (_) {
+          // Ignore stale or malformed identities and fall back to the current extraction.
+        }
+      }
+      documentIdsByHash.set(documentHash, documentId);
+      const legacyStudyType = settings.studyTypeOverrides?.[documentHash]?.studyType;
+      const record = await documentStore.prepareDocument({
+        schemaVersion: 1,
+        documentId,
+        title: document?.title || '',
+        canonicalUrl: document?.canonicalUrl || document?.url || '',
+        studyType: shared.isStudyType(legacyStudyType) ? legacyStudyType : null,
+        annotations: [],
+        revision: 0,
+        updatedAt: '',
+        documentHash,
+        documentHashes: [documentHash],
+        legacyStudyTypeMigrated: true
+      });
+      const profile = shared.createManualStudyProfile(record.studyType, document);
+      const composition = await composeManualCategories(settings, profile);
+      return { documentId, documentHash, record, profile, composition, paragraphs };
+    }
+
+    function prepareStoredDocument(settings, document) {
+      return serializeDocumentMutation(() =>
+        prepareStoredDocumentUnsafe(settings, document)
+      );
+    }
+
+    async function prepareDocument(settings, document) {
+      requireLlmReady(settings);
+      const stored = await prepareStoredDocument(settings, document);
+      const { documentId, documentHash, record, profile, paragraphs } = stored;
+      const composition = await composeCategories(settings, profile);
+      return {
+        documentId,
+        documentHash,
+        record,
+        requiresStudyType: !profile,
+        studyProfile: profile,
+        paperBlueprint: profile?.paperBlueprint || null,
+        readingViewId: composition.viewId,
+        activeCategories: composition.categories,
+        categorySources: composition.sources,
+        paragraphs
+      };
+    }
+
+    async function prepareParagraphOnlyReviewDocument(settings, message, requestedParagraphIds) {
+      requireLlmReady(settings);
+      const paragraphs = Array.isArray(message?.document?.paragraphs)
+        ? message.document.paragraphs : [];
+      const proof = message?.documentProof || {};
+      const documentId = String(proof.documentId || '').trim();
+      const documentHash = String(proof.documentHash || '').toLowerCase();
+      const suppliedParagraphIds = paragraphs.map(paragraph =>
+        String(paragraph?.paragraphId || '').trim()
+      ).filter(Boolean);
+      const suppliedIdSet = new Set(suppliedParagraphIds);
+      if (!requestedParagraphIds.size || !paragraphs.length ||
+          paragraphs.length !== requestedParagraphIds.size ||
+          suppliedIdSet.size !== paragraphs.length ||
+          !suppliedParagraphIds.every(id => requestedParagraphIds.has(id))) {
+        throw invalidSettings(['scopeParagraphIds', 'paragraphs']);
+      }
+      if (!documentId || !/^[a-f0-9]{64}$/.test(documentHash)) {
+        throw invalidSettings(['documentProof']);
+      }
+      const record = await documentStore.getDocument(documentId);
+      const knownHashes = new Set([
+        record?.documentHash,
+        ...(Array.isArray(record?.documentHashes) ? record.documentHashes : [])
+      ].map(value => String(value || '').toLowerCase()).filter(Boolean));
+      if (!record || !knownHashes.has(documentHash)) {
+        throw invalidSettings(['documentProof']);
+      }
+      const profile = shared.createManualStudyProfile(record.studyType, message.document);
+      const composition = await composeCategories(settings, profile);
+      documentIdsByHash.set(documentHash, documentId);
+      return {
+        documentId,
+        documentHash,
+        record,
+        requiresStudyType: !profile,
+        studyProfile: profile,
+        paperBlueprint: profile?.paperBlueprint || null,
+        readingViewId: composition.viewId,
+        activeCategories: composition.categories,
+        categorySources: composition.sources,
+        paragraphs
+      };
+    }
+
+    function requireStudyType(prepared) {
+      if (!prepared?.studyProfile) {
+        const error = new Error('Study type must be selected before analysis.');
+        error.code = 'STUDY_TYPE_REQUIRED';
+        throw error;
+      }
+    }
+
+    let settingsMutationTail = Promise.resolve();
+
+    function serializeSettingsMutation(operation) {
+      const pending = settingsMutationTail.then(operation, operation);
+      settingsMutationTail = pending.catch(() => undefined);
+      return pending;
+    }
+
+    function serializeAllMutations(operation) {
+      const pending = Promise.all([
+        settingsMutationTail.catch(() => undefined),
+        documentMutationTail.catch(() => undefined)
+      ]).then(operation);
+      const settled = pending.catch(() => undefined);
+      settingsMutationTail = settled;
+      documentMutationTail = settled;
+      return pending;
+    }
+
+    function requireVersion5Settings(settings) {
+      if (Number(settings?.version) !== 5) throw invalidSettings(['version']);
+    }
+
+    function orderedProfileIds(settings) {
+      const profiles = isPlainObject(settings?.profiles) ? settings.profiles : {};
+      const seen = new Set();
+      const result = [];
+      (Array.isArray(settings?.profileOrder) ? settings.profileOrder : [])
+        .forEach(profileId => {
+          if (typeof profileId !== 'string' || seen.has(profileId) ||
+              !Object.prototype.hasOwnProperty.call(profiles, profileId)) return;
+          seen.add(profileId);
+          result.push(profileId);
+        });
+      Object.keys(profiles).sort().forEach(profileId => {
+        if (seen.has(profileId)) return;
+        seen.add(profileId);
+        result.push(profileId);
+      });
+      return result;
+    }
+
+    function publicProfileResult(profileId, profile) {
+      const config = isPlainObject(profile?.config) ? profile.config : {};
+      return {
+        id: profileId,
+        name: String(profile?.name || ''),
+        providerId: profile?.providerId,
+        model: String(config.model || ''),
+        supportsVision: shared.getProviderCapabilities(
+          profile?.providerId,
+          config
+        ).supportsVision === true
+      };
+    }
+
+    function upsertProfile(settings, message) {
+      requireVersion5Settings(settings);
+      const incoming = isPlainObject(message?.profile) ? message.profile : message;
+      const profileId = String(
+        incoming?.id || incoming?.profileId || message?.profileId || ''
+      );
+      if (!shared.PROFILE_ID_PATTERN?.test(profileId)) {
+        throw invalidSettings(['profileId']);
+      }
+      const current = isPlainObject(settings.profiles?.[profileId])
+        ? settings.profiles[profileId] : null;
+      const providerId = String(incoming?.providerId || current?.providerId || '');
+      if (!Object.prototype.hasOwnProperty.call(
+        shared.getProviderDefinitions(), providerId
+      )) throw invalidSettings(['providerId']);
+      if (incoming?.config !== undefined && !isPlainObject(incoming.config)) {
+        throw invalidSettings(['config']);
+      }
+
+      const currentConfig = isPlainObject(current?.config) ? current.config : {};
+      const incomingConfig = isPlainObject(incoming?.config) ? incoming.config : {};
+      const config = { ...cloneJsonLike(currentConfig), ...cloneJsonLike(incomingConfig) };
+      if (message?.clearApiKey === true) {
+        config.apiKey = '';
+      } else if (!String(incomingConfig.apiKey || '').trim() && currentConfig.apiKey) {
+        config.apiKey = currentConfig.apiKey;
+      }
+      const candidate = {
+        ...cloneJsonLike(current || {}),
+        ...cloneJsonLike(incoming || {}),
+        name: incoming?.name !== undefined ? incoming.name : current?.name,
+        providerId,
+        config,
+        capabilities: incoming?.capabilities !== undefined
+          ? cloneJsonLike(incoming.capabilities)
+          : cloneJsonLike(current?.capabilities || {}),
+        tokenPolicy: incoming?.tokenPolicy !== undefined
+          ? cloneJsonLike(incoming.tokenPolicy)
+          : cloneJsonLike(current?.tokenPolicy || {})
+      };
+      const normalized = shared.normalizeProfile(profileId, candidate);
+      if (!normalized) throw invalidSettings(['profileId', 'providerId']);
+
+      settings.profiles = isPlainObject(settings.profiles) ? settings.profiles : {};
+      settings.profiles[profileId] = normalized;
+      settings.profileOrder = orderedProfileIds(settings);
+      if (!Object.prototype.hasOwnProperty.call(
+        settings.profiles,
+        settings.globalProfileId
+      )) settings.globalProfileId = settings.profileOrder[0] || profileId;
+      settings.taskRoutes = shared.normalizeTaskRoutes(
+        settings.taskRoutes,
+        settings.profiles
+      );
+      return { profileId, profile: normalized };
+    }
+
+    function duplicateProfileId(settings, sourceId) {
+      const sourceStem = String(sourceId || '').replace(/^profile_/, '')
+        .replace(/[^a-z0-9_]/g, '_').slice(0, 64) || 'copy';
+      let suffix = 'copy';
+      let sequence = 1;
+      while (true) {
+        const room = Math.max(3, 80 - 'profile_'.length - suffix.length - 1);
+        const candidate = `profile_${sourceStem.slice(0, room)}_${suffix}`;
+        if (!Object.prototype.hasOwnProperty.call(settings.profiles, candidate)) {
+          return candidate;
+        }
+        sequence += 1;
+        suffix = `copy_${sequence}`;
+      }
+    }
+
+    async function runConnectionTest(profileId, profile, configOverride) {
+      const currentConfig = isPlainObject(profile?.config) ? profile.config : {};
+      const incomingConfig = isPlainObject(configOverride) ? configOverride : {};
+      const config = { ...cloneJsonLike(currentConfig), ...cloneJsonLike(incomingConfig) };
+      if (!String(incomingConfig.apiKey || '').trim() && currentConfig.apiKey) {
+        config.apiKey = currentConfig.apiKey;
+      }
+      const errors = shared.validateProviderConfig(profile?.providerId, config);
+      if (errors.length) throw invalidSettings(errors);
+      const adapter = shared.createProviderAdapter({
+        providerId: profile.providerId,
+        config,
+        fetchImpl
+      });
+      const connectionParagraphs = [
+        { paragraphId: 'connection-p1', sectionTitle: '', text: 'Treatment increased survival.' }
+      ];
+      const connectionPrompt = shared.compileAnalysisPrompt({
+        categories: [shared.createBuiltInCategories().result],
+        chunkId: 'connection-test',
+        sectionTitle: '',
+        paragraphs: connectionParagraphs
+      });
+      const result = await testAdapterWithRetry(adapter, {
+        ...connectionPrompt,
+        paragraphs: connectionParagraphs
+      });
+      if (!Array.isArray(result.paragraphs_reviewed) || !Array.isArray(result.annotations)) {
+        const error = new Error('Invalid connection-test response');
+        error.code = 'INVALID_RESPONSE';
+        throw error;
+      }
+      return {
+        connected: true,
+        profileId,
+        providerId: profile.providerId,
+        model: config.model
+      };
+    }
+
+    function categoryAsset(settings) {
+      return {
+        schemaVersion: 1,
+        revision: Number(settings.userDataCategoryRevision) || 0,
+        sourceId: 'extension',
+        categoryOverrides: cloneJsonLike(settings.categoryOverrides || {}),
+        customCategories: cloneJsonLike(settings.customCategories || []),
+        selectedCategoryIds: [...(settings.selectedCategoryIds || [])],
+        viewCategoryOverrides: cloneJsonLike(settings.viewCategoryOverrides || {})
+      };
+    }
+
+    function scheduleDirectoryFlush() {
+      if (!directorySync?.flush) return;
+      try {
+        Promise.resolve(directorySync.flush(importUserDataAsset)).catch(() => undefined);
+      } catch (_) {
+        // Directory availability must never roll back a successful local mutation.
+      }
+    }
+
+    async function mirrorJson(relativePath, value) {
+      if (!directorySync?.enqueueJson) return;
+      try {
+        await directorySync.enqueueJson(relativePath, value);
+        scheduleDirectoryFlush();
+      } catch (_) {
+        // The primary local stores remain authoritative while sync is unavailable.
+      }
+    }
+
+    async function mirrorText(relativePath, value) {
+      if (!directorySync?.enqueueText) return;
+      try {
+        await directorySync.enqueueText(relativePath, value);
+        scheduleDirectoryFlush();
+      } catch (_) {
+        // The primary local stores remain authoritative while sync is unavailable.
+      }
+    }
+
+    async function mirrorCategorySettings(settings) {
+      await mirrorJson('categories.json', categoryAsset(settings));
+    }
+
+    async function mirrorDocumentRecord(record) {
+      if (!record?.documentId) return;
+      await mirrorJson(
+        `annotations/${encodeURIComponent(record.documentId)}.json`,
+        cloneJsonLike(record)
+      );
+    }
+
+    function isWordCharacter(value) {
+      return Boolean(value) && /[\p{L}\p{N}_]/u.test(value);
+    }
+
+    function regexMatches(regex, text, expressionRow, wholeWord) {
+      const matches = [];
+      let match;
+      while ((match = regex.exec(text)) && matches.length <= 100) {
+        const value = match[0];
+        if (!value) {
+          regex.lastIndex = Math.max(regex.lastIndex + 1, match.index + 1);
+          continue;
+        }
+        const start = match.index;
+        const end = start + value.length;
+        if (!wholeWord || (
+          !isWordCharacter(text[start - 1]) && !isWordCharacter(text[end])
+        )) {
+          matches.push({ expressionRow, start, end, text: value });
+        }
+      }
+      return matches;
+    }
+
+    function escapeRegex(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function testCategoryRegex(category, text) {
+      const flags = category.regex.caseSensitive ? 'g' : 'gi';
+      const matches = [];
+      category.regex.phrases.forEach((phrase, index) => {
+        if (!phrase) return;
+        matches.push(...regexMatches(
+          new RegExp(escapeRegex(phrase), flags),
+          text,
+          `phrase:${index}`,
+          category.regex.wholeWord
+        ));
+      });
+      category.regex.expressions.forEach((expression, index) => {
+        matches.push(...regexMatches(
+          new RegExp(expression, flags),
+          text,
+          `expression:${index}`,
+          category.regex.wholeWord
+        ));
+      });
+      matches.sort((left, right) =>
+        left.start - right.start || left.end - right.end ||
+        left.expressionRow.localeCompare(right.expressionRow)
+      );
+      return {
+        matches: matches.slice(0, 100),
+        truncated: matches.length > 100
+      };
+    }
+
+    function normalizeFigureInput(value, articleTitle) {
+      const figureId = String(value?.figureId || '').trim().slice(0, 80);
+      const caption = String(value?.caption || '').normalize('NFKC')
+        .replace(/\s+/g, ' ').trim().slice(0, 8000);
+      if (!/^figure-(?:s)?\d{1,3}$/.test(figureId) || !caption) {
+        throw invalidSettings(['figures']);
+      }
+      return {
+        figureId,
+        figureLabel: String(value?.figureLabel || figureId).trim().slice(0, 80),
+        caption,
+        articleTitle: String(articleTitle || '').trim().slice(0, 500),
+        panelHints: (Array.isArray(value?.panelHints) ? value.panelHints : []).slice(0, 30)
+          .map(item => String(item || '').trim().toUpperCase())
+          .filter(item => /^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(item)),
+        contextParagraphs: (Array.isArray(value?.contextParagraphs)
+          ? value.contextParagraphs : []).slice(0, 12).map(item => ({
+          paragraphId: String(item?.paragraphId || '').slice(0, 120),
+          sectionTitle: String(item?.sectionTitle || '').normalize('NFKC')
+            .replace(/\s+/g, ' ').trim().slice(0, 240),
+          text: String(item?.text || '').normalize('NFKC')
+            .replace(/\s+/g, ' ').trim().slice(0, 1200)
+        })),
+        images: shared.normalizeImageInputs(value?.images)
+      };
+    }
+
+    async function requestFigureJson(adapter, request, context, progressBase, options = {}) {
+      const emitLifecycle = options.emitLifecycle === true;
+      const operation = options.operation || null;
+      const requestOnce = async payload => {
+        await waitForOperation(operation);
+        if (emitLifecycle) {
+          context.onProgress?.({ phase: 'figure_model_processing', ...progressBase });
+        }
+        const raw = await adapter.generateJson({
+          ...payload,
+          signal: operation?.controller?.signal
+        });
+        if (emitLifecycle) {
+          context.onProgress?.({ phase: 'figure_response_received', ...progressBase });
+        }
+        return raw;
+      };
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          return await requestOnce(request);
+        } catch (error) {
+          if (operation?.controller?.signal?.aborted) throw shared.operationError();
+          if (!error?.retryable || attempt >= 2) throw error;
+          const waitMs = Math.max(
+            Number(error?.retryAfterMs) || 0,
+            attempt === 1 ? 1500 : 4000
+          );
+          context.onProgress?.({
+            phase: 'figure_retry',
+            ...progressBase,
+            attempt: attempt + 1,
+            waitMs,
+            errorCode: error.code || 'NETWORK_ERROR'
+          });
+          await sleepForOperation(waitMs, operation);
+        }
+      }
+      throw new Error('Figure analysis did not complete');
+    }
+
+    function splitFigurePanelBatches(figure, analysisDepth) {
+      const panels = Array.isArray(figure?.panelHints) ? figure.panelHints : [];
+      if (!panels.length) return [[]];
+      // Deep analysis contains many required fields per panel.  Small batches keep
+      // its structured response below the output limit of economical models.
+      const batchSize = analysisDepth === 'deep' ? 2 : 4;
+      const batches = [];
+      for (let index = 0; index < panels.length; index += batchSize) {
+        batches.push(panels.slice(index, index + batchSize));
+      }
+      return batches;
+    }
+
+    function mergeFigurePanelBatchResults(results, figure, analysisDepth) {
+      const values = Array.isArray(results) ? results.filter(Boolean) : [];
+      const first = values[0] || {};
+      const uniqueBy = (items, key) => {
+        const seen = new Set();
+        return (Array.isArray(items) ? items : []).filter(item => {
+          const value = key(item);
+          if (!value || seen.has(value)) return false;
+          seen.add(value);
+          return true;
+        });
+      };
+      const panels = uniqueBy(values.flatMap(item => item.panels || []), item => item.panel);
+      const expectedPanels = Array.isArray(figure?.panelHints) ? figure.panelHints : [];
+      const firstText = field => values.map(item => String(item?.[field] || '').trim())
+        .find(Boolean) || '';
+      const merged = {
+        ...first,
+        figureId: figure.figureId,
+        analysisDepth,
+        panels,
+        panelGroups: uniqueBy(values.flatMap(item => item.panelGroups || []), item =>
+          shared.stableHash([item?.panels, item?.groupGoal, item?.groupConclusion])),
+        logicBridges: uniqueBy(values.flatMap(item => item.logicBridges || []), item =>
+          shared.stableHash([item?.fromGroup, item?.toGroup, item?.relationType, item?.bridge])),
+        argumentChain: uniqueBy(values.flatMap(item => item.argumentChain || []), item =>
+          shared.stableHash([item?.panels, item?.established, item?.handoff, item?.evidenceLevel])),
+        panelCoverage: {
+          expectedPanels: [...expectedPanels],
+          returnedPanels: panels.map(item => item.panel),
+          missingPanels: expectedPanels.filter(panel => !panels.some(item => item.panel === panel))
+        },
+        figureQuestion: firstText('figureQuestion'),
+        authorAssembly: firstText('authorAssembly'),
+        coreConclusion: firstText('coreConclusion'),
+        claimBoundary: firstText('claimBoundary')
+      };
+      if (analysisDepth === 'deep') Object.assign(merged, {
+        controlAnalysis: uniqueBy(values.flatMap(item => item.controlAnalysis || []), item =>
+          shared.stableHash([item?.panels, item?.controlType, item?.excludedExplanation])),
+        evidenceRelations: uniqueBy(values.flatMap(item => item.evidenceRelations || []), item =>
+          shared.stableHash([item?.panels, item?.relationLevel, item?.rationale])),
+        negativeResultValue: firstText('negativeResultValue'),
+        qualitativeQuantitativeLink: firstText('qualitativeQuantitativeLink'),
+        alternativeExplanations: uniqueBy(values.flatMap(item => item.alternativeExplanations || []),
+          item => String(item || '')),
+        missingLinksIfPanelRemoved: uniqueBy(
+          values.flatMap(item => item.missingLinksIfPanelRemoved || []),
+          item => String(item || '')
+        ),
+        paperArgumentRole: firstText('paperArgumentRole'),
+        deepAuthorStrategy: firstText('deepAuthorStrategy')
+      });
+      return merged;
+    }
+
+    async function mapWithConcurrency(items, limit, mapper) {
+      const values = new Array(items.length);
+      let cursor = 0;
+      const workers = Array.from({
+        length: Math.max(1, Math.min(items.length || 1, Number(limit) || 1))
+      }, async () => {
+        while (cursor < items.length) {
+          const index = cursor;
+          cursor += 1;
+          values[index] = await mapper(items[index], index);
+        }
+      });
+      await Promise.all(workers);
+      return values;
+    }
+
+    async function requestFigurePanelBatches({
+      adapter,
+      route,
+      figure,
+      analysisDepth,
+      progress,
+      progressBase,
+      operation
+    }) {
+      const panelBatches = splitFigurePanelBatches(figure, analysisDepth);
+      let visionFallback = route.capabilityMode === 'caption_text_only';
+      let useVisualInput = route.capabilityMode === 'vision' && figure.images.length > 0;
+      if (visionFallback) {
+        progress({
+          phase: 'caption_text_only',
+          ...progressBase,
+          basis: 'caption_context',
+          visionFallback: true,
+          completedPanelBatches: 0,
+          totalPanelBatches: panelBatches.length
+        });
+      }
+
+      async function requestValidated({
+        prompt,
+        request,
+        validate,
+        progressDetails
+      }) {
+        let raw = await requestFigureJson(
+          adapter, request, { onProgress: progress }, progressDetails,
+          { emitLifecycle: true, operation }
+        );
+        progress({ phase: 'figure_validating', ...progressDetails });
+        try {
+          return validate(raw);
+        } catch (error) {
+          if (error?.code !== 'INVALID_RESPONSE') throw error;
+          progress({ phase: 'figure_schema_retry', ...progressDetails });
+          raw = await requestFigureJson(adapter, {
+            ...request,
+            systemPrompt: `${prompt.systemPrompt}\nSCHEMA_REPAIR_PASS: Return only the exact JSON object, include every required key, use empty strings or empty arrays when evidence is absent, and do not add unsupported keys.`
+          }, { onProgress: progress }, progressDetails,
+          { emitLifecycle: true, operation });
+          progress({ phase: 'figure_validating', ...progressDetails });
+          return validate(raw);
+        }
+      }
+
+      // A small Figure is fastest and most coherent as one structured request.
+      if (panelBatches.length === 1) {
+        const panelHints = panelBatches[0];
+        const batchFigure = { ...figure, panelHints };
+        const batchBase = {
+          ...progressBase,
+          expectedPanels: [...panelHints],
+          expectedPanelCount: panelHints.length,
+          panelBatchIndex: 1,
+          totalPanelBatches: 1,
+          completedPanelBatches: 0
+        };
+        const run = async visualInput => {
+          const prompt = shared.compileFigureAnalysisPrompt(
+            batchFigure, { visualInput, analysisDepth }
+          );
+          const request = {
+            ...prompt,
+            images: visualInput ? figure.images : [],
+            outputUnits: Math.max(1, panelHints.length)
+          };
+          progress({
+            phase: 'figure_requesting', ...batchBase,
+            basis: visualInput ? 'vision_text' : 'caption_context',
+            visionFallback
+          });
+          return requestValidated({
+            prompt, request, progressDetails: batchBase,
+            validate: raw => shared.validateFigureAnalysis(
+              raw, batchFigure, { visualInput, analysisDepth }
+            )
+          });
+        };
+        let result;
+        try {
+          result = await run(useVisualInput);
+        } catch (error) {
+          if (!useVisualInput || error?.code !== 'PROVIDER_REJECTED') throw error;
+          visionFallback = true;
+          useVisualInput = false;
+          progress({ phase: 'figure_fallback', ...batchBase, errorCode: error.code });
+          result = await run(false);
+        }
+        progress({
+          phase: 'figure_assembling', ...batchBase,
+          recognizedPanelCount: result.panels.length
+        });
+        progress({
+          phase: 'figure_panel_batch_complete', ...batchBase,
+          completedPanelBatches: 1,
+          recognizedPanelCount: result.panels.length,
+          basis: result.basis,
+          visionFallback,
+          partialFigureResult: result
+        });
+        return { result, visionFallback, totalPanelBatches: 1 };
+      }
+
+      const runExtraction = async visualInput => {
+        const completed = new Array(panelBatches.length);
+        let completedCount = 0;
+        return mapWithConcurrency(
+          panelBatches,
+          TASK_CONCURRENCY.figure,
+          async (panelHints, batchIndex) => {
+            const batchFigure = { ...figure, panelHints };
+            const batchBase = {
+              ...progressBase,
+              expectedPanels: [...panelHints],
+              expectedPanelCount: panelHints.length,
+              panelBatchIndex: batchIndex + 1,
+              totalPanelBatches: panelBatches.length,
+              completedPanelBatches: completedCount
+            };
+            const prompt = shared.compileFigurePanelBatchPrompt(
+              batchFigure, { visualInput, analysisDepth }
+            );
+            const request = {
+              ...prompt,
+              images: visualInput ? figure.images : [],
+              outputUnits: Math.max(1, panelHints.length)
+            };
+            progress({
+              phase: 'figure_requesting', ...batchBase,
+              basis: visualInput ? 'vision_text' : 'caption_context',
+              visionFallback
+            });
+            const result = await requestValidated({
+              prompt, request, progressDetails: batchBase,
+              validate: raw => shared.validateFigurePanelBatch(
+                raw, batchFigure, { visualInput, analysisDepth }
+              )
+            });
+            completed[batchIndex] = result;
+            completedCount += 1;
+            const partial = mergeFigurePanelBatchResults(
+              completed.filter(Boolean), figure, analysisDepth
+            );
+            progress({
+              phase: 'figure_assembling', ...batchBase,
+              completedPanelBatches: completedCount,
+              recognizedPanelCount: partial.panels.length
+            });
+            progress({
+              phase: 'figure_panel_batch_complete', ...batchBase,
+              completedPanelBatches: completedCount,
+              recognizedPanelCount: partial.panels.length,
+              basis: partial.basis,
+              visionFallback,
+              partialFigureResult: partial
+            });
+            return result;
+          }
+        );
+      };
+
+      let batchResults;
+      try {
+        batchResults = await runExtraction(useVisualInput);
+      } catch (error) {
+        if (!useVisualInput || error?.code !== 'PROVIDER_REJECTED') throw error;
+        visionFallback = true;
+        useVisualInput = false;
+        progress({ phase: 'figure_fallback', ...progressBase, errorCode: error.code });
+        batchResults = await runExtraction(false);
+      }
+
+      const panelResult = mergeFigurePanelBatchResults(batchResults, figure, analysisDepth);
+      const synthesisBase = {
+        ...progressBase,
+        expectedPanels: [...figure.panelHints],
+        expectedPanelCount: figure.panelHints.length,
+        completedPanelBatches: panelBatches.length,
+        totalPanelBatches: panelBatches.length
+      };
+      progress({
+        phase: 'figure_synthesizing', ...synthesisBase,
+        recognizedPanelCount: panelResult.panels.length
+      });
+      const synthesisPrompt = shared.compileFigureSynthesisPrompt(
+        figure, panelResult.panels, { visualInput: useVisualInput, analysisDepth }
+      );
+      const synthesisRequest = {
+        ...synthesisPrompt,
+        images: [],
+        outputUnits: Math.max(1, panelResult.panels.length)
+      };
+      const result = await requestValidated({
+        prompt: synthesisPrompt,
+        request: synthesisRequest,
+        progressDetails: synthesisBase,
+        validate: raw => shared.validateFigureSynthesis(
+          raw, figure, panelResult.panels,
+          { visualInput: useVisualInput, analysisDepth }
+        )
+      });
+      progress({
+        phase: 'figure_synthesis_complete', ...synthesisBase,
+        recognizedPanelCount: result.panels.length,
+        basis: result.basis,
+        visionFallback
+      });
+      return { result, visionFallback, totalPanelBatches: panelBatches.length };
+    }
+
+    async function analyzeFigures(settings, message, context) {
+      requireLlmReady(settings);
+      const operation = operationFor(message);
+      await waitForOperation(operation);
+      const rawFigures = Array.isArray(message?.figures) ? message.figures.slice(0, 50) : [];
+      if (!rawFigures.length) throw invalidSettings(['figures']);
+      const document = message?.document || {};
+      const paragraphs = Array.isArray(document.paragraphs) ? document.paragraphs : [];
+      const documentHash = paragraphs.length
+        ? await shared.hashDocument(paragraphs)
+        : shared.stableHash({
+          title: String(document.title || ''),
+          figures: rawFigures.map(item => [item?.figureId, item?.caption])
+        });
+      const analysisDepth = message?.analysisDepth === 'standard' ? 'standard' : 'deep';
+      const operationId = String(message?.operationId || '').trim().slice(0, 100);
+      const figureProgressState = { active: null };
+      const figureProgressContext = {
+        ...context,
+        onProgress: event => context.onProgress?.({
+          ...(figureProgressState.active || {}),
+          ...event
+        })
+      };
+      const task = createTaskAdapter(
+        settings, 'figure', { vision: true }, figureProgressContext, 'figure'
+      );
+      const { adapter, route, routePublic } = task;
+      const progress = routeProgress(figureProgressContext, routePublic);
+      const figures = rawFigures.map(value => normalizeFigureInput(value, document.title));
+      const records = figures.map(figure => {
+        const figureHash = shared.stableHash({
+          caption: figure.caption,
+          panelHints: figure.panelHints,
+          contextParagraphs: figure.contextParagraphs,
+          images: route.capabilityMode === 'vision'
+            ? figure.images.map(image => shared.stableHash(image.dataUrl))
+            : []
+        });
+        return {
+          figure,
+          key: shared.buildFigureCacheKey({
+            documentHash,
+            providerId: route.providerId,
+            model: route.model,
+            profileSignature: route.profileSignature,
+            figureId: figure.figureId,
+            figureHash,
+            analysisDepth,
+            figureVersion: shared.FIGURE_ANALYSIS_VERSION
+          })
+        };
+      });
+      const cached = message?.forceRefresh === true
+        ? new Map() : await cacheStore.getMany(records.map(record => record.key));
+      const figureResults = [];
+      let cacheHits = 0;
+      let visionFallbacks = 0;
+      const progressOffset = Math.max(
+        0,
+        Math.floor(Number(message.figureProgressOffset) || 0)
+      );
+      const progressTotal = Math.max(
+        progressOffset + records.length,
+        Math.floor(Number(message.figureProgressTotal) || 0)
+      );
+
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        const startedAt = Date.now();
+        const progressBase = {
+          figureId: record.figure.figureId,
+          figureLabel: record.figure.figureLabel,
+          expectedPanels: [...record.figure.panelHints],
+          expectedPanelCount: record.figure.panelHints.length,
+          completedFigures: progressOffset + index,
+          totalFigures: progressTotal,
+          providerId: route.providerId,
+          model: route.model,
+          capabilityMode: route.capabilityMode,
+          operationId,
+          startedAt
+        };
+        figureProgressState.active = progressBase;
+        const cachedValue = cached.get(record.key)?.figureResult;
+        let result;
+        if (cachedValue) {
+          try {
+            const validated = shared.validateCachedFigureAnalysis(
+              cachedValue,
+              record.figure,
+              { analysisDepth }
+            );
+            cacheHits += 1;
+            result = {
+              ...validated,
+              visionFallback: cachedValue.visionFallback === true,
+              cacheHit: true
+            };
+          } catch (error) {
+            await cacheStore.deleteMany?.([record.key]);
+          }
+        }
+        if (!result) {
+          const analyzed = await requestFigurePanelBatches({
+            adapter,
+            route,
+            figure: record.figure,
+            analysisDepth,
+            progress,
+            progressBase,
+            operation
+          });
+          result = {
+            ...analyzed.result,
+            visionFallback: analyzed.visionFallback,
+            cacheHit: false
+          };
+          await cacheStore.setMany([{
+            key: record.key,
+            createdAt: Date.now(),
+            figureResult: result
+          }]);
+        }
+        if (result.visionFallback) visionFallbacks += 1;
+        figureResults.push(result);
+        progress({
+          phase: 'figure',
+          ...progressBase,
+          completedFigures: progressOffset + index + 1,
+          basis: result.basis,
+          cacheHit: result.cacheHit,
+          recognizedPanelCount: Array.isArray(result.panels) ? result.panels.length : 0,
+          figureResult: result
+        });
+        figureProgressState.active = null;
+      }
+
+      return {
+        documentHash,
+        figureResults,
+        totalFigures: figureResults.length,
+        cacheHits,
+        visionFallbacks,
+        analysisDepth,
+        operationId,
+        providerId: route.providerId,
+        model: route.model,
+        route: routePublic,
+        figureVersion: shared.FIGURE_ANALYSIS_VERSION
+      };
+    }
+
+    function normalizePanelFollowupInput(message) {
+      const document = message?.document || {};
+      const figure = normalizeFigureInput(message?.figure, document.title);
+      const panelSource = isPlainObject(message?.panel) ? message.panel : {};
+      const panel = String(panelSource.panel || '').trim().toUpperCase();
+      if (!/^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(panel)) {
+        throw invalidSettings(['panel']);
+      }
+      if (figure.panelHints.length && !figure.panelHints.includes(panel)) {
+        throw invalidSettings(['panel']);
+      }
+      const topics = shared.normalizePanelFollowupTopics(message?.topics);
+      const customQuestion = shared.normalizePanelCustomQuestion(message?.customQuestion);
+      if (!topics.length && !customQuestion) throw invalidSettings(['topics', 'customQuestion']);
+      return {
+        ...figure,
+        panel: {
+          panel,
+          role: String(panelSource.role || '').trim().slice(0, 80),
+          phenotypeName: String(panelSource.phenotypeName || '').trim().slice(0, 240),
+          methods: (Array.isArray(panelSource.methods) ? panelSource.methods : [])
+            .slice(0, 12).map(item => String(item || '').trim().slice(0, 120)),
+          purpose: String(panelSource.purpose || '').trim().slice(0, 1000),
+          design: String(panelSource.design || '').trim().slice(0, 1000),
+          comparison: String(panelSource.comparison || '').trim().slice(0, 1000),
+          directObservation: String(panelSource.directObservation || '').trim().slice(0, 1000)
+        },
+        topics,
+        customQuestion
+      };
+    }
+
+    async function askFigurePanel(settings, message, context) {
+      requireLlmReady(settings);
+      const input = normalizePanelFollowupInput(message);
+      const task = createTaskAdapter(settings, 'figure', { vision: true }, context, 'singleSummary');
+      const { adapter, route, routePublic } = task;
+      const visualInput = route.capabilityMode === 'vision' && input.images.length > 0;
+      const prompt = shared.compilePanelFollowupPrompt(input, {
+        visualInput,
+        topicPrompts: settings.figurePanelFollowupPrompts
+      });
+      const raw = await requestFigureJson(adapter, {
+        ...prompt,
+        images: visualInput ? input.images : [],
+        outputUnits: 1
+      }, { onProgress: () => {} }, {
+        figureId: input.figureId,
+        figureLabel: input.figureLabel,
+        expectedPanels: [input.panel.panel],
+        expectedPanelCount: 1,
+        completedFigures: 0,
+        totalFigures: 1,
+        providerId: route.providerId,
+        model: route.model,
+        capabilityMode: route.capabilityMode
+      });
+      return {
+        panelFollowup: shared.validatePanelFollowup(raw, input, { visualInput }),
+        route: routePublic
+      };
+    }
+
+    function settingsForExplicitProfile(settings, profileId) {
+      const requestedProfileId = String(profileId || '').trim();
+      if (!requestedProfileId) return settings;
+      const profile = settings?.profiles?.[requestedProfileId];
+      if (!profile || !shared.profileUsable({ ...profile, id: requestedProfileId })) {
+        throw invalidSettings(['profileId']);
+      }
+      return {
+        ...settings,
+        taskRoutes: {
+          ...(settings.taskRoutes || {}),
+          summary: { mode: 'profile', profileId: requestedProfileId }
+        }
+      };
+    }
+
+    async function askArticle(settings, message, context) {
+      const input = shared.normalizeArticleChatInput(message);
+      if (settings?.consentGranted !== true) {
+        const error = new Error('Article content sharing consent is required');
+        error.code = 'LLM_NOT_READY';
+        throw error;
+      }
+      const operation = operationFor(message);
+      await waitForOperation(operation);
+      const routedSettings = settingsForExplicitProfile(settings, input.profileId);
+      const task = createTaskAdapter(
+        routedSettings,
+        'summary',
+        {},
+        context,
+        'singleSummary'
+      );
+      const prompt = shared.compileArticleChatPrompt(input);
+      const raw = await task.adapter.generateJson({
+        ...prompt,
+        outputUnits: Math.max(1, Math.ceil(input.question.length / 1000)),
+        signal: operation?.controller?.signal
+      });
+      await waitForOperation(operation);
+      return {
+        message: shared.validateArticleChatResponse(raw),
+        coverage: input.coverage,
+        operationId: operation?.operationId || '',
+        route: {
+          ...task.routePublic,
+          taskType: 'chat',
+          concurrency: TASK_CONCURRENCY.chat
+        }
+      };
+    }
+
+    async function analyzeCrossFigureLogic(settings, message, context) {
+      requireLlmReady(settings);
+      const input = shared.normalizeCrossFigureLogicInput({
+        articleTitle: message?.document?.title || '',
+        figures: message?.figures
+      });
+      if (input.mainFigureIds.length < 2) throw invalidSettings(['figures']);
+      const task = createTaskAdapter(settings, 'crossFigure', {}, context, 'crossFigure');
+      const { adapter, route, routePublic } = task;
+      const progress = routeProgress(context, routePublic);
+      const documentHash = shared.stableHash({
+        title: input.articleTitle,
+        figures: input.figures
+      });
+      const figureHash = shared.stableHash({
+        figures: input.figures,
+        crossFigureVersion: shared.CROSS_FIGURE_LOGIC_VERSION
+      });
+      const key = shared.buildFigureCacheKey({
+        documentHash,
+        providerId: route.providerId,
+        model: route.model,
+        profileSignature: route.profileSignature,
+        figureId: 'cross-figure-domino',
+        figureHash,
+        analysisDepth: 'deep',
+        figureVersion: shared.CROSS_FIGURE_LOGIC_VERSION
+      });
+      const cached = await cacheStore.getMany([key]);
+      const cachedValue = cached.get(key)?.crossFigureLogic;
+      if (cachedValue && message?.forceRefresh !== true) {
+        return {
+          documentHash,
+          crossFigureLogic: { ...cachedValue, cacheHit: true },
+          cacheHit: true,
+          providerId: route.providerId,
+          model: route.model,
+          route: routePublic,
+          crossFigureVersion: shared.CROSS_FIGURE_LOGIC_VERSION
+        };
+      }
+      progress({
+        phase: 'cross_figure_logic',
+        completedFigures: 0,
+        totalFigures: input.mainFigureIds.length,
+        figureLabel: 'Cross-figure domino chain'
+      });
+      const prompt = shared.compileCrossFigureLogicPrompt(input);
+      const raw = await requestFigureJson(adapter, {
+        ...prompt,
+        outputUnits: input.mainFigureIds.length
+      }, { onProgress: progress }, {
+        completedFigures: 0,
+        totalFigures: input.mainFigureIds.length,
+        figureLabel: 'Cross-figure domino chain'
+      });
+      const crossFigureLogic = shared.validateCrossFigureLogic(raw, input);
+      await cacheStore.setMany([{
+        key,
+        createdAt: Date.now(),
+        crossFigureLogic
+      }]);
+      progress({
+        phase: 'cross_figure_logic',
+        completedFigures: input.mainFigureIds.length,
+        totalFigures: input.mainFigureIds.length,
+        figureLabel: 'Cross-figure domino chain'
+      });
+      return {
+        documentHash,
+        crossFigureLogic: { ...crossFigureLogic, cacheHit: false },
+        cacheHit: false,
+        providerId: route.providerId,
+        model: route.model,
+        route: routePublic,
+        crossFigureVersion: shared.CROSS_FIGURE_LOGIC_VERSION
+      };
+    }
+
+    function validAssetRevision(value) {
+      return Number.isSafeInteger(value) && value >= 0;
+    }
+
+    function validImportedCategoryAsset(value) {
+      if (!isPlainObject(value) || value.schemaVersion !== 1 ||
+          !validAssetRevision(value.revision) ||
+          !isPlainObject(value.categoryOverrides) ||
+          !Array.isArray(value.customCategories) ||
+          !Array.isArray(value.selectedCategoryIds) ||
+          !isPlainObject(value.viewCategoryOverrides)) return false;
+      if (!value.selectedCategoryIds.every(categoryId =>
+        /^[a-z][a-z0-9_]*$/.test(String(categoryId || ''))
+      )) return false;
+      const customCategories = value.customCategories.map(normalizeUnifiedCustomCategory);
+      if (customCategories.some(category =>
+        !/^[a-z][a-z0-9_]*$/.test(category.categoryId) ||
+        shared.validateUnifiedCategory(category).length
+      )) return false;
+      const catalog = shared.createUnifiedCategoryCatalog();
+      customCategories.forEach(category => { catalog[category.categoryId] = category; });
+      for (const [categoryId, override] of Object.entries(value.categoryOverrides)) {
+        if (!/^[a-z][a-z0-9_]*$/.test(categoryId) || !isPlainObject(override) ||
+            !catalog[categoryId]) return false;
+        const merged = shared.mergeCategoryOverrides(catalog[categoryId], override);
+        if (shared.validateUnifiedCategory(merged).length) return false;
+      }
+      return Object.values(value.viewCategoryOverrides).every(override =>
+        isPlainObject(override) && Array.isArray(override.add) &&
+        Array.isArray(override.remove) &&
+        [...override.add, ...override.remove].every(categoryId =>
+          /^[a-z][a-z0-9_]*$/.test(String(categoryId || ''))
+        )
+      );
+    }
+
+    async function importUserDataAsset(relativePath, value) {
+      if (relativePath === 'categories.json') {
+        if (!validImportedCategoryAsset(value)) return { imported: false, reason: 'invalid' };
+        const settings = await shared.loadSettings(storageArea);
+        const localRevision = Number(settings.userDataCategoryRevision) || 0;
+        if (value.revision <= localRevision) return { imported: false, reason: 'stale' };
+        settings.categoryOverrides = cloneJsonLike(value.categoryOverrides);
+        settings.customCategories = value.customCategories.map(normalizeUnifiedCustomCategory);
+        settings.selectedCategoryIds = [...value.selectedCategoryIds];
+        settings.viewCategoryOverrides = cloneJsonLike(value.viewCategoryOverrides);
+        settings.userDataCategoryRevision = value.revision;
+        await shared.saveSettings(storageArea, settings);
+        return { imported: true, revision: value.revision };
+      }
+
+      const match = /^annotations\/([^/]+)\.json$/u.exec(String(relativePath || ''));
+      if (!match || !isPlainObject(value) || value.schemaVersion !== 1 ||
+          !validAssetRevision(value.revision)) return { imported: false, reason: 'invalid' };
+      let pathDocumentId;
+      try {
+        pathDocumentId = decodeURIComponent(match[1]);
+      } catch (_) {
+        return { imported: false, reason: 'invalid' };
+      }
+      if (pathDocumentId !== value.documentId) return { imported: false, reason: 'invalid' };
+      const local = await documentStore.getDocument(value.documentId);
+      if (local && Number(local.revision) >= value.revision) {
+        return { imported: false, reason: 'stale' };
+      }
+      try {
+        const record = await documentStore.putDocument(value);
+        return { imported: true, revision: record.revision };
+      } catch (_) {
+        return { imported: false, reason: 'invalid' };
+      }
+    }
+
+    function requireDirectorySync(method) {
+      if (typeof directorySync?.[method] === 'function') return;
+      const error = new Error('Directory sync is unavailable');
+      error.code = 'DIRECTORY_SYNC_UNAVAILABLE';
+      throw error;
+    }
+
+    async function handleUnsafe(message, context = {}) {
+      if (message.type === 'LLM_CONTROL_OPERATION') {
+        const operationId = shared.normalizeOperationId?.(message.operationId) || '';
+        const command = String(message.command || 'status');
+        if (!operationId || !['pause', 'resume', 'cancel', 'release', 'status'].includes(command)) {
+          throw invalidSettings(['operationId', 'command']);
+        }
+        return operationRegistry?.control(operationId, command) || {
+          operationId, active: false, paused: false, cancelled: false
+        };
+      }
+
+      if (message.type === 'MIGRATION_EXPORT') {
+        const [settings, documents, feedbackSamples] = await Promise.all([
+          shared.loadSettings(storageArea),
+          documentStore.exportAll(),
+          corpusStore.list()
+        ]);
+        return shared.createMigrationBundle({
+          exportedAt: new Date().toISOString(),
+          extensionVersion: String(message.extensionVersion || ''),
+          settings,
+          documents,
+          feedbackSamples
+        });
+      }
+
+      if (message.type === 'MIGRATION_IMPORT') {
+        const bundle = shared.validateMigrationBundle(message.bundle);
+        return serializeAllMutations(async () => {
+          const settings = await shared.saveSettings(storageArea, bundle.settings);
+          let importedDocuments = 0;
+          for (const record of bundle.documents.documents) {
+            await documentStore.putDocument(record);
+            importedDocuments += 1;
+          }
+          let importedFeedback = 0;
+          for (const sample of bundle.feedbackSamples) {
+            await corpusStore.add(sample);
+            importedFeedback += 1;
+          }
+          await mirrorCategorySettings(settings);
+          for (const record of bundle.documents.documents) {
+            await mirrorDocumentRecord(record);
+          }
+          return {
+            imported: true,
+            importedDocuments,
+            importedFeedback,
+            settings: shared.toPublicSettings(settings),
+            directoryHandleRestored: false
+          };
+        });
+      }
+
+      if (message.type === 'ARTICLE_ARCHIVE_PROBE') {
+        requireDirectorySync('readJson');
+        const documentId = String(message.documentId || '').trim();
+        const relativePath = shared.articleArchiveRelativePath({
+          documentId,
+          canonicalUrl: message.canonicalUrl
+        });
+        const result = await directorySync.readJson(relativePath);
+        if (!result.found) {
+          return {
+            found: false,
+            permission: result.permission,
+            relativePath
+          };
+        }
+        const archive = shared.validateArticleArchive(result.value);
+        if (shared.articleArchiveRelativePath(archive) !== relativePath) {
+          const error = new Error('ARCHIVE_IDENTITY_MISMATCH');
+          error.code = 'ARCHIVE_IDENTITY_MISMATCH';
+          throw error;
+        }
+        return {
+          found: true,
+          permission: result.permission,
+          relativePath,
+          savedAt: archive.savedAt,
+          revision: archive.revision,
+          title: archive.title,
+          documentHash: archive.documentHash,
+          annotationCount: archive.documentRecord.annotations?.length || 0,
+          hasLlmAnalysis: Boolean(archive.workspace?.llm?.rawAnalysis),
+          hasReviewOutline: Boolean(archive.workspace?.reviewOutline),
+          figureCount: Array.isArray(archive.workspace?.figures)
+            ? archive.workspace.figures.length : 0
+        };
+      }
+
+      if (message.type === 'ARTICLE_ARCHIVE_SAVE') {
+        requireDirectorySync('enqueueJson');
+        const archive = shared.validateArticleArchive(message.archive);
+        const relativePath = shared.articleArchiveRelativePath(archive);
+        await directorySync.enqueueJson(relativePath, archive);
+        scheduleDirectoryFlush();
+        return {
+          saved: true,
+          queued: true,
+          relativePath,
+          revision: archive.revision,
+          savedAt: archive.savedAt
+        };
+      }
+
+      if (message.type === 'ARTICLE_ARCHIVE_LOAD') {
+        requireDirectorySync('readJson');
+        const documentId = String(message.documentId || '').trim();
+        const relativePath = shared.articleArchiveRelativePath({
+          documentId,
+          canonicalUrl: message.canonicalUrl
+        });
+        const directArchive = message.archive
+          ? shared.validateArticleArchive(message.archive) : null;
+        const result = directArchive
+          ? { permission: 'imported', found: true, value: directArchive }
+          : await directorySync.readJson(relativePath);
+        if (!result.found) {
+          const error = new Error('ARTICLE_ARCHIVE_NOT_FOUND');
+          error.code = 'ARTICLE_ARCHIVE_NOT_FOUND';
+          throw error;
+        }
+        const archive = shared.validateArticleArchive(result.value);
+        if (!directArchive && shared.articleArchiveRelativePath(archive) !== relativePath) {
+          const error = new Error('ARCHIVE_IDENTITY_MISMATCH');
+          error.code = 'ARCHIVE_IDENTITY_MISMATCH';
+          throw error;
+        }
+        let applied = false;
+        if (message.apply === true) {
+          await documentStore.putDocument({
+            ...archive.documentRecord,
+            documentId,
+            documentHash: String(message.documentHash || archive.documentHash || ''),
+            documentHashes: [...new Set([
+              ...(archive.documentRecord.documentHashes || []),
+              archive.documentHash,
+              message.documentHash
+            ].filter(Boolean))],
+            canonicalUrl: String(message.canonicalUrl || archive.canonicalUrl || '')
+          });
+          applied = true;
+        }
+        return { archive, applied, permission: result.permission, relativePath };
+      }
+
+      if (message.type === 'USER_DATA_SYNC_STATUS') {
+        requireDirectorySync('status');
+        return directorySync.status();
+      }
+
+      if (message.type === 'USER_DATA_SYNC_NOW') {
+        requireDirectorySync('flush');
+        return directorySync.flush(importUserDataAsset);
+      }
+
+      if (message.type === 'USER_DATA_REBUILD_INDEX') {
+        requireDirectorySync('rebuildIndex');
+        return serializeAllMutations(() =>
+          directorySync.rebuildIndex(importUserDataAsset)
+        );
+      }
+
+      if (message.type === 'USER_DATA_EXPORT_BUNDLE') {
+        requireDirectorySync('exportBundle');
+        const [settings, documents, samples] = await Promise.all([
+          shared.loadSettings(storageArea),
+          documentStore.exportAll(),
+          corpusStore.list()
+        ]);
+        return directorySync.exportBundle({
+          schemaVersion: 1,
+          categories: categoryAsset(settings),
+          documents,
+          feedbackCorpus: shared.exportCorpus(samples, 'jsonl')
+        });
+      }
+
+      if (message.type === 'LLM_GET_SETTINGS') {
+        return publicState(await shared.loadSettings(storageArea));
+      }
+
+      if (message.type === 'CATEGORY_GET') {
+        const settings = await shared.loadSettings(storageArea);
+        return await categoryDetail(settings, String(message.categoryId || ''));
+      }
+
+      if (message.type === 'CATEGORY_SAVE_OVERRIDE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const detail = await categoryDetail(settings, categoryId);
+          if (!isPlainObject(message.override)) throw invalidSettings(['override']);
+          const incoming = shared.normalizeCategoryOverride(message.override);
+          if (incoming.categoryId && incoming.categoryId !== categoryId) {
+            throw invalidSettings(['categoryId']);
+          }
+          delete incoming.categoryId;
+          if (!detail.metadata.builtIn) {
+            const mergedCategory = shared.mergeCategoryOverrides(detail.category, incoming);
+            mergedCategory.categoryId = categoryId;
+            mergedCategory.persistence = detail.category.persistence === 'one-off'
+              ? 'one-off' : 'saved';
+            mergedCategory.builtIn = false;
+            const customErrors = shared.validateUnifiedCategory(mergedCategory);
+            if (customErrors.length) throw invalidSettings(customErrors);
+            if (mergedCategory.persistence === 'one-off') {
+              const sessionCategories = await loadRouterSessionCategories();
+              const nextSession = sessionCategories
+                .filter(item => item.categoryId !== categoryId);
+              nextSession.push(mergedCategory);
+              await saveRouterSessionCategories(nextSession);
+              return await categoryDetail(settings, categoryId);
+            }
+            settings.customCategories = (settings.customCategories || [])
+              .filter(item => item.categoryId !== categoryId);
+            settings.customCategories.push(mergedCategory);
+            settings.userDataCategoryRevision =
+              (Number(settings.userDataCategoryRevision) || 0) + 1;
+            const saved = await shared.saveSettings(storageArea, settings);
+            await mirrorCategorySettings(saved);
+            return await categoryDetail(saved, categoryId);
+          }
+          const current = isPlainObject(settings.categoryOverrides?.[categoryId])
+            ? settings.categoryOverrides[categoryId] : {};
+          const nextOverride = deepMergeJsonLike(current, incoming);
+          const baseCategory = shared.createUnifiedCategoryCatalog()[categoryId];
+          const mergedCategory = shared.mergeCategoryOverrides(baseCategory, nextOverride);
+          const errors = shared.validateUnifiedCategory(mergedCategory);
+          if (errors.length) throw invalidSettings(errors);
+          settings.categoryOverrides[categoryId] = nextOverride;
+          settings.userDataCategoryRevision =
+            (Number(settings.userDataCategoryRevision) || 0) + 1;
+          const saved = await shared.saveSettings(storageArea, settings);
+          await mirrorCategorySettings(saved);
+          return await categoryDetail(saved, categoryId);
+        });
+      }
+
+      if (message.type === 'CATEGORY_RESET_OVERRIDE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const detail = await categoryDetail(settings, categoryId);
+          if (!detail.metadata.builtIn) throw invalidSettings(['categoryId']);
+          delete settings.categoryOverrides[categoryId];
+          settings.userDataCategoryRevision =
+            (Number(settings.userDataCategoryRevision) || 0) + 1;
+          const saved = await shared.saveSettings(storageArea, settings);
+          await mirrorCategorySettings(saved);
+          return await categoryDetail(saved, categoryId);
+        });
+      }
+
+      if (message.type === 'CATEGORY_TEST_REGEX') {
+        const settings = await shared.loadSettings(storageArea);
+        const categoryId = String(message.categoryId || '');
+        const detail = await categoryDetail(settings, categoryId);
+        if (typeof message.testText !== 'string' || message.testText.length > 20000) {
+          throw invalidSettings(['testText']);
+        }
+        let category = detail.category;
+        if (message.candidateRegex !== undefined) {
+          if (!isPlainObject(message.candidateRegex)) {
+            throw invalidSettings(['candidateRegex']);
+          }
+          category = shared.mergeCategoryOverrides(category, {
+            regex: message.candidateRegex
+          });
+        }
+        const errors = shared.validateUnifiedCategory(category);
+        if (errors.length) throw invalidSettings(errors);
+        return testCategoryRegex(category, message.testText);
+      }
+
+      if (message.type === 'LLM_SAVE_PROFILE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const result = upsertProfile(settings, message);
+          const saved = await shared.saveSettings(storageArea, settings);
+          return {
+            ...(await publicState(saved)),
+            profile: publicProfileResult(result.profileId, saved.profiles[result.profileId])
+          };
+        });
+      }
+
+      if (message.type === 'LLM_DUPLICATE_PROFILE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          requireVersion5Settings(settings);
+          const sourceId = String(message.profileId || '');
+          const source = settings.profiles?.[sourceId];
+          if (!isPlainObject(source)) throw invalidSettings(['profileId']);
+          const profileId = duplicateProfileId(settings, sourceId);
+          const duplicate = cloneJsonLike(source);
+          duplicate.name = `${String(source.name || '')} 副本`.trim();
+          const result = upsertProfile(settings, { profile: { ...duplicate, id: profileId } });
+          const saved = await shared.saveSettings(storageArea, settings);
+          return {
+            ...(await publicState(saved)),
+            profile: publicProfileResult(result.profileId, saved.profiles[result.profileId])
+          };
+        });
+      }
+
+      if (message.type === 'LLM_DELETE_PROFILE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          requireVersion5Settings(settings);
+          const profileId = String(message.profileId || '');
+          if (!shared.PROFILE_ID_PATTERN?.test(profileId) ||
+              !Object.prototype.hasOwnProperty.call(settings.profiles || {}, profileId)) {
+            throw invalidSettings(['profileId']);
+          }
+          delete settings.profiles[profileId];
+          settings.profileOrder = orderedProfileIds(settings);
+          settings.taskRoutes = shared.normalizeTaskRoutes(
+            settings.taskRoutes,
+            settings.profiles
+          );
+          if (settings.globalProfileId === profileId ||
+              !Object.prototype.hasOwnProperty.call(
+                settings.profiles,
+                settings.globalProfileId
+              )) settings.globalProfileId = settings.profileOrder[0] || '';
+          const saved = await shared.saveSettings(storageArea, settings);
+          return {
+            ...(await publicState(saved)),
+            deletedProfileId: profileId
+          };
+        });
+      }
+
+      if (message.type === 'LLM_UPDATE_PROFILE_ROUTING') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          requireVersion5Settings(settings);
+          if (message.globalProfileId !== undefined) {
+            const profileId = String(message.globalProfileId || '');
+            if (!Object.prototype.hasOwnProperty.call(settings.profiles || {}, profileId)) {
+              throw invalidSettings(['globalProfileId']);
+            }
+            settings.globalProfileId = profileId;
+          }
+          settings.taskRoutes = shared.normalizeTaskRoutes(
+            message.taskRoutes === undefined ? settings.taskRoutes : message.taskRoutes,
+            settings.profiles
+          );
+          return publicState(await shared.saveSettings(storageArea, settings));
+        });
+      }
+
+      if (message.type === 'LLM_SAVE_PROVIDER') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          requireVersion5Settings(settings);
+          const providerId = String(message.providerId || '');
+          const profileId = shared.legacyProfileId(providerId);
+          const current = settings.profiles?.[profileId];
+          const currentConfig = isPlainObject(current?.config) ? current.config : {};
+          const incomingConfig = isPlainObject(message.config) ? message.config : {};
+          const config = { ...cloneJsonLike(currentConfig), ...cloneJsonLike(incomingConfig) };
+          if (!String(incomingConfig.apiKey || '').trim() && currentConfig.apiKey) {
+            config.apiKey = currentConfig.apiKey;
+          }
+          const errors = shared.validateProviderConfig(providerId, config);
+          if (errors.length) throw invalidSettings(errors);
+          const definition = shared.getProviderDefinitions()[providerId];
+          const result = upsertProfile(settings, {
+            profile: {
+              ...(current || {}),
+              id: profileId,
+              name: current?.name || definition?.label || providerId,
+              providerId,
+              config
+            }
+          });
+          const saved = await shared.saveSettings(storageArea, settings);
+          return {
+            ...(await publicState(saved)),
+            profile: publicProfileResult(result.profileId, saved.profiles[result.profileId])
+          };
+        });
+      }
+
+      if (message.type === 'LLM_UPDATE_PREFERENCES') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          requireVersion5Settings(settings);
+          const preferences = message.preferences && typeof message.preferences === 'object'
+            ? message.preferences : {};
+          Object.entries(preferences).forEach(([key, value]) => {
+            if (PREFERENCE_KEYS.has(key)) settings[key] = value;
+          });
+          if (!['regex', 'llm'].includes(settings.mode)) throw invalidSettings(['mode']);
+          if (preferences.providerId !== undefined) {
+            const legacyProfileId = shared.legacyProfileId(preferences.providerId);
+            if (!settings.profiles?.[legacyProfileId]) throw invalidSettings(['providerId']);
+            settings.globalProfileId = legacyProfileId;
+          }
+          delete settings.providerId;
+          delete settings.providers;
+          if (!settings.profiles?.[settings.globalProfileId]) {
+            throw invalidSettings(['globalProfileId']);
+          }
+          if (!Array.isArray(settings.selectedCategoryIds)) throw invalidSettings(['selectedCategoryIds']);
+          if (!shared.isReadingView(settings.readingViewId)) throw invalidSettings(['readingViewId']);
+          if (Array.isArray(preferences.selectedCategoryIds)) {
+            settings.viewCategoryOverrides[settings.readingViewId] = shared.deriveViewOverride(
+              settings.readingViewId,
+              preferences.selectedCategoryIds
+            );
+          }
+          const saved = await shared.saveSettings(storageArea, settings);
+          return publicState(saved);
+        });
+      }
+
+      if (message.type === 'LLM_SAVE_CUSTOM_CATEGORY') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const sessionCategories = await loadRouterSessionCategories();
+          const category = shared.normalizeCustomCategory(message.category || {});
+          const errors = shared.validateCategory(category);
+          const builtInIds = new Set(Object.keys(shared.createAdaptiveCategoryCatalog()));
+          if (builtInIds.has(category.categoryId)) errors.push('categoryId');
+          if (errors.length) throw invalidSettings([...new Set(errors)]);
+
+          settings.customCategories = settings.customCategories
+            .filter(item => item.categoryId !== category.categoryId);
+          const nextSession = sessionCategories
+            .filter(item => item.categoryId !== category.categoryId);
+          if (category.persistence === 'one-off') nextSession.push(category);
+          else settings.customCategories.push(category);
+          if (!settings.selectedCategoryIds.includes(category.categoryId)) {
+            settings.selectedCategoryIds.push(category.categoryId);
+          }
+          const currentOverride = settings.viewCategoryOverrides[settings.readingViewId];
+          if (!currentOverride.add.includes(category.categoryId)) {
+            currentOverride.add.push(category.categoryId);
+          }
+          currentOverride.remove = currentOverride.remove
+            .filter(categoryId => categoryId !== category.categoryId);
+          if (category.persistence === 'one-off' ||
+              sessionCategories.some(item => item.categoryId === category.categoryId)) {
+            await saveRouterSessionCategories(nextSession);
+          }
+          return publicState(await shared.saveSettings(storageArea, settings));
+        });
+      }
+
+      if (message.type === 'LLM_DELETE_CUSTOM_CATEGORY') {
+        return serializeAllMutations(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const builtInIds = new Set(Object.keys(shared.createAdaptiveCategoryCatalog()));
+          if (!categoryId || builtInIds.has(categoryId)) throw invalidSettings(['categoryId']);
+          const sessionCategories = await loadRouterSessionCategories();
+          const savedDefinition = settings.customCategories
+            .find(item => item.categoryId === categoryId);
+          const sessionDefinition = sessionCategories
+            .find(item => item.categoryId === categoryId);
+          if (!savedDefinition && !sessionDefinition) throw invalidSettings(['categoryId']);
+          const referenceCount = await documentStore.countCategoryReferences(categoryId);
+          settings.selectedCategoryIds = settings.selectedCategoryIds
+            .filter(item => item !== categoryId);
+          Object.values(settings.viewCategoryOverrides).forEach(override => {
+            override.add = override.add.filter(item => item !== categoryId);
+            override.remove = override.remove.filter(item => item !== categoryId);
+          });
+          let nextSession;
+          if (referenceCount > 0) {
+            settings.customCategories = settings.customCategories.map(item =>
+              item.categoryId === categoryId
+                ? { ...item, retired: true, enabledEngines: [] }
+                : item
+            );
+            nextSession = sessionCategories.map(item =>
+              item.categoryId === categoryId
+                ? { ...item, retired: true, enabledEngines: [] }
+                : item
+            );
+          } else {
+            settings.customCategories = settings.customCategories
+              .filter(item => item.categoryId !== categoryId);
+            nextSession = sessionCategories
+              .filter(item => item.categoryId !== categoryId);
+          }
+          await saveRouterSessionCategories(nextSession);
+          return {
+            ...(await publicState(await shared.saveSettings(storageArea, settings))),
+            retired: referenceCount > 0,
+            referenceCount
+          };
+        });
+      }
+
+      if (message.type === 'LLM_TEST_PROFILE') {
+        const settings = await shared.loadSettings(storageArea);
+        requireVersion5Settings(settings);
+        const profileId = String(message.profileId || '');
+        const profile = settings.profiles?.[profileId];
+        if (!isPlainObject(profile)) throw invalidSettings(['profileId']);
+        return runConnectionTest(profileId, profile, message.config);
+      }
+
+      if (message.type === 'LLM_TEST_PROVIDER') {
+        const settings = await shared.loadSettings(storageArea);
+        requireVersion5Settings(settings);
+        const providerId = String(message.providerId || '');
+        const profileId = shared.legacyProfileId(providerId);
+        const profile = settings.profiles?.[profileId];
+        if (!isPlainObject(profile)) throw invalidSettings(['providerId']);
+        return runConnectionTest(profileId, profile, message.config);
+      }
+
+      if (message.type === 'DOCUMENT_PREPARE') {
+        const settings = await shared.loadSettings(storageArea);
+        const prepared = await prepareStoredDocument(settings, message.document);
+        return {
+          documentId: prepared.documentId,
+          documentHash: prepared.documentHash,
+          record: prepared.record,
+          studyProfile: publicStudyProfile(prepared.profile),
+          paperBlueprint: prepared.profile?.paperBlueprint || null,
+          readingViewId: prepared.composition.viewId,
+          activeCategories: prepared.composition.categories.map(publicCategory),
+          categorySources: prepared.composition.sources,
+          requiresStudyType: !prepared.profile
+        };
+      }
+
+      if (message.type === 'DOCUMENT_GET') {
+        const documentId = String(message.documentId || '').trim();
+        if (!documentId) throw invalidSettings(['documentId']);
+        return { record: await documentStore.getDocument(documentId) };
+      }
+
+      if (message.type === 'ANNOTATION_UPSERT') {
+        return serializeDocumentMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const documentId = String(message.documentId || '').trim();
+          if (!documentId) throw invalidSettings(['documentId']);
+          if (!isPlainObject(message.annotation)) throw invalidSettings(['annotation']);
+          const categoryId = String(message.annotation.categoryId || '');
+          const { categoryMap } = await loadAllCategories(settings);
+          const category = categoryMap[categoryId];
+          if (!category) throw invalidSettings(['categoryId']);
+          const trustedAnnotation = {
+            ...message.annotation,
+            categoryId,
+            categorySnapshot: shared.makeCategorySnapshot(category)
+          };
+          const record = await documentStore.upsertAnnotation(documentId, trustedAnnotation);
+          await mirrorDocumentRecord(record);
+          return {
+            record,
+            annotation: record.annotations.find(item =>
+              item.annotationId === trustedAnnotation.annotationId
+            ),
+            warningThresholdReached: record.annotations.length >=
+              (shared.WARNING_ANNOTATIONS_PER_DOCUMENT || 1000)
+          };
+        });
+      }
+
+      if (message.type === 'ANNOTATION_DELETE') {
+        return serializeDocumentMutation(async () => {
+          const documentId = String(message.documentId || '').trim();
+          const annotationId = String(message.annotationId || '').trim();
+          if (!documentId) throw invalidSettings(['documentId']);
+          if (!annotationId) throw invalidSettings(['annotationId']);
+          const record = await documentStore.deleteAnnotation(documentId, annotationId);
+          await mirrorDocumentRecord(record);
+          return { record };
+        });
+      }
+
+      if (message.type === 'ANNOTATION_CLEAR_DOCUMENT') {
+        return serializeDocumentMutation(async () => {
+          const documentId = String(message.documentId || '').trim();
+          if (!documentId) throw invalidSettings(['documentId']);
+          const record = await documentStore.clearAnnotations(documentId);
+          await mirrorDocumentRecord(record);
+          return { record };
+        });
+      }
+
+      if (message.type === 'LLM_PREPARE_DOCUMENT') {
+        const settings = await shared.loadSettings(storageArea);
+        const prepared = await prepareDocument(settings, message.document);
+        return {
+          documentId: prepared.documentId,
+          documentHash: prepared.documentHash,
+          studyProfile: publicStudyProfile(prepared.studyProfile),
+          paperBlueprint: prepared.paperBlueprint,
+          readingViewId: prepared.readingViewId,
+          activeCategories: prepared.activeCategories.map(publicCategory),
+          categorySources: prepared.categorySources,
+          requiresStudyType: prepared.requiresStudyType,
+          profileCacheHit: false,
+          fullTextAnalyzed: false
+        };
+      }
+
+      if (message.type === 'LLM_SET_STUDY_TYPE') {
+        return serializeDocumentMutation(async () => {
+        const settings = await shared.loadSettings(storageArea);
+        const rawDocumentId = String(message.documentId || '').trim();
+        const documentHash = String(message.documentHash || '').toLowerCase();
+        if (!rawDocumentId && !/^[a-f0-9]{64}$/.test(documentHash)) {
+          throw invalidSettings(['documentId']);
+        }
+        if (!shared.isStudyType(message.studyType)) throw invalidSettings(['studyType']);
+        let documentId = rawDocumentId || documentIdsByHash.get(documentHash);
+        if (!documentId && documentHash) {
+          const exported = await documentStore.exportAll();
+          const matchingRecord = exported.documents.find(item =>
+            item.documentHash === documentHash ||
+            item.documentHashes?.includes(documentHash)
+          );
+          documentId = matchingRecord?.documentId;
+        }
+        documentId ||= `sha256:${documentHash}`;
+        const record = await documentStore.setStudyType(
+          documentId,
+          message.studyType
+        );
+        await mirrorDocumentRecord(record);
+        const profile = shared.createManualStudyProfile(record.studyType);
+        const composition = await composeCategories(settings, profile);
+        return {
+          documentId,
+          documentHash: documentHash || documentId.replace(/^sha256:/, ''),
+          updatedAt: record.updatedAt,
+          record,
+          studyProfile: publicStudyProfile(profile),
+          paperBlueprint: profile.paperBlueprint,
+          readingViewId: composition.viewId,
+          activeCategories: composition.categories.map(publicCategory),
+          categorySources: composition.sources,
+          requiresStudyType: false,
+          profileCacheHit: false,
+          fullTextAnalyzed: false
+        };
+        });
+      }
+
+      if (message.type === 'LLM_ANALYZE_DOCUMENT') {
+        const operation = operationFor(message);
+        await waitForOperation(operation);
+        const settings = await shared.loadSettings(storageArea);
+        const prepared = await prepareDocument(settings, message.document);
+        requireStudyType(prepared);
+        if (!prepared.activeCategories.length) throw invalidSettings(['activeCategories']);
+        const highlightTask = createTaskAdapter(settings, 'highlight', {}, context, 'highlight');
+        const { adapter: highlightAdapter, route: highlightRoute, routePublic } = highlightTask;
+        const progress = routeProgress(context, routePublic);
+        const contextHash = shared.stableHash({
+          studyType: prepared.studyProfile.primaryType,
+          paperBlueprint: prepared.paperBlueprint
+        });
+        const analysis = await shared.analyzeWithCategoryCache({
+          paragraphs: prepared.paragraphs,
+          selectedCategories: prepared.activeCategories,
+          providerId: highlightRoute.providerId,
+          model: highlightRoute.model,
+          profileSignature: highlightRoute.profileSignature,
+          adapter: highlightAdapter,
+          cacheStore,
+          // Keep one response compact enough for providers with modest output caps;
+          // analysis-pipeline will split again if a single paragraph is still too dense.
+          maxChars: 6400,
+          concurrency: routePublic.concurrency,
+          contextHash,
+          viewId: prepared.readingViewId,
+          paperBlueprint: prepared.paperBlueprint,
+          studyProfile: prepared.studyProfile,
+          signal: operation?.controller?.signal,
+          waitIfPaused: () => waitForOperation(operation),
+          onProgress: progress,
+          onChunkComplete: async completed => {
+            progress({
+              phase: 'chunk_checkpoint',
+              chunkId: completed.chunkId,
+              checkpointedAnnotations: Array.isArray(completed.annotations)
+                ? completed.annotations.length : 0,
+              // These are already validated, bounded annotations for one
+              // chunk. Sending them with progress lets the page render useful
+              // highlights while later chunks are still being requested.
+              checkpointAnnotations: Array.isArray(completed.annotations)
+                ? completed.annotations : [],
+              checkpointRejected: Array.isArray(completed.rejected)
+                ? completed.rejected : []
+            });
+          }
+        });
+
+        const annotationDigest = shared.stableHash(analysis.annotations);
+        const ledgerKey = shared.buildLedgerCacheKey({
+          documentHash: prepared.documentHash,
+          viewId: prepared.readingViewId,
+          studyTypeSignature: shared.studyTypeSignature(prepared.studyProfile),
+          categorySignature: shared.stableHash(
+            prepared.activeCategories.map(item => [item.categoryId, item.version])
+          ),
+          annotationDigest,
+          ledgerVersion: shared.EVIDENCE_LEDGER_VERSION,
+          profileSignature: highlightRoute.profileSignature
+        });
+        let ledger;
+        let ledgerCacheHit = false;
+        const ledgerCached = await cacheStore.getMany([ledgerKey]);
+        if (ledgerCached.has(ledgerKey)) {
+          ledger = ledgerCached.get(ledgerKey).ledger;
+          ledgerCacheHit = true;
+        } else if (!analysis.annotations.length) {
+          ledger = {
+            available: true,
+            keyAnnotationIds: [],
+            relationSummaries: [],
+            reviewWarnings: [],
+            auditItems: [],
+            rejected: []
+          };
+        } else {
+          try {
+            const ledgerTask = createTaskAdapter(settings, 'highlight', {}, context, 'highlight');
+            ledger = await shared.reviewEvidenceLedger({
+              viewId: prepared.readingViewId,
+              studyProfile: prepared.studyProfile,
+              annotations: analysis.annotations,
+              paragraphs: prepared.paragraphs,
+              adapter: ledgerTask.adapter,
+              signal: operation?.controller?.signal,
+              waitIfPaused: () => waitForOperation(operation)
+            });
+            await cacheStore.setMany([{
+              key: ledgerKey,
+              createdAt: Date.now(),
+              ledger
+            }]);
+          } catch (error) {
+            if (operation?.controller?.signal?.aborted || error?.code === 'CANCELLED') {
+              throw shared.operationError();
+            }
+            ledger = {
+              available: false,
+              errorCode: safeError(error).code,
+              keyAnnotationIds: [],
+              relationSummaries: [],
+              reviewWarnings: [],
+              auditItems: [],
+              rejected: []
+            };
+          }
+        }
+
+        return {
+          ...analysis,
+          documentId: prepared.documentId,
+          documentHash: prepared.documentHash,
+          studyProfile: publicStudyProfile(prepared.studyProfile),
+          paperBlueprint: prepared.paperBlueprint,
+          readingViewId: prepared.readingViewId,
+          requiresStudyType: false,
+          profileCacheHit: false,
+          ledgerCacheHit,
+          ledger,
+          confidenceThreshold: settings.confidenceThreshold,
+          semanticRejectedCount: Array.isArray(analysis.rejected)
+            ? analysis.rejected.length : 0,
+          categories: prepared.activeCategories.map(publicCategory),
+          categorySources: prepared.categorySources,
+          route: routePublic
+        };
+      }
+
+      if (message.type === 'LLM_ANALYZE_FIGURES') {
+        return analyzeFigures(
+          await shared.loadSettings(storageArea),
+          message,
+          context
+        );
+      }
+
+      if (message.type === 'LLM_ASK_FIGURE_PANEL') {
+        return askFigurePanel(
+          await shared.loadSettings(storageArea),
+          message,
+          context
+        );
+      }
+
+      if (message.type === 'LLM_ASK_ARTICLE') {
+        return askArticle(
+          await shared.loadSettings(storageArea),
+          message,
+          context
+        );
+      }
+
+      if (message.type === 'LLM_ANALYZE_CROSS_FIGURE_LOGIC') {
+        return analyzeCrossFigureLogic(
+          await shared.loadSettings(storageArea),
+          message,
+          context
+        );
+      }
+
+      if (message.type === 'LLM_ANALYZE_REVIEW_OUTLINE') {
+        const settings = await shared.loadSettings(storageArea);
+        const requestedParagraphIds = new Set(
+          (Array.isArray(message.scopeParagraphIds) ? message.scopeParagraphIds : [])
+            .map(value => String(value || '').trim())
+            .filter(Boolean)
+        );
+        const prepared = message.paragraphOnly === true
+          ? await prepareParagraphOnlyReviewDocument(
+            settings, message, requestedParagraphIds
+          )
+          : await prepareDocument(settings, message.document);
+        requireStudyType(prepared);
+        const analysisParagraphs = message.paragraphOnly === true
+          ? prepared.paragraphs
+          : requestedParagraphIds.size
+          ? prepared.paragraphs.filter(paragraph =>
+              requestedParagraphIds.has(String(paragraph.paragraphId || '')))
+          : prepared.paragraphs;
+        if (!analysisParagraphs.length) throw invalidSettings(['scopeParagraphIds']);
+        const scopeSignature = requestedParagraphIds.size
+          ? shared.stableHash({
+              scopeId: String(message.scopeId || ''),
+              paragraphIds: analysisParagraphs.map(paragraph => paragraph.paragraphId)
+            })
+          : '';
+        const summaryTask = createTaskAdapter(
+          settings, 'summary', {}, context,
+          message.paragraphOnly === true ? 'singleSummary' : 'batchSummary'
+        );
+        const { adapter: summaryAdapter, route: summaryRoute, routePublic } = summaryTask;
+        const progress = routeProgress(context, routePublic);
+        const cacheContext = {
+          documentHash: prepared.documentHash,
+          providerId: summaryRoute.providerId,
+          model: summaryRoute.model,
+          profileSignature: summaryRoute.profileSignature,
+          outlineVersion: shared.REVIEW_OUTLINE_VERSION,
+          promptVersion: shared.REVIEW_PROMPT_VERSION,
+          studyTypeSignature: shared.studyTypeSignature(prepared.studyProfile),
+          scopeSignature
+        };
+        const outlineKey = shared.buildReviewOutlineCacheKey(cacheContext);
+        const progressKey = shared.buildReviewOutlineProgressKey(cacheContext);
+        const cached = await cacheStore.getMany([outlineKey, progressKey]);
+        const cachedOutline = cached.get(outlineKey)?.outline;
+        const responseBase = {
+          documentId: prepared.documentId,
+          documentHash: prepared.documentHash,
+          studyProfile: publicStudyProfile(prepared.studyProfile),
+          providerId: summaryRoute.providerId,
+          model: summaryRoute.model,
+          route: routePublic,
+          nonReviewNotice: prepared.studyProfile.reviewSubtype === 'not_review',
+          scopeId: String(message.scopeId || '')
+        };
+        if (cachedOutline && message.forceRefresh !== true) {
+          return { ...responseBase, outline: cachedOutline, cacheHit: true };
+        }
+        const progressChunks = {
+          ...(cached.get(progressKey)?.chunks || {})
+        };
+        const maxChars = Math.min(10000, Math.max(100, Number(message.maxChars) || 10000));
+        const outline = await shared.analyzeReviewOutline({
+          paragraphs: analysisParagraphs,
+          articleTitle: message.document?.title || '',
+          reviewSubtype: prepared.studyProfile.reviewSubtype,
+          documentHash: prepared.documentHash,
+          adapter: summaryAdapter,
+          paragraphOnly: message.paragraphOnly === true,
+          resumeChunks: new Map(Object.entries(progressChunks)),
+          maxChars,
+          sleepImpl,
+          onProgress: progress,
+          onChunkComplete: async completed => {
+            progressChunks[completed.chunkId] = completed;
+            await cacheStore.setMany([{
+              key: progressKey,
+              createdAt: Date.now(),
+              chunks: progressChunks
+            }]);
+          }
+        });
+        await cacheStore.setMany([{
+          key: outlineKey,
+          createdAt: Date.now(),
+          outline
+        }]);
+        return { ...responseBase, outline, cacheHit: false };
+      }
+
+      if (message.type === 'LLM_RECORD_FEEDBACK') {
+        const sample = shared.normalizeFeedbackSample(message.sample || {});
+        const missing = ['documentHash', 'paragraphId', 'quote', 'categoryId']
+          .filter(field => !sample[field]);
+        if (missing.length) throw invalidSettings(missing);
+        await corpusStore.add(sample);
+        const stats = await corpusStore.stats();
+        const samples = await corpusStore.list();
+        await mirrorText('corpus/feedback.jsonl', shared.exportCorpus(samples, 'jsonl'));
+        return {
+          saved: true,
+          stats,
+          suggestExport: stats.documents >= 3 && stats.accepted + stats.corrected >= 3
+        };
+      }
+
+      if (message.type === 'LLM_CORPUS_STATUS') {
+        const stats = await corpusStore.stats();
+        return {
+          stats,
+          suggestExport: stats.documents >= 3 && stats.accepted + stats.corrected >= 3
+        };
+      }
+
+      if (message.type === 'LLM_EXPORT_CORPUS') {
+        const format = message.format === 'csv' ? 'csv' : 'jsonl';
+        const samples = await corpusStore.list();
+        return {
+          format,
+          content: shared.exportCorpus(samples, format),
+          mimeType: format === 'csv'
+            ? 'text/csv;charset=utf-8' : 'application/x-ndjson;charset=utf-8',
+          filename: `sci-llm-corpus-${new Date().toISOString().slice(0, 10)}.${format}`
+        };
+      }
+
+      if (message.type === 'LLM_DISTILL_RULES') {
+        const samples = await corpusStore.list();
+        const settings = await shared.loadSettings(storageArea);
+        const categoryMap = shared.createAdaptiveCategoryCatalog();
+        [...settings.customCategories, ...await loadRouterSessionCategories()]
+          .forEach(category => { categoryMap[category.categoryId] = category; });
+        return {
+          rules: shared.distillOfflineRules(samples, categoryMap),
+          stats: await corpusStore.stats()
+        };
+      }
+
+      throw Object.assign(new Error('Unknown message'), { code: 'UNKNOWN_MESSAGE' });
+    }
+
+    async function handle(message, context = {}) {
+      try {
+        return { success: true, data: await handleUnsafe(message || {}, context) };
+      } catch (error) {
+        return { success: false, error: safeError(error) };
+      }
+    }
+
+    return { handle };
+  }
+
+  return { createBackgroundRouter };
+});

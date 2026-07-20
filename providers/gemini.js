@@ -1,0 +1,64 @@
+(function attach(root, factory) {
+  const api = factory(root.SciLLM || {});
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.SciLLM = Object.assign(root.SciLLM || {}, api);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  function createGeminiAdapter(config, fetchImpl) {
+    const adapter = {
+      providerId: 'gemini',
+      async generateJson(request) {
+        const startedAt = Date.now();
+        const model = encodeURIComponent(config.model);
+        const url = config.baseUrl || `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+        const images = shared.normalizeImageInputs(request.images);
+        const userParts = [
+          { text: request.userPrompt },
+          ...images.map(image => ({
+            inlineData: { mimeType: image.mediaType, data: image.data }
+          }))
+        ];
+        const data = await shared.requestJson(fetchImpl, url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': config.apiKey
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: shared.withStructuredSchemaPrompt(request) }] },
+            contents: [{ role: 'user', parts: userParts }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens)
+            }
+          }),
+          signal: request.signal,
+          timeoutMs: request.timeoutMs
+        });
+        shared.emitProviderTelemetry(request, {
+          providerId: 'gemini', model: config.model,
+          elapsedMs: Date.now() - startedAt,
+          finishReason: data?.candidates?.[0]?.finishReason,
+          usage: data?.usageMetadata
+        });
+        if (data?.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+          throw new shared.ProviderRequestError('OUTPUT_TRUNCATED', 'Model output reached its token limit');
+        }
+        const parts = data.candidates?.[0]?.content?.parts;
+        const text = Array.isArray(parts) ? parts.map(item => item.text || '').join('') : '';
+        if (!text) throw new shared.ProviderRequestError('INVALID_RESPONSE', 'Gemini response did not contain text');
+        return shared.parseJsonText(text);
+      },
+      async analyzeChunk(request) {
+        return adapter.generateJson({
+          ...request,
+          schemaName: request.schemaName || 'scientific_annotations',
+          responseSchema: request.responseSchema ||
+            shared.createAnnotationSchema(request.requestedCategoryIds || [])
+        });
+      }
+    };
+    return adapter;
+  }
+
+  return { createGeminiAdapter };
+});

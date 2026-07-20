@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Generated builds and archives
+dist/
+output/
+qa-artifacts/
+发布/
+*.zip
+*.crx
+*.sha256.txt
+
+# Browser automation state and local agent state
+.playwright-cli/
+.superpowers/
+playwright-report/
+test-results/
+
+# Coverage and logs
+coverage/
+*.log
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+

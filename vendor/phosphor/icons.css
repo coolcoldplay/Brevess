@@ -1,0 +1,46 @@
+/* Phosphor Icons 2.1.2 — MIT License. See LICENSE in this directory. */
+@font-face {
+  font-family: "Phosphor";
+  src: url("./Phosphor.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.ph {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-family: "Phosphor" !important;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  line-height: 1;
+  speak: never;
+  text-transform: none;
+  vertical-align: -.08em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ph.ph-file-magnifying-glass::before { content: "\e238"; }
+.ph.ph-gear::before { content: "\e270"; }
+.ph.ph-eraser::before { content: "\e21e"; }
+.ph.ph-highlighter::before { content: "\ec76"; }
+.ph.ph-folder::before { content: "\e24a"; }
+.ph.ph-arrows-clockwise::before { content: "\e094"; }
+.ph.ph-download::before { content: "\e20a"; }
+.ph.ph-floppy-disk::before { content: "\e248"; }
+.ph.ph-arrow-counter-clockwise::before { content: "\e038"; }
+.ph.ph-test-tube::before { content: "\e7a0"; }
+.ph.ph-caret-up::before { content: "\e13c"; }
+.ph.ph-caret-down::before { content: "\e136"; }
+.ph.ph-warning::before { content: "\e4e0"; }
+.ph.ph-note-pencil::before { content: "\e34c"; }
+.ph.ph-chats-circle::before { content: "\e17e"; }
+.ph.ph-paper-plane-tilt::before { content: "\e398"; }
+.ph.ph-upload::before { content: "\e4be"; }
+.ph.ph-export::before { content: "\eaf0"; }
+.ph.ph-x::before { content: "\e4f6"; }
+.ph.ph-magnifying-glass::before { content: "\e30c"; }
+.ph.ph-database::before { content: "\e1de"; }
+.ph.ph-check-circle::before { content: "\e184"; }

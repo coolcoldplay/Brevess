@@ -1,0 +1,262 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  FIGURE_SELECTOR,
+  parseFigureLabel,
+  extractPanelHints,
+  extractArticleFigures
+} = require('../core/figure-extractor.js');
+
+function image(src, width = 900, height = 600) {
+  return {
+    currentSrc: src,
+    src,
+    naturalWidth: width,
+    naturalHeight: height,
+    width,
+    height,
+    getAttribute(name) {
+      if (name === 'src') return src;
+      if (name === 'width') return String(width);
+      if (name === 'height') return String(height);
+      return '';
+    }
+  };
+}
+
+function figure({ caption = '', captionLabel = '', images = [], panelNodes = [], ariaLabel = '', excluded = false }) {
+  const captionElement = caption ? {
+    textContent: caption,
+    querySelector(selector) {
+      return captionLabel && /fig-label|figure-label/i.test(selector)
+        ? { textContent: captionLabel }
+        : null;
+    }
+  } : null;
+  return {
+    textContent: caption,
+    className: '',
+    querySelector(selector) {
+      return /figcaption|caption/i.test(selector) ? captionElement : null;
+    },
+    querySelectorAll(selector) {
+      if (/img/i.test(selector)) return images;
+      if (/panel/i.test(selector)) return panelNodes;
+      return [];
+    },
+    getAttribute(name) {
+      return name === 'aria-label' ? ariaLabel : '';
+    },
+    closest() {
+      return excluded ? {} : null;
+    },
+    captionElement
+  };
+}
+
+function documentWith(candidates) {
+  return {
+    querySelectorAll() {
+      return candidates;
+    }
+  };
+}
+
+test('parses English and Chinese main Figure labels but excludes supplementary labels', () => {
+  assert.deepEqual(parseFigureLabel('Figure 12. Study workflow'), {
+    figureNumber: 12,
+    figureCode: '12',
+    isSupplemental: false,
+    figureId: 'figure-12',
+    figureLabel: 'Figure 12'
+  });
+  assert.equal(parseFigureLabel('图 3｜治疗结果').figureId, 'figure-3');
+  assert.deepEqual(parseFigureLabel('Supplementary Figure 2'), {
+    figureNumber: 2,
+    figureCode: 'S2',
+    isSupplemental: true,
+    figureId: 'figure-s2',
+    figureLabel: 'Figure S2'
+  });
+  assert.equal(parseFigureLabel('Figure S9. Full gating strategy.')?.figureId, 'figure-s9');
+  assert.equal(parseFigureLabel('Graphical abstract'), null);
+  assert.equal(
+    parseFigureLabel('Open in a separate window Figure 1. See Supplementary Figure 2 and Table 1.')?.figureId,
+    'figure-1'
+  );
+});
+
+test('extracts, deduplicates and numerically sorts main article Figures', () => {
+  const weakFigure1 = figure({
+    caption: 'Figure 1. Short.',
+    images: [image('https://journal.example/f1-thumb.jpg', 120, 90)]
+  });
+  const richFigure1 = figure({
+    caption: 'Figure 1. Experimental design and quantified treatment response.',
+    images: [
+      image('https://journal.example/f1.jpg'),
+      image('https://journal.example/f1-panel.jpg', 700, 500)
+    ]
+  });
+  const supplementary = figure({
+    caption: 'Supplementary Figure 2. Extra analysis.',
+    images: [image('https://journal.example/s2.jpg')]
+  });
+  const figure10 = figure({
+    caption: 'Fig. 10. Final validation.',
+    images: [image('https://journal.example/f10.jpg')]
+  });
+  const figure3 = figure({
+    caption: 'Figure 3. Rescue experiment.',
+    images: [image('https://journal.example/f3.jpg')]
+  });
+
+  const results = extractArticleFigures(
+    documentWith([weakFigure1, figure10, supplementary, richFigure1, figure3]),
+    [
+      { paragraphId: 'p1', text: 'As shown in Fig. 1, treatment reduced tumor volume.' },
+      { paragraphId: 'p2', text: 'Figure 3 demonstrates restoration after rescue.' }
+    ]
+  );
+
+  assert.deepEqual(results.map(item => item.figureId), ['figure-10', 'figure-s2', 'figure-1', 'figure-3']);
+  assert.equal(results[2].element, richFigure1);
+  assert.equal(results[2].imageElements.length, 2);
+  assert.deepEqual(results[2].contextParagraphs.map(item => item.paragraphId), ['p1']);
+  assert.deepEqual(results[3].contextParagraphs.map(item => item.paragraphId), ['p2']);
+});
+
+test('filters icon-sized images and bounds related paragraph context', () => {
+  const candidate = figure({
+    caption: 'Figure 4. Multi-panel assay.',
+    images: [
+      image('https://journal.example/icon.png', 24, 24),
+      image('https://journal.example/full.jpg', 1200, 800)
+    ]
+  });
+  const paragraphs = Array.from({ length: 9 }, (_, index) => ({
+    paragraphId: 'p' + (index + 1),
+    text: 'Figure 4 shows result ' + (index + 1) + '. ' + 'x'.repeat(1400)
+  }));
+
+  const [result] = extractArticleFigures(documentWith([candidate]), paragraphs);
+
+  assert.equal(result.imageElements.length, 1);
+  assert.equal(result.contextParagraphs.length, 6);
+  assert.ok(result.contextParagraphs.every(item => item.text.length <= 1200));
+});
+
+test('collects individual, paired, and ranged panel hints from a Figure caption', () => {
+  const candidate = figure({
+    caption: 'Figure S1. (A and B) paired assays. (C–E) quantitative validation. (F) control. (G, I, and J) statistics.',
+    images: [image('https://journal.example/fs1.jpg')]
+  });
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-s1');
+  assert.deepEqual(result.panelHints, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J']);
+});
+
+test('recognizes common unparenthesized caption and DOM panel labels without an LLM', () => {
+  assert.deepEqual(
+    extractPanelHints('Figure 2. Panels A–C show the screen. D: rescue assay. E, validation.'),
+    ['A', 'B', 'C', 'D', 'E']
+  );
+  const panelNode = {
+    textContent: 'Panel F',
+    getAttribute(name) { return name === 'data-panel' ? 'F' : ''; }
+  };
+  const candidate = figure({
+    caption: 'Figure 2. A: screen. B, quantification.',
+    panelNodes: [panelNode],
+    images: [image('https://journal.example/f2.jpg')]
+  });
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+  assert.deepEqual(result.panelHints, ['A', 'B', 'F']);
+});
+
+test('keeps lazy-loaded publisher images from data-src attributes', () => {
+  const lazyImage = {
+    currentSrc: '',
+    src: '',
+    naturalWidth: 1100,
+    naturalHeight: 700,
+    width: 1100,
+    height: 700,
+    getAttribute(name) {
+      return name === 'data-src'
+        ? 'https://journal.example/cms/asset/figure-5.jpg'
+        : '';
+    }
+  };
+  const candidate = figure({
+    caption: 'Figure 5. Publisher lazy image.',
+    images: [lazyImage]
+  });
+
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-5');
+  assert.equal(result.imageElements[0], lazyImage);
+});
+
+test('links plural and compound Figure citations to every referenced Figure', () => {
+  const figure2 = figure({
+    caption: 'Figure 2. First experiment.',
+    images: [image('https://journal.example/f2.jpg')]
+  });
+  const figure3 = figure({
+    caption: 'Figure 3. Follow-up experiment.',
+    images: [image('https://journal.example/f3.jpg')]
+  });
+  const paragraph = {
+    paragraphId: 'p-results',
+    text: 'Figs. 2A, B, and 3 show the sequential validation experiments.'
+  };
+
+  const results = extractArticleFigures(
+    documentWith([figure2, figure3]),
+    [paragraph]
+  );
+
+  assert.deepEqual(
+    results.map(item => item.contextParagraphs.map(context => context.paragraphId)),
+    [['p-results'], ['p-results']]
+  );
+});
+
+test('registers the Europe PMC full-text Figure container', () => {
+  assert.match(FIGURE_SELECTOR, /\.fig-inline-img-set/);
+});
+
+test('does not attach Figure S5 citations to main Figure 5', () => {
+  const figure5 = figure({
+    caption: 'Figure 5. Main-text experiment.',
+    images: [image('https://journal.example/f5.jpg')]
+  });
+  const figureS5 = figure({
+    caption: 'Figure S5. Supporting validation.',
+    images: [image('https://journal.example/fs5.jpg')]
+  });
+  const results = extractArticleFigures(documentWith([figure5, figureS5]), [
+    { paragraphId: 'main', text: 'Figure 5 shows the causal intervention.' },
+    { paragraphId: 'supplement', text: 'Figure S5F shows the supporting control.' }
+  ]);
+
+  assert.deepEqual(results[0].contextParagraphs.map(item => item.paragraphId), ['main']);
+  assert.deepEqual(results[1].contextParagraphs.map(item => item.paragraphId), ['supplement']);
+});
+
+test('uses a publisher Figure label element when accessibility text is concatenated', () => {
+  const candidate = figure({
+    caption: 'Open in a separate windowFigure 6 Main result. See Supplementary Table 2.',
+    captionLabel: 'Figure 6',
+    images: [image('https://europepmc.org/api/fulltextRepo?fileName=figure6.jpg')]
+  });
+
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-6');
+  assert.match(result.caption, /Open in a separate windowFigure 6/);
+});

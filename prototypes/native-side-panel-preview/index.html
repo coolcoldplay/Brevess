@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCI 论文逻辑助手 · 原生侧栏原型</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../vendor/phosphor/icons.css">
+  <style>
+    :root {
+      --navy: #0b4778;
+      --navy-strong: #083b65;
+      --navy-soft: #eaf2f8;
+      --pearl: #f7f5ef;
+      --canvas: #eef2f5;
+      --surface: #ffffff;
+      --surface-soft: #f7f9fb;
+      --graphite: #202a33;
+      --muted: #647481;
+      --line: #d9e2ea;
+      --line-warm: #d9d6ce;
+      --success: #28704b;
+      --warning: #a86119;
+      --danger: #a73730;
+      --result: #dfa24f;
+      --limitation: #d96b62;
+      --mechanism: #6b93be;
+      --strategy: #73a990;
+      --panel-width: 480px;
+      --shadow: 0 10px 30px rgba(25, 48, 65, .11);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--graphite);
+      background: var(--canvas);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--navy);
+      outline-offset: 2px;
+    }
+
+    .browser-shell { height: 100%; display: grid; grid-template-rows: 48px minmax(0, 1fr); }
+    .browser-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid #aeb9c2;
+      background: #263442;
+      color: #eef4f7;
+    }
+    .browser-brand { display: flex; align-items: center; gap: 8px; min-width: 178px; font-weight: 700; }
+    .browser-brand-mark {
+      display: grid;
+      width: 25px;
+      height: 25px;
+      place-items: center;
+      border-radius: 6px;
+      background: #f6f8fa;
+      color: var(--navy);
+      font-size: 14px;
+    }
+    .address {
+      min-width: 0;
+      flex: 1;
+      padding: 7px 13px;
+      overflow: hidden;
+      border: 1px solid #5d6a76;
+      border-radius: 8px;
+      background: #1f2a35;
+      color: #dce7ed;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+    .browser-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 6px 10px;
+      border: 1px solid #70808d;
+      border-radius: 8px;
+      background: #314454;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 650;
+    }
+    .browser-action[aria-pressed="true"] { border-color: #b8d4e7; background: var(--navy); }
+
+    .workspace { min-height: 0; display: flex; }
+    .paper-view {
+      min-width: 420px;
+      flex: 1;
+      overflow: auto;
+      background: #fff;
+      scroll-behavior: smooth;
+    }
+    .journal-bar {
+      position: sticky;
+      z-index: 2;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 74px;
+      padding: 0 42px;
+      border-bottom: 1px solid #d6dde2;
+      background: #fff;
+    }
+    .journal-name { color: #df5b16; font-size: 22px; font-weight: 680; }
+    .journal-actions { display: flex; align-items: center; gap: 10px; }
+    .journal-button {
+      padding: 9px 14px;
+      border: 1px solid #1076ad;
+      background: #0c82bb;
+      color: #fff;
+      cursor: default;
+      font-weight: 650;
+    }
+    .paper-layout {
+      display: grid;
+      grid-template-columns: minmax(190px, 270px) minmax(480px, 820px);
+      justify-content: center;
+      gap: 46px;
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 38px 44px 100px;
+    }
+    .paper-outline {
+      position: sticky;
+      top: 100px;
+      align-self: start;
+      max-height: calc(100vh - 150px);
+      overflow: auto;
+      color: #167ab2;
+    }
+    .paper-outline h2 { margin: 0 0 22px; color: #303840; font-size: 20px; font-weight: 520; }
+    .paper-outline a {
+      display: block;
+      margin: 0 0 18px;
+      color: inherit;
+      text-decoration: none;
+      line-height: 1.35;
+    }
+    .paper-outline a:hover { text-decoration: underline; }
+    .paper-article { min-width: 0; font-family: Georgia, "Times New Roman", serif; }
+    .paper-meta { color: #69757c; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+    .paper-article h1 { margin: 10px 0 16px; font-size: clamp(30px, 3vw, 44px); line-height: 1.12; font-weight: 540; }
+    .paper-article h2 { margin: 46px 0 16px; font-size: 28px; line-height: 1.2; font-weight: 520; }
+    .paper-article h3 { margin: 30px 0 12px; font-size: 22px; font-weight: 520; }
+    .authors { margin: 0 0 28px; color: #40525e; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+    .paper-article p { margin: 0 0 18px; font-size: 18px; line-height: 1.62; }
+    .auto-highlight { text-decoration: underline 3px var(--result); text-underline-offset: 4px; }
+    .manual-highlight {
+      padding: 1px 2px;
+      border-radius: 2px;
+      background: rgba(246, 207, 93, .55);
+      cursor: pointer;
+    }
+    .source-focus { animation: sourceFocus 1.9s ease-out; }
+    @keyframes sourceFocus {
+      0%, 55% { outline: 4px solid rgba(20, 119, 171, .42); background: rgba(202, 232, 248, .38); }
+      100% { outline: 4px solid transparent; background: transparent; }
+    }
+
+    .side-panel {
+      position: relative;
+      width: var(--panel-width);
+      min-width: 360px;
+      max-width: min(720px, 62vw);
+      overflow: hidden;
+      border-left: 1px solid #bfc8cf;
+      background: var(--canvas);
+      box-shadow: -7px 0 24px rgba(25, 48, 65, .08);
+      transition: width .18s ease, min-width .18s ease;
+    }
+    .side-panel[hidden] { display: block; width: 0; min-width: 0; border-left: 0; box-shadow: none; }
+    .resize-handle {
+      position: absolute;
+      z-index: 10;
+      top: 0;
+      bottom: 0;
+      left: -4px;
+      width: 9px;
+      border: 0;
+      background: transparent;
+      cursor: col-resize;
+      touch-action: none;
+    }
+    .resize-handle::after {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 4px;
+      width: 1px;
+      background: #9eb2c0;
+      content: "";
+    }
+    .side-panel.resizing { transition: none; user-select: none; }
+    .panel-app { height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+
+    .panel-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 16px 16px 13px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+    .brand-row { display: flex; align-items: center; gap: 9px; color: var(--navy); font-weight: 760; }
+    .brand-icon {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--navy);
+      color: #fff;
+    }
+    .paper-title {
+      margin: 8px 0 0;
+      overflow: hidden;
+      color: #34434e;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .header-actions { display: flex; align-items: flex-start; gap: 4px; }
+    .icon-button {
+      display: inline-grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--navy);
+      cursor: pointer;
+    }
+    .icon-button:hover { border-color: var(--line); background: var(--surface-soft); }
+    .document-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--pearl);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .status-live { display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-weight: 700; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+
+    .panel-main { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+    .views { min-height: 0; overflow: hidden; }
+    .view { display: none; height: 100%; overflow-y: auto; padding: 14px 14px 24px; }
+    .view.active { display: block; }
+    .view-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .view-heading h2 { margin: 0; font-size: 17px; }
+    .view-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .small-button, .secondary-button, .primary-button, .segmented button, .tree-action, .chip-button {
+      border: 1px solid var(--line-warm);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--navy);
+      cursor: pointer;
+    }
+    .small-button { padding: 6px 9px; font-size: 12px; }
+    .primary-button {
+      display: inline-flex;
+      width: 100%;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-color: var(--navy);
+      background: var(--navy);
+      color: #fff;
+      font-weight: 750;
+    }
+    .primary-button:hover { background: var(--navy-strong); }
+    .secondary-button { padding: 8px 11px; }
+
+    .card {
+      margin-bottom: 11px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .card h3 { margin: 0 0 9px; font-size: 13px; }
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .meta { color: var(--muted); font-size: 11px; }
+    .segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .segmented.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .segmented button { min-height: 36px; padding: 7px 8px; font-size: 12px; }
+    .segmented button[aria-pressed="true"] { border-color: #82aaca; background: var(--navy-soft); color: var(--navy-strong); font-weight: 750; }
+
+    .study-type { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .study-type select { min-width: 0; flex: 1; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--graphite); }
+    .category-list { display: grid; gap: 8px; }
+    .category-row {
+      display: grid;
+      grid-template-columns: auto 12px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 38px;
+      padding: 7px 8px;
+      border: 1px solid #e6ebef;
+      border-radius: 8px;
+      background: var(--surface-soft);
+    }
+    .category-color { width: 12px; height: 12px; border-radius: 3px; }
+    .category-name { font-size: 12px; font-weight: 680; }
+    .category-source { color: var(--muted); font-size: 10px; }
+    .analysis-progress { display: none; margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: var(--navy-soft); color: var(--navy); font-size: 12px; }
+    .analysis-progress.visible { display: block; }
+
+    .result-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin-bottom: 10px;
+    }
+    .metric { padding: 9px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); text-align: center; }
+    .metric strong { display: block; color: var(--navy); font-size: 18px; }
+    .metric span { color: var(--muted); font-size: 10px; }
+    .ledger-preview { border-left: 3px solid var(--navy); }
+    .ledger-preview p { margin: 7px 0 0; color: #485965; font-size: 12px; line-height: 1.5; }
+
+    .tree-toolbar { display: flex; gap: 7px; margin-bottom: 11px; }
+    .tree-action { padding: 7px 9px; font-size: 12px; }
+    .tree-action.active { border-color: var(--navy); background: var(--navy); color: #fff; }
+    .tree { display: grid; gap: 5px; }
+    .tree-node { border-left: 2px solid #b9d1e1; }
+    .tree-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 38px; padding: 5px 5px 5px 8px; }
+    .tree-row:hover { background: var(--surface-soft); }
+    .tree-toggle, .tree-jump { border: 0; background: transparent; color: var(--navy); cursor: pointer; }
+    .tree-jump { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-weight: 680; }
+    .tree-count { color: var(--muted); font-size: 10px; }
+    .tree-children { margin-left: 20px; }
+    .tree-node.collapsed > .tree-children { display: none; }
+    .summary-line { margin: 3px 9px 8px 36px; padding: 8px 10px; border-left: 2px solid var(--result); background: #fffaf1; color: #5d503f; font-size: 11px; line-height: 1.45; }
+    .tree[data-summary="hidden"] .summary-line { display: none; }
+
+    .distribution { display: grid; gap: 8px; }
+    .distribution-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 28px; align-items: center; gap: 8px; }
+    .distribution-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .bar { height: 7px; overflow: hidden; border-radius: 999px; background: #e8edf0; }
+    .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--navy); }
+    .jump-list { display: grid; gap: 7px; margin-top: 11px; }
+    .jump-item { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; cursor: pointer; }
+    .jump-item strong { display: block; margin-bottom: 3px; font-size: 12px; }
+    .jump-item span { color: var(--muted); font-size: 11px; }
+
+    .figure-item { margin-bottom: 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; overflow: hidden; }
+    .figure-item summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .figure-body { padding: 0 12px 12px; color: #465761; font-size: 12px; line-height: 1.55; }
+    .figure-body h4 { margin: 10px 0 4px; color: var(--graphite); font-size: 12px; }
+    .figure-body p { margin: 0; }
+
+    .annotation-editor label { display: grid; gap: 5px; margin-bottom: 10px; color: #42535f; font-size: 12px; font-weight: 650; }
+    .annotation-editor select, .annotation-editor textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--graphite); }
+    .annotation-editor textarea { min-height: 92px; resize: vertical; }
+    .quote { margin: 0 0 10px; padding: 9px 10px; border-left: 3px solid #e4c151; background: #fffbed; color: #5c5130; font-size: 12px; line-height: 1.5; }
+    .success-banner { display: none; margin-top: 9px; padding: 8px 10px; border-radius: 7px; background: #e9f5ef; color: var(--success); font-size: 12px; }
+    .success-banner.visible { display: block; }
+
+    .panel-nav {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 4px;
+      padding: 8px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+    .nav-button {
+      display: grid;
+      min-width: 0;
+      min-height: 48px;
+      place-items: center;
+      gap: 2px;
+      padding: 5px 3px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .nav-button .ph { font-size: 17px; }
+    .nav-button[aria-selected="true"] { border-color: #bcd1df; background: var(--navy-soft); color: var(--navy); font-weight: 750; }
+
+    .subview { display: none; }
+    .subview.active { display: block; }
+    .back-button { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 12px; padding: 6px 8px; border: 0; background: transparent; color: var(--navy); cursor: pointer; }
+    .ledger-item { margin-bottom: 8px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .ledger-item strong { display: block; margin-bottom: 5px; font-size: 12px; }
+    .ledger-item p { margin: 0; color: #52636f; font-size: 11px; line-height: 1.5; }
+    .ledger-evidence { border-left: 3px solid var(--strategy); }
+    .ledger-warning { border-left: 3px solid var(--warning); }
+
+    .inactive-screen {
+      display: none;
+      height: 100%;
+      place-items: center;
+      padding: 28px;
+      text-align: center;
+    }
+    .side-panel.inactive .panel-app { display: none; }
+    .side-panel.inactive .inactive-screen { display: grid; }
+    .inactive-card { max-width: 330px; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); }
+    .inactive-card .brand-icon { margin: 0 auto 12px; }
+    .inactive-card h2 { margin: 0 0 8px; font-size: 18px; }
+    .inactive-card p { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    @media (max-width: 1040px) {
+      .paper-layout { grid-template-columns: minmax(420px, 760px); padding-inline: 34px; }
+      .paper-outline { display: none; }
+      .side-panel { max-width: 66vw; }
+    }
+    @media (max-width: 760px) {
+      .browser-brand span, .browser-action span { display: none; }
+      .browser-brand { min-width: auto; }
+      .paper-view { display: none; }
+      .side-panel { width: 100% !important; min-width: 100%; max-width: none; }
+      .resize-handle { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="browser-shell">
+    <header class="browser-bar">
+      <div class="browser-brand">
+        <span class="browser-brand-mark"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i></span>
+        <span>Edge 侧栏原型</span>
+      </div>
+      <div class="address">https://www.sciencedirect.com/science/article/pii/S2352304225004246</div>
+      <button id="extensionAction" class="browser-action" type="button" aria-pressed="true">
+        <i class="ph ph-highlighter" aria-hidden="true"></i><span>SCI 逻辑助手</span>
+      </button>
+    </header>
+
+    <main class="workspace">
+      <section class="paper-view" aria-label="模拟论文页面">
+        <div class="journal-bar">
+          <div class="journal-name">ScienceDirect</div>
+          <div class="journal-actions">
+            <span class="paper-meta">Genes &amp; Diseases · Review Article</span>
+            <span class="journal-button">View PDF</span>
+          </div>
+        </div>
+        <div class="paper-layout">
+          <nav class="paper-outline" aria-label="论文目录">
+            <h2>Outline</h2>
+            <a href="#abstract">Abstract</a>
+            <a href="#overview">Overview of lactylation</a>
+            <a href="#adaptation">Cellular adaptation and resistance</a>
+            <a href="#mechanisms">Mechanisms of therapeutic resistance</a>
+            <a href="#strategies">Therapeutic strategies</a>
+            <a href="#conclusions">Conclusions and perspectives</a>
+          </nav>
+          <article class="paper-article">
+            <div class="paper-meta">Review Article · Open access</div>
+            <h1>Lactylation-driven therapeutic resistance in cancer: Mechanisms and therapeutic opportunities</h1>
+            <p class="authors">Wanghao Zhang, Guanglong Huang, Woheng Tang, Jingxian Chen, Yaojiang Feng, Kaichen Li</p>
+
+            <h2 id="abstract">Abstract</h2>
+            <p>Protein lactylation connects tumor metabolic reprogramming with epigenetic regulation and therapeutic resistance. This review integrates recent advances in lactylation writers, readers, and erasers and evaluates translational opportunities.</p>
+
+            <h2 id="overview">Overview of lactylation</h2>
+            <h3>The discovery of lactylation</h3>
+            <p>Lactate is no longer considered merely a metabolic waste product. It acts as a signaling substrate that reshapes transcription, chromatin state, and cellular adaptation under stress.</p>
+            <p><span class="auto-highlight" id="result-source">Increased lactylation was associated with sustained tumor-cell survival and resistance across several experimental systems.</span> These findings define a plausible connection between metabolic state and treatment response.</p>
+
+            <h2 id="adaptation">Cellular adaptation and resistance</h2>
+            <p>Hypoxia-associated metabolic change supports cellular plasticity. Nutrient deprivation can maintain mitochondrial respiration and enable survival during chemotherapy or radiotherapy.</p>
+            <p><span class="manual-highlight" id="manual-source" tabindex="0" role="button">The acidic tumor microenvironment may reduce drug permeability and support immune evasion.</span> This sentence has been manually highlighted; select it to preview category and note editing in the side panel.</p>
+
+            <h2 id="mechanisms">Mechanisms of therapeutic resistance</h2>
+            <p>Histone and non-histone lactylation can stabilize stemness programs, remodel macrophage states, and sustain compensatory signaling. However, many reported relationships remain associative rather than causal.</p>
+
+            <h2 id="strategies">Therapeutic strategies</h2>
+            <p>Candidate strategies include targeting lactate production, blocking transporters, modulating lactylation enzymes, and combining metabolic interventions with immunotherapy.</p>
+
+            <h2 id="conclusions">Conclusions and perspectives</h2>
+            <p>The field requires stronger causal experiments, external validation, dose–response evidence, and clearer separation of preclinical promise from demonstrated clinical benefit.</p>
+          </article>
+        </div>
+      </section>
+
+      <aside id="sidePanel" class="side-panel" aria-label="SCI 论文逻辑助手侧栏">
+        <button id="resizeHandle" class="resize-handle" type="button" aria-label="拖动调整侧栏宽度"></button>
+        <div class="inactive-screen">
+          <div class="inactive-card">
+            <span class="brand-icon"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i></span>
+            <h2>等待激活当前论文</h2>
+            <p>新页面不会自动扫描。点击浏览器顶部的扩展图标后，才会读取当前论文并显示工具。</p>
+            <button id="activateInside" class="primary-button" type="button">模拟点击扩展图标</button>
+          </div>
+        </div>
+
+        <div class="panel-app">
+          <header class="panel-header">
+            <div>
+              <div class="brand-row"><span class="brand-icon"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i></span>SCI 论文逻辑助手</div>
+              <div class="paper-title">Lactylation-driven therapeutic resistance in cancer</div>
+            </div>
+            <div class="header-actions">
+              <button class="icon-button" type="button" aria-label="设置"><i class="ph ph-gear" aria-hidden="true"></i></button>
+              <button id="closePanel" class="icon-button" type="button" aria-label="关闭侧栏"><i class="ph ph-x" aria-hidden="true"></i></button>
+            </div>
+          </header>
+          <div class="document-status">
+            <span class="status-live"><span class="status-dot"></span>已激活</span>
+            <span>Elsevier · 36 个标题 · 62 段正文</span>
+          </div>
+
+          <div class="panel-main">
+            <div class="views">
+              <section class="view active" data-view="analysis">
+                <div id="analysisMain" class="subview active">
+                  <div class="view-heading">
+                    <div><h2>分析工作区</h2><p>只在激活后读取当前论文</p></div>
+                    <button class="small-button" type="button"><i class="ph ph-gear" aria-hidden="true"></i> API</button>
+                  </div>
+
+                  <div class="card">
+                    <div class="card-title-row"><h3>识别引擎</h3><span class="meta">DeepSeek · 已连接</span></div>
+                    <div class="segmented">
+                      <button type="button" aria-pressed="false">正则模式</button>
+                      <button type="button" aria-pressed="true">LLM 精确模式</button>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <h3>阅读视图</h3>
+                    <div class="segmented four" data-segmented>
+                      <button type="button" aria-pressed="false">快速主线</button>
+                      <button type="button" aria-pressed="true">机制链</button>
+                      <button type="button" aria-pressed="false">批判审读</button>
+                      <button type="button" aria-pressed="false">综述脉络</button>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <h3>文献类型（单选）</h3>
+                    <div class="study-type">
+                      <select aria-label="文献类型">
+                        <option selected>叙述性综述（机制/转化）</option>
+                        <option>基础机制研究</option>
+                        <option>临床前/转化研究</option>
+                        <option>观察性研究</option>
+                        <option>临床试验</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <div class="card-title-row"><h3>当前高亮类别</h3><button class="small-button" type="button">编辑规则</button></div>
+                    <div class="category-list">
+                      <label class="category-row"><input type="checkbox" checked><span class="category-color" style="background:var(--mechanism)"></span><span><span class="category-name">机制关系</span><br><span class="category-source">LLM 语义识别</span></span><span class="meta">12</span></label>
+                      <label class="category-row"><input type="checkbox" checked><span class="category-color" style="background:var(--result)"></span><span><span class="category-name">关键结果</span><br><span class="category-source">LLM 语义识别</span></span><span class="meta">9</span></label>
+                      <label class="category-row"><input type="checkbox" checked><span class="category-color" style="background:var(--limitation)"></span><span><span class="category-name">局限性</span><br><span class="category-source">LLM 语义识别</span></span><span class="meta">6</span></label>
+                      <label class="category-row"><input type="checkbox" checked><span class="category-color" style="background:var(--strategy)"></span><span><span class="category-name">研究策略</span><br><span class="category-source">LLM 语义识别</span></span><span class="meta">8</span></label>
+                    </div>
+                  </div>
+
+                  <button id="analyzeButton" class="primary-button" type="button"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i>分析全文</button>
+                  <div id="analysisProgress" class="analysis-progress" role="status">正在复用本次激活生成的正文快照…</div>
+
+                  <div class="card" style="margin-top:11px">
+                    <div class="result-summary">
+                      <div class="metric"><strong>35</strong><span>高亮证据</span></div>
+                      <div class="metric"><strong>8</strong><span>机制关系</span></div>
+                      <div class="metric"><strong>3</strong><span>审读提醒</span></div>
+                    </div>
+                    <div class="ledger-preview">
+                      <div class="card-title-row"><h3>论文证据台账</h3><span class="meta">已生成</span></div>
+                      <p>把机制关系、支持证据和需要谨慎解释的推断集中在侧栏中，不再覆盖论文页面。</p>
+                      <button id="openLedger" class="secondary-button" type="button" style="margin-top:9px">查看证据台账</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="ledgerView" class="subview">
+                  <button class="back-button" type="button" data-back="analysis"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>返回分析</button>
+                  <div class="view-heading"><div><h2>论文证据台账</h2><p>8 条关系 · 3 条审读提醒</p></div></div>
+                  <div class="ledger-item ledger-evidence"><strong>乳酰化 → 治疗耐受</strong><p>多项实验提示肿瘤代谢重编程和乳酰化水平升高与耐药表型同时出现，但不同系统中的因果强度并不一致。</p></div>
+                  <div class="ledger-item ledger-evidence"><strong>酸性微环境 → 药物通透性下降</strong><p>正文提出弱碱性药物在酸性环境中的离子捕获，并将其作为可能的耐药机制。</p></div>
+                  <div class="ledger-item ledger-warning"><strong>审读提醒：临床外推有限</strong><p>多数支持证据来自体外与动物研究，尚不能直接表述为已证实的人体临床获益。</p></div>
+                  <button class="jump-item" type="button" data-jump="result-source"><strong>跳转到关联证据</strong><span>Overview of lactylation · 第 2 段</span></button>
+                </div>
+              </section>
+
+              <section class="view" data-view="navigation">
+                <div class="view-heading"><div><h2>论文导航</h2><p>本地 HTML 结构 · 无需调用 AI</p></div><button class="small-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>刷新</button></div>
+                <div class="tree-toolbar">
+                  <button class="tree-action active" type="button" data-tree-depth="major">主章节</button>
+                  <button class="tree-action" type="button" data-tree-depth="all">全部标题</button>
+                  <button id="summaryToggle" class="tree-action" type="button">显示摘要</button>
+                </div>
+                <div id="outlineTree" class="tree" data-summary="hidden">
+                  <div class="tree-node">
+                    <div class="tree-row"><button class="tree-toggle" type="button" aria-label="折叠 Abstract"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="abstract">Abstract</button><span class="tree-count">2 段</span></div>
+                    <div class="summary-line">概述乳酰化与代谢重编程、表观遗传调控和治疗耐受之间的联系。</div>
+                  </div>
+                  <div class="tree-node">
+                    <div class="tree-row"><button class="tree-toggle" type="button" aria-label="折叠 Overview"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="overview">Overview of lactylation</button><span class="tree-count">9 段</span></div>
+                    <div class="tree-children"><div class="tree-node"><div class="tree-row"><span></span><button class="tree-jump" type="button" data-jump="overview">The discovery of lactylation</button><span class="tree-count">3 段</span></div><div class="summary-line">乳酸从代谢废物被重新认识为调控转录和细胞适应的信号底物。</div></div></div>
+                  </div>
+                  <div class="tree-node">
+                    <div class="tree-row"><button class="tree-toggle" type="button" aria-label="折叠 adaptation"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="adaptation">Cellular adaptation and resistance</button><span class="tree-count">12 段</span></div>
+                    <div class="summary-line">缺氧、营养剥夺与酸性环境共同塑造治疗压力下的代谢可塑性。</div>
+                  </div>
+                  <div class="tree-node"><div class="tree-row"><button class="tree-toggle" type="button"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="mechanisms">Mechanisms of therapeutic resistance</button><span class="tree-count">16 段</span></div><div class="summary-line">总结乳酰化维持肿瘤干性、免疫抑制和补偿信号的候选机制。</div></div>
+                  <div class="tree-node"><div class="tree-row"><button class="tree-toggle" type="button"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="strategies">Therapeutic strategies</button><span class="tree-count">11 段</span></div><div class="summary-line">按乳酸生成、转运、修饰酶和联合治疗组织干预策略。</div></div>
+                  <div class="tree-node"><div class="tree-row"><button class="tree-toggle" type="button"><i class="ph ph-caret-down"></i></button><button class="tree-jump" type="button" data-jump="conclusions">Conclusions and perspectives</button><span class="tree-count">4 段</span></div><div class="summary-line">强调因果实验、外部验证和临床转化边界仍需加强。</div></div>
+                </div>
+              </section>
+
+              <section class="view" data-view="highlights">
+                <div id="highlightMain" class="subview active">
+                  <div class="view-heading"><div><h2>高亮与标注</h2><p>按类别查看分布并跳回正文</p></div><button class="small-button" type="button"><i class="ph ph-download" aria-hidden="true"></i>导出</button></div>
+                  <div class="card">
+                    <h3>全文类别分布</h3>
+                    <div class="distribution">
+                      <div class="distribution-row"><span class="distribution-label">机制关系</span><span class="bar"><span style="width:82%;background:var(--mechanism)"></span></span><strong>12</strong></div>
+                      <div class="distribution-row"><span class="distribution-label">关键结果</span><span class="bar"><span style="width:64%;background:var(--result)"></span></span><strong>9</strong></div>
+                      <div class="distribution-row"><span class="distribution-label">局限性</span><span class="bar"><span style="width:43%;background:var(--limitation)"></span></span><strong>6</strong></div>
+                      <div class="distribution-row"><span class="distribution-label">研究策略</span><span class="bar"><span style="width:57%;background:var(--strategy)"></span></span><strong>8</strong></div>
+                    </div>
+                  </div>
+                  <div class="jump-list">
+                    <button class="jump-item" type="button" data-jump="result-source"><strong>关键结果 · Overview of lactylation</strong><span>Increased lactylation was associated with sustained tumor-cell survival…</span></button>
+                    <button id="editManual" class="jump-item" type="button"><strong>手动标注 · Cellular adaptation</strong><span>酸性肿瘤微环境可能降低药物通透性并支持免疫逃逸。</span></button>
+                    <button class="jump-item" type="button" data-jump="conclusions"><strong>局限性 · Conclusions</strong><span>需要更强的因果实验、外部验证和临床证据。</span></button>
+                  </div>
+                </div>
+                <div id="annotationEditor" class="subview annotation-editor">
+                  <button class="back-button" type="button" data-back="highlights"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>返回高亮</button>
+                  <div class="view-heading"><div><h2>编辑手动标注</h2><p>荧光笔高亮与 AI 下划线明确区分</p></div></div>
+                  <blockquote class="quote">The acidic tumor microenvironment may reduce drug permeability and support immune evasion.</blockquote>
+                  <label>绑定类别<select><option>局限性</option><option selected>机制关系</option><option>关键结果</option><option>研究策略</option></select></label>
+                  <label>备注<textarea>该段属于合理的机制解释，但作者未在此处提供直接临床验证；后续阅读时需要与治疗策略章节交叉核对。</textarea></label>
+                  <button id="saveAnnotation" class="primary-button" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存标注</button>
+                  <div id="annotationSaved" class="success-banner" role="status"><i class="ph ph-check-circle" aria-hidden="true"></i> 已保存到当前论文</div>
+                </div>
+              </section>
+
+              <section class="view" data-view="figures">
+                <div class="view-heading"><div><h2>逐图解读</h2><p>标准与深度分析统一留在侧栏</p></div><button class="small-button" type="button">生成全部</button></div>
+                <div class="segmented" data-segmented style="margin-bottom:11px"><button type="button" aria-pressed="true">标准解读</button><button type="button" aria-pressed="false">深度解读</button></div>
+                <details class="figure-item" open><summary><span>Figure 1 · 乳酰化调控框架</span><span class="meta">已完成</span></summary><div class="figure-body"><h4>本图回答的问题</h4><p>乳酸生成、转运与蛋白乳酰化如何连接肿瘤代谢和耐药表型。</p><h4>核心结论</h4><p>图示提出一条由代谢压力到表观遗传重塑的候选机制链，但其中多处仍主要由关联证据支持。</p><h4>证据边界</h4><p>不能仅依据该图将动物或细胞结果写成人体临床获益。</p></div></details>
+                <details class="figure-item"><summary><span>Figure 2 · 细胞适应与免疫逃逸</span><span class="meta">已完成</span></summary><div class="figure-body"><h4>核心结论</h4><p>乳酰化可能同时作用于肿瘤细胞内在耐受和微环境免疫抑制。</p></div></details>
+                <details class="figure-item"><summary><span>Figure 3 · 靶向策略</span><span class="meta">待分析</span></summary><div class="figure-body"><p>点击“生成全部”后将在这里显示逐 Panel 解读、证据关系和替代解释。</p></div></details>
+              </section>
+            </div>
+
+            <nav class="panel-nav" aria-label="侧栏一级视图">
+              <button class="nav-button" type="button" data-target="analysis" aria-selected="true"><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i><span>分析</span></button>
+              <button class="nav-button" type="button" data-target="navigation" aria-selected="false"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><span>导航</span></button>
+              <button class="nav-button" type="button" data-target="highlights" aria-selected="false"><i class="ph ph-highlighter" aria-hidden="true"></i><span>高亮</span></button>
+              <button class="nav-button" type="button" data-target="figures" aria-selected="false"><i class="ph ph-note-pencil" aria-hidden="true"></i><span>图解</span></button>
+            </nav>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const sidePanel = document.getElementById('sidePanel');
+    const extensionAction = document.getElementById('extensionAction');
+    const activateInside = document.getElementById('activateInside');
+    const closePanel = document.getElementById('closePanel');
+    const resizeHandle = document.getElementById('resizeHandle');
+
+    function activatePanel() {
+      sidePanel.hidden = false;
+      sidePanel.classList.remove('inactive');
+      extensionAction.setAttribute('aria-pressed', 'true');
+    }
+
+    function showInactivePanel() {
+      sidePanel.hidden = false;
+      sidePanel.classList.add('inactive');
+      extensionAction.setAttribute('aria-pressed', 'false');
+    }
+
+    function closeWorkspace() {
+      sidePanel.hidden = true;
+      sidePanel.classList.remove('inactive');
+      extensionAction.setAttribute('aria-pressed', 'false');
+    }
+
+    extensionAction.addEventListener('click', () => {
+      if (sidePanel.hidden) activatePanel();
+      else if (sidePanel.classList.contains('inactive')) activatePanel();
+      else showInactivePanel();
+    });
+    activateInside.addEventListener('click', activatePanel);
+    closePanel.addEventListener('click', closeWorkspace);
+
+    document.querySelectorAll('.nav-button').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.nav-button').forEach(item =>
+          item.setAttribute('aria-selected', String(item === button))
+        );
+        document.querySelectorAll('.view').forEach(view =>
+          view.classList.toggle('active', view.dataset.view === button.dataset.target)
+        );
+      });
+    });
+
+    document.querySelectorAll('[data-segmented] button').forEach(button => {
+      button.addEventListener('click', () => {
+        button.parentElement.querySelectorAll('button').forEach(item =>
+          item.setAttribute('aria-pressed', String(item === button))
+        );
+      });
+    });
+
+    document.querySelectorAll('.tree-toggle').forEach(button => {
+      button.addEventListener('click', () => {
+        const node = button.closest('.tree-node');
+        node.classList.toggle('collapsed');
+        const icon = button.querySelector('.ph');
+        if (icon) icon.className = node.classList.contains('collapsed') ? 'ph ph-caret-up' : 'ph ph-caret-down';
+      });
+    });
+
+    document.getElementById('summaryToggle').addEventListener('click', event => {
+      const tree = document.getElementById('outlineTree');
+      const nextVisible = tree.dataset.summary === 'hidden';
+      tree.dataset.summary = nextVisible ? 'visible' : 'hidden';
+      event.currentTarget.textContent = nextVisible ? '隐藏摘要' : '显示摘要';
+      event.currentTarget.classList.toggle('active', nextVisible);
+    });
+
+    document.querySelectorAll('[data-tree-depth]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-tree-depth]').forEach(item => item.classList.toggle('active', item === button));
+        document.querySelectorAll('.tree-node').forEach((node, index) => {
+          node.style.display = button.dataset.treeDepth === 'major' && node.closest('.tree-children') ? 'none' : '';
+        });
+      });
+    });
+
+    function focusSource(id) {
+      const source = document.getElementById(id);
+      if (!source) return;
+      source.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      source.classList.remove('source-focus');
+      void source.offsetWidth;
+      source.classList.add('source-focus');
+    }
+    document.querySelectorAll('[data-jump]').forEach(button => button.addEventListener('click', () => focusSource(button.dataset.jump)));
+
+    const analysisMain = document.getElementById('analysisMain');
+    const ledgerView = document.getElementById('ledgerView');
+    document.getElementById('openLedger').addEventListener('click', () => {
+      analysisMain.classList.remove('active');
+      ledgerView.classList.add('active');
+    });
+    document.querySelector('[data-back="analysis"]').addEventListener('click', () => {
+      ledgerView.classList.remove('active');
+      analysisMain.classList.add('active');
+    });
+
+    const highlightMain = document.getElementById('highlightMain');
+    const annotationEditor = document.getElementById('annotationEditor');
+    function openAnnotationEditor() {
+      document.querySelector('[data-target="highlights"]').click();
+      highlightMain.classList.remove('active');
+      annotationEditor.classList.add('active');
+    }
+    document.getElementById('editManual').addEventListener('click', openAnnotationEditor);
+    document.getElementById('manual-source').addEventListener('click', openAnnotationEditor);
+    document.getElementById('manual-source').addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') openAnnotationEditor();
+    });
+    document.querySelector('[data-back="highlights"]').addEventListener('click', () => {
+      annotationEditor.classList.remove('active');
+      highlightMain.classList.add('active');
+    });
+    document.getElementById('saveAnnotation').addEventListener('click', () => {
+      document.getElementById('annotationSaved').classList.add('visible');
+    });
+
+    document.getElementById('analyzeButton').addEventListener('click', event => {
+      const progress = document.getElementById('analysisProgress');
+      progress.classList.add('visible');
+      event.currentTarget.disabled = true;
+      event.currentTarget.textContent = '正在分析…';
+      window.setTimeout(() => {
+        progress.textContent = '分析完成：正文快照只提取一次，证据台账已更新。';
+        event.currentTarget.disabled = false;
+        event.currentTarget.innerHTML = '<i class="ph ph-check-circle" aria-hidden="true"></i>分析完成';
+      }, 850);
+    });
+
+    let resizing = false;
+    resizeHandle.addEventListener('pointerdown', event => {
+      resizing = true;
+      sidePanel.classList.add('resizing');
+      resizeHandle.setPointerCapture(event.pointerId);
+    });
+    resizeHandle.addEventListener('pointermove', event => {
+      if (!resizing) return;
+      const width = Math.max(360, Math.min(720, window.innerWidth - event.clientX));
+      document.documentElement.style.setProperty('--panel-width', width + 'px');
+    });
+    resizeHandle.addEventListener('pointerup', event => {
+      resizing = false;
+      sidePanel.classList.remove('resizing');
+      resizeHandle.releasePointerCapture(event.pointerId);
+    });
+    resizeHandle.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const current = sidePanel.getBoundingClientRect().width;
+      const width = Math.max(360, Math.min(720, current + (event.key === 'ArrowLeft' ? 20 : -20)));
+      document.documentElement.style.setProperty('--panel-width', width + 'px');
+    });
+  </script>
+</body>
+</html>
