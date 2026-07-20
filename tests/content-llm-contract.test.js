@@ -237,6 +237,19 @@ test('content script explains retry waits and adaptive chunk splitting', () => {
   assert.match(script, /自动拆分/);
 });
 
+test('live article structure tracks removals, text edits, and root replacement', () => {
+  const script = read('content.js');
+  const start = script.indexOf('function isArticleStructureMutation');
+  const end = script.indexOf('function flattenArticleNodes', start);
+  const observer = script.slice(start, end);
+  assert.match(observer, /mutation\?\.removedNodes/);
+  assert.match(observer, /mutation\?\.type === 'characterData'/);
+  assert.match(observer, /articleStructureBoundaryRoots/);
+  assert.match(observer, /characterData:\s*true/);
+  assert.match(observer, /observe\(parent,\s*\{\s*childList:\s*true\s*\}\)/);
+  assert.match(observer, /startArticleStructureObserver\(\)/);
+});
+
 test('validated highlight chunks are rendered progressively before the final document response', () => {
   const script = read('content.js');
   const router = read('core/background-router.js');

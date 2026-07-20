@@ -679,6 +679,8 @@ let reviewOutlineStatus = createInitialReviewOutlineStatus();
 let currentArticleStructure = null;
 let articleStructureObserver = null;
 let articleStructureRefreshTimer = null;
+let articleStructureObservedRoots = new Set();
+let articleStructureBoundaryRoots = new Map();
 const extractionTrace = SciLLM.createExtractionTraceRecorder({ limit: 40 });
 let lastSuccessfulExtraction = null;
 let lastSuccessfulStructure = null;
@@ -5407,6 +5409,8 @@ function getArticleStructureObserveRoots() {
 function stopArticleStructureObserver() {
     if (articleStructureObserver) articleStructureObserver.disconnect();
     articleStructureObserver = null;
+    articleStructureObservedRoots = new Set();
+    articleStructureBoundaryRoots = new Map();
     if (articleStructureRefreshTimer !== null) {
         clearTimeout(articleStructureRefreshTimer);
         articleStructureRefreshTimer = null;
@@ -5414,9 +5418,25 @@ function stopArticleStructureObserver() {
 }
 
 function isArticleStructureMutation(mutation) {
-    return [...(mutation?.addedNodes || [])].some(node => {
+    const changedNodes = mutation?.type === 'characterData'
+        ? [mutation.target]
+        : [...(mutation?.addedNodes || []), ...(mutation?.removedNodes || [])];
+    const boundaryRoots = articleStructureBoundaryRoots.get(mutation?.target);
+    if (boundaryRoots?.size && !changedNodes.some(node =>
+        [...boundaryRoots].some(root => node === root || node?.contains?.(root)))) {
+        return false;
+    }
+    const pluginRewrite = mutation?.type === 'childList' && changedNodes.some(node => {
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : null;
+        return Boolean(element && (
+            element.closest?.('[data-sci-plugin-ui]') ||
+            element.matches?.('.sci-highlight,.sci-llm-highlight,.sci-manual-highlight')
+        ));
+    });
+    return changedNodes.some(node => {
         const element = node?.nodeType === Node.ELEMENT_NODE
-            ? node : node?.parentElement;
+            ? node : node?.parentElement || mutation?.target?.parentElement || mutation?.target;
+        if (pluginRewrite && node?.nodeType !== Node.ELEMENT_NODE) return false;
         if (!element || element.closest?.('[data-sci-plugin-ui]')) return false;
         if (element.matches?.('.sci-highlight,.sci-llm-highlight,.sci-manual-highlight')) {
             return false;
@@ -5450,6 +5470,7 @@ function startArticleStructureObserver() {
             articleStructureRefreshTimer = null;
             const previousRevision = currentArticleStructure?.revision || 0;
             const next = extractCurrentArticleStructure({ forceRefresh: true });
+            startArticleStructureObserver();
             if (next.revision !== previousRevision &&
                 document.getElementById('sci-article-navigator-host')) {
                 renderArticleNavigator(next);
@@ -5463,8 +5484,22 @@ function startArticleStructureObserver() {
             }
         }, 450);
     });
-    getArticleStructureObserveRoots().forEach(root => {
-        articleStructureObserver.observe(root, { childList: true, subtree: true });
+    const roots = getArticleStructureObserveRoots();
+    articleStructureObservedRoots = new Set(roots);
+    roots.forEach(root => {
+        articleStructureObserver.observe(root, {
+            childList: true,
+            characterData: true,
+            subtree: true
+        });
+        const parent = root.parentElement;
+        if (!parent || articleStructureObservedRoots.has(parent)) return;
+        const ownedRoots = articleStructureBoundaryRoots.get(parent) || new Set();
+        ownedRoots.add(root);
+        articleStructureBoundaryRoots.set(parent, ownedRoots);
+    });
+    articleStructureBoundaryRoots.forEach((ownedRoots, parent) => {
+        if (ownedRoots.size) articleStructureObserver.observe(parent, { childList: true });
     });
 }
 

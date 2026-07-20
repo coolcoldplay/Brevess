@@ -1251,6 +1251,47 @@ async function readDiagnosticDownload(download) {
     paragraphCount: currentWorkspaceSnapshot?.paragraphs?.length || 0
   }));
 
+  const dynamicMutationFixture = await fixture.evaluate(() => {
+    document.querySelectorAll('[class*="responsive-copy-"]').forEach(node => node.remove());
+    const firstParagraph = document.querySelector('article section p');
+    const marker = ' Character-data mutation is reflected in the live article index.';
+    if (firstParagraph?.firstChild) firstParagraph.firstChild.data += marker;
+    return { marker };
+  });
+  await sidePanel.waitForFunction(marker => {
+    const paragraphs = currentWorkspaceSnapshot?.paragraphs || [];
+    return paragraphs.length === 6 && paragraphs.some(item => item.text.includes(marker));
+  }, dynamicMutationFixture.marker, { timeout: 5000 });
+  const dynamicRemovalAndTextQa = await sidePanel.evaluate(marker => ({
+    paragraphCount: currentWorkspaceSnapshot?.paragraphs?.length || 0,
+    removedResponsiveCopies: !(currentWorkspaceSnapshot?.paragraphs || []).some(item =>
+      item.text.includes('dynamically loaded mechanistic paragraph')),
+    characterDataUpdated: (currentWorkspaceSnapshot?.paragraphs || []).some(item =>
+      item.text.includes(marker))
+  }), dynamicMutationFixture.marker);
+
+  const rootReplacementFixture = await fixture.evaluate(() => {
+    const article = document.querySelector('article');
+    const replacement = article?.cloneNode(true);
+    const marker = 'Root replacement paragraph must enter navigation and article chat.';
+    if (!article || !replacement) return { replaced: false, marker };
+    const paragraph = document.createElement('p');
+    paragraph.textContent = marker;
+    replacement.querySelector('section:last-of-type')?.appendChild(paragraph);
+    article.replaceWith(replacement);
+    return { replaced: true, marker };
+  });
+  await sidePanel.waitForFunction(marker => {
+    const paragraphs = currentWorkspaceSnapshot?.paragraphs || [];
+    return paragraphs.length === 7 && paragraphs.some(item => item.text.includes(marker));
+  }, rootReplacementFixture.marker, { timeout: 5000 });
+  const articleRootReplacementQa = await sidePanel.evaluate(marker => ({
+    replaced: true,
+    paragraphCount: currentWorkspaceSnapshot?.paragraphs?.length || 0,
+    replacementIndexed: (currentWorkspaceSnapshot?.paragraphs || []).some(item =>
+      item.text.includes(marker))
+  }), rootReplacementFixture.marker);
+
   const options = await context.newPage();
   options.on('pageerror', error => pageErrors.push(`options: ${error.message}`));
   await options.goto(`chrome-extension://${extensionId}/options.html`, {
@@ -1891,6 +1932,8 @@ async function readDiagnosticDownload(download) {
     articleChatQa,
     chatMutationQa,
     dynamicParagraphQa,
+    dynamicRemovalAndTextQa,
+    articleRootReplacementQa,
     workspaceOverviewFixture,
     workspaceOverviewQa,
     activeWorkspaceDeletionQa,
@@ -2032,6 +2075,12 @@ async function readDiagnosticDownload(download) {
     results.chatMutationQa.finalStoredTurns === 0 &&
     results.chatMutationQa.finalIndexTurns === 0 &&
     results.dynamicParagraphQa.paragraphCount === 7 &&
+    results.dynamicRemovalAndTextQa.paragraphCount === 6 &&
+    results.dynamicRemovalAndTextQa.removedResponsiveCopies &&
+    results.dynamicRemovalAndTextQa.characterDataUpdated &&
+    results.articleRootReplacementQa.replaced &&
+    results.articleRootReplacementQa.paragraphCount === 7 &&
+    results.articleRootReplacementQa.replacementIndexed &&
     /7 段正文/.test(results.dynamicParagraphQa.status) &&
     results.workspaceOverviewFixture.ensured &&
     results.workspaceOverviewFixture.assetSaved &&
