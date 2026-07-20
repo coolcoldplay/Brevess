@@ -1,9 +1,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+require('../core/article-chat-citations.js');
 const {
-  createMarkdownBlockStreamCoalescer
+  createMarkdownBlockStreamCoalescer,
+  createArticleChatNdjsonParser
 } = require('../core/article-chat-stream.js');
+
+const citationSnapshot = {
+  revision: 4,
+  paragraphs: [{
+    paragraphId: 'p1', sourceKey: 'results:1', textHash: 'hash-1',
+    sectionTitle: 'Results', sectionPath: ['Results'],
+    text: 'Treatment significantly improved survival in the intervention group.'
+  }]
+};
 
 function createCollector(options = {}) {
   const blocks = [];
@@ -64,4 +75,69 @@ test('stream coalescer finalizes the last complete response and cancellation dis
   second.stream.cancel();
   second.stream.finish();
   assert.deepEqual(second.blocks, []);
+});
+
+test('NDJSON parser emits only complete validated answer blocks', () => {
+  const blocks = [];
+  const records = [];
+  const parser = createArticleChatNdjsonParser({
+    snapshot: citationSnapshot,
+    onBlock: block => blocks.push(block),
+    onRecord: record => records.push(record)
+  });
+  const line = JSON.stringify({
+    type: 'answer_block', block_id: 'block-1',
+    markdown: '治疗显著改善生存。[[1]]',
+    evidence: [{
+      marker: '1', paragraph_id: 'p1', source_key: 'results:1', text_hash: 'hash-1',
+      quote: 'Treatment significantly improved survival in the intervention group.',
+      section_path: ['Results']
+    }]
+  });
+
+  parser.push(line.slice(0, 30));
+  assert.equal(blocks.length, 0);
+  parser.push(`${line.slice(30)}\n`);
+  parser.push(`${JSON.stringify({ type: 'turn_summary', summary: '治疗改善生存。' })}\n`);
+  parser.push(`${JSON.stringify({ type: 'final', status: 'completed' })}\n`);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].evidence[0].verification.status, 'verified');
+  assert.deepEqual(records.map(record => record.type), [
+    'answer_block', 'turn_summary', 'final'
+  ]);
+  assert.equal(parser.snapshot().final.status, 'completed');
+});
+
+test('NDJSON parser discards an incomplete block and deduplicates a continuation', () => {
+  const blocks = [];
+  const parser = createArticleChatNdjsonParser({
+    snapshot: citationSnapshot,
+    onBlock: block => blocks.push(block)
+  });
+  const complete = JSON.stringify({
+    type: 'answer_block', block_id: 'block-1',
+    markdown: '治疗显著改善生存。[[1]]',
+    evidence: [{ marker: '1', paragraph_id: 'p1' }]
+  });
+  parser.push(`${complete}\n{"type":"answer_block","block_id":"unfinished"`);
+  assert.ok(parser.discardPending() > 0);
+  parser.push(`${complete}\n`);
+  parser.push(`${JSON.stringify({
+    ...JSON.parse(complete), block_id: 'block-duplicate-content'
+  })}\n`);
+
+  assert.deepEqual(blocks.map(block => block.blockId), ['block-1']);
+});
+
+test('NDJSON parser rejects unfinished Markdown and misplaced evidence markers', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  assert.throws(() => parser.push(`${JSON.stringify({
+    type: 'answer_block', block_id: 'open-fence', markdown: '```js\nconst x = 1', evidence: []
+  })}\n`), error => error.code === 'INVALID_RESPONSE');
+  assert.throws(() => parser.push(`${JSON.stringify({
+    type: 'answer_block', block_id: 'bad-marker',
+    markdown: '治疗显著改善生存[[1]]',
+    evidence: [{ marker: '1', paragraph_id: 'p1' }]
+  })}\n`), error => error.code === 'INVALID_RESPONSE');
 });

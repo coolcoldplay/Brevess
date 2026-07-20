@@ -4,10 +4,10 @@
  * See THIRD_PARTY_NOTICES.md for provenance and modifications.
  */
 (function attach(root, factory) {
-  const api = factory();
+  const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const DEFAULT_MIN_BOUNDARY_CHARS = 180;
   const DEFAULT_TARGET_CHARS = 360;
   const DEFAULT_HARD_CAP_CHARS = 800;
@@ -141,8 +141,217 @@
     };
   }
 
+  function invalidStreamResponse(message) {
+    const error = new Error(message || 'Article chat stream record is invalid');
+    error.code = 'INVALID_RESPONSE';
+    return error;
+  }
+
+  function normalizeValue(value, maximum = 4000) {
+    return String(value || '').normalize('NFKC').replace(/\0/g, '').trim().slice(0, maximum);
+  }
+
+  function normalizeNarrativeValue(value, maximum = 4000) {
+    return String(value || '').normalize('NFC').replace(/\0/g, '').trim().slice(0, maximum);
+  }
+
+  function stableFingerprint(value) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    let result = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      result = Math.imul(result ^ text.charCodeAt(index), 16777619);
+    }
+    return (result >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function markerImmediatelyFollowsSentence(markdown, marker) {
+    const escaped = String(marker).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`[.!?;:\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A]\\s*\\[\\[${escaped}\\]\\]`, 'u')
+      .test(markdown);
+  }
+
+  function normalizeAnswerEvidence(value, snapshot) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw invalidStreamResponse('Article chat evidence must be an object');
+    }
+    const marker = normalizeValue(value.marker, 12).replace(/^\[\[|\]\]$/g, '');
+    if (!/^\d{1,3}$/.test(marker)) {
+      throw invalidStreamResponse('Article chat evidence marker is invalid');
+    }
+    const evidence = {
+      marker,
+      paragraphId: normalizeValue(value.paragraph_id || value.paragraphId, 160),
+      sourceKey: normalizeValue(value.source_key || value.sourceKey, 160),
+      textHash: normalizeValue(value.text_hash || value.textHash, 160),
+      quote: normalizeNarrativeValue(value.quote, 2400),
+      sectionPath: (Array.isArray(value.section_path || value.sectionPath)
+        ? value.section_path || value.sectionPath : [])
+        .slice(-12).map(item => normalizeValue(
+          typeof item === 'string' ? item : item?.title, 300
+        )).filter(Boolean),
+      sectionTitle: normalizeValue(value.section_title || value.sectionTitle, 300),
+      documentRevision: Number(snapshot?.revision) || 0
+    };
+    const verification = typeof shared.verifyArticleChatEvidence === 'function'
+      ? shared.verifyArticleChatEvidence(evidence, snapshot)
+      : { status: 'missing', candidateCount: 0, reason: 'VERIFIER_UNAVAILABLE', target: null };
+    return { ...evidence, verification };
+  }
+
+  function validateArticleChatAnswerBlock(value, snapshot) {
+    const blockId = normalizeValue(value?.block_id || value?.blockId, 160);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,159}$/.test(blockId)) {
+      throw invalidStreamResponse('Article chat block id is invalid');
+    }
+    const markdown = normalizeNarrativeValue(value?.markdown, 64 * 1024);
+    if (!markdown || !canFinalizeMarkdown(markdown)) {
+      throw invalidStreamResponse('Article chat block contains incomplete Markdown');
+    }
+    const evidence = (Array.isArray(value?.evidence) ? value.evidence : [])
+      .slice(0, 24).map(item => normalizeAnswerEvidence(item, snapshot));
+    const evidenceMarkers = new Set(evidence.map(item => item.marker));
+    const markdownMarkers = new Set(
+      [...markdown.matchAll(/\[\[(\d{1,3})\]\]/g)].map(match => match[1])
+    );
+    if ([...markdownMarkers].some(marker => !evidenceMarkers.has(marker)) ||
+        evidence.some(item => !markdownMarkers.has(item.marker))) {
+      throw invalidStreamResponse('Article chat evidence markers do not match the block');
+    }
+    if (evidence.some(item => !markerImmediatelyFollowsSentence(markdown, item.marker))) {
+      throw invalidStreamResponse('Article chat evidence marker is not placed after a sentence');
+    }
+    return { type: 'answer_block', blockId, markdown, evidence };
+  }
+
+  function createArticleChatNdjsonParser(options = {}) {
+    const snapshot = options.snapshot || { revision: 0, paragraphs: [] };
+    const maximumBufferChars = Math.max(
+      4096, Math.min(1024 * 1024, Number(options.maximumBufferChars) || 256 * 1024)
+    );
+    const blocks = [];
+    const blockIds = new Set();
+    const blockFingerprints = new Set();
+    let buffer = '';
+    let summary = '';
+    let final = null;
+    let usage = null;
+
+    function emit(record) {
+      try { options.onRecord?.(record); } catch { /* UI progress must not break parsing. */ }
+    }
+
+    function processRecord(value) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw invalidStreamResponse();
+      }
+      if (value.type === 'answer_block') {
+        const block = validateArticleChatAnswerBlock(value, snapshot);
+        const fingerprint = stableFingerprint([
+          block.markdown,
+          block.evidence.map(item => [
+            item.marker, item.paragraphId, item.sourceKey, item.textHash, item.quote
+          ])
+        ]);
+        if (blockIds.has(block.blockId) || blockFingerprints.has(fingerprint)) return null;
+        blockIds.add(block.blockId);
+        blockFingerprints.add(fingerprint);
+        blocks.push(block);
+        try { options.onBlock?.(block); } catch { /* UI progress must not break parsing. */ }
+        emit(block);
+        return block;
+      }
+      if (value.type === 'turn_summary') {
+        const normalized = normalizeNarrativeValue(value.summary, 2000);
+        if (!normalized) throw invalidStreamResponse('Article chat turn summary is empty');
+        summary = normalized;
+        const record = { type: 'turn_summary', summary };
+        emit(record);
+        return record;
+      }
+      if (value.type === 'usage') {
+        usage = {
+          inputTokens: Math.max(0, Number(value.input_tokens || value.inputTokens) || 0),
+          outputTokens: Math.max(0, Number(value.output_tokens || value.outputTokens) || 0),
+          cacheHitTokens: Math.max(0, Number(value.cache_hit_tokens || value.cacheHitTokens) || 0)
+        };
+        const record = { type: 'usage', usage };
+        emit(record);
+        return record;
+      }
+      if (value.type === 'final') {
+        const status = value.status === 'truncated' ? 'truncated' : 'completed';
+        final = { type: 'final', status };
+        emit(final);
+        return final;
+      }
+      throw invalidStreamResponse('Article chat stream record type is unsupported');
+    }
+
+    function processLine(line) {
+      const text = String(line || '').trim();
+      if (!text) return null;
+      let value;
+      try { value = JSON.parse(text); } catch {
+        throw invalidStreamResponse('Article chat stream line is malformed JSON');
+      }
+      return processRecord(value);
+    }
+
+    return {
+      push(value) {
+        buffer += String(value || '');
+        if (buffer.length > maximumBufferChars) {
+          throw invalidStreamResponse('Article chat NDJSON buffer exceeded its limit');
+        }
+        let boundary;
+        while ((boundary = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, boundary).replace(/\r$/, '');
+          buffer = buffer.slice(boundary + 1);
+          processLine(line);
+        }
+      },
+      finish() {
+        const pending = buffer.trim();
+        buffer = '';
+        if (!pending) return true;
+        try {
+          const value = JSON.parse(pending);
+          processRecord(value);
+          return true;
+        } catch (error) {
+          if (error?.code === 'INVALID_RESPONSE') throw error;
+          return false;
+        }
+      },
+      discardPending() {
+        const discarded = buffer.length;
+        buffer = '';
+        return discarded;
+      },
+      hasPending() { return Boolean(buffer); },
+      snapshot() {
+        return {
+          blocks: blocks.map(block => ({
+            ...block,
+            evidence: block.evidence.map(item => ({
+              ...item,
+              sectionPath: [...item.sectionPath],
+              verification: { ...item.verification }
+            }))
+          })),
+          summary,
+          usage: usage ? { ...usage } : null,
+          final: final ? { ...final } : null,
+          pendingCharacters: buffer.length
+        };
+      }
+    };
+  }
+
   return {
     createMarkdownBlockStreamCoalescer,
-    createBlockStreamCoalescer: createMarkdownBlockStreamCoalescer
+    createBlockStreamCoalescer: createMarkdownBlockStreamCoalescer,
+    validateArticleChatAnswerBlock,
+    createArticleChatNdjsonParser
   };
 });

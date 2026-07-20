@@ -1,30 +1,33 @@
 (function attach(root, factory) {
-  const api = factory();
+  const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  // Kept temporarily for the pre-workspace UI coverage label. Request planning
+  // no longer uses this fixed character limit.
   const ARTICLE_CHAT_MAX_CONTEXT_CHARS = 220000;
-  const ARTICLE_CHAT_MAX_HISTORY_MESSAGES = 20;
 
-  function cleanText(value, maximum = 12000) {
-    return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
+  function normalizeText(value, maximum = 16000) {
+    return String(value || '').normalize('NFKC').replace(/\0/g, '')
+      .replace(/\s+/gu, ' ').trim().slice(0, maximum);
   }
 
-  function cleanMarkdown(value, maximum = 32000) {
-    return String(value || '')
-      .normalize('NFKC')
-      .replace(/\0/g, '')
-      .replace(/\r\n?/g, '\n')
-      .split('\n')
-      .map(line => line.replace(/[\t\f\v ]+/g, ' ').trimEnd())
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-      .slice(0, maximum);
+  function normalizeMarkdown(value, maximum = 64 * 1024) {
+    return String(value || '').normalize('NFC').replace(/\0/g, '')
+      .replace(/\r\n?/g, '\n').replace(/\n{4,}/g, '\n\n\n').trim().slice(0, maximum);
   }
 
-  function isPlainObject(value) {
-    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  function hash(value) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    let first = 2166136261;
+    let second = 2166136261 ^ 0x9e3779b9;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      first = Math.imul(first ^ code, 16777619);
+      second = Math.imul(second ^ code, 2246822519);
+    }
+    return `${(first >>> 0).toString(16).padStart(8, '0')}` +
+      `${(second >>> 0).toString(16).padStart(8, '0')}`;
   }
 
   function invalidSettings(fields) {
@@ -34,85 +37,416 @@
     return error;
   }
 
-  function invalidResponse(message) {
-    const error = new Error(message || 'Article chat response is invalid');
-    error.code = 'INVALID_RESPONSE';
+  function normalizeHeadingPath(value, fallbackTitle, fallbackId) {
+    const path = (Array.isArray(value) ? value : []).map((item, index) => ({
+      level: Math.max(1, Math.min(6, Number(item?.level) || 2)),
+      sectionId: normalizeText(item?.sectionId || `${fallbackId}-${index + 1}`, 160),
+      title: normalizeText(typeof item === 'string' ? item : item?.title, 300)
+    })).filter(item => item.title);
+    if (path.length || !fallbackTitle) return path;
+    return [{ level: 2, sectionId: normalizeText(fallbackId, 160), title: fallbackTitle }];
+  }
+
+  function normalizeArticleParagraph(item, index) {
+    const text = normalizeText(item?.text, 16000);
+    if (!text) return null;
+    const paragraphId = normalizeText(item?.paragraphId || `p-${index + 1}`, 160);
+    const sourceKey = normalizeText(item?.sourceKey || paragraphId, 160);
+    const sectionTitle = normalizeText(item?.sectionTitle, 300) || 'Article';
+    const sectionId = normalizeText(item?.sectionId || `section-${hash(sectionTitle)}`, 160);
+    const headingInput = Array.isArray(item?.headingPath)
+      ? item.headingPath : item?.sectionPath;
+    return {
+      paragraphId,
+      sourceKey,
+      sourceIdentity: normalizeText(item?.sourceIdentity || sourceKey, 200),
+      textHash: normalizeText(item?.textHash || hash(text), 160),
+      recordType: normalizeText(item?.recordType || 'body', 40),
+      sectionId,
+      sectionTitle,
+      sectionKind: normalizeText(item?.sectionKind || sectionTitle, 80).toLowerCase(),
+      headingPath: normalizeHeadingPath(headingInput, sectionTitle, sectionId),
+      text,
+      order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index
+    };
+  }
+
+  function normalizeArticleHistory(value) {
+    return (Array.isArray(value) ? value : []).map((turn, index) => ({
+      turnId: normalizeText(turn?.turnId || turn?.id || `turn-${index + 1}`, 160),
+      role: turn?.role === 'assistant' ? 'assistant' :
+        turn?.role === 'user' ? 'user' : '',
+      content: normalizeMarkdown(turn?.content, 32000),
+      question: normalizeText(
+        turn?.question || (turn?.role === 'user' ? turn?.content : ''), 4000
+      ),
+      answer: normalizeMarkdown(
+        turn?.answer || (turn?.role === 'assistant' ? turn?.content : ''), 32000
+      ),
+      answerBlocks: (Array.isArray(turn?.answerBlocks) ? turn.answerBlocks : []).map(block => ({
+        blockId: normalizeText(block?.blockId || block?.id, 160),
+        markdown: normalizeMarkdown(block?.markdown || block?.text || block?.content, 64 * 1024)
+      })).filter(block => block.markdown),
+      summary: normalizeMarkdown(turn?.summary, 2000),
+      createdAt: Math.max(0, Number(turn?.createdAt) || 0)
+    })).filter(turn => turn.turnId && (
+      turn.question || turn.answer || turn.content || turn.answerBlocks.length
+    ));
+  }
+
+  function normalizeArticleChatInput(message = {}) {
+    const question = normalizeText(message?.question, 4000);
+    if (!question) throw invalidSettings(['question']);
+    const profileId = normalizeText(message?.profileId, 100);
+    if (profileId && !/^profile_[a-z0-9_]{3,80}$/.test(profileId)) {
+      throw invalidSettings(['profileId']);
+    }
+    const document = message?.document && typeof message.document === 'object'
+      ? message.document : {};
+    const sourceRecords = Array.isArray(document.typedRecords)
+      ? document.typedRecords : document.paragraphs;
+    const typedRecords = (Array.isArray(sourceRecords) ? sourceRecords : [])
+      .map(normalizeArticleParagraph).filter(Boolean);
+    const paragraphs = typedRecords.filter(item => item.recordType === 'body');
+    if (!paragraphs.length) throw invalidSettings(['document.paragraphs']);
+    const revision = Math.max(1, Number(document.revision) || 1);
+    const documentHash = normalizeText(document.documentHash, 160) || hash(
+      typedRecords.map(item => [item.sourceIdentity, item.textHash, item.recordType])
+    );
+    return {
+      question,
+      profileId,
+      turnId: normalizeText(message?.turnId, 160),
+      operationId: normalizeText(message?.operationId, 100),
+      history: normalizeArticleHistory(message.history),
+      cacheState: message?.cacheState && typeof message.cacheState === 'object'
+        ? { ...message.cacheState } : null,
+      document: {
+        title: normalizeText(document.title, 1000),
+        url: normalizeText(document.url || document.canonicalUrl, 2000),
+        documentHash,
+        revision,
+        key: `${documentHash}:${revision}`,
+        paragraphs,
+        typedRecords
+      }
+    };
+  }
+
+  async function prepareArticleChatRequest(input, profile = {}, options = {}) {
+    if (typeof shared.buildArticleChatIndex !== 'function' ||
+        typeof shared.planArticleChatContext !== 'function') {
+      throw new Error('Article chat planning modules are not loaded');
+    }
+    const snapshot = input.document;
+    const index = shared.buildArticleChatIndex(snapshot, options.indexOptions);
+    const memory = typeof shared.buildArticleChatMemory === 'function'
+      ? shared.buildArticleChatMemory(input.history) : { entries: [] };
+    const plan = await shared.planArticleChatContext({
+      index,
+      query: input.question,
+      history: input.history,
+      memory,
+      profile,
+      kind: 'articleChat',
+      outputUnits: Math.max(1, Math.ceil(input.question.length / 600)),
+      cacheState: input.cacheState,
+      embedTexts: options.embedTexts,
+      neighborRadius: options.neighborRadius
+    });
+    return { snapshot, index, memory, plan };
+  }
+
+  function publicChunk(chunk) {
+    return {
+      chunkId: chunk.chunkId,
+      recordType: chunk.recordType,
+      sectionId: chunk.sectionId,
+      sectionTitle: chunk.sectionTitle,
+      sectionKind: chunk.sectionKind,
+      headingPath: chunk.headingPath,
+      sourceSpans: chunk.sourceSpans,
+      text: chunk.text
+    };
+  }
+
+  function includedHistory(input, plan) {
+    const ids = new Set(plan.includedHistoryIds || []);
+    return input.history.filter(turn => ids.has(turn.turnId)).map(turn => ({
+      turnId: turn.turnId,
+      question: turn.question,
+      answer: turn.answer,
+      answerBlocks: turn.answerBlocks,
+      summary: turn.summary
+    }));
+  }
+
+  function compileArticleChatPrompt(input, plan, options = {}) {
+    const stablePayload = {
+      article: {
+        title: input.document.title,
+        canonical_url: input.document.url,
+        document_hash: input.document.documentHash,
+        document_revision: input.document.revision,
+        index_id: plan.indexId,
+        context_mode: plan.mode,
+        chunks: plan.chunks.map(publicChunk)
+      }
+    };
+    const stablePrefix = `ARTICLE_CONTEXT\n${JSON.stringify(stablePayload)}\n`;
+    const continuation = options.continuation || null;
+    const dynamicPayload = {
+      conversation_history: includedHistory(input, plan),
+      retrieved_old_turn_memory: plan.localMemory,
+      current_question: input.question,
+      section_coverage: plan.sectionCoverage,
+      continuation: continuation ? {
+        continue_after_block_ids: continuation.blockIds,
+        turn_summary_so_far: continuation.summary || '',
+        instruction: 'Continue with new block IDs. Do not repeat earlier blocks.'
+      } : null
+    };
+    return {
+      schemaName: 'article_chat_ndjson',
+      stablePrefix,
+      systemPrompt: [
+        'You are a rigorous biomedical paper assistant. Answer in Chinese using only the supplied article context and conversation memory.',
+        'Return newline-delimited JSON (NDJSON) only. Do not wrap lines in Markdown fences and do not emit a JSON array.',
+        'Emit one complete answer_block line per complete Markdown paragraph, list, heading section, code block, or table.',
+        'answer_block schema: {"type":"answer_block","block_id":"block-1","markdown":"...","evidence":[{"marker":"1","paragraph_id":"...","source_key":"...","text_hash":"...","quote":"...","section_path":["..."]}]}',
+        'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly.',
+        'In markdown, append [[marker]] immediately after the supported sentence or list item. Never collect markers in a references paragraph.',
+        'Use readable Markdown. Put every bullet or numbered item on its own line, preserve blank lines, and close every code fence and table inside its block.',
+        'After all answer blocks, emit one turn_summary line: {"type":"turn_summary","summary":"brief factual memory"}.',
+        'End with exactly one final line: {"type":"final","status":"completed"}.',
+        'Never invent evidence, study details, usage data, or hidden reasoning.'
+      ].join('\n'),
+      userPrompt: `${stablePrefix}CHAT_REQUEST\n${JSON.stringify(dynamicPayload)}`
+    };
+  }
+
+  function operationCancelledError() {
+    const error = new Error('Article chat was cancelled');
+    error.name = 'AbortError';
+    error.code = 'CANCELLED';
+    error.retryable = false;
     return error;
   }
 
-  function normalizeArticleChatHistory(value) {
-    return (Array.isArray(value) ? value : [])
-      .slice(-ARTICLE_CHAT_MAX_HISTORY_MESSAGES)
-      .map(item => ({
-        role: item?.role === 'assistant' ? 'assistant' : 'user',
-        content: cleanMarkdown(item?.content, 16000)
-      }))
-      .filter(item => item.content);
+  function streamEventError(value = {}) {
+    const error = new Error(String(value.message || 'Provider stream failed').slice(0, 240));
+    error.code = String(value.code || 'NETWORK_ERROR');
+    error.retryable = value.retryable === true;
+    error.status = Math.max(0, Number(value.status) || 0);
+    error.retryAfterMs = Math.max(0, Number(value.retryAfterMs) || 0);
+    return error;
   }
 
-  function questionTerms(question) {
-    const stopWords = new Set([
-      'the', 'and', 'for', 'with', 'that', 'this', 'from', 'what', 'which',
-      'how', 'why', 'are', 'was', 'were', 'does', 'did', 'into', 'about',
-      '一个', '这个', '这些', '论文', '文章', '作者', '什么', '如何', '为什么',
-      '是否', '可以', '请问', '请', '分析', '说明', '解释'
-    ]);
-    const latin = cleanText(question, 4000).toLowerCase().match(/[a-z0-9][a-z0-9._+-]{2,}/g) || [];
-    const chinese = cleanText(question, 4000).match(/[\u3400-\u9fff]{2,8}/g) || [];
-    return [...new Set([...latin, ...chinese].filter(term => !stopWords.has(term)))].slice(0, 40);
+  function publicPlan(plan) {
+    return {
+      mode: plan.mode,
+      indexId: plan.indexId,
+      contextWindowTokens: plan.contextWindowTokens,
+      inputBudgetTokens: plan.inputBudgetTokens,
+      outputBudgetTokens: plan.outputBudgetTokens,
+      estimatedInputTokens: plan.estimatedInputTokens,
+      chunkIds: plan.chunks.map(chunk => chunk.chunkId),
+      completeHistoryIds: [...plan.completeHistoryIds],
+      includedHistoryIds: [...plan.includedHistoryIds],
+      retrievedOldTurnIds: [...plan.retrievedOldTurnIds],
+      sectionCoverage: [...plan.sectionCoverage],
+      cacheDecision: plan.cacheDecision,
+      retrievalCoverage: plan.retrievalCoverage
+    };
   }
 
-  function normalizeArticleParagraphs(value) {
-    return (Array.isArray(value) ? value : []).slice(0, 5000).map((item, index) => ({
-      index,
-      paragraphId: cleanText(item?.paragraphId, 120),
-      sourceKey: cleanText(item?.sourceKey, 120),
-      sectionTitle: cleanText(item?.sectionTitle, 300),
-      text: cleanText(item?.text, 12000)
-    })).filter(item => item.text);
+  function coverageFromPlan(snapshot, plan) {
+    const paragraphIds = new Set(plan.chunks.flatMap(chunk => chunk.paragraphIds || []));
+    const sentCharacters = plan.chunks.reduce((sum, chunk) => sum + chunk.text.length, 0);
+    const totalCharacters = snapshot.paragraphs.reduce((sum, item) => sum + item.text.length, 0);
+    return {
+      mode: plan.mode,
+      totalParagraphs: snapshot.paragraphs.length,
+      sentParagraphs: paragraphIds.size,
+      totalCharacters,
+      sentCharacters,
+      truncated: plan.mode !== 'full',
+      sectionCoverage: [...plan.sectionCoverage],
+      cacheDecision: plan.cacheDecision
+    };
   }
 
-  function selectArticleChatContext(value, question, maximum = ARTICLE_CHAT_MAX_CONTEXT_CHARS) {
-    const paragraphs = normalizeArticleParagraphs(value);
-    const totalCharacters = paragraphs.reduce((sum, item) => sum + item.text.length, 0);
-    const limit = Math.max(20000, Number(maximum) || ARTICLE_CHAT_MAX_CONTEXT_CHARS);
-    if (totalCharacters <= limit) {
-      return {
-        paragraphs,
-        coverage: {
-          totalParagraphs: paragraphs.length,
-          sentParagraphs: paragraphs.length,
-          totalCharacters,
-          sentCharacters: totalCharacters,
-          truncated: false
+  function compatibilityMessage(state, limited) {
+    const evidence = [];
+    const markdownBlocks = state.blocks.map(block => {
+      const markerMap = new Map();
+      block.evidence.forEach(item => {
+        const globalMarker = String(evidence.length + 1);
+        markerMap.set(item.marker, globalMarker);
+        evidence.push({ ...item, marker: globalMarker });
+      });
+      return block.markdown.replace(/\[\[(\d{1,3})\]\]/g, (match, marker) =>
+        markerMap.has(marker) ? `[[${markerMap.get(marker)}]]` : match
+      );
+    });
+    return {
+      answer: markdownBlocks.join('\n\n'),
+      answerBlocks: state.blocks,
+      evidence,
+      summary: state.summary || normalizeText(markdownBlocks.join(' '), 1200),
+      limitations: limited
+        ? 'The provider reached its output limit twice. Complete answer blocks were preserved.' : '',
+      status: limited ? 'truncated' : 'completed'
+    };
+  }
+
+  async function runArticleChat(options = {}) {
+    const input = options.input;
+    const profile = options.profile || {};
+    const adapter = options.adapter;
+    const report = event => {
+      try { options.onProgress?.({ operationId: input.operationId || '', ...event }); } catch {
+        // Progress listeners must not affect chat generation.
+      }
+    };
+    if (!input || !adapter || typeof adapter.generateTextStream !== 'function') {
+      throw invalidSettings(['adapter']);
+    }
+    report({ phase: 'chat_started', turnId: input.turnId || '' });
+    let prepared;
+    try {
+      prepared = await prepareArticleChatRequest(input, profile, options);
+    } catch (error) {
+      report({ phase: 'chat_error', errorCode: error?.code || 'INTERNAL_ERROR' });
+      throw error;
+    }
+    const coverage = coverageFromPlan(prepared.snapshot, prepared.plan);
+    report({
+      phase: 'chat_context_ready',
+      coverage,
+      plan: publicPlan(prepared.plan)
+    });
+    const parser = shared.createArticleChatNdjsonParser({
+      snapshot: prepared.snapshot,
+      onBlock: block => report({ phase: 'chat_answer_block', block })
+    });
+    let usage = null;
+    let limited = false;
+    let continuationCount = 0;
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (options.signal?.aborted) throw operationCancelledError();
+        await options.waitIfPaused?.();
+        const current = parser.snapshot();
+        const prompt = compileArticleChatPrompt(input, prepared.plan, attempt ? {
+          continuation: {
+            blockIds: current.blocks.map(block => block.blockId),
+            summary: current.summary
+          }
+        } : {});
+        const request = {
+          ...prompt,
+          selectedProfileId: String(options.selectedProfileId || input.profileId || ''),
+          maxOutputTokens: prepared.plan.outputBudgetTokens.initial,
+          timeoutMs: Number(options.timeoutMs) || 240000,
+          signal: options.signal
+        };
+        let terminalError = null;
+        let completed = false;
+        for await (const event of adapter.generateTextStream(request)) {
+          if (options.signal?.aborted) throw operationCancelledError();
+          await options.waitIfPaused?.();
+          if (event?.type === 'text_delta') parser.push(event.text);
+          else if (event?.type === 'usage') {
+            usage = { ...(usage || {}), ...(event.usage || {}) };
+            report({ phase: 'chat_usage', usage });
+          } else if (event?.type === 'completed') {
+            completed = true;
+          } else if (event?.type === 'cancelled') {
+            throw operationCancelledError();
+          } else if (event?.type === 'error') {
+            terminalError = streamEventError(event.error);
+            break;
+          }
         }
-      };
+
+        let finalized = false;
+        if (completed && !terminalError) finalized = parser.finish();
+        const after = parser.snapshot();
+        if (terminalError && terminalError.code !== 'OUTPUT_TRUNCATED') {
+          throw terminalError;
+        }
+        const needsContinuation = terminalError?.code === 'OUTPUT_TRUNCATED' ||
+          !finalized || !after.final;
+        if (!needsContinuation) break;
+        parser.discardPending();
+        if (attempt === 0) {
+          continuationCount += 1;
+          report({
+            phase: 'chat_continuing',
+            continuation: continuationCount,
+            lastBlockId: after.blocks.at(-1)?.blockId || ''
+          });
+          continue;
+        }
+        if (terminalError && terminalError.code !== 'OUTPUT_TRUNCATED') throw terminalError;
+        limited = true;
+      }
+    } catch (error) {
+      if (error?.code === 'CANCELLED' || error?.name === 'AbortError') {
+        parser.discardPending();
+        report({ phase: 'chat_cancelled', completedBlockCount: parser.snapshot().blocks.length });
+        throw operationCancelledError();
+      }
+      parser.discardPending();
+      report({ phase: 'chat_error', errorCode: error?.code || 'INTERNAL_ERROR' });
+      throw error;
     }
 
-    const terms = questionTerms(question);
-    const scored = paragraphs.map(item => {
-      const haystack = `${item.sectionTitle} ${item.text}`.toLowerCase();
-      const relevance = terms.reduce((sum, term) => sum + (haystack.includes(term.toLowerCase()) ? 4 : 0), 0);
-      const sectionPriority = /abstract|summary|introduction|discussion|conclusion|摘要|引言|讨论|结论/i
-        .test(item.sectionTitle) ? 2 : 0;
-      const edgePriority = item.index < 8 || item.index >= paragraphs.length - 8 ? 1 : 0;
-      return { item, score: relevance + sectionPriority + edgePriority };
-    }).sort((left, right) => right.score - left.score || left.item.index - right.item.index);
+    const state = parser.snapshot();
+    if (!state.blocks.length) {
+      const error = new Error('Article chat did not produce a complete answer block');
+      error.code = limited ? 'OUTPUT_TRUNCATED' : 'INVALID_RESPONSE';
+      report({ phase: 'chat_error', errorCode: error.code });
+      throw error;
+    }
+    const message = compatibilityMessage(state, limited);
+    report({
+      phase: 'chat_completed',
+      status: message.status,
+      completedBlockCount: state.blocks.length,
+      continuationCount
+    });
+    return {
+      message,
+      usage,
+      coverage,
+      plan: publicPlan(prepared.plan),
+      cacheState: {
+        indexId: prepared.index.indexId,
+        stablePrefixChunkIds: prepared.plan.chunks.map(chunk => chunk.chunkId)
+      }
+    };
+  }
 
+  // Compatibility helper for the current coverage label. The router uses
+  // prepareArticleChatRequest/planArticleChatContext instead.
+  function selectArticleChatContext(value, _question, maximum = ARTICLE_CHAT_MAX_CONTEXT_CHARS) {
+    const paragraphs = (Array.isArray(value) ? value : []).map(normalizeArticleParagraph)
+      .filter(Boolean);
+    const totalCharacters = paragraphs.reduce((sum, item) => sum + item.text.length, 0);
     const selected = [];
     const selectedIndexes = new Set();
     let sentCharacters = 0;
-    for (const candidate of scored) {
-      const cost = candidate.item.text.length + candidate.item.sectionTitle.length + 32;
-      if (selected.length && sentCharacters + cost > limit) continue;
-      selected.push(candidate.item);
-      selectedIndexes.add(candidate.item.index);
-      sentCharacters += cost;
-      if (sentCharacters >= limit) break;
+    for (let index = 0; index < paragraphs.length; index += 1) {
+      if (selected.length && sentCharacters + paragraphs[index].text.length > maximum) break;
+      selected.push(paragraphs[index]);
+      selectedIndexes.add(index);
+      sentCharacters += paragraphs[index].text.length;
     }
-    selected.sort((left, right) => left.index - right.index);
     return {
-      paragraphs: selected.map(({ index, ...item }) => item),
+      paragraphs: selected,
       coverage: {
         totalParagraphs: paragraphs.length,
         sentParagraphs: selected.length,
@@ -123,111 +457,13 @@
     };
   }
 
-  function normalizeArticleChatInput(message = {}) {
-    const question = cleanText(message.question, 4000);
-    if (!question) throw invalidSettings(['question']);
-    const profileId = cleanText(message.profileId, 100);
-    if (profileId && !/^profile_[a-z0-9_]{3,80}$/.test(profileId)) {
-      throw invalidSettings(['profileId']);
-    }
-    const document = isPlainObject(message.document) ? message.document : {};
-    const selected = selectArticleChatContext(document.paragraphs, question);
-    if (!selected.paragraphs.length) throw invalidSettings(['document.paragraphs']);
-    return {
-      question,
-      profileId,
-      history: normalizeArticleChatHistory(message.history),
-      document: {
-        title: cleanText(document.title, 1000),
-        url: cleanText(document.url || document.canonicalUrl, 2000),
-        paragraphs: selected.paragraphs
-      },
-      coverage: selected.coverage
-    };
-  }
-
-  function createArticleChatSchema() {
-    return {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        answer_zh: { type: 'string' },
-        evidence: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              paragraph_id: { type: 'string' },
-              source_key: { type: 'string' },
-              section_title: { type: 'string' },
-              quote: { type: 'string' },
-              support_zh: { type: 'string' }
-            },
-            required: ['paragraph_id', 'source_key', 'section_title', 'quote', 'support_zh']
-          }
-        },
-        limitations_zh: { type: 'string' }
-      },
-      required: ['answer_zh', 'evidence', 'limitations_zh']
-    };
-  }
-
-  function compileArticleChatPrompt(input) {
-    return {
-      systemPrompt: [
-        'You are a rigorous biomedical paper assistant.',
-        'Answer the user in Chinese using only the supplied webpage article context and conversation history.',
-        'You may synthesize across sections, compare claims, explain methods, critique evidence, or help the user reason about the paper.',
-        'Never invent a result, sample size, method detail, citation, or conclusion absent from the supplied context.',
-        'When the article context cannot support part of the answer, say so explicitly in limitations_zh.',
-        'Write answer_zh as readable Markdown: put every numbered or bulleted item on its own line, leave a blank line between paragraphs, and use **bold** for concise emphasis. Do not use HTML.',
-        'For every distinct source paragraph used, add a separate evidence item. Copy its exact supplied paragraphId into paragraph_id, copy its exact supplied sourceKey into source_key, and include one short verbatim sentence or excerpt from that paragraph in quote. Never invent paragraph IDs or source keys.',
-        'Number evidence items from 1 in their array order. In answer_zh, append [[n]] immediately after every sentence or list item supported by evidence item n. Keep each marker directly after the supported sentence, never collect markers in a separate references paragraph.',
-        'Keep the answer readable with short paragraphs. Return strict JSON only.'
-      ].join('\n'),
-      userPrompt: JSON.stringify({
-        article: input.document,
-        conversation_history: input.history,
-        current_question: input.question,
-        context_coverage: input.coverage
-      }),
-      responseSchema: createArticleChatSchema(),
-      schemaName: 'article_fulltext_chat'
-    };
-  }
-
-  function validateArticleChatResponse(value) {
-    if (!isPlainObject(value)) throw invalidResponse();
-    const allowed = new Set(['answer_zh', 'evidence', 'limitations_zh']);
-    if (Object.keys(value).some(key => !allowed.has(key))) {
-      throw invalidResponse('Article chat response contains unsupported fields');
-    }
-    const answer = cleanMarkdown(value.answer_zh, 32000);
-    if (!answer) throw invalidResponse('Article chat response did not contain an answer');
-    const evidence = (Array.isArray(value.evidence) ? value.evidence : []).slice(0, 12)
-      .map(item => ({
-        paragraphId: cleanText(item?.paragraph_id, 120),
-        sourceKey: cleanText(item?.source_key || item?.paragraph_id, 120),
-        sectionTitle: cleanText(item?.section_title, 300),
-        quote: cleanText(item?.quote, 2000),
-        support: cleanText(item?.support_zh, 1600)
-      })).filter(item => item.paragraphId || item.sectionTitle || item.quote || item.support);
-    return {
-      answer,
-      evidence,
-      limitations: cleanMarkdown(value.limitations_zh, 4000)
-    };
-  }
-
   return {
     ARTICLE_CHAT_MAX_CONTEXT_CHARS,
-    ARTICLE_CHAT_MAX_HISTORY_MESSAGES,
-    normalizeArticleChatHistory,
+    normalizeArticleChatHistory: normalizeArticleHistory,
     selectArticleChatContext,
     normalizeArticleChatInput,
-    createArticleChatSchema,
+    prepareArticleChatRequest,
     compileArticleChatPrompt,
-    validateArticleChatResponse
+    runArticleChat
   };
 });

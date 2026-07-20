@@ -65,6 +65,7 @@
       'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_REJECTED', 'NETWORK_ERROR',
       'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'CANCELLED', 'LLM_NOT_READY',
       'NO_USABLE_PROFILE', 'TOKEN_LIMIT_REJECTED', 'PARAGRAPH_STALE',
+      'CONTEXT_BUDGET_EXCEEDED', 'CITATION_AMBIGUOUS', 'CITATION_STALE',
       'STUDY_TYPE_REQUIRED', 'ANNOTATION_LIMIT_REACHED', 'NOTE_TOO_LONG',
       'INVALID_ARCHIVE_SCHEMA', 'ARCHIVE_IDENTITY_MISMATCH',
       'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
@@ -90,6 +91,9 @@
       NO_USABLE_PROFILE: 'No usable API profile is configured',
       TOKEN_LIMIT_REJECTED: 'Provider rejected the requested output token limit',
       PARAGRAPH_STALE: 'The requested paragraph is no longer in the document',
+      CONTEXT_BUDGET_EXCEEDED: 'The selected model context window cannot fit this request',
+      CITATION_AMBIGUOUS: 'The cited text matches more than one article location',
+      CITATION_STALE: 'The article changed and the citation must be verified again',
       STUDY_TYPE_REQUIRED: 'Study type must be selected before analysis.',
       ANNOTATION_LIMIT_REACHED: 'This document has reached the annotation limit.',
       NOTE_TOO_LONG: 'The annotation note is too long.',
@@ -1419,24 +1423,34 @@
         'summary',
         {},
         context,
-        'singleSummary'
+        'articleChat'
       );
-      const prompt = shared.compileArticleChatPrompt(input);
-      const raw = await task.adapter.generateJson({
-        ...prompt,
-        outputUnits: Math.max(1, Math.ceil(input.question.length / 1000)),
-        signal: operation?.controller?.signal
+      const route = {
+        ...task.routePublic,
+        taskType: 'chat',
+        concurrency: TASK_CONCURRENCY.chat
+      };
+      const effectiveProfile = routedSettings?.profiles?.[task.route.effectiveProfileId] || {};
+      const result = await shared.runArticleChat({
+        input,
+        adapter: task.adapter,
+        selectedProfileId: task.route.effectiveProfileId,
+        profile: {
+          providerId: task.route.providerId,
+          config: task.route.config,
+          tokenPolicy: task.route.tokenPolicy,
+          contextWindowTokens: effectiveProfile.contextWindowTokens
+        },
+        signal: operation?.controller?.signal,
+        timeoutMs: TASK_TIMEOUTS_MS.chat,
+        waitIfPaused: () => waitForOperation(operation),
+        onProgress: routeProgress(context, route)
       });
       await waitForOperation(operation);
       return {
-        message: shared.validateArticleChatResponse(raw),
-        coverage: input.coverage,
+        ...result,
         operationId: operation?.operationId || '',
-        route: {
-          ...task.routePublic,
-          taskType: 'chat',
-          concurrency: TASK_CONCURRENCY.chat
-        }
+        route
       };
     }
 

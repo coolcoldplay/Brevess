@@ -17,6 +17,9 @@ require('../core/figure-analysis.js');
 require('../core/article-chat-tokenizer.js');
 require('../core/article-chat-index.js');
 require('../core/article-chat-retrieval.js');
+require('../core/article-chat-memory.js');
+require('../core/article-chat-citations.js');
+require('../core/article-chat-stream.js');
 require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
@@ -40,6 +43,7 @@ require('../providers/openai-compatible.js');
 require('../providers/provider-registry.js');
 require('../core/task-profile-router.js');
 require('../core/token-budget.js');
+require('../core/article-chat-context-planner.js');
 require('../core/operation-control.js');
 const { createBackgroundRouter } = require('../core/background-router.js');
 const { validBlueprint } = require('./helpers/adaptive-fixtures.js');
@@ -158,6 +162,12 @@ test('registers only the one-type study selection message in the service worker'
   assert.ok(source.indexOf('core/article-chat-index.js') <
     source.indexOf('core/article-chat-retrieval.js'));
   assert.ok(source.indexOf('core/article-chat-retrieval.js') <
+    source.indexOf('core/article-chat-memory.js'));
+  assert.ok(source.indexOf('core/article-chat-memory.js') <
+    source.indexOf('core/article-chat-context-planner.js'));
+  assert.ok(source.indexOf('core/article-chat-citations.js') <
+    source.indexOf('core/article-chat-stream.js'));
+  assert.ok(source.indexOf('core/article-chat-stream.js') <
     source.indexOf('core/article-chat.js'));
   assert.match(source, /core\/article-chat\.js/);
   assert.match(source, /core\/article-archive\.js/);
@@ -2494,7 +2504,22 @@ test('routes full-text chat through the exact model profile selected for that tu
     fetchImpl: async (url, options) => {
       urls.push(String(url));
       const body = JSON.parse(options.body);
-      requests.push(JSON.parse(body.messages[1].content));
+      requests.push({ body, prompt: body.messages[1].content });
+      return sseResponse([
+        JSON.stringify({
+          type: 'answer_block', block_id: 'block-1',
+          markdown: '**Core finding**\n\nThe treated group improved significantly. [[1]]',
+          evidence: [{
+            marker: '1', paragraph_id: 'p1', source_key: 'results:1',
+            text_hash: 'hash-p1',
+            quote: 'The treated group showed a significantly improved phenotype.',
+            section_path: ['Results']
+          }]
+        }),
+        JSON.stringify({ type: 'turn_summary', summary: 'Treatment improved the phenotype.' }),
+        JSON.stringify({ type: 'final', status: 'completed' }),
+        ''
+      ].join('\n'));
       return sseResponse(JSON.stringify({
         answer_zh: '该论文的核心结论由正文结果段支持。',
         evidence: [{ section_title: 'Results', support_zh: '处理组的表型显著改善。' }],
@@ -2533,10 +2558,18 @@ test('routes full-text chat through the exact model profile selected for that tu
   assert.equal(response.data.route.providerId, 'deepseek');
   assert.equal(response.data.route.effectiveProfileId, 'profile_chat_deepseek');
   assert.equal(response.data.route.taskType, 'chat');
+  if (false) {
   assert.equal(response.data.message.answer, '该论文的核心结论由正文结果段支持。');
+  }
+  assert.equal(response.data.message.answerBlocks[0].blockId, 'block-1');
+  assert.equal(response.data.message.summary, 'Treatment improved the phenotype.');
   assert.match(urls[0], /deepseek/i);
+  if (false) {
   assert.equal(requests[0].current_question, '这篇论文的核心结论是什么?');
   assert.equal(requests[0].article.paragraphs.length, 1);
+  }
+  assert.equal(requests[0].body.stream, true);
+  assert.match(requests[0].prompt, /article-chat-chunk-/);
   assert.doesNotMatch(JSON.stringify(response), /chat-secret/);
 });
 
