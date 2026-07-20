@@ -722,12 +722,17 @@
     const visualInput = options.visualInput === true;
     const expectedPanels = normalizedPanelRefs(input?.panelHints);
     const seenPanels = new Set();
+    const unexpectedPanels = [];
     const panels = [];
     for (const raw of Array.isArray(value.panels) ? value.panels.slice(0, 30) : []) {
       const panel = canonicalPanelRef(raw.panel);
       if (!panel) throw invalidResponse('Figure response panel label is invalid');
       if (expectedPanels.length && !expectedPanels.includes(panel)) {
-        throw invalidResponse('Figure response returned an unexpected panel label');
+        if (options.ignoreUnexpectedPanels !== true) {
+          throw invalidResponse('Figure response returned an unexpected panel label');
+        }
+        if (!unexpectedPanels.includes(panel)) unexpectedPanels.push(panel);
+        continue;
       }
       if (seenPanels.has(panel)) continue;
       seenPanels.add(panel);
@@ -791,7 +796,9 @@
       panelCoverage: {
         expectedPanels,
         returnedPanels,
-        missingPanels: expectedPanels.filter(panel => !returnedPanels.includes(panel))
+        missingPanels: expectedPanels.filter(panel => !returnedPanels.includes(panel)),
+        unexpectedPanels,
+        ignoredUnexpectedPanelCount: unexpectedPanels.length
       },
       authorAssembly: cleanFigureField(value.author_assembly_zh, 3200),
       coreConclusion: cleanFigureField(value.core_conclusion_zh, 2400),
@@ -883,7 +890,7 @@
       basis: value.basis,
       panels: value.panels,
       ...emptyFigureFields(analysisDepth)
-    }, input, options);
+    }, input, { ...options, ignoreUnexpectedPanels: true });
   }
 
   function validateFigureSynthesis(value, input, panelEvidence, options = {}) {

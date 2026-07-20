@@ -172,6 +172,29 @@ test('splits large Figure output into strict Panel extraction and synthesis pass
   assert.equal(synthesized.coreConclusion, '该治疗在当前模型中抑制肿瘤生长。');
 });
 
+test('keeps requested Panel records when a batch response also repeats other Panels', () => {
+  const full = validStandardFigureOutput('deep');
+  const requested = ['A', 'B'];
+  const panelFor = panel => ({
+    ...full.panels[0], panel,
+    method_source: 'caption', observation_source: 'caption_statement'
+  });
+  const normalized = validateFigurePanelBatch({
+    figure_id: full.figure_id,
+    analysis_depth: full.analysis_depth,
+    basis: 'caption_context',
+    panels: [panelFor('A'), panelFor('B'), panelFor('C'), panelFor('D')]
+  }, { ...figureInput, panelHints: requested }, {
+    visualInput: false, analysisDepth: 'deep'
+  });
+
+  assert.deepEqual(normalized.panels.map(panel => panel.panel), requested);
+  assert.deepEqual(normalized.panelCoverage.returnedPanels, requested);
+  assert.deepEqual(normalized.panelCoverage.missingPanels, []);
+  assert.deepEqual(normalized.panelCoverage.unexpectedPanels, ['C', 'D']);
+  assert.equal(normalized.panelCoverage.ignoredUnexpectedPanelCount, 2);
+});
+
 test('compiles and validates a bounded Panel follow-up request', () => {
   const panel = {
     panel: 'A', role: 'phenotype', phenotypeName: 'Tumor volume', methods: ['CCK-8'],

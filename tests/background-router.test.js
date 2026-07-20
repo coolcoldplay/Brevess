@@ -2533,7 +2533,7 @@ test('analyzes Figures sequentially, checkpoints results and reuses identical ca
   assert.equal(firstFigureProgress[5].recognizedPanelCount, 1);
 });
 
-test('splits a deep Figure into bounded Panel batches and exposes each merged checkpoint', async () => {
+test('splits a deep Figure, ignores repeated out-of-batch Panels, and exposes each checkpoint', async () => {
   const storageArea = createMemoryStorage();
   const progress = [];
   let calls = 0;
@@ -2543,6 +2543,9 @@ test('splits a deep Figure into bounded Panel batches and exposes each merged ch
       calls += 1;
       const input = openAIInputPayload(JSON.parse(options.body));
       const output = figurePassOutput(input);
+      if (input.pass === 'panel_extraction') {
+        output.panels.push({ ...output.panels[0], panel: 'Z' });
+      }
       return jsonResponse({ output_text: JSON.stringify(output) });
     }
   });
@@ -2563,6 +2566,10 @@ test('splits a deep Figure into bounded Panel batches and exposes each merged ch
   assert.deepEqual(checkpoints.map(item => item.completedPanelBatches), [1, 2, 3]);
   assert.deepEqual(checkpoints.map(item => item.totalPanelBatches), [3, 3, 3]);
   assert.deepEqual(checkpoints.map(item => item.partialFigureResult.panels.length), [2, 4, 5]);
+  assert.deepEqual(checkpoints.map(item => item.batchRecognizedPanelCount), [2, 2, 1]);
+  assert.deepEqual(checkpoints.map(item => item.ignoredUnexpectedPanelCount), [1, 1, 1]);
+  assert.deepEqual(checkpoints.map(item => item.unexpectedPanels), [['Z'], ['Z'], ['Z']]);
+  assert.deepEqual(checkpoints.at(-1).partialFigureResult.panelCoverage.unexpectedPanels, ['Z']);
   assert.equal(progress.filter(item => item.phase === 'figure_synthesizing').length, 1);
   assert.equal(progress.filter(item => item.phase === 'figure_synthesis_complete').length, 1);
 });

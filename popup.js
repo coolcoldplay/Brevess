@@ -1566,6 +1566,10 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
     const expectedPanelCount = Math.max(0, Number(progress.expectedPanelCount) || expectedPanels.length);
     const recognizedPanelCount = Number.isFinite(Number(progress.recognizedPanelCount))
         ? Math.max(0, Number(progress.recognizedPanelCount)) : null;
+    const batchRecognizedPanelCount = Number.isFinite(Number(progress.batchRecognizedPanelCount))
+        ? Math.max(0, Number(progress.batchRecognizedPanelCount)) : null;
+    const unexpectedPanels = Array.isArray(progress.unexpectedPanels)
+        ? progress.unexpectedPanels.map(String).slice(0, 30) : [];
     const cancelledPhaseText = phase === 'cancelled'
         ? '本批 Figure 解读已取消' : '';
     const phaseText = cancelledPhaseText || {
@@ -1607,6 +1611,16 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
             Math.max(0, Number(progress.completedPanelBatches) || 0))}/${totalPanelBatches}`);
     }
     if (recognizedPanelCount !== null) details.push(`已识别 ${recognizedPanelCount} 个 Panel`);
+    if (batchRecognizedPanelCount !== null) {
+        details.push(`本批有效 Panel：${batchRecognizedPanelCount}`);
+    }
+    const ignoredUnexpectedPanelCount = Math.max(
+        0, Number(progress.ignoredUnexpectedPanelCount) || unexpectedPanels.length
+    );
+    if (ignoredUnexpectedPanelCount) {
+        const labels = unexpectedPanels.length ? `（${unexpectedPanels.join('、')}）` : '';
+        details.push(`已忽略模型重复返回的 ${ignoredUnexpectedPanelCount} 个批次外 Panel${labels}`);
+    }
     if (progress.capabilityMode === 'caption_text_only' || phase === 'caption_text_only') {
         details.push('当前有效模型不接收图片；本次仅发送图注与正文证据');
     }

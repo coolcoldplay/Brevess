@@ -234,6 +234,9 @@ test('content script publishes structured per-Figure progress for the popup', ()
   assert.match(script, /startedAt/);
   assert.match(script, /elapsedSeconds/);
   assert.match(script, /recognizedPanelCount/);
+  assert.match(script, /batchRecognizedPanelCount/);
+  assert.match(script, /ignoredUnexpectedPanelCount/);
+  assert.match(script, /unexpectedPanels/);
   assert.match(script, /function updateFigureAnalysisStatus/);
   assert.match(script, /currentFigure/);
   assert.match(script, /totalFigures/);
@@ -250,6 +253,8 @@ test('Figure progress UI uses the content snapshot and never invents a current P
   assert.match(popup, /function hasRunningFigureProgress/);
   assert.match(popup, /expectedPanels/);
   assert.match(popup, /recognizedPanelCount/);
+  assert.match(popup, /batchRecognizedPanelCount/);
+  assert.match(popup, /ignoredUnexpectedPanelCount/);
   assert.match(popup, /startedAt/);
   assert.match(popup, /caption_text_only/);
   assert.match(popup, /figure_model_processing/);

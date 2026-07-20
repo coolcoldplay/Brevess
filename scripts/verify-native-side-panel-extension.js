@@ -428,6 +428,80 @@ async function readDiagnosticDownload(download) {
     { tabId: fixtureTab.id, value: archive }
   );
 
+  const figureIncrementalQa = await sidePanel.evaluate(completeWorkspace => {
+    const originalWorkspaceSnapshot = currentWorkspaceSnapshot;
+    const originalFigureAnalysisState = figureAnalysisState;
+    const pendingWorkspace = structuredClone(completeWorkspace);
+    pendingWorkspace.status = {
+      running: true,
+      paused: false,
+      phase: 'figure_panel_batch_complete',
+      figureProgress: [{
+        figureId: 'figure-1',
+        figureLabel: 'Figure 1',
+        phase: 'figure_panel_batch_complete',
+        running: true,
+        expectedPanels: ['A', 'B'],
+        expectedPanelCount: 2,
+        recognizedPanelCount: 2,
+        batchRecognizedPanelCount: 2,
+        unexpectedPanels: ['D', 'E'],
+        ignoredUnexpectedPanelCount: 2,
+        completedPanelBatches: 1,
+        totalPanelBatches: 2,
+        completedFigures: 0,
+        totalFigures: 3,
+        startedAt: Date.now() - 5000
+      }]
+    };
+    pendingWorkspace.figures = pendingWorkspace.figures.map(figure => ({
+      ...figure,
+      standard: null,
+      deep: null,
+      standardError: '',
+      deepError: ''
+    }));
+    const completeFirstFigure = completeWorkspace.figures[0];
+    pendingWorkspace.figures[0].standard = {
+      ...completeFirstFigure.standard,
+      panels: completeFirstFigure.standard.panels.slice(0, 2),
+      panelCoverage: {
+        expectedPanels: ['A', 'B', 'C'],
+        returnedPanels: ['A', 'B'],
+        missingPanels: ['C'],
+        unexpectedPanels: ['D', 'E'],
+        ignoredUnexpectedPanelCount: 2
+      }
+    };
+    currentWorkspaceSnapshot = {
+      ...currentWorkspaceSnapshot,
+      figures: pendingWorkspace
+    };
+    figureAnalysisState = pendingWorkspace.status;
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    const cards = Array.from(document.querySelectorAll('.workspace-figure-card'));
+    const firstProgressText = cards[0]
+      ?.querySelector('.workspace-figure-progress')?.textContent || '';
+    const result = {
+      cardCount: cards.length,
+      summaries: cards.map(card => card.querySelector('summary')?.textContent?.trim() || ''),
+      firstHasPartialResult: Boolean(cards[0]?.querySelector('.workspace-figure-field')),
+      firstPanelCatalogSize:
+        cards[0]?.querySelectorAll('.workspace-figure-panel-card').length || 0,
+      firstAnalyzedPanels: Array.from(
+        cards[0]?.querySelectorAll('.workspace-panel-analyze') || []
+      ).filter(button => button.textContent?.includes('重新解读')).length,
+      secondHasResult: Boolean(cards[1]?.querySelector('.workspace-figure-field')),
+      firstProgressText,
+      reportsBatchCount: /本批有效 Panel：2/.test(firstProgressText),
+      reportsIgnoredPanels: /已忽略模型重复返回的 2 个批次外 Panel（D、E）/.test(firstProgressText)
+    };
+    currentWorkspaceSnapshot = originalWorkspaceSnapshot;
+    figureAnalysisState = originalFigureAnalysisState;
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    return result;
+  }, figureWorkspaceFixture());
+
   // A real Edge side panel never becomes the active browser tab. Keep the
   // article active while exercising the panel's navigation handler.
   await fixture.bringToFront();
@@ -796,6 +870,7 @@ async function readDiagnosticDownload(download) {
     restored,
     navigationStatus,
     manualSelectionQa,
+    figureIncrementalQa,
     figureVisualQa,
     quickNavSwitchQa,
     quickNavExitQa,
@@ -854,6 +929,17 @@ async function readDiagnosticDownload(download) {
     archive.kind === 'sci-logic-highlighter-article' &&
     !results.archive.containsSecrets &&
     restored?.success === true &&
+    results.figureIncrementalQa.cardCount === 3 &&
+    results.figureIncrementalQa.firstHasPartialResult &&
+    results.figureIncrementalQa.firstPanelCatalogSize === 3 &&
+    results.figureIncrementalQa.firstAnalyzedPanels === 2 &&
+    !results.figureIncrementalQa.secondHasResult &&
+    /Figure 1/.test(results.figureIncrementalQa.summaries[0]) &&
+    /当前 Panel 分批已保存/.test(results.figureIncrementalQa.summaries[0]) &&
+    /待解读/.test(results.figureIncrementalQa.summaries[1]) &&
+    /待解读/.test(results.figureIncrementalQa.summaries[2]) &&
+    results.figureIncrementalQa.reportsBatchCount &&
+    results.figureIncrementalQa.reportsIgnoredPanels &&
     results.figureVisualQa.figureOpen &&
     results.figureVisualQa.panelOpen &&
     results.figureVisualQa.followupOpen &&

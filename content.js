@@ -1031,6 +1031,10 @@ function sanitizeFigureProgressSnapshot(progress = {}) {
     const recognizedPanelCount = Number.isFinite(Number(progress.recognizedPanelCount))
         ? Math.max(0, Math.min(30, Math.floor(Number(progress.recognizedPanelCount))))
         : null;
+    const batchRecognizedPanelCount = Number.isFinite(Number(progress.batchRecognizedPanelCount))
+        ? Math.max(0, Math.min(30, Math.floor(Number(progress.batchRecognizedPanelCount))))
+        : null;
+    const unexpectedPanels = sanitizeFigureProgressPanels(progress.unexpectedPanels);
     return {
         figureId: sanitizeFigureProgressText(progress.figureId, 80),
         figureLabel: sanitizeFigureProgressText(progress.figureLabel, 120),
@@ -1038,6 +1042,10 @@ function sanitizeFigureProgressSnapshot(progress = {}) {
         expectedPanelCount: Math.max(0, Math.min(30,
             Math.floor(Number(progress.expectedPanelCount) || expectedPanels.length))),
         recognizedPanelCount,
+        batchRecognizedPanelCount,
+        unexpectedPanels,
+        ignoredUnexpectedPanelCount: Math.max(0, Math.min(30,
+            Math.floor(Number(progress.ignoredUnexpectedPanelCount) || unexpectedPanels.length))),
         panelBatchIndex: Math.max(0, Math.floor(Number(progress.panelBatchIndex) || 0)),
         completedPanelBatches: Math.max(0, Math.floor(Number(progress.completedPanelBatches) || 0)),
         totalPanelBatches: Math.max(0, Math.floor(Number(progress.totalPanelBatches) || 0)),
@@ -1133,7 +1141,11 @@ function formatFigureProgressMessage(progress = {}) {
     if (progress.phase === 'output_compact_retry') return `${label}${position}：输出过长，正改用紧凑 JSON 重试。`;
     if (progress.phase === 'figure_schema_retry') return `${label}${position}：返回结构不完整，正在按精确字段要求重试。`;
     if (progress.phase === 'figure_panel_batch_complete') {
-        return `${label}${position}：已完成 Panel 分批 ${progress.completedPanelBatches}/${progress.totalPanelBatches}，正在继续下一批。`;
+        const ignored = Number(progress.ignoredUnexpectedPanelCount) || 0;
+        const ignoredNotice = ignored
+            ? `，已忽略模型重复返回的 ${ignored} 个批次外 Panel`
+            : '';
+        return `${label}${position}：已完成 Panel 分批 ${progress.completedPanelBatches}/${progress.totalPanelBatches}${ignoredNotice}，正在继续下一批。`;
     }
     if (progress.phase === 'figure_synthesizing') {
         return `${label}${position}：Panel 已提取，正在综合整图证据链。`;

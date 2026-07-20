@@ -956,6 +956,10 @@
       };
       const panels = uniqueBy(values.flatMap(item => item.panels || []), item => item.panel);
       const expectedPanels = Array.isArray(figure?.panelHints) ? figure.panelHints : [];
+      const unexpectedPanels = uniqueBy(
+        values.flatMap(item => item?.panelCoverage?.unexpectedPanels || []),
+        item => String(item || '')
+      );
       const firstText = field => values.map(item => String(item?.[field] || '').trim())
         .find(Boolean) || '';
       const merged = {
@@ -972,7 +976,9 @@
         panelCoverage: {
           expectedPanels: [...expectedPanels],
           returnedPanels: panels.map(item => item.panel),
-          missingPanels: expectedPanels.filter(panel => !panels.some(item => item.panel === panel))
+          missingPanels: expectedPanels.filter(panel => !panels.some(item => item.panel === panel)),
+          unexpectedPanels,
+          ignoredUnexpectedPanelCount: unexpectedPanels.length
         },
         figureQuestion: firstText('figureQuestion'),
         authorAssembly: firstText('authorAssembly'),
@@ -1164,12 +1170,20 @@
             progress({
               phase: 'figure_assembling', ...batchBase,
               completedPanelBatches: completedCount,
-              recognizedPanelCount: partial.panels.length
+              recognizedPanelCount: partial.panels.length,
+              batchRecognizedPanelCount: result.panels.length,
+              unexpectedPanels: result.panelCoverage?.unexpectedPanels || [],
+              ignoredUnexpectedPanelCount:
+                result.panelCoverage?.ignoredUnexpectedPanelCount || 0
             });
             progress({
               phase: 'figure_panel_batch_complete', ...batchBase,
               completedPanelBatches: completedCount,
               recognizedPanelCount: partial.panels.length,
+              batchRecognizedPanelCount: result.panels.length,
+              unexpectedPanels: result.panelCoverage?.unexpectedPanels || [],
+              ignoredUnexpectedPanelCount:
+                result.panelCoverage?.ignoredUnexpectedPanelCount || 0,
               basis: partial.basis,
               visionFallback,
               partialFigureResult: partial
