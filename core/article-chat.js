@@ -199,7 +199,9 @@
       continuation: continuation ? {
         continue_after_block_ids: continuation.blockIds,
         turn_summary_so_far: continuation.summary || '',
-        instruction: 'Continue with new block IDs. Do not repeat earlier blocks.'
+        instruction: continuation.formatRepair
+          ? 'The previous response was invalid NDJSON. Retry using exactly one compact JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
+          : 'Continue with new block IDs. Do not repeat earlier blocks.'
       } : null
     };
     return {
@@ -335,6 +337,7 @@
     let usage = null;
     let limited = false;
     let continuationCount = 0;
+    let repairFormat = false;
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -344,7 +347,8 @@
         const prompt = compileArticleChatPrompt(input, prepared.plan, attempt ? {
           continuation: {
             blockIds: current.blocks.map(block => block.blockId),
-            summary: current.summary
+            summary: current.summary,
+            formatRepair: repairFormat
           }
         } : {});
         const request = {
@@ -356,10 +360,19 @@
         };
         let terminalError = null;
         let completed = false;
+        let parserError = null;
         for await (const event of adapter.generateTextStream(request)) {
           if (options.signal?.aborted) throw operationCancelledError();
           await options.waitIfPaused?.();
-          if (event?.type === 'text_delta') parser.push(event.text);
+          if (event?.type === 'text_delta') {
+            try {
+              parser.push(event.text);
+            } catch (error) {
+              if (error?.code !== 'INVALID_RESPONSE') throw error;
+              parserError = error;
+              parser.discardPending();
+            }
+          }
           else if (event?.type === 'usage') {
             usage = { ...(usage || {}), ...(event.usage || {}) };
             report({ phase: 'chat_usage', usage });
@@ -374,18 +387,37 @@
         }
 
         let finalized = false;
-        if (completed && !terminalError) finalized = parser.finish();
+        if (completed && !terminalError) {
+          try {
+            finalized = parser.finish();
+          } catch (error) {
+            if (error?.code !== 'INVALID_RESPONSE') throw error;
+            parserError = error;
+            parser.discardPending();
+          }
+        }
         const after = parser.snapshot();
         if (terminalError && terminalError.code !== 'OUTPUT_TRUNCATED') {
+          if (terminalError.code === 'INVALID_RESPONSE' && attempt === 0) {
+            repairFormat = true;
+            parser.discardPending();
+            report({ phase: 'chat_repairing_format', errorCode: terminalError.code });
+            continue;
+          }
           throw terminalError;
         }
+        const validCompleteResponse = finalized && Boolean(after.final) && after.blocks.length > 0;
         const needsContinuation = terminalError?.code === 'OUTPUT_TRUNCATED' ||
-          !finalized || !after.final;
+          !validCompleteResponse || (parserError && !validCompleteResponse);
         if (!needsContinuation) break;
         parser.discardPending();
         if (attempt === 0) {
           continuationCount += 1;
-          report({
+          repairFormat = Boolean(parserError);
+          report(repairFormat ? {
+            phase: 'chat_repairing_format',
+            errorCode: parserError?.code || 'INVALID_RESPONSE'
+          } : {
             phase: 'chat_continuing',
             continuation: continuationCount,
             lastBlockId: after.blocks.at(-1)?.blockId || ''

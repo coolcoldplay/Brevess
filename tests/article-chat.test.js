@@ -93,7 +93,7 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
     ...input, question: '这项机制的局限是什么？'
   }, prepared.plan);
 
-  assert.equal(prepared.plan.mode, 'full');
+  assert.equal(prepared.plan.mode, 'retrieval');
   assert.ok(prepared.plan.outputBudgetTokens.initial >= 4096);
   assert.equal(prepared.plan.outputBudgetTokens.ceiling, 12288);
   assert.equal(first.stablePrefix, followup.stablePrefix);
@@ -103,6 +103,41 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
   assert.match(first.systemPrompt, /turn_summary/);
   assert.match(first.systemPrompt, /append \[\[marker\]\] immediately/);
   assert.equal('responseSchema' in first, false);
+});
+
+test('retries once with a format-repair instruction after malformed streamed output', async () => {
+  const requests = [];
+  const progress = [];
+  const adapter = {
+    generateTextStream(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (attempt === 1) {
+          yield { type: 'text_delta', text: 'This is not the requested NDJSON.\n' };
+        } else {
+          yield { type: 'text_delta', text: [
+            blockLine('block-repaired', '结果段支持该结论。[[1]]'),
+            JSON.stringify({ type: 'turn_summary', summary: '结果段支持结论。' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        }
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter,
+    onProgress: event => progress.push(event)
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].userPrompt, /invalid NDJSON/i);
+  assert.equal(result.message.answerBlocks[0].blockId, 'block-repaired');
+  assert.ok(progress.some(event => event.phase === 'chat_repairing_format'));
 });
 
 test('streams verified blocks, continues once after truncation, and deduplicates continuation', async () => {

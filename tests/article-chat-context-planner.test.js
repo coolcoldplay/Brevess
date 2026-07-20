@@ -67,6 +67,66 @@ test('chooses full context for a fitting first turn and retrieval for a constrai
   assert.ok(retrieval.inputBudgetTokens.available > retrieval.estimatedInputTokens);
 });
 
+test('keeps a 64k article chat usable when the manual output maximum was set to 65536', async () => {
+  const index = makeIndex(157, 600);
+  const plan = await planArticleChatContext({
+    index,
+    query: '作者如何一步一步锁定介导攻击行为的神经元？',
+    profile: profile({
+      providerId: 'deepseek',
+      config: { model: 'deepseek-v4-pro' },
+      contextWindowTokens: 65536,
+      tokenPolicy: { mode: 'manual', manualMax: 65536 }
+    }),
+    history: []
+  });
+
+  assert.equal(plan.mode, 'retrieval');
+  assert.ok(plan.chunks.length > 0);
+  assert.ok(plan.chunks.length <= 8);
+  assert.ok(plan.outputBudgetTokens.initial <= 16384);
+  assert.ok(plan.estimatedInputTokens < plan.inputBudgetTokens.available);
+  assert.equal(plan.outputBudgetTokens.contextClamped, true);
+});
+
+test('fits at least one Chinese evidence chunk into an 8k automatic context budget', async () => {
+  const records = [{
+    paragraphId: 'p-long-cjk', sourceKey: 'source-long-cjk',
+    sourceIdentity: 'stable-long-cjk', textHash: 'hash-long-cjk',
+    recordType: 'body', sectionId: 'results', sectionTitle: 'Results',
+    sectionKind: 'results', text: `攻击行为神经元${'实验结果'.repeat(700)}`
+  }];
+  const index = buildArticleChatIndex({
+    key: 'paper-cjk:1', documentHash: 'paper-cjk', revision: 1,
+    paragraphs: records, typedRecords: records
+  });
+  const plan = await planArticleChatContext({
+    index,
+    query: '攻击行为由哪些神经元介导？',
+    profile: profile({ contextWindowTokens: 8192 }),
+    history: []
+  });
+
+  assert.equal(plan.mode, 'retrieval');
+  assert.ok(plan.chunks.length >= 1);
+  assert.ok(plan.estimatedInputTokens <= plan.inputBudgetTokens.available);
+  assert.ok(plan.outputBudgetTokens.initial <= 2048);
+});
+
+test('does not raise a deliberately small manual article-chat output maximum', async () => {
+  const plan = await planArticleChatContext({
+    index: makeIndex(4, 300), query: 'kinase rescue result?',
+    profile: profile({
+      contextWindowTokens: 8192,
+      tokenPolicy: { mode: 'manual', manualMax: 1024 }
+    }),
+    history: []
+  });
+
+  assert.equal(plan.outputBudgetTokens.initial, 1024);
+  assert.equal(plan.outputBudgetTokens.ceiling, 1024);
+});
+
 test('records all history ids, retrieves old turns, and reports a cache-aware follow-up decision', async () => {
   const history = Array.from({ length: 75 }, (_, index) => ({
     turnId: `turn-${index + 1}`,

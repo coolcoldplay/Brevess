@@ -109,6 +109,32 @@ test('NDJSON parser emits only complete validated answer blocks', () => {
   assert.equal(parser.snapshot().final.status, 'completed');
 });
 
+test('NDJSON parser accepts a model wrapping the stream in a Markdown JSON fence', () => {
+  const blocks = [];
+  const parser = createArticleChatNdjsonParser({
+    snapshot: citationSnapshot,
+    onBlock: block => blocks.push(block)
+  });
+  const answer = JSON.stringify({
+    type: 'answer_block', block_id: 'block-fenced',
+    markdown: '治疗显著改善生存。[[1]]',
+    evidence: [{
+      marker: '1', paragraph_id: 'p1', source_key: 'results:1', text_hash: 'hash-1',
+      quote: 'Treatment significantly improved survival in the intervention group.',
+      section_path: ['Results']
+    }]
+  });
+
+  parser.push(`\`\`\`jsonl\n${answer}\n`);
+  parser.push(`${JSON.stringify({ type: 'turn_summary', summary: '治疗改善生存。' })}\n`);
+  parser.push(`${JSON.stringify({ type: 'final', status: 'completed' })}\n\`\`\`\n`);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].blockId, 'block-fenced');
+  assert.equal(parser.finish(), true);
+  assert.equal(parser.snapshot().final.status, 'completed');
+});
+
 test('NDJSON parser discards an incomplete block and deduplicates a continuation', () => {
   const blocks = [];
   const parser = createArticleChatNdjsonParser({

@@ -11,6 +11,10 @@
     return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
   }
 
+  function isBroadArticleChatQuery(query) {
+    return BROAD_QUERY.test(normalize(query));
+  }
+
   function reciprocalRankFusion(rankings, constant = 60) {
     const scores = new Map();
     (Array.isArray(rankings) ? rankings : []).forEach(ranking => {
@@ -154,7 +158,7 @@
     const normalizedQuery = normalize(query);
     const queryTokens = shared.tokenizeRetrievalQuery(query, 128);
     const referencesIntent = REFERENCES_INTENT.test(normalizedQuery);
-    const broadQuery = BROAD_QUERY.test(normalizedQuery);
+    const broadQuery = isBroadArticleChatQuery(normalizedQuery);
     const phrases = quotedPhrases(query);
     const eligible = index.chunks.filter(chunk =>
       referencesIntent || chunk.recordType !== 'reference');
@@ -269,6 +273,7 @@
   return {
     reciprocalRankFusion,
     maximalMarginalRelevance,
+    isBroadArticleChatQuery,
     retrieveArticleChatContext
   };
 });

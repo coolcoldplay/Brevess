@@ -414,6 +414,16 @@
       throw new ProviderRequestError('PROVIDER_REJECTED', 'Provider rejected the streaming request');
     }
     if (protocol === 'openai-responses') {
+      const compatibleChoice = data.choices?.[0] || {};
+      if (Array.isArray(data.choices)) {
+        return [
+          ...(typeof compatibleChoice.delta?.content === 'string' && compatibleChoice.delta.content
+            ? [{ kind: 'delta', text: compatibleChoice.delta.content }] : []),
+          ...(data.usage ? [{ kind: 'usage', usage: data.usage }] : []),
+          ...(compatibleChoice.finish_reason
+            ? [{ kind: 'finish', reason: compatibleChoice.finish_reason }] : [])
+        ];
+      }
       const type = data.type || parsed.event;
       if (type === 'response.output_text.delta' && typeof data.delta === 'string') {
         return [{ kind: 'delta', text: data.delta }];
@@ -472,6 +482,14 @@
 
   function nonStreamProtocolResult(protocol, data) {
     if (protocol === 'openai-responses') {
+      const compatibleChoice = data?.choices?.[0] || {};
+      if (typeof compatibleChoice.message?.content === 'string') {
+        return {
+          text: compatibleChoice.message.content,
+          usage: data?.usage,
+          finishReason: compatibleChoice.finish_reason || 'stop'
+        };
+      }
       let text = typeof data?.output_text === 'string' ? data.output_text : '';
       if (!text) {
         text = (Array.isArray(data?.output) ? data.output : []).flatMap(output =>

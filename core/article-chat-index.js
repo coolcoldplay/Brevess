@@ -107,6 +107,13 @@
       sourceStart: unit.sourceStart,
       sourceEnd: unit.sourceEnd
     }));
+    let chunkCursor = 0;
+    const sourceSpanRanges = units.map((unit, index) => {
+      if (index) chunkCursor += 2;
+      const chunkStart = chunkCursor;
+      chunkCursor += unit.text.length;
+      return { chunkStart, chunkEnd: chunkCursor };
+    });
     const paragraphIds = [...new Set(units.map(unit => unit.paragraphId).filter(Boolean))];
     const sourceKeys = [...new Set(units.map(unit => unit.sourceKey).filter(Boolean))];
     const chunkIdentity = hash([
@@ -124,6 +131,7 @@
       paragraphIds,
       sourceKeys,
       sourceSpans,
+      sourceSpanRanges,
       text,
       textHash: hash(text),
       tokens,

@@ -290,6 +290,7 @@
     function processLine(line) {
       const text = String(line || '').trim();
       if (!text) return null;
+      if (/^```(?:jsonl?|ndjson)?\s*$/i.test(text) || text === '```') return null;
       let value;
       try { value = JSON.parse(text); } catch {
         throw invalidStreamResponse('Article chat stream line is malformed JSON');

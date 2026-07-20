@@ -319,6 +319,26 @@ test('streaming adapters report malformed events and support non-stream JSON fal
   assert.equal(fallback.at(-1).type, 'completed');
 });
 
+test('OpenAI Responses streaming tolerates a chat-completions shaped gateway response', async () => {
+  const adapter = createProviderAdapter({
+    providerId: 'openai', config: providerConfigFor('openai'),
+    fetchImpl: async () => streamingTextResponse(sseEvents([
+      { data: { choices: [{ delta: { content: '兼容' }, finish_reason: null }] } },
+      { data: { choices: [{ delta: { content: '成功' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 8, completion_tokens: 2 } } },
+      { data: '[DONE]' }
+    ]))
+  });
+
+  const events = await collectStream(adapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION', maxOutputTokens: 2048
+  }));
+
+  assert.equal(events.filter(event => event.type === 'text_delta')
+    .map(event => event.text).join(''), '兼容成功');
+  assert.equal(events.at(-1).type, 'completed');
+});
+
 test('streaming adapters emit a terminal cancelled event when the request is aborted', async () => {
   const adapter = createProviderAdapter({
     providerId: 'openai-compatible', config: providerConfigFor('openai-compatible'),
