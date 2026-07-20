@@ -85,6 +85,7 @@ test('keeps a 64k article chat usable when the manual output maximum was set to 
   assert.ok(plan.chunks.length > 0);
   assert.ok(plan.chunks.length <= 8);
   assert.ok(plan.outputBudgetTokens.initial <= 16384);
+  assert.equal(plan.outputBudgetTokens.ceiling, 32768);
   assert.ok(plan.estimatedInputTokens < plan.inputBudgetTokens.available);
   assert.equal(plan.outputBudgetTokens.contextClamped, true);
 });
@@ -111,6 +112,7 @@ test('fits at least one Chinese evidence chunk into an 8k automatic context budg
   assert.ok(plan.chunks.length >= 1);
   assert.ok(plan.estimatedInputTokens <= plan.inputBudgetTokens.available);
   assert.ok(plan.outputBudgetTokens.initial <= 2048);
+  assert.ok(plan.outputBudgetTokens.ceiling <= 4096);
 });
 
 test('does not raise a deliberately small manual article-chat output maximum', async () => {

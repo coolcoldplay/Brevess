@@ -9,7 +9,7 @@
     batchSummary: Object.freeze({ base: 1400, perUnit: 420, floor: 2048, ceiling: 12288 }),
     figure: Object.freeze({ base: 3200, perUnit: 1400, floor: 6144, ceiling: 24576 }),
     crossFigure: Object.freeze({ base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 }),
-    articleChat: Object.freeze({ base: 4096, perUnit: 512, floor: 4096, ceiling: 12288 }),
+    articleChat: Object.freeze({ base: 4096, perUnit: 512, floor: 4096, ceiling: 32768 }),
     figurePanel: Object.freeze({ base: 2048, perUnit: 0, floor: 2048, ceiling: 4096 }),
     panelChat: Object.freeze({ base: 2048, perUnit: 384, floor: 2048, ceiling: 4096 })
   });

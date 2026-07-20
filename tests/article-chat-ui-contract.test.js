@@ -35,6 +35,8 @@ test('content sends canonical workspace paragraphs and persists only public chat
   assert.match(chat, /history/);
   assert.doesNotMatch(chat, /apiKey|customHeaders|authorization/i);
   assert.match(content, /chat:\s*getPublicArticleChatState\(\)/);
+  assert.match(content, /function articleChatFailureMessage/);
+  assert.match(content, /OUTPUT_TRUNCATED:\s*'模型连续达到输出上限/);
 });
 
 test('full-text chat reports when a very long paper used a relevance-bounded context', () => {

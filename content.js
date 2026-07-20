@@ -4507,6 +4507,15 @@ function mergeArticleChatAnswerBlocks(turn, answer, snapshot) {
     });
 }
 
+function articleChatFailureMessage(error) {
+    const messages = {
+        OUTPUT_TRUNCATED: '模型连续达到输出上限。插件已自动提高额度并续写，但仍未形成完整回答；请把问题拆成两个更具体的问题，或检查当前 Profile 的“自动上限”是否过低。',
+        INVALID_RESPONSE: '模型连续两次没有返回可解析的回答格式。请重试；若仍失败，请检查当前 Profile 的 Provider 是否与 API 接口协议一致。',
+        CONTEXT_BUDGET_EXCEEDED: '当前模型上下文不足以同时容纳问题、证据和回答，请提高该 Profile 的上下文窗口设置或缩小问题范围。'
+    };
+    return messages[error?.code] || String(error?.message || '全文问答失败').slice(0, 1000);
+}
+
 async function runArticleChatTurn(turn) {
     const generation = ++articleChatGeneration;
     const operationId = `chat-${generation}-${Date.now()}`;
@@ -4581,7 +4590,7 @@ async function runArticleChatTurn(turn) {
         turn.status = cancelled ? 'cancelled' : 'error';
         turn.error = cancelled
             ? '本次提问已取消，已完成的回答内容已保留。'
-            : String(error?.message || 'ARTICLE_CHAT_FAILED').slice(0, 1000);
+            : articleChatFailureMessage(error);
         turn.updatedAt = Date.now();
         articleChatState.error = turn.error;
         void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);

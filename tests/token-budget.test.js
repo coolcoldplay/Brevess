@@ -14,17 +14,17 @@ test('defines output budget rules for every request kind', () => {
   assert.deepEqual(RULES.batchSummary, { base: 1400, perUnit: 420, floor: 2048, ceiling: 12288 });
   assert.deepEqual(RULES.figure, { base: 3200, perUnit: 1400, floor: 6144, ceiling: 24576 });
   assert.deepEqual(RULES.crossFigure, { base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 });
-  assert.deepEqual(RULES.articleChat, { base: 4096, perUnit: 512, floor: 4096, ceiling: 12288 });
+  assert.deepEqual(RULES.articleChat, { base: 4096, perUnit: 512, floor: 4096, ceiling: 32768 });
   assert.deepEqual(RULES.figurePanel, { base: 2048, perUnit: 0, floor: 2048, ceiling: 4096 });
   assert.deepEqual(RULES.panelChat, { base: 2048, perUnit: 384, floor: 2048, ceiling: 4096 });
 });
 
 test('keeps article chat and Panel output budgets within their independent floors and ceilings', () => {
   assert.deepEqual(computeOutputTokenBudget('articleChat', { units: 1 }), {
-    initial: 4608, ceiling: 12288, mode: 'auto'
+    initial: 4608, ceiling: 32768, mode: 'auto'
   });
   assert.deepEqual(computeOutputTokenBudget('articleChat', { units: 100 }), {
-    initial: 12288, ceiling: 12288, mode: 'auto'
+    initial: 32768, ceiling: 32768, mode: 'auto'
   });
   assert.deepEqual(computeOutputTokenBudget('panelChat', { units: 1 }), {
     initial: 2560, ceiling: 4096, mode: 'auto'

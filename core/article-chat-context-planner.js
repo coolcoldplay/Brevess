@@ -83,19 +83,21 @@
   function contextAwareOutputBudget(requested, options) {
     const minimumOutputTokens = options.kind === 'panelChat'
       ? MIN_PANEL_OUTPUT_TOKENS : MIN_ARTICLE_OUTPUT_TOKENS;
-    const maximumByShare = roundDown256(options.contextWindowTokens * 0.25);
+    const maximumInitialByShare = roundDown256(options.contextWindowTokens * 0.25);
+    const maximumCeilingByShare = roundDown256(options.contextWindowTokens * 0.50);
     const maximumBySpace = roundDown256(
       options.contextWindowTokens - options.reservedTokens - options.systemTokens -
       options.queryTokens - MIN_ARTICLE_CONTEXT_TOKENS
     );
-    const maximum = Math.min(maximumByShare, maximumBySpace);
+    const maximumInitial = Math.min(maximumInitialByShare, maximumBySpace);
+    const maximumCeiling = Math.min(maximumCeilingByShare, maximumBySpace);
     const requestedInitial = Math.max(512, Number(requested.initial) || minimumOutputTokens);
     const minimumViableOutput = Math.min(minimumOutputTokens, requestedInitial);
-    if (maximum < minimumViableOutput) return null;
-    const initial = Math.min(requestedInitial, maximum);
+    if (maximumInitial < minimumViableOutput) return null;
+    const initial = Math.min(requestedInitial, maximumInitial);
     const ceiling = Math.max(
       initial,
-      Math.min(Number(requested.ceiling) || initial, maximum)
+      Math.min(Number(requested.ceiling) || initial, maximumCeiling)
     );
     return {
       ...requested,
@@ -270,7 +272,7 @@
     } else {
       retrieval = await shared.retrieveArticleChatContext(index, input.query, {
         maxChars: Math.max(200, Math.min(
-          broadQuery ? 60000 : 24000,
+          broadQuery ? 60000 : 18000,
           Math.floor(remainingForArticle * 3)
         )),
         limit: Math.max(1, Math.min(

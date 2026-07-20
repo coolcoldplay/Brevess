@@ -90,6 +90,19 @@
     ));
   }
 
+  function articleChatOutputUnits(question) {
+    const text = String(question || '').normalize('NFKC');
+    let units = Math.max(1, Math.ceil(text.length / 600));
+    if (/(?:一步一步|逐步|分步骤|详细|详述|证据链|论证链|推理链|step[ -]?by[ -]?step|evidence chain|argument chain)/iu.test(text)) {
+      units = Math.max(units, 8);
+    }
+    if (typeof shared.isBroadArticleChatQuery === 'function' &&
+        shared.isBroadArticleChatQuery(text)) {
+      units = Math.max(units, 8);
+    }
+    return units;
+  }
+
   function normalizeArticleChatInput(message = {}) {
     const question = normalizeText(message?.question, 4000);
     if (!question) throw invalidSettings(['question']);
@@ -145,7 +158,7 @@
       memory,
       profile,
       kind: 'articleChat',
-      outputUnits: Math.max(1, Math.ceil(input.question.length / 600)),
+      outputUnits: articleChatOutputUnits(input.question),
       cacheState: input.cacheState,
       embedTexts: options.embedTexts,
       neighborRadius: options.neighborRadius
@@ -201,6 +214,8 @@
         turn_summary_so_far: continuation.summary || '',
         instruction: continuation.formatRepair
           ? 'The previous response was invalid NDJSON. Retry using exactly one compact JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
+          : continuation.truncationRecovery
+            ? 'The previous response was truncated before completing the answer. Continue from the next missing step. If no complete block was preserved, restart the answer. Emit one compact answer_block per numbered step so each step is saved before generating the next one. Do not repeat preserved block IDs.'
           : 'Continue with new block IDs. Do not repeat earlier blocks.'
       } : null
     };
@@ -211,6 +226,8 @@
         'You are a rigorous biomedical paper assistant. Answer in Chinese using only the supplied article context and conversation memory.',
         'Return newline-delimited JSON (NDJSON) only. Do not wrap lines in Markdown fences and do not emit a JSON array.',
         'Emit one complete answer_block line per complete Markdown paragraph, list, heading section, code block, or table.',
+        'For a numbered or stepwise answer, emit one answer_block per numbered step. Never place the whole chain in one answer_block.',
+        'Keep each answer_block compact: at most 600 Chinese characters or 900 Latin characters, including Markdown but excluding evidence metadata.',
         'answer_block schema: {"type":"answer_block","block_id":"block-1","markdown":"...","evidence":[{"marker":"1","paragraph_id":"...","source_key":"...","text_hash":"...","quote":"...","section_path":["..."]}]}',
         'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly.',
         'In markdown, append [[marker]] immediately after the supported sentence or list item. Never collect markers in a references paragraph.',
@@ -272,6 +289,20 @@
       sectionCoverage: [...plan.sectionCoverage],
       cacheDecision: plan.cacheDecision
     };
+  }
+
+  function continuationOutputTokens(plan) {
+    const initial = Math.max(512, Number(plan?.outputBudgetTokens?.initial) || 4096);
+    const ceiling = Math.max(initial, Number(plan?.outputBudgetTokens?.ceiling) || initial);
+    const contextWindow = Math.max(0, Number(plan?.contextWindowTokens) || 0);
+    const estimatedInput = Math.max(0, Number(plan?.estimatedInputTokens) || 0);
+    const reserved = Math.max(0, Number(plan?.inputBudgetTokens?.reservedTokens) || 0);
+    const system = Math.max(0, Number(plan?.inputBudgetTokens?.systemTokens) || 0);
+    const safeHeadroom = Math.floor(Math.max(
+      0, contextWindow - estimatedInput - reserved - system - 512
+    ) / 256) * 256;
+    if (safeHeadroom <= initial) return initial;
+    return Math.min(ceiling, safeHeadroom);
   }
 
   function compatibilityMessage(state, limited) {
@@ -338,6 +369,8 @@
     let limited = false;
     let continuationCount = 0;
     let repairFormat = false;
+    let recoverTruncation = false;
+    let currentOutputTokens = prepared.plan.outputBudgetTokens.initial;
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -348,13 +381,14 @@
           continuation: {
             blockIds: current.blocks.map(block => block.blockId),
             summary: current.summary,
-            formatRepair: repairFormat
+            formatRepair: repairFormat,
+            truncationRecovery: recoverTruncation
           }
         } : {});
         const request = {
           ...prompt,
           selectedProfileId: String(options.selectedProfileId || input.profileId || ''),
-          maxOutputTokens: prepared.plan.outputBudgetTokens.initial,
+          maxOutputTokens: currentOutputTokens,
           timeoutMs: Number(options.timeoutMs) || 240000,
           signal: options.signal
         };
@@ -400,6 +434,7 @@
         if (terminalError && terminalError.code !== 'OUTPUT_TRUNCATED') {
           if (terminalError.code === 'INVALID_RESPONSE' && attempt === 0) {
             repairFormat = true;
+            recoverTruncation = false;
             parser.discardPending();
             report({ phase: 'chat_repairing_format', errorCode: terminalError.code });
             continue;
@@ -414,13 +449,18 @@
         if (attempt === 0) {
           continuationCount += 1;
           repairFormat = Boolean(parserError);
+          recoverTruncation = terminalError?.code === 'OUTPUT_TRUNCATED';
+          if (recoverTruncation) {
+            currentOutputTokens = continuationOutputTokens(prepared.plan);
+          }
           report(repairFormat ? {
             phase: 'chat_repairing_format',
             errorCode: parserError?.code || 'INVALID_RESPONSE'
           } : {
             phase: 'chat_continuing',
             continuation: continuationCount,
-            lastBlockId: after.blocks.at(-1)?.blockId || ''
+            lastBlockId: after.blocks.at(-1)?.blockId || '',
+            maxOutputTokens: currentOutputTokens
           });
           continue;
         }

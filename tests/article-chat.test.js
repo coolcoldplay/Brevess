@@ -95,14 +95,27 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
 
   assert.equal(prepared.plan.mode, 'retrieval');
   assert.ok(prepared.plan.outputBudgetTokens.initial >= 4096);
-  assert.equal(prepared.plan.outputBudgetTokens.ceiling, 12288);
+  assert.equal(prepared.plan.outputBudgetTokens.ceiling, 32768);
   assert.equal(first.stablePrefix, followup.stablePrefix);
   assert.ok(first.userPrompt.startsWith(first.stablePrefix));
   assert.match(first.systemPrompt, /NDJSON/);
   assert.match(first.systemPrompt, /answer_block/);
+  assert.match(first.systemPrompt, /one answer_block per numbered step/i);
+  assert.match(first.systemPrompt, /at most 600 Chinese characters/i);
   assert.match(first.systemPrompt, /turn_summary/);
   assert.match(first.systemPrompt, /append \[\[marker\]\] immediately/);
   assert.equal('responseSchema' in first, false);
+});
+
+test('allocates a larger initial answer budget for a stepwise evidence-chain question', async () => {
+  const input = normalizeArticleChatInput(articleMessage({
+    question: '这个研究如何一步一步找到介导攻击行为的关键神经元？'
+  }));
+  const prepared = await prepareArticleChatRequest(input, profile);
+
+  assert.ok(prepared.plan.outputBudgetTokens.initial >= 8192);
+  assert.ok(prepared.plan.outputBudgetTokens.initial <=
+    prepared.plan.outputBudgetTokens.ceiling);
 });
 
 test('retries once with a format-repair instruction after malformed streamed output', async () => {
@@ -196,6 +209,44 @@ test('streams verified blocks, continues once after truncation, and deduplicates
     'chat_started', 'chat_context_ready', 'chat_answer_block',
     'chat_continuing', 'chat_answer_block', 'chat_usage', 'chat_completed'
   ]);
+});
+
+test('raises the safe continuation budget when truncation occurs before the first complete block', async () => {
+  const requests = [];
+  const progress = [];
+  const adapter = {
+    generateTextStream(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (attempt === 1) {
+          yield { type: 'text_delta', text: '{"type":"answer_block","block_id":"partial"' };
+          yield { type: 'error', error: { code: 'OUTPUT_TRUNCATED', message: 'limit' } };
+          return;
+        }
+        yield { type: 'text_delta', text: [
+          blockLine('block-after-limit', '第一步由结果段支持。[[1]]'),
+          JSON.stringify({ type: 'turn_summary', summary: '结果段支持第一步。' }),
+          JSON.stringify({ type: 'final', status: 'completed' }),
+          ''
+        ].join('\n') };
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter,
+    onProgress: event => progress.push(event)
+  });
+
+  assert.equal(requests.length, 2);
+  assert.ok(requests[1].maxOutputTokens > requests[0].maxOutputTokens);
+  assert.ok(requests[1].maxOutputTokens <= 32768);
+  assert.match(requests[1].userPrompt, /truncated before completing/i);
+  assert.equal(result.message.answerBlocks[0].blockId, 'block-after-limit');
+  assert.ok(progress.some(event => event.phase === 'chat_continuing'));
 });
 
 test('uses the same NDJSON parser when a provider returns the whole answer in one delta', async () => {
