@@ -7,15 +7,18 @@ const {
   createFigureAnalysisSchema,
   createFigurePanelBatchSchema,
   createFigureSynthesisSchema,
+  createFigurePanelInterpretationSchema,
   createPanelFollowupSchema,
   compileFigureAnalysisPrompt,
   compileFigurePanelBatchPrompt,
   compileFigureSynthesisPrompt,
+  compileFigurePanelInterpretationPrompt,
   compilePanelFollowupPrompt,
   isFatalFigureBatchError,
   validateFigureAnalysis,
   validateFigurePanelBatch,
   validateFigureSynthesis,
+  validateFigurePanelInterpretation,
   validatePanelFollowup,
   normalizePanelFollowupPrompts
 } = require('../core/figure-analysis.js');
@@ -200,6 +203,45 @@ test('compiles and validates a bounded Panel follow-up request', () => {
   assert.equal(payload.custom_question, '为什么作者使用这一统计方法?');
   assert.equal(payload.requested_topic_instructions.grouping, '只解释本文实际采用的分组。');
   assert.equal(Object.keys(normalizePanelFollowupPrompts({})).length, 4);
+});
+
+test('uses a dedicated strict schema for one Panel without Figure synthesis fields', () => {
+  const prompt = compileFigurePanelInterpretationPrompt({
+    ...figureInput,
+    panelId: 'A',
+    topic: 'grouping_stats',
+    captionEvidence: {
+      sharedLegend: 'Values are mean ± SEM.',
+      targetText: '(A) Treatment reduced tumor volume.'
+    },
+    contextParagraphs: [
+      { paragraphId: 'r1', sectionTitle: 'Results', text: 'Figure 2A reports the comparison.' },
+      { paragraphId: 'm1', sectionTitle: 'Methods', text: 'Groups were randomized.' }
+    ]
+  }, { visualInput: false });
+  const schema = createFigurePanelInterpretationSchema();
+  const payload = JSON.parse(prompt.userPrompt);
+  assert.equal(prompt.schemaName, 'figure_panel_interpretation_v1');
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(Object.hasOwn(schema.properties, 'panel_groups'), false);
+  assert.equal(payload.panel, 'A');
+  assert.equal(payload.target_panel_caption, '(A) Treatment reduced tumor volume.');
+  assert.equal(payload.related_body_context.length, 2);
+
+  const rawPanel = validStandardFigureOutput().panels[0];
+  const result = validateFigurePanelInterpretation({
+    figure_id: 'figure-2', panel: 'A', basis: 'caption_context',
+    panel_interpretation: {
+      ...rawPanel,
+      method_source: 'caption',
+      observation_source: 'caption_statement'
+    },
+    claim_boundary_zh: 'The supplied evidence does not establish direct causality.'
+  }, { ...figureInput, panelId: 'A' }, { visualInput: false });
+  assert.equal(result.panel, 'A');
+  assert.equal(result.basis, 'caption_context');
+  assert.equal(result.observationSource, 'caption_statement');
+  assert.match(result.claimBoundary, /direct causality/i);
 });
 
 test('deep Figure schema includes controls evidence levels and alternatives', () => {

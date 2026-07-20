@@ -1150,6 +1150,19 @@ function panelWorkspaceKey(figureId, panelId) {
     return `${String(figureId || '')}::${String(panelId || '').toUpperCase()}`;
 }
 
+function formatFigurePanelInputBasis(value) {
+    if (!value || typeof value !== 'object') return '';
+    const mode = {
+        panel_crop: 'Panel 裁切图',
+        figure_image: '最佳单张 Figure 图',
+        caption_context: '图注与相关正文（未发送图片）'
+    }[value.inputMode] || '按容量规划的证据';
+    const size = value.pixelsSupplied && value.imageWidth && value.imageHeight
+        ? ` · ${value.imageWidth}×${value.imageHeight} px` : '';
+    const retry = Number(value.attempts) > 1 ? ` · 第 ${value.attempts} 次降级请求` : '';
+    return `${mode}${size}${retry}`;
+}
+
 function getPanelFollowupDraft(figureId, panelId) {
     const key = panelWorkspaceKey(figureId, panelId);
     if (!panelFollowupDraftState.has(key)) {
@@ -1235,6 +1248,10 @@ function createPanelFollowupControl(figure, panel) {
             result.appendChild(createWorkspaceElement('p', 'workspace-panel-followup-boundary',
                 `解读边界：${answer.claimBoundary}`));
         }
+        const inputBasis = formatFigurePanelInputBasis(answer.inputBasis);
+        if (inputBasis) result.appendChild(createWorkspaceElement(
+            'p', 'workspace-panel-input-basis', `本次依据：${inputBasis}`
+        ));
         root.appendChild(result);
     } else if (errors[panelId]) {
         root.appendChild(createWorkspaceElement('p', 'workspace-figure-error', errors[panelId]));
@@ -1316,6 +1333,11 @@ function appendFigurePanelCatalog(parent, figure, result) {
                 ['观察来源', panel.observationSource], ['局部推论', panel.localInference],
                 ['对论证链的贡献', panel.contribution]
             ].forEach(([label, value]) => appendFigureWorkspaceField(panelDetails, label, value));
+            appendFigureWorkspaceField(
+                panelDetails,
+                '本次解读依据',
+                formatFigurePanelInputBasis(panel.inputBasis)
+            );
         } else {
             panelDetails.appendChild(createWorkspaceElement(
                 'p', 'workspace-figure-caption',

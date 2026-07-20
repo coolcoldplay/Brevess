@@ -222,6 +222,21 @@
     };
   }
 
+  function createFigurePanelInterpretationSchema() {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        figure_id: stringSchema(),
+        panel: stringSchema(),
+        basis: { type: 'string', enum: ['vision_text', 'caption_context'] },
+        panel_interpretation: createFigureAnalysisSchema('standard').properties.panels.items,
+        claim_boundary_zh: stringSchema()
+      },
+      required: ['figure_id', 'panel', 'basis', 'panel_interpretation', 'claim_boundary_zh']
+    };
+  }
+
   function createFigurePanelBatchSchema(depth = 'standard') {
     const analysisDepth = normalizeFigureDepth(depth);
     return {
@@ -463,6 +478,44 @@
     return cleanText(value, 1200);
   }
 
+  function compileFigurePanelInterpretationPrompt(input, options = {}) {
+    const visualInput = options.visualInput === true;
+    const panel = canonicalPanelRef(input?.panelId || input?.panel?.panel || input?.panel);
+    const captionEvidence = input?.captionEvidence && typeof input.captionEvidence === 'object'
+      ? input.captionEvidence : {};
+    return {
+      systemPrompt: [
+        'You are a rigorous biomedical figure-reading tutor interpreting exactly one requested Panel.',
+        'Use only the supplied Panel pixels when present, the target caption range, shared legend, and selected body paragraphs.',
+        'Separate experimental purpose, design, comparison, direct observation, local inference, and contribution to the paper argument.',
+        'Do not infer unseen axes, colors, sample sizes, statistics, methods, groups, or causal mechanisms.',
+        visualInput
+          ? 'Image pixels are supplied. State only details that are actually legible in those pixels.'
+          : 'No image pixels are supplied. Never use image_observation or image as a source.',
+        'Return strict Chinese JSON for the requested Panel only. Do not produce Figure-level groups, synthesis, or a domino chain.'
+      ].join('\n'),
+      userPrompt: JSON.stringify({
+        request_mode: 'single_panel_interpretation',
+        figure_id: cleanText(input?.figureId, 80),
+        figure_label: cleanText(input?.figureLabel, 80),
+        panel,
+        article_title: cleanText(input?.articleTitle, 500),
+        question_topic: cleanText(input?.topic, 40),
+        shared_legend: cleanText(captionEvidence.sharedLegend, 2400),
+        target_panel_caption: cleanText(captionEvidence.targetText || captionEvidence.combined, 4800),
+        related_body_context: (Array.isArray(input?.contextParagraphs)
+          ? input.contextParagraphs : []).slice(0, 4).map(item => ({
+          paragraph_id: cleanText(item?.paragraphId, 120),
+          section_title: cleanText(item?.sectionTitle, 240),
+          text: cleanText(item?.text, 1600)
+        })),
+        analysis_basis: visualInput ? 'vision_text' : 'caption_context'
+      }),
+      responseSchema: createFigurePanelInterpretationSchema(),
+      schemaName: 'figure_panel_interpretation_v1'
+    };
+  }
+
   function compilePanelFollowupPrompt(input, options = {}) {
     const visualInput = options.visualInput === true;
     const topics = normalizePanelFollowupTopics(input?.topics);
@@ -487,12 +540,22 @@
           topics.map(topic => [topic, topicInstructions[topic]])
         ),
         custom_question: customQuestion,
-        caption: cleanText(input?.caption, 8000),
+        shared_legend: cleanText(input?.captionEvidence?.sharedLegend, 2400),
+        target_panel_caption: cleanText(
+          input?.captionEvidence?.targetText || input?.captionEvidence?.combined || input?.caption,
+          4800
+        ),
         related_body_context: (Array.isArray(input?.contextParagraphs) ? input.contextParagraphs : [])
-          .slice(0, 8).map(item => ({
+          .slice(0, 4).map(item => ({
+            paragraph_id: cleanText(item?.paragraphId, 120),
             section_title: cleanText(item?.sectionTitle, 240),
-            text: cleanText(item?.text, 1200)
+            text: cleanText(item?.text, 1600)
           })),
+        bounded_panel_history: (Array.isArray(input?.history) ? input.history : [])
+          .map(item => ({
+            role: item?.role === 'assistant' ? 'assistant' : 'user',
+            content: cleanText(item?.content, 3200)
+          })).filter(item => item.content),
         existing_panel_interpretation: {
           role: cleanText(panel?.role, 80),
           phenotype: cleanText(panel?.phenotypeName, 240),
@@ -931,6 +994,43 @@
     };
   }
 
+  function validateFigurePanelInterpretation(value, input, options = {}) {
+    const expectedFigureId = cleanText(input?.figureId, 80);
+    const expectedPanel = canonicalPanelRef(input?.panelId || input?.panel?.panel || input?.panel);
+    requireExactFigureKeys(value, [
+      'figure_id', 'panel', 'basis', 'panel_interpretation', 'claim_boundary_zh'
+    ], 'Panel interpretation');
+    if (cleanText(value.figure_id, 80) !== expectedFigureId ||
+        canonicalPanelRef(value.panel) !== expectedPanel) {
+      throw invalidResponse('Panel interpretation did not match the requested Figure or Panel');
+    }
+    assertRawPanelShape(value.panel_interpretation);
+    if (canonicalPanelRef(value.panel_interpretation.panel) !== expectedPanel) {
+      throw invalidResponse('Panel interpretation body returned a different Panel');
+    }
+    const normalized = validateFigureAnalysis({
+      figure_id: value.figure_id,
+      analysis_depth: 'standard',
+      basis: value.basis,
+      figure_question_zh: '',
+      panels: [value.panel_interpretation],
+      panel_groups: [],
+      logic_bridges: [],
+      argument_chain: [],
+      author_assembly_zh: '',
+      core_conclusion_zh: '',
+      claim_boundary_zh: value.claim_boundary_zh
+    }, { ...input, panelHints: [expectedPanel] }, {
+      analysisDepth: 'standard', visualInput: options.visualInput === true
+    });
+    return {
+      ...normalized.panels[0],
+      figureId: expectedFigureId,
+      basis: normalized.basis,
+      claimBoundary: normalized.claimBoundary
+    };
+  }
+
   return {
     FIGURE_ANALYSIS_VERSION,
     PANEL_FOLLOWUP_TOPICS,
@@ -938,10 +1038,12 @@
     createFigureAnalysisSchema,
     createFigurePanelBatchSchema,
     createFigureSynthesisSchema,
+    createFigurePanelInterpretationSchema,
     createPanelFollowupSchema,
     compileFigureAnalysisPrompt,
     compileFigurePanelBatchPrompt,
     compileFigureSynthesisPrompt,
+    compileFigurePanelInterpretationPrompt,
     compilePanelFollowupPrompt,
     isFatalFigureBatchError,
     normalizeFigureDepth,
@@ -949,6 +1051,7 @@
     validateFigurePanelBatch,
     validateFigureSynthesis,
     validateCachedFigureAnalysis,
+    validateFigurePanelInterpretation,
     validatePanelFollowup,
     normalizePanelFollowupTopics,
     normalizePanelFollowupPrompts,

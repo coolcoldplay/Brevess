@@ -64,7 +64,11 @@ function figureWorkspaceFixture() {
     directObservation: observation,
     observationSource: 'caption_statement',
     localInference: 'The observation supports this local step only.',
-    contribution: `Panel ${label} advances the Figure argument.`
+    contribution: `Panel ${label} advances the Figure argument.`,
+    inputBasis: {
+      inputMode: 'caption_context', imageWidth: 0, imageHeight: 0,
+      pixelsSupplied: false, attempts: 1
+    }
   });
   const makeFigure = (number, panels) => ({
     figureId: `figure-${number}`,
@@ -465,6 +469,8 @@ async function readDiagnosticDownload(download) {
       followupOpen: document.querySelector('.workspace-panel-followup')?.hidden === false,
       draftPreserved: document.querySelector('.workspace-panel-followup-custom textarea')?.value ===
         'Why does this Panel use this comparison?',
+      inputBasisVisible: Array.from(document.querySelectorAll('.workspace-figure-field'))
+        .some(element => /图注与相关正文/.test(element.textContent || '')),
       quickNavVisible: document.getElementById('figureQuickNav')?.hidden === false,
       figureMarkers: document.querySelectorAll('.figure-quick-nav-marker').length,
       figureLabels: document.querySelectorAll('.figure-quick-nav-label').length,
@@ -825,6 +831,7 @@ async function readDiagnosticDownload(download) {
     results.figureVisualQa.panelOpen &&
     results.figureVisualQa.followupOpen &&
     results.figureVisualQa.draftPreserved &&
+    results.figureVisualQa.inputBasisVisible &&
     results.figureVisualQa.quickNavVisible &&
     results.figureVisualQa.figureMarkers === 3 &&
     results.figureVisualQa.figureLabels === 3 &&

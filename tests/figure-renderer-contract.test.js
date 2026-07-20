@@ -83,7 +83,15 @@ test('DOM-discovered Panels are available before LLM analysis and can be analyze
   assert.match(panelCatalog, /runSingleFigurePanelAnalysis\(figure\.figureId, panelId\)/);
   assert.match(panelCatalog, /createPanelFollowupControl\(figure, panel\)/);
   assert.match(content, /async function analyzeSingleFigurePanelWithLLM/);
+  assert.match(content, /type: 'LLM_ANALYZE_FIGURE_PANEL'/);
+  assert.match(content, /computePageDocumentHash\(\)/);
+  assert.match(content, /prepareFigurePanelImageVariants\(state\.figure, normalizedPanelId\)/);
   assert.match(content, /request\.action === 'analyzeSingleFigurePanelWithLLM'/);
+  const workflow = functionBody(
+    content, 'analyzeSingleFigurePanelWithLLM', 'askFigurePanelWithLLM'
+  );
+  assert.doesNotMatch(workflow, /document:\s*\{[^}]*paragraphs/);
+  assert.doesNotMatch(workflow, /type: 'LLM_ANALYZE_FIGURES'/);
 });
 
 test('Figure argument chain, evidence groups, and logic bridges are independently collapsible', () => {
@@ -164,12 +172,14 @@ test('single Figure work preserves user-controlled Figure and Panel expansion ac
   assert.doesNotMatch(popup, /details\.open = figure\.expanded === true \|\| loading/);
 });
 
-test('Panel cards provide a bounded checkbox follow-up menu that uses the Figure route', () => {
+test('Panel cards provide a bounded follow-up menu using the same dedicated Panel planner', () => {
   const content = read('content.js');
   const popup = read('popup.js');
   const css = read('popup.css');
   assert.match(content, /async function askFigurePanelWithLLM\(/);
   assert.match(content, /type: 'LLM_ASK_FIGURE_PANEL'/);
+  assert.match(content, /prepareFigurePanelImageVariants\(state\.figure, panelKey\)/);
+  assert.match(content, /panelFollowupHistories/);
   assert.match(popup, /const PANEL_FOLLOWUP_OPTIONS/);
   assert.match(popup, /function createPanelFollowupControl\(/);
   assert.match(popup, /function runFigurePanelFollowup\(/);
@@ -177,6 +187,20 @@ test('Panel cards provide a bounded checkbox follow-up menu that uses the Figure
   assert.match(popup, /customQuestion/);
   assert.match(popup, /workspace-panel-followup-custom/);
   assert.match(css, /\.workspace-panel-followup-chooser/);
+  assert.match(popup, /formatFigurePanelInputBasis/);
+});
+
+test('single Panel images use one best source, reliable canvas crop, and a 1200/960/768 ladder', () => {
+  const content = read('content.js');
+  const workflow = functionBody(
+    content, 'prepareFigurePanelImageVariants', 'closeFigureImageViewer'
+  );
+  assert.match(content, /function normalizePanelCropGeometry/);
+  assert.match(content, /function encodeFigureImageVariant/);
+  assert.match(workflow, /findDedicatedPanelImageElement/);
+  assert.match(workflow, /\[1200, 960, 768\]/);
+  assert.match(workflow, /inputMode = dedicated \|\| reliableCrop \? 'panel_crop' : 'figure_image'/);
+  assert.match(content, /context\.drawImage\(/);
 });
 
 test('deep workflow does not clear standard Figure results', () => {

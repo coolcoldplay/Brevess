@@ -347,7 +347,9 @@
       };
     }
 
-    function createTaskAdapter(settings, taskType, requirements = {}, context = {}, budgetKind) {
+    function createTaskAdapter(
+      settings, taskType, requirements = {}, context = {}, budgetKind, adapterOptions = {}
+    ) {
       const route = shared.resolveTaskProfile(settings, taskType, requirements);
       const rawAdapter = shared.createProviderAdapter({
         providerId: route.providerId,
@@ -355,12 +357,23 @@
         fetchImpl
       });
       const routePublic = publicRoute(route);
+      const tokenPolicyCap = Math.max(0, Number(adapterOptions.tokenPolicyCap) || 0);
+      const effectiveTokenPolicy = tokenPolicyCap
+        ? {
+          ...route.tokenPolicy,
+          ...(route.tokenPolicy?.mode === 'manual'
+            ? { manualMax: Math.min(tokenPolicyCap, Number(route.tokenPolicy.manualMax) || tokenPolicyCap) }
+            : { autoCap: Math.min(tokenPolicyCap, Number(route.tokenPolicy?.autoCap) || tokenPolicyCap) })
+        }
+        : route.tokenPolicy;
       const adapter = shared.createTokenManagedAdapter({
         rawAdapter,
         kind: budgetKind,
-        tokenPolicy: route.tokenPolicy,
+        tokenPolicy: effectiveTokenPolicy,
         adapterCap: rawAdapter.maxOutputTokens,
         requestTimeoutMs: TASK_TIMEOUTS_MS[taskType] || 180000,
+        maxTokenLimitRetries: adapterOptions.maxTokenLimitRetries,
+        maxTruncationRetries: adapterOptions.maxTruncationRetries,
         onProgress: event => context.onProgress?.({
           ...event,
           taskType,
@@ -369,7 +382,7 @@
           route: routePublic
         })
       });
-      return { adapter, route, routePublic };
+      return { adapter, rawAdapter, route, routePublic, tokenPolicy: effectiveTokenPolicy };
     }
 
     function routeProgress(context, routePublic) {
@@ -817,6 +830,24 @@
       if (!/^figure-(?:s)?\d{1,3}$/.test(figureId) || !caption) {
         throw invalidSettings(['figures']);
       }
+      const imageVariants = (Array.isArray(value?.imageVariants) ? value.imageVariants : [])
+        .slice(0, 6).map(candidate => {
+          const image = shared.normalizeImageInputs([candidate], { maxImages: 1 })[0];
+          const width = Math.max(0, Math.round(Number(candidate?.width) || 0));
+          const height = Math.max(0, Math.round(Number(candidate?.height) || 0));
+          if (!image || !width || !height) return null;
+          return {
+            ...image,
+            width,
+            height,
+            maxEdge: Math.max(0, Math.round(
+              Number(candidate?.maxEdge) || Math.max(width, height)
+            )),
+            inputMode: candidate?.inputMode === 'panel_crop'
+              ? 'panel_crop' : 'figure_image',
+            pixelsSupplied: true
+          };
+        }).filter(Boolean);
       return {
         figureId,
         figureLabel: String(value?.figureLabel || figureId).trim().slice(0, 80),
@@ -833,7 +864,8 @@
           text: String(item?.text || '').normalize('NFKC')
             .replace(/\s+/g, ' ').trim().slice(0, 1200)
         })),
-        images: shared.normalizeImageInputs(value?.images)
+        images: shared.normalizeImageInputs(value?.images),
+        imageVariants
       };
     }
 
@@ -1329,10 +1361,11 @@
       };
     }
 
-    function normalizePanelFollowupInput(message) {
+    function normalizeSinglePanelInput(message, requestMode) {
       const document = message?.document || {};
       const figure = normalizeFigureInput(message?.figure, document.title);
-      const panelSource = isPlainObject(message?.panel) ? message.panel : {};
+      const panelSource = isPlainObject(message?.panel)
+        ? message.panel : { panel: message?.panelId || message?.panel };
       const panel = String(panelSource.panel || '').trim().toUpperCase();
       if (!/^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(panel)) {
         throw invalidSettings(['panel']);
@@ -1342,9 +1375,20 @@
       }
       const topics = shared.normalizePanelFollowupTopics(message?.topics);
       const customQuestion = shared.normalizePanelCustomQuestion(message?.customQuestion);
-      if (!topics.length && !customQuestion) throw invalidSettings(['topics', 'customQuestion']);
+      if (requestMode === 'followup' && !topics.length && !customQuestion) {
+        throw invalidSettings(['topics', 'customQuestion']);
+      }
+      const documentHash = String(
+        message?.documentHash || document.documentHash || ''
+      ).replace(/^sha256:/i, '').trim().toLowerCase();
       return {
         ...figure,
+        requestMode,
+        documentHash: /^[a-f0-9]{64}$/.test(documentHash)
+          ? documentHash : shared.stableHash({
+            title: document.title || '', figureId: figure.figureId, caption: figure.caption
+          }),
+        panelId: panel,
         panel: {
           panel,
           role: String(panelSource.role || '').trim().slice(0, 80),
@@ -1357,39 +1401,218 @@
           directObservation: String(panelSource.directObservation || '').trim().slice(0, 1000)
         },
         topics,
-        customQuestion
+        customQuestion,
+        history: (Array.isArray(message?.history) ? message.history : []).slice(-100)
+          .map((item, index) => ({
+            historyId: String(item?.historyId || item?.turnId || `panel-history-${index + 1}`)
+              .slice(0, 120),
+            role: item?.role === 'assistant' ? 'assistant' : 'user',
+            content: String(item?.content || item?.answer || item?.question || '')
+              .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 3200)
+          })).filter(item => item.content)
       };
     }
 
-    async function askFigurePanel(settings, message, context) {
+    function publicFigurePanelPlan(plan, attempts) {
+      return {
+        topic: plan.topic,
+        inputMode: plan.inputMode,
+        imageWidth: plan.imageWidth,
+        imageHeight: plan.imageHeight,
+        imageMaxEdge: plan.imageMaxEdge,
+        pixelsSupplied: plan.pixelsSupplied,
+        selectedSources: [...plan.selectedSources],
+        degradationReason: plan.degradationReason,
+        estimatedInputTokens: plan.estimatedInputTokens,
+        inputBudgetTokens: plan.inputBudgetTokens,
+        includedHistoryIds: plan.history.map(item => item.historyId),
+        attempts
+      };
+    }
+
+    async function runSinglePanelRequest(settings, message, context, requestMode) {
       requireLlmReady(settings);
-      const input = normalizePanelFollowupInput(message);
-      const task = createTaskAdapter(settings, 'figure', { vision: true }, context, 'singleSummary');
-      const { adapter, route, routePublic } = task;
-      const visualInput = route.capabilityMode === 'vision' && input.images.length > 0;
-      const prompt = shared.compilePanelFollowupPrompt(input, {
-        visualInput,
-        topicPrompts: settings.figurePanelFollowupPrompts
+      const input = normalizeSinglePanelInput(message, requestMode);
+      const operation = operationFor(message);
+      await waitForOperation(operation);
+      const task = createTaskAdapter(
+        settings, 'figure', { vision: true }, context, 'figurePanel',
+        { maxTokenLimitRetries: 0, maxTruncationRetries: 0, tokenPolicyCap: 4096 }
+      );
+      const { adapter, rawAdapter, route, routePublic } = task;
+      const profile = settings?.profiles?.[route.effectiveProfileId] || {};
+      const contextWindowTokens = shared.getProviderContextWindowTokens(
+        route.providerId, route.config, profile.contextWindowTokens
+      );
+      const outputBudget = shared.computeOutputTokenBudget('figurePanel', {
+        tokenPolicy: task.tokenPolicy,
+        adapterCap: adapter.maxOutputTokens,
+        units: 1
       });
-      const raw = await requestFigureJson(adapter, {
-        ...prompt,
-        images: visualInput ? input.images : [],
-        outputUnits: 1
-      }, { onProgress: () => {} }, {
+      const planInput = {
+        ...input,
+        existingPanelInterpretation: requestMode === 'followup' ? input.panel : null,
+        imageVariants: route.capabilityMode === 'vision' ? input.imageVariants : [],
+        contextWindowTokens,
+        outputTokens: outputBudget.initial
+      };
+      const plans = shared.buildFigurePanelPlans(planInput);
+      if (!plans.length || plans[0].estimatedInputTokens > plans[0].inputBudgetTokens) {
+        const error = new Error('The selected model context window cannot fit this Panel request');
+        error.code = 'CONTEXT_BUDGET_EXCEEDED';
+        throw error;
+      }
+      const figureHash = shared.stableHash({
+        figureId: input.figureId,
+        caption: input.caption,
+        panelHints: input.panelHints,
+        contextParagraphs: input.contextParagraphs.map(item => [item.paragraphId, item.text]),
+        imageVariants: input.imageVariants.map(item => [
+          item.width, item.height, item.inputMode, shared.stableHash(item.dataUrl)
+        ])
+      });
+      const questionSignature = shared.stableHash({
+        topics: input.topics,
+        customQuestion: input.customQuestion,
+        history: input.history.map(item => [item.role, item.content]),
+        existingPanelInterpretation: requestMode === 'followup' ? input.panel : null
+      });
+      const records = plans.map(plan => ({
+        plan,
+        key: shared.buildFigurePanelCacheKey({
+          documentHash: input.documentHash,
+          figureHash,
+          panelId: input.panelId,
+          providerId: route.providerId,
+          model: route.model,
+          inputMode: plan.inputMode,
+          imageWidth: plan.imageWidth,
+          imageHeight: plan.imageHeight,
+          promptVersion: shared.FIGURE_PANEL_PROMPT_VERSION,
+          requestMode,
+          questionSignature,
+          profileSignature: route.profileSignature
+        })
+      }));
+      if (message?.forceRefresh !== true) {
+        const cached = await cacheStore.getMany(records.map(record => record.key));
+        for (const record of records) {
+          const value = cached.get(record.key)?.panelResult;
+          if (!value || value.panel !== input.panelId || value.figureId !== input.figureId) continue;
+          const resultKey = requestMode === 'followup' ? 'panelFollowup' : 'panelAnalysis';
+          return {
+            [resultKey]: { ...value, cacheHit: true },
+            cacheHit: true,
+            documentHash: input.documentHash,
+            route: routePublic
+          };
+        }
+      }
+
+      const progressBase = {
         figureId: input.figureId,
         figureLabel: input.figureLabel,
-        expectedPanels: [input.panel.panel],
+        expectedPanels: [input.panelId],
         expectedPanelCount: 1,
         completedFigures: 0,
         totalFigures: 1,
         providerId: route.providerId,
         model: route.model,
-        capabilityMode: route.capabilityMode
-      });
-      return {
-        panelFollowup: shared.validatePanelFollowup(raw, input, { visualInput }),
-        route: routePublic
+        capabilityMode: route.capabilityMode,
+        operationId: String(message?.operationId || '').slice(0, 100)
       };
+      context.onProgress?.({ phase: 'figure_panel_planning', ...progressBase });
+      let lastError = null;
+      let recordIndex = 0;
+      let currentOutputTokens = outputBudget.initial;
+      let degradationOverride = '';
+      for (let providerAttempt = 0;
+        providerAttempt < 3 && recordIndex < records.length;
+        providerAttempt += 1) {
+        const { plan, key } = records[recordIndex];
+        await waitForOperation(operation);
+        const visualInput = plan.pixelsSupplied === true;
+        const promptInput = { ...input, ...plan };
+        const prompt = requestMode === 'followup'
+          ? shared.compilePanelFollowupPrompt(promptInput, {
+            visualInput,
+            topicPrompts: settings.figurePanelFollowupPrompts
+          })
+          : shared.compileFigurePanelInterpretationPrompt(promptInput, { visualInput });
+        try {
+          const raw = await rawAdapter.generateJson({
+            ...prompt,
+            images: plan.images,
+            outputUnits: 1,
+            maxOutputTokens: currentOutputTokens,
+            timeoutMs: TASK_TIMEOUTS_MS.figure,
+            signal: operation?.controller?.signal
+          });
+          const validated = requestMode === 'followup'
+            ? shared.validatePanelFollowup(raw, input, { visualInput })
+            : shared.validateFigurePanelInterpretation(raw, input, { visualInput });
+          const panelResult = {
+            ...validated,
+            inputBasis: {
+              ...publicFigurePanelPlan(plan, providerAttempt + 1),
+              ...(degradationOverride ? { degradationReason: degradationOverride } : {}),
+              outputBudgetTokens: currentOutputTokens
+            },
+            cacheHit: false
+          };
+          await cacheStore.setMany([{ key, createdAt: Date.now(), panelResult }]);
+          context.onProgress?.({
+            phase: 'figure_panel_complete', ...progressBase,
+            inputMode: plan.inputMode, attempts: providerAttempt + 1
+          });
+          const resultKey = requestMode === 'followup' ? 'panelFollowup' : 'panelAnalysis';
+          return {
+            [resultKey]: panelResult,
+            cacheHit: false,
+            documentHash: input.documentHash,
+            route: routePublic
+          };
+        } catch (error) {
+          lastError = error;
+          const rejectedVisualInput = plan.pixelsSupplied &&
+            error?.code === 'PROVIDER_REJECTED';
+          if (rejectedVisualInput) degradationOverride = 'provider_rejected_pixels';
+          if (error?.code === 'TOKEN_LIMIT_REJECTED') {
+            const suggested = Number(error?.suggestedMaxOutputTokens);
+            const reduced = Number.isFinite(suggested) && suggested >= 512
+              ? suggested : currentOutputTokens * 0.75;
+            currentOutputTokens = Math.max(
+              512,
+              Math.min(currentOutputTokens - 256, Math.floor(reduced / 256) * 256)
+            );
+          }
+          const nextIndex = rejectedVisualInput
+            ? records.findIndex((record, index) =>
+              index > recordIndex && record.plan.pixelsSupplied === false)
+            : recordIndex + 1;
+          const next = nextIndex >= 0 ? records[nextIndex]?.plan : null;
+          if ((!shared.isFigurePanelCapacityError(error) && !rejectedVisualInput) || !next ||
+              next.estimatedInputTokens >= plan.estimatedInputTokens) throw error;
+          context.onProgress?.({
+            phase: 'figure_panel_retry', ...progressBase,
+            attempt: providerAttempt + 2,
+            previousEstimatedInputTokens: plan.estimatedInputTokens,
+            estimatedInputTokens: next.estimatedInputTokens,
+            inputMode: next.inputMode,
+            errorCode: error.code || 'CONTEXT_BUDGET_EXCEEDED'
+          });
+          recordIndex = nextIndex;
+        }
+      }
+      throw lastError || new Error('Panel request did not complete');
+    }
+
+    function analyzeFigurePanel(settings, message, context) {
+      return runSinglePanelRequest(settings, message, context, 'interpretation');
+    }
+
+    function askFigurePanel(settings, message, context) {
+      return runSinglePanelRequest(settings, message, context, 'followup');
     }
 
     function settingsForExplicitProfile(settings, profileId) {
@@ -2396,6 +2619,14 @@
 
       if (message.type === 'LLM_ANALYZE_FIGURES') {
         return analyzeFigures(
+          await shared.loadSettings(storageArea),
+          message,
+          context
+        );
+      }
+
+      if (message.type === 'LLM_ANALYZE_FIGURE_PANEL') {
+        return analyzeFigurePanel(
           await shared.loadSettings(storageArea),
           message,
           context

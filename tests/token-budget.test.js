@@ -15,6 +15,7 @@ test('defines output budget rules for every request kind', () => {
   assert.deepEqual(RULES.figure, { base: 3200, perUnit: 1400, floor: 6144, ceiling: 24576 });
   assert.deepEqual(RULES.crossFigure, { base: 3200, perUnit: 1200, floor: 6144, ceiling: 32768 });
   assert.deepEqual(RULES.articleChat, { base: 4096, perUnit: 512, floor: 4096, ceiling: 12288 });
+  assert.deepEqual(RULES.figurePanel, { base: 2048, perUnit: 0, floor: 2048, ceiling: 4096 });
   assert.deepEqual(RULES.panelChat, { base: 2048, perUnit: 384, floor: 2048, ceiling: 4096 });
 });
 
@@ -30,6 +31,9 @@ test('keeps article chat and Panel output budgets within their independent floor
   });
   assert.deepEqual(computeOutputTokenBudget('panelChat', { units: 100 }), {
     initial: 4096, ceiling: 4096, mode: 'auto'
+  });
+  assert.deepEqual(computeOutputTokenBudget('figurePanel', { units: 1 }), {
+    initial: 2048, ceiling: 4096, mode: 'auto'
   });
 });
 
@@ -106,6 +110,17 @@ test('retries one provider token-limit rejection at a lower request budget', asy
   assert.deepEqual(await adapter.generateJson({ outputUnits: 30 }), { ok: true });
   assert.deepEqual(seen, [12032, 2816]);
   assert.deepEqual(progress, [{ phase: 'token_limit_retry', maxOutputTokens: 2816 }]);
+});
+
+test('can delegate every Panel capacity retry to a strictly smaller input plan', async () => {
+  let attempts = 0;
+  const error = Object.assign(new Error('limit'), { code: 'TOKEN_LIMIT_REJECTED' });
+  const adapter = createTokenManagedAdapter({
+    rawAdapter: { async generateJson() { attempts += 1; throw error; } },
+    kind: 'figurePanel', maxTokenLimitRetries: 0, maxTruncationRetries: 0
+  });
+  await assert.rejects(() => adapter.generateJson({ outputUnits: 1 }), failure => failure === error);
+  assert.equal(attempts, 1);
 });
 
 test('retries one auto output truncation at a larger budget', async () => {

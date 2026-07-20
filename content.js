@@ -3142,29 +3142,69 @@ async function fetchFigureImage(source) {
     }
 }
 
-function encodeFigureImage(sourceImage) {
+function normalizePanelCropGeometry(value, sourceWidth, sourceHeight) {
+    if (!value || value.reliable !== true) return null;
+    let x = Number(value.x);
+    let y = Number(value.y);
+    let width = Number(value.width);
+    let height = Number(value.height);
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+    if (x >= 0 && y >= 0 && x <= 1 && y <= 1 && width <= 1 && height <= 1) {
+        x *= sourceWidth;
+        y *= sourceHeight;
+        width *= sourceWidth;
+        height *= sourceHeight;
+    }
+    x = Math.max(0, Math.round(x));
+    y = Math.max(0, Math.round(y));
+    width = Math.min(sourceWidth - x, Math.round(width));
+    height = Math.min(sourceHeight - y, Math.round(height));
+    if (width < 96 || height < 72 || width * height < sourceWidth * sourceHeight * .02) return null;
+    return { x, y, width, height };
+}
+
+function encodeFigureImageVariant(sourceImage, maxEdge, cropGeometry = null) {
     const sourceWidth = Number(sourceImage.naturalWidth || sourceImage.width) || 0;
     const sourceHeight = Number(sourceImage.naturalHeight || sourceImage.height) || 0;
     if (!sourceWidth || !sourceHeight) throw new Error('Figure image has no dimensions');
-    const scale = Math.min(1, FIGURE_IMAGE_MAX_EDGE / Math.max(sourceWidth, sourceHeight));
+    const crop = normalizePanelCropGeometry(cropGeometry, sourceWidth, sourceHeight) || {
+        x: 0, y: 0, width: sourceWidth, height: sourceHeight
+    };
+    const requestedEdge = Math.max(256, Math.min(FIGURE_IMAGE_MAX_EDGE, Number(maxEdge) || 1200));
+    const scale = Math.min(1, requestedEdge / Math.max(crop.width, crop.height));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    canvas.width = Math.max(1, Math.round(crop.width * scale));
+    canvas.height = Math.max(1, Math.round(crop.height * scale));
     const context = canvas.getContext('2d', { alpha: false });
     if (!context) throw new Error('Canvas is unavailable');
     context.fillStyle = '#ffffff';
     context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+    context.drawImage(
+        sourceImage,
+        crop.x, crop.y, crop.width, crop.height,
+        0, 0, canvas.width, canvas.height
+    );
     for (const quality of [0.86, 0.78, 0.68, 0.58, 0.48]) {
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
         if (figureDataUrlBytes(dataUrl) <= FIGURE_IMAGE_MAX_BYTES) {
-            return { mediaType: 'image/jpeg', dataUrl };
+            return {
+                mediaType: 'image/jpeg', dataUrl,
+                width: canvas.width, height: canvas.height,
+                maxEdge: Math.max(canvas.width, canvas.height)
+            };
         }
     }
     throw new Error('Figure image remains too large after compression');
 }
 
-async function prepareFigureImage(imageElement) {
+function encodeFigureImage(sourceImage) {
+    const { width, height, maxEdge, ...image } = encodeFigureImageVariant(
+        sourceImage, FIGURE_IMAGE_MAX_EDGE
+    );
+    return image;
+}
+
+async function loadPreparedFigureSource(imageElement) {
     const fallbackSource = imageElement?.currentSrc || imageElement?.src ||
         imageElement?.getAttribute?.('src') ||
         imageElement?.getAttribute?.('data-src') ||
@@ -3177,21 +3217,23 @@ async function prepareFigureImage(imageElement) {
     let lastError = null;
     for (const source of candidates) {
         try {
-            const sourceImage = imageElement.complete && imageElement.naturalWidth &&
+            return imageElement.complete && imageElement.naturalWidth &&
                 (imageElement.currentSrc === source || imageElement.src === source)
                 ? imageElement : await loadFigureImage(source);
-            return encodeFigureImage(sourceImage);
         } catch (error) {
             lastError = error;
             try {
-                const fetched = await fetchFigureImage(source);
-                return encodeFigureImage(fetched);
+                return await fetchFigureImage(source);
             } catch (fetchError) {
                 lastError = fetchError;
             }
         }
     }
     throw lastError || new Error('Figure image could not be loaded');
+}
+
+async function prepareFigureImage(imageElement) {
+    return encodeFigureImage(await loadPreparedFigureSource(imageElement));
 }
 
 async function figureRouteSupportsVision() {
@@ -3227,6 +3269,69 @@ async function prepareFigureImages(figure) {
         }
     }
     return prepared;
+}
+
+function figureImagePixelArea(imageElement) {
+    const width = Number(imageElement?.naturalWidth || imageElement?.width) || 0;
+    const height = Number(imageElement?.naturalHeight || imageElement?.height) || 0;
+    return width * height;
+}
+
+function findDedicatedPanelImageElement(figure, panelId) {
+    const panel = String(panelId || '').toUpperCase();
+    const marker = new RegExp(`^(?:panel\\s*)?${panel}$`, 'i');
+    return Array.from(figure?.imageElements || []).find(imageElement => {
+        const values = [
+            imageElement?.getAttribute?.('data-panel'),
+            imageElement?.getAttribute?.('data-panel-id'),
+            imageElement?.getAttribute?.('data-subfigure'),
+            imageElement?.getAttribute?.('aria-label'),
+            imageElement?.getAttribute?.('alt')
+        ].map(value => String(value || '').normalize('NFKC').trim());
+        return values.some(value => marker.test(value));
+    }) || null;
+}
+
+async function prepareFigurePanelImageVariants(figure, panelId) {
+    if (!await figureRouteSupportsVision()) return [];
+    const allImages = Array.from(figure?.imageElements || [])
+        .sort((left, right) => figureImagePixelArea(right) - figureImagePixelArea(left));
+    const dedicated = findDedicatedPanelImageElement(figure, panelId);
+    const imageElement = dedicated || allImages[0];
+    if (!imageElement) return [];
+    let sourceImage;
+    try {
+        sourceImage = await loadPreparedFigureSource(imageElement);
+    } catch (error) {
+        console.warn('SCI Panel 解读：图片读取失败，改用图注与相关正文', error.message);
+        return [];
+    }
+    const geometry = dedicated ? null : (
+        figure?.panelGeometries?.[String(panelId || '').toUpperCase()] || null
+    );
+    const sourceWidth = Number(sourceImage.naturalWidth || sourceImage.width) || 0;
+    const sourceHeight = Number(sourceImage.naturalHeight || sourceImage.height) || 0;
+    const reliableCrop = normalizePanelCropGeometry(geometry, sourceWidth, sourceHeight);
+    const inputMode = dedicated || reliableCrop ? 'panel_crop' : 'figure_image';
+    const variants = [];
+    const seenDimensions = new Set();
+    for (const maxEdge of [1200, 960, 768]) {
+        let encoded;
+        try {
+            encoded = encodeFigureImageVariant(sourceImage, maxEdge, reliableCrop ? {
+                ...reliableCrop,
+                reliable: true
+            } : null);
+        } catch (error) {
+            console.warn(`SCI Panel 解读：跳过 ${maxEdge}px 图片版本`, error.message);
+            continue;
+        }
+        const key = `${encoded.width}x${encoded.height}`;
+        if (seenDimensions.has(key)) continue;
+        seenDimensions.add(key);
+        variants.push({ ...encoded, inputMode, pixelsSupplied: true });
+    }
+    return variants;
 }
 
 const FIGURE_IMAGE_VIEWER_ID = 'sci-figure-image-viewer';
@@ -3447,6 +3552,7 @@ function ensureFigureWalkthroughState(figureId) {
         deepLoading: false,
         deepError: String(restored?.deepError || ''),
         panelFollowups: restored?.panelFollowups || {},
+        panelFollowupHistories: restored?.panelFollowupHistories || {},
         panelFollowupLoading: {},
         panelFollowupErrors: restored?.panelFollowupErrors || {},
         panelAnalyses: restored?.panelAnalyses || {},
@@ -3751,6 +3857,32 @@ function mergeSinglePanelIntoFigureResult(result, panel, figure) {
     };
 }
 
+async function computePageDocumentHash() {
+    const snapshot = getCanonicalArticleSnapshot();
+    const known = String(snapshot?.documentHash || '').replace(/^sha256:/i, '').toLowerCase();
+    if (/^[a-f0-9]{64}$/.test(known)) return known;
+    const canonical = JSON.stringify((Array.isArray(snapshot?.paragraphs)
+        ? snapshot.paragraphs : []).map(item => ({
+        paragraphId: String(item?.paragraphId || ''),
+        sectionTitle: String(item?.sectionTitle || ''),
+        sectionPath: Array.isArray(item?.sectionPath) ? item.sectionPath : [],
+        text: String(item?.text || '').normalize('NFKC').replace(/\s+/g, ' ').trim()
+    })));
+    if (globalThis.crypto?.subtle) {
+        const digest = await globalThis.crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(canonical)
+        );
+        return Array.from(new Uint8Array(digest), value =>
+            value.toString(16).padStart(2, '0')).join('');
+    }
+    let fallback = 2166136261;
+    for (let index = 0; index < canonical.length; index += 1) {
+        fallback ^= canonical.charCodeAt(index);
+        fallback = Math.imul(fallback, 16777619);
+    }
+    return (fallback >>> 0).toString(16).padStart(8, '0').repeat(8);
+}
+
 async function analyzeSingleFigurePanelWithLLM(
     figureId,
     panelId,
@@ -3781,29 +3913,27 @@ async function analyzeSingleFigurePanelWithLLM(
     });
     figureDepthAnalysisPromise = (async () => {
         try {
-            const paragraphs = extractArticleWithTrace('analyze_single_figure_panel')
-                .map(item => ({
-                    paragraphId: String(item?.paragraphId || ''),
-                    sectionTitle: String(item?.sectionTitle || ''),
-                    text: String(item?.text || '')
-                }));
             await waitForLocalOperation(operation);
-            const images = await prepareFigureImages(state.figure);
+            const [documentHash, imageVariants] = await Promise.all([
+                computePageDocumentHash(),
+                prepareFigurePanelImageVariants(state.figure, normalizedPanelId)
+            ]);
             await waitForLocalOperation(operation);
             const response = await chrome.runtime.sendMessage({
-                type: 'LLM_ANALYZE_FIGURES',
-                analysisDepth: 'standard',
+                type: 'LLM_ANALYZE_FIGURE_PANEL',
                 forceRefresh: forceRefresh === true,
                 operationId: operation.operationId,
-                document: { title: document.title, paragraphs },
-                figures: [{
+                documentHash,
+                document: { title: document.title, documentHash },
+                figure: {
                     figureId: state.figure.figureId,
                     figureLabel: state.figure.figureLabel,
                     caption: state.figure.caption,
                     panelHints: [normalizedPanelId],
                     contextParagraphs: state.figure.contextParagraphs,
-                    images
-                }]
+                    imageVariants
+                },
+                panel: { panel: normalizedPanelId }
             });
             if (!response?.success) {
                 const error = new Error(response?.error?.message || 'FIGURE_PANEL_ANALYSIS_FAILED');
@@ -3811,9 +3941,7 @@ async function analyzeSingleFigurePanelWithLLM(
                 throw error;
             }
             if (!isCurrentFigureOperation(operation)) throwStaleFigureOperation(operation);
-            const result = response.data?.figureResults?.[0];
-            const panel = (Array.isArray(result?.panels) ? result.panels : [])
-                .find(item => normalizeRequestedPanelId(item?.panel) === normalizedPanelId);
+            const panel = response.data?.panelAnalysis;
             if (!panel) {
                 const error = new Error('FIGURE_PANEL_RESULT_MISSING');
                 error.code = 'INVALID_RESPONSE';
@@ -3874,6 +4002,7 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
     }
     const panelKey = String(panel.panel || '').toUpperCase();
     state.panelFollowups ||= {};
+    state.panelFollowupHistories ||= {};
     state.panelFollowupLoading ||= {};
     state.panelFollowupErrors ||= {};
     if (state.panelFollowupLoading[panelKey]) {
@@ -3884,21 +4013,28 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
     state.panelFollowupLoading[panelKey] = true;
     state.panelFollowupErrors[panelKey] = '';
     try {
-        const images = await prepareFigureImages(state.figure);
+        const [documentHash, imageVariants] = await Promise.all([
+            computePageDocumentHash(),
+            prepareFigurePanelImageVariants(state.figure, panelKey)
+        ]);
+        const history = Array.isArray(state.panelFollowupHistories[panelKey])
+            ? state.panelFollowupHistories[panelKey] : [];
         const response = await chrome.runtime.sendMessage({
             type: 'LLM_ASK_FIGURE_PANEL',
-            document: { title: document.title },
+            documentHash,
+            document: { title: document.title, documentHash },
             figure: {
                 figureId: state.figure.figureId,
                 figureLabel: state.figure.figureLabel,
                 caption: state.figure.caption,
                 panelHints: state.figure.panelHints,
                 contextParagraphs: state.figure.contextParagraphs,
-                images
+                imageVariants
             },
             panel,
             topics: selectedTopics,
-            customQuestion: normalizedQuestion
+            customQuestion: normalizedQuestion,
+            history
         });
         if (!response?.success || !response.data?.panelFollowup) {
             const error = new Error(response?.error?.message || 'FIGURE_PANEL_FOLLOWUP_FAILED');
@@ -3906,6 +4042,19 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
             throw error;
         }
         state.panelFollowups[panelKey] = response.data.panelFollowup;
+        state.panelFollowupHistories[panelKey] = [
+            ...history,
+            {
+                historyId: `panel-question-${Date.now()}`,
+                role: 'user',
+                content: normalizedQuestion || selectedTopics.join(', ')
+            },
+            {
+                historyId: `panel-answer-${Date.now()}`,
+                role: 'assistant',
+                content: response.data.panelFollowup.answer
+            }
+        ];
         scheduleCurrentArticleArchiveSave();
         return {
             success: true,
@@ -4721,6 +4870,7 @@ async function analyzeFiguresWithLLM(options = {}) {
                         deepLoading: false,
                         deepError: '',
                         panelFollowups: previous?.panelFollowups || {},
+                        panelFollowupHistories: previous?.panelFollowupHistories || {},
                         panelFollowupLoading: {},
                         panelFollowupErrors: previous?.panelFollowupErrors || {},
                         panelAnalyses: previous?.panelAnalyses || {},
@@ -5282,6 +5432,7 @@ function buildFigureWorkspaceSnapshot({ forceRefresh = false } = {}) {
             deepLoading: source.deepLoading === true,
             deepError: String(source.deepError || ''),
             panelFollowups: source.panelFollowups || {},
+            panelFollowupHistories: source.panelFollowupHistories || {},
             panelFollowupLoading: source.panelFollowupLoading || {},
             panelFollowupErrors: source.panelFollowupErrors || {},
             panelAnalyses: source.panelAnalyses || {},

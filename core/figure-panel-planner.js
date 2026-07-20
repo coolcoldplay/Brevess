@@ -1,0 +1,304 @@
+(function attach(root, factory) {
+  const api = factory(root.SciLLM || {});
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.SciLLM = Object.assign(root.SciLLM || {}, api);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const FIGURE_PANEL_PROMPT_VERSION = '1';
+  const FIGURE_PANEL_IMAGE_EDGES = Object.freeze([1200, 960, 768]);
+  const CAPACITY_ERROR_CODES = new Set([
+    'TOKEN_LIMIT_REJECTED', 'CONTEXT_BUDGET_EXCEEDED', 'OUTPUT_TRUNCATED'
+  ]);
+
+  function cleanText(value, maximum = 8000) {
+    return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
+  }
+
+  function panelRef(value) {
+    const normalized = cleanText(value, 20).toUpperCase();
+    return /^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(normalized) ? normalized : '';
+  }
+
+  function classifyFigurePanelQuestion(input = {}) {
+    const topics = new Set(Array.isArray(input.topics) ? input.topics : []);
+    const question = cleanText(input.customQuestion || input.question, 1600).toLowerCase();
+    if (topics.has('axes_reading') || /(?:axis|axes|curve|trend|image|colour|color|signal|band|morpholog|横轴|纵轴|坐标|曲线|趋势|颜色|亮度|条带|形态|图像)/i.test(question)) {
+      return 'visual';
+    }
+    if (topics.has('grouping') || /(?:group|control|treat|compar|statistic|p[ -]?value|分组|对照|处理组|比较|统计|显著)/i.test(question)) {
+      return 'grouping_stats';
+    }
+    if (topics.has('technique_principle') || topics.has('sample_information') ||
+        /(?:method|assay|protocol|sample|cohort|technique|方法|技术|原理|样本|队列)/i.test(question)) {
+      return 'methods';
+    }
+    if (/(?:argument|evidence chain|role|contribute|mechanism|论证|证据链|作用|贡献|机制)/i.test(question)) {
+      return 'argument_role';
+    }
+    return 'general';
+  }
+
+  function markerPanels(match) {
+    const start = String(match[1] || match[3] || '').toUpperCase();
+    const end = String(match[2] || match[4] || start).toUpperCase();
+    if (!start) return [];
+    if (!/^[A-Z]$/.test(start) || !/^[A-Z]$/.test(end) || end < start) return [start];
+    const values = [];
+    for (let code = start.charCodeAt(0); code <= end.charCodeAt(0); code += 1) {
+      values.push(String.fromCharCode(code));
+    }
+    return values;
+  }
+
+  function extractFigurePanelCaption(caption, requestedPanel) {
+    const text = cleanText(caption, 12000);
+    const panel = panelRef(requestedPanel);
+    const pattern = /\(\s*([A-Z])(?:\s*[-\u2013\u2014]\s*([A-Z]))?\s*\)|(?:^|[.;]\s+)([A-Z])(?:\s*[-\u2013\u2014]\s*([A-Z]))?\s*[:.]/g;
+    const markers = [];
+    let match;
+    while ((match = pattern.exec(text))) {
+      markers.push({ index: match.index, end: pattern.lastIndex, panels: markerPanels(match) });
+    }
+    if (!markers.length) {
+      return { panel, sharedLegend: '', targetText: text.slice(0, 6000), combined: text.slice(0, 6000) };
+    }
+    const sharedLegend = text.slice(0, markers[0].index).trim().slice(0, 2400);
+    const ranges = markers.map((marker, index) => ({
+      ...marker,
+      text: text.slice(marker.index, markers[index + 1]?.index ?? text.length).trim()
+    }));
+    const targets = ranges.filter(range => range.panels.includes(panel));
+    const targetText = targets.map(range => range.text).join(' ').slice(0, 4800);
+    const combined = [sharedLegend, targetText || ranges[0]?.text || '']
+      .filter(Boolean).join(' ').slice(0, 6400);
+    return { panel, sharedLegend, targetText, combined };
+  }
+
+  function queryTerms(value) {
+    const normalized = cleanText(value, 4000).toLowerCase();
+    const latin = normalized.match(/[a-z][a-z0-9+._-]{2,}/g) || [];
+    const cjk = [];
+    for (const run of normalized.match(/[\u3400-\u9fff]{2,}/g) || []) {
+      for (let index = 0; index < run.length - 1; index += 1) cjk.push(run.slice(index, index + 2));
+    }
+    return [...new Set([...latin, ...cjk])].slice(0, 80);
+  }
+
+  function sectionWeight(sectionTitle, topic) {
+    const section = cleanText(sectionTitle, 240).toLowerCase();
+    const methods = /method|material|protocol|方法|材料|实验设计/.test(section);
+    const results = /result|finding|结果|发现/.test(section);
+    const discussion = /discussion|conclusion|讨论|结论/.test(section);
+    if (topic === 'methods') return methods ? 7 : results ? 2 : discussion ? 0.5 : 0;
+    if (topic === 'argument_role') return discussion ? 6 : results ? 5 : methods ? 1 : 0;
+    if (topic === 'visual' || topic === 'grouping_stats') return results ? 7 : methods ? 2 : discussion ? 1 : 0;
+    return results ? 5 : methods || discussion ? 3 : 0;
+  }
+
+  function selectFigurePanelParagraphs(paragraphs, options = {}) {
+    const panel = panelRef(options.panelId);
+    const figureLabel = cleanText(options.figureLabel, 80);
+    const topic = options.topic || 'general';
+    const terms = queryTerms(`${options.question || ''} ${figureLabel} ${panel}`);
+    const scored = (Array.isArray(paragraphs) ? paragraphs : []).map((item, order) => {
+      const text = cleanText(item?.text, 1600);
+      const sectionTitle = cleanText(item?.sectionTitle, 240);
+      const haystack = `${sectionTitle} ${text}`.toLowerCase();
+      let score = sectionWeight(sectionTitle, topic);
+      if (figureLabel && haystack.includes(figureLabel.toLowerCase())) score += 6;
+      if (panel && new RegExp(`(?:fig(?:ure)?\\.?\\s*\\d+|panel)\\s*${panel}\\b`, 'i').test(text)) score += 8;
+      for (const term of terms) if (haystack.includes(term)) score += 1;
+      return {
+        paragraphId: cleanText(item?.paragraphId, 120) || `panel-context-${order + 1}`,
+        sectionTitle,
+        text,
+        score,
+        order
+      };
+    }).filter(item => item.text && item.score > 0)
+      .sort((left, right) => right.score - left.score || left.order - right.order);
+    const selected = scored.slice(0, 4);
+    if (selected.length < 2) {
+      const selectedIds = new Set(selected.map(item => item.paragraphId));
+      (Array.isArray(paragraphs) ? paragraphs : []).forEach((item, order) => {
+        if (selected.length >= 2) return;
+        const paragraphId = cleanText(item?.paragraphId, 120) || `panel-context-${order + 1}`;
+        const text = cleanText(item?.text, 1600);
+        if (!text || selectedIds.has(paragraphId)) return;
+        selectedIds.add(paragraphId);
+        selected.push({ paragraphId, sectionTitle: cleanText(item?.sectionTitle, 240), text, score: 0, order });
+      });
+    }
+    return selected.slice(0, 4).map(({ score, order, ...item }) => item);
+  }
+
+  function textTokens(value) {
+    const text = String(value || '');
+    const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
+    return Math.ceil(cjk / 1.5 + (text.length - cjk) / 4);
+  }
+
+  function imageTokens(width, height) {
+    const safeWidth = Math.max(0, Number(width) || 0);
+    const safeHeight = Math.max(0, Number(height) || 0);
+    if (!safeWidth || !safeHeight) return 0;
+    // A continuous pixel term keeps every resized retry measurably smaller,
+    // while remaining conservative for the tiled vision encoders used by
+    // current Provider APIs.
+    return 85 + Math.ceil((safeWidth * safeHeight) / 750);
+  }
+
+  function estimateFigurePanelInputTokens(options = {}) {
+    return Math.max(0, Number(options.fixedTokens) || 0) +
+      textTokens(options.text) + imageTokens(options.width, options.height);
+  }
+
+  function normalizeImageVariant(value) {
+    const dataUrl = String(value?.dataUrl || '');
+    const width = Math.max(0, Math.round(Number(value?.width) || 0));
+    const height = Math.max(0, Math.round(Number(value?.height) || 0));
+    if (!/^data:image\/(?:jpeg|png|webp|gif);base64,/i.test(dataUrl) || !width || !height) return null;
+    const maxEdge = Math.max(width, height);
+    return {
+      mediaType: cleanText(value?.mediaType, 80) || 'image/jpeg', dataUrl, width, height,
+      maxEdge: Math.max(0, Math.round(Number(value?.maxEdge) || maxEdge)),
+      inputMode: value?.inputMode === 'panel_crop' ? 'panel_crop' : 'figure_image',
+      pixelsSupplied: true
+    };
+  }
+
+  function historyText(history) {
+    return history.map(item => `${item.role}: ${item.content}`).join('\n');
+  }
+
+  function boundedHistory(history, baseText, image, inputBudgetTokens) {
+    const normalized = (Array.isArray(history) ? history : []).map((item, index) => ({
+      historyId: cleanText(item?.historyId || item?.turnId, 120) || `history-${index + 1}`,
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: cleanText(item?.content || item?.answer || item?.question, 3200)
+    })).filter(item => item.content);
+    while (normalized.length && estimateFigurePanelInputTokens({
+      fixedTokens: 1600,
+      text: `${baseText}\n${historyText(normalized)}`,
+      width: image?.width,
+      height: image?.height
+    }) > inputBudgetTokens) normalized.shift();
+    return normalized;
+  }
+
+  function buildFigurePanelPlans(input = {}) {
+    const topic = classifyFigurePanelQuestion(input);
+    const panelId = panelRef(input.panelId || input.panel?.panel || input.panel);
+    const captionEvidence = extractFigurePanelCaption(input.caption, panelId);
+    const question = cleanText(input.customQuestion || input.question, 1600);
+    const contextParagraphs = selectFigurePanelParagraphs(input.contextParagraphs, {
+      panelId, figureLabel: input.figureLabel, topic, question
+    });
+    const contextWindowTokens = Math.max(8192, Math.floor(Number(input.contextWindowTokens) || 32768));
+    const outputTokens = Math.max(512, Math.floor(Number(input.outputTokens) || 2048));
+    const inputBudgetTokens = Math.max(2048, Math.floor(contextWindowTokens * 0.9) - outputTokens - 768);
+    const commonText = [
+      cleanText(input.figureLabel, 80), panelId, topic, captionEvidence.combined, question,
+      contextParagraphs.map(item => `${item.sectionTitle}\n${item.text}`).join('\n'),
+      cleanText(input.existingPanelInterpretation && JSON.stringify(input.existingPanelInterpretation), 5000)
+    ].filter(Boolean).join('\n');
+    const variants = (Array.isArray(input.imageVariants) ? input.imageVariants : [])
+      .map(normalizeImageVariant).filter(Boolean)
+      .filter(item => item.maxEdge <= 1200)
+      .sort((left, right) => right.maxEdge - left.maxEdge ||
+        (right.width * right.height) - (left.width * left.height));
+    const uniqueVariants = [];
+    const seen = new Set();
+    for (const variant of variants) {
+      const key = `${variant.inputMode}:${variant.width}x${variant.height}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueVariants.push(variant);
+      }
+    }
+    const largest = uniqueVariants[0] || null;
+    const history = boundedHistory(input.history, commonText, largest, inputBudgetTokens);
+    const completeText = `${commonText}\n${historyText(history)}`;
+    const candidates = [...uniqueVariants, null].map((image, index) => {
+      const estimatedInputTokens = estimateFigurePanelInputTokens({
+        fixedTokens: 1600, text: completeText, width: image?.width, height: image?.height
+      });
+      return {
+        requestMode: input.requestMode === 'followup' ? 'followup' : 'interpretation',
+        topic, panelId,
+        inputMode: image?.inputMode || 'caption_context',
+        images: image ? [{ mediaType: image.mediaType, dataUrl: image.dataUrl }] : [],
+        imageWidth: image?.width || 0,
+        imageHeight: image?.height || 0,
+        imageMaxEdge: image?.maxEdge || 0,
+        pixelsSupplied: Boolean(image),
+        captionEvidence,
+        contextParagraphs,
+        history,
+        selectedSources: [
+          ...(captionEvidence.sharedLegend ? ['caption:shared_legend'] : []),
+          ...(captionEvidence.targetText ? [`caption:panel_${panelId}`] : []),
+          ...contextParagraphs.map(item => `paragraph:${item.paragraphId}`)
+        ],
+        inputBudgetTokens,
+        estimatedInputTokens,
+        degradationReason: index === 0
+          ? (image ? '' : 'vision_unavailable_or_no_image')
+          : (image ? 'smaller_image_for_capacity' : 'text_only_for_capacity')
+      };
+    }).filter(plan => plan.estimatedInputTokens <= inputBudgetTokens || !plan.pixelsSupplied);
+    const strictlySmaller = [];
+    for (const plan of candidates) {
+      const previous = strictlySmaller.at(-1);
+      if (!previous || plan.estimatedInputTokens < previous.estimatedInputTokens) strictlySmaller.push(plan);
+    }
+    return strictlySmaller.length ? strictlySmaller : candidates.slice(-1);
+  }
+
+  function fallbackHash(value) {
+    const text = JSON.stringify(value);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function buildFigurePanelCacheKey(input = {}) {
+    const context = {
+      documentHash: cleanText(input.documentHash, 100),
+      figureHash: cleanText(input.figureHash, 160),
+      panelId: panelRef(input.panelId),
+      providerId: cleanText(input.providerId, 80),
+      model: cleanText(input.model, 240),
+      profileSignature: cleanText(input.profileSignature, 160),
+      inputMode: cleanText(input.inputMode, 40),
+      imageWidth: Math.max(0, Number(input.imageWidth) || 0),
+      imageHeight: Math.max(0, Number(input.imageHeight) || 0),
+      promptVersion: cleanText(input.promptVersion || FIGURE_PANEL_PROMPT_VERSION, 40),
+      requestMode: input.requestMode === 'followup' ? 'followup' : 'interpretation',
+      questionSignature: cleanText(input.questionSignature, 160)
+    };
+    const hash = typeof shared.stableHash === 'function' ? shared.stableHash(context) : fallbackHash(context);
+    return `figure-panel:${hash}`;
+  }
+
+  function isFigurePanelCapacityError(error) {
+    if (CAPACITY_ERROR_CODES.has(String(error?.code || ''))) return true;
+    if (String(error?.code || '') !== 'PROVIDER_REJECTED') return false;
+    return /(?:context|token|request|payload|image).{0,32}(?:large|long|limit|capacity|maximum|exceed)|too\s+(?:large|long)/i
+      .test(String(error?.message || ''));
+  }
+
+  return {
+    FIGURE_PANEL_PROMPT_VERSION,
+    FIGURE_PANEL_IMAGE_EDGES,
+    classifyFigurePanelQuestion,
+    extractFigurePanelCaption,
+    selectFigurePanelParagraphs,
+    estimateFigurePanelInputTokens,
+    buildFigurePanelPlans,
+    buildFigurePanelCacheKey,
+    isFigurePanelCapacityError
+  };
+});

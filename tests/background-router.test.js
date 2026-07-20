@@ -14,6 +14,7 @@ require('../core/chunker.js');
 require('../core/result-validator.js');
 require('../core/evidence-ledger.js');
 require('../core/figure-analysis.js');
+require('../core/figure-panel-planner.js');
 require('../core/article-chat-tokenizer.js');
 require('../core/article-chat-index.js');
 require('../core/article-chat-retrieval.js');
@@ -157,6 +158,9 @@ test('registers only the one-type study selection message in the service worker'
   ['ARTICLE_ARCHIVE_PROBE', 'ARTICLE_ARCHIVE_SAVE', 'ARTICLE_ARCHIVE_LOAD']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
+  assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
+  assert.ok(source.indexOf('core/figure-panel-planner.js') <
+    source.indexOf('core/figure-analysis.js'));
   assert.ok(source.indexOf('core/article-chat-tokenizer.js') <
     source.indexOf('core/article-chat-index.js'));
   assert.ok(source.indexOf('core/article-chat-index.js') <
@@ -2240,6 +2244,26 @@ function panelFollowupOutput(input) {
   };
 }
 
+function panelInterpretationOutput(input) {
+  const raw = figureOutput(input.figure_id, input.analysis_basis, 'standard').panels[0];
+  return {
+    figure_id: input.figure_id,
+    panel: input.panel,
+    basis: input.analysis_basis,
+    panel_interpretation: { ...raw, panel: input.panel },
+    claim_boundary_zh: 'The interpretation is limited to the supplied Panel evidence.'
+  };
+}
+
+function panelImageVariant(edge, width = edge, height = Math.round(edge * 0.75)) {
+  const length = Math.max(4, Math.ceil(edge / 4) * 4);
+  return {
+    mediaType: 'image/jpeg',
+    dataUrl: `data:image/jpeg;base64,${'A'.repeat(length)}`,
+    width, height, maxEdge: edge, inputMode: 'figure_image', pixelsSupplied: true
+  };
+}
+
 function crossFigureOutput(input) {
   const mainFigureIds = input.main_figure_ids || [];
   return {
@@ -2493,6 +2517,161 @@ test('routes a targeted Panel follow-up through the configured Figure API', asyn
   assert.equal(requested[0].requested_topic_instructions.grouping,
     'Use only the grouping explicitly supported by this paper.');
   assert.equal(requested[0].panel, 'A');
+  assert.equal(response.data.panelFollowup.inputBasis.inputMode, 'caption_context');
+  assert.equal(response.data.panelFollowup.inputBasis.pixelsSupplied, false);
+});
+
+test('routes one Panel interpretation through one dedicated Provider call', async () => {
+  const storageArea = createMemoryStorage();
+  const inputs = [];
+  const outputBudgets = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      inputs.push(input);
+      outputBudgets.push(body.max_output_tokens);
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const documentHash = 'a'.repeat(64);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL',
+    documentHash,
+    document: { title: 'Mechanistic study', documentHash },
+    figure: {
+      ...figureInput(2), panelHints: ['A'],
+      caption: 'Figure 2. Values are mean ± SEM. (A) Treatment reduced tumor volume. (B) Validation.',
+      contextParagraphs: [
+        { paragraphId: 'r1', sectionTitle: 'Results', text: 'Figure 2A compares treated and control groups.' },
+        { paragraphId: 'm1', sectionTitle: 'Methods', text: 'Animals were randomized before treatment.' },
+        { paragraphId: 'd1', sectionTitle: 'Discussion', text: 'The result supports the proposed mechanism.' }
+      ],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(inputs.length, 1);
+  assert.deepEqual(outputBudgets, [2048]);
+  assert.equal(inputs[0].request_mode, 'single_panel_interpretation');
+  assert.equal(inputs[0].panel, 'A');
+  assert.equal(inputs[0].related_body_context.length <= 4, true);
+  assert.doesNotMatch(inputs[0].target_panel_caption, /Validation/);
+  assert.equal(response.data.documentHash, documentHash);
+  assert.equal(response.data.panelAnalysis.panel, 'A');
+  assert.equal(response.data.panelAnalysis.inputBasis.imageMaxEdge, 1200);
+  assert.equal(response.data.panelAnalysis.inputBasis.attempts, 1);
+});
+
+test('retries a Panel capacity failure at most twice with strictly smaller payloads', async () => {
+  const storageArea = createMemoryStorage();
+  const requestSizes = [];
+  const inputs = [];
+  const outputBudgets = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      const image = Array.isArray(body.input)
+        ? body.input[0].content.find(item => item.type === 'input_image')?.image_url || ''
+        : '';
+      requestSizes.push(image.length);
+      inputs.push(input);
+      outputBudgets.push(body.max_output_tokens);
+      if (requestSizes.length < 3) {
+        return jsonResponse({ error: { message: 'max_output_tokens cannot exceed 1024' } }, 400);
+      }
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: 'b'.repeat(64),
+    document: { title: 'Large figure' },
+    figure: {
+      ...figureInput(4), panelHints: ['A'],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }, forceRefresh: true
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(requestSizes.length, 3);
+  assert.ok(requestSizes[1] < requestSizes[0]);
+  assert.ok(requestSizes[2] < requestSizes[1]);
+  assert.deepEqual(outputBudgets, [2048, 1024, 768]);
+  assert.equal(response.data.panelAnalysis.inputBasis.attempts, 3);
+  assert.equal(response.data.panelAnalysis.inputBasis.outputBudgetTokens, 768);
+  assert.deepEqual(inputs.map(input => input.panel), ['A', 'A', 'A']);
+});
+
+test('jumps directly to text evidence when a nominally visual model rejects Panel pixels', async () => {
+  const storageArea = createMemoryStorage();
+  const modes = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      const hasImage = Array.isArray(body.input);
+      modes.push(hasImage ? 'image' : 'text');
+      if (hasImage) return jsonResponse({ error: { message: 'unsupported image input' } }, 400);
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: 'e'.repeat(64),
+    document: { title: 'Text fallback' },
+    figure: {
+      ...figureInput(6), panelHints: ['A'],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }, forceRefresh: true
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(modes, ['image', 'text']);
+  assert.equal(response.data.panelAnalysis.basis, 'caption_context');
+  assert.equal(response.data.panelAnalysis.inputBasis.inputMode, 'caption_context');
+  assert.equal(response.data.panelAnalysis.inputBasis.pixelsSupplied, false);
+  assert.equal(response.data.panelAnalysis.inputBasis.attempts, 2);
+});
+
+test('keeps dedicated Panel cache entries isolated by Panel identity', async () => {
+  const storageArea = createMemoryStorage();
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const base = {
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: 'c'.repeat(64),
+    document: { title: 'Cache isolation' },
+    figure: {
+      ...figureInput(5), panelHints: ['A', 'B'],
+      caption: 'Figure 5. (A) Discovery. (B) Validation.'
+    }
+  };
+  const firstA = await router.handle({ ...base, panel: { panel: 'A' } });
+  const secondA = await router.handle({ ...base, panel: { panel: 'A' } });
+  const firstB = await router.handle({ ...base, panel: { panel: 'B' } });
+
+  assert.equal(firstA.data.cacheHit, false);
+  assert.equal(secondA.data.cacheHit, true);
+  assert.equal(firstB.data.cacheHit, false);
+  assert.equal(firstB.data.panelAnalysis.panel, 'B');
+  assert.equal(calls, 2);
 });
 
 test('routes full-text chat through the exact model profile selected for that turn', async () => {
