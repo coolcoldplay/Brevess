@@ -227,9 +227,14 @@
           <select id="articleChatProfile" aria-label="选择全文问答模型"></select>
         </div>
         <div id="articleChatCoverage" class="article-chat-coverage" aria-live="polite">等待读取当前网页正文…</div>
-        <div id="articleChatMessages" class="article-chat-messages" aria-live="polite">
+        <button id="articleChatLoadEarlier" class="article-chat-load-earlier" type="button" hidden>加载更早对话</button>
+        <div id="articleChatMessages" class="article-chat-messages" role="log"
+          aria-live="polite" aria-relevant="additions text" aria-label="全文问答记录">
           <div class="workspace-empty">可以询问结论、机制、方法、证据强弱、局限，或让模型跨章节比较。</div>
         </div>
+        <button id="articleChatReturnLatest" class="article-chat-return-latest" type="button" hidden>
+          <i class="ph ph-arrow-down" aria-hidden="true"></i>回到最新
+        </button>
         <form id="articleChatForm" class="article-chat-composer">
           <label class="visually-hidden" for="articleChatQuestion">向全文提问</label>
           <textarea id="articleChatQuestion" rows="3" maxlength="4000"

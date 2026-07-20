@@ -608,6 +608,33 @@ async function readDiagnosticDownload(download) {
     ).join('\n\n');
     currentWorkspaceSnapshot.chat.messages[1].content += `\n\n${longAnswerAppendix}`;
     currentWorkspaceSnapshot.chat.messages[3].content += `\n\n${longAnswerAppendix}`;
+    const legacyMessages = currentWorkspaceSnapshot.chat.messages;
+    currentWorkspaceSnapshot.chat.turns = [0, 2].map((questionIndex, turnIndex) => {
+      const question = legacyMessages[questionIndex];
+      const answer = legacyMessages[questionIndex + 1];
+      return {
+        turnId: `turn-qa-${turnIndex + 1}`,
+        question: question.content,
+        answerBlocks: [{
+          blockId: `block-qa-${turnIndex + 1}`,
+          markdown: answer.content,
+          evidence: answer.evidence.map((item, evidenceIndex) => ({
+            ...item,
+            marker: String(evidenceIndex + 1),
+            documentRevision: currentWorkspaceSnapshot.revision
+          }))
+        }],
+        summary: '',
+        status: 'completed',
+        selectedProfileId: turnIndex === 0 ? 'profile_qa_deepseek' : 'profile_qa_openai',
+        profileName: answer.profileName,
+        model: answer.model,
+        createdAt: question.createdAt,
+        updatedAt: answer.createdAt
+      };
+    });
+    currentWorkspaceSnapshot.chat.totalTurns = currentWorkspaceSnapshot.chat.turns.length;
+    delete currentWorkspaceSnapshot.chat.messages;
     switchWorkspaceView('chat');
     renderArticleChatSnapshot(currentWorkspaceSnapshot);
     return {
@@ -664,15 +691,25 @@ async function readDiagnosticDownload(download) {
   });
   await sidePanel.evaluate(() => {
     const messages = document.getElementById('articleChatMessages');
-    if (messages) messages.scrollTop = 0;
+    if (messages) {
+      messages.scrollTop = 0;
+      messages.dispatchEvent(new Event('scroll'));
+    }
   });
+  await sidePanel.waitForTimeout(80);
+  articleChatQa.returnLatestVisible = await sidePanel.evaluate(() =>
+    document.getElementById('articleChatReturnLatest')?.hidden === false
+  );
   await sidePanel.screenshot({
     path: path.join(outputDir, 'edge-article-chat-citations.png'),
     fullPage: true
   });
-  await sidePanel.evaluate(() => {
+  await sidePanel.locator('#articleChatReturnLatest').click();
+  await sidePanel.waitForTimeout(240);
+  articleChatQa.returnLatestRestored = await sidePanel.evaluate(() => {
     const messages = document.getElementById('articleChatMessages');
-    if (messages) messages.scrollTop = messages.scrollHeight;
+    return Boolean(messages && messages.scrollTop + messages.clientHeight >=
+      messages.scrollHeight - 3);
   });
   await sidePanel.screenshot({
     path: path.join(outputDir, 'edge-article-chat.png'),
@@ -819,6 +856,8 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.messagesOverflowY === 'auto' &&
     results.articleChatQa.messagesScrollable &&
     results.articleChatQa.scrolledToLatest &&
+    results.articleChatQa.returnLatestVisible &&
+    results.articleChatQa.returnLatestRestored &&
     results.articleChatQa.composerOutsideMessages &&
     results.articleChatQa.citationJumpFocused &&
     results.dynamicParagraphQa.paragraphCount === 7 &&

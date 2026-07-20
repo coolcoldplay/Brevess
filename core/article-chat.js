@@ -305,7 +305,13 @@
     const profile = options.profile || {};
     const adapter = options.adapter;
     const report = event => {
-      try { options.onProgress?.({ operationId: input.operationId || '', ...event }); } catch {
+      try {
+        options.onProgress?.({
+          operationId: input.operationId || '',
+          turnId: input.turnId || '',
+          ...event
+        });
+      } catch {
         // Progress listeners must not affect chat generation.
       }
     };

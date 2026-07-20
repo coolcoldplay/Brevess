@@ -649,14 +649,17 @@ let crossFigureLogicState = {
     error: ''
 };
 let articleChatState = {
-    messages: [],
+    turns: [],
     loading: false,
     error: '',
     operationId: '',
-    activeProfileId: '',
-    coverage: null
+    activeTurnId: '',
+    coverage: null,
+    memoryNeedsRebuild: false
 };
 let articleChatGeneration = 0;
+let articleChatTurnSequence = 0;
+let articleChatPumpPromise = null;
 let reviewOutlinePromise = null;
 let lastReviewOutline = null;
 const standaloneReviewParagraphSummaries = new Map();
@@ -3919,33 +3922,138 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
     }
 }
 
-function publicArticleChatMessage(message = {}) {
+function normalizeArticleChatEvidence(item = {}) {
+    const verification = item.verification && typeof item.verification === 'object'
+        ? item.verification : {};
     return {
-        role: message.role === 'assistant' ? 'assistant' : 'user',
-        content: String(message.content || '').slice(0, 32000),
-        profileId: String(message.profileId || '').slice(0, 100),
-        profileName: String(message.profileName || '').slice(0, 200),
-        model: String(message.model || '').slice(0, 200),
-        evidence: (Array.isArray(message.evidence) ? message.evidence : []).slice(0, 12)
-            .map(item => ({
-                paragraphId: String(item?.paragraphId || '').slice(0, 120),
-                sourceKey: String(item?.sourceKey || item?.paragraphId || '').slice(0, 120),
-                textHash: String(item?.textHash || '').slice(0, 120),
-                sectionTitle: String(item?.sectionTitle || '').slice(0, 300),
-                sectionPath: (Array.isArray(item?.sectionPath) ? item.sectionPath : [])
-                    .slice(-12).map(entry => String(
-                        typeof entry === 'string' ? entry : entry?.title || ''
-                    ).slice(0, 300)).filter(Boolean),
-                quote: String(item?.quote || '').slice(0, 2000),
-                support: String(item?.support || '').slice(0, 1600),
-                documentRevision: Math.max(0, Number(item?.documentRevision) || 0),
-                verificationStatus: String(item?.verificationStatus || '').slice(0, 32),
-                candidateCount: Math.max(0, Number(item?.candidateCount) || 0),
-                verificationReason: String(item?.verificationReason || '').slice(0, 120)
-            })),
-        limitations: String(message.limitations || '').slice(0, 4000),
-        createdAt: Number(message.createdAt) || Date.now()
+        marker: String(item.marker || '').slice(0, 12),
+        paragraphId: String(item.paragraphId || '').slice(0, 160),
+        sourceKey: String(item.sourceKey || item.paragraphId || '').slice(0, 160),
+        textHash: String(item.textHash || '').slice(0, 160),
+        sectionTitle: String(item.sectionTitle || '').slice(0, 300),
+        sectionPath: (Array.isArray(item.sectionPath) ? item.sectionPath : [])
+            .slice(-12).map(entry => String(
+                typeof entry === 'string' ? entry : entry?.title || ''
+            ).slice(0, 300)).filter(Boolean),
+        quote: String(item.quote || '').slice(0, 2400),
+        support: String(item.support || '').slice(0, 1600),
+        documentRevision: Math.max(0, Number(item.documentRevision) || 0),
+        verificationStatus: String(
+            item.verificationStatus || verification.status || ''
+        ).slice(0, 32),
+        candidateCount: Math.max(
+            0, Number(item.candidateCount ?? verification.candidateCount) || 0
+        ),
+        verificationReason: String(
+            item.verificationReason || verification.reason || ''
+        ).slice(0, 160)
     };
+}
+
+function publicArticleChatBlock(block = {}) {
+    return {
+        blockId: String(block.blockId || block.id || '').slice(0, 160),
+        markdown: String(block.markdown || block.content || '').slice(0, 65536),
+        evidence: (Array.isArray(block.evidence) ? block.evidence : [])
+            .map(normalizeArticleChatEvidence),
+        createdAt: Math.max(0, Number(block.createdAt) || Date.now())
+    };
+}
+
+function publicArticleChatPlan(plan = null) {
+    if (!plan || typeof plan !== 'object') return null;
+    return {
+        mode: String(plan.mode || '').slice(0, 40),
+        indexId: String(plan.indexId || '').slice(0, 160),
+        contextWindowTokens: Math.max(0, Number(plan.contextWindowTokens) || 0),
+        inputBudgetTokens: Math.max(0, Number(plan.inputBudgetTokens) || 0),
+        outputBudgetTokens: plan.outputBudgetTokens && typeof plan.outputBudgetTokens === 'object'
+            ? { ...plan.outputBudgetTokens } : null,
+        estimatedInputTokens: Math.max(0, Number(plan.estimatedInputTokens) || 0),
+        chunkIds: (Array.isArray(plan.chunkIds) ? plan.chunkIds : [])
+            .map(value => String(value).slice(0, 160)),
+        includedHistoryIds: (Array.isArray(plan.includedHistoryIds)
+            ? plan.includedHistoryIds : []).map(value => String(value).slice(0, 160)),
+        retrievedOldTurnIds: (Array.isArray(plan.retrievedOldTurnIds)
+            ? plan.retrievedOldTurnIds : []).map(value => String(value).slice(0, 160)),
+        sectionCoverage: (Array.isArray(plan.sectionCoverage)
+            ? plan.sectionCoverage : []).map(value => String(value).slice(0, 300)),
+        cacheDecision: plan.cacheDecision && typeof plan.cacheDecision === 'object'
+            ? { ...plan.cacheDecision } : null,
+        retrievalCoverage: plan.retrievalCoverage &&
+            typeof plan.retrievalCoverage === 'object' ? { ...plan.retrievalCoverage } : null
+    };
+}
+
+function publicArticleChatTurn(turn = {}) {
+    const allowedStatuses = new Set([
+        'queued', 'generating', 'completed', 'truncated', 'cancelled', 'error', 'unanswered'
+    ]);
+    const route = turn.route && typeof turn.route === 'object' ? turn.route : {};
+    const usage = turn.usage && typeof turn.usage === 'object' ? turn.usage : null;
+    return {
+        turnId: String(turn.turnId || '').slice(0, 160),
+        question: String(turn.question || '').slice(0, 4000),
+        answerBlocks: (Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [])
+            .map(publicArticleChatBlock).filter(block => block.blockId && block.markdown),
+        summary: String(turn.summary || '').slice(0, 2000),
+        status: allowedStatuses.has(turn.status) ? turn.status : 'unanswered',
+        selectedProfileId: String(
+            turn.selectedProfileId || turn.profileId || ''
+        ).slice(0, 100),
+        profileName: String(turn.profileName || route.effectiveProfileName || '').slice(0, 200),
+        model: String(turn.model || route.model || '').slice(0, 200),
+        route: {
+            effectiveProfileId: String(route.effectiveProfileId || '').slice(0, 100),
+            effectiveProfileName: String(route.effectiveProfileName || '').slice(0, 200),
+            providerId: String(route.providerId || '').slice(0, 80),
+            model: String(route.model || '').slice(0, 200),
+            capabilityMode: String(route.capabilityMode || '').slice(0, 40),
+            fallbackReason: String(route.fallbackReason || '').slice(0, 120)
+        },
+        usage: usage ? {
+            inputTokens: Math.max(0, Number(usage.inputTokens) || 0),
+            outputTokens: Math.max(0, Number(usage.outputTokens) || 0),
+            cacheHitTokens: Math.max(0, Number(usage.cacheHitTokens) || 0)
+        } : null,
+        plan: publicArticleChatPlan(turn.plan),
+        coverage: turn.coverage && typeof turn.coverage === 'object'
+            ? { ...turn.coverage } : null,
+        operationId: String(turn.operationId || '').slice(0, 100),
+        error: String(turn.error || '').slice(0, 1000),
+        createdAt: Math.max(0, Number(turn.createdAt) || Date.now()),
+        updatedAt: Math.max(0, Number(turn.updatedAt) || Date.now())
+    };
+}
+
+function getPublicArticleChatState() {
+    return {
+        turns: articleChatState.turns.map(publicArticleChatTurn),
+        totalTurns: articleChatState.turns.length,
+        loading: articleChatState.loading === true,
+        error: String(articleChatState.error || ''),
+        operationId: String(articleChatState.operationId || ''),
+        activeTurnId: String(articleChatState.activeTurnId || ''),
+        coverage: articleChatState.coverage ? { ...articleChatState.coverage } : null,
+        memoryNeedsRebuild: articleChatState.memoryNeedsRebuild === true
+    };
+}
+
+function notifyArticleChatStateChanged(kind, turn = null, extra = {}) {
+    const event = {
+        kind,
+        turnId: String(turn?.turnId || extra.turnId || ''),
+        turn: turn ? publicArticleChatTurn(turn) : null,
+        loading: articleChatState.loading === true,
+        operationId: String(articleChatState.operationId || ''),
+        activeTurnId: String(articleChatState.activeTurnId || ''),
+        error: String(articleChatState.error || ''),
+        coverage: articleChatState.coverage ? { ...articleChatState.coverage } : null,
+        totalTurns: articleChatState.turns.length,
+        memoryNeedsRebuild: articleChatState.memoryNeedsRebuild === true,
+        ...extra
+    };
+    chrome.runtime.sendMessage({ type: 'ARTICLE_CHAT_STATE_CHANGED', event }).catch(() => {});
 }
 
 function attachArticleChatEvidenceIdentity(evidence, snapshot) {
@@ -3969,7 +4077,8 @@ function attachArticleChatEvidenceIdentity(evidence, snapshot) {
     });
 }
 
-async function askArticleWithLLM(question, profileId = '') {
+/* Legacy flat-message workflow retained only for archive migration reference.
+async function legacyAskArticleWithLLM(question, profileId = '') {
     const normalizedQuestion = String(question || '').normalize('NFKC').trim().slice(0, 4000);
     const normalizedProfileId = String(profileId || '').trim().slice(0, 100);
     if (!normalizedQuestion) {
@@ -3985,15 +4094,13 @@ async function askArticleWithLLM(question, profileId = '') {
     const generation = ++articleChatGeneration;
     const operationId = `chat-${generation}-${Date.now()}`;
     const history = articleChatState.messages.map(publicArticleChatMessage)
-        .map(message => ({ role: message.role, content: message.content }))
-        .slice(-20);
+        .map(message => ({ role: message.role, content: message.content }));
     articleChatState.messages.push(publicArticleChatMessage({
         role: 'user',
         content: normalizedQuestion,
         profileId: normalizedProfileId,
         createdAt: Date.now()
     }));
-    articleChatState.messages = articleChatState.messages.slice(-40);
     articleChatState.loading = true;
     articleChatState.error = '';
     articleChatState.operationId = operationId;
@@ -4044,7 +4151,6 @@ async function askArticleWithLLM(question, profileId = '') {
             createdAt: Date.now()
         });
         articleChatState.messages.push(assistantMessage);
-        articleChatState.messages = articleChatState.messages.slice(-40);
         articleChatState.coverage = response.data.coverage || null;
         scheduleCurrentArticleArchiveSave();
         return {
@@ -4069,7 +4175,7 @@ async function askArticleWithLLM(question, profileId = '') {
     }
 }
 
-async function cancelArticleChatWithLLM() {
+async function legacyCancelArticleChatWithLLM() {
     const operationId = articleChatState.operationId;
     if (!articleChatState.loading || !operationId) return { success: true, active: false };
     articleChatGeneration += 1;
@@ -4088,7 +4194,7 @@ async function cancelArticleChatWithLLM() {
     return { success: true, active: false, cancelled: true };
 }
 
-function clearArticleChat() {
+function legacyClearArticleChat() {
     if (articleChatState.loading) {
         const error = new Error('ARTICLE_CHAT_BUSY');
         error.code = 'ARTICLE_CHAT_BUSY';
@@ -4100,6 +4206,364 @@ function clearArticleChat() {
         activeProfileId: '', coverage: null
     };
     scheduleCurrentArticleArchiveSave();
+    return { success: true };
+}
+
+*/
+function applyArticleChatProgress(progress = {}) {
+    const operationId = String(progress.operationId || '').slice(0, 100);
+    const turnId = String(progress.turnId || '').slice(0, 160);
+    if (!operationId || !turnId) return false;
+    const turn = articleChatState.turns.find(item => item.turnId === turnId);
+    if (!turn || progress.operationId !== turn.operationId || progress.turnId !== turn.turnId) {
+        return false;
+    }
+    const phase = String(progress.phase || '');
+    let changed = false;
+    if (progress.route && typeof progress.route === 'object') {
+        turn.route = { ...progress.route };
+        turn.profileName = String(progress.effectiveProfileName ||
+            progress.route.effectiveProfileName || '');
+        turn.model = String(progress.route.model || '');
+        changed = true;
+    }
+    if (phase === 'chat_started') {
+        turn.status = 'generating';
+        changed = true;
+    } else if (phase === 'chat_context_ready') {
+        turn.coverage = progress.coverage && typeof progress.coverage === 'object'
+            ? { ...progress.coverage } : null;
+        articleChatState.coverage = turn.coverage;
+        changed = true;
+    } else if (phase === 'chat_answer_block' && progress.block) {
+        const snapshot = getCanonicalArticleSnapshot();
+        const block = publicArticleChatBlock({
+            ...progress.block,
+            evidence: attachArticleChatEvidenceIdentity(progress.block.evidence, snapshot)
+        });
+        if (block.blockId && block.markdown &&
+            !turn.answerBlocks.some(item => item.blockId === block.blockId)) {
+            turn.answerBlocks.push(block);
+            changed = true;
+        }
+    } else if (phase === 'chat_usage') {
+        turn.usage = progress.usage && typeof progress.usage === 'object'
+            ? { ...progress.usage } : null;
+        changed = true;
+    } else if (phase === 'chat_continuing') {
+        turn.status = 'generating';
+        turn.continuationCount = Math.max(1, Number(progress.continuation) || 1);
+        changed = true;
+    } else if (phase === 'chat_cancelled') {
+        turn.status = 'cancelled';
+        turn.error = '本次提问已取消，已完成的回答内容已保留。';
+        changed = true;
+    } else if (phase === 'chat_error') {
+        turn.status = 'error';
+        turn.error = String(progress.errorCode || 'ARTICLE_CHAT_FAILED').slice(0, 1000);
+        changed = true;
+    } else if (phase === 'chat_completed') {
+        turn.status = progress.status === 'truncated' ? 'truncated' : 'completed';
+        changed = true;
+    }
+    if (!changed) return false;
+    turn.updatedAt = Date.now();
+    notifyArticleChatStateChanged('turn_updated', turn, { phase });
+    if (phase === 'chat_answer_block' || phase === 'chat_cancelled' ||
+        phase === 'chat_completed') scheduleCurrentArticleArchiveSave();
+    return true;
+}
+
+function createArticleChatTurn(question, selectedProfileId, options = {}) {
+    const normalizedQuestion = String(question || '').normalize('NFKC').trim().slice(0, 4000);
+    const normalizedProfileId = String(selectedProfileId || '').trim().slice(0, 100);
+    if (!normalizedQuestion) {
+        const error = new Error('ARTICLE_CHAT_QUESTION_REQUIRED');
+        error.code = 'INVALID_SETTINGS';
+        throw error;
+    }
+    if (!normalizedProfileId) {
+        const error = new Error('ARTICLE_CHAT_PROFILE_REQUIRED');
+        error.code = 'INVALID_SETTINGS';
+        throw error;
+    }
+    const createdAt = Date.now();
+    articleChatTurnSequence += 1;
+    return {
+        turnId: String(options.turnId ||
+            `turn-${createdAt.toString(36)}-${articleChatTurnSequence.toString(36)}`),
+        question: normalizedQuestion,
+        answerBlocks: [],
+        summary: '',
+        status: 'queued',
+        selectedProfileId: normalizedProfileId,
+        route: null,
+        usage: null,
+        plan: null,
+        coverage: null,
+        operationId: '',
+        error: '',
+        createdAt,
+        updatedAt: createdAt
+    };
+}
+
+function articleChatHistoryForTurn(turnId) {
+    return articleChatState.turns.filter(turn => turn.turnId !== turnId &&
+        turn.status !== 'queued' && turn.status !== 'generating' &&
+        turn.status !== 'unanswered' && turn.status !== 'error' &&
+        (turn.answerBlocks.length > 0 || Boolean(turn.summary)))
+        .map(publicArticleChatTurn).map(turn => ({
+            turnId: turn.turnId,
+            question: turn.question,
+            answerBlocks: turn.answerBlocks.map(block => ({
+                blockId: block.blockId,
+                markdown: block.markdown
+            })),
+            summary: turn.summary,
+            createdAt: turn.createdAt
+        }));
+}
+
+function mergeArticleChatAnswerBlocks(turn, answer, snapshot) {
+    const blocks = Array.isArray(answer?.answerBlocks) ? answer.answerBlocks : [];
+    blocks.forEach(value => {
+        const block = publicArticleChatBlock({
+            ...value,
+            evidence: attachArticleChatEvidenceIdentity(value?.evidence, snapshot)
+        });
+        if (block.blockId && block.markdown &&
+            !turn.answerBlocks.some(item => item.blockId === block.blockId)) {
+            turn.answerBlocks.push(block);
+        }
+    });
+}
+
+async function runArticleChatTurn(turn) {
+    const generation = ++articleChatGeneration;
+    const operationId = `chat-${generation}-${Date.now()}`;
+    turn.status = 'generating';
+    turn.operationId = operationId;
+    turn.error = '';
+    turn.updatedAt = Date.now();
+    articleChatState.loading = true;
+    articleChatState.error = '';
+    articleChatState.operationId = operationId;
+    articleChatState.activeTurnId = turn.turnId;
+    notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_started' });
+    try {
+        const snapshot = getCanonicalArticleSnapshot();
+        const paragraphs = (Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : [])
+            .map(item => ({
+                paragraphId: String(item?.paragraphId || ''),
+                sourceKey: String(item?.sourceKey || ''),
+                textHash: String(item?.textHash || ''),
+                recordType: String(item?.recordType || 'body'),
+                sectionId: String(item?.sectionId || ''),
+                sectionTitle: String(item?.sectionTitle || ''),
+                sectionKind: String(item?.sectionKind || ''),
+                sectionPath: Array.isArray(item?.sectionPath) ? item.sectionPath : [],
+                text: String(item?.text || '')
+            }));
+        const history = articleChatHistoryForTurn(turn.turnId);
+        articleChatState.memoryNeedsRebuild = false;
+        const response = await chrome.runtime.sendMessage({
+            type: 'LLM_ASK_ARTICLE',
+            operationId,
+            turnId: turn.turnId,
+            profileId: turn.selectedProfileId,
+            question: turn.question,
+            history,
+            document: {
+                title: document.title,
+                url: globalThis.location?.href || '',
+                documentHash: String(snapshot.documentHash || ''),
+                revision: Math.max(1, Number(snapshot.revision) || 1),
+                paragraphs
+            }
+        });
+        if (turn.operationId !== operationId || generation > articleChatGeneration) {
+            const error = new Error('ARTICLE_CHAT_STALE');
+            error.code = 'CANCELLED';
+            throw error;
+        }
+        if (!response?.success || !response.data?.message) {
+            const error = new Error(response?.error?.message || 'ARTICLE_CHAT_FAILED');
+            error.code = response?.error?.code || 'ARTICLE_CHAT_FAILED';
+            throw error;
+        }
+        const answer = response.data.message;
+        mergeArticleChatAnswerBlocks(turn, answer, snapshot);
+        turn.summary = String(answer.summary || '').slice(0, 2000);
+        turn.status = answer.status === 'truncated' ? 'truncated' : 'completed';
+        turn.route = response.data.route || null;
+        turn.profileName = String(response.data.route?.effectiveProfileName || '');
+        turn.model = String(response.data.route?.model || '');
+        turn.usage = response.data.usage || turn.usage;
+        turn.plan = publicArticleChatPlan(response.data.plan);
+        turn.coverage = response.data.coverage || turn.coverage;
+        articleChatState.coverage = turn.coverage;
+        turn.error = '';
+        turn.updatedAt = Date.now();
+        scheduleCurrentArticleArchiveSave();
+        notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_completed' });
+    } catch (error) {
+        const cancelled = error?.code === 'CANCELLED' || error?.name === 'AbortError';
+        turn.status = cancelled ? 'cancelled' : 'error';
+        turn.error = cancelled
+            ? '本次提问已取消，已完成的回答内容已保留。'
+            : String(error?.message || 'ARTICLE_CHAT_FAILED').slice(0, 1000);
+        turn.updatedAt = Date.now();
+        articleChatState.error = turn.error;
+        scheduleCurrentArticleArchiveSave();
+        notifyArticleChatStateChanged('turn_updated', turn, {
+            phase: cancelled ? 'chat_cancelled' : 'chat_error'
+        });
+    } finally {
+        if (articleChatState.operationId === operationId) {
+            articleChatState.loading = false;
+            articleChatState.operationId = '';
+            articleChatState.activeTurnId = '';
+        }
+        turn.operationId = '';
+        chrome.runtime.sendMessage({
+            type: 'LLM_CONTROL_OPERATION', operationId, command: 'release'
+        }).catch(() => {});
+        notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_terminal' });
+    }
+}
+
+function pumpArticleChatQueue() {
+    if (articleChatPumpPromise) return articleChatPumpPromise;
+    articleChatPumpPromise = (async () => {
+        while (true) {
+            const nextTurn = articleChatState.turns.find(turn => turn.status === 'queued');
+            if (!nextTurn) break;
+            await runArticleChatTurn(nextTurn);
+        }
+    })().finally(() => {
+        articleChatPumpPromise = null;
+        const queued = articleChatState.turns.some(turn => turn.status === 'queued');
+        if (queued) void pumpArticleChatQueue();
+    });
+    return articleChatPumpPromise;
+}
+
+async function askArticleWithLLM(question, profileId = '') {
+    const turn = createArticleChatTurn(question, profileId);
+    articleChatState.turns.push(turn);
+    notifyArticleChatStateChanged('turn_added', turn);
+    scheduleCurrentArticleArchiveSave();
+    void pumpArticleChatQueue();
+    return { success: true, queued: true, turn: publicArticleChatTurn(turn) };
+}
+
+async function cancelArticleChatWithLLM() {
+    const operationId = articleChatState.operationId;
+    const turn = articleChatState.turns.find(item =>
+        item.turnId === articleChatState.activeTurnId && item.operationId === operationId
+    );
+    if (!articleChatState.loading || !operationId || !turn) {
+        return { success: true, active: false };
+    }
+    const response = await chrome.runtime.sendMessage({
+        type: 'LLM_CONTROL_OPERATION', operationId, command: 'cancel'
+    });
+    if (!response?.success) {
+        const error = new Error(response?.error?.message || 'ARTICLE_CHAT_CANCEL_FAILED');
+        error.code = response?.error?.code;
+        throw error;
+    }
+    turn.status = 'cancelled';
+    turn.error = '本次提问已取消，已完成的回答内容已保留。';
+    turn.updatedAt = Date.now();
+    notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_cancelled' });
+    return { success: true, active: false, cancelled: true };
+}
+
+function removeArticleChatTurn(turnId, { queuedOnly = false } = {}) {
+    const normalizedTurnId = String(turnId || '').slice(0, 160);
+    const index = articleChatState.turns.findIndex(turn => turn.turnId === normalizedTurnId);
+    if (index < 0) return { success: true, deleted: false };
+    const turn = articleChatState.turns[index];
+    if (turn.status === 'generating' || (queuedOnly && turn.status !== 'queued')) {
+        const error = new Error(turn.status === 'generating'
+            ? 'ARTICLE_CHAT_TURN_ACTIVE' : 'ARTICLE_CHAT_TURN_NOT_QUEUED');
+        error.code = 'ARTICLE_CHAT_BUSY';
+        throw error;
+    }
+    articleChatState.turns.splice(index, 1);
+    articleChatState.memoryNeedsRebuild = true;
+    scheduleCurrentArticleArchiveSave();
+    notifyArticleChatStateChanged('turn_removed', null, { turnId: normalizedTurnId });
+    return { success: true, deleted: true, turnId: normalizedTurnId };
+}
+
+function deleteArticleChatAnswer(turnId) {
+    const turn = articleChatState.turns.find(item => item.turnId === String(turnId || ''));
+    if (!turn) return { success: true, deleted: false };
+    if (turn.status === 'generating' || turn.status === 'queued') {
+        const error = new Error('ARTICLE_CHAT_TURN_ACTIVE');
+        error.code = 'ARTICLE_CHAT_BUSY';
+        throw error;
+    }
+    turn.answerBlocks = [];
+    turn.summary = '';
+    turn.usage = null;
+    turn.plan = null;
+    turn.error = '';
+    turn.status = 'unanswered';
+    turn.updatedAt = Date.now();
+    articleChatState.memoryNeedsRebuild = true;
+    scheduleCurrentArticleArchiveSave();
+    notifyArticleChatStateChanged('turn_updated', turn, { phase: 'answer_deleted' });
+    return { success: true, deleted: true, turn: publicArticleChatTurn(turn) };
+}
+
+function regenerateArticleChatTurn(turnId, profileId = '') {
+    const turn = articleChatState.turns.find(item => item.turnId === String(turnId || ''));
+    if (!turn) {
+        const error = new Error('ARTICLE_CHAT_TURN_NOT_FOUND');
+        error.code = 'INVALID_SETTINGS';
+        throw error;
+    }
+    if (turn.status === 'generating' || turn.status === 'queued') {
+        const error = new Error('ARTICLE_CHAT_TURN_ACTIVE');
+        error.code = 'ARTICLE_CHAT_BUSY';
+        throw error;
+    }
+    turn.answerBlocks = [];
+    turn.summary = '';
+    turn.usage = null;
+    turn.plan = null;
+    turn.coverage = null;
+    turn.route = null;
+    turn.profileName = '';
+    turn.model = '';
+    turn.error = '';
+    turn.status = 'queued';
+    turn.selectedProfileId = String(profileId || turn.selectedProfileId).trim().slice(0, 100);
+    turn.updatedAt = Date.now();
+    articleChatState.memoryNeedsRebuild = true;
+    scheduleCurrentArticleArchiveSave();
+    notifyArticleChatStateChanged('turn_updated', turn, { phase: 'regenerated' });
+    void pumpArticleChatQueue();
+    return { success: true, queued: true, turn: publicArticleChatTurn(turn) };
+}
+
+function clearArticleChat() {
+    if (articleChatState.loading) {
+        const error = new Error('ARTICLE_CHAT_BUSY');
+        error.code = 'ARTICLE_CHAT_BUSY';
+        throw error;
+    }
+    articleChatGeneration += 1;
+    articleChatState = {
+        turns: [], loading: false, error: '', operationId: '', activeTurnId: '',
+        coverage: null, memoryNeedsRebuild: true
+    };
+    scheduleCurrentArticleArchiveSave();
+    notifyArticleChatStateChanged('chat_cleared');
     return { success: true };
 }
 
@@ -4893,14 +5357,7 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
         studyProfile: lastLlmAnalysis?.rawAnalysis?.studyProfile || null,
         reviewOutline: lastReviewOutline || null,
         paragraphSummaries: Array.from(standaloneReviewParagraphSummaries.values()),
-        chat: {
-            messages: articleChatState.messages.map(message => ({ ...message })),
-            loading: articleChatState.loading === true,
-            error: String(articleChatState.error || ''),
-            operationId: String(articleChatState.operationId || ''),
-            activeProfileId: String(articleChatState.activeProfileId || ''),
-            coverage: articleChatState.coverage ? { ...articleChatState.coverage } : null
-        },
+        chat: getPublicArticleChatState(),
         llmTask: {
             running: Boolean(llmOperationState.active && !llmOperationState.active.cancelled),
             paused: llmOperationState.active?.paused === true,
@@ -5041,9 +5498,25 @@ async function applyArticleArchiveSnapshot(input) {
             : null
     );
     const restoredChat = workspace.chat;
-    if (restoredChat && Array.isArray(restoredChat.messages)) {
+    if (restoredChat && Array.isArray(restoredChat.turns)) {
         articleChatState = {
-            messages: restoredChat.messages.slice(-40).map(message => ({
+            turns: restoredChat.turns.map(publicArticleChatTurn).map(turn => ({
+                ...turn,
+                status: turn.status === 'generating' ? 'cancelled' : turn.status,
+                operationId: '',
+                error: turn.status === 'generating'
+                    ? '浏览器关闭前的回答已中断，完整回答块已保留。' : turn.error
+            })).filter(turn => turn.turnId && turn.question),
+            loading: false,
+            error: '',
+            operationId: '',
+            activeTurnId: '',
+            coverage: restoredChat.coverage || null,
+            memoryNeedsRebuild: restoredChat.memoryNeedsRebuild === true
+        };
+    } else if (restoredChat && Array.isArray(restoredChat.messages)) {
+        articleChatState = {
+            messages: restoredChat.messages.map(message => ({
                 role: message?.role === 'assistant' ? 'assistant' : 'user',
                 content: String(message?.content || '').slice(0, 32000),
                 profileId: String(message?.profileId || '').slice(0, 100),
@@ -5074,6 +5547,41 @@ async function applyArticleArchiveSnapshot(input) {
             operationId: '',
             activeProfileId: '',
             coverage: restoredChat.coverage || null
+        };
+    }
+    if (Array.isArray(articleChatState.messages)) {
+        const legacyMessages = articleChatState.messages;
+        const migratedTurns = [];
+        legacyMessages.forEach(message => {
+            if (message.role === 'user') {
+                migratedTurns.push(createArticleChatTurn(
+                    message.content,
+                    message.profileId || 'profile_legacy',
+                    { turnId: `turn-legacy-${migratedTurns.length + 1}` }
+                ));
+                return;
+            }
+            const turn = migratedTurns.at(-1);
+            if (!turn || turn.answerBlocks.length) return;
+            turn.answerBlocks = [publicArticleChatBlock({
+                blockId: `block-legacy-${migratedTurns.length}`,
+                markdown: message.content,
+                evidence: message.evidence,
+                createdAt: message.createdAt
+            })];
+            turn.status = 'completed';
+            turn.profileName = message.profileName;
+            turn.model = message.model;
+            turn.updatedAt = message.createdAt;
+        });
+        articleChatState = {
+            turns: migratedTurns,
+            loading: false,
+            error: '',
+            operationId: '',
+            activeTurnId: '',
+            coverage: restoredChat?.coverage || null,
+            memoryNeedsRebuild: true
         };
     }
     const restoredCrossFigureLogic = restoredFigureWorkspaceSnapshot?.crossFigureLogic;
@@ -5913,6 +6421,11 @@ const highlighter = new SciPaperHighlighter();
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'llmAnalysisProgress') {
         const progress = request.progress || {};
+        if (progress.taskType === 'chat' || String(progress.phase || '').startsWith('chat_')) {
+            applyArticleChatProgress(progress);
+            sendResponse({ success: true });
+            return;
+        }
         if (progress.taskType === 'figure' || progress.figureId) {
             const figureProgress = applyFigureProgressEvent(progress);
             if (figureProgress) {
@@ -6319,6 +6832,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         cancelArticleChatWithLLM()
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
+    } else if (request.action === 'deleteArticleChatTurn') {
+        try {
+            sendResponse(removeArticleChatTurn(String(request.turnId || '')));
+        } catch (error) {
+            sendResponse({ success: false, error: error.message, code: error.code });
+        }
+    } else if (request.action === 'deleteArticleChatAnswer') {
+        try {
+            sendResponse(deleteArticleChatAnswer(String(request.turnId || '')));
+        } catch (error) {
+            sendResponse({ success: false, error: error.message, code: error.code });
+        }
+    } else if (request.action === 'deleteQueuedArticleChatTurn') {
+        try {
+            sendResponse(removeArticleChatTurn(
+                String(request.turnId || ''), { queuedOnly: true }
+            ));
+        } catch (error) {
+            sendResponse({ success: false, error: error.message, code: error.code });
+        }
+    } else if (request.action === 'regenerateArticleChatTurn') {
+        try {
+            sendResponse(regenerateArticleChatTurn(
+                String(request.turnId || ''), String(request.profileId || '')
+            ));
+        } catch (error) {
+            sendResponse({ success: false, error: error.message, code: error.code });
+        }
     } else if (request.action === 'clearArticleChat') {
         try {
             sendResponse(clearArticleChat());

@@ -153,6 +153,21 @@ test('article citation jumps reverify canonical evidence after a document revisi
   assert.match(script, /citationResult/);
 });
 
+test('article chat progress is applied only to the matching active turn', () => {
+  const script = read('content.js');
+  const start = script.indexOf('function notifyArticleChatStateChanged');
+  const end = script.indexOf('function createArticleChatTurn', start);
+  const workflow = script.slice(start, end);
+  assert.ok(start >= 0);
+  assert.match(workflow, /chat_answer_block/);
+  assert.match(workflow, /chat_context_ready/);
+  assert.match(workflow, /chat_usage/);
+  assert.match(workflow, /operationId/);
+  assert.match(workflow, /turnId/);
+  assert.match(workflow, /answerBlocks\.some/);
+  assert.match(workflow, /ARTICLE_CHAT_STATE_CHANGED/);
+});
+
 test('single paragraph analysis sends current navigation records but scopes the requested paragraph', () => {
   const script = read('content.js');
   assert.match(script, /async function analyzeReviewParagraphWithLLM\(/);

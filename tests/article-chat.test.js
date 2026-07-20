@@ -136,7 +136,7 @@ test('streams verified blocks, continues once after truncation, and deduplicates
   };
 
   const result = await runArticleChat({
-    input: normalizeArticleChatInput(articleMessage()),
+    input: normalizeArticleChatInput(articleMessage({ turnId: 'turn-stream' })),
     profile,
     selectedProfileId: 'profile_deepseek_chat',
     adapter,
@@ -153,6 +153,7 @@ test('streams verified blocks, continues once after truncation, and deduplicates
   assert.equal(result.message.answerBlocks[0].evidence[0].verification.status, 'verified');
   assert.equal(result.message.summary, '热应激后 IL-6 升高，并被解释为候选系统信号。');
   assert.equal(result.usage.outputTokens, 40);
+  assert.ok(progress.every(event => event.turnId === 'turn-stream'));
   assert.deepEqual(progress.map(event => event.phase), [
     'chat_started', 'chat_context_ready', 'chat_answer_block',
     'chat_continuing', 'chat_answer_block', 'chat_usage', 'chat_completed'

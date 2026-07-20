@@ -427,7 +427,12 @@ let matchCounts = {}; // 存储匹配计数
 let activeWorkspaceView = 'analysis';
 let currentWorkspaceSnapshot = null;
 let articleChatSelectedProfileId = '';
-let articleChatRequestPending = false;
+const articleChatTurnElements = new Map();
+const articleChatHistoryPageSize = 30;
+let articleChatVisibleTurnCount = articleChatHistoryPageSize;
+let articleChatFollowLatest = true;
+let articleChatRenderedDocumentKey = '';
+let articleChatScrollToLatestActive = false;
 const workspaceParagraphSummaryState = new Map();
 let reviewOutlineTaskGeneration = 0;
 let paragraphSummaryTaskGeneration = 0;
@@ -511,7 +516,11 @@ function resetPanelArticleState() {
     figureQuickNavExpandedFigureId = '';
     clearTimeout(figureQuickNavHoverTimer);
     figureQuickNavHoverTimer = null;
-    articleChatRequestPending = false;
+    articleChatTurnElements.clear();
+    articleChatVisibleTurnCount = articleChatHistoryPageSize;
+    articleChatFollowLatest = true;
+    articleChatRenderedDocumentKey = '';
+    articleChatScrollToLatestActive = false;
     stopReviewOutlineProgressPolling();
     figureTaskGeneration += 1;
     reviewOutlineTaskGeneration += 1;
@@ -670,6 +679,11 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             void refreshArticleWorkspace();
+        }
+        if (message?.type === 'ARTICLE_CHAT_STATE_CHANGED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            applyArticleChatStateEvent(message.event);
         }
     });
 }
@@ -2070,8 +2084,10 @@ function appendArticleChatInlineMarkdown(parent, value, context = {}) {
         const token = match[0];
         const citationMatch = token.match(/^\[\[(\d{1,2})\]\]$/);
         if (citationMatch) {
-            const evidenceIndex = Number(citationMatch[1]) - 1;
-            const evidenceItem = context.evidence?.[evidenceIndex];
+            const marker = citationMatch[1];
+            const evidenceIndex = (Array.isArray(context.evidence) ? context.evidence : [])
+                .findIndex(item => String(item?.marker || '') === marker);
+            const evidenceItem = evidenceIndex >= 0 ? context.evidence[evidenceIndex] : null;
             if (evidenceItem) {
                 parent.appendChild(createArticleChatInlineCitation(
                     evidenceItem, evidenceIndex, context.snapshot
@@ -2203,78 +2219,246 @@ function appendArticleChatEvidence(parent, message, snapshot, inlineCitationInde
     }
 }
 
+function articleChatStatusText(turn = {}) {
+    if (turn.status === 'queued') return '已排队，等待上一轮完成';
+    if (turn.status === 'generating') return turn.answerBlocks?.length
+        ? '正在继续生成…' : '正在检索全文并组织回答…';
+    if (turn.status === 'truncated') return '已保留完整回答；模型续写后仍达到输出上限';
+    if (turn.status === 'cancelled') return '已取消；已完成的回答块已保留';
+    if (turn.status === 'error') return turn.error || '回答失败';
+    if (turn.status === 'unanswered') return '回答已删除，可以重新生成';
+    return '';
+}
+
+function renderArticleChatBlock(block, turn, snapshot) {
+    const element = createWorkspaceElement('section', 'article-chat-answer-block');
+    element.dataset.blockId = String(block.blockId || '');
+    const markdown = renderArticleChatMarkdown(block.markdown || '', {
+        evidence: block.evidence,
+        snapshot
+    });
+    element.appendChild(markdown);
+    appendArticleChatEvidence(
+        element,
+        { evidence: block.evidence },
+        snapshot,
+        String(markdown.dataset.inlineCitationIndexes || '').split(',')
+            .filter(Boolean).map(Number)
+    );
+    return element;
+}
+
+function createArticleChatTurnAction(action, label, turnId) {
+    const button = createWorkspaceElement('button', 'article-chat-turn-action', label);
+    button.type = 'button';
+    button.dataset.articleChatAction = action;
+    button.dataset.turnId = turnId;
+    button.setAttribute('aria-label', `${label}：本轮问答`);
+    return button;
+}
+
+function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
+    const container = document.getElementById('articleChatMessages');
+    if (!container || !turn?.turnId) return null;
+    const turnId = String(turn.turnId);
+    let element = articleChatTurnElements.get(turnId) ||
+        container.querySelector(`[data-turn-id="${turnId}"]`);
+    if (!element) {
+        element = createWorkspaceElement('article', 'article-chat-turn');
+        element.dataset.turnId = turnId;
+        const question = createWorkspaceElement(
+            'div', 'article-chat-message is-user article-chat-question'
+        );
+        question.appendChild(createWorkspaceElement('div', 'article-chat-message-content'));
+        const answer = createWorkspaceElement(
+            'div', 'article-chat-message is-assistant article-chat-answer'
+        );
+        answer.append(
+            createWorkspaceElement('header', 'article-chat-message-meta'),
+            createWorkspaceElement('div', 'article-chat-answer-blocks'),
+            createWorkspaceElement('p', 'article-chat-turn-status'),
+            createWorkspaceElement('div', 'article-chat-turn-actions')
+        );
+        element.append(question, answer);
+        articleChatTurnElements.set(turnId, element);
+    }
+
+    const questionContent = element.querySelector('.article-chat-question .article-chat-message-content');
+    if (questionContent && questionContent.textContent !== String(turn.question || '')) {
+        questionContent.textContent = String(turn.question || '');
+    }
+    const meta = element.querySelector('.article-chat-message-meta');
+    const modelLabel = [turn.profileName, turn.model].filter(Boolean).join(' · ');
+    if (meta) meta.textContent = modelLabel || (turn.status === 'queued' ? '等待调用模型' : 'LLM');
+
+    const blocks = Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [];
+    const blockContainer = element.querySelector('.article-chat-answer-blocks');
+    const expectedBlockIds = new Set(blocks.map(block => String(block.blockId || '')));
+    blockContainer?.querySelectorAll('[data-block-id]').forEach(node => {
+        if (!expectedBlockIds.has(node.dataset.blockId)) node.remove();
+    });
+    blocks.forEach(block => {
+        const blockId = String(block.blockId || '');
+        if (!blockId || blockContainer.querySelector(`[data-block-id="${blockId}"]`)) return;
+        blockContainer.appendChild(renderArticleChatBlock(block, turn, snapshot));
+    });
+
+    const status = element.querySelector('.article-chat-turn-status');
+    const statusText = articleChatStatusText(turn);
+    if (status) {
+        status.textContent = statusText;
+        status.hidden = !statusText;
+        status.classList.toggle('is-error', turn.status === 'error');
+    }
+    element.classList.toggle('is-queued', turn.status === 'queued');
+    element.classList.toggle('is-generating', turn.status === 'generating');
+    element.classList.toggle('is-interrupted', ['cancelled', 'truncated', 'error'].includes(turn.status));
+
+    const actions = element.querySelector('.article-chat-turn-actions');
+    if (actions) {
+        actions.replaceChildren();
+        if (turn.status === 'queued') {
+            actions.appendChild(createArticleChatTurnAction(
+                'delete-queued', '删除排队问题', turnId
+            ));
+        } else if (turn.status !== 'generating') {
+            if (blocks.length) actions.appendChild(createArticleChatTurnAction(
+                'delete-answer', '只删除回答', turnId
+            ));
+            actions.append(
+                createArticleChatTurnAction('regenerate', '重新生成', turnId),
+                createArticleChatTurnAction('delete-turn', '删除本轮', turnId)
+            );
+        }
+    }
+    return element;
+}
+
+function isArticleChatNearBottom(container = document.getElementById('articleChatMessages')) {
+    if (!container) return true;
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= 72;
+}
+
+function updateArticleChatReturnLatest() {
+    const button = document.getElementById('articleChatReturnLatest');
+    if (button) button.hidden = articleChatFollowLatest ||
+        isArticleChatNearBottom();
+}
+
+function scrollArticleChatToLatest({ smooth = false } = {}) {
+    const container = document.getElementById('articleChatMessages');
+    if (!container) return;
+    articleChatFollowLatest = true;
+    articleChatScrollToLatestActive = smooth;
+    container.scrollTo({ top: container.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    updateArticleChatReturnLatest();
+    if (smooth) setTimeout(() => {
+        if (!container.isConnected) return;
+        container.scrollTop = container.scrollHeight;
+        articleChatScrollToLatestActive = false;
+        articleChatFollowLatest = true;
+        updateArticleChatReturnLatest();
+    }, 180);
+}
+
 function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
     renderArticleChatProfileOptions();
     const container = document.getElementById('articleChatMessages');
     const coverage = document.getElementById('articleChatCoverage');
     if (!container || !coverage) return;
-    const chat = snapshot?.chat || { messages: [], loading: false, error: '' };
-    const messages = Array.isArray(chat.messages) ? chat.messages : [];
-    container.replaceChildren();
-    if (!messages.length && !chat.loading) {
-        container.appendChild(createWorkspaceElement(
-            'div', 'workspace-empty',
-            '可以询问结论、机制、方法、证据强弱、局限，或让模型跨章节比较。'
-        ));
+    const documentKey = `${snapshot?.url || ''}|${snapshot?.revision || ''}`;
+    if (articleChatRenderedDocumentKey && articleChatRenderedDocumentKey !== documentKey) {
+        container.querySelectorAll('[data-turn-id]').forEach(node => node.remove());
+        articleChatTurnElements.clear();
+        articleChatVisibleTurnCount = articleChatHistoryPageSize;
+        articleChatFollowLatest = true;
     }
-    messages.forEach((message, messageIndex) => {
-        const role = message?.role === 'assistant' ? 'assistant' : 'user';
-        const bubble = createWorkspaceElement(
-            'article', `article-chat-message is-${role}`
-        );
-        bubble.dataset.messageIndex = String(messageIndex);
-        if (role === 'assistant') bubble.appendChild(createWorkspaceElement(
-            'header', 'article-chat-message-meta',
-            [message.profileName, message.model].filter(Boolean).join(' · ') || 'LLM'
-        ));
-        const markdown = renderArticleChatMarkdown(message.content || '', role === 'assistant'
-            ? { evidence: message.evidence, snapshot } : {});
-        bubble.appendChild(markdown);
-        if (role === 'assistant') appendArticleChatEvidence(
-            bubble,
-            message,
-            snapshot,
-            String(markdown.dataset.inlineCitationIndexes || '').split(',')
-                .filter(Boolean).map(Number)
-        );
-        container.appendChild(bubble);
+    articleChatRenderedDocumentKey = documentKey;
+
+    const chat = snapshot?.chat || { turns: [], loading: false, error: '' };
+    const turns = Array.isArray(chat.turns) ? chat.turns : [];
+    const visibleStart = Math.max(0, turns.length - articleChatVisibleTurnCount);
+    const visibleTurns = turns.slice(visibleStart);
+    const visibleIds = new Set(visibleTurns.map(turn => String(turn.turnId || '')));
+    const wasNearBottom = isArticleChatNearBottom(container);
+
+    container.querySelectorAll(':scope > .workspace-empty').forEach(node => node.remove());
+    container.querySelectorAll(':scope > [data-turn-id]').forEach(node => {
+        if (!visibleIds.has(node.dataset.turnId)) {
+            articleChatTurnElements.delete(node.dataset.turnId);
+            node.remove();
+        }
     });
-    const loading = articleChatRequestPending || chat.loading === true;
-    if (loading) {
-        const thinking = createWorkspaceElement(
-            'article', 'article-chat-message is-assistant is-thinking'
-        );
-        thinking.append(
-            createWorkspaceElement('header', 'article-chat-message-meta', 'LLM'),
-            createWorkspaceElement('span', 'article-chat-thinking', '正在阅读全文并组织回答')
-        );
-        container.appendChild(thinking);
-    }
-    if (chat.error) container.appendChild(createWorkspaceElement(
-        'p', 'workspace-figure-error article-chat-error', chat.error
+    visibleTurns.forEach((turn, index) => {
+        const element = renderArticleChatTurn(turn, snapshot);
+        const current = container.children[index];
+        if (element && current !== element) container.insertBefore(element, current || null);
+    });
+    if (!turns.length) container.appendChild(createWorkspaceElement(
+        'div', 'workspace-empty',
+        '可以询问结论、机制、方法、证据强弱、局限，或让模型跨章节比较。'
     ));
+
     const context = chat.coverage;
     coverage.textContent = context
         ? `本轮上下文：${context.sentParagraphs || 0}/${context.totalParagraphs || 0} 段` +
-            (context.truncated ? ' · 超长文章已优先保留相关章节' : ' · 已发送全文')
+            (context.truncated ? ' · 已按问题覆盖相关章节' : ' · 已发送完整正文')
         : `当前网页已建立正文索引 · ${snapshot?.paragraphs?.length || 0} 段`;
+    const loading = chat.loading === true;
     const send = document.getElementById('sendArticleChat');
     const cancel = document.getElementById('cancelArticleChat');
     const clear = document.getElementById('clearArticleChat');
-    if (send) send.disabled = loading || !articleChatSelectedProfileId;
+    const loadEarlier = document.getElementById('articleChatLoadEarlier');
+    if (send) send.disabled = !articleChatSelectedProfileId;
     if (cancel) cancel.hidden = !loading;
-    if (clear) clear.disabled = loading || messages.length === 0;
-    const scrollToLatest = () => { container.scrollTop = container.scrollHeight; };
-    requestAnimationFrame(() => {
-        scrollToLatest();
-        requestAnimationFrame(scrollToLatest);
-    });
-    setTimeout(scrollToLatest, 100);
+    if (clear) clear.disabled = loading || turns.length === 0;
+    if (loadEarlier) {
+        loadEarlier.hidden = visibleStart === 0;
+        loadEarlier.textContent = visibleStart > 0
+            ? `加载更早对话（还有 ${visibleStart} 轮）` : '已显示全部对话';
+    }
+
+    if (articleChatFollowLatest && wasNearBottom) {
+        requestAnimationFrame(() => scrollArticleChatToLatest());
+    } else {
+        articleChatFollowLatest = false;
+        updateArticleChatReturnLatest();
+    }
+}
+
+function applyArticleChatStateEvent(event = {}) {
+    if (!currentWorkspaceSnapshot) return;
+    const currentChat = currentWorkspaceSnapshot.chat || { turns: [] };
+    let turns = Array.isArray(currentChat.turns) ? [...currentChat.turns] : [];
+    if (event.kind === 'chat_cleared') {
+        turns = [];
+    } else if (event.kind === 'turn_removed') {
+        turns = turns.filter(turn => turn.turnId !== event.turnId);
+    } else if (event.turn?.turnId) {
+        const index = turns.findIndex(turn => turn.turnId === event.turn.turnId);
+        if (index >= 0) turns[index] = event.turn;
+        else turns.push(event.turn);
+    }
+    currentWorkspaceSnapshot = {
+        ...currentWorkspaceSnapshot,
+        chat: {
+            ...currentChat,
+            turns,
+            totalTurns: Number(event.totalTurns) || turns.length,
+            loading: event.loading === true,
+            operationId: String(event.operationId || ''),
+            activeTurnId: String(event.activeTurnId || ''),
+            error: String(event.error || ''),
+            coverage: event.coverage || currentChat.coverage || null,
+            memoryNeedsRebuild: event.memoryNeedsRebuild === true
+        }
+    };
+    renderArticleChatSnapshot(currentWorkspaceSnapshot);
+    cacheCurrentPanelTabState();
 }
 
 async function submitArticleChat(event) {
     event?.preventDefault();
-    if (articleChatRequestPending) return;
     const input = document.getElementById('articleChatQuestion');
     const question = String(input?.value || '').trim();
     const profileId = document.getElementById('articleChatProfile')?.value || '';
@@ -2287,24 +2471,12 @@ async function submitArticleChat(event) {
         return;
     }
     const panelContext = capturePanelContext();
-    articleChatRequestPending = true;
-    const optimisticChat = currentWorkspaceSnapshot?.chat || { messages: [] };
-    currentWorkspaceSnapshot = {
-        ...(currentWorkspaceSnapshot || {}),
-        chat: {
-            ...optimisticChat,
-            messages: [...(optimisticChat.messages || []), {
-                role: 'user', content: question, profileId, createdAt: Date.now()
-            }],
-            loading: true,
-            error: ''
-        }
-    };
+    const queuedBehindActive = currentWorkspaceSnapshot?.chat?.loading === true;
     if (input) input.value = '';
-    renderArticleChatSnapshot(currentWorkspaceSnapshot);
     try {
         const response = await sendTabMessage(panelContext.tabId, {
-            action: 'askArticleWithLLM', question, profileId
+            action: 'askArticleWithLLM', question, profileId,
+            selectedProfileId: profileId
         });
         if (!isCurrentPanelContext(panelContext)) return;
         if (!response?.success) {
@@ -2312,31 +2484,35 @@ async function submitArticleChat(event) {
             error.code = response?.code;
             throw error;
         }
-        await refreshArticleWorkspace({ panelContext });
+        if (response.turn) {
+            const existingTurns = currentWorkspaceSnapshot?.chat?.turns || [];
+            const alreadyPresent = existingTurns.some(turn =>
+                turn.turnId === response.turn.turnId
+            );
+            applyArticleChatStateEvent({
+                kind: 'turn_added',
+                turn: response.turn,
+                totalTurns: existingTurns.length + (alreadyPresent ? 0 : 1),
+                loading: currentWorkspaceSnapshot?.chat?.loading === true
+            });
+        }
+        showStatus(queuedBehindActive
+            ? '问题已加入队列，将使用提交时选择的模型。' : '问题已发送。', 'success');
     } catch (error) {
         if (!isCurrentPanelContext(panelContext)) return;
         if (input && !input.value) input.value = question;
-        showStatus(error?.code === 'CANCELLED'
-            ? '本次全文提问已取消' : `全文问答失败：${error.message}`,
-        error?.code === 'CANCELLED' ? 'success' : 'error');
-        await refreshArticleWorkspace({ panelContext });
-    } finally {
-        if (!isCurrentPanelContext(panelContext)) return;
-        articleChatRequestPending = false;
-        renderArticleChatSnapshot(currentWorkspaceSnapshot);
+        showStatus(`全文问答发送失败：${error.message}`, 'error');
     }
 }
 
 async function cancelArticleChat() {
-    if (!articleChatRequestPending && !currentWorkspaceSnapshot?.chat?.loading) return;
+    if (!currentWorkspaceSnapshot?.chat?.loading) return;
     const panelContext = capturePanelContext();
-    try {
-        await sendTabMessage(panelContext.tabId, { action: 'cancelArticleChatWithLLM' });
-    } finally {
-        if (!isCurrentPanelContext(panelContext)) return;
-        articleChatRequestPending = false;
-        await refreshArticleWorkspace({ panelContext });
-    }
+    const response = await sendTabMessage(panelContext.tabId, {
+        action: 'cancelArticleChatWithLLM'
+    });
+    if (!isCurrentPanelContext(panelContext)) return;
+    if (!response?.success) throw new Error(response?.error || 'ARTICLE_CHAT_CANCEL_FAILED');
 }
 
 async function clearArticleChatHistory() {
@@ -2345,6 +2521,36 @@ async function clearArticleChatHistory() {
     if (!isCurrentPanelContext(panelContext)) return;
     if (!response?.success) throw new Error(response?.error || 'ARTICLE_CHAT_CLEAR_FAILED');
     await refreshArticleWorkspace({ panelContext });
+}
+
+async function mutateArticleChatTurn(action, turnId) {
+    const panelContext = capturePanelContext();
+    const message = { action, turnId };
+    if (action === 'regenerateArticleChatTurn') {
+        message.profileId = document.getElementById('articleChatProfile')?.value || '';
+    }
+    const response = await sendTabMessage(panelContext.tabId, message);
+    if (!isCurrentPanelContext(panelContext)) return;
+    if (!response?.success) throw new Error(response?.error || 'ARTICLE_CHAT_MUTATION_FAILED');
+    await refreshArticleWorkspace({ panelContext });
+}
+
+function handleArticleChatTurnAction(event) {
+    const button = event.target.closest('[data-article-chat-action]');
+    if (!button) return;
+    const actions = {
+        'delete-turn': { action: 'deleteArticleChatTurn' },
+        'delete-answer': { action: 'deleteArticleChatAnswer' },
+        'delete-queued': { action: 'deleteQueuedArticleChatTurn' },
+        regenerate: { action: 'regenerateArticleChatTurn' }
+    };
+    const mutation = actions[button.dataset.articleChatAction];
+    if (!mutation) return;
+    button.disabled = true;
+    void mutateArticleChatTurn(mutation.action, button.dataset.turnId).catch(error => {
+        button.disabled = false;
+        showStatus(`无法修改本轮问答：${error.message}`, 'error');
+    });
 }
 
 function withPreparationDeadline(promise, timeoutMs = 15000) {
@@ -4728,6 +4934,27 @@ function setupEventListeners() {
     });
     document.getElementById('articleChatForm')?.addEventListener('submit', event => {
         void submitArticleChat(event);
+    });
+    document.getElementById('articleChatMessages')?.addEventListener('scroll', event => {
+        if (articleChatScrollToLatestActive) return;
+        articleChatFollowLatest = isArticleChatNearBottom(event.currentTarget);
+        updateArticleChatReturnLatest();
+    }, { passive: true });
+    document.getElementById('articleChatMessages')?.addEventListener(
+        'click', handleArticleChatTurnAction
+    );
+    document.getElementById('articleChatLoadEarlier')?.addEventListener('click', () => {
+        const container = document.getElementById('articleChatMessages');
+        const previousHeight = container?.scrollHeight || 0;
+        articleChatVisibleTurnCount += articleChatHistoryPageSize;
+        articleChatFollowLatest = false;
+        renderArticleChatSnapshot(currentWorkspaceSnapshot);
+        requestAnimationFrame(() => {
+            if (container) container.scrollTop += container.scrollHeight - previousHeight;
+        });
+    });
+    document.getElementById('articleChatReturnLatest')?.addEventListener('click', () => {
+        scrollArticleChatToLatest({ smooth: true });
     });
     document.getElementById('articleChatQuestion')?.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

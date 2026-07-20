@@ -45,6 +45,22 @@ test('popup exposes task controls and never treats user cancellation as regex fa
   assert.match(script, /error\?\.code === 'CANCELLED' \|\| highlightTaskState\.cancelled/);
 });
 
+test('popup article chat allows queueing and preserves the composer while blocks stream', () => {
+  const html = read('popup.html');
+  const script = read('popup.js');
+  const start = script.indexOf('function articleChatStatusText');
+  const end = script.indexOf('function withPreparationDeadline', start);
+  const chat = script.slice(start, end);
+  assert.match(html, /id="articleChatMessages"[^>]*role="log"/);
+  assert.match(html, /aria-relevant="additions text"/);
+  assert.match(script, /function applyArticleChatStateEvent/);
+  assert.match(chat, /function renderArticleChatTurn/);
+  assert.match(chat, /function renderArticleChatBlock/);
+  assert.match(chat, /selectedProfileId:\s*profileId/);
+  assert.doesNotMatch(chat, /if \(articleChatRequestPending\) return;[\s\S]{0,700}articleChatQuestion/);
+  assert.doesNotMatch(chat, /send\.disabled = loading/);
+});
+
 test('popup formats effective-route fallback without exposing provider secrets', () => {
   const script = read('popup.js');
   assert.match(script, /function formatEffectiveRoute\(status, route\)/);
