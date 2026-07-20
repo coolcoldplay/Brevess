@@ -14,6 +14,9 @@ require('../core/chunker.js');
 require('../core/result-validator.js');
 require('../core/evidence-ledger.js');
 require('../core/figure-analysis.js');
+require('../core/article-chat-tokenizer.js');
+require('../core/article-chat-index.js');
+require('../core/article-chat-retrieval.js');
 require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
@@ -150,6 +153,12 @@ test('registers only the one-type study selection message in the service worker'
   ['ARTICLE_ARCHIVE_PROBE', 'ARTICLE_ARCHIVE_SAVE', 'ARTICLE_ARCHIVE_LOAD']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
+  assert.ok(source.indexOf('core/article-chat-tokenizer.js') <
+    source.indexOf('core/article-chat-index.js'));
+  assert.ok(source.indexOf('core/article-chat-index.js') <
+    source.indexOf('core/article-chat-retrieval.js'));
+  assert.ok(source.indexOf('core/article-chat-retrieval.js') <
+    source.indexOf('core/article-chat.js'));
   assert.match(source, /core\/article-chat\.js/);
   assert.match(source, /core\/article-archive\.js/);
   assert.match(source, /core\/manual-annotations\.js/);
