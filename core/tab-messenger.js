@@ -19,6 +19,7 @@
     'core/manual-annotations.js',
     'core/cache-planner.js',
     'core/review-outline.js',
+    'core/article-workspace.js',
     'core/article-archive.js',
     'content.js'
   ];

@@ -495,6 +495,20 @@
       return handleStore.load();
     }
 
+    async function requestDirectoryPermission() {
+      const handle = await handleStore.load();
+      if (!handle) return { permission: 'unconfigured', granted: false };
+      let permission = await permissionState(handle);
+      if (permission !== 'granted' && typeof handle.requestPermission === 'function') {
+        try {
+          permission = await handle.requestPermission({ mode: 'readwrite' });
+        } catch (_) {
+          permission = await permissionState(handle);
+        }
+      }
+      return { permission, granted: permission === 'granted' };
+    }
+
     async function enqueueJson(relativePath, input) {
       const path = normalizeRelativePath(relativePath);
       const sanitized = sanitizeValue(cloneJsonLike(input));
@@ -1132,6 +1146,7 @@
     return {
       saveDirectoryHandle: saveDirectoryHandleMethod,
       getDirectoryHandle: getDirectoryHandleMethod,
+      requestDirectoryPermission,
       enqueueJson,
       enqueueText,
       flush,

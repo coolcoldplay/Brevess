@@ -164,6 +164,21 @@ test('workspace refresh and cached-tab restore resume the shared Figure progress
   assert.match(script, /elapsedSeconds/);
 });
 
+test('side panel scans, restores, and clears the current page workspace explicitly', () => {
+  const html = read('popup.html');
+  const script = read('popup.js');
+  assert.match(html, /id="scanArticleWorkspace"/);
+  assert.match(html, /id="clearArticleWorkspace"/);
+  assert.match(script, /ARTICLE_WORKSPACE_SCAN_RESTORE/);
+  assert.match(script, /requestPermission:\s*true/);
+  assert.match(script, /action:\s*'applyArticleWorkspaceAssets'/);
+  assert.match(script, /ARTICLE_WORKSPACE_BEGIN_DELETE/);
+  assert.match(script, /ARTICLE_WORKSPACE_FINALIZE_DELETE/);
+  assert.match(script, /confirm\(/);
+  assert.match(script, /activeWorkspaceView/);
+  assert.match(script, /ui\/state\.json/);
+});
+
 test('side panel follows the active tab without activating untouched papers', () => {
   const html = read('popup.html');
   const script = read('popup.js');

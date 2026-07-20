@@ -167,6 +167,10 @@
           const saved = {
             ...current,
             ...normalized,
+            workspaceGeneration: Math.max(
+              Number(current?.workspaceGeneration || 0),
+              Number(normalized.workspaceGeneration || 1)
+            ),
             createdAt: current?.createdAt || timestamp,
             updatedAt: timestamp,
             nextTurnSequence: Number.isSafeInteger(current?.nextTurnSequence)

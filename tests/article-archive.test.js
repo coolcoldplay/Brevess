@@ -148,3 +148,14 @@ test('content and side panel expose archive snapshot, restore, probe, and portab
     html.indexOf('core/article-archive.js') < html.indexOf('popup.js')
   );
 });
+
+test('workspace restore preserves changed-content safety and current-page clear controls', () => {
+  const root = join(__dirname, '..');
+  const content = readFileSync(join(root, 'content.js'), 'utf8');
+  const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+  assert.match(content, /match === 'content-changed'/);
+  assert.match(content, /restoredWithoutRanges/);
+  assert.match(popup, /scanCurrentArticleWorkspace/);
+  assert.match(popup, /clearCurrentArticleWorkspace/);
+  assert.match(popup, /workspaceGeneration/);
+});

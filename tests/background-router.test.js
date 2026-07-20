@@ -91,6 +91,13 @@ function createDirectorySyncDouble(options = {}) {
     readPaths,
     workspaceAssets,
     flushCalls: 0,
+    permissionRequests: 0,
+    async requestDirectoryPermission() {
+      this.permissionRequests += 1;
+      return options.requestDirectoryPermission?.() || {
+        permission: 'granted', granted: true
+      };
+    },
     async enqueueJson(path, value) {
       if (options.enqueueError) throw options.enqueueError;
       json.push({ path, value: JSON.parse(JSON.stringify(value)) });
@@ -2642,9 +2649,10 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
   const scan = await router.handle({
     type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: {
       canonicalUrl: workspace.canonicalUrl, contentHash: workspace.contentHash
-    }
+    }, requestPermission: true
   });
   assert.equal(scan.data.matches[0].match, 'exact');
+  assert.equal(directorySync.permissionRequests, 1);
   assert.equal((await router.handle({
     type: 'ARTICLE_WORKSPACE_PROBE', identity: { canonicalUrl: workspace.canonicalUrl }
   })).data.matches[0].match, 'exact');
@@ -2674,6 +2682,58 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
   });
   assert.deepEqual(rejectedResurrection.data.matches, []);
   assert.equal(rejectedResurrection.data.tombstonedMatches, 1);
+});
+
+test('scan restores validated workspace assets into IndexedDB before returning them', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'c'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/restored-paper',
+    aliases: [],
+    title: 'Restored paper',
+    directoryName: `Restored paper--${'c'.repeat(16)}`,
+    revision: '3'.repeat(64), contentHash: '3'.repeat(64), workspaceGeneration: 1
+  };
+  const manifest = {
+    ...workspace,
+    kind: 'sci-logic-highlighter-workspace',
+    createdAt: '2026-07-20T00:00:00.000Z',
+    updatedAt: '2026-07-20T00:00:00.000Z',
+    assets: [{
+      path: 'chat/index.json', type: 'json', revision: 4,
+      contentHash: 'asset-hash', updatedAt: '2026-07-20T00:00:00.000Z'
+    }]
+  };
+  const chat = { turns: [{ turnId: 'turn-1', question: 'What changed?' }] };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted', manifests: [manifest],
+      matches: [{ match: 'exact', manifest }]
+    }),
+    readWorkspaceAsset: async (_manifest, path) => ({
+      permission: 'granted', found: path === 'chat/index.json',
+      value: {
+        kind: 'sci-logic-highlighter-workspace-asset',
+        revision: 4,
+        contentHash: 'asset-hash',
+        data: chat
+      }
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync, articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const result = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: workspace,
+    requestPermission: true
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.data.restore.match, 'exact');
+  assert.deepEqual(result.data.restore.assets[0].content, chat);
+  assert.deepEqual((await workspaceStore.listAssets(workspace.workspaceId))[0].content, chat);
 });
 
 test('scan imports a legacy archive into a workspace without deleting the legacy file', async () => {

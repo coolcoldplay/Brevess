@@ -2024,8 +2024,71 @@
         };
       }
 
+      if (message.type === 'ARTICLE_WORKSPACE_UPDATE_TURN') {
+        requireArticleWorkspaceStore('updateTurn');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const turn = await articleWorkspaceStore.updateTurn(
+          workspace.workspaceId, message.turnId, message.turn || {}
+        );
+        let queued = false;
+        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+          const filename = encodeURIComponent(turn.turnId).slice(0, 240);
+          try {
+            await directorySync.enqueueWorkspaceAsset(
+              workspace, `chat/turns/${filename}.json`, turn, {
+                revision: turn.revision,
+                updatedAt: turn.updatedAt,
+                workspaceGeneration: workspace.workspaceGeneration
+              }
+            );
+            queued = true;
+            scheduleDirectoryFlush();
+          } catch (_) {}
+        }
+        return { saved: true, queued, turn: cloneJsonLike(turn) };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_DELETE_TURN') {
+        requireArticleWorkspaceStore('deleteTurn');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          return { deleted: true, alreadyMissing: true };
+        }
+        const tombstone = await articleWorkspaceStore.deleteTurn(
+          workspace.workspaceId, message.turnId
+        );
+        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+          const filename = encodeURIComponent(String(message.turnId || '')).slice(0, 240);
+          try {
+            await directorySync.enqueueWorkspaceAsset(
+              workspace, `chat/tombstones/${filename}.json`, tombstone, {
+                revision: Date.now(),
+                workspaceGeneration: workspace.workspaceGeneration
+              }
+            );
+            scheduleDirectoryFlush();
+          } catch (_) {}
+        }
+        return { deleted: true, tombstone: cloneJsonLike(tombstone) };
+      }
+
       if (message.type === 'ARTICLE_WORKSPACE_PROBE' ||
           message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE') {
+        if (message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE' &&
+            message.requestPermission === true &&
+            typeof directorySync?.requestDirectoryPermission === 'function') {
+          const permissionResult = await directorySync.requestDirectoryPermission();
+          if (!permissionResult.granted) {
+            return { permission: permissionResult.permission, manifests: [], matches: [] };
+          }
+        }
         requireDirectorySync('listWorkspaceManifests');
         const result = await directorySync.listWorkspaceManifests(message.identity || {});
         if (typeof articleWorkspaceStore?.getWorkspaceGenerationState === 'function' &&
@@ -2074,8 +2137,62 @@
               }
             }
             result.matches = [{ match: 'legacy-imported', manifest: converted.manifest }];
+            result.restore = {
+              match: 'legacy-imported',
+              manifest: converted.manifest,
+              assets: converted.assets.map(asset => ({
+                relativePath: asset.path,
+                content: cloneJsonLike(asset.value),
+                revision: Number(asset.revision) || 1,
+                contentHash: String(asset.contentHash || '')
+              }))
+            };
             result.legacyPreserved = true;
           }
+        }
+        if (message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE' && result.matches.length &&
+            !result.restore) {
+          const selected = result.matches[0];
+          const assets = [];
+          if (typeof directorySync?.readWorkspaceAsset === 'function') {
+            for (const asset of selected.manifest?.assets || []) {
+              try {
+                const loaded = await directorySync.readWorkspaceAsset(
+                  selected.manifest, asset.path
+                );
+                const envelope = loaded?.value;
+                if (loaded?.found && envelope?.data !== undefined) {
+                  assets.push({
+                    relativePath: asset.path,
+                    content: cloneJsonLike(envelope.data),
+                    revision: Number(envelope.revision) || Number(asset.revision) || 0,
+                    contentHash: String(envelope.contentHash || asset.contentHash || ''),
+                    updatedAt: String(envelope.updatedAt || asset.updatedAt || '')
+                  });
+                }
+              } catch (_) {}
+            }
+          }
+          if (articleWorkspaceStore?.ensureWorkspace && articleWorkspaceStore?.putAsset) {
+            const currentWorkspace = typeof articleWorkspaceStore.getWorkspace === 'function'
+              ? await articleWorkspaceStore.getWorkspace(selected.manifest.workspaceId) : null;
+            const importedWorkspace = currentWorkspace ||
+              await articleWorkspaceStore.ensureWorkspace({
+                ...selected.manifest,
+                storageRevision: selected.manifest.revision
+              });
+            for (const asset of assets) {
+              await articleWorkspaceStore.putAsset(
+                importedWorkspace.workspaceId, asset.relativePath, asset.content,
+                { contentHash: asset.contentHash }
+              );
+            }
+          }
+          result.restore = {
+            match: selected.match,
+            manifest: selected.manifest,
+            assets
+          };
         }
         return result;
       }

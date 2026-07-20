@@ -630,6 +630,15 @@ let lastPreparedStudy = null;
 let lastRegexHighlightRequest = null;
 let restoredFigureWorkspaceSnapshot = null;
 let articleArchiveSaveTimer = null;
+let articleWorkspaceSaveTimer = null;
+let currentArticleWorkspace = null;
+let articleWorkspaceEnsurePromise = null;
+let articleWorkspaceMutationTail = Promise.resolve();
+let articleWorkspaceSaveFrozen = false;
+let articleWorkspaceGenerationOverride = 1;
+let articleWorkspaceSidePanelUiState = null;
+let restoredWorkspaceLlmTask = null;
+const articleWorkspaceAssetFingerprints = new Map();
 let figureAnalysisPromise = null;
 let figureDepthAnalysisPromise = null;
 let figureDepthAnalysisId = '';
@@ -905,6 +914,7 @@ function finishFigureOperation(operation) {
 }
 
 function beginLlmHighlightOperation() {
+    restoredWorkspaceLlmTask = null;
     const generation = ++llmOperationState.generation;
     const operation = {
         operationId: `highlight-${generation}-${Date.now()}`,
@@ -4136,7 +4146,8 @@ function publicArticleChatPlan(plan = null) {
 
 function publicArticleChatTurn(turn = {}) {
     const allowedStatuses = new Set([
-        'queued', 'generating', 'completed', 'truncated', 'cancelled', 'error', 'unanswered'
+        'queued', 'generating', 'interrupted', 'completed', 'truncated', 'cancelled', 'error',
+        'unanswered'
     ]);
     const route = turn.route && typeof turn.route === 'object' ? turn.route : {};
     const usage = turn.usage && typeof turn.usage === 'object' ? turn.usage : null;
@@ -4418,8 +4429,16 @@ function applyArticleChatProgress(progress = {}) {
     if (!changed) return false;
     turn.updatedAt = Date.now();
     notifyArticleChatStateChanged('turn_updated', turn, { phase });
+    if (phase === 'chat_answer_block') {
+        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+        void persistWorkspaceAssetCheckpoint('chat/index.json', getPublicArticleChatState())
+            .catch(() => undefined);
+    }
     if (phase === 'chat_answer_block' || phase === 'chat_cancelled' ||
-        phase === 'chat_completed') scheduleCurrentArticleArchiveSave();
+        phase === 'chat_completed' || phase === 'chat_error') {
+        scheduleCurrentArticleArchiveSave();
+        scheduleArticleWorkspaceArtifactsSave({ immediate: phase !== 'chat_answer_block' });
+    }
     return true;
 }
 
@@ -4554,6 +4573,7 @@ async function runArticleChatTurn(turn) {
         articleChatState.coverage = turn.coverage;
         turn.error = '';
         turn.updatedAt = Date.now();
+        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
         scheduleCurrentArticleArchiveSave();
         notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_completed' });
     } catch (error) {
@@ -4564,6 +4584,7 @@ async function runArticleChatTurn(turn) {
             : String(error?.message || 'ARTICLE_CHAT_FAILED').slice(0, 1000);
         turn.updatedAt = Date.now();
         articleChatState.error = turn.error;
+        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
         scheduleCurrentArticleArchiveSave();
         notifyArticleChatStateChanged('turn_updated', turn, {
             phase: cancelled ? 'chat_cancelled' : 'chat_error'
@@ -4602,6 +4623,7 @@ async function askArticleWithLLM(question, profileId = '') {
     const turn = createArticleChatTurn(question, profileId);
     articleChatState.turns.push(turn);
     notifyArticleChatStateChanged('turn_added', turn);
+    void persistWorkspaceTurnCheckpoint(turn, { append: true }).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     void pumpArticleChatQueue();
     return { success: true, queued: true, turn: publicArticleChatTurn(turn) };
@@ -4626,6 +4648,8 @@ async function cancelArticleChatWithLLM() {
     turn.status = 'cancelled';
     turn.error = '本次提问已取消，已完成的回答内容已保留。';
     turn.updatedAt = Date.now();
+    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_cancelled' });
     return { success: true, active: false, cancelled: true };
 }
@@ -4643,6 +4667,11 @@ function removeArticleChatTurn(turnId, { queuedOnly = false } = {}) {
     }
     articleChatState.turns.splice(index, 1);
     articleChatState.memoryNeedsRebuild = true;
+    void ensureCurrentArticleWorkspace().then(workspace => chrome.runtime.sendMessage({
+        type: 'ARTICLE_WORKSPACE_DELETE_TURN',
+        workspaceId: workspace.workspaceId,
+        turnId: normalizedTurnId
+    })).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_removed', null, { turnId: normalizedTurnId });
     return { success: true, deleted: true, turnId: normalizedTurnId };
@@ -4664,6 +4693,7 @@ function deleteArticleChatAnswer(turnId) {
     turn.status = 'unanswered';
     turn.updatedAt = Date.now();
     articleChatState.memoryNeedsRebuild = true;
+    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'answer_deleted' });
     return { success: true, deleted: true, turn: publicArticleChatTurn(turn) };
@@ -4694,6 +4724,7 @@ function regenerateArticleChatTurn(turnId, profileId = '') {
     turn.selectedProfileId = String(profileId || turn.selectedProfileId).trim().slice(0, 100);
     turn.updatedAt = Date.now();
     articleChatState.memoryNeedsRebuild = true;
+    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'regenerated' });
     void pumpArticleChatQueue();
@@ -4707,11 +4738,20 @@ function clearArticleChat() {
         throw error;
     }
     articleChatGeneration += 1;
+    const deletedTurnIds = articleChatState.turns.map(turn => turn.turnId).filter(Boolean);
     articleChatState = {
         turns: [], loading: false, error: '', operationId: '', activeTurnId: '',
         coverage: null, memoryNeedsRebuild: true
     };
+    void ensureCurrentArticleWorkspace().then(async workspace => {
+        for (const turnId of deletedTurnIds) {
+            await chrome.runtime.sendMessage({
+                type: 'ARTICLE_WORKSPACE_DELETE_TURN', workspaceId: workspace.workspaceId, turnId
+            });
+        }
+    }).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
+    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyArticleChatStateChanged('chat_cleared');
     return { success: true };
 }
@@ -5509,7 +5549,7 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
         reviewOutline: lastReviewOutline || null,
         paragraphSummaries: Array.from(standaloneReviewParagraphSummaries.values()),
         chat: getPublicArticleChatState(),
-        llmTask: {
+        llmTask: llmOperationState.active ? {
             running: Boolean(llmOperationState.active && !llmOperationState.active.cancelled),
             paused: llmOperationState.active?.paused === true,
             canPause: Boolean(llmOperationState.active && !llmOperationState.active.cancelled),
@@ -5517,10 +5557,203 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
             operationId: llmOperationState.active?.operationId || '',
             phase: llmOperationState.active?.cancelled
                 ? 'cancelled' : llmOperationState.active?.paused ? 'paused'
-                    : llmOperationState.active ? 'analyzing' : 'idle'
+                    : 'analyzing'
+        } : restoredWorkspaceLlmTask || {
+            running: false, paused: false, canPause: false, cancelled: false,
+            operationId: '', phase: 'idle'
         },
         figures: buildFigureWorkspaceSnapshot({ forceRefresh })
     };
+}
+
+function articleWorkspaceMetadata() {
+    const canonicalUrl = document.querySelector('link[rel="canonical"]')?.href || location.href;
+    const doi = document.querySelector(
+        'meta[name="citation_doi"],meta[name="dc.identifier"],meta[name="DC.Identifier"]'
+    )?.content || '';
+    return { canonicalUrl, doi, title: document.title };
+}
+
+async function ensureCurrentArticleWorkspace({ forceRefresh = false } = {}) {
+    if (articleWorkspaceSaveFrozen) throw new Error('WORKSPACE_WRITES_FROZEN');
+    const snapshot = getCanonicalArticleSnapshot({ forceRefresh });
+    const metadata = articleWorkspaceMetadata();
+    const content = snapshot.paragraphs.map(paragraph => String(paragraph?.text || '')).join('\n\n');
+    const identity = await SciLLM.createArticleWorkspaceIdentity({ ...metadata, content });
+    identity.workspaceGeneration = Math.max(1, articleWorkspaceGenerationOverride);
+    if (!forceRefresh && currentArticleWorkspace?.workspaceId === identity.workspaceId &&
+        currentArticleWorkspace?.contentHash === identity.contentHash &&
+        !currentArticleWorkspace?.deletionPending) {
+        return currentArticleWorkspace;
+    }
+    if (articleWorkspaceEnsurePromise) return articleWorkspaceEnsurePromise;
+    articleWorkspaceEnsurePromise = chrome.runtime.sendMessage({
+        type: 'ARTICLE_WORKSPACE_ENSURE',
+        workspace: identity
+    }).then(response => {
+        if (!response?.success || !response.data?.workspace) {
+            throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_ENSURE_FAILED');
+        }
+        currentArticleWorkspace = response.data.workspace;
+        articleWorkspaceGenerationOverride = Math.max(
+            articleWorkspaceGenerationOverride,
+            Number(currentArticleWorkspace.workspaceGeneration) || 1
+        );
+        return currentArticleWorkspace;
+    }).finally(() => {
+        articleWorkspaceEnsurePromise = null;
+    });
+    return articleWorkspaceEnsurePromise;
+}
+
+function articleWorkspaceAssetFingerprint(content) {
+    try { return JSON.stringify(content); } catch (_) { return ''; }
+}
+
+function persistWorkspaceAssetCheckpoint(relativePath, content, { force = false } = {}) {
+    if (articleWorkspaceSaveFrozen) return Promise.resolve({ saved: false, frozen: true });
+    const path = String(relativePath || '');
+    const fingerprint = articleWorkspaceAssetFingerprint(content);
+    if (!force && fingerprint && articleWorkspaceAssetFingerprints.get(path) === fingerprint) {
+        return Promise.resolve({ saved: false, unchanged: true });
+    }
+    const mutation = articleWorkspaceMutationTail.then(async () => {
+        if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
+        if (!force && fingerprint && articleWorkspaceAssetFingerprints.get(path) === fingerprint) {
+            return { saved: false, unchanged: true };
+        }
+        const workspace = await ensureCurrentArticleWorkspace();
+        const response = await chrome.runtime.sendMessage({
+            type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+            workspaceId: workspace.workspaceId,
+            relativePath: path,
+            content
+        });
+        if (!response?.success) {
+            throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_SAVE_FAILED');
+        }
+        if (fingerprint) articleWorkspaceAssetFingerprints.set(path, fingerprint);
+        return response.data;
+    });
+    articleWorkspaceMutationTail = mutation.catch(() => undefined);
+    return mutation;
+}
+
+function persistWorkspaceTurnCheckpoint(turn, { append = false } = {}) {
+    if (!turn?.turnId || articleWorkspaceSaveFrozen) {
+        return Promise.resolve({ saved: false, frozen: articleWorkspaceSaveFrozen });
+    }
+    const publicTurn = publicArticleChatTurn(turn);
+    const turnPath = `chat/turns/${encodeURIComponent(publicTurn.turnId).slice(0, 240)}.json`;
+    const fingerprint = articleWorkspaceAssetFingerprint(publicTurn);
+    const mutation = articleWorkspaceMutationTail.then(async () => {
+        if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
+        if (!append && fingerprint &&
+            articleWorkspaceAssetFingerprints.get(turnPath) === fingerprint) {
+            return { saved: false, unchanged: true };
+        }
+        const workspace = await ensureCurrentArticleWorkspace();
+        const response = await chrome.runtime.sendMessage({
+            type: append ? 'ARTICLE_WORKSPACE_SAVE_TURN' : 'ARTICLE_WORKSPACE_UPDATE_TURN',
+            workspaceId: workspace.workspaceId,
+            turnId: publicTurn.turnId,
+            turn: publicTurn
+        });
+        if (!response?.success && !append && response?.error?.code === 'TURN_NOT_FOUND') {
+            const fallback = await chrome.runtime.sendMessage({
+                type: 'ARTICLE_WORKSPACE_SAVE_TURN',
+                workspaceId: workspace.workspaceId,
+                turn: publicTurn
+            });
+            if (!fallback?.success) {
+                throw new Error(fallback?.error?.message || 'ARTICLE_WORKSPACE_TURN_SAVE_FAILED');
+            }
+            return fallback.data;
+        }
+        if (!response?.success) {
+            throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_TURN_SAVE_FAILED');
+        }
+        if (fingerprint) articleWorkspaceAssetFingerprints.set(turnPath, fingerprint);
+        return response.data;
+    });
+    articleWorkspaceMutationTail = mutation.catch(() => undefined);
+    return mutation;
+}
+
+function buildArticleWorkspaceAssets() {
+    const snapshot = buildArticleWorkspaceSnapshot();
+    const activeEngine = document.querySelector('.sci-llm-highlight')
+        ? 'llm' : document.querySelector('.sci-highlight') ? 'regex' : '';
+    const assets = new Map([
+        ['article/structure.json', {
+            title: snapshot.title,
+            url: snapshot.url,
+            publisherFamily: snapshot.publisherFamily,
+            revision: snapshot.revision,
+            diagnostics: snapshot.diagnostics,
+            nodes: snapshot.nodes
+        }],
+        ['article/paragraphs.json', {
+            revision: snapshot.revision,
+            paragraphs: snapshot.paragraphs
+        }],
+        ['annotations/highlights.json', {
+            activeEngine,
+            lastRegexRequest: lastRegexHighlightRequest,
+            annotations: currentManualDocument?.record?.annotations || [],
+            highlightDistribution: snapshot.highlightDistribution
+        }],
+        ['analysis/full-analysis.json', {
+            llm: lastLlmAnalysis ? {
+                rawAnalysis: lastLlmAnalysis.rawAnalysis,
+                paragraphs: lastLlmAnalysis.paragraphs,
+                extractionDiagnostics: lastLlmAnalysis.extractionDiagnostics,
+                confidenceThreshold: lastLlmAnalysis.threshold ||
+                    lastLlmDiagnostics?.confidenceThreshold || 0.8
+            } : null,
+            diagnostics: lastLlmDiagnostics,
+            reviewOutline: lastReviewOutline,
+            ledger: snapshot.ledger,
+            paragraphSummaries: snapshot.paragraphSummaries,
+            task: snapshot.llmTask
+        }],
+        ['chat/index.json', snapshot.chat],
+        ['figures/inventory.json', snapshot.figures],
+        ['ui/state.json', {
+            navigator: {
+                activeTab: articleNavigatorState.activeTab,
+                depth: articleNavigatorState.depth,
+                summariesVisible: articleNavigatorState.summariesVisible,
+                expandedSectionIds: [...articleNavigatorState.expandedSectionIds]
+            },
+            sidePanel: articleWorkspaceSidePanelUiState
+        }]
+    ]);
+    return assets;
+}
+
+async function persistArticleWorkspaceArtifacts({ force = false } = {}) {
+    if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
+    await ensureCurrentArticleWorkspace();
+    const results = [];
+    for (const [path, content] of buildArticleWorkspaceAssets()) {
+        results.push(await persistWorkspaceAssetCheckpoint(path, content, { force }));
+    }
+    return { saved: true, results };
+}
+
+function scheduleArticleWorkspaceArtifactsSave({ immediate = false } = {}) {
+    clearTimeout(articleWorkspaceSaveTimer);
+    if (articleWorkspaceSaveFrozen) return;
+    if (immediate) {
+        articleWorkspaceSaveTimer = null;
+        void persistArticleWorkspaceArtifacts().catch(() => undefined);
+        return;
+    }
+    articleWorkspaceSaveTimer = setTimeout(() => {
+        articleWorkspaceSaveTimer = null;
+        void persistArticleWorkspaceArtifacts().catch(() => undefined);
+    }, 220);
 }
 
 function buildCurrentArticleArchive() {
@@ -5582,13 +5815,57 @@ async function persistCurrentArticleArchive() {
 
 function scheduleCurrentArticleArchiveSave() {
     clearTimeout(articleArchiveSaveTimer);
-    articleArchiveSaveTimer = setTimeout(() => {
-        articleArchiveSaveTimer = null;
-        persistCurrentArticleArchive().catch(() => undefined);
-    }, 350);
+    scheduleArticleWorkspaceArtifactsSave();
+    articleArchiveSaveTimer = null;
 }
 
-async function applyArticleArchiveSnapshot(input) {
+function normalizeRestoredFigureWorkspace(input = null) {
+    if (!input || typeof input !== 'object') return null;
+    const status = input.status && typeof input.status === 'object' ? input.status : {};
+    const figures = (Array.isArray(input.figures) ? input.figures : []).map(figure => ({
+        ...figure,
+        deepLoading: false,
+        panelFollowupLoading: Object.fromEntries(Object.keys(
+            figure?.panelFollowupLoading || {}
+        ).map(key => [key, false])),
+        panelAnalysisLoading: Object.fromEntries(Object.keys(
+            figure?.panelAnalysisLoading || {}
+        ).map(key => [key, false]))
+    }));
+    const figureWasRunning = status.running === true ||
+        ['analyzing', 'retrying', 'paused', 'fallback'].includes(status.phase) ||
+        (Array.isArray(input.figures) ? input.figures : []).some(figure =>
+            figure?.deepLoading === true ||
+            Object.values(figure?.panelFollowupLoading || {}).some(Boolean) ||
+            Object.values(figure?.panelAnalysisLoading || {}).some(Boolean));
+    return {
+        ...input,
+        figures,
+        status: figureWasRunning ? {
+            ...status,
+            running: false,
+            paused: false,
+            canPause: false,
+            operationId: '',
+            phase: 'interrupted',
+            message: '上次 Figure 任务已中断，请手动重新开始。',
+            figureProgress: (Array.isArray(status.figureProgress)
+                ? status.figureProgress : []).map(progress => ({
+                ...progress, running: false, paused: false, operationId: '',
+                phase: progress?.running ? 'interrupted' : progress?.phase
+            }))
+        } : status,
+        crossFigureLogic: input.crossFigureLogic ? {
+            ...input.crossFigureLogic,
+            loading: false,
+            error: input.crossFigureLogic.loading
+                ? '上次组间逻辑任务已中断，请手动重新开始。'
+                : String(input.crossFigureLogic.error || '')
+        } : input.crossFigureLogic
+    };
+}
+
+async function applyArticleArchiveSnapshot(input, { forceContentChanged = false } = {}) {
     const archive = SciLLM.validateArticleArchive(input);
     const currentDocumentId = currentManualDocument?.documentId || lastPreparedStudy?.documentId || '';
     const currentCanonicalUrl = currentManualDocument?.record?.canonicalUrl || location.href;
@@ -5603,8 +5880,9 @@ async function applyArticleArchiveSnapshot(input) {
     }
     const currentDocumentHash = currentManualDocument?.record?.documentHash ||
         lastPreparedStudy?.documentHash || '';
-    const hashMatches = !archive.documentHash || !currentDocumentHash ||
-        archive.documentHash === currentDocumentHash;
+    const hashMatches = !forceContentChanged && (
+        !archive.documentHash || !currentDocumentHash || archive.documentHash === currentDocumentHash
+    );
     const workspace = archive.workspace || {};
     let regexHighlights = 0;
     let aiHighlights = 0;
@@ -5643,19 +5921,36 @@ async function applyArticleArchiveSnapshot(input) {
         }
     }
     lastReviewOutline = workspace.reviewOutline || null;
-    restoredFigureWorkspaceSnapshot = workspace.figureWorkspace || (
+    restoredFigureWorkspaceSnapshot = normalizeRestoredFigureWorkspace(
+        workspace.figureWorkspace || (
         Array.isArray(workspace.figures)
             ? { figures: workspace.figures, totalFigures: workspace.figures.length }
             : null
+        )
     );
+    if (restoredFigureWorkspaceSnapshot?.status?.phase === 'interrupted') {
+        figureAnalysisStatus = {
+            ...figureAnalysisStatus,
+            ...restoredFigureWorkspaceSnapshot.status
+        };
+    }
+    const archivedTask = workspace.navigation?.llmTask;
+    restoredWorkspaceLlmTask = archivedTask?.running === true ||
+        ['analyzing', 'paused', 'retrying'].includes(archivedTask?.phase)
+        ? {
+            ...archivedTask, running: false, paused: false, canPause: false,
+            operationId: '', phase: 'interrupted',
+            message: '上次全文分析已中断，请手动重新开始。'
+        } : null;
     const restoredChat = workspace.chat;
     if (restoredChat && Array.isArray(restoredChat.turns)) {
         articleChatState = {
             turns: restoredChat.turns.map(publicArticleChatTurn).map(turn => ({
                 ...turn,
-                status: turn.status === 'generating' ? 'cancelled' : turn.status,
+                status: turn.status === 'generating' ? 'interrupted'
+                    : turn.status === 'queued' ? 'interrupted' : turn.status,
                 operationId: '',
-                error: turn.status === 'generating'
+                error: turn.status === 'generating' || turn.status === 'queued'
                     ? '浏览器关闭前的回答已中断，完整回答块已保留。' : turn.error
             })).filter(turn => turn.turnId && turn.question),
             loading: false,
@@ -5754,6 +6049,165 @@ async function applyArticleArchiveSnapshot(input) {
         reviewOutlineRestored: Boolean(lastReviewOutline),
         figuresRestored: restoredFigureWorkspaceSnapshot?.figures?.length || 0
     };
+}
+
+async function applyArticleWorkspaceAssets(input = {}) {
+    const match = String(input.match || 'exact');
+    const assets = Array.isArray(input.assets) ? input.assets : [];
+    const byPath = new Map(assets.map(asset => [
+        String(asset?.relativePath || asset?.path || ''),
+        asset?.content === undefined ? asset?.data : asset.content
+    ]).filter(([path]) => path));
+    let archiveResult = null;
+    if (byPath.has('legacy/archive.json')) {
+        archiveResult = await applyArticleArchiveSnapshot(byPath.get('legacy/archive.json'), {
+            forceContentChanged: match === 'content-changed'
+        });
+    }
+
+    const savedAnalysis = byPath.get('analysis/full-analysis.json');
+    if (!archiveResult && savedAnalysis && typeof savedAnalysis === 'object') {
+        const savedLlm = savedAnalysis.llm;
+        if (savedLlm?.rawAnalysis && Array.isArray(savedLlm.paragraphs)) {
+            lastLlmAnalysis = {
+                rawAnalysis: savedLlm.rawAnalysis,
+                paragraphs: savedLlm.paragraphs,
+                extractionDiagnostics: savedLlm.extractionDiagnostics || null,
+                threshold: Number(savedLlm.confidenceThreshold) || 0.8
+            };
+        }
+        lastLlmDiagnostics = {
+            ...(savedAnalysis.diagnostics || {}),
+            ...(match === 'content-changed' ? { restoredWithoutRanges: true } : {})
+        };
+        lastReviewOutline = savedAnalysis.reviewOutline || null;
+        const savedTask = savedAnalysis.task;
+        restoredWorkspaceLlmTask = savedTask?.running === true ||
+            ['analyzing', 'paused', 'retrying'].includes(savedTask?.phase)
+            ? {
+                ...savedTask,
+                running: false,
+                paused: false,
+                canPause: false,
+                operationId: '',
+                phase: 'interrupted',
+                message: '上次全文分析在浏览器关闭或页面离开时中断，请手动重新开始。'
+            } : null;
+    }
+
+    const savedFigures = byPath.get('figures/inventory.json');
+    if (!archiveResult && savedFigures && typeof savedFigures === 'object') {
+        restoredFigureWorkspaceSnapshot = normalizeRestoredFigureWorkspace(savedFigures);
+        if (restoredFigureWorkspaceSnapshot?.status?.phase === 'interrupted') {
+            figureAnalysisStatus = {
+            ...figureAnalysisStatus,
+            ...restoredFigureWorkspaceSnapshot.status
+            };
+        }
+        const restoredLogic = savedFigures.crossFigureLogic;
+        if (restoredLogic?.result) {
+            crossFigureLogicState = {
+                result: restoredLogic.result, loading: false,
+                error: String(restoredLogic.error || '')
+            };
+        }
+    }
+
+    const savedChat = byPath.get('chat/index.json') ||
+        (archiveResult ? getPublicArticleChatState() : null);
+    if (savedChat && Array.isArray(savedChat.turns)) {
+        articleChatState = {
+            turns: savedChat.turns.map(publicArticleChatTurn).map(turn => ({
+                ...turn,
+                status: turn.status === 'generating' ? 'interrupted'
+                    : turn.status === 'queued' ? 'interrupted' : turn.status,
+                operationId: '',
+                error: turn.status === 'generating' || turn.status === 'queued'
+                    ? '浏览器关闭或页面离开时任务已中断；已完成的回答块已保留，可手动重新生成。'
+                    : turn.error
+            })).filter(turn => turn.turnId && turn.question),
+            loading: false,
+            error: '',
+            operationId: '',
+            activeTurnId: '',
+            coverage: savedChat.coverage || null,
+            memoryNeedsRebuild: savedChat.memoryNeedsRebuild === true
+        };
+    }
+
+    const savedUi = byPath.get('ui/state.json');
+    if (savedUi?.navigator) {
+        articleNavigatorState.activeTab = ['outline', 'figures'].includes(savedUi.navigator.activeTab)
+            ? savedUi.navigator.activeTab : articleNavigatorState.activeTab;
+        articleNavigatorState.depth = savedUi.navigator.depth === 'all' ? 'all' : 'major';
+        articleNavigatorState.summariesVisible = savedUi.navigator.summariesVisible === true;
+        articleNavigatorState.expandedSectionIds = new Set(
+            Array.isArray(savedUi.navigator.expandedSectionIds)
+                ? savedUi.navigator.expandedSectionIds.map(String) : []
+        );
+    }
+    articleWorkspaceSidePanelUiState = savedUi?.sidePanel || null;
+
+    if (match === 'content-changed') {
+        lastLlmDiagnostics = { ...(lastLlmDiagnostics || {}), restoredWithoutRanges: true };
+        articleWorkspaceAssetFingerprints.clear();
+    } else {
+        assets.forEach(asset => {
+            const path = String(asset?.relativePath || asset?.path || '');
+            const content = asset?.content === undefined ? asset?.data : asset.content;
+            if (path) articleWorkspaceAssetFingerprints.set(
+                path, articleWorkspaceAssetFingerprint(content)
+            );
+        });
+        if (input.manifest?.workspaceId) currentArticleWorkspace = { ...input.manifest };
+    }
+    articleChatState.loading = false;
+    articleChatState.operationId = '';
+    articleChatState.activeTurnId = '';
+    notifyArticleChatStateChanged('workspace_restored');
+    return {
+        success: true,
+        match,
+        partial: match === 'content-changed' || archiveResult?.partial === true,
+        restoredWithoutRanges: match === 'content-changed',
+        assetCount: assets.length,
+        chatTurns: articleChatState.turns.length,
+        uiState: articleWorkspaceSidePanelUiState
+    };
+}
+
+async function resetArticleWorkspaceState({ workspaceGeneration = 1 } = {}) {
+    articleWorkspaceSaveFrozen = true;
+    clearTimeout(articleArchiveSaveTimer);
+    clearTimeout(articleWorkspaceSaveTimer);
+    articleArchiveSaveTimer = null;
+    articleWorkspaceSaveTimer = null;
+    clearAutomaticHighlights();
+    lastRegexHighlightRequest = null;
+    lastLlmAnalysis = null;
+    lastLlmDiagnostics = null;
+    lastReviewOutline = null;
+    restoredWorkspaceLlmTask = null;
+    restoredFigureWorkspaceSnapshot = null;
+    lastFigureAnalysis = null;
+    figureWalkthroughState.clear();
+    figureProgressById.clear();
+    crossFigureLogicState = { result: null, loading: false, error: '' };
+    articleChatGeneration += 1;
+    articleChatState = {
+        turns: [], loading: false, error: '', operationId: '', activeTurnId: '',
+        coverage: null, memoryNeedsRebuild: true
+    };
+    currentArticleWorkspace = null;
+    articleWorkspaceEnsurePromise = null;
+    articleWorkspaceAssetFingerprints.clear();
+    articleWorkspaceSidePanelUiState = null;
+    articleWorkspaceGenerationOverride = Math.max(1, Number(workspaceGeneration) || 1);
+    articleWorkspaceSaveFrozen = false;
+    const workspace = await ensureCurrentArticleWorkspace({ forceRefresh: true });
+    await persistArticleWorkspaceArtifacts({ force: true });
+    notifyArticleChatStateChanged('workspace_cleared');
+    return { success: true, workspace };
 }
 
 function resolveWorkspaceParagraph(target = {}) {
@@ -6719,18 +7173,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: true, shown: false, reason: 'NO_REVIEW_OUTLINE' });
         }
     } else if (request.action === 'getArticleWorkspaceSnapshot') {
-        try {
+        Promise.resolve().then(async () => {
             const snapshot = buildArticleWorkspaceSnapshot({
                 forceRefresh: request.forceRefresh === true
             });
-            if (!articleStructureObserver) startArticleStructureObserver();
-            sendResponse({
-                success: true,
-                snapshot
+            const localWorkspace = await ensureCurrentArticleWorkspace({
+                forceRefresh: request.forceRefresh === true
             });
-        } catch (error) {
+            if (!articleStructureObserver) startArticleStructureObserver();
+            scheduleArticleWorkspaceArtifactsSave();
+            return {
+                success: true,
+                snapshot: { ...snapshot, localWorkspace }
+            };
+        }).then(sendResponse).catch(error => {
             sendResponse({ success: false, error: error.message });
-        }
+        });
+    } else if (request.action === 'ensureArticleWorkspace') {
+        ensureCurrentArticleWorkspace({ forceRefresh: request.forceRefresh === true })
+            .then(workspace => sendResponse({ success: true, workspace }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'saveArticleWorkspaceUiState') {
+        articleWorkspaceSidePanelUiState = request.uiState && typeof request.uiState === 'object'
+            ? { ...request.uiState } : null;
+        persistWorkspaceAssetCheckpoint('ui/state.json', {
+            navigator: {
+                activeTab: articleNavigatorState.activeTab,
+                depth: articleNavigatorState.depth,
+                summariesVisible: articleNavigatorState.summariesVisible,
+                expandedSectionIds: [...articleNavigatorState.expandedSectionIds]
+            },
+            sidePanel: articleWorkspaceSidePanelUiState
+        }).then(() => sendResponse({ success: true }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'freezeArticleWorkspaceWrites') {
+        articleWorkspaceSaveFrozen = true;
+        clearTimeout(articleWorkspaceSaveTimer);
+        clearTimeout(articleArchiveSaveTimer);
+        articleWorkspaceSaveTimer = null;
+        articleArchiveSaveTimer = null;
+        sendResponse({ success: true, frozen: true });
+    } else if (request.action === 'applyArticleWorkspaceAssets') {
+        applyArticleWorkspaceAssets(request.restore || request)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'resetArticleWorkspaceState') {
+        resetArticleWorkspaceState({ workspaceGeneration: request.workspaceGeneration })
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'getArticleArchiveSnapshot') {
         try {
             sendResponse({ success: true, archive: buildCurrentArticleArchive() });

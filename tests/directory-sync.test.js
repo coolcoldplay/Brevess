@@ -21,6 +21,8 @@ const { createIndexedDbDocumentStore } = require('../core/document-store.js');
 
 function createFakeHandleStore(initialPermission = 'granted') {
   let permission = initialPermission;
+  let requestedPermission = 'granted';
+  let permissionRequests = 0;
   let failWrites = 0;
   let pausePath = '';
   let releasePausedWrite;
@@ -72,6 +74,12 @@ function createFakeHandleStore(initialPermission = 'granted') {
         assert.deepEqual(options, { mode: 'readwrite' });
         return permission;
       },
+      async requestPermission(options) {
+        assert.deepEqual(options, { mode: 'readwrite' });
+        permissionRequests += 1;
+        permission = requestedPermission;
+        return permission;
+      },
       async getDirectoryHandle(child) {
         return directoryHandle(`${prefix}${child}/`, child);
       },
@@ -108,6 +116,8 @@ function createFakeHandleStore(initialPermission = 'granted') {
     async load() { return root; },
     async save() {},
     setPermission(value) { permission = value; },
+    setRequestedPermission(value) { requestedPermission = value; },
+    get permissionRequests() { return permissionRequests; },
     failNextWrites(count = 1) { failWrites = count; },
     pauseNextWrite(path) { pausePath = path; },
     async waitForPausedWrite() { await pausedEntered; },
@@ -119,6 +129,21 @@ function createFakeHandleStore(initialPermission = 'granted') {
     reads
   };
 }
+
+test('requests a stored directory permission only from an explicit caller', async () => {
+  const handles = createFakeHandleStore('prompt');
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+
+  assert.equal((await sync.status()).permission, 'prompt');
+  assert.equal(handles.permissionRequests, 0);
+  assert.deepEqual(await sync.requestDirectoryPermission(), {
+    permission: 'granted', granted: true
+  });
+  assert.equal(handles.permissionRequests, 1);
+});
 
 function workspaceFixture(overrides = {}) {
   return {

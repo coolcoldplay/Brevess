@@ -112,6 +112,19 @@ test('one canonical snapshot is reused by navigation, chat, archive, and paragra
   assert.match(extractor, /function buildArticleStructureFromRecords/);
 });
 
+test('content creates a non-LLM workspace and autosaves separate restorable artifacts', () => {
+  const script = read('content.js');
+  const messenger = read('core/tab-messenger.js');
+  assert.match(script, /createArticleWorkspaceIdentity/);
+  assert.match(script, /action === 'ensureArticleWorkspace'/);
+  assert.match(script, /ARTICLE_WORKSPACE_SAVE_ASSET/);
+  ['article/structure.json', 'article/paragraphs.json', 'annotations/highlights.json',
+    'analysis/full-analysis.json', 'chat/index.json', 'figures/inventory.json',
+    'ui/state.json'].forEach(path => assert.match(script, new RegExp(path.replace('/', '\\/'))));
+  assert.ok(messenger.indexOf("'core/article-workspace.js'") < messenger.indexOf("'content.js'"));
+  assert.match(script, /action === 'applyArticleWorkspaceAssets'/);
+});
+
 test('dynamic article structure refresh observes prose containers used outside p tags', () => {
   const script = read('content.js');
   const start = script.indexOf('function isArticleStructureMutation(');

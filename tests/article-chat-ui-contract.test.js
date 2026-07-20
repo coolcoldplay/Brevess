@@ -114,6 +114,19 @@ test('article chat keeps unlimited turn and block state with immutable queued pr
   assert.doesNotMatch(workflow, /\.slice\(-20\)|\.slice\(-40\)/);
 });
 
+test('workspace autosave checkpoints complete chat blocks and keeps interrupted tasks inert', () => {
+  const content = read('content.js');
+  assert.match(content, /function ensureCurrentArticleWorkspace/);
+  assert.match(content, /type:\s*'ARTICLE_WORKSPACE_ENSURE'/);
+  assert.match(content, /function persistWorkspaceAssetCheckpoint/);
+  assert.match(content, /chat\/turns\//);
+  assert.match(content, /phase === 'chat_answer_block'[\s\S]{0,900}persistWorkspaceTurnCheckpoint/);
+  assert.match(content, /status:\s*turn\.status === 'generating'\s*\?\s*'interrupted'/);
+  const restoreStart = content.indexOf('async function applyArticleWorkspaceAssets');
+  assert.ok(restoreStart >= 0);
+  assert.doesNotMatch(content.slice(restoreStart, restoreStart + 6000), /pumpArticleChatQueue\(/);
+});
+
 test('article chat supports delete, answer removal, queued removal, regeneration, and clear', () => {
   const content = read('content.js');
   const popup = read('popup.js');
