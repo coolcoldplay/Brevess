@@ -2736,6 +2736,55 @@ test('scan restores validated workspace assets into IndexedDB before returning t
   assert.deepEqual((await workspaceStore.listAssets(workspace.workspaceId))[0].content, chat);
 });
 
+test('workspace overview returns safe summaries and loads one detail on demand', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'d'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/overview-paper',
+    aliases: [{ type: 'doi', value: '10.1000/overview' }],
+    title: 'Overview paper',
+    directoryName: `Overview paper--${'d'.repeat(16)}`,
+    revision: '4'.repeat(64), contentHash: '4'.repeat(64), workspaceGeneration: 1,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-20T00:00:00.000Z',
+    lastAccessedAt: '2026-07-20T01:00:00.000Z'
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  await workspaceStore.ensureWorkspace(workspace);
+  await workspaceStore.putAsset(workspace.workspaceId, 'chat/index.json', {
+    turns: [{ turnId: 'turn-1' }, { turnId: 'turn-2' }]
+  });
+  await workspaceStore.putAsset(workspace.workspaceId, 'figures/inventory.json', {
+    figures: [{ figureId: 'figure-1', panelHints: ['A', 'B'] }]
+  });
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted', manifests: [], matches: [], invalidManifests: 1
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync, articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('overview must stay local'); }
+  });
+
+  const overview = await router.handle({ type: 'ARTICLE_WORKSPACE_LIST' });
+  assert.equal(overview.success, true);
+  assert.equal(overview.data.workspaces[0].doi, '10.1000/overview');
+  assert.equal(overview.data.totals.workspaceCount, 1);
+  assert.equal(overview.data.sync.corruptCount, 1);
+  assert.doesNotMatch(JSON.stringify(overview.data), /directoryName|absolutePath|apiKey/i);
+
+  const detail = await router.handle({
+    type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId: workspace.workspaceId
+  });
+  assert.equal(detail.success, true);
+  assert.equal(detail.data.chatTurnCount, 2);
+  assert.equal(detail.data.figureCount, 1);
+  assert.equal(detail.data.panelCount, 2);
+  assert.ok(detail.data.estimatedBytes > 0);
+  assert.doesNotMatch(JSON.stringify(detail.data), /relativePath|content|apiKey/i);
+});
+
 test('scan imports a legacy archive into a workspace without deleting the legacy file', async () => {
   const archive = portableArchive();
   const legacyPath = articleArchiveRelativePath(archive);

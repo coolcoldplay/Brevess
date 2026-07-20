@@ -32,6 +32,19 @@ const userDataUi = {
   directoryHandle: null,
   handleLoaded: false
 };
+const ARTICLE_WORKSPACE_PAGE_SIZE = 20;
+const articleWorkspaceOverviewUi = {
+  items: [],
+  details: new Map(),
+  selected: new Set(),
+  query: '',
+  sort: 'updated_desc',
+  page: 1,
+  loading: false,
+  requestSequence: 0,
+  totals: null,
+  sync: null
+};
 let pendingMigrationBundle = null;
 const USER_DATA_ACTION_IDS = [
   'chooseUserDataDirectory', 'reauthorizeUserDataDirectory',
@@ -47,6 +60,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateDirectoryFeatureSupport();
   await preloadUserDataDirectoryHandle();
   await refreshUserDataStatus();
+  await refreshArticleWorkspaceOverview();
 });
 
 function bindEvents() {
@@ -106,6 +120,52 @@ function bindEvents() {
   document.getElementById('importMigrationBundle').addEventListener('change', importMigrationBundle);
   document.getElementById('confirmMigrationImport').addEventListener('click', confirmMigrationImport);
   document.getElementById('confirmRebuildUserDataIndex').addEventListener('click', confirmRebuildUserDataIndex);
+  document.getElementById('refreshArticleWorkspaceOverview')
+    .addEventListener('click', refreshArticleWorkspaceOverview);
+  document.getElementById('articleWorkspaceSearch').addEventListener('input', event => {
+    articleWorkspaceOverviewUi.query = event.currentTarget.value.trim().toLocaleLowerCase();
+    articleWorkspaceOverviewUi.page = 1;
+    renderArticleWorkspaceOverview();
+    loadVisibleArticleWorkspaceDetails();
+  });
+  document.getElementById('articleWorkspaceSort').addEventListener('change', event => {
+    articleWorkspaceOverviewUi.sort = event.currentTarget.value || 'updated_desc';
+    articleWorkspaceOverviewUi.page = 1;
+    renderArticleWorkspaceOverview();
+    loadVisibleArticleWorkspaceDetails();
+  });
+  document.getElementById('articleWorkspaceSelectAll').addEventListener('change', event => {
+    visibleArticleWorkspacePage().forEach(item => {
+      if (event.currentTarget.checked) articleWorkspaceOverviewUi.selected.add(item.workspaceId);
+      else articleWorkspaceOverviewUi.selected.delete(item.workspaceId);
+    });
+    renderArticleWorkspaceOverview();
+  });
+  document.getElementById('clearSelectedArticleWorkspaces').addEventListener('click', () => {
+    clearArticleWorkspaces([...articleWorkspaceOverviewUi.selected]);
+  });
+  document.getElementById('articleWorkspacePreviousPage').addEventListener('click', () => {
+    articleWorkspaceOverviewUi.page = Math.max(1, articleWorkspaceOverviewUi.page - 1);
+    renderArticleWorkspaceOverview();
+    loadVisibleArticleWorkspaceDetails();
+  });
+  document.getElementById('articleWorkspaceNextPage').addEventListener('click', () => {
+    articleWorkspaceOverviewUi.page += 1;
+    renderArticleWorkspaceOverview();
+    loadVisibleArticleWorkspaceDetails();
+  });
+  document.getElementById('articleWorkspaceList').addEventListener('change', event => {
+    const input = event.target.closest('[data-workspace-select]');
+    if (!input) return;
+    if (input.checked) articleWorkspaceOverviewUi.selected.add(input.dataset.workspaceSelect);
+    else articleWorkspaceOverviewUi.selected.delete(input.dataset.workspaceSelect);
+    updateArticleWorkspaceOverviewControls();
+  });
+  document.getElementById('articleWorkspaceList').addEventListener('click', event => {
+    const button = event.target.closest('[data-workspace-action]');
+    if (!button) return;
+    handleArticleWorkspaceAction(button.dataset.workspaceAction, button.dataset.workspaceId);
+  });
   document.getElementById('categorySearch').addEventListener('input', event => {
     categoryEditor.search = event.target.value.trim().toLocaleLowerCase();
     renderCategoryList();
@@ -405,6 +465,375 @@ async function exportUserDataBundle() {
     setUserDataActionPending(false);
   }
 }
+
+// Article workspace overview: lightweight list first, details only for the visible page.
+function articleWorkspaceStatus(message, type = 'info') {
+  const status = document.getElementById('articleWorkspaceOverviewStatus');
+  status.textContent = String(message || '');
+  status.className = message
+    ? `status local-data-status show ${type}`
+    : 'status local-data-status';
+}
+
+function formatWorkspaceBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function formatWorkspaceTime(value) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : '暂无记录';
+}
+
+function articleWorkspaceIdentity(item) {
+  if (item.doi) return `DOI ${item.doi}`;
+  if (item.site) return item.site;
+  return '本地论文';
+}
+
+function filteredArticleWorkspaces() {
+  const query = articleWorkspaceOverviewUi.query;
+  const items = articleWorkspaceOverviewUi.items.filter(item => {
+    if (!query) return true;
+    return `${item.title || ''} ${item.doi || ''}`.toLocaleLowerCase().includes(query);
+  });
+  const sort = articleWorkspaceOverviewUi.sort;
+  const text = item => String(item.title || '').toLocaleLowerCase();
+  const time = (item, field) => Date.parse(item[field]) || 0;
+  return items.sort((left, right) => {
+    if (sort === 'size_desc') return (right.estimatedBytes || 0) - (left.estimatedBytes || 0);
+    if (sort === 'size_asc') return (left.estimatedBytes || 0) - (right.estimatedBytes || 0);
+    if (sort === 'title_asc') return text(left).localeCompare(text(right), 'zh-CN');
+    if (sort === 'accessed_desc') return time(right, 'lastAccessedAt') - time(left, 'lastAccessedAt');
+    if (sort === 'created_desc') return time(right, 'createdAt') - time(left, 'createdAt');
+    return time(right, 'updatedAt') - time(left, 'updatedAt');
+  });
+}
+
+function articleWorkspacePageModel() {
+  const filtered = filteredArticleWorkspaces();
+  const pageCount = Math.max(1, Math.ceil(filtered.length / ARTICLE_WORKSPACE_PAGE_SIZE));
+  articleWorkspaceOverviewUi.page = Math.min(Math.max(1, articleWorkspaceOverviewUi.page), pageCount);
+  const start = (articleWorkspaceOverviewUi.page - 1) * ARTICLE_WORKSPACE_PAGE_SIZE;
+  return {
+    filtered,
+    pageCount,
+    items: filtered.slice(start, start + ARTICLE_WORKSPACE_PAGE_SIZE)
+  };
+}
+
+function visibleArticleWorkspacePage() {
+  return articleWorkspacePageModel().items;
+}
+
+function workspaceCountDetail(item) {
+  return articleWorkspaceOverviewUi.details.get(item.workspaceId) || item;
+}
+
+function workspaceSyncLabel(state) {
+  return {
+    synced: '已同步', pending: '待同步', conflict: '有冲突',
+    'content-changed': '正文已变化', deleting: '待清除', 'local-only': '仅本机'
+  }[state] || '仅本机';
+}
+
+function workspaceMetric(label, value) {
+  const metric = document.createElement('span');
+  metric.textContent = `${label} ${Math.max(0, Number(value) || 0)}`;
+  return metric;
+}
+
+function createArticleWorkspaceCard(item) {
+  const detail = workspaceCountDetail(item);
+  const card = document.createElement('article');
+  card.className = 'article-workspace-card';
+
+  const checkbox = document.createElement('input');
+  checkbox.className = 'article-workspace-select';
+  checkbox.type = 'checkbox';
+  checkbox.dataset.workspaceSelect = item.workspaceId;
+  checkbox.checked = articleWorkspaceOverviewUi.selected.has(item.workspaceId);
+  checkbox.setAttribute('aria-label', `选择 ${item.title || '未命名论文'}`);
+
+  const body = document.createElement('div');
+  body.className = 'article-workspace-body';
+  const titleRow = document.createElement('div');
+  titleRow.className = 'article-workspace-title-row';
+  const title = document.createElement('strong');
+  title.className = 'article-workspace-title';
+  title.textContent = item.title || '未命名论文';
+  const state = document.createElement('span');
+  state.className = 'article-workspace-state';
+  state.dataset.state = item.syncState || 'local-only';
+  state.textContent = workspaceSyncLabel(item.syncState);
+  titleRow.append(title, state);
+
+  const identity = document.createElement('p');
+  identity.className = 'article-workspace-identity';
+  identity.textContent = [item.site, item.doi ? `DOI ${item.doi}` : ''].filter(Boolean).join(' · ') ||
+    articleWorkspaceIdentity(item);
+
+  const metrics = document.createElement('div');
+  metrics.className = 'article-workspace-metrics';
+  metrics.append(
+    workspaceMetric('问答', detail.chatTurnCount),
+    workspaceMetric('Figure', detail.figureCount),
+    workspaceMetric('Panel', detail.panelCount),
+    workspaceMetric('高亮', detail.highlightCount)
+  );
+  const size = document.createElement('span');
+  size.textContent = `占用 ${formatWorkspaceBytes(detail.estimatedBytes)}`;
+  metrics.appendChild(size);
+
+  const times = document.createElement('div');
+  times.className = 'article-workspace-times';
+  [
+    ['创建', item.createdAt], ['访问', item.lastAccessedAt], ['修改', item.updatedAt]
+  ].forEach(([label, value]) => {
+    const entry = document.createElement('span');
+    entry.textContent = `${label}：${formatWorkspaceTime(value)}`;
+    times.appendChild(entry);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'article-workspace-actions';
+  [
+    ['restore', '扫描并恢复'], ['export', '导出'], ['clear', '清除']
+  ].forEach(([action, label]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `button ${action === 'clear' ? 'quiet' : 'secondary'}`;
+    button.dataset.workspaceAction = action;
+    button.dataset.workspaceId = item.workspaceId;
+    button.disabled = articleWorkspaceOverviewUi.loading;
+    button.textContent = label;
+    actions.appendChild(button);
+  });
+
+  body.append(titleRow, identity, metrics, times, actions);
+  card.append(checkbox, body);
+  return card;
+}
+
+function updateArticleWorkspaceOverviewControls() {
+  const model = articleWorkspacePageModel();
+  const visibleIds = model.items.map(item => item.workspaceId);
+  const selectedVisible = visibleIds.filter(id => articleWorkspaceOverviewUi.selected.has(id));
+  const selectAll = document.getElementById('articleWorkspaceSelectAll');
+  selectAll.disabled = articleWorkspaceOverviewUi.loading || !visibleIds.length;
+  selectAll.checked = Boolean(visibleIds.length && selectedVisible.length === visibleIds.length);
+  selectAll.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visibleIds.length;
+  document.getElementById('clearSelectedArticleWorkspaces').disabled =
+    articleWorkspaceOverviewUi.loading || !articleWorkspaceOverviewUi.selected.size;
+  document.getElementById('refreshArticleWorkspaceOverview').disabled =
+    articleWorkspaceOverviewUi.loading;
+  document.getElementById('articleWorkspacePreviousPage').disabled =
+    articleWorkspaceOverviewUi.loading || articleWorkspaceOverviewUi.page <= 1;
+  document.getElementById('articleWorkspaceNextPage').disabled =
+    articleWorkspaceOverviewUi.loading || articleWorkspaceOverviewUi.page >= model.pageCount;
+  document.getElementById('articleWorkspacePageStatus').textContent =
+    `第 ${articleWorkspaceOverviewUi.page} / ${model.pageCount} 页`;
+}
+
+function renderArticleWorkspaceOverview() {
+  const list = document.getElementById('articleWorkspaceList');
+  const model = articleWorkspacePageModel();
+  list.replaceChildren();
+  if (!model.items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'article-workspace-empty';
+    empty.textContent = articleWorkspaceOverviewUi.query
+      ? '没有匹配标题或 DOI 的论文工作区。'
+      : '还没有本地论文工作区。打开论文并激活插件后会自动建立。';
+    list.appendChild(empty);
+  } else {
+    model.items.forEach(item => list.appendChild(createArticleWorkspaceCard(item)));
+  }
+  const totals = articleWorkspaceOverviewUi.totals || {};
+  const sync = articleWorkspaceOverviewUi.sync || {};
+  document.getElementById('articleWorkspaceTotals').textContent =
+    `${Math.max(0, Number(totals.workspaceCount) || 0)} 篇论文 · ` +
+    `${Math.max(0, Number(totals.chatTurnCount) || 0)} 轮问答 · ` +
+    `${Math.max(0, Number(totals.figureCount) || 0)} 个 Figure · ` +
+    `${formatWorkspaceBytes(totals.estimatedBytes)} · ` +
+    `待同步 ${Math.max(0, Number(sync.pendingCount) || 0)} · ` +
+    `冲突 ${Math.max(0, Number(sync.conflictCount) || 0)} · ` +
+    `损坏 ${Math.max(0, Number(sync.corruptCount) || 0)}`;
+  updateArticleWorkspaceOverviewControls();
+}
+
+async function loadArticleWorkspaceDetail(workspaceId) {
+  if (articleWorkspaceOverviewUi.details.has(workspaceId)) {
+    return articleWorkspaceOverviewUi.details.get(workspaceId);
+  }
+  const detail = await callBackground({ type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId });
+  articleWorkspaceOverviewUi.details.set(workspaceId, detail);
+  return detail;
+}
+
+async function loadVisibleArticleWorkspaceDetails() {
+  const requestSequence = articleWorkspaceOverviewUi.requestSequence;
+  const missing = visibleArticleWorkspacePage()
+    .filter(item => !articleWorkspaceOverviewUi.details.has(item.workspaceId));
+  if (!missing.length) return;
+  await Promise.all(missing.map(item => loadArticleWorkspaceDetail(item.workspaceId).catch(() => null)));
+  if (requestSequence === articleWorkspaceOverviewUi.requestSequence) {
+    renderArticleWorkspaceOverview();
+  }
+}
+
+async function refreshArticleWorkspaceOverview() {
+  const requestSequence = ++articleWorkspaceOverviewUi.requestSequence;
+  articleWorkspaceOverviewUi.loading = true;
+  updateArticleWorkspaceOverviewControls();
+  articleWorkspaceStatus('正在刷新论文工作区总览…', 'info');
+  try {
+    const result = await callBackground({ type: 'ARTICLE_WORKSPACE_LIST' });
+    if (requestSequence !== articleWorkspaceOverviewUi.requestSequence) return;
+    articleWorkspaceOverviewUi.items = Array.isArray(result.workspaces) ? result.workspaces : [];
+    articleWorkspaceOverviewUi.totals = result.totals || null;
+    articleWorkspaceOverviewUi.sync = result.sync || null;
+    articleWorkspaceOverviewUi.details.clear();
+    const knownIds = new Set(articleWorkspaceOverviewUi.items.map(item => item.workspaceId));
+    articleWorkspaceOverviewUi.selected.forEach(id => {
+      if (!knownIds.has(id)) articleWorkspaceOverviewUi.selected.delete(id);
+    });
+    articleWorkspaceStatus('', 'info');
+    renderArticleWorkspaceOverview();
+    await loadVisibleArticleWorkspaceDetails();
+  } catch (error) {
+    if (requestSequence !== articleWorkspaceOverviewUi.requestSequence) return;
+    articleWorkspaceStatus(`读取论文工作区失败：${friendlyError(error)}`, 'error');
+  } finally {
+    if (requestSequence === articleWorkspaceOverviewUi.requestSequence) {
+      articleWorkspaceOverviewUi.loading = false;
+      renderArticleWorkspaceOverview();
+    }
+  }
+}
+
+function workspaceDeleteConfirmation(items) {
+  const totals = items.reduce((result, item) => {
+    const detail = workspaceCountDetail(item);
+    result.chat += Math.max(0, Number(detail.chatTurnCount) || 0);
+    result.figures += Math.max(0, Number(detail.figureCount) || 0);
+    result.panels += Math.max(0, Number(detail.panelCount) || 0);
+    result.bytes += Math.max(0, Number(detail.estimatedBytes) || 0);
+    return result;
+  }, { chat: 0, figures: 0, panels: 0, bytes: 0 });
+  const names = items.length <= 3
+    ? `\n\n${items.map(item => `“${item.title || '未命名论文'}”`).join('\n')}` : '';
+  return `确认清除 ${items.length} 篇论文的本地工作区吗？${names}\n\n` +
+    `将删除 ${totals.chat} 轮问答、${totals.figures} 个 Figure、` +
+    `${totals.panels} 个 Panel，共约 ${formatWorkspaceBytes(totals.bytes)}。此操作不可撤销。`;
+}
+
+async function ensureArticleWorkspaceDetails(items) {
+  await Promise.all(items.map(item => loadArticleWorkspaceDetail(item.workspaceId)));
+}
+
+async function clearArticleWorkspaces(workspaceIds) {
+  if (articleWorkspaceOverviewUi.loading) return;
+  const ids = new Set(workspaceIds.filter(Boolean));
+  const items = articleWorkspaceOverviewUi.items.filter(item => ids.has(item.workspaceId));
+  if (!items.length) return;
+  articleWorkspaceOverviewUi.loading = true;
+  renderArticleWorkspaceOverview();
+  try {
+    await ensureArticleWorkspaceDetails(items);
+    if (!confirm(workspaceDeleteConfirmation(items))) return;
+    let deleted = 0;
+    let pending = 0;
+    for (const item of items) {
+      const started = await callBackground({
+        type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: item.workspaceId
+      });
+      const result = await callBackground({
+        type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
+        workspaceId: item.workspaceId,
+        tombstoneId: started.tombstoneId
+      });
+      if (result.deleted) deleted += 1;
+      else pending += 1;
+    }
+    items.forEach(item => articleWorkspaceOverviewUi.selected.delete(item.workspaceId));
+    articleWorkspaceStatus(
+      pending
+        ? `已清除 ${deleted} 篇；${pending} 篇等待目录重新授权后完成。`
+        : `已清除 ${deleted} 篇论文工作区。`,
+      pending ? 'info' : 'success'
+    );
+  } catch (error) {
+    articleWorkspaceStatus(`清除失败：${friendlyError(error)}`, 'error');
+  } finally {
+    articleWorkspaceOverviewUi.loading = false;
+    await refreshArticleWorkspaceOverview();
+  }
+}
+
+function safeArticleWorkspaceFilename(item) {
+  const base = String(item.title || item.doi || 'article-workspace')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 90);
+  return `${base || 'article-workspace'}.json`;
+}
+
+async function handleArticleWorkspaceAction(action, workspaceId) {
+  if (articleWorkspaceOverviewUi.loading) return;
+  const item = articleWorkspaceOverviewUi.items.find(entry => entry.workspaceId === workspaceId);
+  if (!item) return;
+  if (action === 'clear') {
+    await clearArticleWorkspaces([workspaceId]);
+    return;
+  }
+  articleWorkspaceOverviewUi.loading = true;
+  renderArticleWorkspaceOverview();
+  try {
+    if (action === 'export') {
+      const bundle = await callBackground({ type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId });
+      downloadTextFile(
+        `${JSON.stringify(bundle, null, 2)}\n`,
+        'application/json;charset=utf-8',
+        safeArticleWorkspaceFilename(item)
+      );
+      articleWorkspaceStatus(`已导出“${item.title || '未命名论文'}”。`, 'success');
+    } else if (action === 'restore') {
+      const result = await callBackground({
+        type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+        requestPermission: true,
+        identity: {
+          canonicalUrl: item.canonicalUrl,
+          doi: item.doi,
+          title: item.title,
+          contentHash: item.contentHash
+        }
+      });
+      if (result.restore) {
+        articleWorkspaceStatus(
+          `已从本地文件恢复“${item.title || '未命名论文'}”，读取 ` +
+          `${Array.isArray(result.restore.assets) ? result.restore.assets.length : 0} 个内容文件。`,
+          'success'
+        );
+      } else if (result.permission !== 'granted') {
+        articleWorkspaceStatus('需要重新授权本地保存目录后才能扫描恢复。', 'error');
+      } else {
+        articleWorkspaceStatus('本地保存目录中没有找到匹配的论文工作区。', 'info');
+      }
+    }
+  } catch (error) {
+    articleWorkspaceStatus(`操作失败：${friendlyError(error)}`, 'error');
+  } finally {
+    articleWorkspaceOverviewUi.loading = false;
+    if (action === 'restore') await refreshArticleWorkspaceOverview();
+    else renderArticleWorkspaceOverview();
+  }
+}
+// Article workspace overview: end.
 
 function showMigrationStatus(message, type = 'info') {
   const status = document.getElementById('migrationStatus');

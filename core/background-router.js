@@ -1884,6 +1884,93 @@
       };
     }
 
+    function safeWorkspaceCounts(summary = {}) {
+      const count = value => Math.max(0, Number(value) || 0);
+      return {
+        assetCount: count(summary.assetCount),
+        chatTurnCount: count(summary.chatTurnCount || summary.turnCount),
+        figureCount: count(summary.figureCount),
+        panelCount: count(summary.panelCount),
+        highlightCount: count(summary.highlightCount),
+        annotationCount: count(summary.annotationCount),
+        estimatedBytes: count(summary.assetBytes) + count(summary.turnBytes)
+      };
+    }
+
+    function workspaceDoi(workspace = {}) {
+      return String((Array.isArray(workspace.aliases) ? workspace.aliases : [])
+        .find(alias => alias?.type === 'doi')?.value || '');
+    }
+
+    function publicWorkspaceOverview(workspace, manifest = null, syncStatus = {}) {
+      const counts = safeWorkspaceCounts(workspace?.summary);
+      let site = '';
+      try { site = new URL(workspace.canonicalUrl).hostname; } catch (_) {}
+      const conflictMatches = Boolean(syncStatus.lastConflict && workspace.directoryName &&
+        JSON.stringify(syncStatus.lastConflict).includes(workspace.directoryName));
+      let syncState = 'local-only';
+      if (workspace.deletionPending) syncState = 'deleting';
+      else if (conflictMatches) syncState = 'conflict';
+      else if (manifest && manifest.contentHash !== workspace.contentHash) {
+        syncState = 'content-changed';
+      } else if (manifest && manifest.contentHash === workspace.contentHash) {
+        syncState = Number(manifest.revision || 0) >= Number(workspace.storageRevision || 0)
+          ? 'synced' : 'pending';
+      } else if (syncStatus.permission === 'granted') syncState = 'pending';
+      return {
+        schemaVersion: 1,
+        workspaceId: String(workspace.workspaceId || ''),
+        canonicalUrl: String(workspace.canonicalUrl || ''),
+        doi: workspaceDoi(workspace),
+        site,
+        title: String(workspace.title || ''),
+        contentHash: String(workspace.contentHash || ''),
+        workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
+        createdAt: String(workspace.createdAt || ''),
+        lastAccessedAt: String(workspace.lastAccessedAt || workspace.updatedAt || ''),
+        updatedAt: String(workspace.updatedAt || ''),
+        syncState,
+        deletionPending: Boolean(workspace.deletionPending),
+        ...counts
+      };
+    }
+
+    function jsonByteSize(value) {
+      try { return new TextEncoder().encode(JSON.stringify(value)).byteLength; } catch (_) { return 0; }
+    }
+
+    function detailFromWorkspaceAssets(workspace, assets, turns) {
+      const byPath = new Map((Array.isArray(assets) ? assets : [])
+        .map(asset => [String(asset.relativePath || ''), asset.content]));
+      const chat = byPath.get('chat/index.json');
+      const figuresAsset = byPath.get('figures/inventory.json');
+      const highlightAsset = byPath.get('annotations/highlights.json');
+      const figures = Array.isArray(figuresAsset?.figures) ? figuresAsset.figures : [];
+      const panelCount = figures.reduce((total, figure) => {
+        const panels = new Set();
+        (Array.isArray(figure?.panelHints) ? figure.panelHints : []).forEach(panel =>
+          panels.add(String(panel?.panelId || panel?.panel || panel || '')));
+        Object.keys(figure?.panelAnalyses || {}).forEach(panel => panels.add(String(panel)));
+        Object.keys(figure?.panelFollowups || {}).forEach(panel => panels.add(String(panel)));
+        return total + [...panels].filter(Boolean).length;
+      }, 0);
+      const storedTurns = Array.isArray(turns) ? turns : [];
+      return {
+        workspaceId: String(workspace.workspaceId || ''),
+        chatTurnCount: Array.isArray(chat?.turns) ? chat.turns.length : storedTurns.length,
+        figureCount: figures.length,
+        panelCount,
+        highlightCount: Math.max(0,
+          Number(highlightAsset?.highlightDistribution?.totalHighlights) || 0),
+        annotationCount: Array.isArray(highlightAsset?.annotations)
+          ? highlightAsset.annotations.length : 0,
+        assetCount: Array.isArray(assets) ? assets.length : 0,
+        estimatedBytes: (Array.isArray(assets) ? assets : []).reduce((sum, asset) =>
+          sum + (Number(asset.byteSize) || jsonByteSize(asset.content)), 0) +
+          storedTurns.reduce((sum, turn) => sum + jsonByteSize(turn), 0)
+      };
+    }
+
     async function handleUnsafe(message, context = {}) {
       if (message.type === 'LLM_CONTROL_OPERATION') {
         const operationId = shared.normalizeOperationId?.(message.operationId) || '';
@@ -2199,9 +2286,73 @@
 
       if (message.type === 'ARTICLE_WORKSPACE_LIST') {
         requireArticleWorkspaceStore('listWorkspaces');
-        return {
-          workspaces: (await articleWorkspaceStore.listWorkspaces()).map(publicWorkspace)
+        const workspaces = await articleWorkspaceStore.listWorkspaces();
+        let directoryOverview = {
+          permission: 'unconfigured', manifests: [], invalidManifests: 0,
+          pendingCount: 0, conflictCount: 0, lastConflict: null
         };
+        if (typeof directorySync?.listWorkspaceManifests === 'function') {
+          try {
+            directoryOverview = {
+              ...directoryOverview,
+              ...(await directorySync.listWorkspaceManifests({}))
+            };
+          } catch (_) {}
+        }
+        if (typeof directorySync?.status === 'function') {
+          try {
+            directoryOverview = {
+              ...directoryOverview,
+              ...(await directorySync.status())
+            };
+          } catch (_) {}
+        }
+        const manifestById = new Map((directoryOverview.manifests || [])
+          .map(manifest => [manifest.workspaceId, manifest]));
+        const summaries = workspaces.map(workspace => publicWorkspaceOverview(
+          workspace, manifestById.get(workspace.workspaceId) || null, directoryOverview
+        ));
+        return {
+          workspaces: summaries,
+          totals: {
+            workspaceCount: summaries.length,
+            estimatedBytes: summaries.reduce((sum, item) => sum + item.estimatedBytes, 0),
+            chatTurnCount: summaries.reduce((sum, item) => sum + item.chatTurnCount, 0),
+            figureCount: summaries.reduce((sum, item) => sum + item.figureCount, 0),
+            panelCount: summaries.reduce((sum, item) => sum + item.panelCount, 0),
+            highlightCount: summaries.reduce((sum, item) => sum + item.highlightCount, 0)
+          },
+          sync: {
+            permission: String(directoryOverview.permission || 'unconfigured'),
+            pendingCount: Math.max(0, Number(directoryOverview.pendingCount) || 0),
+            conflictCount: Math.max(0, Number(directoryOverview.conflictCount) || 0),
+            corruptCount: Math.max(0, Number(directoryOverview.invalidManifests) || 0)
+          }
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_DETAIL') {
+        requireArticleWorkspaceStore('getWorkspace');
+        requireArticleWorkspaceStore('listAssets');
+        requireArticleWorkspaceStore('pageTurns');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const assets = await articleWorkspaceStore.listAssets(workspace.workspaceId);
+        const turns = [];
+        let afterSequence = 0;
+        while (true) {
+          const page = await articleWorkspaceStore.pageTurns(workspace.workspaceId, {
+            limit: 1000, afterSequence
+          });
+          turns.push(...page.items);
+          if (!page.hasMore || Number(page.nextSequence) <= afterSequence) break;
+          afterSequence = Number(page.nextSequence);
+        }
+        return detailFromWorkspaceAssets(workspace, assets, turns);
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_STATS') {

@@ -227,6 +227,67 @@ test('workspace assets are atomic and enforce revision and content-hash conflict
     ownerBeforeFailure.storageRevision);
 });
 
+test('workspace summaries stay exact across asset replacement and turn mutations', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  await store.putAsset(owner.workspaceId, 'chat/index.json', {
+    turns: [{ turnId: 'chat-1' }, { turnId: 'chat-2' }]
+  });
+  await store.putAsset(owner.workspaceId, 'figures/inventory.json', {
+    figures: [{
+      figureId: 'figure-1', panelHints: ['A', 'B'],
+      panelAnalyses: { C: { text: 'third panel' } }
+    }]
+  });
+  await store.putAsset(owner.workspaceId, 'annotations/highlights.json', {
+    highlightDistribution: { totalHighlights: 4 },
+    annotations: [{ id: 'a1' }, { id: 'a2' }]
+  });
+  const turn = await store.appendTurn(owner.workspaceId, {
+    turnId: 'stored-turn', role: 'user', content: 'short'
+  });
+
+  let saved = await store.getWorkspace(owner.workspaceId);
+  assert.deepEqual({
+    assets: saved.summary.assetCount,
+    turns: saved.summary.turnCount,
+    chat: saved.summary.chatTurnCount,
+    figures: saved.summary.figureCount,
+    panels: saved.summary.panelCount,
+    highlights: saved.summary.highlightCount,
+    annotations: saved.summary.annotationCount
+  }, {
+    assets: 3, turns: 1, chat: 2, figures: 1, panels: 3,
+    highlights: 4, annotations: 2
+  });
+  const initialTurnBytes = saved.summary.turnBytes;
+
+  await store.updateTurn(owner.workspaceId, turn.turnId, {
+    content: 'a substantially longer revised turn body'
+  });
+  saved = await store.getWorkspace(owner.workspaceId);
+  assert.ok(saved.summary.turnBytes > initialTurnBytes);
+
+  await store.putAsset(owner.workspaceId, 'figures/inventory.json', {
+    figures: [{ figureId: 'figure-1', panelHints: ['A'] }]
+  });
+  saved = await store.getWorkspace(owner.workspaceId);
+  assert.equal(saved.summary.assetCount, 3);
+  assert.equal(saved.summary.panelCount, 1);
+
+  const statistics = await store.getStorageStatistics();
+  assert.equal(statistics.workspaceCount, 1);
+  assert.equal(statistics.assetCount, 3);
+  assert.equal(statistics.turnCount, 1);
+  assert.ok(statistics.estimatedBytes > 0);
+
+  await store.deleteTurn(owner.workspaceId, turn.turnId);
+  saved = await store.getWorkspace(owner.workspaceId);
+  assert.equal(saved.summary.turnCount, 0);
+  assert.equal(saved.summary.turnBytes, 0);
+});
+
 test('turns page per workspace, tombstone deletions, and never delete by count', async () => {
   const fake = createFakeIndexedDb();
   const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);

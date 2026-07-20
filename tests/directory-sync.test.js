@@ -145,6 +145,24 @@ test('requests a stored directory permission only from an explicit caller', asyn
   assert.equal(handles.permissionRequests, 1);
 });
 
+test('workspace manifest overview reports health without exposing filesystem paths', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  await sync.enqueueWorkspaceAsset(workspace, 'ui/state.json', { view: 'chat' }, {
+    revision: 2, workspaceGeneration: 1
+  });
+  await sync.flush();
+  const overview = await sync.listWorkspaceManifests({});
+  assert.equal(overview.permission, 'granted');
+  assert.equal(overview.manifests.length, 1);
+  assert.equal(overview.invalidManifests, 0);
+  assert.doesNotMatch(JSON.stringify(overview), /chosen-folder|[A-Z]:\\|\/Users\//i);
+});
+
 function workspaceFixture(overrides = {}) {
   return {
     schemaVersion: 1,

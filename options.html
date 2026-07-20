@@ -306,6 +306,44 @@
         </div>
       </div>
       <div class="local-data-layout">
+        <section id="articleWorkspaceOverview" class="settings-section local-data-section article-workspace-overview" aria-labelledby="articleWorkspaceOverviewHeading">
+          <div class="section-heading local-data-heading">
+            <div>
+              <h3 id="articleWorkspaceOverviewHeading">论文工作区总览</h3>
+              <p>按论文管理已保存的全文问答、Figure/Panel 解读、高亮和分析结果。列表只读取轻量摘要，详细占用按当前页加载。</p>
+            </div>
+            <button id="refreshArticleWorkspaceOverview" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>刷新</button>
+          </div>
+          <div id="articleWorkspaceTotals" class="workspace-overview-totals" aria-live="polite">正在读取本地工作区…</div>
+          <div class="workspace-overview-toolbar">
+            <label class="search-field workspace-search-field">
+              <span class="sr-only">按论文标题或 DOI 搜索</span>
+              <input id="articleWorkspaceSearch" type="search" autocomplete="off" placeholder="搜索标题或 DOI">
+            </label>
+            <label class="workspace-sort-field"><span>排序</span>
+              <select id="articleWorkspaceSort">
+                <option value="updated_desc">最近修改</option>
+                <option value="accessed_desc">最近访问</option>
+                <option value="created_desc">最近创建</option>
+                <option value="size_desc">占用从大到小</option>
+                <option value="size_asc">占用从小到大</option>
+                <option value="title_asc">标题 A–Z</option>
+              </select>
+            </label>
+          </div>
+          <div class="workspace-bulk-toolbar">
+            <label><input id="articleWorkspaceSelectAll" type="checkbox">选择当前页</label>
+            <button id="clearSelectedArticleWorkspaces" class="button quiet" type="button" disabled><i class="ph ph-trash" aria-hidden="true"></i>清除所选</button>
+          </div>
+          <div id="articleWorkspaceList" class="article-workspace-list" aria-live="polite"></div>
+          <div class="workspace-pagination" aria-label="论文工作区分页">
+            <button id="articleWorkspacePreviousPage" class="button quiet compact-button" type="button">上一页</button>
+            <span id="articleWorkspacePageStatus">第 1 / 1 页</span>
+            <button id="articleWorkspaceNextPage" class="button quiet compact-button" type="button">下一页</button>
+          </div>
+          <div id="articleWorkspaceOverviewStatus" class="status local-data-status" role="status" aria-live="polite"></div>
+        </section>
+
         <section class="settings-section local-data-section" aria-labelledby="directorySyncHeading">
           <div class="section-heading local-data-heading">
             <div>

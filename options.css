@@ -157,6 +157,33 @@ input[type="color"] { padding: 4px; cursor: pointer; }
 .local-data-section:last-child { padding-bottom: 0; }
 .local-data-heading { align-items: center; margin-bottom: 15px; }
 .local-data-heading h3 { margin-bottom: 0; }
+.article-workspace-overview { display: grid; gap: 14px; }
+.workspace-overview-totals { padding: 12px 14px; border: 1px solid #c9d9e5; border-radius: 10px; color: var(--navy); background: var(--navy-soft); font-size: 12px; font-weight: 720; line-height: 1.55; }
+.workspace-overview-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px); gap: 10px; align-items: end; }
+.workspace-search-field { margin: 0; }
+.workspace-sort-field { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 720; }
+.workspace-sort-field select { width: 100%; }
+.workspace-bulk-toolbar, .workspace-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.workspace-bulk-toolbar label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.article-workspace-list { display: grid; gap: 10px; min-height: 92px; }
+.article-workspace-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+.article-workspace-card:hover { border-color: #a8bfd1; box-shadow: 0 5px 16px rgba(11, 71, 120, .06); }
+.article-workspace-select { margin-top: 4px; }
+.article-workspace-body { min-width: 0; }
+.article-workspace-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.article-workspace-title { min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }
+.article-workspace-identity { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.article-workspace-state { flex: none; padding: 4px 7px; border-radius: 999px; color: #52606c; background: #eef1f3; font-size: 9px; font-weight: 760; }
+.article-workspace-state[data-state="synced"] { color: #246a45; background: #e8f5ed; }
+.article-workspace-state[data-state="pending"], .article-workspace-state[data-state="content-changed"] { color: #765617; background: #fcf4dc; }
+.article-workspace-state[data-state="conflict"], .article-workspace-state[data-state="deleting"] { color: #94342f; background: #fcebea; }
+.article-workspace-metrics { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 10px 0; color: #435260; font-size: 10px; }
+.article-workspace-times { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.article-workspace-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.article-workspace-actions .button { min-height: 30px; padding: 5px 9px; font-size: 10px; }
+.article-workspace-empty { padding: 24px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--muted); text-align: center; font-size: 12px; }
+.workspace-pagination { justify-content: center; }
+.workspace-pagination span { min-width: 90px; color: var(--muted); font-size: 10px; text-align: center; }
 .directory-identity { display: flex; min-width: 0; align-items: baseline; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
 .directory-identity span { flex: none; color: var(--muted); font-size: 11px; font-weight: 700; }
 .directory-identity strong { min-width: 0; overflow: hidden; color: var(--graphite); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
@@ -232,6 +259,9 @@ input[type="color"] { padding: 4px; cursor: pointer; }
   .settings-panel { padding: 21px 18px; }
   .settings-panel-heading { flex-direction: column; }
   .local-data-heading, .directory-identity { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .workspace-overview-toolbar, .article-workspace-times { grid-template-columns: 1fr; }
+  .workspace-bulk-toolbar { align-items: stretch; flex-direction: column; }
+  .workspace-bulk-toolbar .button { width: 100%; }
   .sync-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sync-metrics .sync-time { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); border-left: 0; padding-left: 0; }
   .sync-actions { flex-direction: column; }

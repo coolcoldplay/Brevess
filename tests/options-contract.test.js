@@ -389,3 +389,36 @@ test('local data export uses a dated safe download and never renders an operatin
   assert.doesNotMatch(script, /webkitRelativePath|fullPath|directoryPath|handle\.path/);
   assert.doesNotMatch(html, /data-(?:full-)?path=|[A-Z]:\\Users|\/Users\//);
 });
+
+test('local data exposes a searchable paged workspace overview with exact management actions', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  const overviewScript = script.slice(
+    script.indexOf('// Article workspace overview:'),
+    script.indexOf('// Article workspace overview: end.')
+  );
+  [
+    'articleWorkspaceOverview', 'articleWorkspaceSearch', 'articleWorkspaceSort',
+    'articleWorkspaceTotals', 'articleWorkspaceList', 'articleWorkspaceSelectAll',
+    'clearSelectedArticleWorkspaces', 'refreshArticleWorkspaceOverview',
+    'articleWorkspacePreviousPage', 'articleWorkspaceNextPage', 'articleWorkspacePageStatus',
+    'articleWorkspaceOverviewStatus'
+  ].forEach(id => assert.match(html, new RegExp(`id=["']${id}["']`)));
+  assert.match(script, /const ARTICLE_WORKSPACE_PAGE_SIZE\s*=\s*20/);
+  assert.match(script, /function refreshArticleWorkspaceOverview/);
+  assert.match(script, /function renderArticleWorkspaceOverview/);
+  assert.match(script, /function workspaceDeleteConfirmation/);
+  assert.match(script, /ARTICLE_WORKSPACE_LIST/);
+  assert.match(script, /ARTICLE_WORKSPACE_DETAIL/);
+  assert.match(script, /ARTICLE_WORKSPACE_SCAN_RESTORE/);
+  assert.match(script, /ARTICLE_WORKSPACE_EXPORT/);
+  assert.match(script, /ARTICLE_WORKSPACE_BEGIN_DELETE/);
+  assert.match(script, /ARTICLE_WORKSPACE_FINALIZE_DELETE/);
+  assert.match(script, /title.*doi|doi.*title/is);
+  assert.match(script, /updated_desc|size_desc/);
+  assert.match(script, /confirm\(workspaceDeleteConfirmation/);
+  assert.match(css, /\.article-workspace-overview\s*\{/);
+  assert.match(css, /\.article-workspace-list\s*\{/);
+  assert.doesNotMatch(overviewScript, /fullPath|directoryPath|handle\.path|apiKey|authorization/i);
+});

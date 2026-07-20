@@ -111,6 +111,66 @@
     try { return new TextEncoder().encode(JSON.stringify(value)).byteLength; } catch (_) { return 0; }
   }
 
+  function nonNegativeCount(value) {
+    return Math.max(0, Number(value) || 0);
+  }
+
+  function normalizeWorkspaceSummary(input = {}) {
+    return {
+      assetCount: nonNegativeCount(input.assetCount),
+      assetBytes: nonNegativeCount(input.assetBytes),
+      turnCount: nonNegativeCount(input.turnCount),
+      turnBytes: nonNegativeCount(input.turnBytes),
+      chatTurnCount: nonNegativeCount(input.chatTurnCount),
+      figureCount: nonNegativeCount(input.figureCount),
+      panelCount: nonNegativeCount(input.panelCount),
+      highlightCount: nonNegativeCount(input.highlightCount),
+      annotationCount: nonNegativeCount(input.annotationCount)
+    };
+  }
+
+  function workspaceAssetContribution(path, content, bytes) {
+    const contribution = {
+      byteSize: nonNegativeCount(bytes), chatTurnCount: 0, figureCount: 0,
+      panelCount: 0, highlightCount: 0, annotationCount: 0
+    };
+    if (path === 'chat/index.json') {
+      contribution.chatTurnCount = Array.isArray(content?.turns)
+        ? content.turns.length : nonNegativeCount(content?.totalTurns);
+    } else if (path === 'figures/inventory.json') {
+      const figures = Array.isArray(content?.figures) ? content.figures : [];
+      contribution.figureCount = figures.length;
+      contribution.panelCount = figures.reduce((total, figure) => {
+        const panels = new Set();
+        (Array.isArray(figure?.panelHints) ? figure.panelHints : []).forEach(panel =>
+          panels.add(String(panel?.panelId || panel?.panel || panel || '')));
+        Object.keys(figure?.panelAnalyses || {}).forEach(panel => panels.add(String(panel)));
+        Object.keys(figure?.panelFollowups || {}).forEach(panel => panels.add(String(panel)));
+        return total + [...panels].filter(Boolean).length;
+      }, 0);
+    } else if (path === 'annotations/highlights.json') {
+      contribution.highlightCount = nonNegativeCount(
+        content?.highlightDistribution?.totalHighlights
+      );
+      contribution.annotationCount = Array.isArray(content?.annotations)
+        ? content.annotations.length : 0;
+    }
+    return contribution;
+  }
+
+  function summarizeWorkspaceContributions(contributions = {}, previous = {}) {
+    const summary = normalizeWorkspaceSummary(previous);
+    const values = Object.values(contributions || {});
+    summary.assetCount = values.length;
+    summary.assetBytes = values.reduce((sum, item) => sum + nonNegativeCount(item?.byteSize), 0);
+    for (const field of [
+      'chatTurnCount', 'figureCount', 'panelCount', 'highlightCount', 'annotationCount'
+    ]) {
+      summary[field] = values.reduce((sum, item) => sum + nonNegativeCount(item?.[field]), 0);
+    }
+    return summary;
+  }
+
   function stableValue(value) {
     if (Array.isArray(value)) return value.map(stableValue);
     if (!isPlainObject(value)) return value;
@@ -164,6 +224,7 @@
           if (current && conflict.expectedContentHash !== undefined &&
               current.contentHash !== conflict.expectedContentHash) fail('WORKSPACE_HASH_CONFLICT');
           const timestamp = now();
+          const contentChanged = Boolean(current && current.contentHash !== normalized.contentHash);
           const saved = {
             ...current,
             ...normalized,
@@ -172,7 +233,10 @@
               Number(normalized.workspaceGeneration || 1)
             ),
             createdAt: current?.createdAt || timestamp,
-            updatedAt: timestamp,
+            updatedAt: !current || contentChanged ? timestamp : current.updatedAt,
+            lastAccessedAt: timestamp,
+            summary: normalizeWorkspaceSummary(current?.summary),
+            assetSummaryByPath: cloneValue(current?.assetSummaryByPath || {}),
             nextTurnSequence: Number.isSafeInteger(current?.nextTurnSequence)
               ? current.nextTurnSequence : 0,
             storageRevision: Number.isSafeInteger(current?.storageRevision)
@@ -234,10 +298,16 @@
             createdAt: current?.createdAt || timestamp,
             updatedAt: timestamp
           };
+          const assetSummaryByPath = {
+            ...(owner.assetSummaryByPath || {}),
+            [path]: workspaceAssetContribution(path, safeContent, saved.byteSize)
+          };
           const updatedOwner = {
             ...owner,
             storageRevision: Number(owner.storageRevision || 0) + 1,
-            updatedAt: timestamp
+            updatedAt: timestamp,
+            summary: summarizeWorkspaceContributions(assetSummaryByPath, owner.summary),
+            assetSummaryByPath
           };
           await request(assets.put(saved));
           await request(workspaceStore.put(updatedOwner));
@@ -293,7 +363,13 @@
           await request(turns.put(saved));
           await request(workspaces.put({
             ...owner, nextTurnSequence: sequence,
-            storageRevision: Number(owner.storageRevision || 0) + 1, updatedAt: timestamp
+            storageRevision: Number(owner.storageRevision || 0) + 1,
+            updatedAt: timestamp,
+            summary: {
+              ...normalizeWorkspaceSummary(owner.summary),
+              turnCount: nonNegativeCount(owner.summary?.turnCount) + 1,
+              turnBytes: nonNegativeCount(owner.summary?.turnBytes) + byteSize(saved)
+            }
           }));
           return cloneValue(saved);
         });
@@ -304,8 +380,9 @@
       const key = turnKey(id, turnIdValue);
       if (!isPlainObject(patch)) fail('INVALID_TURN');
       safeValue(patch);
-      return run(WORKSPACE_TURN_STORE_NAME, 'readwrite', async transaction => {
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_TURN_STORE_NAME], 'readwrite', async transaction => {
         const store = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
+        const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
         const current = await request(store.get(key));
         if (!current) fail('TURN_NOT_FOUND');
         if (conflict.expectedRevision !== undefined &&
@@ -321,6 +398,18 @@
           updatedAt: now()
         };
         await request(store.put(saved));
+        const owner = await request(workspaces.get(id));
+        if (owner) {
+          await request(workspaces.put({
+            ...owner,
+            updatedAt: saved.updatedAt,
+            summary: {
+              ...normalizeWorkspaceSummary(owner.summary),
+              turnBytes: Math.max(0, nonNegativeCount(owner.summary?.turnBytes) -
+                byteSize(current) + byteSize(saved))
+            }
+          }));
+        }
         return cloneValue(saved);
       });
     }
@@ -369,15 +458,31 @@
       const id = workspaceId(value);
       const idOfTurn = boundedId(turnIdValue, 'INVALID_TURN_ID');
       const key = turnKey(id, idOfTurn);
-      return run([WORKSPACE_TURN_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME], 'readwrite',
+      return run([
+        WORKSPACE_STORE_NAME, WORKSPACE_TURN_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME
+      ], 'readwrite',
         async transaction => {
           const turns = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
+          const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
           const current = await request(turns.get(key));
           if (!current) return null;
           const tombstone = newTombstone(id, 'turn', idOfTurn,
             Number(current.workspaceGeneration || 1));
           await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).put(tombstone));
           await request(turns.delete(key));
+          const owner = await request(workspaces.get(id));
+          if (owner) {
+            await request(workspaces.put({
+              ...owner,
+              updatedAt: tombstone.deletedAt,
+              summary: {
+                ...normalizeWorkspaceSummary(owner.summary),
+                turnCount: Math.max(0, nonNegativeCount(owner.summary?.turnCount) - 1),
+                turnBytes: Math.max(0,
+                  nonNegativeCount(owner.summary?.turnBytes) - byteSize(current))
+              }
+            }));
+          }
           return cloneValue(tombstone);
         });
     }
@@ -449,22 +554,20 @@
 
     async function getStorageStatistics() {
       return run([
-        WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME,
-        WORKSPACE_TURN_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME
+        WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME
       ], 'readonly', async transaction => {
-        const [workspaces, assets, turns, tombstones] = await Promise.all([
+        const [workspaces, tombstones] = await Promise.all([
           request(transaction.objectStore(WORKSPACE_STORE_NAME).getAll()),
-          request(transaction.objectStore(WORKSPACE_ASSET_STORE_NAME).getAll()),
-          request(transaction.objectStore(WORKSPACE_TURN_STORE_NAME).getAll()),
           request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).getAll())
         ]);
+        const summaries = workspaces.map(workspace => normalizeWorkspaceSummary(workspace.summary));
         return {
           workspaceCount: workspaces.length,
-          assetCount: assets.length,
-          turnCount: turns.length,
+          assetCount: summaries.reduce((sum, item) => sum + item.assetCount, 0),
+          turnCount: summaries.reduce((sum, item) => sum + item.turnCount, 0),
           tombstoneCount: tombstones.length,
-          estimatedBytes: assets.reduce((sum, item) => sum + Number(item.byteSize || 0), 0) +
-            turns.reduce((sum, item) => sum + byteSize(item), 0)
+          estimatedBytes: summaries.reduce((sum, item) =>
+            sum + item.assetBytes + item.turnBytes, 0)
         };
       });
     }
