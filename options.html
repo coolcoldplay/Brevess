@@ -21,6 +21,7 @@
         <a href="#openSource">开源</a>
         <a href="#support">反馈</a>
       </nav>
+      <button id="reopenOnboarding" class="button quiet compact-button onboarding-reopen" type="button">新手引导</button>
       <span id="effectiveMode" class="mode-badge">当前：正则模式</span>
     </div>
   </header>
@@ -33,6 +34,25 @@
         <p class="subtitle">逐个查看和编辑给 AI 的提示词与离线正则规则。修改只保存在本机，内置类别可随时恢复。</p>
       </div>
     </header>
+
+    <section id="onboardingGuide" class="settings-panel onboarding-guide" aria-labelledby="onboardingStepTitle" hidden>
+      <div class="onboarding-guide-copy">
+        <p class="section-kicker">首次使用设置</p>
+        <div id="onboardingProgress" class="onboarding-progress" role="list" aria-label="新手引导进度">
+          <span role="listitem" data-onboarding-progress="storage"><b>1</b>本地保存目录</span>
+          <span role="listitem" data-onboarding-progress="api"><b>2</b>API 配置</span>
+        </div>
+        <h1 id="onboardingStepTitle">选择本地保存目录</h1>
+        <p id="onboardingStepDescription" class="subtitle">插件会在你选择的位置建立 SCI-Highlighter 文件夹，并为每篇论文保存独立工作区。</p>
+        <p id="onboardingStepState" class="onboarding-step-state" role="status" aria-live="polite"></p>
+      </div>
+      <div class="onboarding-actions">
+        <button id="onboardingBack" class="button quiet" type="button" hidden>上一步</button>
+        <button id="onboardingSkip" class="button quiet" type="button">暂时跳过</button>
+        <button id="onboardingContinue" class="button primary" type="button" disabled>继续配置 API</button>
+        <button id="onboardingFinish" class="button primary" type="button" hidden disabled>完成并打开插件</button>
+      </div>
+    </section>
 
     <section id="categoryWorkspace" class="category-workspace" aria-label="类别规则工作区">
       <aside class="category-rail" aria-label="识别类别">
@@ -344,7 +364,7 @@
           <div id="articleWorkspaceOverviewStatus" class="status local-data-status" role="status" aria-live="polite"></div>
         </section>
 
-        <section class="settings-section local-data-section" aria-labelledby="directorySyncHeading">
+        <section id="directorySyncSettings" class="settings-section local-data-section" aria-labelledby="directorySyncHeading">
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="directorySyncHeading">目录镜像</h3>

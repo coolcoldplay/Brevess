@@ -45,6 +45,12 @@ const articleWorkspaceOverviewUi = {
   totals: null,
   sync: null
 };
+const onboardingUi = {
+  active: false,
+  step: 'storage',
+  pending: false,
+  state: null
+};
 let pendingMigrationBundle = null;
 const USER_DATA_ACTION_IDS = [
   'chooseUserDataDirectory', 'reauthorizeUserDataDirectory',
@@ -53,6 +59,7 @@ const USER_DATA_ACTION_IDS = [
 ];
 
 document.addEventListener('DOMContentLoaded', async () => {
+  if (location.hash === '#onboarding') enterOnboardingLayout();
   bindEvents();
   await refreshSettings();
   await loadCategoryFromHash();
@@ -61,6 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await preloadUserDataDirectoryHandle();
   await refreshUserDataStatus();
   await refreshArticleWorkspaceOverview();
+  await initializeOnboarding();
 });
 
 function bindEvents() {
@@ -166,6 +174,17 @@ function bindEvents() {
     if (!button) return;
     handleArticleWorkspaceAction(button.dataset.workspaceAction, button.dataset.workspaceId);
   });
+  document.getElementById('reopenOnboarding').addEventListener('click', reopenOnboarding);
+  document.getElementById('onboardingBack').addEventListener('click', () => {
+    onboardingUi.step = 'storage';
+    renderOnboarding();
+  });
+  document.getElementById('onboardingSkip').addEventListener('click', skipOnboardingStep);
+  document.getElementById('onboardingContinue').addEventListener('click', () => {
+    onboardingUi.step = 'api';
+    renderOnboarding();
+  });
+  document.getElementById('onboardingFinish').addEventListener('click', finishOnboarding);
   document.getElementById('categorySearch').addEventListener('input', event => {
     categoryEditor.search = event.target.value.trim().toLocaleLowerCase();
     renderCategoryList();
@@ -215,6 +234,174 @@ async function callBackground(message) {
     throw error;
   }
   return response.data;
+}
+
+function enterOnboardingLayout() {
+  onboardingUi.active = true;
+  document.body.classList.add('is-onboarding');
+  document.body.dataset.onboardingStep = onboardingUi.step;
+  const guide = document.getElementById('onboardingGuide');
+  if (guide) guide.hidden = false;
+}
+
+function leaveOnboardingLayout() {
+  onboardingUi.active = false;
+  document.body.classList.remove('is-onboarding');
+  delete document.body.dataset.onboardingStep;
+  document.getElementById('onboardingGuide').hidden = true;
+}
+
+function hasUsableApiConfiguration() {
+  if (state?.settings?.consentGranted !== true) return false;
+  return profileEntries().some(([, profile]) =>
+    profile?.config?.hasApiKey === true && String(profile?.config?.model || '').trim()
+  );
+}
+
+async function setOnboardingStepState(step, status) {
+  onboardingUi.pending = true;
+  renderOnboarding();
+  try {
+    onboardingUi.state = await callBackground({
+      type: 'ONBOARDING_SET_STEP', step, status
+    });
+    return onboardingUi.state;
+  } finally {
+    onboardingUi.pending = false;
+    renderOnboarding();
+  }
+}
+
+async function reconcileOnboardingConfiguration() {
+  if (!onboardingUi.active || !onboardingUi.state) return;
+  if (onboardingUi.state.steps?.storage !== 'completed' &&
+      Boolean(userDataUi.lastStatus?.directoryName)) {
+    await setOnboardingStepState('storage', 'completed');
+  }
+  if (onboardingUi.state.steps?.api !== 'completed' && hasUsableApiConfiguration()) {
+    await setOnboardingStepState('api', 'completed');
+  }
+}
+
+function onboardingStateText(step, status) {
+  if (step === 'storage') {
+    if (status === 'completed') return '本地保存目录已配置；浏览器授权失效时可稍后重新授权。';
+    if (status === 'skipped') return '已暂时跳过；插件仍会使用 IndexedDB 保存本机工作副本。';
+    return '请选择目录，或暂时跳过后继续。目录选择只会由你的点击触发。';
+  }
+  if (status === 'completed') return 'API 配置已保存，LLM 全文问答、图解和高亮可以使用。';
+  if (status === 'skipped') return '已暂时跳过；导航、手动高亮和本地阅读功能仍可使用。';
+  return '保存至少一个可用 API 配置并同意发送内容，或暂时跳过。';
+}
+
+function renderOnboarding() {
+  const guide = document.getElementById('onboardingGuide');
+  if (!guide) return;
+  if (!onboardingUi.active) {
+    leaveOnboardingLayout();
+    return;
+  }
+  enterOnboardingLayout();
+  const step = onboardingUi.step;
+  const steps = onboardingUi.state?.steps || { storage: 'pending', api: 'pending' };
+  const status = steps[step] || 'pending';
+  document.body.dataset.onboardingStep = step;
+  document.getElementById('onboardingStepTitle').textContent = step === 'storage'
+    ? '选择本地保存目录' : '配置 LLM API';
+  document.getElementById('onboardingStepDescription').textContent = step === 'storage'
+    ? '插件会在你选择的位置建立 SCI-Highlighter 文件夹，并为每篇网页保存独立工作区。跳过后仍使用浏览器 IndexedDB 自动保存。'
+    : '沿用下方命名 API Profile 表单，可配置 Provider、模型、密钥、服务地址并测试连接。现有配置不会被重置。';
+  document.getElementById('onboardingStepState').textContent =
+    onboardingStateText(step, status);
+  document.querySelectorAll('[data-onboarding-progress]').forEach(item => {
+    const name = item.dataset.onboardingProgress;
+    item.dataset.state = name === step ? 'active' : (steps[name] || 'pending');
+  });
+  const back = document.getElementById('onboardingBack');
+  const skip = document.getElementById('onboardingSkip');
+  const next = document.getElementById('onboardingContinue');
+  const finish = document.getElementById('onboardingFinish');
+  back.hidden = step !== 'api';
+  skip.hidden = status !== 'pending';
+  next.hidden = step !== 'storage';
+  finish.hidden = step !== 'api';
+  back.disabled = onboardingUi.pending;
+  skip.disabled = onboardingUi.pending;
+  next.disabled = onboardingUi.pending || !['completed', 'skipped'].includes(status);
+  finish.disabled = onboardingUi.pending || onboardingUi.state?.acknowledged !== true;
+}
+
+async function initializeOnboarding() {
+  try {
+    onboardingUi.state = await callBackground({ type: 'ONBOARDING_GET' });
+    if (location.hash !== '#onboarding') {
+      leaveOnboardingLayout();
+      return;
+    }
+    enterOnboardingLayout();
+    await reconcileOnboardingConfiguration();
+    onboardingUi.step = onboardingUi.state.steps?.storage === 'pending'
+      ? 'storage' : 'api';
+    renderOnboarding();
+  } catch (error) {
+    enterOnboardingLayout();
+    document.getElementById('onboardingStepState').textContent =
+      `无法读取引导状态：${friendlyError(error)}`;
+  }
+}
+
+async function reopenOnboarding() {
+  if (onboardingUi.pending) return;
+  onboardingUi.pending = true;
+  try {
+    onboardingUi.state = await callBackground({ type: 'ONBOARDING_RESTART' });
+    onboardingUi.step = 'storage';
+    history.replaceState(null, '', `${location.pathname}${location.search}#onboarding`);
+    enterOnboardingLayout();
+    await reconcileOnboardingConfiguration();
+    renderOnboarding();
+    document.getElementById('onboardingGuide').scrollIntoView({ block: 'start' });
+  } catch (error) {
+    showStatus(`无法重新打开新手引导：${friendlyError(error)}`, 'error');
+  } finally {
+    onboardingUi.pending = false;
+    renderOnboarding();
+  }
+}
+
+async function skipOnboardingStep() {
+  if (onboardingUi.pending) return;
+  const step = onboardingUi.step;
+  try {
+    await setOnboardingStepState(step, 'skipped');
+    if (step === 'storage') onboardingUi.step = 'api';
+    renderOnboarding();
+  } catch (error) {
+    document.getElementById('onboardingStepState').textContent =
+      `无法保存跳过状态：${friendlyError(error)}`;
+  }
+}
+
+async function finishOnboarding() {
+  if (onboardingUi.pending || onboardingUi.state?.acknowledged !== true) return;
+  onboardingUi.pending = true;
+  renderOnboarding();
+  try {
+    const result = await callBackground({
+      type: 'ONBOARDING_FINISH', sourceTab: onboardingUi.state.sourceTab
+    });
+    if (!result.opened) {
+      leaveOnboardingLayout();
+      history.replaceState(null, '', `${location.pathname}${location.search}#providerSettings`);
+      showStatus('原论文标签页已关闭；引导已完成，可从任意论文页再次点击插件图标。', 'info');
+    }
+  } catch (error) {
+    document.getElementById('onboardingStepState').textContent =
+      `无法返回原论文页面：${friendlyError(error)}`;
+  } finally {
+    onboardingUi.pending = false;
+    renderOnboarding();
+  }
 }
 
 function updateDirectoryFeatureSupport() {
@@ -361,6 +548,7 @@ async function chooseUserDataDirectory() {
     userDataUi.handleLoaded = true;
     await callBackground({ type: 'USER_DATA_SYNC_NOW' });
     await refreshUserDataStatus();
+    if (onboardingUi.active) await setOnboardingStepState('storage', 'completed');
     showUserDataStatus('目录已保存，本地数据同步完成。', 'success');
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -980,6 +1168,7 @@ function categoryIdFromHash() {
 }
 
 async function loadCategoryFromHash() {
+  if (location.hash === '#onboarding') return;
   const categoryId = categoryIdFromHash();
   if (categoryId) {
     if (categoryId === categoryEditor.categoryId) {
@@ -2012,6 +2201,9 @@ async function persistForm(silent) {
     });
     applyState(updated);
     profileEditorDirty = false;
+    if (onboardingUi.active && hasUsableApiConfiguration()) {
+      await setOnboardingStepState('api', 'completed');
+    }
     if (!silent) showStatus('模型与路由设置已保存。', 'success');
     return { profileId: selectedProfileId };
   } catch (error) {
@@ -2021,6 +2213,7 @@ async function persistForm(silent) {
     endProfileAction('save');
     buttons.forEach(button => { button.disabled = false; });
     updateUserDataActionButtons();
+    renderOnboarding();
   }
 }
 

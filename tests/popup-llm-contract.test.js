@@ -45,6 +45,16 @@ test('popup exposes task controls and never treats user cancellation as regex fa
   assert.match(script, /error\?\.code === 'CANCELLED' \|\| highlightTaskState\.cancelled/);
 });
 
+test('an unavailable LLM mode turns the primary action into a settings CTA', () => {
+  const script = read('popup.js');
+  const updateStart = script.indexOf('function updateApplyButton');
+  const updateEnd = script.indexOf('async function controlActiveAnalysis', updateStart);
+  const update = script.slice(updateStart, updateEnd);
+  assert.match(update, /先配置 API/);
+  assert.match(update, /applyButton\.disabled\s*=\s*false/);
+  assert.match(script, /chrome\.runtime\.openOptionsPage\(\)/);
+});
+
 test('popup article chat allows queueing and preserves the composer while blocks stream', () => {
   const html = read('popup.html');
   const script = read('popup.js');

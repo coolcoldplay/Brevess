@@ -1,4 +1,5 @@
 importScripts(
+  'core/onboarding.js',
   'core/tab-activation.js',
   'core/category-store.js',
   'core/adaptive-catalog.js',
@@ -50,6 +51,10 @@ importScripts(
   'core/directory-sync.js',
   'core/background-router.js'
 );
+
+const onboardingController = SciLLM.createOnboardingController({
+  storageArea: chrome.storage.local
+});
 
 async function configureSidePanelAction() {
   if (!chrome.sidePanel?.setPanelBehavior) return;
@@ -106,8 +111,31 @@ async function activateTabAndOpenSidePanel(tab) {
   chrome.tabs.sendMessage(tab.id, { action: 'disarmSidePanelRestore' }).catch(() => {});
 }
 
+async function openOnboardingForTab(tab) {
+  if (!tab?.id || !tab?.windowId) return;
+  await onboardingController.begin({
+    tabId: tab.id,
+    windowId: tab.windowId,
+    url: tab.url || ''
+  });
+  await chrome.tabs.create({
+    url: chrome.runtime.getURL('options.html#onboarding'),
+    active: true,
+    windowId: tab.windowId
+  });
+}
+
+async function handleToolbarAction(tab) {
+  const onboarding = await onboardingController.get();
+  if (SciLLM.shouldStartOnboarding(onboarding)) {
+    await openOnboardingForTab(tab);
+    return;
+  }
+  await activateTabAndOpenSidePanel(tab);
+}
+
 chrome.action.onClicked.addListener(tab => {
-  activateTabAndOpenSidePanel(tab).catch(error =>
+  handleToolbarAction(tab).catch(error =>
     console.warn('SCI 论文逻辑助手：无法激活当前标签页', error)
   );
 });
@@ -275,6 +303,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
     return false;
+  }
+
+  if (message?.type === 'ONBOARDING_GET') {
+    onboardingController.get()
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
+  }
+
+  if (message?.type === 'ONBOARDING_SET_STEP') {
+    onboardingController.setStep(message.step, message.status)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
+  }
+
+  if (message?.type === 'ONBOARDING_RESTART') {
+    onboardingController.restart(message.sourceTab || {})
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
+  }
+
+  if (message?.type === 'ONBOARDING_FINISH') {
+    const sourceTab = message.sourceTab || {};
+    const tabId = Number(sourceTab.tabId);
+    const windowId = Number(sourceTab.windowId);
+    if (!Number.isInteger(tabId)) {
+      sendResponse({ success: true, data: { opened: false, reason: 'source-tab-missing' } });
+      return false;
+    }
+    // Keep sidePanel.open in the completion click's user gesture. State is
+    // already terminal before options.js enables this button.
+    activatedSidePanelTabIds.add(tabId);
+    const enablePromise = setTabSidePanelAvailability(tabId, true);
+    const openPromise = chrome.sidePanel.open({ tabId });
+    const focusPromise = chrome.tabs.update(tabId, { active: true });
+    const windowPromise = Number.isInteger(windowId) && chrome.windows?.update
+      ? chrome.windows.update(windowId, { focused: true }) : Promise.resolve();
+    const activationPromise = focusPromise.then(currentTab =>
+      SciLLM.markTabActivated(chrome.storage.session, currentTab)
+    );
+    Promise.all([enablePromise, openPromise, focusPromise, windowPromise, activationPromise])
+      .then(([, , , , activation]) => {
+        chrome.runtime.sendMessage({ type: 'PANEL_TAB_ACTIVATED', activation }).catch(() => {});
+        chrome.tabs.sendMessage(tabId, { action: 'disarmSidePanelRestore' }).catch(() => {});
+        if (sender.tab?.id && sender.tab.id !== tabId) {
+          chrome.tabs.remove(sender.tab.id).catch(() => {});
+        }
+        sendResponse({ success: true, data: { opened: true, tabId } });
+      })
+      .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
   }
 
   if (message?.type === 'SIDE_PANEL_RESTORE_FROM_USER_GESTURE' && sender.tab?.id) {

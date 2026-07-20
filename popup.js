@@ -3350,6 +3350,7 @@ async function handleStudyTypeChange(event) {
 
 function updateApplyButton() {
     const applyButton = document.getElementById('applyHighlight');
+    delete applyButton.dataset.settingsCta;
     updateHighlightTaskControls();
     if (regexApplyPending) {
         applyButton.textContent = analysisMode === 'llm'
@@ -3369,8 +3370,9 @@ function updateApplyButton() {
     }
     const selectedType = getSelectedStudyType();
     if (llmSettingsState?.effectiveMode !== 'llm') {
-        applyButton.textContent = '配置 LLM';
-        applyButton.disabled = true;
+        applyButton.textContent = '先配置 API';
+        applyButton.disabled = false;
+        applyButton.dataset.settingsCta = 'true';
     } else if (prepareState === 'preparing') {
         applyButton.textContent = '正在准备正文';
         applyButton.disabled = true;

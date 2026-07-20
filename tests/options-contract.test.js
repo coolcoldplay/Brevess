@@ -422,3 +422,23 @@ test('local data exposes a searchable paged workspace overview with exact manage
   assert.match(css, /\.article-workspace-list\s*\{/);
   assert.doesNotMatch(overviewScript, /fullPath|directoryPath|handle\.path|apiKey|authorization/i);
 });
+
+test('settings reuse directory and API controls in a skippable two-step onboarding view', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  [
+    'onboardingGuide', 'onboardingProgress', 'onboardingStepTitle',
+    'onboardingBack', 'onboardingSkip', 'onboardingContinue', 'onboardingFinish',
+    'reopenOnboarding', 'directorySyncSettings', 'providerSettings'
+  ].forEach(id => assert.match(html, new RegExp(`id=["']${id}["']`)));
+  assert.match(script, /location\.hash\s*===\s*['"]#onboarding['"]/);
+  assert.match(script, /ONBOARDING_GET/);
+  assert.match(script, /ONBOARDING_SET_STEP/);
+  assert.match(script, /ONBOARDING_RESTART/);
+  assert.match(script, /ONBOARDING_FINISH/);
+  assert.match(script, /chooseUserDataDirectory/);
+  assert.match(script, /persistForm/);
+  assert.match(css, /body\.is-onboarding/);
+  assert.match(css, /data-onboarding-step/);
+});

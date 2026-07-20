@@ -73,6 +73,14 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /chrome\.tabs\.onRemoved\.addListener/);
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(background, /chrome\.runtime\.onStartup\.addListener/);
+  assert.match(background, /core\/onboarding\.js/);
+  assert.match(background, /options\.html#onboarding/);
+  assert.match(background, /shouldStartOnboarding/);
+  assert.match(background, /ONBOARDING_FINISH/);
+  assert.doesNotMatch(
+    background,
+    /onInstalled\.addListener\([\s\S]{0,500}options\.html#onboarding|onStartup\.addListener\([\s\S]{0,500}options\.html#onboarding/
+  );
 });
 
 test('production workflow contains no classifier or secondary-type UI remnants', () => {
