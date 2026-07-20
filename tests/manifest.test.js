@@ -55,6 +55,17 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /chrome\.action\.onClicked\.addListener/);
   assert.match(background, /markTabActivated/);
   assert.match(background, /chrome\.sidePanel\.open/);
+  const actionListenerStart = background.indexOf('chrome.action.onClicked.addListener(tab => {');
+  const actionListenerEnd = background.indexOf('\n});', actionListenerStart);
+  const actionListener = background.slice(actionListenerStart, actionListenerEnd);
+  assert.match(actionListener, /beginToolbarSidePanelOpen\(tab\)/);
+  assert.match(actionListener, /handleToolbarAction\(tab,\s*panelOpen/);
+  assert.ok(
+    actionListener.indexOf('beginToolbarSidePanelOpen(tab)') <
+      actionListener.indexOf('handleToolbarAction(tab, panelOpen'),
+    'the side-panel open attempt must start before any asynchronous onboarding lookup'
+  );
+  assert.doesNotMatch(actionListener, /\bawait\b/);
   assert.ok(
     background.indexOf('chrome.sidePanel.open({ tabId: tab.id })') <
       background.indexOf('SciLLM.markTabActivated(chrome.storage.session, tab)'),

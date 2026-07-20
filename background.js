@@ -55,6 +55,10 @@ importScripts(
 const onboardingController = SciLLM.createOnboardingController({
   storageArea: chrome.storage.local
 });
+let onboardingSnapshot = null;
+onboardingController.get().then(state => {
+  onboardingSnapshot = state;
+}).catch(() => {});
 
 async function configureSidePanelAction() {
   if (!chrome.sidePanel?.setPanelBehavior) return;
@@ -90,19 +94,27 @@ async function syncActiveTabSidePanels() {
   await Promise.all(tabs.map(syncTabSidePanelAvailability));
 }
 
-async function activateTabAndOpenSidePanel(tab) {
+function beginToolbarSidePanelOpen(tab) {
   if (!tab?.id || !tab?.windowId) return;
-  // Invoke open synchronously inside the toolbar click's user gesture. The
-  // activation marker can settle in parallel; the panel receives a follow-up
-  // message before it is allowed to inject into the tab.
-  // Queue the per-tab enable call before open while both calls still occur in
-  // the toolbar gesture. Chromium processes extension API calls in order.
-  activatedSidePanelTabIds.add(tab.id);
+  // Both extension API calls must start before the toolbar listener yields;
+  // Edge invalidates the sidePanel.open user gesture after an awaited storage read.
   const enablePromise = setTabSidePanelAvailability(tab.id, true);
   const openPromise = chrome.sidePanel.open({ tabId: tab.id });
+  // Attach rejection observers immediately. The activation flow below still
+  // receives the original promises and reports either failure.
+  enablePromise.catch(() => {});
+  openPromise.catch(() => {});
+  return { enablePromise, openPromise };
+}
+
+async function activateTabAndOpenSidePanel(tab, panelOpen) {
+  if (!tab?.id || !tab?.windowId) return;
+  const attempt = panelOpen || beginToolbarSidePanelOpen(tab);
+  if (!attempt) return;
+  activatedSidePanelTabIds.add(tab.id);
   const activationPromise = SciLLM.markTabActivated(chrome.storage.session, tab);
   const [, , activation] = await Promise.all([
-    enablePromise, openPromise, activationPromise
+    attempt.enablePromise, attempt.openPromise, activationPromise
   ]);
   chrome.runtime.sendMessage({
     type: 'PANEL_TAB_ACTIVATED',
@@ -113,7 +125,7 @@ async function activateTabAndOpenSidePanel(tab) {
 
 async function openOnboardingForTab(tab) {
   if (!tab?.id || !tab?.windowId) return;
-  await onboardingController.begin({
+  onboardingSnapshot = await onboardingController.begin({
     tabId: tab.id,
     windowId: tab.windowId,
     url: tab.url || ''
@@ -125,17 +137,25 @@ async function openOnboardingForTab(tab) {
   });
 }
 
-async function handleToolbarAction(tab) {
-  const onboarding = await onboardingController.get();
+async function handleToolbarAction(tab, panelOpen, knownOnboarding = null) {
+  const onboarding = knownOnboarding || await onboardingController.get();
+  onboardingSnapshot = onboarding;
   if (SciLLM.shouldStartOnboarding(onboarding)) {
+    if (panelOpen) {
+      await Promise.allSettled([panelOpen.enablePromise, panelOpen.openPromise]);
+      await setTabSidePanelAvailability(tab.id, false).catch(() => {});
+    }
     await openOnboardingForTab(tab);
     return;
   }
-  await activateTabAndOpenSidePanel(tab);
+  await activateTabAndOpenSidePanel(tab, panelOpen);
 }
 
 chrome.action.onClicked.addListener(tab => {
-  handleToolbarAction(tab).catch(error =>
+  const knownOnboarding = onboardingSnapshot;
+  const panelOpen = knownOnboarding && SciLLM.shouldStartOnboarding(knownOnboarding)
+    ? null : beginToolbarSidePanelOpen(tab);
+  handleToolbarAction(tab, panelOpen, knownOnboarding).catch(error =>
     console.warn('SCI 论文逻辑助手：无法激活当前标签页', error)
   );
 });
@@ -307,21 +327,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'ONBOARDING_GET') {
     onboardingController.get()
-      .then(data => sendResponse({ success: true, data }))
+      .then(data => {
+        onboardingSnapshot = data;
+        sendResponse({ success: true, data });
+      })
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
     return true;
   }
 
   if (message?.type === 'ONBOARDING_SET_STEP') {
     onboardingController.setStep(message.step, message.status)
-      .then(data => sendResponse({ success: true, data }))
+      .then(data => {
+        onboardingSnapshot = data;
+        sendResponse({ success: true, data });
+      })
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
     return true;
   }
 
   if (message?.type === 'ONBOARDING_RESTART') {
     onboardingController.restart(message.sourceTab || {})
-      .then(data => sendResponse({ success: true, data }))
+      .then(data => {
+        onboardingSnapshot = data;
+        sendResponse({ success: true, data });
+      })
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
     return true;
   }
