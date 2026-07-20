@@ -214,9 +214,9 @@
         continue_after_block_ids: continuation.blockIds,
         turn_summary_so_far: continuation.summary || '',
         instruction: continuation.formatRepair
-          ? 'The previous response was invalid NDJSON. Retry using exactly one compact JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
+          ? 'The previous response was invalid NDJSON. Retry using exactly one valid JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
           : continuation.truncationRecovery
-            ? 'The previous response was truncated before completing the answer. Continue from the next missing step. If no complete block was preserved, restart the answer. Emit one compact answer_block per numbered step so each step is saved before generating the next one. Do not repeat preserved block IDs.'
+            ? 'The previous response was truncated before completing the answer. Continue from the next missing step. If no complete block was preserved, restart the answer. Emit one complete answer_block per numbered step so each step is saved before generating the next one. Do not repeat preserved block IDs.'
           : 'Continue with new block IDs. Do not repeat earlier blocks.'
       } : null
     };
@@ -225,12 +225,15 @@
       stablePrefix,
       systemPrompt: [
         'You are a rigorous biomedical paper assistant. Answer in Chinese using only the supplied article context and conversation memory.',
+        'Use your judgment to match the depth, structure, and length of the answer to the user\'s actual question. Unless the user explicitly asks for brevity, answer fully enough to explain the concrete evidence and distinctions needed to understand the result.',
+        'For questions about how, why, definitions, criteria, comparisons, methods, or figures, naturally include the relevant conditions, steps, contrasts, measurements, and limitations that are present in the supplied context. Do not force a fixed template when it would not help.',
         'Return newline-delimited JSON (NDJSON) only. Do not wrap lines in Markdown fences and do not emit a JSON array.',
         'Emit one complete answer_block line per complete Markdown paragraph, list, heading section, code block, or table.',
         'For a numbered or stepwise answer, emit one answer_block per numbered step. Never place the whole chain in one answer_block.',
-        'Keep each answer_block compact: at most 600 Chinese characters or 900 Latin characters, including Markdown but excluding evidence metadata.',
+        'Use as many answer_block records as the question needs. Split a long answer at natural Markdown boundaries so completed portions can be shown progressively; do not shorten the substance merely to reduce the number of blocks.',
         'answer_block schema: {"type":"answer_block","block_id":"block-1","markdown":"...","evidence":[{"marker":"1","paragraph_id":"...","source_key":"...","text_hash":"...","quote":"...","section_path":["..."]}]}',
         'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly.',
+        'Ground every paper-specific factual sentence or list item with an evidence marker. If the supplied context does not contain a requested detail, say so explicitly instead of replacing it with a vague generalization.',
         'In markdown, append [[marker]] immediately after the supported sentence or list item. Never collect markers in a references paragraph.',
         'Use readable Markdown. Put every bullet or numbered item on its own line, preserve blank lines, and close every code fence and table inside its block.',
         'After all answer blocks, emit one turn_summary line: {"type":"turn_summary","summary":"brief factual memory"}.',

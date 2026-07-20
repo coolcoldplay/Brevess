@@ -101,7 +101,10 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
   assert.match(first.systemPrompt, /NDJSON/);
   assert.match(first.systemPrompt, /answer_block/);
   assert.match(first.systemPrompt, /one answer_block per numbered step/i);
-  assert.match(first.systemPrompt, /at most 600 Chinese characters/i);
+  assert.match(first.systemPrompt, /Use your judgment to match the depth/i);
+  assert.match(first.systemPrompt, /Use as many answer_block records as the question needs/i);
+  assert.match(first.systemPrompt, /Ground every paper-specific factual sentence or list item/i);
+  assert.doesNotMatch(first.systemPrompt, /at most 600 Chinese characters|Keep each answer_block compact/i);
   assert.match(first.systemPrompt, /turn_summary/);
   assert.match(first.systemPrompt, /append \[\[marker\]\] immediately/);
   assert.equal('responseSchema' in first, false);
