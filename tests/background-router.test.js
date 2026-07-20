@@ -1377,7 +1377,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.3.0-panel-chat-r3');
+  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r1');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);
@@ -2783,6 +2783,44 @@ test('workspace overview returns safe summaries and loads one detail on demand',
   assert.equal(detail.data.panelCount, 2);
   assert.ok(detail.data.estimatedBytes > 0);
   assert.doesNotMatch(JSON.stringify(detail.data), /relativePath|content|apiKey/i);
+});
+
+test('workspace overview summarizes 1,000 records without loading any workspace asset', async () => {
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index.toString(16).padStart(64, '0');
+    await workspaceStore.ensureWorkspace({
+      schemaVersion: 1,
+      workspaceId: `workspace:${suffix}`,
+      canonicalUrl: `https://example.org/paper/${index}`,
+      aliases: [],
+      title: `Paper ${index}`,
+      directoryName: `Paper ${index}--${suffix.slice(0, 16)}`,
+      revision: suffix,
+      contentHash: suffix,
+      workspaceGeneration: 1,
+      summary: {
+        assetCount: 7, assetBytes: 1000, turnCount: 3, turnBytes: 200,
+        chatTurnCount: 3, figureCount: 2, panelCount: 6, highlightCount: 4
+      }
+    });
+  }
+  workspaceStore.listAssets = async () => {
+    throw new Error('overview must not load asset bodies');
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('overview must stay local'); }
+  });
+  const response = await router.handle({ type: 'ARTICLE_WORKSPACE_LIST' });
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.workspaces.length, 1000);
+  assert.equal(response.data.totals.workspaceCount, 1000);
+  assert.equal(response.data.totals.estimatedBytes, 1_200_000);
+  assert.equal(response.data.totals.panelCount, 6000);
 });
 
 test('scan imports a legacy archive into a workspace without deleting the legacy file', async () => {

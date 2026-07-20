@@ -3,10 +3,6 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  // Kept temporarily for the pre-workspace UI coverage label. Request planning
-  // no longer uses this fixed character limit.
-  const ARTICLE_CHAT_MAX_CONTEXT_CHARS = 220000;
-
   function normalizeText(value, maximum = 16000) {
     return String(value || '').normalize('NFKC').replace(/\0/g, '')
       .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -436,37 +432,8 @@
     };
   }
 
-  // Compatibility helper for the current coverage label. The router uses
-  // prepareArticleChatRequest/planArticleChatContext instead.
-  function selectArticleChatContext(value, _question, maximum = ARTICLE_CHAT_MAX_CONTEXT_CHARS) {
-    const paragraphs = (Array.isArray(value) ? value : []).map(normalizeArticleParagraph)
-      .filter(Boolean);
-    const totalCharacters = paragraphs.reduce((sum, item) => sum + item.text.length, 0);
-    const selected = [];
-    const selectedIndexes = new Set();
-    let sentCharacters = 0;
-    for (let index = 0; index < paragraphs.length; index += 1) {
-      if (selected.length && sentCharacters + paragraphs[index].text.length > maximum) break;
-      selected.push(paragraphs[index]);
-      selectedIndexes.add(index);
-      sentCharacters += paragraphs[index].text.length;
-    }
-    return {
-      paragraphs: selected,
-      coverage: {
-        totalParagraphs: paragraphs.length,
-        sentParagraphs: selected.length,
-        totalCharacters,
-        sentCharacters,
-        truncated: selectedIndexes.size < paragraphs.length
-      }
-    };
-  }
-
   return {
-    ARTICLE_CHAT_MAX_CONTEXT_CHARS,
     normalizeArticleChatHistory: normalizeArticleHistory,
-    selectArticleChatContext,
     normalizeArticleChatInput,
     prepareArticleChatRequest,
     compileArticleChatPrompt,

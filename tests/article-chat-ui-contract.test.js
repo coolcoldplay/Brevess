@@ -40,8 +40,9 @@ test('content sends canonical workspace paragraphs and persists only public chat
 test('full-text chat reports when a very long paper used a relevance-bounded context', () => {
   const core = read('core/article-chat.js');
   const popup = read('popup.js');
-  assert.match(core, /ARTICLE_CHAT_MAX_CONTEXT_CHARS\s*=\s*220000/);
-  assert.match(core, /truncated:\s*selectedIndexes\.size < paragraphs\.length/);
+  assert.doesNotMatch(core, /ARTICLE_CHAT_MAX_CONTEXT_CHARS|selectArticleChatContext/);
+  assert.match(core, /planArticleChatContext/);
+  assert.match(core, /retrievalCoverage/);
   assert.match(popup, /已按问题覆盖相关章节/);
   assert.match(popup, /已发送完整正文/);
 });

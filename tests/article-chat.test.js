@@ -2,10 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 require('../core/article-chat-tokenizer.js');
-require('../core/article-chat-index.js');
-require('../core/article-chat-retrieval.js');
-require('../core/article-chat-memory.js');
-require('../core/article-chat-citations.js');
+const { buildArticleChatIndex } = require('../core/article-chat-index.js');
+const { retrieveArticleChatContext } = require('../core/article-chat-retrieval.js');
+const {
+  buildArticleChatMemory,
+  retrieveArticleChatMemory
+} = require('../core/article-chat-memory.js');
+const { verifyArticleChatEvidence } = require('../core/article-chat-citations.js');
 require('../core/token-budget.js');
 require('../providers/provider-registry.js');
 require('../core/article-chat-context-planner.js');
@@ -257,4 +260,92 @@ test('continues at most once and returns complete blocks after repeated truncati
   assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
     'block-truncated-1', 'block-truncated-2'
   ]);
+});
+
+function scaleParagraphs(count) {
+  const sections = [
+    ['Abstract', 'abstract'], ['Introduction', 'introduction'],
+    ['Results', 'results'], ['Discussion', 'discussion'], ['Conclusion', 'conclusion']
+  ];
+  return Array.from({ length: count }, (_, index) => {
+    const [sectionTitle, sectionKind] = sections[index % sections.length];
+    const rare = index === count - 17
+      ? 'rare-neuroaxis-CRISPR rescue restored thermoregulation without changing food intake.'
+      : `Replicate ${index + 1} measured heat stress, metabolism, signaling, and controls.`;
+    return {
+      paragraphId: `scale-p-${index + 1}`,
+      sourceKey: `scale-source-${index + 1}`,
+      textHash: `scale-hash-${index + 1}`,
+      sectionId: `scale-${sectionKind}`,
+      sectionTitle,
+      sectionKind,
+      sectionPath: [sectionTitle],
+      text: `${rare} This paragraph preserves a stable scientific evidence record.`
+    };
+  });
+}
+
+test('100 to 500 paragraph fixtures keep broad coverage and narrow evidence bounded', async () => {
+  const small = scaleParagraphs(100);
+  const large = scaleParagraphs(500);
+  const smallIndex = buildArticleChatIndex({
+    documentHash: 'scale-small', revision: 1, paragraphs: small
+  }, { minChars: 80, targetChars: 220, maxChars: 360 });
+  const largeIndex = buildArticleChatIndex({
+    documentHash: 'scale-large', revision: 1, paragraphs: large
+  }, { minChars: 80, targetChars: 220, maxChars: 360 });
+  const broad = await retrieveArticleChatContext(
+    smallIndex, '请概括全文的研究背景、主要发现和结论',
+    { maxChars: 12000, limit: 8, neighborRadius: 0 }
+  );
+  const narrow = await retrieveArticleChatContext(
+    largeIndex, 'rare-neuroaxis-CRISPR rescue 对 food intake 有什么影响？',
+    { maxChars: 4000, limit: 6, neighborRadius: 1 }
+  );
+
+  assert.equal(broad.coverage.broadQuery, true);
+  for (const kind of ['abstract', 'introduction', 'results', 'discussion', 'conclusion']) {
+    assert.ok(broad.coverage.selectedSectionKinds.includes(kind), kind);
+  }
+  assert.ok(narrow.chunks.some(chunk => chunk.text.includes('rare-neuroaxis-CRISPR')));
+  assert.ok(narrow.selectedChars <= 4000);
+  assert.ok(narrow.chunks.length < largeIndex.chunks.length);
+});
+
+test('5,000 turns remain searchable without a conversation-count cap', () => {
+  const history = Array.from({ length: 5000 }, (_, index) => ({
+    turnId: `scale-turn-${index + 1}`,
+    question: index === 16
+      ? 'What did the rare-synaptic-lipid result show?'
+      : `Question ${index + 1} about the common result`,
+    answer: index === 16
+      ? 'The rare-synaptic-lipid response was reversible.'
+      : `Answer ${index + 1} summarizes a common result.`,
+    createdAt: index + 1
+  }));
+  const normalized = normalizeArticleChatInput(articleMessage({ history }));
+  const memory = buildArticleChatMemory(normalized.history);
+  const found = retrieveArticleChatMemory(memory, 'rare-synaptic-lipid reversible', {
+    limit: 4
+  });
+
+  assert.equal(normalized.history.length, 5000);
+  assert.equal(memory.entries.length, 5000);
+  assert.equal(found[0].turnId, 'scale-turn-17');
+  assert.ok(memory.entries.every(entry => entry.tokens.length <= 1024));
+});
+
+test('duplicate evidence across a 500-paragraph fixture never creates a jump target', () => {
+  const duplicate = 'This repeated evidence sentence is intentionally non-unique.';
+  const paragraphs = scaleParagraphs(500).map((paragraph, index) => ({
+    ...paragraph,
+    text: index % 25 === 0 ? duplicate : paragraph.text
+  }));
+  const result = verifyArticleChatEvidence({ quote: duplicate }, {
+    revision: 1, paragraphs
+  });
+
+  assert.equal(result.status, 'ambiguous');
+  assert.equal(result.candidateCount, 20);
+  assert.equal(result.target, null);
 });

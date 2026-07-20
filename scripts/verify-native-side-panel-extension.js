@@ -800,7 +800,7 @@ async function readDiagnosticDownload(download) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.3.0-panel-chat-r3' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r1' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -814,7 +814,7 @@ async function readDiagnosticDownload(download) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.3.0-panel-chat-r3' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r1' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     multiTab.actualExtractionRuns === 1 &&
     multiTab.switchBackMs < 1500 &&

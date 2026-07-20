@@ -159,3 +159,16 @@ test('workspace restore preserves changed-content safety and current-page clear 
   assert.match(popup, /clearCurrentArticleWorkspace/);
   assert.match(popup, /workspaceGeneration/);
 });
+
+test('active persistence uses bounded workspace assets while retaining legacy archive import', () => {
+  const root = join(__dirname, '..');
+  const content = readFileSync(join(root, 'content.js'), 'utf8');
+  const router = readFileSync(join(root, 'core', 'background-router.js'), 'utf8');
+  for (const relativePath of [
+    'article/structure.json', 'article/paragraphs.json', 'annotations/highlights.json',
+    'analysis/full-analysis.json', 'chat/index.json', 'figures/inventory.json', 'ui/state.json'
+  ]) assert.match(content, new RegExp(relativePath.replace(/[./]/g, '\\$&')));
+  assert.match(content, /ARTICLE_WORKSPACE_SAVE_ASSET/);
+  assert.match(router, /convertLegacyArticleArchiveToWorkspace/);
+  assert.match(router, /legacyPreserved\s*=\s*true/);
+});
