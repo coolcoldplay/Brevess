@@ -670,6 +670,7 @@ let lastSuccessfulExtraction = null;
 let lastSuccessfulStructure = null;
 const ARTICLE_EXTRACTION_CACHE_TTL_MS = 15000;
 let articleExtractionCache = null;
+let canonicalArticleSnapshotCache = null;
 const articleSectionOutlines = new Map();
 const articleNavigatorState = {
     activeTab: 'outline',
@@ -712,8 +713,14 @@ const llmHighlightInteractions = new WeakSet();
 
 function summarizeExtractedParagraphs(paragraphs) {
     const list = Array.isArray(paragraphs) ? paragraphs : [];
+    const typed = typeof SciLLM.summarizeArticleRecords === 'function'
+        ? SciLLM.summarizeArticleRecords(list) : null;
     return {
-        paragraphCount: list.length,
+        paragraphCount: typed?.bodyParagraphCount ?? list.length,
+        recordCount: typed?.recordCount ?? list.length,
+        figureCaptionCount: typed?.figureCaptionCount ?? 0,
+        tableCaptionCount: typed?.tableCaptionCount ?? 0,
+        referenceCount: typed?.referenceCount ?? 0,
         characterCount: list.reduce((sum, item) =>
             sum + String(item?.text || '').length, 0)
     };
@@ -725,14 +732,16 @@ function getCachedArticleExtraction() {
         Date.now() - articleExtractionCache.capturedAt > ARTICLE_EXTRACTION_CACHE_TTL_MS) {
         return null;
     }
-    return articleExtractionCache.paragraphs;
+    return articleExtractionCache.records;
 }
 
 function extractArticleWithTrace(source = 'unknown', { forceRefresh = false } = {}) {
     const operationId = extractionTrace.begin({ source, stage: 'extract_article' });
     try {
-        const cached = forceRefresh ? null : getCachedArticleExtraction();
-        if (cached) {
+        const cachedRecords = forceRefresh ? null : getCachedArticleExtraction();
+        if (cachedRecords) {
+            const cached = cachedRecords.filter(item => item?.recordType !== 'reference' &&
+                !['figure-caption', 'table-caption'].includes(item?.recordType));
             lastSuccessfulExtraction = cached;
             extractionTrace.complete(operationId, {
                 ...summarizeExtractedParagraphs(cached),
@@ -740,14 +749,15 @@ function extractArticleWithTrace(source = 'unknown', { forceRefresh = false } = 
             });
             return cached;
         }
-        const paragraphs = SciLLM.extractArticle(document);
+        const records = SciLLM.extractArticle(document, { includeTyped: true });
+        const paragraphs = records.filter(item => item?.recordType === 'body');
         lastSuccessfulExtraction = paragraphs;
         articleExtractionCache = {
             url: String(globalThis.location?.href || ''),
             capturedAt: Date.now(),
-            paragraphs
+            records
         };
-        extractionTrace.complete(operationId, summarizeExtractedParagraphs(paragraphs));
+        extractionTrace.complete(operationId, summarizeExtractedParagraphs(records));
         return paragraphs;
     } catch (error) {
         extractionTrace.fail(operationId, error);
@@ -776,12 +786,12 @@ function extractArticleStructureWithTrace(source = 'unknown', { forceRefresh = f
         let records = forceRefresh ? null : getCachedArticleExtraction();
         const cacheHit = Boolean(records);
         if (!records) {
-            records = SciLLM.extractArticle(document);
-            lastSuccessfulExtraction = records;
+            records = SciLLM.extractArticle(document, { includeTyped: true });
+            lastSuccessfulExtraction = records.filter(item => item?.recordType === 'body');
             articleExtractionCache = {
                 url: String(globalThis.location?.href || ''),
                 capturedAt: Date.now(),
-                paragraphs: records
+                records
             };
         }
         const structure = typeof SciLLM.buildArticleStructureFromRecords === 'function'
@@ -3959,8 +3969,8 @@ async function askArticleWithLLM(question, profileId = '') {
     articleChatState.operationId = operationId;
     articleChatState.activeProfileId = normalizedProfileId;
     try {
-        const structure = extractCurrentArticleStructure({ forceRefresh: true });
-        const paragraphs = (Array.isArray(structure?.paragraphs) ? structure.paragraphs : [])
+        const snapshot = getCanonicalArticleSnapshot();
+        const paragraphs = (Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : [])
             .map(item => ({
             paragraphId: String(item?.paragraphId || ''),
             sourceKey: String(item?.sourceKey || ''),
@@ -4464,7 +4474,53 @@ function extractCurrentArticleStructure({ forceRefresh = false } = {}) {
     currentArticleStructure = typeof SciLLM.reconcileArticleStructure === 'function'
         ? SciLLM.reconcileArticleStructure(currentArticleStructure, extracted)
         : extracted;
+    canonicalArticleSnapshotCache = null;
     return currentArticleStructure;
+}
+
+function getCanonicalArticleSnapshot({ forceRefresh = false } = {}) {
+    const structure = forceRefresh || !currentArticleStructure
+        ? extractCurrentArticleStructure({ forceRefresh })
+        : currentArticleStructure;
+    const documentHash = String(
+        currentManualDocument?.record?.documentHash ||
+        lastPreparedStudy?.documentHash ||
+        SciLLM.structureSignature?.(structure) || ''
+    );
+    const revision = Math.max(1, Number(structure?.revision) || 1);
+    const key = `${documentHash}:${revision}`;
+    const url = String(globalThis.location?.href || '');
+    if (!forceRefresh && canonicalArticleSnapshotCache?.key === key &&
+        canonicalArticleSnapshotCache?.url === url) {
+        return canonicalArticleSnapshotCache.snapshot;
+    }
+    const paragraphs = Array.isArray(structure?.paragraphs)
+        ? structure.paragraphs : [];
+    const typedRecords = Array.isArray(structure?.typedRecords)
+        ? structure.typedRecords : paragraphs;
+    const bodyParagraphCount = paragraphs.length;
+    const archiveParagraphCount = bodyParagraphCount;
+    const chatParagraphCount = bodyParagraphCount;
+    const snapshot = Object.freeze({
+        key,
+        documentHash,
+        revision,
+        url,
+        structure,
+        typedRecords,
+        paragraphs,
+        bodyParagraphCount,
+        archiveParagraphCount,
+        chatParagraphCount,
+        diagnostics: Object.freeze({
+            ...(structure?.diagnostics || {}),
+            paragraphCount: bodyParagraphCount,
+            bodyParagraphCount,
+            recordCount: typedRecords.length
+        })
+    });
+    canonicalArticleSnapshotCache = { key, url, snapshot };
+    return snapshot;
 }
 
 function getArticleStructureObserveRoots() {
@@ -4759,11 +4815,10 @@ function buildFigureWorkspaceSnapshot({ forceRefresh = false } = {}) {
 }
 
 function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
-    const structure = !forceRefresh && currentArticleStructure
-        ? currentArticleStructure
-        : extractCurrentArticleStructure({ forceRefresh });
+    const canonicalSnapshot = getCanonicalArticleSnapshot({ forceRefresh });
+    const structure = canonicalSnapshot.structure;
     const paragraphCounts = new Map();
-    (structure.paragraphs || []).forEach(paragraph => {
+    canonicalSnapshot.paragraphs.forEach(paragraph => {
         const sectionId = String(paragraph.sectionId || '');
         paragraphCounts.set(sectionId, (paragraphCounts.get(sectionId) || 0) + 1);
     });
@@ -4778,12 +4833,18 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
         revision: Number(structure.revision) || 0,
         diagnostics: {
             headingCount: Number(structure.diagnostics?.headingCount) || 0,
-            paragraphCount: Number(structure.diagnostics?.paragraphCount) || 0,
+            paragraphCount: canonicalSnapshot.bodyParagraphCount,
+            bodyParagraphCount: canonicalSnapshot.bodyParagraphCount,
+            archiveParagraphCount: canonicalSnapshot.archiveParagraphCount,
+            chatParagraphCount: canonicalSnapshot.chatParagraphCount,
+            figureCaptionCount: Number(structure.diagnostics?.figureCaptionCount) || 0,
+            tableCaptionCount: Number(structure.diagnostics?.tableCaptionCount) || 0,
+            referenceCount: Number(structure.diagnostics?.referenceCount) || 0,
             warnings: [...(structure.diagnostics?.warnings || [])]
         },
         nodes: (structure.nodes || []).map(node =>
             serializeArticleWorkspaceNode(node, paragraphCounts)),
-        paragraphs: (structure.paragraphs || []).map(paragraph => ({
+        paragraphs: canonicalSnapshot.paragraphs.map(paragraph => ({
             paragraphId: String(paragraph.paragraphId || ''),
             sourceKey: String(paragraph.sourceKey || ''),
             navigationRevision: Number(structure.revision) || 0,

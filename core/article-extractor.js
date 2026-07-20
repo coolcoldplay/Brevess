@@ -15,7 +15,7 @@
     `${SEMANTIC_HEADING_SELECTOR},${SUPPLEMENTAL_HEADING_SELECTOR},p,li,caption,[role="paragraph"]`;
   const STRUCTURAL_TEXT_SELECTOR = `${CONTENT_BLOCK_SELECTOR},figcaption`;
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
-  const EXTRACTOR_VERSION = '2.0.1-extractor-r11';
+  const EXTRACTOR_VERSION = '2.1.0-extractor-r12';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
   const EXCLUDED_ANCESTOR_SELECTOR =
     'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],.references,.bibliography,' +
@@ -142,10 +142,46 @@
     return { text: output.join(''), rawStarts, rawEnds };
   }
 
+  function hashNormalizedText(value) {
+    const text = normalizeTextWithOffsets(value).text.normalize('NFKC').toLowerCase();
+    let first = 2166136261;
+    let second = 2166136261 ^ 0x9e3779b9;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      first = Math.imul(first ^ code, 16777619);
+      second = Math.imul(second ^ code, 2246822519);
+    }
+    return `${(first >>> 0).toString(16).padStart(8, '0')}` +
+      `${(second >>> 0).toString(16).padStart(8, '0')}`;
+  }
+
+  function recordTypeForBlock(kind, referenceListReached) {
+    if (referenceListReached || kind === 'reference') return 'reference';
+    if (kind === 'figure-caption') return 'figure-caption';
+    if (kind === 'table-caption') return 'table-caption';
+    return 'body';
+  }
+
+  function summarizeArticleRecords(records) {
+    const source = Array.isArray(records) ? records : [];
+    const count = type => source.filter(record => record.recordType === type).length;
+    return {
+      recordCount: source.length,
+      bodyParagraphCount: count('body'),
+      figureCaptionCount: count('figure-caption'),
+      tableCaptionCount: count('table-caption'),
+      referenceCount: count('reference'),
+      bodyCharacterCount: source
+        .filter(record => record.recordType === 'body')
+        .reduce((sum, record) => sum + String(record.text || '').length, 0),
+      characterCount: source.reduce((sum, record) =>
+        sum + String(record.text || '').length, 0)
+    };
+  }
+
   function buildParagraphRecords(blocks) {
     const records = [];
-    const seenSectionParagraphs = new Set();
-    const seenNamedSectionParagraphs = new Set();
+    const seenCanonicalRecords = new Set();
     let sectionTitle = 'Article';
     let sectionId = 'sec-article';
     let sectionKind = 'article';
@@ -154,16 +190,34 @@
     let referenceListReached = false;
     const sectionOccurrences = new Map();
     const headingStack = [];
+    const recordIndexes = new Map();
 
     blocks.forEach(block => {
-      if (referenceListReached) return;
       const text = normalizeTextWithOffsets(block.text).text;
       if (!text) return;
       if (block.kind === 'heading') {
         if (REFERENCE_SECTION.test(text)) {
           referenceListReached = true;
+          excluded = false;
+          sectionKind = 'reference';
+          sectionTitle = text;
+          const sectionSlug = slugifyHeading(text);
+          const occurrence = (sectionOccurrences.get(sectionSlug) || 0) + 1;
+          sectionOccurrences.set(sectionSlug, occurrence);
+          sectionId = `sec-${sectionSlug}${occurrence > 1 ? `-${occurrence}` : ''}`;
+          headingStack.length = 0;
+          headingStack.push({
+            level: Number.isInteger(block.level) ? block.level : 2,
+            sectionId,
+            title: sectionTitle,
+            domId: String(block.domId || ''),
+            dataSelector: String(block.dataSelector || ''),
+            blockFingerprint: String(block.blockFingerprint || '')
+          });
+          index = 0;
           return;
         }
+        if (referenceListReached) return;
         if (isReviewUtilitySectionTitle(text) && !isExcludedSectionHeading(text)) {
           return;
         }
@@ -193,16 +247,32 @@
         return;
       }
       if (excluded) return;
-      const normalizedKey = text.toLowerCase();
-      const sectionDedupeKey = `${sectionId}\n${normalizedKey}`;
-      const namedSectionDedupeKey = `${sectionTitle.toLowerCase()}\n${normalizedKey}`;
-      if (seenSectionParagraphs.has(sectionDedupeKey) ||
-          seenNamedSectionParagraphs.has(namedSectionDedupeKey)) return;
-      seenSectionParagraphs.add(sectionDedupeKey);
-      seenNamedSectionParagraphs.add(namedSectionDedupeKey);
-      index += 1;
+      const textHash = hashNormalizedText(text);
+      const recordType = recordTypeForBlock(block.kind, referenceListReached);
+      const explicitSourceIdentity = String(
+        block.sourceKey || block.blockFingerprint || block.dataSelector || block.domId || ''
+      ).normalize('NFKC').trim();
+      const sectionPathKey = headingStack.map(item => item.title.toLowerCase()).join(' > ') ||
+        sectionTitle.toLowerCase();
+      const dedupeKey = explicitSourceIdentity
+        ? `${sectionPathKey}\n${explicitSourceIdentity}\n${textHash}`
+        : `${sectionTitle.toLowerCase()}\n${recordType}\n${textHash}`;
+      if (seenCanonicalRecords.has(dedupeKey)) return;
+      seenCanonicalRecords.add(dedupeKey);
+      const indexKey = `${sectionId}:${recordType}`;
+      const recordIndex = (recordIndexes.get(indexKey) || 0) + 1;
+      recordIndexes.set(indexKey, recordIndex);
+      index = recordIndex;
+      const sourceIdentity = explicitSourceIdentity ||
+        `text-${hashNormalizedText(`${sectionPathKey}\n${recordType}\n${text}`)}`;
+      const idPrefix = recordType === 'body' ? 'p'
+        : recordType === 'figure-caption' ? 'figcap'
+          : recordType === 'table-caption' ? 'tblcap' : 'ref';
       const record = {
-        paragraphId: `${sectionId}-p-${String(index).padStart(3, '0')}`,
+        paragraphId: `${sectionId}-${idPrefix}-${String(recordIndex).padStart(3, '0')}`,
+        sourceIdentity,
+        textHash,
+        recordType,
         sectionId,
         sectionTitle,
         sectionKind,
@@ -236,7 +306,7 @@
     );
     const primaryElements = allElements.filter(element => {
       if (isExcludedContentElement(element, adapter)) return false;
-      if (element.tagName === 'FIGCAPTION') return false;
+      if (element.tagName === 'FIGCAPTION') return true;
       const adapterHeading = adapterHeadings.has(element) &&
         !PRIMARY_CONTENT_TAGS.has(element.tagName) &&
         element.tagName !== 'FIGCAPTION' &&
@@ -273,6 +343,7 @@
 
   function getBlockKind(element) {
     if (isHeadingElement(element)) return 'heading';
+    if (element.tagName === 'FIGCAPTION') return 'figure-caption';
     if (element.tagName === 'CAPTION') return 'table-caption';
     return 'paragraph';
   }
@@ -320,7 +391,14 @@
   }
 
   function isExcludedContentElement(element, adapter = null) {
-    if (closestSafely(element, EXCLUDED_ANCESTOR_SELECTOR)) return true;
+    const tagName = String(element?.tagName || '').toUpperCase();
+    if (tagName === 'FIGCAPTION') {
+      const captionExcludedSelector = EXCLUDED_ANCESTOR_SELECTOR
+        .split(',').filter(selector => selector.trim() !== 'figure').join(',');
+      if (closestSafely(element, captionExcludedSelector)) return true;
+    } else if (closestSafely(element, EXCLUDED_ANCESTOR_SELECTOR)) {
+      return true;
+    }
     return (adapter?.excludedSelectors || []).some(selector =>
       Boolean(closestSafely(element, selector))
     );
@@ -393,6 +471,12 @@
       domId: String(element.id || ''),
       dataSelector: element.dataset?.sciLlmParagraphId
         ? `[data-sci-llm-paragraph-id="${element.dataset.sciLlmParagraphId}"]` : '',
+      sourceKey: String(
+        element.dataset?.sciLlmSourceKey ||
+        element.getAttribute?.('data-section-id') ||
+        element.getAttribute?.('data-id') ||
+        element.id || ''
+      ),
       blockFingerprint: String(element.dataset?.sciLlmParagraphId || element.id || '')
     }));
     return buildParagraphRecords(blocks);
@@ -542,7 +626,8 @@
       const hasChildSection = entries.some(candidate =>
         candidate.root !== entry.root &&
         typeof entry.root?.contains === 'function' && entry.root.contains(candidate.root));
-      const paragraphContent = content.filter(element => getBlockKind(element) === 'paragraph');
+      const paragraphContent = content.filter(element =>
+        getBlockKind(element) === 'paragraph');
       if (!paragraphContent.length && !hasChildSection) return;
       let headingDataSelector = '';
       if (matchingHeading?.dataset && options.markElements !== false) {
@@ -572,15 +657,22 @@
           });
           return;
         }
-        if (getBlockKind(element) !== 'paragraph') return;
+        const kind = getBlockKind(element);
+        if (!['paragraph', 'figure-caption', 'table-caption'].includes(kind)) return;
         const sourceIndex = sourceElements.length;
         sourceElements.push(element);
         blocks.push({
-          kind: 'paragraph',
+          kind,
           level: 0,
           text: element.textContent,
           sourceIndex,
           domId: String(element.id || ''),
+          sourceKey: String(
+            element.dataset?.sciLlmSourceKey ||
+            element.getAttribute?.('data-section-id') ||
+            element.getAttribute?.('data-id') ||
+            element.id || ''
+          ),
           blockFingerprint: String(element.id || '')
         });
       });
@@ -592,6 +684,7 @@
     if (sectionCount < 3 || records.length < 3 || characterCount < 300) return [];
     if (options.markElements !== false) {
       records.forEach(record => {
+        if (record.recordType !== 'body') return;
         const element = sourceElements[record.sourceIndex];
         if (element?.dataset) element.dataset.sciLlmParagraphId = record.paragraphId;
       });
@@ -641,8 +734,17 @@
     });
     const paragraphs = sourceRecords.map((record, index) => ({
       sourceKey: record.paragraphId,
+      sourceIdentity: record.sourceIdentity,
       headingSourceKey: record.sectionId,
       text: record.text,
+      textHash: record.textHash,
+      recordType: record.recordType,
+      sectionTitle: record.sectionTitle,
+      sectionPath: (record.headingPath || []).map(item => ({
+        level: item.level,
+        sectionId: item.sectionId,
+        title: item.title
+      })),
       sectionKind: record.sectionKind,
       kind: record.kind,
       order: index,
@@ -760,6 +862,7 @@
     );
     if (options.markElements !== false) {
       records.forEach(record => {
+        if (record.recordType !== 'body') return;
         const element = elements[record.sourceIndex];
         if (element?.dataset) element.dataset.sciLlmParagraphId = record.paragraphId;
       });
@@ -769,6 +872,7 @@
 
   function markRootExtraction(extraction) {
     extraction.records.forEach(record => {
+      if (record.recordType !== 'body') return;
       const element = extraction.elements[record.sourceIndex];
       if (element?.dataset) element.dataset.sciLlmParagraphId = record.paragraphId;
     });
@@ -841,7 +945,8 @@
     const prepared = [];
 
     source.forEach(record => {
-      if (!record || ['table-caption', 'figure-caption'].includes(record.kind)) return;
+      if (!record || record.recordType === 'reference' ||
+          ['table-caption', 'figure-caption', 'reference'].includes(record.kind)) return;
       const text = normalizeTextWithOffsets(record.text).text;
       if (!text || REVIEW_UTILITY_TEXT.test(text)) return;
       const immediateTitle = String(record.sectionTitle || '').trim();
@@ -972,11 +1077,8 @@
           .filter(element => element.tagName === 'FIGCAPTION').length
       })),
       selected: {
-        recordCount: records.length,
-        paragraphCount: records.filter(record => record.kind === 'paragraph').length,
-        figureCaptionCount: records.filter(record => record.kind === 'figure-caption').length,
-        tableCaptionCount: records.filter(record => record.kind === 'table-caption').length,
-        characterCount: records.reduce((sum, record) => sum + record.text.length, 0)
+        ...summarizeArticleRecords(records),
+        paragraphCount: summarizeArticleRecords(records).bodyParagraphCount
       },
       unrecognizedTextBlockCount: unrecognizedTextBlocks
         .reduce((sum, item) => sum + item.count, 0),
@@ -998,10 +1100,14 @@
       markElements: false
     });
     if (outlineRecordsAreReliable(outlinedRecords, rootExtraction.records)) {
-      return outlinedRecords;
+      return options.includeTyped === true
+        ? outlinedRecords
+        : outlinedRecords.filter(record => record.recordType === 'body');
     }
     markRootExtraction(rootExtraction);
-    return rootExtraction.records;
+    return options.includeTyped === true
+      ? rootExtraction.records
+      : rootExtraction.records.filter(record => record.recordType === 'body');
   }
 
   return {
@@ -1011,6 +1117,8 @@
     getHeadingLevel,
     isReviewUtilitySectionTitle,
     buildParagraphRecords,
+    hashNormalizedText,
+    summarizeArticleRecords,
     normalizeTextWithOffsets,
     collectContentElements,
     scoreContentRoot,

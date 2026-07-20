@@ -12,7 +12,8 @@ const {
   diagnoseArticleExtraction,
   extractArticle,
   extractArticleStructure,
-  prepareReviewOutlineParagraphs
+  prepareReviewOutlineParagraphs,
+  summarizeArticleRecords
 } = require('../core/article-extractor.js');
 
 test('deduplicates repeated DOM copies without merging legitimate short text across sections', () => {
@@ -30,6 +31,64 @@ test('deduplicates repeated DOM copies without merging legitimate short text acr
   assert.equal(records.filter(record => record.text === repeated).length, 1);
   assert.equal(records.filter(record => record.text === 'No adverse events were observed.').length, 2);
   assert.equal(records.length, 3);
+});
+
+test('deduplicates responsive DOM copies by stable source identity but retains real repeated prose', () => {
+  const sentence = 'No increase in TP53 signaling was observed after treatment.';
+  const records = buildParagraphRecords([
+    { kind: 'heading', text: 'Results' },
+    { kind: 'paragraph', text: sentence, sourceKey: 'result-p1', domId: 'desktop-p1' },
+    { kind: 'paragraph', text: sentence, sourceKey: 'result-p1', domId: 'mobile-p1' },
+    { kind: 'paragraph', text: sentence, sourceKey: 'result-p2', domId: 'desktop-p2' },
+    { kind: 'heading', text: 'Discussion' },
+    { kind: 'paragraph', text: sentence, sourceKey: 'discussion-p1' }
+  ]);
+
+  assert.equal(records.length, 3);
+  assert.deepEqual(records.map(item => item.sourceIdentity), [
+    'result-p1', 'result-p2', 'discussion-p1'
+  ]);
+  assert.equal(new Set(records.map(item => item.textHash)).size, 1);
+});
+
+test('classifies captions and references without mixing them into the body count', () => {
+  const records = buildParagraphRecords([
+    { kind: 'heading', text: 'Results' },
+    { kind: 'paragraph', text: 'Treatment increased survival.' },
+    { kind: 'figure-caption', text: 'Figure 1. Survival curves by treatment group.' },
+    { kind: 'table-caption', text: 'Table 1. Baseline characteristics.' },
+    { kind: 'heading', text: 'References' },
+    { kind: 'paragraph', text: 'Smith et al. 2020. Example Journal.' }
+  ]);
+
+  assert.deepEqual(records.map(item => item.recordType), [
+    'body', 'figure-caption', 'table-caption', 'reference'
+  ]);
+  assert.deepEqual(summarizeArticleRecords(records), {
+    recordCount: 4,
+    bodyParagraphCount: 1,
+    figureCaptionCount: 1,
+    tableCaptionCount: 1,
+    referenceCount: 1,
+    bodyCharacterCount: 'Treatment increased survival.'.length,
+    characterCount: records.reduce((sum, item) => sum + item.text.length, 0)
+  });
+});
+
+test('does not collect hidden utility prose as canonical article content', () => {
+  const visible = {
+    tagName: 'P', textContent: 'Visible scientific evidence paragraph.', dataset: {},
+    closest: () => null, querySelector: () => null, querySelectorAll: () => [],
+    getAttribute: () => null
+  };
+  const hidden = {
+    tagName: 'P', textContent: 'Duplicated mobile utility paragraph.', dataset: {},
+    closest: selector => selector.includes('[hidden]') ? { hidden: true } : null,
+    querySelector: () => null, querySelectorAll: () => [], getAttribute: () => null
+  };
+  const root = { querySelectorAll: selector => selector === '*' ? [visible, hidden] : [] };
+
+  assert.deepEqual(collectContentElements(root), [visible]);
 });
 
 test('counts a nested adapter paragraph once instead of counting its wrapper and child', () => {
@@ -125,7 +184,7 @@ test('treats numbered figure and table labels as outline chrome', () => {
   ));
 });
 
-test('assigns stable ids and stops at excluded sections', () => {
+test('assigns stable ids and separates the terminal reference section', () => {
   const records = buildParagraphRecords([
     { kind: 'heading', text: 'Results' },
     { kind: 'paragraph', text: 'Treatment increased survival.' },
@@ -134,9 +193,12 @@ test('assigns stable ids and stops at excluded sections', () => {
     { kind: 'heading', text: 'Appendix' },
     { kind: 'paragraph', text: 'Material after the reference list.' }
   ]);
-  assert.deepEqual(records.map(item => item.paragraphId), ['sec-results-p-001']);
+  assert.deepEqual(records.map(item => item.paragraphId), [
+    'sec-results-p-001', 'sec-references-ref-001', 'sec-references-ref-002'
+  ]);
   assert.equal(records[0].sectionTitle, 'Results');
   assert.equal(records[0].sectionKind, 'results');
+  assert.deepEqual(records.map(item => item.recordType), ['body', 'reference', 'reference']);
 });
 
 test('inherits the major Results kind across descriptive subsection headings', () => {
@@ -260,14 +322,17 @@ test('reports privacy-safe extraction diagnostics for the selected content root'
 
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.equal(diagnostics.version, '2.0.1-extractor-r11');
+  assert.equal(diagnostics.version, '2.1.0-extractor-r12');
   assert.equal(diagnostics.candidateCount, 2);
   assert.equal(diagnostics.selectedRoot, 'MAIN#paper.article-main.content');
   assert.deepEqual(diagnostics.selected, {
     recordCount: 1,
+    bodyParagraphCount: 1,
     paragraphCount: 1,
     figureCaptionCount: 0,
     tableCaptionCount: 0,
+    referenceCount: 0,
+    bodyCharacterCount: paragraph.textContent.length,
     characterCount: paragraph.textContent.length
   });
   assert.equal(JSON.stringify(diagnostics).includes(paragraph.textContent), false);

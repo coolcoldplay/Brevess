@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const ARTICLE_STRUCTURE_VERSION = '1';
+  const ARTICLE_STRUCTURE_VERSION = '2';
   const TERMINAL_SECTION = /^(references|bibliography|literature cited)\b/i;
   const UTILITY_SECTION = /^(?:keywords?|abbreviations?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|information|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|generative ai statement|declaration of ai use|funding|conflicts? of interest(?:\s+declaration)?|competing interests?|declaration of (?:competing )?interests?|data availability(?:\s+statement)?|supplementary (?:materials?|data)|footnotes?|recommended articles?|cited by|article metrics?|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|figures|tables|media|share|show full outline)$/i;
 
@@ -53,6 +53,23 @@
       blockFingerprint: normalize(item.blockFingerprint || item.sourceKey || hash(item.text)),
       sourceOrder: Number(item.order) || 0
     };
+  }
+
+  function normalizeRecordType(item) {
+    const type = normalize(item?.recordType);
+    if (['figure-caption', 'table-caption', 'reference'].includes(type)) return type;
+    if (item?.kind === 'figure-caption') return 'figure-caption';
+    if (item?.kind === 'table-caption') return 'table-caption';
+    if (item?.kind === 'reference') return 'reference';
+    return 'body';
+  }
+
+  function normalizeSectionPath(value) {
+    return (Array.isArray(value) ? value : []).map((item, index) => ({
+      level: Math.min(6, Math.max(1, Number(item?.level) || 2)),
+      sectionId: normalize(item?.sectionId || `section-${index + 1}`),
+      title: normalize(item?.title)
+    })).filter(item => item.title);
   }
 
   function buildArticleStructure(input = {}) {
@@ -124,6 +141,7 @@
         order: item.order,
         anchor: headingAnchor(item, path),
         headingPath: ancestry,
+        sectionPath: path.map(entry => normalize(entry.title)),
         children: [],
         paragraphIds: []
       };
@@ -136,12 +154,17 @@
     }
 
     const flatNodes = flattenStructureNodes(nodes);
-    const paragraphs = (Array.isArray(input.paragraphs) ? input.paragraphs : [])
+    const typedRecords = (Array.isArray(input.paragraphs) ? input.paragraphs : [])
       .map((item, index) => ({
         ...item,
         sourceKey: normalize(item?.sourceKey || `paragraph-${index + 1}`),
+        sourceIdentity: normalize(item?.sourceIdentity),
         headingSourceKey: normalize(item?.headingSourceKey),
         text: normalize(item?.text),
+        textHash: normalize(item?.textHash) || hash(normalize(item?.text)),
+        recordType: normalizeRecordType(item),
+        sectionTitle: normalize(item?.sectionTitle),
+        sectionPath: normalizeSectionPath(item?.sectionPath),
         order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index
       }))
       .filter(item => item.text)
@@ -154,7 +177,6 @@
             candidate.order <= item.order
           ) || flatNodes[0];
         }
-        if (!node) return [];
         const pathNodes = [];
         let current = node;
         while (current) {
@@ -163,22 +185,40 @@
             ? flatNodes.find(candidate => candidate.sectionId === current.parentSectionId)
             : null;
         }
-        const headingPath = pathNodes.map(candidate => ({
+        let headingPath = pathNodes.map(candidate => ({
           level: candidate.level,
           sectionId: candidate.sectionId,
           title: candidate.title
         }));
+        if (!headingPath.length) headingPath = item.sectionPath;
+        if (!headingPath.length && item.sectionTitle) {
+          headingPath = [{
+            level: 2,
+            sectionId: `sec-${hash([item.sectionTitle, item.recordType])}`,
+            title: item.sectionTitle
+          }];
+        }
+        if (!headingPath.length) return [];
+        const leaf = headingPath[headingPath.length - 1];
+        const sectionId = node?.sectionId || leaf.sectionId;
+        const sectionTitle = node?.title || leaf.title;
         const paragraphId = `p-${hash([
-          item.sourceKey, node.sectionId, item.text.slice(0, 800)
+          headingPath.map(entry => normalize(entry.title).toLowerCase()),
+          item.recordType,
+          item.textHash,
+          item.sourceIdentity || item.sourceKey
         ])}`;
-        node.paragraphIds.push(paragraphId);
+        if (node && item.recordType === 'body') node.paragraphIds.push(paragraphId);
         return [{
           paragraphId,
           sourceKey: item.sourceKey,
-          sectionId: node.sectionId,
-          sectionTitle: node.title,
+          sourceIdentity: item.sourceIdentity || item.sourceKey,
+          textHash: item.textHash,
+          recordType: item.recordType,
+          sectionId,
+          sectionTitle,
           sectionKind: item.sectionKind || 'article',
-          headingLevel: node.level,
+          headingLevel: node?.level || leaf.level,
           headingPath,
           kind: item.kind || 'paragraph',
           text: item.text,
@@ -186,6 +226,9 @@
           anchor: paragraphAnchor(item, headingPath)
         }];
       });
+
+    const paragraphs = typedRecords.filter(item => item.recordType === 'body');
+    const countTyped = type => typedRecords.filter(item => item.recordType === type).length;
 
     const structure = {
       version: ARTICLE_STRUCTURE_VERSION,
@@ -202,7 +245,13 @@
         ),
         headingCount: flatNodes.length,
         paragraphCount: paragraphs.length,
+        recordCount: typedRecords.length,
+        bodyParagraphCount: paragraphs.length,
+        figureCaptionCount: countTyped('figure-caption'),
+        tableCaptionCount: countTyped('table-caption'),
+        referenceCount: countTyped('reference'),
         characterCount: paragraphs.reduce((sum, item) => sum + item.text.length, 0),
+        typedCharacterCount: typedRecords.reduce((sum, item) => sum + item.text.length, 0),
         excludedCount: excludedCount + Math.max(
           0, Number(input.diagnostics?.excludedCount) || 0
         ),
@@ -211,7 +260,8 @@
         )].slice(0, 20)
       },
       nodes,
-      paragraphs
+      paragraphs,
+      typedRecords
     };
     const outlineCount = structure.diagnostics.outlineEntryCount;
     structure.diagnostics.outlineCoverage = outlineCount
@@ -229,8 +279,9 @@
       nodes: flattenStructureNodes(structure?.nodes).map(node => [
         node.sectionId, node.parentSectionId, node.title, node.level, node.order
       ]),
-      paragraphs: (structure?.paragraphs || []).map(item => [
-        item.paragraphId, item.sectionId, hash(item.text)
+      typedRecords: (structure?.typedRecords || structure?.paragraphs || []).map(item => [
+        item.paragraphId, item.sectionId, item.recordType || 'body',
+        item.textHash || hash(item.text)
       ])
     });
   }

@@ -19,8 +19,18 @@ test('repository contains the complete AGPL release documentation', () => {
   assert.match(read('LICENSE'), /GNU AFFERO GENERAL PUBLIC LICENSE/);
   assert.match(read('LICENSE'), /Version 3, 19 November 2007/);
   assert.match(read('OPEN_SOURCE.md'), /Corresponding source/);
-  assert.match(read('THIRD_PARTY_NOTICES.md'), /Phosphor Icons/);
-  assert.match(read('THIRD_PARTY_NOTICES.md'), /no source code from `yilewang\/llm-for-zotero`/);
+  const notices = read('THIRD_PARTY_NOTICES.md');
+  assert.match(notices, /Phosphor Icons/);
+  assert.match(notices, /yilewang\/llm-for-zotero/);
+  assert.match(notices, /f8dbbd863b021368c07efe0f61c67f3503d79bc9/);
+  assert.match(notices, /Yile Wang/);
+  assert.match(notices, /AGPL-3\.0-or-later/);
+  for (const filename of [
+    'core/article-chat-tokenizer.js',
+    'core/article-chat-citations.js',
+    'core/article-chat-stream.js',
+    'core/article-chat-queue.js'
+  ]) assert.match(notices, new RegExp(filename.replace(/[./]/g, '\\$&')));
 });
 
 test('unpacked build carries license, notices, and source instructions', () => {

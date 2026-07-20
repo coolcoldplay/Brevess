@@ -100,6 +100,68 @@ test('does not increment revision for an unchanged structure', () => {
   assert.equal(reconcileArticleStructure(first, same).revision, first.revision);
 });
 
+test('preserves paragraph identity across harmless DOM source-key and selector changes', () => {
+  const first = buildArticleStructure(input([
+    { sourceKey: 'h-results', title: 'Results', level: 2, order: 1 }
+  ], [{
+    sourceKey: 'desktop-wrapper-p1', sourceIdentity: 'results-p1',
+    headingSourceKey: 'h-results', text: 'Stable evidence.',
+    textHash: 'stable-hash', dataSelector: '.desktop > p', order: 2
+  }]));
+  const reflowed = buildArticleStructure(input([
+    { sourceKey: 'h-results', title: 'Results', level: 2, order: 1 }
+  ], [{
+    sourceKey: 'mobile-wrapper-p9', sourceIdentity: 'results-p1',
+    headingSourceKey: 'h-results', text: 'Stable evidence.',
+    textHash: 'stable-hash', dataSelector: '.mobile > div > p', order: 2
+  }]));
+  const reconciled = reconcileArticleStructure(first, reflowed);
+
+  assert.equal(reconciled.paragraphs[0].paragraphId, first.paragraphs[0].paragraphId);
+  assert.equal(reconciled.paragraphs[0].textHash, 'stable-hash');
+  assert.equal(reconciled.revision, first.revision);
+  assert.equal(structureSignature(reconciled), structureSignature(first));
+});
+
+test('keeps identical sentences in different real sections as distinct paragraphs', () => {
+  const sentence = 'No adverse events were observed.';
+  const structure = buildArticleStructure(input([
+    { sourceKey: 'h-results', title: 'Results', level: 2, order: 1 },
+    { sourceKey: 'h-discussion', title: 'Discussion', level: 2, order: 3 }
+  ], [
+    { sourceKey: 'result-p1', sourceIdentity: 'result-p1', headingSourceKey: 'h-results', text: sentence, textHash: 'same', order: 2 },
+    { sourceKey: 'discussion-p1', sourceIdentity: 'discussion-p1', headingSourceKey: 'h-discussion', text: sentence, textHash: 'same', order: 4 }
+  ]));
+
+  assert.equal(structure.paragraphs.length, 2);
+  assert.notEqual(structure.paragraphs[0].paragraphId, structure.paragraphs[1].paragraphId);
+});
+
+test('exposes typed records and body-only diagnostics while signatures include captions and references', () => {
+  const baseInput = input([
+    { sourceKey: 'h-results', title: 'Results', level: 2, order: 1 }
+  ], [
+    { sourceKey: 'p1', headingSourceKey: 'h-results', text: 'Body result.', recordType: 'body', textHash: 'body', order: 2 },
+    { sourceKey: 'fig1', headingSourceKey: 'h-results', text: 'Figure 1. Result.', recordType: 'figure-caption', textHash: 'fig-a', order: 3 },
+    { sourceKey: 'ref1', headingSourceKey: '', sectionTitle: 'References', text: 'Smith 2020.', recordType: 'reference', textHash: 'ref', order: 4 }
+  ]);
+  const first = buildArticleStructure(baseInput);
+  const changedCaption = buildArticleStructure({
+    ...baseInput,
+    paragraphs: baseInput.paragraphs.map(item => item.sourceKey === 'fig1'
+      ? { ...item, text: 'Figure 1. Changed result.', textHash: 'fig-b' }
+      : item)
+  });
+
+  assert.equal(first.paragraphs.length, 1);
+  assert.equal(first.typedRecords.length, 3);
+  assert.equal(first.diagnostics.paragraphCount, 1);
+  assert.equal(first.diagnostics.bodyParagraphCount, 1);
+  assert.equal(first.diagnostics.figureCaptionCount, 1);
+  assert.equal(first.diagnostics.referenceCount, 1);
+  assert.notEqual(structureSignature(first), structureSignature(changedCaption));
+});
+
 test('resolves a workspace paragraph by id first and source key as a fallback', () => {
   const structure = buildArticleStructure(input([
     { sourceKey: 'h-results', title: 'Results', level: 2, order: 1 }

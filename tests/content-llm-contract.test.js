@@ -98,15 +98,17 @@ test('content records bounded extraction traces and exports diagnostics without 
   assert.doesNotMatch(handler, /extractArticleWithTrace|diagnoseArticleWithTrace|SciLLM\.extractArticle/);
 });
 
-test('one activation reuses a bounded DOM extraction for document, annotations, and structure', () => {
+test('one canonical snapshot is reused by navigation, chat, archive, and paragraph counts', () => {
   const script = read('content.js');
   const extractor = read('core/article-extractor.js');
-  assert.match(script, /ARTICLE_EXTRACTION_CACHE_TTL_MS/);
-  assert.match(script, /getCachedArticleExtraction/);
+  assert.match(script, /canonicalArticleSnapshotCache/);
+  assert.match(script, /function getCanonicalArticleSnapshot\(/);
+  assert.match(script, /documentHash[\s\S]*revision/);
   assert.match(script, /buildArticleStructureFromRecords/);
-  assert.match(script, /strategy:\s*cacheHit \? 'cached-records' : 'canonical-records'/);
-  assert.match(script, /articleExtractionCache\s*=\s*\{[\s\S]*?paragraphs:\s*records/);
-  assert.match(script, /!forceRefresh\s*&&\s*currentArticleStructure/);
+  assert.match(script, /canonicalArticleSnapshotCache\s*=\s*\{[\s\S]*?snapshot/);
+  assert.match(script, /bodyParagraphCount/);
+  assert.match(script, /archiveParagraphCount/);
+  assert.match(script, /chatParagraphCount/);
   assert.match(extractor, /function buildArticleStructureFromRecords/);
 });
 

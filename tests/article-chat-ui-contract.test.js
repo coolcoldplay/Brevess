@@ -26,7 +26,9 @@ test('content sends canonical workspace paragraphs and persists only public chat
     content.indexOf('function publicArticleChatMessage'),
     content.indexOf('function clearArticleChat')
   );
-  assert.match(chat, /extractCurrentArticleStructure\(\{ forceRefresh: true \}\)/);
+  assert.match(chat, /getCanonicalArticleSnapshot\(\)/);
+  assert.match(chat, /snapshot\.paragraphs/);
+  assert.doesNotMatch(chat, /forceRefresh:\s*true/);
   assert.match(chat, /sourceKey: String\(item\?\.sourceKey/);
   assert.match(chat, /type: 'LLM_ASK_ARTICLE'/);
   assert.match(chat, /profileId: normalizedProfileId/);
