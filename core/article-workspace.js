@@ -4,6 +4,8 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const ARTICLE_WORKSPACE_SCHEMA_VERSION = 1;
+  const WORKSPACE_MANIFEST_KIND = 'sci-logic-highlighter-workspace';
+  const WORKSPACE_INDEX_KIND = 'sci-logic-highlighter-workspace-index';
   const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
   const CREDENTIAL_KEY = /(?:api.?key|authorization|credential|secret|access.?token|refresh.?token|password|bearer|custom.?headers?)/iu;
 
@@ -160,14 +162,235 @@
     };
   }
 
+  function validateNonNegativeInteger(value, code) {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < 0) fail(code);
+    return number;
+  }
+
+  function normalizeAliases(value) {
+    const aliases = [];
+    for (const alias of Array.isArray(value) ? value : []) {
+      if (!isPlainObject(alias) || !['doi', 'site'].includes(alias.type)) continue;
+      const normalized = alias.type === 'doi'
+        ? normalizeDoi(alias.value) : normalizeSiteId(alias.value);
+      if (normalized && !aliases.some(item => item.type === alias.type && item.value === normalized)) {
+        aliases.push({ type: alias.type, value: normalized });
+      }
+    }
+    return aliases;
+  }
+
+  function normalizeManifestAsset(input) {
+    if (!isPlainObject(input)) fail('INVALID_WORKSPACE_MANIFEST_ASSET');
+    return {
+      path: normalizeWorkspaceRelativePath(input.path),
+      type: input.type === 'text' ? 'text' : 'json',
+      revision: validateNonNegativeInteger(input.revision ?? 0, 'INVALID_WORKSPACE_ASSET_REVISION'),
+      contentHash: normalizeText(input.contentHash, 300),
+      updatedAt: normalizeText(input.updatedAt, 80)
+    };
+  }
+
+  function normalizeManifest(input) {
+    if (!isPlainObject(input) || input.schemaVersion !== ARTICLE_WORKSPACE_SCHEMA_VERSION ||
+        input.kind !== WORKSPACE_MANIFEST_KIND) fail('INVALID_WORKSPACE_MANIFEST');
+    assertWorkspaceSafeValue(input);
+    const id = `workspace:${workspaceHash(input.workspaceId)}`;
+    const directoryName = normalizeText(input.directoryName, 180);
+    const suffix = directoryName.split('--').at(-1)?.toLocaleLowerCase('en-US') || '';
+    if (!directoryName || suffix.length < 12 || !workspaceHash(id).startsWith(suffix)) {
+      fail('INVALID_WORKSPACE_DIRECTORY');
+    }
+    const contentHash = String(input.contentHash || input.contentRevision || '')
+      .replace(/^sha256:/iu, '').toLocaleLowerCase('en-US');
+    if (!/^[a-f0-9]{64}$/u.test(contentHash)) fail('INVALID_CONTENT_HASH');
+    const assets = (Array.isArray(input.assets) ? input.assets : []).map(normalizeManifestAsset)
+      .sort((first, second) => first.path.localeCompare(second.path));
+    if (new Set(assets.map(asset => asset.path)).size !== assets.length) {
+      fail('DUPLICATE_WORKSPACE_ASSET');
+    }
+    return {
+      schemaVersion: ARTICLE_WORKSPACE_SCHEMA_VERSION,
+      kind: WORKSPACE_MANIFEST_KIND,
+      workspaceId: id,
+      directoryName,
+      canonicalUrl: normalizeWorkspaceCanonicalUrl(input.canonicalUrl),
+      aliases: normalizeAliases(input.aliases),
+      title: normalizeText(input.title, 1000),
+      contentHash,
+      revision: validateNonNegativeInteger(input.revision, 'INVALID_WORKSPACE_MANIFEST_REVISION'),
+      workspaceGeneration: validateNonNegativeInteger(
+        input.workspaceGeneration ?? 1, 'INVALID_WORKSPACE_GENERATION'
+      ),
+      createdAt: normalizeText(input.createdAt, 80),
+      updatedAt: normalizeText(input.updatedAt, 80),
+      assets
+    };
+  }
+
+  function createWorkspaceManifest(workspace, assets = []) {
+    if (!isPlainObject(workspace)) fail('INVALID_WORKSPACE');
+    return normalizeManifest({
+      schemaVersion: ARTICLE_WORKSPACE_SCHEMA_VERSION,
+      kind: WORKSPACE_MANIFEST_KIND,
+      workspaceId: workspace.workspaceId,
+      directoryName: workspace.directoryName,
+      canonicalUrl: workspace.canonicalUrl,
+      aliases: workspace.aliases,
+      title: workspace.title,
+      contentHash: workspace.contentHash || workspace.revision,
+      revision: Number.isSafeInteger(workspace.storageRevision)
+        ? workspace.storageRevision : 1,
+      workspaceGeneration: Number.isSafeInteger(workspace.workspaceGeneration)
+        ? workspace.workspaceGeneration : 1,
+      createdAt: workspace.createdAt || '',
+      updatedAt: workspace.updatedAt || '',
+      assets
+    });
+  }
+
+  function validateWorkspaceManifest(input) {
+    return normalizeManifest(input);
+  }
+
+  function manifestIndexEntry(manifestInput) {
+    const manifest = validateWorkspaceManifest(manifestInput);
+    return {
+      workspaceId: manifest.workspaceId,
+      directoryName: manifest.directoryName,
+      manifestPath: `workspaces/${manifest.directoryName}/manifest.json`,
+      canonicalUrl: manifest.canonicalUrl,
+      aliases: manifest.aliases,
+      title: manifest.title,
+      contentHash: manifest.contentHash,
+      revision: manifest.revision,
+      workspaceGeneration: manifest.workspaceGeneration,
+      createdAt: manifest.createdAt,
+      updatedAt: manifest.updatedAt,
+      assetCount: manifest.assets.length
+    };
+  }
+
+  function createWorkspaceIndex(manifests, input = {}) {
+    const entries = (Array.isArray(manifests) ? manifests : []).map(manifestIndexEntry)
+      .sort((first, second) => first.workspaceId.localeCompare(second.workspaceId));
+    if (new Set(entries.map(entry => entry.workspaceId)).size !== entries.length) {
+      fail('DUPLICATE_WORKSPACE_INDEX_ENTRY');
+    }
+    return {
+      schemaVersion: ARTICLE_WORKSPACE_SCHEMA_VERSION,
+      kind: WORKSPACE_INDEX_KIND,
+      revision: Number.isSafeInteger(input.revision)
+        ? input.revision : Math.max(0, ...entries.map(entry => entry.revision)),
+      updatedAt: normalizeText(input.updatedAt ||
+        entries.map(entry => entry.updatedAt).filter(Boolean).sort().at(-1), 80),
+      workspaces: entries
+    };
+  }
+
+  function validateWorkspaceIndex(input) {
+    if (!isPlainObject(input) || input.schemaVersion !== ARTICLE_WORKSPACE_SCHEMA_VERSION ||
+        input.kind !== WORKSPACE_INDEX_KIND || !Array.isArray(input.workspaces)) {
+      fail('INVALID_WORKSPACE_INDEX');
+    }
+    assertWorkspaceSafeValue(input);
+    const workspaces = input.workspaces.map(entry => {
+      if (!isPlainObject(entry)) fail('INVALID_WORKSPACE_INDEX_ENTRY');
+      const manifest = normalizeManifest({
+        schemaVersion: ARTICLE_WORKSPACE_SCHEMA_VERSION,
+        kind: WORKSPACE_MANIFEST_KIND,
+        ...entry,
+        assets: []
+      });
+      const expectedPath = `workspaces/${manifest.directoryName}/manifest.json`;
+      const manifestPath = normalizeWorkspaceRelativePath(entry.manifestPath);
+      if (manifestPath !== expectedPath) fail('INVALID_WORKSPACE_INDEX_ENTRY');
+      return {
+        workspaceId: manifest.workspaceId,
+        directoryName: manifest.directoryName,
+        manifestPath,
+        canonicalUrl: manifest.canonicalUrl,
+        aliases: manifest.aliases,
+        title: manifest.title,
+        contentHash: manifest.contentHash,
+        revision: manifest.revision,
+        workspaceGeneration: manifest.workspaceGeneration,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+        assetCount: validateNonNegativeInteger(
+          entry.assetCount ?? 0, 'INVALID_WORKSPACE_INDEX_ENTRY'
+        )
+      };
+    }).sort((first, second) => first.workspaceId.localeCompare(second.workspaceId));
+    if (new Set(workspaces.map(entry => entry.workspaceId)).size !== workspaces.length) {
+      fail('DUPLICATE_WORKSPACE_INDEX_ENTRY');
+    }
+    return {
+      schemaVersion: ARTICLE_WORKSPACE_SCHEMA_VERSION,
+      kind: WORKSPACE_INDEX_KIND,
+      revision: validateNonNegativeInteger(input.revision, 'INVALID_WORKSPACE_INDEX_REVISION'),
+      updatedAt: normalizeText(input.updatedAt, 80),
+      workspaces
+    };
+  }
+
+  function queryAliases(identity) {
+    const aliases = normalizeAliases(identity?.aliases);
+    const doi = normalizeDoi(identity?.doi, identity?.canonicalUrl || identity?.url);
+    const site = normalizeSiteId(identity?.siteId || identity?.publisherId || identity?.pii);
+    if (doi && !aliases.some(item => item.type === 'doi' && item.value === doi)) {
+      aliases.push({ type: 'doi', value: doi });
+    }
+    if (site && !aliases.some(item => item.type === 'site' && item.value === site)) {
+      aliases.push({ type: 'site', value: site });
+    }
+    return aliases;
+  }
+
+  function matchWorkspaceManifests(identity, manifestInputs) {
+    if (!isPlainObject(identity)) return [];
+    let canonicalUrl = '';
+    try { canonicalUrl = normalizeWorkspaceCanonicalUrl(identity.canonicalUrl || identity.url); } catch (_) {}
+    const aliases = queryAliases(identity);
+    const id = /^workspace:[a-f0-9]{64}$/iu.test(String(identity.workspaceId || ''))
+      ? String(identity.workspaceId).toLocaleLowerCase('en-US') : '';
+    if (!canonicalUrl && !aliases.length && !id) return [];
+    const contentHash = String(identity.contentHash || identity.documentHash || '')
+      .replace(/^sha256:/iu, '').toLocaleLowerCase('en-US');
+    return (Array.isArray(manifestInputs) ? manifestInputs : []).flatMap(input => {
+      let manifest;
+      try { manifest = validateWorkspaceManifest(input); } catch (_) { return []; }
+      const identityMatches = (id && manifest.workspaceId === id) ||
+        (canonicalUrl && manifest.canonicalUrl === canonicalUrl) ||
+        aliases.some(alias => manifest.aliases.some(candidate =>
+          candidate.type === alias.type && candidate.value === alias.value));
+      if (!identityMatches) return [];
+      return [{
+        match: contentHash && contentHash !== manifest.contentHash ? 'content-changed' : 'exact',
+        manifest
+      }];
+    }).sort((first, second) => {
+      if (first.match !== second.match) return first.match === 'exact' ? -1 : 1;
+      return String(second.manifest.updatedAt).localeCompare(String(first.manifest.updatedAt));
+    });
+  }
+
   return {
     ARTICLE_WORKSPACE_SCHEMA_VERSION,
+    WORKSPACE_MANIFEST_KIND,
+    WORKSPACE_INDEX_KIND,
     normalizeWorkspaceCanonicalUrl,
     normalizeWorkspaceRelativePath,
     normalizeWorkspaceDoi: normalizeDoi,
     normalizeWorkspaceSiteId: normalizeSiteId,
     assertWorkspaceSafeValue,
     createWorkspaceDirectoryName,
-    createArticleWorkspaceIdentity
+    createArticleWorkspaceIdentity,
+    createWorkspaceManifest,
+    validateWorkspaceManifest,
+    createWorkspaceIndex,
+    validateWorkspaceIndex,
+    matchWorkspaceManifests
   };
 });

@@ -10,6 +10,8 @@
   const DIRECTORY_HANDLE_STORE_NAME = 'directoryHandles';
   const SYNC_QUEUE_STORE_NAME = 'syncQueue';
   const ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
+  const WORKSPACE_INDEX_PATH = 'workspace-index.json';
+  const WORKSPACE_ROOT_PATH = 'workspaces';
   const HANDLE_KEY = 'selected-directory';
   const META_KEY = 'meta';
   const MAX_ERROR_LENGTH = 240;
@@ -386,6 +388,51 @@
     }
   }
 
+  function workspaceManifest(input, assets) {
+    if (typeof shared.validateWorkspaceManifest !== 'function' ||
+        typeof shared.createWorkspaceManifest !== 'function') {
+      fail('WORKSPACE_SCHEMA_UNAVAILABLE');
+    }
+    if (input?.kind === shared.WORKSPACE_MANIFEST_KIND) {
+      return shared.validateWorkspaceManifest(input);
+    }
+    return shared.createWorkspaceManifest(input, assets || []);
+  }
+
+  function workspaceDirectory(input) {
+    const manifest = workspaceManifest(input);
+    return {
+      manifest,
+      rootPath: `${WORKSPACE_ROOT_PATH}/${manifest.directoryName}`,
+      manifestPath: `${WORKSPACE_ROOT_PATH}/${manifest.directoryName}/manifest.json`
+    };
+  }
+
+  function workspaceAssetPath(input, relativePath) {
+    const location = workspaceDirectory(input);
+    const assetPath = shared.normalizeWorkspaceRelativePath(relativePath);
+    if (assetPath === 'manifest.json') fail('INVALID_WORKSPACE_ASSET_PATH');
+    return { ...location, assetPath, fullPath: `${location.rootPath}/${assetPath}` };
+  }
+
+  function workspaceIndexWithManifest(indexInput, manifestInput, revision) {
+    const manifest = shared.validateWorkspaceManifest(manifestInput);
+    const current = indexInput && Array.isArray(indexInput.workspaces)
+      ? shared.validateWorkspaceIndex(indexInput)
+      : shared.createWorkspaceIndex([]);
+    const entry = shared.createWorkspaceIndex([manifest]).workspaces[0];
+    const workspaces = current.workspaces.filter(item => item.workspaceId !== manifest.workspaceId);
+    workspaces.push(entry);
+    workspaces.sort((first, second) => first.workspaceId.localeCompare(second.workspaceId));
+    return shared.validateWorkspaceIndex({
+      schemaVersion: 1,
+      kind: shared.WORKSPACE_INDEX_KIND,
+      revision: Math.max(Number(current.revision || 0) + 1, Number(revision || 0)),
+      updatedAt: manifest.updatedAt || new Date().toISOString(),
+      workspaces
+    });
+  }
+
   function validIndex(value) {
     if (!isPlainObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.assets)) {
       fail('INVALID_INDEX');
@@ -399,6 +446,8 @@
         const allowed = path === 'categories.json' ||
           /^annotations\/[^/]+\.json$/u.test(path) ||
           /^articles\/[a-f0-9]{8}\.json$/u.test(path) ||
+          path === WORKSPACE_INDEX_PATH ||
+          /^workspaces\/[^/]+\/.+/u.test(path) ||
           path === 'corpus/feedback.jsonl';
         if (!allowed) fail('INVALID_INDEX_ASSET');
         assets.push({
@@ -475,6 +524,167 @@
         sourceId,
         contentHash: contentHash(content)
       });
+    }
+
+    async function enqueueWorkspaceJson(relativePath, input) {
+      const path = normalizeRelativePath(relativePath);
+      if (typeof shared.assertWorkspaceSafeValue !== 'function') {
+        fail('WORKSPACE_SCHEMA_UNAVAILABLE');
+      }
+      shared.assertWorkspaceSafeValue(input);
+      const value = cloneJsonLike(input);
+      validateJsonAsset(value);
+      const content = `${JSON.stringify(stableValue(value), null, 2)}\n`;
+      return queueStore.put({
+        relativePath: path,
+        type: 'json',
+        content,
+        revision: value.revision,
+        sourceId: String(value.sourceId || sourceId),
+        contentHash: contentHash(stableStringify(value))
+      });
+    }
+
+    async function readQueuedOrDiskJson(relativePath) {
+      const queued = await queueStore.get(relativePath);
+      if (queued?.content) {
+        try { return JSON.parse(queued.content); } catch (_) { fail('INVALID_JSON_ASSET'); }
+      }
+      const handle = await handleStore.load();
+      if (!handle || await permissionState(handle) !== 'granted') return null;
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') return null;
+        throw error;
+      }
+      const content = await readText(root, relativePath);
+      if (content === null) return null;
+      try { return JSON.parse(content); } catch (_) { fail('INVALID_JSON_ASSET'); }
+    }
+
+    async function enqueueWorkspaceAsset(workspaceInput, relativePath, input, metadata = {}) {
+      const location = workspaceAssetPath(workspaceInput, relativePath);
+      const baseManifest = location.manifest;
+      if (baseManifest.workspaceGeneration !== (metadata.workspaceGeneration ??
+          baseManifest.workspaceGeneration)) fail('WORKSPACE_GENERATION_CONFLICT');
+      if (typeof shared.assertWorkspaceSafeValue !== 'function') {
+        fail('WORKSPACE_SCHEMA_UNAVAILABLE');
+      }
+      shared.assertWorkspaceSafeValue(input);
+      const revision = validateRevision(metadata.revision ?? Date.now());
+      const timestamp = String(metadata.updatedAt || new Date().toISOString());
+      const data = cloneJsonLike(input);
+      const dataHash = String(metadata.contentHash || contentHash(stableStringify(data)));
+      const envelope = {
+        schemaVersion: 1,
+        kind: 'sci-logic-highlighter-workspace-asset',
+        revision,
+        updatedAt: timestamp,
+        contentHash: dataHash,
+        sourceId: String(metadata.sourceId || sourceId),
+        workspaceId: baseManifest.workspaceId,
+        workspaceGeneration: baseManifest.workspaceGeneration,
+        relativePath: location.assetPath,
+        data
+      };
+      const assetQueued = await enqueueWorkspaceJson(location.fullPath, envelope);
+
+      let existingManifest = null;
+      const manifestValue = await readQueuedOrDiskJson(location.manifestPath);
+      if (manifestValue) existingManifest = shared.validateWorkspaceManifest(manifestValue);
+      if (existingManifest && (existingManifest.workspaceId !== baseManifest.workspaceId ||
+          existingManifest.workspaceGeneration !== baseManifest.workspaceGeneration)) {
+        fail('WORKSPACE_MANIFEST_CONFLICT');
+      }
+      const assets = (existingManifest?.assets || baseManifest.assets)
+        .filter(asset => asset.path !== location.assetPath);
+      assets.push({
+        path: location.assetPath,
+        type: 'json',
+        revision,
+        contentHash: dataHash,
+        updatedAt: timestamp
+      });
+      const manifestRevision = Math.max(
+        Number(existingManifest?.revision || 0) + 1,
+        Number(baseManifest.revision || 0), revision
+      );
+      const manifest = shared.createWorkspaceManifest({
+        ...(existingManifest || baseManifest),
+        ...baseManifest,
+        storageRevision: manifestRevision,
+        updatedAt: timestamp
+      }, assets);
+      const manifestQueued = await enqueueWorkspaceJson(location.manifestPath, manifest);
+
+      const indexValue = await readQueuedOrDiskJson(WORKSPACE_INDEX_PATH);
+      let index = null;
+      if (indexValue) index = shared.validateWorkspaceIndex(indexValue);
+      const workspaceIndex = workspaceIndexWithManifest(index, manifest, manifestRevision);
+      const indexQueued = await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH, workspaceIndex);
+      return {
+        queued: true,
+        relativePath: location.fullPath,
+        manifestPath: location.manifestPath,
+        revision,
+        queueRevisions: [
+          assetQueued.queueRevision, manifestQueued.queueRevision, indexQueued.queueRevision
+        ]
+      };
+    }
+
+    async function readWorkspaceAsset(workspaceInput, relativePath) {
+      const location = workspaceAssetPath(workspaceInput, relativePath);
+      const result = await readJson(location.fullPath);
+      if (!result.found) return result;
+      const value = result.value;
+      if (value.kind !== 'sci-logic-highlighter-workspace-asset' ||
+          value.workspaceId !== location.manifest.workspaceId ||
+          value.relativePath !== location.assetPath ||
+          value.workspaceGeneration !== location.manifest.workspaceGeneration) {
+        fail('WORKSPACE_ASSET_IDENTITY_MISMATCH');
+      }
+      return result;
+    }
+
+    async function loadWorkspaceIndexForRead(root) {
+      const content = await readText(root, WORKSPACE_INDEX_PATH);
+      if (content === null) return shared.createWorkspaceIndex([]);
+      try { return shared.validateWorkspaceIndex(JSON.parse(content)); } catch (_) {
+        fail('INVALID_WORKSPACE_INDEX');
+      }
+    }
+
+    async function listWorkspaceManifests(identity = {}) {
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, manifests: [], matches: [] };
+      }
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') return { permission, manifests: [], matches: [] };
+        throw error;
+      }
+      const index = await loadWorkspaceIndexForRead(root);
+      const manifests = [];
+      let invalidManifests = 0;
+      for (const entry of index.workspaces) {
+        const content = await readText(root, entry.manifestPath);
+        try {
+          const manifest = shared.validateWorkspaceManifest(JSON.parse(content || ''));
+          if (manifest.workspaceId !== entry.workspaceId) fail('WORKSPACE_INDEX_IDENTITY_MISMATCH');
+          manifests.push(manifest);
+        } catch (_) {
+          invalidManifests += 1;
+        }
+      }
+      return {
+        permission,
+        manifests,
+        matches: shared.matchWorkspaceManifests(identity, manifests),
+        invalidManifests
+      };
     }
 
     async function status() {
@@ -602,6 +812,8 @@
       const items = await queueStore.getAll();
       for (const item of items) {
         try {
+          const latestQueued = await queueStore.get(item.relativePath);
+          if (!latestQueued || latestQueued.queueRevision !== item.queueRevision) continue;
           const existingContent = await readText(root, item.relativePath);
           if (item.type === 'json' && existingContent) {
             const existing = parseValidJson(existingContent);
@@ -630,6 +842,45 @@
                 await writeText(root, conflictPath, item.content);
                 await recordConflict(item, conflictPath);
                 result.conflicts += 1;
+                const match = /^workspaces\/([^/]+)\/(?!manifest\.json$).+/u
+                  .exec(item.relativePath);
+                if (match) {
+                  const pendingManifest = await queueStore.get(
+                    `workspaces/${match[1]}/manifest.json`
+                  );
+                  if (pendingManifest?.content) {
+                    try {
+                      const manifest = shared.validateWorkspaceManifest(
+                        JSON.parse(pendingManifest.content)
+                      );
+                      await queueStore.remove(pendingManifest.relativePath,
+                        pendingManifest.queueRevision);
+                      const pendingWorkspaceIndex = await queueStore.get(WORKSPACE_INDEX_PATH);
+                      if (pendingWorkspaceIndex?.content) {
+                        const queuedIndex = shared.validateWorkspaceIndex(
+                          JSON.parse(pendingWorkspaceIndex.content)
+                        );
+                        const diskIndexContent = await readText(root, WORKSPACE_INDEX_PATH);
+                        const diskIndex = diskIndexContent
+                          ? shared.validateWorkspaceIndex(JSON.parse(diskIndexContent)) : null;
+                        const primaryEntry = diskIndex?.workspaces.find(entry =>
+                          entry.workspaceId === manifest.workspaceId);
+                        const entries = queuedIndex.workspaces.filter(entry =>
+                          entry.workspaceId !== manifest.workspaceId);
+                        if (primaryEntry) entries.push(primaryEntry);
+                        const corrected = shared.validateWorkspaceIndex({
+                          ...queuedIndex,
+                          revision: queuedIndex.revision + 1,
+                          updatedAt: new Date().toISOString(),
+                          workspaces: entries
+                        });
+                        await queueStore.remove(WORKSPACE_INDEX_PATH,
+                          pendingWorkspaceIndex.queueRevision);
+                        await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH, corrected);
+                      }
+                    } catch (_) {}
+                  }
+                }
               }
               index = indexWithAsset(index, {
                 ...item,
@@ -743,6 +994,133 @@
       return result;
     }
 
+    async function rebuildWorkspaceIndex() {
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, workspaceCount: 0, quarantined: 0, invalidManifests: 0 };
+      }
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          return { permission, workspaceCount: 0, quarantined: 0, invalidManifests: 0 };
+        }
+        throw error;
+      }
+      let workspacesDirectory;
+      try {
+        workspacesDirectory = await root.getDirectoryHandle(WORKSPACE_ROOT_PATH, { create: false });
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error;
+      }
+      const manifests = [];
+      let quarantined = 0;
+      if (workspacesDirectory && typeof workspacesDirectory.entries === 'function') {
+        for await (const [directoryName, entry] of workspacesDirectory.entries()) {
+          if (entry?.kind && entry.kind !== 'directory') continue;
+          const manifestPath = `${WORKSPACE_ROOT_PATH}/${directoryName}/manifest.json`;
+          const content = await readText(root, manifestPath);
+          if (content === null) continue;
+          try {
+            const manifest = shared.validateWorkspaceManifest(JSON.parse(content));
+            if (manifest.directoryName !== directoryName) fail('WORKSPACE_DIRECTORY_MISMATCH');
+            manifests.push(manifest);
+          } catch (_) {
+            const safeName = String(directoryName).replace(/[^a-z0-9._-]/giu, '_').slice(0, 120);
+            await writeText(root,
+              `conflicts/quarantine/${safeName || 'unknown'}.manifest.invalid.json`,
+              content.slice(0, 2 * 1024 * 1024));
+            quarantined += 1;
+          }
+        }
+      }
+      const previousContent = await readText(root, WORKSPACE_INDEX_PATH);
+      let previousRevision = 0;
+      if (previousContent) {
+        try { previousRevision = shared.validateWorkspaceIndex(JSON.parse(previousContent)).revision; }
+        catch (_) {}
+      }
+      const index = shared.createWorkspaceIndex(manifests, {
+        revision: previousRevision + 1,
+        updatedAt: new Date().toISOString()
+      });
+      await writeText(root, WORKSPACE_INDEX_PATH, `${JSON.stringify(index, null, 2)}\n`);
+      return {
+        permission,
+        workspaceCount: manifests.length,
+        quarantined,
+        invalidManifests: quarantined,
+        indexRevision: index.revision
+      };
+    }
+
+    async function cancelWorkspaceQueue(workspaceInput) {
+      const location = workspaceDirectory(workspaceInput);
+      const prefix = `${location.rootPath}/`;
+      const pending = await queueStore.getAll();
+      const pendingIndex = pending.find(item => item.relativePath === WORKSPACE_INDEX_PATH);
+      let cancelled = 0;
+      for (const item of pending) {
+        if (!item.relativePath.startsWith(prefix)) continue;
+        if (await queueStore.remove(item.relativePath, item.queueRevision)) cancelled += 1;
+      }
+      if (pendingIndex) {
+        let index;
+        try { index = shared.validateWorkspaceIndex(JSON.parse(pendingIndex.content)); }
+        catch (_) { index = null; }
+        if (index) {
+          const workspaces = index.workspaces.filter(item =>
+            item.workspaceId !== location.manifest.workspaceId);
+          const next = shared.validateWorkspaceIndex({
+            ...index,
+            revision: index.revision + 1,
+            updatedAt: new Date().toISOString(),
+            workspaces
+          });
+          if (await queueStore.remove(WORKSPACE_INDEX_PATH, pendingIndex.queueRevision)) cancelled += 1;
+          await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH, next);
+        }
+      }
+      return { cancelled, workspaceId: location.manifest.workspaceId };
+    }
+
+    async function removeWorkspaceTree(workspaceInput) {
+      const location = workspaceDirectory(workspaceInput);
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, removed: false, pending: true };
+      }
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') return { permission, removed: true, missing: true };
+        throw error;
+      }
+      try {
+        const parent = await root.getDirectoryHandle(WORKSPACE_ROOT_PATH, { create: false });
+        await parent.removeEntry(location.manifest.directoryName, { recursive: true });
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error;
+      }
+      const content = await readText(root, WORKSPACE_INDEX_PATH);
+      if (content) {
+        try {
+          const current = shared.validateWorkspaceIndex(JSON.parse(content));
+          const next = shared.validateWorkspaceIndex({
+            ...current,
+            revision: current.revision + 1,
+            updatedAt: new Date().toISOString(),
+            workspaces: current.workspaces.filter(item =>
+              item.workspaceId !== location.manifest.workspaceId)
+          });
+          await writeText(root, WORKSPACE_INDEX_PATH, `${JSON.stringify(next, null, 2)}\n`);
+        } catch (_) {
+          await rebuildWorkspaceIndex();
+        }
+      }
+      return { permission, removed: true, workspaceId: location.manifest.workspaceId };
+    }
+
     async function exportBundle(bundleOverride) {
       const snapshot = bundleOverride === undefined
         ? await bundleExporter() : bundleOverride;
@@ -759,7 +1137,13 @@
       flush,
       status,
       readJson,
+      enqueueWorkspaceAsset,
+      readWorkspaceAsset,
+      listWorkspaceManifests,
       rebuildIndex,
+      rebuildWorkspaceIndex,
+      cancelWorkspaceQueue,
+      removeWorkspaceTree,
       exportBundle
     };
   }
@@ -769,6 +1153,7 @@
     USER_DATA_DATABASE_VERSION,
     DIRECTORY_HANDLE_STORE_NAME,
     SYNC_QUEUE_STORE_NAME,
+    WORKSPACE_INDEX_PATH,
     createMemoryDirectoryHandleStore,
     createMemorySyncQueue,
     createIndexedDbDirectoryHandleStore,

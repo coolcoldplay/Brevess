@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 
 require('../core/user-data-database.js');
 const {
+  createWorkspaceManifest,
+  validateWorkspaceIndex
+} = require('../core/article-workspace.js');
+const {
   USER_DATA_DATABASE_NAME,
   USER_DATA_DATABASE_VERSION,
   DIRECTORY_HANDLE_STORE_NAME,
@@ -63,6 +67,7 @@ function createFakeHandleStore(initialPermission = 'granted') {
   function directoryHandle(prefix, name) {
     return {
       name,
+      kind: 'directory',
       async queryPermission(options) {
         assert.deepEqual(options, { mode: 'readwrite' });
         return permission;
@@ -72,6 +77,27 @@ function createFakeHandleStore(initialPermission = 'granted') {
       },
       async getFileHandle(child) {
         return fileHandle(`${prefix}${child}`);
+      },
+      async *entries() {
+        const children = new Map();
+        for (const path of files.keys()) {
+          if (!path.startsWith(prefix)) continue;
+          const remainder = path.slice(prefix.length);
+          if (!remainder) continue;
+          const [child, ...rest] = remainder.split('/');
+          children.set(child, rest.length
+            ? directoryHandle(`${prefix}${child}/`, child)
+            : { ...fileHandle(`${prefix}${child}`), kind: 'file' });
+        }
+        yield* children.entries();
+      },
+      async removeEntry(child, options = {}) {
+        const target = `${prefix}${child}`;
+        const nestedPrefix = `${target}/`;
+        const nested = [...files.keys()].filter(path => path.startsWith(nestedPrefix));
+        if (nested.length && options.recursive !== true) throw new Error('Directory is not empty');
+        nested.forEach(path => files.delete(path));
+        files.delete(target);
       }
     };
   }
@@ -91,6 +117,22 @@ function createFakeHandleStore(initialPermission = 'granted') {
     writeText(path, value) { files.set(path, String(value)); },
     writes,
     reads
+  };
+}
+
+function workspaceFixture(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'a'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/paper',
+    aliases: [{ type: 'doi', value: '10.1000/example' }],
+    title: 'Example paper',
+    directoryName: `Example paper--${'a'.repeat(16)}`,
+    revision: '1'.repeat(64),
+    contentHash: '1'.repeat(64),
+    storageRevision: 1,
+    workspaceGeneration: 1,
+    ...overrides
   };
 }
 
@@ -582,4 +624,106 @@ test('v1 document data survives the v3 upgrade in both adapter opening orders', 
       'workspaceAssets', 'workspaceTurns', 'workspaceTombstones']
       .forEach(name => assert.equal(fake.stores.has(name), true));
   }
+});
+
+test('queues nested workspace assets before manifest and central index while permission is pending', async () => {
+  const handles = createFakeHandleStore('prompt');
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const workspace = workspaceFixture();
+
+  await sync.enqueueWorkspaceAsset(workspace, 'figures/figure-1/panel-questions/q-1.json', {
+    question: 'What changed?', answer: 'Signal increased.'
+  }, { revision: 1 });
+  assert.deepEqual((await queue.getAll()).map(item => item.relativePath), [
+    `workspaces/${workspace.directoryName}/figures/figure-1/panel-questions/q-1.json`,
+    `workspaces/${workspace.directoryName}/manifest.json`,
+    'workspace-index.json'
+  ]);
+  assert.equal((await sync.flush()).permission, 'prompt');
+  assert.equal((await queue.getAll()).length, 3);
+
+  handles.setPermission('granted');
+  const flushed = await sync.flush();
+  assert.equal(flushed.written, 3);
+  const assetPath = `SCI-Highlighter/workspaces/${workspace.directoryName}/figures/figure-1/panel-questions/q-1.json`;
+  const manifestPath = `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`;
+  assert.ok(handles.writes.indexOf(assetPath) < handles.writes.indexOf(manifestPath));
+  assert.ok(handles.writes.indexOf(manifestPath) < handles.writes.indexOf('SCI-Highlighter/workspace-index.json'));
+  const loaded = await sync.readWorkspaceAsset(workspace, 'figures/figure-1/panel-questions/q-1.json');
+  assert.equal(loaded.found, true);
+  assert.equal(loaded.value.data.answer, 'Signal increased.');
+});
+
+test('rebuilds a workspace index from manifests, quarantines malformed data, and matches exact identity only', async () => {
+  const handles = createFakeHandleStore();
+  const first = workspaceFixture();
+  const second = workspaceFixture({
+    workspaceId: `workspace:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/other',
+    aliases: [{ type: 'doi', value: '10.1000/other' }],
+    title: 'Same visible title',
+    directoryName: `Same visible title--${'b'.repeat(16)}`,
+    contentHash: '2'.repeat(64), revision: '2'.repeat(64)
+  });
+  handles.writeText(`SCI-Highlighter/workspaces/${first.directoryName}/manifest.json`,
+    `${JSON.stringify(createWorkspaceManifest(first))}\n`);
+  handles.writeText(`SCI-Highlighter/workspaces/${second.directoryName}/manifest.json`,
+    `${JSON.stringify(createWorkspaceManifest(second))}\n`);
+  handles.writeText('SCI-Highlighter/workspaces/Broken--cccccccccccccccc/manifest.json', '{bad json');
+  const sync = createDirectorySync({ handleStore: handles, queueStore: createMemorySyncQueue() });
+
+  const rebuilt = await sync.rebuildWorkspaceIndex();
+  assert.equal(rebuilt.workspaceCount, 2);
+  assert.equal(rebuilt.quarantined, 1);
+  assert.ok(handles.has('SCI-Highlighter/conflicts/quarantine/Broken--cccccccccccccccc.manifest.invalid.json'));
+  const index = validateWorkspaceIndex(JSON.parse(handles.readText('SCI-Highlighter/workspace-index.json')));
+  assert.equal(index.workspaces.length, 2);
+
+  const exactUrl = await sync.listWorkspaceManifests({
+    canonicalUrl: 'https://example.org/paper?tracking=1', contentHash: '1'.repeat(64)
+  });
+  assert.equal(exactUrl.matches[0].match, 'exact');
+  const exactDoi = await sync.listWorkspaceManifests({
+    doi: '10.1000/other', contentHash: '2'.repeat(64)
+  });
+  assert.equal(exactDoi.matches[0].manifest.workspaceId, second.workspaceId);
+  const changed = await sync.listWorkspaceManifests({
+    canonicalUrl: first.canonicalUrl, contentHash: '9'.repeat(64)
+  });
+  assert.equal(changed.matches[0].match, 'content-changed');
+  const titleOnly = await sync.listWorkspaceManifests({ title: 'Same visible title' });
+  assert.deepEqual(titleOnly.matches, []);
+});
+
+test('workspace conflicts remain divergent and deletion cancels its queue and removes only its tree', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = workspaceFixture();
+  const second = workspaceFixture({
+    workspaceId: `workspace:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/other',
+    directoryName: `Other--${'b'.repeat(16)}`,
+    contentHash: '2'.repeat(64), revision: '2'.repeat(64)
+  });
+  await sync.enqueueWorkspaceAsset(first, 'chat/turns/turn-1.json', { answer: 'first' }, { revision: 1 });
+  await sync.enqueueWorkspaceAsset(second, 'chat/turns/turn-1.json', { answer: 'other' }, { revision: 1 });
+  await sync.flush();
+  await sync.enqueueWorkspaceAsset(first, 'chat/turns/turn-1.json', { answer: 'divergent' }, { revision: 1 });
+  const conflict = await sync.flush();
+  assert.ok(conflict.conflicts >= 1);
+  assert.equal(JSON.parse(handles.readText(
+    `SCI-Highlighter/workspaces/${first.directoryName}/chat/turns/turn-1.json`
+  )).data.answer, 'first');
+
+  await sync.enqueueWorkspaceAsset(first, 'ui/state.json', { view: 'chat' }, { revision: 2 });
+  await sync.enqueueWorkspaceAsset(second, 'ui/state.json', { view: 'figure' }, { revision: 2 });
+  const cancelled = await sync.cancelWorkspaceQueue(first);
+  assert.ok(cancelled.cancelled >= 1);
+  assert.ok((await queue.getAll()).some(item => item.relativePath.includes(second.directoryName)));
+  const removed = await sync.removeWorkspaceTree(first);
+  assert.equal(removed.removed, true);
+  assert.equal(handles.has(`SCI-Highlighter/workspaces/${first.directoryName}/chat/turns/turn-1.json`), false);
+  assert.equal(handles.has(`SCI-Highlighter/workspaces/${second.directoryName}/chat/turns/turn-1.json`), true);
 });

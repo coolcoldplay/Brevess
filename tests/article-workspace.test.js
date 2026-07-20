@@ -6,7 +6,12 @@ const {
   normalizeWorkspaceRelativePath,
   createArticleWorkspaceIdentity,
   createWorkspaceDirectoryName,
-  assertWorkspaceSafeValue
+  assertWorkspaceSafeValue,
+  createWorkspaceManifest,
+  validateWorkspaceManifest,
+  createWorkspaceIndex,
+  validateWorkspaceIndex,
+  matchWorkspaceManifests
 } = require('../core/article-workspace.js');
 
 test('workspace identity uses normalized canonical URL, aliases, and content hash revision', async () => {
@@ -49,4 +54,29 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     /WORKSPACE_CONTAINS_CREDENTIALS/);
   assert.throws(() => assertWorkspaceSafeValue({ Authorization: 'Bearer secret' }),
     /WORKSPACE_CONTAINS_CREDENTIALS/);
+});
+
+test('workspace manifests expose only relative assets and exact identity matching ignores titles', async () => {
+  const workspace = await createArticleWorkspaceIdentity({
+    canonicalUrl: 'https://example.org/paper', doi: '10.1000/example',
+    contentHash: '1'.repeat(64), title: 'Shared title'
+  });
+  const manifest = createWorkspaceManifest(workspace, [{
+    path: 'chat/turns/turn-1.json', type: 'json', revision: 1,
+    contentHash: 'asset-1', updatedAt: '2026-07-20T01:00:00.000Z'
+  }]);
+  assert.deepEqual(validateWorkspaceManifest(manifest), manifest);
+  assert.throws(() => createWorkspaceManifest(workspace, [{
+    path: '../escape.json', revision: 1
+  }]), /INVALID_WORKSPACE_PATH/);
+  const index = createWorkspaceIndex([manifest]);
+  assert.deepEqual(validateWorkspaceIndex(index), index);
+
+  assert.equal(matchWorkspaceManifests({
+    canonicalUrl: workspace.canonicalUrl, contentHash: workspace.contentHash
+  }, [manifest])[0].match, 'exact');
+  assert.equal(matchWorkspaceManifests({
+    doi: '10.1000/example', contentHash: '2'.repeat(64)
+  }, [manifest])[0].match, 'content-changed');
+  assert.deepEqual(matchWorkspaceManifests({ title: 'Shared title' }, [manifest]), []);
 });

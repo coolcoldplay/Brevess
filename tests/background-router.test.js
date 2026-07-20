@@ -25,6 +25,7 @@ require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
 require('../core/cache-planner.js');
+require('../core/article-workspace.js');
 const {
   articleArchiveRelativePath,
   createArticleArchive
@@ -82,11 +83,13 @@ function createDirectorySyncDouble(options = {}) {
   const json = [];
   const text = [];
   const readPaths = [];
+  const workspaceAssets = [];
   const flushGate = options.flushGate || Promise.resolve({ permission: 'granted' });
   return {
     json,
     text,
     readPaths,
+    workspaceAssets,
     flushCalls: 0,
     async enqueueJson(path, value) {
       if (options.enqueueError) throw options.enqueueError;
@@ -121,6 +124,82 @@ function createDirectorySyncDouble(options = {}) {
     },
     async exportBundle(bundle) {
       return JSON.parse(JSON.stringify(bundle));
+    },
+    async enqueueWorkspaceAsset(workspace, path, value, metadata) {
+      workspaceAssets.push({ workspace, path, value, metadata });
+      return { queued: true, relativePath: `workspaces/${workspace.directoryName}/${path}` };
+    },
+    async readWorkspaceAsset(workspace, path) {
+      return options.readWorkspaceAsset?.(workspace, path) || {
+        permission: 'granted', found: false, value: null
+      };
+    },
+    async listWorkspaceManifests(identity) {
+      return options.listWorkspaceManifests?.(identity) || {
+        permission: 'granted', manifests: [], matches: []
+      };
+    },
+    async rebuildWorkspaceIndex() {
+      return options.rebuildWorkspaceIndex?.() || {
+        permission: 'granted', workspaceCount: 0, quarantined: 0
+      };
+    },
+    async cancelWorkspaceQueue(workspace) {
+      return options.cancelWorkspaceQueue?.(workspace) || { cancelled: 0 };
+    },
+    async removeWorkspaceTree(workspace) {
+      return options.removeWorkspaceTree?.(workspace) || { permission: 'granted', removed: true };
+    }
+  };
+}
+
+function createArticleWorkspaceStoreDouble() {
+  const workspaces = new Map();
+  const assets = new Map();
+  const turns = new Map();
+  const deletionGenerations = new Map();
+  return {
+    async ensureWorkspace(workspace) {
+      const saved = { ...workspace, storageRevision: workspace.storageRevision || 0 };
+      workspaces.set(saved.workspaceId, saved);
+      return structuredClone(saved);
+    },
+    async getWorkspace(id) { return structuredClone(workspaces.get(id) || null); },
+    async listWorkspaces() { return [...workspaces.values()].map(value => structuredClone(value)); },
+    async putAsset(id, path, content) {
+      const saved = { workspaceId: id, relativePath: path, content, revision: 1 };
+      assets.set(`${id}:${path}`, saved);
+      return structuredClone(saved);
+    },
+    async listAssets(id) {
+      return [...assets.values()].filter(item => item.workspaceId === id)
+        .map(value => structuredClone(value));
+    },
+    async appendTurn(id, turn) {
+      const saved = { ...turn, workspaceId: id, sequence: (turns.get(id)?.length || 0) + 1, revision: 1 };
+      turns.set(id, [...(turns.get(id) || []), saved]);
+      return structuredClone(saved);
+    },
+    async pageTurns(id) { return { items: structuredClone(turns.get(id) || []), hasMore: false }; },
+    async getStorageStatistics() {
+      return { workspaceCount: workspaces.size, assetCount: assets.size,
+        turnCount: [...turns.values()].flat().length, estimatedBytes: 123 };
+    },
+    async beginWorkspaceDeletion(id) {
+      const workspace = workspaces.get(id);
+      if (workspace) workspaces.set(id, { ...workspace, deletionPending: true });
+      deletionGenerations.set(id, Number(workspace?.workspaceGeneration || 1));
+      return { workspaceId: id, tombstoneId: 'workspace-delete-1', entityType: 'workspace' };
+    },
+    async finalizeWorkspaceDeletion(id) { workspaces.delete(id); return true; },
+    async getWorkspaceGenerationState(id) {
+      const workspace = workspaces.get(id);
+      return {
+        workspaceId: id,
+        activeGeneration: Number(workspace?.workspaceGeneration || 0),
+        deletionGeneration: Number(deletionGenerations.get(id) || 0),
+        deletionPending: Boolean(workspace?.deletionPending)
+      };
     }
   };
 }
@@ -156,6 +235,13 @@ test('registers only the one-type study selection message in the service worker'
     'ANNOTATION_DELETE', 'ANNOTATION_CLEAR_DOCUMENT']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   ['ARTICLE_ARCHIVE_PROBE', 'ARTICLE_ARCHIVE_SAVE', 'ARTICLE_ARCHIVE_LOAD']
+    .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
+  ['ARTICLE_WORKSPACE_ENSURE', 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    'ARTICLE_WORKSPACE_SAVE_TURN', 'ARTICLE_WORKSPACE_PROBE',
+    'ARTICLE_WORKSPACE_SCAN_RESTORE', 'ARTICLE_WORKSPACE_LIST',
+    'ARTICLE_WORKSPACE_STATS', 'ARTICLE_WORKSPACE_EXPORT',
+    'ARTICLE_WORKSPACE_BEGIN_DELETE', 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
+    'ARTICLE_WORKSPACE_REBUILD_INDEX']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
   assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
@@ -2519,6 +2605,109 @@ test('routes a targeted Panel follow-up through the configured Figure API', asyn
   assert.equal(requested[0].panel, 'A');
   assert.equal(response.data.panelFollowup.inputBasis.inputMode, 'caption_context');
   assert.equal(response.data.panelFollowup.inputBasis.pixelsSupplied, false);
+});
+
+test('routes credential-free multi-file workspace save, scan, export, and crash-safe deletion', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'a'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/paper',
+    aliases: [{ type: 'doi', value: '10.1000/example' }],
+    title: 'Example paper',
+    directoryName: `Example paper--${'a'.repeat(16)}`,
+    revision: '1'.repeat(64), contentHash: '1'.repeat(64), workspaceGeneration: 1
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted', manifests: [],
+      matches: [{ match: 'exact', manifest: { ...workspace, kind: 'sci-logic-highlighter-workspace' } }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('workspace operations must stay local'); }
+  });
+
+  assert.equal((await router.handle({ type: 'ARTICLE_WORKSPACE_ENSURE', workspace })).success, true);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    relativePath: 'ui/state.json', content: { view: 'chat' }
+  })).success, true);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_TURN', workspaceId: workspace.workspaceId,
+    turn: { turnId: 'turn-1', role: 'user', content: 'Question' }
+  })).success, true);
+  const scan = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: {
+      canonicalUrl: workspace.canonicalUrl, contentHash: workspace.contentHash
+    }
+  });
+  assert.equal(scan.data.matches[0].match, 'exact');
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_PROBE', identity: { canonicalUrl: workspace.canonicalUrl }
+  })).data.matches[0].match, 'exact');
+  assert.equal((await router.handle({ type: 'ARTICLE_WORKSPACE_LIST' })).data.workspaces.length, 1);
+  assert.equal((await router.handle({ type: 'ARTICLE_WORKSPACE_STATS' })).data.turnCount, 1);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_REBUILD_INDEX'
+  })).data.workspaceCount, 0);
+  const exported = await router.handle({
+    type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId: workspace.workspaceId
+  });
+  assert.equal(exported.data.turns.length, 1);
+  assert.doesNotMatch(JSON.stringify(exported.data), /apiKey|Authorization|absolutePath/i);
+
+  const begun = await router.handle({
+    type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: workspace.workspaceId
+  });
+  assert.equal(begun.data.tombstoneId, 'workspace-delete-1');
+  const finalized = await router.handle({
+    type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE', workspaceId: workspace.workspaceId,
+    tombstoneId: begun.data.tombstoneId
+  });
+  assert.equal(finalized.data.deleted, true);
+  assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
+  const rejectedResurrection = await router.handle({
+    type: 'ARTICLE_WORKSPACE_PROBE', identity: { canonicalUrl: workspace.canonicalUrl }
+  });
+  assert.deepEqual(rejectedResurrection.data.matches, []);
+  assert.equal(rejectedResurrection.data.tombstonedMatches, 1);
+});
+
+test('scan imports a legacy archive into a workspace without deleting the legacy file', async () => {
+  const archive = portableArchive();
+  const legacyPath = articleArchiveRelativePath(archive);
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted', manifests: [], matches: []
+    }),
+    readJson: async path => ({
+      permission: 'granted', found: path === legacyPath,
+      value: path === legacyPath ? archive : null
+    })
+  });
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('legacy import must stay local'); }
+  });
+
+  const restored = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: {
+      documentId: archive.documentId,
+      canonicalUrl: archive.canonicalUrl,
+      contentHash: archive.documentHash
+    }
+  });
+  assert.equal(restored.success, true);
+  assert.equal(restored.data.matches[0].match, 'legacy-imported');
+  assert.equal(restored.data.legacyPreserved, true);
+  assert.deepEqual(directorySync.readPaths, [legacyPath]);
+  assert.equal(directorySync.workspaceAssets[0].path, 'legacy/archive.json');
 });
 
 test('routes one Panel interpretation through one dedicated Provider call', async () => {

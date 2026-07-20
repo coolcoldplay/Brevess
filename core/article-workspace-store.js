@@ -57,6 +57,20 @@
   function normalizeWorkspace(input) {
     if (!isPlainObject(input)) fail('INVALID_WORKSPACE');
     safeValue(input);
+    if (typeof shared.createWorkspaceManifest === 'function') {
+      const manifest = shared.createWorkspaceManifest(input, []);
+      return {
+        schemaVersion: 1,
+        workspaceId: workspaceId(manifest.workspaceId),
+        canonicalUrl: manifest.canonicalUrl,
+        aliases: cloneValue(manifest.aliases),
+        title: manifest.title,
+        directoryName: manifest.directoryName,
+        revision: manifest.contentHash,
+        contentHash: manifest.contentHash,
+        workspaceGeneration: manifest.workspaceGeneration
+      };
+    }
     const id = workspaceId(input.workspaceId);
     const revision = normalizeHash(input.revision || input.contentHash);
     const contentHash = normalizeHash(input.contentHash || revision);
@@ -72,7 +86,8 @@
       title: String(input.title || '').normalize('NFKC').trim().slice(0, 1000),
       directoryName,
       revision,
-      contentHash
+      contentHash,
+      workspaceGeneration: 1
     };
   }
 
@@ -96,6 +111,24 @@
     try { return new TextEncoder().encode(JSON.stringify(value)).byteLength; } catch (_) { return 0; }
   }
 
+  function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (!isPlainObject(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
+  }
+
+  function contentFingerprint(value) {
+    let text;
+    try { text = typeof value === 'string' ? value : JSON.stringify(stableValue(value)); }
+    catch (_) { text = String(value); }
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
   function createIndexedDbArticleWorkspaceStore(indexedDbRef, options = {}) {
     if (typeof shared.runUserDataTransaction !== 'function' ||
         typeof shared.requestToPromise !== 'function') {
@@ -108,29 +141,44 @@
 
     async function ensureWorkspace(input, conflict = {}) {
       const normalized = normalizeWorkspace(input);
-      return run(WORKSPACE_STORE_NAME, 'readwrite', async transaction => {
-        const store = transaction.objectStore(WORKSPACE_STORE_NAME);
-        const current = await request(store.get(normalized.workspaceId));
-        if (current && conflict.expectedRevision !== undefined &&
-            current.revision !== conflict.expectedRevision) fail('WORKSPACE_REVISION_CONFLICT');
-        if (current && conflict.expectedContentHash !== undefined &&
-            current.contentHash !== conflict.expectedContentHash) fail('WORKSPACE_HASH_CONFLICT');
-        const timestamp = now();
-        const saved = {
-          ...current,
-          ...normalized,
-          createdAt: current?.createdAt || timestamp,
-          updatedAt: timestamp,
-          nextTurnSequence: Number.isSafeInteger(current?.nextTurnSequence)
-            ? current.nextTurnSequence : 0,
-          storageRevision: Number.isSafeInteger(current?.storageRevision)
-            ? current.storageRevision : 0,
-          memoryNeedsRebuild: Boolean(current?.memoryNeedsRebuild),
-          deletionPending: false
-        };
-        await request(store.put(saved));
-        return cloneValue(saved);
-      });
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME], 'readwrite',
+        async transaction => {
+          const store = transaction.objectStore(WORKSPACE_STORE_NAME);
+          const current = await request(store.get(normalized.workspaceId));
+          if (current?.deletionPending) fail('WORKSPACE_DELETION_PENDING');
+          if (!current) {
+            const tombstones = await request(
+              transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).getAll()
+            );
+            const latestDeletionGeneration = tombstones
+              .filter(item => item.workspaceId === normalized.workspaceId &&
+                item.entityType === 'workspace')
+              .reduce((maximum, item) =>
+                Math.max(maximum, Number(item.workspaceGeneration || 0)), 0);
+            if (latestDeletionGeneration >= normalized.workspaceGeneration) {
+              fail('WORKSPACE_GENERATION_CONFLICT');
+            }
+          }
+          if (current && conflict.expectedRevision !== undefined &&
+              current.revision !== conflict.expectedRevision) fail('WORKSPACE_REVISION_CONFLICT');
+          if (current && conflict.expectedContentHash !== undefined &&
+              current.contentHash !== conflict.expectedContentHash) fail('WORKSPACE_HASH_CONFLICT');
+          const timestamp = now();
+          const saved = {
+            ...current,
+            ...normalized,
+            createdAt: current?.createdAt || timestamp,
+            updatedAt: timestamp,
+            nextTurnSequence: Number.isSafeInteger(current?.nextTurnSequence)
+              ? current.nextTurnSequence : 0,
+            storageRevision: Number.isSafeInteger(current?.storageRevision)
+              ? current.storageRevision : 0,
+            memoryNeedsRebuild: Boolean(current?.memoryNeedsRebuild),
+            deletionPending: false
+          };
+          await request(store.put(saved));
+          return cloneValue(saved);
+        });
     }
 
     async function getWorkspace(value) {
@@ -173,9 +221,10 @@
           const saved = {
             assetKey: key,
             workspaceId: id,
+            workspaceGeneration: Number(owner.workspaceGeneration || 1),
             relativePath: path,
             content: safeContent,
-            contentHash: String(conflict.contentHash || ''),
+            contentHash: String(conflict.contentHash || contentFingerprint(safeContent)),
             revision: Number(current?.revision || 0) + 1,
             byteSize: byteSize(safeContent),
             createdAt: current?.createdAt || timestamp,
@@ -230,6 +279,7 @@
             ...cloneValue(input),
             turnKey: key,
             workspaceId: id,
+            workspaceGeneration: Number(owner.workspaceGeneration || 1),
             turnId: idOfTurn,
             sequence,
             revision: 1,
@@ -297,7 +347,7 @@
       });
     }
 
-    function newTombstone(id, entityType, entityId) {
+    function newTombstone(id, entityType, entityId, workspaceGeneration = 1) {
       const deletedAt = now();
       const tombstoneId = `${entityType}:${entityId}:${deletedAt}`;
       return {
@@ -306,6 +356,7 @@
         workspaceId: id,
         entityType,
         entityId,
+        workspaceGeneration,
         deletedAt
       };
     }
@@ -319,7 +370,8 @@
           const turns = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
           const current = await request(turns.get(key));
           if (!current) return null;
-          const tombstone = newTombstone(id, 'turn', idOfTurn);
+          const tombstone = newTombstone(id, 'turn', idOfTurn,
+            Number(current.workspaceGeneration || 1));
           await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).put(tombstone));
           await request(turns.delete(key));
           return cloneValue(tombstone);
@@ -345,7 +397,16 @@
           const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
           const current = await request(workspaces.get(id));
           if (!current) fail('WORKSPACE_NOT_FOUND');
-          const tombstone = newTombstone(id, 'workspace', id);
+          if (current.deletionPending && current.deletionTombstoneId) {
+            const records = await request(
+              transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).getAll()
+            );
+            const existing = records.find(item =>
+              item.workspaceId === id && item.tombstoneId === current.deletionTombstoneId);
+            if (existing) return cloneValue(existing);
+          }
+          const tombstone = newTombstone(id, 'workspace', id,
+            Number(current.workspaceGeneration || 1));
           await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).put(tombstone));
           await request(workspaces.put({
             ...current, deletionPending: true, deletionTombstoneId: tombstone.tombstoneId,
@@ -404,6 +465,27 @@
       });
     }
 
+    async function getWorkspaceGenerationState(value) {
+      const id = workspaceId(value);
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME], 'readonly',
+        async transaction => {
+          const [current, tombstones] = await Promise.all([
+            request(transaction.objectStore(WORKSPACE_STORE_NAME).get(id)),
+            request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).getAll())
+          ]);
+          const deletionGeneration = tombstones
+            .filter(item => item.workspaceId === id && item.entityType === 'workspace')
+            .reduce((maximum, item) =>
+              Math.max(maximum, Number(item.workspaceGeneration || 0)), 0);
+          return {
+            workspaceId: id,
+            activeGeneration: Number(current?.workspaceGeneration || 0),
+            deletionGeneration,
+            deletionPending: Boolean(current?.deletionPending)
+          };
+        });
+    }
+
     return {
       ensureWorkspace,
       getWorkspace,
@@ -418,7 +500,8 @@
       markMemoryRebuild,
       beginWorkspaceDeletion,
       finalizeWorkspaceDeletion,
-      getStorageStatistics
+      getStorageStatistics,
+      getWorkspaceGenerationState
     };
   }
 

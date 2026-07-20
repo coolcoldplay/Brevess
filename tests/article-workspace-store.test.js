@@ -271,8 +271,10 @@ test('workspace updates enforce content revisions and deletion uses a durable to
   assert.equal((await store.getWorkspace(first.workspaceId)).memoryNeedsRebuild, true);
   const tombstone = await store.beginWorkspaceDeletion(first.workspaceId);
   assert.equal(tombstone.entityType, 'workspace');
+  assert.deepEqual(await store.beginWorkspaceDeletion(first.workspaceId), tombstone);
   await store.finalizeWorkspaceDeletion(first.workspaceId, tombstone.tombstoneId);
   assert.equal(await store.getWorkspace(first.workspaceId), null);
+  await assert.rejects(() => store.ensureWorkspace(workspace()), /WORKSPACE_GENERATION_CONFLICT/);
   const statistics = await store.getStorageStatistics();
   assert.equal(statistics.workspaceCount, 0);
 });

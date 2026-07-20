@@ -4,11 +4,13 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 require('../core/cache-planner.js');
+require('../core/article-workspace.js');
 const {
   ARTICLE_ARCHIVE_KIND,
   articleArchiveRelativePath,
   createArticleArchive,
-  validateArticleArchive
+  validateArticleArchive,
+  convertLegacyArticleArchiveToWorkspace
 } = require('../core/article-archive.js');
 
 function sampleArchiveInput() {
@@ -101,6 +103,19 @@ test('rejects mismatched identities, unsupported schemas, and oversized archives
     }),
     /ARTICLE_ARCHIVE_TOO_LARGE/
   );
+});
+
+test('converts a legacy monolithic archive into workspace assets without changing its old path', async () => {
+  const archive = createArticleArchive(sampleArchiveInput());
+  const legacyPath = articleArchiveRelativePath(archive);
+  const converted = await convertLegacyArticleArchiveToWorkspace(archive);
+
+  assert.match(converted.workspace.workspaceId, /^workspace:[a-f0-9]{64}$/);
+  assert.equal(converted.manifest.canonicalUrl, 'https://example.org/article/1');
+  assert.ok(converted.assets.some(asset => asset.path === 'legacy/archive.json'));
+  assert.equal(articleArchiveRelativePath(archive), legacyPath);
+  assert.equal(converted.legacy.relativePath, legacyPath);
+  assert.equal(converted.legacy.deleteAfterImport, false);
 });
 
 test('content and side panel expose archive snapshot, restore, probe, and portable file controls', () => {

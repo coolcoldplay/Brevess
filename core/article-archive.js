@@ -157,12 +157,54 @@
     });
   }
 
+  async function convertLegacyArticleArchiveToWorkspace(input) {
+    const archive = validateArticleArchive(input);
+    if (typeof shared.createArticleWorkspaceIdentity !== 'function' ||
+        typeof shared.createWorkspaceManifest !== 'function') {
+      fail('WORKSPACE_CONVERTER_UNAVAILABLE');
+    }
+    const workspace = await shared.createArticleWorkspaceIdentity({
+      canonicalUrl: archive.canonicalUrl,
+      doi: archive.documentRecord?.doi,
+      siteId: archive.documentRecord?.siteId || archive.documentRecord?.publisherId,
+      title: archive.title || archive.documentRecord?.title,
+      content: JSON.stringify({
+        documentHash: archive.documentHash,
+        paragraphs: archive.workspace?.llm?.paragraphs || []
+      })
+    });
+    workspace.storageRevision = archive.revision;
+    workspace.workspaceGeneration = 1;
+    workspace.createdAt = archive.savedAt;
+    workspace.updatedAt = archive.savedAt;
+    const relativePath = 'legacy/archive.json';
+    const asset = {
+      path: relativePath,
+      type: 'json',
+      revision: archive.revision,
+      contentHash: typeof shared.stableHash === 'function'
+        ? shared.stableHash(archive) : String(archive.revision),
+      updatedAt: archive.savedAt,
+      value: archive
+    };
+    return {
+      workspace,
+      manifest: shared.createWorkspaceManifest(workspace, [asset]),
+      assets: [asset],
+      legacy: {
+        relativePath: articleArchiveRelativePath(archive),
+        deleteAfterImport: false
+      }
+    };
+  }
+
   return {
     ARTICLE_ARCHIVE_KIND,
     ARTICLE_ARCHIVE_SCHEMA_VERSION,
     MAX_ARTICLE_ARCHIVE_BYTES,
     articleArchiveRelativePath,
     createArticleArchive,
-    validateArticleArchive
+    validateArticleArchive,
+    convertLegacyArticleArchiveToWorkspace
   };
 });

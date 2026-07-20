@@ -70,6 +70,12 @@
       'INVALID_ARCHIVE_SCHEMA', 'ARCHIVE_IDENTITY_MISMATCH',
       'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
       'INVALID_JSON_ASSET', 'DIRECTORY_SYNC_UNAVAILABLE',
+      'WORKSPACE_STORE_UNAVAILABLE', 'WORKSPACE_NOT_FOUND',
+      'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
+      'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
+      'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
+      'INVALID_WORKSPACE', 'INVALID_WORKSPACE_PATH', 'INVALID_WORKSPACE_MANIFEST',
+      'INVALID_WORKSPACE_INDEX', 'WORKSPACE_CONTAINS_CREDENTIALS',
       'INVALID_MIGRATION_SCHEMA', 'INVALID_MIGRATION_SETTINGS',
       'INVALID_MIGRATION_DOCUMENTS', 'INVALID_MIGRATION_FEEDBACK',
       'MIGRATION_BUNDLE_TOO_LARGE'
@@ -103,6 +109,19 @@
       ARTICLE_ARCHIVE_NOT_FOUND: 'No saved article archive was found.',
       INVALID_JSON_ASSET: 'The saved article archive is damaged.',
       DIRECTORY_SYNC_UNAVAILABLE: 'A local archive directory has not been configured.',
+      WORKSPACE_STORE_UNAVAILABLE: 'Local article workspaces are unavailable.',
+      WORKSPACE_NOT_FOUND: 'The local article workspace was not found.',
+      WORKSPACE_REVISION_CONFLICT: 'The article workspace changed before this save completed.',
+      WORKSPACE_HASH_CONFLICT: 'The article workspace content hash no longer matches.',
+      WORKSPACE_GENERATION_CONFLICT: 'This save belongs to an older cleared workspace.',
+      WORKSPACE_DELETION_CONFLICT: 'The article workspace deletion state changed.',
+      WORKSPACE_DELETION_PENDING: 'The article workspace is being deleted.',
+      INVALID_WORKSPACE_GENERATION: 'The article workspace generation is invalid.',
+      INVALID_WORKSPACE: 'The article workspace is invalid.',
+      INVALID_WORKSPACE_PATH: 'The article workspace path is invalid.',
+      INVALID_WORKSPACE_MANIFEST: 'The article workspace manifest is invalid.',
+      INVALID_WORKSPACE_INDEX: 'The article workspace index is invalid.',
+      WORKSPACE_CONTAINS_CREDENTIALS: 'Credentials cannot be stored in an article workspace.',
       INVALID_MIGRATION_SCHEMA: 'The migration file format is invalid.',
       INVALID_MIGRATION_SETTINGS: 'The migration settings are invalid.',
       INVALID_MIGRATION_DOCUMENTS: 'The migration document records are invalid.',
@@ -202,6 +221,7 @@
     cacheStore = shared.createMemoryAnalysisCache(),
     corpusStore = shared.createMemoryCorpusStore(),
     documentStore = shared.createMemoryDocumentStore(),
+    articleWorkspaceStore = null,
     directorySync = null,
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay))
   }) {
@@ -1836,6 +1856,34 @@
       throw error;
     }
 
+    function requireArticleWorkspaceStore(method) {
+      if (typeof articleWorkspaceStore?.[method] === 'function') return;
+      const error = new Error('Article workspace store is unavailable');
+      error.code = 'WORKSPACE_STORE_UNAVAILABLE';
+      throw error;
+    }
+
+    function publicWorkspace(workspace) {
+      if (!workspace) return null;
+      return {
+        schemaVersion: Number(workspace.schemaVersion) || 1,
+        workspaceId: String(workspace.workspaceId || ''),
+        canonicalUrl: String(workspace.canonicalUrl || ''),
+        aliases: cloneJsonLike(workspace.aliases || []),
+        title: String(workspace.title || ''),
+        directoryName: String(workspace.directoryName || ''),
+        revision: String(workspace.revision || ''),
+        contentHash: String(workspace.contentHash || ''),
+        workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
+        storageRevision: Number(workspace.storageRevision) || 0,
+        nextTurnSequence: Number(workspace.nextTurnSequence) || 0,
+        memoryNeedsRebuild: Boolean(workspace.memoryNeedsRebuild),
+        deletionPending: Boolean(workspace.deletionPending),
+        createdAt: String(workspace.createdAt || ''),
+        updatedAt: String(workspace.updatedAt || '')
+      };
+    }
+
     async function handleUnsafe(message, context = {}) {
       if (message.type === 'LLM_CONTROL_OPERATION') {
         const operationId = shared.normalizeOperationId?.(message.operationId) || '';
@@ -1889,6 +1937,229 @@
             directoryHandleRestored: false
           };
         });
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_ENSURE') {
+        requireArticleWorkspaceStore('ensureWorkspace');
+        const workspace = await articleWorkspaceStore.ensureWorkspace(message.workspace, {
+          expectedRevision: message.expectedRevision,
+          expectedContentHash: message.expectedContentHash
+        });
+        return { workspace: publicWorkspace(workspace) };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_ASSET') {
+        requireArticleWorkspaceStore('putAsset');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const asset = await articleWorkspaceStore.putAsset(
+          workspace.workspaceId, message.relativePath, message.content, {
+            expectedRevision: message.expectedRevision,
+            expectedContentHash: message.expectedContentHash,
+            contentHash: message.contentHash
+          }
+        );
+        let queued = false;
+        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+          try {
+            await directorySync.enqueueWorkspaceAsset(
+              workspace, asset.relativePath, asset.content, {
+                revision: asset.revision,
+                contentHash: asset.contentHash,
+                updatedAt: asset.updatedAt,
+                workspaceGeneration: workspace.workspaceGeneration
+              }
+            );
+            queued = true;
+            scheduleDirectoryFlush();
+          } catch (_) {}
+        }
+        return {
+          saved: true,
+          queued,
+          asset: {
+            relativePath: asset.relativePath,
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            byteSize: asset.byteSize,
+            updatedAt: asset.updatedAt
+          }
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_TURN') {
+        requireArticleWorkspaceStore('appendTurn');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const turn = await articleWorkspaceStore.appendTurn(workspace.workspaceId, message.turn);
+        let queued = false;
+        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+          const filename = encodeURIComponent(turn.turnId).slice(0, 240);
+          try {
+            await directorySync.enqueueWorkspaceAsset(
+              workspace, `chat/turns/${filename}.json`, turn, {
+                revision: turn.revision,
+                updatedAt: turn.updatedAt,
+                workspaceGeneration: workspace.workspaceGeneration
+              }
+            );
+            queued = true;
+            scheduleDirectoryFlush();
+          } catch (_) {}
+        }
+        return {
+          saved: true,
+          queued,
+          turn: cloneJsonLike(turn)
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_PROBE' ||
+          message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE') {
+        requireDirectorySync('listWorkspaceManifests');
+        const result = await directorySync.listWorkspaceManifests(message.identity || {});
+        if (typeof articleWorkspaceStore?.getWorkspaceGenerationState === 'function' &&
+            Array.isArray(result.matches)) {
+          const retained = [];
+          let tombstonedMatches = 0;
+          for (const match of result.matches) {
+            const manifest = match?.manifest;
+            if (!manifest?.workspaceId) continue;
+            const state = await articleWorkspaceStore.getWorkspaceGenerationState(
+              manifest.workspaceId
+            );
+            if (state.deletionGeneration >= Number(manifest.workspaceGeneration || 1)) {
+              tombstonedMatches += 1;
+            } else {
+              retained.push(match);
+            }
+          }
+          result.matches = retained;
+          result.tombstonedMatches = tombstonedMatches;
+        }
+        if (message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE' && !result.matches.length &&
+            !result.tombstonedMatches &&
+            message.identity?.documentId && typeof directorySync.readJson === 'function' &&
+            typeof shared.convertLegacyArticleArchiveToWorkspace === 'function') {
+          const legacyPath = shared.articleArchiveRelativePath({
+            documentId: message.identity.documentId,
+            canonicalUrl: message.identity.canonicalUrl
+          });
+          const legacy = await directorySync.readJson(legacyPath);
+          if (legacy.found) {
+            const converted = await shared.convertLegacyArticleArchiveToWorkspace(legacy.value);
+            if (articleWorkspaceStore?.ensureWorkspace && articleWorkspaceStore?.putAsset) {
+              const savedWorkspace = await articleWorkspaceStore.ensureWorkspace(converted.workspace);
+              await articleWorkspaceStore.putAsset(
+                savedWorkspace.workspaceId, converted.assets[0].path, converted.assets[0].value,
+                { contentHash: converted.assets[0].contentHash }
+              );
+              if (typeof directorySync.enqueueWorkspaceAsset === 'function') {
+                await directorySync.enqueueWorkspaceAsset(
+                  savedWorkspace, converted.assets[0].path, converted.assets[0].value,
+                  { revision: converted.assets[0].revision,
+                    contentHash: converted.assets[0].contentHash }
+                );
+                scheduleDirectoryFlush();
+              }
+            }
+            result.matches = [{ match: 'legacy-imported', manifest: converted.manifest }];
+            result.legacyPreserved = true;
+          }
+        }
+        return result;
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_LIST') {
+        requireArticleWorkspaceStore('listWorkspaces');
+        return {
+          workspaces: (await articleWorkspaceStore.listWorkspaces()).map(publicWorkspace)
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_STATS') {
+        requireArticleWorkspaceStore('getStorageStatistics');
+        return articleWorkspaceStore.getStorageStatistics();
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_EXPORT') {
+        requireArticleWorkspaceStore('getWorkspace');
+        requireArticleWorkspaceStore('listAssets');
+        requireArticleWorkspaceStore('pageTurns');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const turns = [];
+        let afterSequence = 0;
+        while (true) {
+          const page = await articleWorkspaceStore.pageTurns(workspace.workspaceId, {
+            limit: 10_000, afterSequence
+          });
+          turns.push(...page.items);
+          if (!page.hasMore || page.nextSequence <= afterSequence) break;
+          afterSequence = page.nextSequence;
+        }
+        return {
+          schemaVersion: 1,
+          workspace: publicWorkspace(workspace),
+          assets: (await articleWorkspaceStore.listAssets(workspace.workspaceId)).map(asset => ({
+            relativePath: asset.relativePath,
+            content: cloneJsonLike(asset.content),
+            contentHash: asset.contentHash,
+            revision: asset.revision,
+            updatedAt: asset.updatedAt
+          })),
+          turns: turns.map(turn => cloneJsonLike(turn))
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_BEGIN_DELETE') {
+        requireArticleWorkspaceStore('getWorkspace');
+        requireArticleWorkspaceStore('beginWorkspaceDeletion');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const tombstone = await articleWorkspaceStore.beginWorkspaceDeletion(workspace.workspaceId);
+        const cancellation = typeof directorySync?.cancelWorkspaceQueue === 'function'
+          ? await directorySync.cancelWorkspaceQueue(workspace) : { cancelled: 0 };
+        return { ...cloneJsonLike(tombstone), cancelled: Number(cancellation.cancelled) || 0 };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_FINALIZE_DELETE') {
+        requireArticleWorkspaceStore('getWorkspace');
+        requireArticleWorkspaceStore('finalizeWorkspaceDeletion');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace) return { deleted: true, alreadyMissing: true };
+        let disk = { removed: true, permission: 'unconfigured' };
+        if (typeof directorySync?.removeWorkspaceTree === 'function') {
+          disk = await directorySync.removeWorkspaceTree(workspace);
+          if (!disk.removed) return { deleted: false, pending: true, permission: disk.permission };
+        }
+        await articleWorkspaceStore.finalizeWorkspaceDeletion(
+          workspace.workspaceId, message.tombstoneId
+        );
+        return { deleted: true, permission: disk.permission, removedFromDisk: disk.removed };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_REBUILD_INDEX') {
+        requireDirectorySync('rebuildWorkspaceIndex');
+        return directorySync.rebuildWorkspaceIndex();
       }
 
       if (message.type === 'ARTICLE_ARCHIVE_PROBE') {
