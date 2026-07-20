@@ -1898,6 +1898,18 @@
       };
     }
 
+    function assertWorkspaceMutationGeneration(workspace, message = {}) {
+      const expected = Number(message.workspaceGeneration);
+      if (!Number.isInteger(expected) || expected < 1) return;
+      const current = Math.max(1, Number(workspace?.workspaceGeneration) || 1);
+      if (expected === current) return;
+      const error = new Error('WORKSPACE_GENERATION_CONFLICT');
+      error.code = 'WORKSPACE_GENERATION_CONFLICT';
+      error.expectedGeneration = expected;
+      error.currentGeneration = current;
+      throw error;
+    }
+
     function safeWorkspaceCounts(summary = {}) {
       const count = value => Math.max(0, Number(value) || 0);
       return {
@@ -2058,6 +2070,7 @@
           error.code = 'WORKSPACE_NOT_FOUND';
           throw error;
         }
+        assertWorkspaceMutationGeneration(workspace, message);
         const asset = await articleWorkspaceStore.putAsset(
           workspace.workspaceId, message.relativePath, message.content, {
             expectedRevision: message.expectedRevision,
@@ -2102,6 +2115,7 @@
           error.code = 'WORKSPACE_NOT_FOUND';
           throw error;
         }
+        assertWorkspaceMutationGeneration(workspace, message);
         const turn = await articleWorkspaceStore.appendTurn(workspace.workspaceId, message.turn);
         let queued = false;
         if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
@@ -2134,6 +2148,7 @@
           error.code = 'WORKSPACE_NOT_FOUND';
           throw error;
         }
+        assertWorkspaceMutationGeneration(workspace, message);
         const turn = await articleWorkspaceStore.updateTurn(
           workspace.workspaceId, message.turnId, message.turn || {}
         );
@@ -2162,6 +2177,7 @@
         if (!workspace || workspace.deletionPending) {
           return { deleted: true, alreadyMissing: true };
         }
+        assertWorkspaceMutationGeneration(workspace, message);
         const tombstone = await articleWorkspaceStore.deleteTurn(
           workspace.workspaceId, message.turnId
         );

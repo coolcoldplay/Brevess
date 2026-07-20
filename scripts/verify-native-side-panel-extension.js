@@ -859,6 +859,264 @@ async function readDiagnosticDownload(download) {
     fullPage: true
   });
 
+  const chatMutationSetup = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const completedTurn = (turnId, question, answer) => {
+          const turn = createArticleChatTurn(question, 'profile_qa_openai', { turnId });
+          turn.answerBlocks = [{
+            blockId: `block-${turnId}`,
+            markdown: answer,
+            evidence: [],
+            createdAt: Date.now()
+          }];
+          turn.status = 'completed';
+          turn.profileName = 'GPT 5 Mini';
+          turn.model = 'gpt-5-mini';
+          turn.updatedAt = Date.now();
+          return turn;
+        };
+        const first = completedTurn(
+          'turn-ui-first', '第一个待删除的问题', '第一个回答。'
+        );
+        const second = completedTurn(
+          'turn-ui-regenerate', '请重新生成这个回答', '旧回答。'
+        );
+        const queued = createArticleChatTurn(
+          '这个排队问题应当可以直接删除', 'profile_qa_openai',
+          { turnId: 'turn-ui-queued' }
+        );
+        articleChatGeneration += 1;
+        articleChatPumpPromise = null;
+        articleChatState = {
+          turns: [first, second, queued],
+          loading: false,
+          error: '',
+          operationId: '',
+          activeTurnId: '',
+          coverage: null,
+          memoryNeedsRebuild: false
+        };
+        for (const turn of articleChatState.turns) {
+          await persistWorkspaceTurnCheckpoint(turn, { append: true, force: true });
+        }
+        await persistArticleWorkspaceArtifacts({ force: true });
+        notifyArticleChatStateChanged('workspace_restored');
+        return {
+          workspaceId: currentArticleWorkspace?.workspaceId || '',
+          turnIds: articleChatState.turns.map(turn => turn.turnId)
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  await sidePanel.evaluate(async () => {
+    await refreshArticleWorkspace();
+    switchWorkspaceView('chat');
+  });
+  await sidePanel.waitForFunction(() =>
+    document.querySelectorAll('.article-chat-turn').length === 3
+  );
+  await sidePanel.locator(
+    '[data-article-chat-action="delete-queued"][data-turn-id="turn-ui-queued"]'
+  ).click();
+  await sidePanel.waitForFunction(() =>
+    !document.querySelector('[data-turn-id="turn-ui-queued"]') &&
+    document.querySelectorAll('.article-chat-turn').length === 2
+  );
+  const queuedDeleteState = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => ({
+        turnIds: articleChatState.turns.map(turn => turn.turnId),
+        queuedRemaining: articleChatState.turns.some(turn => turn.status === 'queued')
+      })
+    });
+    return result;
+  }, fixtureTab.id);
+
+  await sidePanel.locator(
+    '[data-article-chat-action="delete-answer"][data-turn-id="turn-ui-regenerate"]'
+  ).click();
+  await sidePanel.waitForFunction(() => {
+    const turn = document.querySelector('[data-turn-id="turn-ui-regenerate"]');
+    return Boolean(turn && !turn.querySelector('.article-chat-answer-block') &&
+      turn.querySelector('[data-article-chat-action="regenerate"]'));
+  });
+  const answerDeleteState = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const turn = articleChatState.turns.find(item =>
+          item.turnId === 'turn-ui-regenerate');
+        return {
+          status: String(turn?.status || ''),
+          answerBlocks: turn?.answerBlocks?.length || 0
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+
+  await worker.evaluate(async tabId => {
+    await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+        globalThis.__sciQaOriginalChatMutationSendMessage = original;
+        chrome.runtime.sendMessage = async message => {
+          if (message?.type === 'LLM_ASK_ARTICLE' &&
+              message.turnId === 'turn-ui-regenerate') {
+            return {
+              success: true,
+              data: {
+                message: {
+                  answerBlocks: [{
+                    blockId: 'block-regenerated-qa',
+                    markdown: '**重新生成成功**：这是新的完整回答。',
+                    evidence: []
+                  }],
+                  summary: '重新生成成功',
+                  status: 'completed'
+                },
+                route: {
+                  effectiveProfileId: 'profile_qa_openai',
+                  effectiveProfileName: 'GPT 5 Mini',
+                  model: 'gpt-5-mini'
+                },
+                usage: { inputTokens: 10, outputTokens: 12 },
+                coverage: { sentParagraphs: 1, totalParagraphs: 1, truncated: false }
+              }
+            };
+          }
+          return original(message);
+        };
+      }
+    });
+  }, fixtureTab.id);
+  await sidePanel.locator(
+    '[data-article-chat-action="regenerate"][data-turn-id="turn-ui-regenerate"]'
+  ).click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelector('[data-turn-id="turn-ui-regenerate"]')
+      ?.textContent?.includes('重新生成成功') === true
+  );
+  const regenerateState = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const turn = articleChatState.turns.find(item =>
+          item.turnId === 'turn-ui-regenerate');
+        const snapshot = {
+          status: String(turn?.status || ''),
+          answer: String(turn?.answerBlocks?.[0]?.markdown || ''),
+          loading: articleChatState.loading === true
+        };
+        if (globalThis.__sciQaOriginalChatMutationSendMessage) {
+          chrome.runtime.sendMessage = globalThis.__sciQaOriginalChatMutationSendMessage;
+          delete globalThis.__sciQaOriginalChatMutationSendMessage;
+        }
+        return snapshot;
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+
+  await sidePanel.locator(
+    '[data-article-chat-action="delete-turn"][data-turn-id="turn-ui-first"]'
+  ).click();
+  await sidePanel.waitForFunction(() =>
+    !document.querySelector('[data-turn-id="turn-ui-first"]') &&
+    document.querySelectorAll('.article-chat-turn').length === 1
+  );
+  await sidePanel.locator('#clearArticleChat').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelectorAll('.article-chat-turn').length === 0
+  );
+  let chatPersistenceSettled = false;
+  const chatPersistenceStartedAt = Date.now();
+  while (!chatPersistenceSettled && Date.now() - chatPersistenceStartedAt < 5000) {
+    chatPersistenceSettled = await worker.evaluate(async ({ workspaceId, tabId }) => {
+      const [{ result: response }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: workspaceId => chrome.runtime.sendMessage({
+          type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId
+        }),
+        args: [workspaceId]
+      });
+      if (!response?.success) return false;
+      const index = response.data.assets.find(asset =>
+        asset.relativePath === 'chat/index.json');
+      return response.data.turns.length === 0 &&
+        Array.isArray(index?.content?.turns) && index.content.turns.length === 0;
+    }, { workspaceId: chatMutationSetup.workspaceId, tabId: fixtureTab.id });
+    if (!chatPersistenceSettled) await sidePanel.waitForTimeout(50);
+  }
+  if (!chatPersistenceSettled) {
+    const diagnostics = await worker.evaluate(async ({ workspaceId, tabId }) => {
+      const [{ result: response }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: workspaceId => chrome.runtime.sendMessage({
+          type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId
+        }),
+        args: [workspaceId]
+      });
+      const index = response?.data?.assets?.find(asset =>
+        asset.relativePath === 'chat/index.json');
+      const [{ result: contentState }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: () => ({
+          turns: articleChatState.turns.map(turn => ({
+            turnId: turn.turnId, status: turn.status,
+            blocks: turn.answerBlocks?.length || 0
+          })),
+          mutationPending: Boolean(articleWorkspaceMutationTail),
+          lifecycle: articleWorkspaceLifecycleGeneration
+        })
+      });
+      return {
+        success: response?.success,
+        storedTurns: response?.data?.turns?.map(turn => ({
+          turnId: turn.turnId, status: turn.status,
+          blocks: turn.answerBlocks?.length || 0
+        })) || [],
+        indexTurns: index?.content?.turns?.map(turn => ({
+          turnId: turn.turnId, status: turn.status,
+          blocks: turn.answerBlocks?.length || 0
+        })) || [],
+        contentState
+      };
+    }, { workspaceId: chatMutationSetup.workspaceId, tabId: fixtureTab.id });
+    throw new Error(`Chat mutations were not persisted: ${JSON.stringify(diagnostics)}`);
+  }
+  const chatMutationQa = await worker.evaluate(async ({ workspaceId, tabId }) => {
+    const [{ result: response }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: workspaceId => chrome.runtime.sendMessage({
+        type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId
+      }),
+      args: [workspaceId]
+    });
+    const index = response?.data?.assets?.find(asset =>
+      asset.relativePath === 'chat/index.json');
+    return {
+      setupTurns: 3,
+      queuedDeleted: true,
+      queuedRemaining: false,
+      answerDeleteState: null,
+      regenerateState: null,
+      finalStoredTurns: response?.data?.turns?.length ?? -1,
+      finalIndexTurns: index?.content?.turns?.length ?? -1
+    };
+  }, { workspaceId: chatMutationSetup.workspaceId, tabId: fixtureTab.id });
+  chatMutationQa.queuedDeleted =
+    !queuedDeleteState.turnIds.includes('turn-ui-queued');
+  chatMutationQa.queuedRemaining = queuedDeleteState.queuedRemaining;
+  chatMutationQa.answerDeleteState = answerDeleteState;
+  chatMutationQa.regenerateState = regenerateState;
+
   await fixture.evaluate(() => {
     const section = document.querySelector('article section:nth-of-type(3)');
     const text = 'A dynamically loaded mechanistic paragraph is represented twice by responsive markup but should count once.';
@@ -1022,6 +1280,85 @@ async function readDiagnosticDownload(download) {
     articleWorkspaceOverviewUi.loading === false &&
     articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId),
   activeWorkspaceId);
+  const lateFigureSetup = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const figure = {
+          figureId: 'figure-stale-qa',
+          figureLabel: 'Figure stale QA',
+          caption: 'A delayed Figure response must not survive workspace deletion.',
+          panelHints: ['A'],
+          contextParagraphs: [],
+          imageElements: [],
+          isSupplemental: false
+        };
+        figureWorkspaceInventory = [figure];
+        figureWalkthroughState.set(figure.figureId, {
+          figure,
+          figureInputHash: '',
+          standard: null,
+          standardError: '',
+          deep: null,
+          activeDepth: 'standard',
+          deepLoading: false,
+          deepError: '',
+          panelFollowups: {},
+          panelFollowupHistories: {},
+          panelFollowupLoading: {},
+          panelFollowupErrors: {},
+          panelAnalyses: {},
+          panelAnalysisLoading: {},
+          panelAnalysisErrors: {},
+          expanded: true
+        });
+        const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+        globalThis.__sciQaOriginalFigureRuntimeSendMessage = original;
+        globalThis.__sciQaResolveLateFigure = null;
+        globalThis.__sciQaLateFigureOutcome = null;
+        chrome.runtime.sendMessage = async message => {
+          if (message?.type === 'LLM_ANALYZE_FIGURES' &&
+              message.figures?.[0]?.figureId === figure.figureId) {
+            return new Promise(resolve => {
+              globalThis.__sciQaResolveLateFigure = resolve;
+            });
+          }
+          return original(message);
+        };
+        globalThis.__sciQaLateFigurePromise = analyzeSingleFigureWithLLM(
+          figure.figureId, { forceRefresh: true }
+        ).then(value => {
+          globalThis.__sciQaLateFigureOutcome = {
+            settled: 'fulfilled', value
+          };
+          return globalThis.__sciQaLateFigureOutcome;
+        }).catch(error => {
+          globalThis.__sciQaLateFigureOutcome = {
+            settled: 'rejected',
+            code: String(error?.code || ''),
+            message: String(error?.message || '')
+          };
+          return globalThis.__sciQaLateFigureOutcome;
+        });
+        const startedAt = Date.now();
+        while (!globalThis.__sciQaResolveLateFigure && Date.now() - startedAt < 1500) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return {
+          deferred: typeof globalThis.__sciQaResolveLateFigure === 'function',
+          promiseAttached: Boolean(figureDepthAnalysisPromise),
+          operationActive: Boolean(figureOperationState.active),
+          progressSize: figureProgressById.size,
+          lifecycle: articleWorkspaceLifecycleGeneration
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  if (!lateFigureSetup?.deferred) {
+    throw new Error(`Unable to establish deferred Figure QA: ${JSON.stringify(lateFigureSetup)}`);
+  }
   options.once('dialog', dialog => dialog.accept());
   await options.evaluate(workspaceId => clearArticleWorkspaces([workspaceId]), activeWorkspaceId);
   await fixture.bringToFront();
@@ -1130,6 +1467,79 @@ async function readDiagnosticDownload(download) {
       currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration
     ) || 0
   })));
+  const lateFigureBeforeRelease = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: () => ({
+        promiseDetached: !figureDepthAnalysisPromise,
+        operationActive: Boolean(figureOperationState.active),
+        progressSize: figureProgressById.size,
+        statusPhase: String(figureAnalysisStatus.phase || ''),
+        statusRunning: figureAnalysisStatus.running === true,
+        lifecycle: articleWorkspaceLifecycleGeneration
+      })
+    });
+    return result;
+  }, fixtureTab.id);
+  const lateFigureResolved = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const resolve = globalThis.__sciQaResolveLateFigure;
+        if (typeof resolve !== 'function') return false;
+        resolve({
+          success: true,
+          data: {
+            figureResults: [{
+              figureId: 'figure-stale-qa',
+              figureLabel: 'Figure stale QA',
+              analysisDepth: 'standard',
+              panels: [],
+              argumentChain: []
+            }],
+            route: { effectiveProfileName: 'Deferred Figure QA', model: 'qa-model' }
+          }
+        });
+        await globalThis.__sciQaLateFigurePromise;
+        return true;
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const lateFigureDeletionQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: () => {
+        const outcome = globalThis.__sciQaLateFigureOutcome;
+        const snapshot = {
+          responseReleased: true,
+          outcome,
+          promiseDetached: !figureDepthAnalysisPromise,
+          operationActive: Boolean(figureOperationState.active),
+          progressSize: figureProgressById.size,
+          progressIds: [...figureProgressById.keys()],
+          statusPhase: String(figureAnalysisStatus.phase || ''),
+          statusRunning: figureAnalysisStatus.running === true,
+          staleFigurePresent: figureWalkthroughState.has('figure-stale-qa'),
+          lifecycle: articleWorkspaceLifecycleGeneration
+        };
+        if (globalThis.__sciQaOriginalFigureRuntimeSendMessage) {
+          chrome.runtime.sendMessage = globalThis.__sciQaOriginalFigureRuntimeSendMessage;
+          delete globalThis.__sciQaOriginalFigureRuntimeSendMessage;
+        }
+        delete globalThis.__sciQaResolveLateFigure;
+        delete globalThis.__sciQaLateFigurePromise;
+        delete globalThis.__sciQaLateFigureOutcome;
+        return snapshot;
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  lateFigureDeletionQa.responseReleased = lateFigureResolved === true;
+  lateFigureDeletionQa.beforeRelease = lateFigureBeforeRelease;
   const lateChatSetup = await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -1364,10 +1774,13 @@ async function readDiagnosticDownload(download) {
     quickNavSwitchQa,
     quickNavExitQa,
     articleChatQa,
+    chatMutationQa,
     dynamicParagraphQa,
     workspaceOverviewFixture,
     workspaceOverviewQa,
     activeWorkspaceDeletionQa,
+    lateFigureSetup,
+    lateFigureDeletionQa,
     lateChatSetup,
     lateChatDeletionQa,
     migrationControls,
@@ -1481,6 +1894,15 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.returnLatestRestored &&
     results.articleChatQa.composerOutsideMessages &&
     results.articleChatQa.citationJumpFocused &&
+    results.chatMutationQa.queuedDeleted &&
+    !results.chatMutationQa.queuedRemaining &&
+    results.chatMutationQa.answerDeleteState.status === 'unanswered' &&
+    results.chatMutationQa.answerDeleteState.answerBlocks === 0 &&
+    results.chatMutationQa.regenerateState.status === 'completed' &&
+    /重新生成成功/.test(results.chatMutationQa.regenerateState.answer) &&
+    !results.chatMutationQa.regenerateState.loading &&
+    results.chatMutationQa.finalStoredTurns === 0 &&
+    results.chatMutationQa.finalIndexTurns === 0 &&
     results.dynamicParagraphQa.paragraphCount === 7 &&
     /7 段正文/.test(results.dynamicParagraphQa.status) &&
     results.workspaceOverviewFixture.ensured &&
@@ -1520,6 +1942,21 @@ async function readDiagnosticDownload(download) {
     !/读取失败|WORKSPACE_|Cannot access contents/i.test(
       results.activeWorkspaceDeletionQa.navigationStatus || ''
     ) &&
+    results.lateFigureSetup.deferred &&
+    results.lateFigureSetup.promiseAttached &&
+    results.lateFigureSetup.operationActive &&
+    results.lateFigureDeletionQa.responseReleased &&
+    results.lateFigureDeletionQa.beforeRelease.promiseDetached &&
+    !results.lateFigureDeletionQa.beforeRelease.operationActive &&
+    results.lateFigureDeletionQa.beforeRelease.progressSize === 0 &&
+    results.lateFigureDeletionQa.beforeRelease.statusPhase === 'idle' &&
+    !results.lateFigureDeletionQa.beforeRelease.statusRunning &&
+    results.lateFigureDeletionQa.promiseDetached &&
+    !results.lateFigureDeletionQa.operationActive &&
+    results.lateFigureDeletionQa.progressSize === 0 &&
+    results.lateFigureDeletionQa.statusPhase === 'idle' &&
+    !results.lateFigureDeletionQa.statusRunning &&
+    !results.lateFigureDeletionQa.staleFigurePresent &&
     results.lateChatSetup.loading &&
     results.lateChatDeletionQa.responseReleased &&
     results.lateChatDeletionQa.workspaceGeneration >

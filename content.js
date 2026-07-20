@@ -3101,7 +3101,6 @@ async function analyzeArticleWithLLM(options = {}) {
         return await llmAnalysisPromise;
     } catch (error) {
         const staleWorkspace = workspaceLifecycle !== articleWorkspaceLifecycleGeneration;
-        llmProgressiveAnalysis = null;
         if (staleWorkspace) {
             return {
                 success: false,
@@ -3110,6 +3109,7 @@ async function analyzeArticleWithLLM(options = {}) {
                 operationId: operation.operationId
             };
         }
+        llmProgressiveAnalysis = null;
         if (error?.code === 'CANCELLED' || operation.cancelled) {
             lastLlmDiagnostics = {
                 ...(lastLlmDiagnostics || {}),
@@ -3145,7 +3145,9 @@ async function analyzeArticleWithLLM(options = {}) {
         showLlmPageStatus(`LLM 分析失败：${error.message}`, 'error');
         throw error;
     } finally {
-        llmAnalysisPromise = null;
+        if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+            llmAnalysisPromise = null;
+        }
         finishLlmHighlightOperation(operation);
     }
 }
@@ -3719,6 +3721,7 @@ async function analyzeSingleFigureDeep(figureId) {
     const state = figureWalkthroughState.get(figureId);
     if (!state?.standard || !state.figure) throw new Error('请先生成该图的标准解读');
     const operation = beginFigureOperation('single', figureId);
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     state.deepLoading = true; // deep Figure operation
     state.deepError = '';
     state.expanded = true;
@@ -3736,7 +3739,7 @@ async function analyzeSingleFigureDeep(figureId) {
             }
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURES',
-                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
+                workspaceLifecycle,
                 analysisDepth: 'deep',
                 operationId: operation.operationId,
                 document: { title: document.title, paragraphs },
@@ -3763,15 +3766,19 @@ async function analyzeSingleFigureDeep(figureId) {
             state.activeDepth = 'deep';
             invalidateCrossFigureLogic();
         } catch (error) {
-            state.deepError = error?.message || '深度解读失败';
-            state.activeDepth = 'standard';
-            finishSingleFigureProgress(state.figure, error);
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.deepError = error?.message || '深度解读失败';
+                state.activeDepth = 'standard';
+                finishSingleFigureProgress(state.figure, error, operation);
+            }
             throw error;
         } finally {
-            state.deepLoading = false;
-            if (!state.deepError) finishSingleFigureProgress(state.figure);
-            figureDepthAnalysisPromise = null;
-            figureDepthAnalysisId = '';
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.deepLoading = false;
+                if (!state.deepError) finishSingleFigureProgress(state.figure, null, operation);
+                figureDepthAnalysisPromise = null;
+                figureDepthAnalysisId = '';
+            }
             finishFigureOperation(operation); // deep Figure operation
         }
     })();
@@ -3784,6 +3791,7 @@ async function analyzeSingleFigureWithLLM(figureId, { forceRefresh = false } = {
         throwBusyFigureAnalysis(figureId);
     }
     const operation = beginFigureOperation('single', figureId);
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const state = ensureFigureWalkthroughState(figureId);
     if (!state?.figure) {
         finishFigureOperation(operation);
@@ -3806,7 +3814,7 @@ async function analyzeSingleFigureWithLLM(figureId, { forceRefresh = false } = {
             state.figureInputHash = buildFigureInputHash(state.figure, images);
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURES',
-                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
+                workspaceLifecycle,
                 analysisDepth: 'standard',
                 forceRefresh: forceRefresh === true,
                 operationId: operation.operationId,
@@ -3857,14 +3865,20 @@ async function analyzeSingleFigureWithLLM(figureId, { forceRefresh = false } = {
                 route: response.data.route || null
             };
         } catch (error) {
-            state.standardError = error?.message || 'FIGURE_ANALYSIS_FAILED';
-            finishSingleFigureProgress(state.figure, error);
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.standardError = error?.message || 'FIGURE_ANALYSIS_FAILED';
+                finishSingleFigureProgress(state.figure, error, operation);
+            }
             throw error;
         } finally {
-            state.deepLoading = false;
-            if (!state.standardError) finishSingleFigureProgress(state.figure);
-            figureDepthAnalysisPromise = null;
-            figureDepthAnalysisId = '';
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.deepLoading = false;
+                if (!state.standardError) {
+                    finishSingleFigureProgress(state.figure, null, operation);
+                }
+                figureDepthAnalysisPromise = null;
+                figureDepthAnalysisId = '';
+            }
             finishFigureOperation(operation);
         }
     })();
@@ -3926,6 +3940,7 @@ async function analyzeSingleFigurePanelWithLLM(
     panelId,
     { forceRefresh = false } = {}
 ) {
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const normalizedPanelId = normalizeRequestedPanelId(panelId);
     const state = ensureFigureWalkthroughState(figureId);
     if (!state?.figure || !normalizedPanelId ||
@@ -3959,7 +3974,7 @@ async function analyzeSingleFigurePanelWithLLM(
             await waitForLocalOperation(operation);
             const response = await chrome.runtime.sendMessage({
                 type: 'LLM_ANALYZE_FIGURE_PANEL',
-                workspaceLifecycle: articleWorkspaceLifecycleGeneration,
+                workspaceLifecycle,
                 forceRefresh: forceRefresh === true,
                 operationId: operation.operationId,
                 documentHash,
@@ -4005,17 +4020,21 @@ async function analyzeSingleFigurePanelWithLLM(
                 operationId: operation.operationId
             };
         } catch (error) {
-            state.panelAnalysisErrors[normalizedPanelId] =
-                error?.message || 'FIGURE_PANEL_ANALYSIS_FAILED';
-            finishSingleFigureProgress(state.figure, error, operation);
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.panelAnalysisErrors[normalizedPanelId] =
+                    error?.message || 'FIGURE_PANEL_ANALYSIS_FAILED';
+                finishSingleFigureProgress(state.figure, error, operation);
+            }
             throw error;
         } finally {
-            state.panelAnalysisLoading[normalizedPanelId] = false;
-            if (!state.panelAnalysisErrors[normalizedPanelId]) {
-                finishSingleFigureProgress(state.figure, null, operation);
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                state.panelAnalysisLoading[normalizedPanelId] = false;
+                if (!state.panelAnalysisErrors[normalizedPanelId]) {
+                    finishSingleFigureProgress(state.figure, null, operation);
+                }
+                figureDepthAnalysisPromise = null;
+                figureDepthAnalysisId = '';
             }
-            figureDepthAnalysisPromise = null;
-            figureDepthAnalysisId = '';
             finishFigureOperation(operation);
         }
     })();
@@ -4302,6 +4321,14 @@ function invalidateArticleWorkspaceLifecycle() {
     llmOperationState.active = null;
     figureOperationState.active = null;
     llmProgressiveAnalysis = null;
+    llmAnalysisPromise = null;
+    figureAnalysisPromise = null;
+    figureDepthAnalysisPromise = null;
+    figureDepthAnalysisId = '';
+    crossFigureLogicPromise = null;
+    reviewOutlinePromise = null;
+    articleChatPumpPromise = null;
+    articleWorkspaceMutationTail = Promise.resolve();
     if (chatOperationId) {
         chrome.runtime.sendMessage({
             type: 'LLM_CONTROL_OPERATION',
@@ -4717,17 +4744,22 @@ async function runArticleChatTurn(turn) {
 
 function pumpArticleChatQueue() {
     if (articleChatPumpPromise) return articleChatPumpPromise;
-    articleChatPumpPromise = (async () => {
-        while (true) {
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
+    let pumpPromise;
+    pumpPromise = (async () => {
+        while (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
             const nextTurn = articleChatState.turns.find(turn => turn.status === 'queued');
             if (!nextTurn) break;
             await runArticleChatTurn(nextTurn);
         }
     })().finally(() => {
-        articleChatPumpPromise = null;
-        const queued = articleChatState.turns.some(turn => turn.status === 'queued');
-        if (queued) void pumpArticleChatQueue();
+        if (articleChatPumpPromise === pumpPromise) {
+            articleChatPumpPromise = null;
+            const queued = articleChatState.turns.some(turn => turn.status === 'queued');
+            if (queued) void pumpArticleChatQueue();
+        }
     });
+    articleChatPumpPromise = pumpPromise;
     return articleChatPumpPromise;
 }
 
@@ -4767,6 +4799,7 @@ async function cancelArticleChatWithLLM() {
 }
 
 function removeArticleChatTurn(turnId, { queuedOnly = false } = {}) {
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const normalizedTurnId = String(turnId || '').slice(0, 160);
     const index = articleChatState.turns.findIndex(turn => turn.turnId === normalizedTurnId);
     if (index < 0) return { success: true, deleted: false };
@@ -4779,11 +4812,8 @@ function removeArticleChatTurn(turnId, { queuedOnly = false } = {}) {
     }
     articleChatState.turns.splice(index, 1);
     articleChatState.memoryNeedsRebuild = true;
-    void ensureCurrentArticleWorkspace().then(workspace => chrome.runtime.sendMessage({
-        type: 'ARTICLE_WORKSPACE_DELETE_TURN',
-        workspaceId: workspace.workspaceId,
-        turnId: normalizedTurnId
-    })).catch(() => undefined);
+    void deleteWorkspaceTurnCheckpoint(normalizedTurnId, { workspaceLifecycle })
+        .catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_removed', null, { turnId: normalizedTurnId });
     return { success: true, deleted: true, turnId: normalizedTurnId };
@@ -4849,19 +4879,17 @@ function clearArticleChat() {
         error.code = 'ARTICLE_CHAT_BUSY';
         throw error;
     }
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     articleChatGeneration += 1;
     const deletedTurnIds = articleChatState.turns.map(turn => turn.turnId).filter(Boolean);
     articleChatState = {
         turns: [], loading: false, error: '', operationId: '', activeTurnId: '',
         coverage: null, memoryNeedsRebuild: true
     };
-    void ensureCurrentArticleWorkspace().then(async workspace => {
-        for (const turnId of deletedTurnIds) {
-            await chrome.runtime.sendMessage({
-                type: 'ARTICLE_WORKSPACE_DELETE_TURN', workspaceId: workspace.workspaceId, turnId
-            });
-        }
-    }).catch(() => undefined);
+    deletedTurnIds.forEach(turnId => {
+        void deleteWorkspaceTurnCheckpoint(turnId, { workspaceLifecycle })
+            .catch(() => undefined);
+    });
     scheduleCurrentArticleArchiveSave();
     scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyArticleChatStateChanged('chat_cleared');
@@ -4918,7 +4946,9 @@ async function analyzeCrossFigureLogicWithLLM({ forceRefresh = false } = {}) {
             };
             throw error;
         } finally {
-            crossFigureLogicPromise = null;
+            if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+                crossFigureLogicPromise = null;
+            }
         }
     })();
     return crossFigureLogicPromise;
@@ -5251,7 +5281,9 @@ async function analyzeFiguresWithLLM(options = {}) {
         showLlmPageStatus('逐图解读失败：' + error.message, 'error');
         throw error;
     } finally {
-        figureAnalysisPromise = null;
+        if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+            figureAnalysisPromise = null;
+        }
         finishFigureOperation(operation);
     }
 }
@@ -5746,23 +5778,30 @@ function articleWorkspaceAssetFingerprint(content) {
 
 function persistWorkspaceAssetCheckpoint(relativePath, content, { force = false } = {}) {
     if (articleWorkspaceSaveFrozen) return Promise.resolve({ saved: false, frozen: true });
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const path = String(relativePath || '');
     const fingerprint = articleWorkspaceAssetFingerprint(content);
     if (!force && fingerprint && articleWorkspaceAssetFingerprints.get(path) === fingerprint) {
         return Promise.resolve({ saved: false, unchanged: true });
     }
     const mutation = articleWorkspaceMutationTail.then(async () => {
+        if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) {
+            return { saved: false, stale: true };
+        }
         if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
         if (!force && fingerprint && articleWorkspaceAssetFingerprints.get(path) === fingerprint) {
             return { saved: false, unchanged: true };
         }
         const workspace = await ensureCurrentArticleWorkspace();
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         const response = await chrome.runtime.sendMessage({
             type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
             workspaceId: workspace.workspaceId,
+            workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
             relativePath: path,
             content
         });
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success) {
             throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_SAVE_FAILED');
         }
@@ -5777,28 +5816,37 @@ function persistWorkspaceTurnCheckpoint(turn, { append = false, force = false } 
     if (!turn?.turnId || articleWorkspaceSaveFrozen) {
         return Promise.resolve({ saved: false, frozen: articleWorkspaceSaveFrozen });
     }
+    const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const publicTurn = publicArticleChatTurn(turn);
     const turnPath = `chat/turns/${encodeURIComponent(publicTurn.turnId).slice(0, 240)}.json`;
     const fingerprint = articleWorkspaceAssetFingerprint(publicTurn);
     const mutation = articleWorkspaceMutationTail.then(async () => {
+        if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) {
+            return { saved: false, stale: true };
+        }
         if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
         if (!append && !force && fingerprint &&
             articleWorkspaceAssetFingerprints.get(turnPath) === fingerprint) {
             return { saved: false, unchanged: true };
         }
         const workspace = await ensureCurrentArticleWorkspace();
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         const response = await chrome.runtime.sendMessage({
             type: append ? 'ARTICLE_WORKSPACE_SAVE_TURN' : 'ARTICLE_WORKSPACE_UPDATE_TURN',
             workspaceId: workspace.workspaceId,
+            workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
             turnId: publicTurn.turnId,
             turn: publicTurn
         });
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success && !append && response?.error?.code === 'TURN_NOT_FOUND') {
             const fallback = await chrome.runtime.sendMessage({
                 type: 'ARTICLE_WORKSPACE_SAVE_TURN',
                 workspaceId: workspace.workspaceId,
+                workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
                 turn: publicTurn
             });
+            assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
             if (!fallback?.success) {
                 throw new Error(fallback?.error?.message || 'ARTICLE_WORKSPACE_TURN_SAVE_FAILED');
             }
@@ -5808,6 +5856,40 @@ function persistWorkspaceTurnCheckpoint(turn, { append = false, force = false } 
             throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_TURN_SAVE_FAILED');
         }
         if (fingerprint) articleWorkspaceAssetFingerprints.set(turnPath, fingerprint);
+        return response.data;
+    });
+    articleWorkspaceMutationTail = mutation.catch(() => undefined);
+    return mutation;
+}
+
+function deleteWorkspaceTurnCheckpoint(turnId, options = {}) {
+    if (articleWorkspaceSaveFrozen) {
+        return Promise.resolve({ deleted: false, frozen: true });
+    }
+    const workspaceLifecycle = Number.isInteger(options.workspaceLifecycle)
+        ? options.workspaceLifecycle : articleWorkspaceLifecycleGeneration;
+    const normalizedTurnId = String(turnId || '').slice(0, 160);
+    if (!normalizedTurnId) return Promise.resolve({ deleted: false, missing: true });
+    const mutation = articleWorkspaceMutationTail.then(async () => {
+        if (workspaceLifecycle !== articleWorkspaceLifecycleGeneration) {
+            return { deleted: false, stale: true };
+        }
+        if (articleWorkspaceSaveFrozen) return { deleted: false, frozen: true };
+        const workspace = await ensureCurrentArticleWorkspace();
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
+        const response = await chrome.runtime.sendMessage({
+            type: 'ARTICLE_WORKSPACE_DELETE_TURN',
+            workspaceId: workspace.workspaceId,
+            workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
+            turnId: normalizedTurnId
+        });
+        assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
+        if (!response?.success) {
+            throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_TURN_DELETE_FAILED');
+        }
+        articleWorkspaceAssetFingerprints.delete(
+            `chat/turns/${encodeURIComponent(normalizedTurnId).slice(0, 240)}.json`
+        );
         return response.data;
     });
     articleWorkspaceMutationTail = mutation.catch(() => undefined);
@@ -7198,7 +7280,9 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
     try {
         return await reviewOutlinePromise;
     } finally {
-        reviewOutlinePromise = null;
+        if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+            reviewOutlinePromise = null;
+        }
     }
 }
 

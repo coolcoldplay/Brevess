@@ -289,6 +289,17 @@ test('external workspace deletion invalidates stale tasks before rebuilding an e
   }
   assert.match(script, /function invalidateArticleWorkspaceLifecycle\(/);
   assert.match(script, /articleWorkspaceLifecycleGeneration \+= 1/);
+  for (const promiseName of [
+    'llmAnalysisPromise',
+    'figureAnalysisPromise',
+    'figureDepthAnalysisPromise',
+    'crossFigureLogicPromise',
+    'reviewOutlinePromise',
+    'articleChatPumpPromise'
+  ]) {
+    assert.match(script, new RegExp(`${promiseName} = null`));
+  }
+  assert.match(script, /articleWorkspaceMutationTail = Promise\.resolve\(\)/);
   assert.match(script, /generation !== articleChatGeneration/);
   assert.match(script, /if \(generation !== articleChatGeneration\) return/);
   assert.match(script, /STALE_WORKSPACE_LIFECYCLE/);
@@ -297,4 +308,22 @@ test('external workspace deletion invalidates stale tasks before rebuilding an e
   assert.match(script, /notifyFigureWorkspaceStateChanged\('workspace_cleared'\)/);
   assert.match(background, /coordinateOpenArticleWorkspaceTabs/);
   assert.match(background, /workspaceLifecycle:\s*Number\.isInteger\(message\.workspaceLifecycle\)/);
+});
+
+test('stale Figure completions and persistence mutations are generation guarded', () => {
+  const script = read('content.js');
+  const router = read('core/background-router.js');
+  const guardedFigureFinishes = script.match(
+    /finishSingleFigureProgress\(state\.figure, (?:error|null), operation\)/g
+  ) || [];
+  assert.ok(guardedFigureFinishes.length >= 5);
+  assert.match(script, /while \(workspaceLifecycle === articleWorkspaceLifecycleGeneration\)/);
+  assert.match(script, /if \(articleChatPumpPromise === pumpPromise\)/);
+  assert.match(script, /workspaceGeneration: Number\(workspace\.workspaceGeneration\) \|\| 1/);
+  assert.match(script, /return \{ saved: false, stale: true \}/);
+  assert.match(script, /function deleteWorkspaceTurnCheckpoint\(/);
+  assert.match(script, /articleWorkspaceMutationTail\.then\(async \(\) =>/);
+  assert.match(script, /deleteWorkspaceTurnCheckpoint\(normalizedTurnId/);
+  assert.match(router, /function assertWorkspaceMutationGeneration\(/);
+  assert.match(router, /WORKSPACE_GENERATION_CONFLICT/);
 });

@@ -2647,12 +2647,21 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
   assert.equal((await router.handle({ type: 'ARTICLE_WORKSPACE_ENSURE', workspace })).success, true);
   assert.equal((await router.handle({
     type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
     relativePath: 'ui/state.json', content: { view: 'chat' }
   })).success, true);
   assert.equal((await router.handle({
     type: 'ARTICLE_WORKSPACE_SAVE_TURN', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
     turn: { turnId: 'turn-1', role: 'user', content: 'Question' }
   })).success, true);
+  const staleMutation = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 2,
+    relativePath: 'ui/stale-state.json', content: { view: 'stale' }
+  });
+  assert.equal(staleMutation.success, false);
+  assert.equal(staleMutation.error.code, 'WORKSPACE_GENERATION_CONFLICT');
   const scan = await router.handle({
     type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: {
       canonicalUrl: workspace.canonicalUrl, contentHash: workspace.contentHash
