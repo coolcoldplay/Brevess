@@ -6,6 +6,41 @@
   function createAnthropicAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'anthropic',
+      generateTextStream(request) {
+        const images = shared.normalizeImageInputs(request.images);
+        const content = images.length ? [
+          { type: 'text', text: request.userPrompt },
+          ...images.map(image => ({
+            type: 'image',
+            source: { type: 'base64', media_type: image.mediaType, data: image.data }
+          }))
+        ] : request.userPrompt;
+        return shared.createProviderTextStream({
+          fetchImpl,
+          url: config.baseUrl || 'https://api.anthropic.com/v1/messages',
+          providerId: 'anthropic',
+          model: config.model,
+          protocol: 'anthropic',
+          request,
+          options: {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': config.apiKey,
+              'anthropic-version': config.anthropicVersion || '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: config.model,
+              max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              system: String(request.systemPrompt || ''),
+              messages: [{ role: 'user', content }],
+              stream: true
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          }
+        });
+      },
       async generateJson(request) {
         const startedAt = Date.now();
         const images = shared.normalizeImageInputs(request.images);

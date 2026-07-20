@@ -247,6 +247,485 @@
     }
   }
 
+  const MAX_PROVIDER_STREAM_EVENT_CHARS = 64 * 1024;
+  const MAX_PROVIDER_STREAM_BUFFER_CHARS = 256 * 1024;
+  const MAX_NON_STREAM_FALLBACK_CHARS = 4 * 1024 * 1024;
+
+  function streamTransportError(value, fallback = 'Provider stream failed') {
+    const error = new Error(String(value?.message || fallback).slice(0, 240));
+    error.name = String(value?.name || 'TypeError').slice(0, 80);
+    return error;
+  }
+
+  function responseHeadersFromStreamStart(value) {
+    return {
+      get(name) {
+        const key = String(name || '').toLowerCase();
+        if (key === 'retry-after') return String(value?.retryAfter || '') || null;
+        if (key === 'content-type') return String(value?.contentType || '') || null;
+        return null;
+      }
+    };
+  }
+
+  async function* readableResponseChunks(response) {
+    if (!response?.body?.getReader) {
+      const body = String(await response.text());
+      for (let offset = 0; offset < body.length; offset += MAX_PROVIDER_STREAM_EVENT_CHARS) {
+        yield body.slice(offset, offset + MAX_PROVIDER_STREAM_EVENT_CHARS);
+      }
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let completed = false;
+    try {
+      while (true) {
+        const item = await reader.read();
+        if (item.done) {
+          completed = true;
+          break;
+        }
+        const bytes = item.value instanceof Uint8Array
+          ? item.value : new Uint8Array(item.value || []);
+        for (let offset = 0; offset < bytes.length; offset += MAX_PROVIDER_STREAM_EVENT_CHARS) {
+          const text = decoder.decode(
+            bytes.subarray(offset, offset + MAX_PROVIDER_STREAM_EVENT_CHARS),
+            { stream: true }
+          );
+          if (text) yield text;
+        }
+      }
+      const tail = decoder.decode();
+      if (tail) yield tail;
+    } finally {
+      if (!completed) {
+        try { await reader.cancel?.(); } catch { /* Preserve the provider result. */ }
+      }
+      try { reader.releaseLock?.(); } catch { /* Preserve the provider result. */ }
+    }
+  }
+
+  async function openProviderTextTransport(fetchImpl, url, fetchOptions) {
+    if (typeof fetchImpl?.stream !== 'function') {
+      const response = await fetchImpl(url, fetchOptions);
+      return {
+        ok: Boolean(response?.ok),
+        status: Number(response?.status) || 0,
+        headers: response?.headers || { get() { return null; } },
+        chunks: readableResponseChunks(response)
+      };
+    }
+    const iterator = fetchImpl.stream(url, fetchOptions)[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    if (first.done || first.value?.type === 'error') {
+      throw streamTransportError(first.value?.error);
+    }
+    if (first.value?.type === 'cancelled') {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
+    if (first.value?.type !== 'started') {
+      throw new ProviderRequestError('INVALID_RESPONSE', 'Offscreen stream did not start correctly');
+    }
+    const started = first.value;
+    return {
+      ok: started.ok === true || (Number(started.status) >= 200 && Number(started.status) < 300),
+      status: Number(started.status) || 0,
+      headers: responseHeadersFromStreamStart(started),
+      chunks: (async function* transportChunks() {
+        while (true) {
+          const item = await iterator.next();
+          if (item.done) return;
+          const event = item.value || {};
+          if (event.type === 'chunk') {
+            yield String(event.text || '').slice(0, MAX_PROVIDER_STREAM_EVENT_CHARS);
+            continue;
+          }
+          if (event.type === 'completed') return;
+          if (event.type === 'cancelled') {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            throw error;
+          }
+          if (event.type === 'error') throw streamTransportError(event.error);
+        }
+      })()
+    };
+  }
+
+  function createSseFrameDecoder() {
+    let buffer = '';
+    function parseBlock(block) {
+      let eventName = '';
+      const dataLines = [];
+      for (const line of block.replace(/\r\n?/g, '\n').split('\n')) {
+        if (!line || line.startsWith(':')) continue;
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) return null;
+      return { event: eventName, data: dataLines.join('\n') };
+    }
+    function pull(final = false) {
+      const frames = [];
+      let boundary = buffer.match(/\r\n\r\n|\n\n|\r\r/);
+      while (boundary) {
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        const frame = parseBlock(block);
+        if (frame) frames.push(frame);
+        boundary = buffer.match(/\r\n\r\n|\n\n|\r\r/);
+      }
+      if (final && buffer.trim() && /^(?:event:|data:|:)/m.test(buffer.trimStart())) {
+        const frame = parseBlock(buffer);
+        buffer = '';
+        if (frame) frames.push(frame);
+      }
+      if (buffer.length > MAX_PROVIDER_STREAM_BUFFER_CHARS) {
+        throw new ProviderRequestError('INVALID_RESPONSE', 'Provider streaming event exceeded the parser limit');
+      }
+      return frames;
+    }
+    return {
+      push(value) {
+        buffer += String(value || '');
+        return pull(false);
+      },
+      finish() { return pull(true); }
+    };
+  }
+
+  function parseStreamJson(frame) {
+    if (frame.data === '[DONE]') return { done: true };
+    try {
+      return { data: JSON.parse(frame.data), event: frame.event };
+    } catch {
+      throw new ProviderRequestError('INVALID_RESPONSE', 'Provider returned malformed streaming data');
+    }
+  }
+
+  function protocolEvents(protocol, frame) {
+    const parsed = parseStreamJson(frame);
+    if (parsed.done) return [{ kind: 'done' }];
+    const data = parsed.data || {};
+    if (data.error) {
+      throw new ProviderRequestError('PROVIDER_REJECTED', 'Provider rejected the streaming request');
+    }
+    if (protocol === 'openai-responses') {
+      const type = data.type || parsed.event;
+      if (type === 'response.output_text.delta' && typeof data.delta === 'string') {
+        return [{ kind: 'delta', text: data.delta }];
+      }
+      if (type === 'response.completed' || type === 'response.incomplete') {
+        const response = data.response || data;
+        return [
+          ...(response.usage ? [{ kind: 'usage', usage: response.usage }] : []),
+          {
+            kind: 'finish',
+            reason: response.status === 'incomplete'
+              ? response.incomplete_details?.reason || 'incomplete' : response.status || 'completed'
+          }
+        ];
+      }
+      return [];
+    }
+    if (protocol === 'anthropic') {
+      const type = data.type || parsed.event;
+      if (type === 'content_block_delta' && data.delta?.type === 'text_delta' &&
+          typeof data.delta.text === 'string') {
+        return [{ kind: 'delta', text: data.delta.text }];
+      }
+      if (type === 'message_start') {
+        return data.message?.usage ? [{ kind: 'usage', usage: data.message.usage }] : [];
+      }
+      if (type === 'message_delta') {
+        return [
+          ...(data.usage ? [{ kind: 'usage', usage: data.usage }] : []),
+          ...(data.delta?.stop_reason
+            ? [{ kind: 'finish', reason: data.delta.stop_reason }] : [])
+        ];
+      }
+      if (type === 'message_stop') return [{ kind: 'done' }];
+      return [];
+    }
+    if (protocol === 'gemini') {
+      const candidate = data.candidates?.[0] || {};
+      const text = (Array.isArray(candidate.content?.parts) ? candidate.content.parts : [])
+        .map(part => typeof part?.text === 'string' ? part.text : '').join('');
+      return [
+        ...(text ? [{ kind: 'delta', text }] : []),
+        ...(data.usageMetadata ? [{ kind: 'usage', usage: data.usageMetadata }] : []),
+        ...(candidate.finishReason
+          ? [{ kind: 'finish', reason: candidate.finishReason }] : [])
+      ];
+    }
+    const choice = data.choices?.[0] || {};
+    return [
+      ...(typeof choice.delta?.content === 'string' && choice.delta.content
+        ? [{ kind: 'delta', text: choice.delta.content }] : []),
+      ...(data.usage ? [{ kind: 'usage', usage: data.usage }] : []),
+      ...(choice.finish_reason ? [{ kind: 'finish', reason: choice.finish_reason }] : [])
+    ];
+  }
+
+  function nonStreamProtocolResult(protocol, data) {
+    if (protocol === 'openai-responses') {
+      let text = typeof data?.output_text === 'string' ? data.output_text : '';
+      if (!text) {
+        text = (Array.isArray(data?.output) ? data.output : []).flatMap(output =>
+          Array.isArray(output?.content) ? output.content : []
+        ).filter(item => item?.type === 'output_text')
+          .map(item => String(item?.text || '')).join('');
+      }
+      return {
+        text,
+        usage: data?.usage,
+        finishReason: data?.status === 'incomplete'
+          ? data?.incomplete_details?.reason || 'incomplete' : data?.status || 'completed'
+      };
+    }
+    if (protocol === 'anthropic') {
+      return {
+        text: (Array.isArray(data?.content) ? data.content : [])
+          .filter(item => item?.type === 'text').map(item => String(item?.text || '')).join(''),
+        usage: data?.usage,
+        finishReason: data?.stop_reason || 'end_turn'
+      };
+    }
+    if (protocol === 'gemini') {
+      const candidate = data?.candidates?.[0] || {};
+      return {
+        text: (Array.isArray(candidate.content?.parts) ? candidate.content.parts : [])
+          .map(item => String(item?.text || '')).join(''),
+        usage: data?.usageMetadata,
+        finishReason: candidate.finishReason || 'STOP'
+      };
+    }
+    const choice = data?.choices?.[0] || {};
+    return {
+      text: typeof choice.message?.content === 'string' ? choice.message.content : '',
+      usage: data?.usage,
+      finishReason: choice.finish_reason || 'stop'
+    };
+  }
+
+  function mergeStreamUsage(target, value) {
+    if (!value || typeof value !== 'object') return false;
+    Object.entries(value).forEach(([key, item]) => {
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        target[key] = { ...(target[key] || {}), ...item };
+      } else if (item !== undefined && item !== null) {
+        target[key] = item;
+      }
+    });
+    return true;
+  }
+
+  function normalizeStreamUsage(value = {}) {
+    return {
+      inputTokens: boundedUsageNumber(
+        value.input_tokens ?? value.prompt_tokens ?? value.promptTokenCount
+      ),
+      outputTokens: boundedUsageNumber(
+        value.output_tokens ?? value.completion_tokens ?? value.candidatesTokenCount
+      ),
+      reasoningTokens: boundedUsageNumber(
+        value.output_tokens_details?.reasoning_tokens ??
+        value.completion_tokens_details?.reasoning_tokens ?? value.thoughtsTokenCount
+      ),
+      cacheHitTokens: boundedUsageNumber(
+        value.prompt_cache_hit_tokens ?? value.cache_read_input_tokens ??
+        value.cached_content_token_count
+      ),
+      cacheMissTokens: boundedUsageNumber(value.prompt_cache_miss_tokens)
+    };
+  }
+
+  function publicStreamError(error) {
+    return {
+      code: String(error?.code || 'NETWORK_ERROR').slice(0, 80),
+      message: String(error?.message || 'Provider stream failed').slice(0, 240),
+      retryable: error?.retryable === true,
+      status: Math.max(0, Number(error?.status) || 0),
+      retryAfterMs: Math.max(0, Number(error?.retryAfterMs) || 0)
+    };
+  }
+
+  function isTruncatedFinishReason(value) {
+    return /^(?:length|max_tokens|max_output_tokens|MAX_TOKENS|incomplete)$/i
+      .test(String(value || ''));
+  }
+
+  async function* createProviderTextStream({
+    fetchImpl,
+    url,
+    options = {},
+    protocol = 'openai-chat',
+    providerId = '',
+    model = '',
+    request = {}
+  } = {}) {
+    yield { type: 'started', providerId: String(providerId), model: String(model) };
+    const {
+      signal: externalSignal,
+      timeoutMs: requestedTimeout,
+      ...fetchOptions
+    } = options || {};
+    const controller = new AbortController();
+    let timedOut = false;
+    const forwardAbort = () => controller.abort();
+    if (externalSignal?.aborted) controller.abort();
+    else externalSignal?.addEventListener('abort', forwardAbort, { once: true });
+    const timeoutMs = Number.isFinite(Number(requestedTimeout))
+      ? Math.max(1, Number(requestedTimeout)) : 240000;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    const startedAt = Date.now();
+    const requestBytes = requestByteLength(fetchOptions.body);
+    let responseStatus = 0;
+    try {
+      const transport = await openProviderTextTransport(fetchImpl, url, {
+        ...fetchOptions,
+        signal: controller.signal
+      });
+      responseStatus = transport.status;
+      if (!transport.ok) {
+        let responseBody = '';
+        for await (const chunk of transport.chunks) {
+          responseBody += chunk;
+          if (responseBody.length >= 16 * 1024) break;
+        }
+        throw errorFromStatus(transport.status, {
+          retryAfterMs: parseRetryAfter(transport.headers?.get?.('Retry-After')),
+          responseBody: responseBody.slice(0, 16 * 1024),
+          diagnosticStage: 'response-body',
+          requestBytes,
+          elapsedMs: Math.max(0, Date.now() - startedAt)
+        });
+      }
+
+      const decoder = createSseFrameDecoder();
+      let fallback = '';
+      let sawSse = false;
+      let sawText = false;
+      let finishReason = '';
+      let usageSeen = false;
+      const usage = {};
+      const consume = function* consumeFrames(frames) {
+        for (const frame of frames) {
+          sawSse = true;
+          fallback = '';
+          for (const item of protocolEvents(protocol, frame)) {
+            if (item.kind === 'delta') {
+              const text = String(item.text || '');
+              if (text.length > MAX_PROVIDER_STREAM_EVENT_CHARS) {
+                throw new ProviderRequestError(
+                  'INVALID_RESPONSE', 'Provider text delta exceeded the event limit'
+                );
+              }
+              if (text) {
+                sawText = true;
+                yield { type: 'text_delta', text };
+              }
+            } else if (item.kind === 'usage') {
+              usageSeen = mergeStreamUsage(usage, item.usage) || usageSeen;
+            } else if (item.kind === 'finish') {
+              finishReason = String(item.reason || finishReason);
+            }
+          }
+        }
+      };
+
+      for await (const chunk of transport.chunks) {
+        if (!sawSse) {
+          fallback += chunk;
+          if (fallback.length > MAX_NON_STREAM_FALLBACK_CHARS) {
+            throw new ProviderRequestError(
+              'INVALID_RESPONSE', 'Non-stream provider fallback exceeded the response limit'
+            );
+          }
+        }
+        for (const event of consume(decoder.push(chunk))) yield event;
+      }
+      for (const event of consume(decoder.finish())) yield event;
+
+      if (!sawSse) {
+        let data;
+        try { data = JSON.parse(fallback.trim()); } catch {
+          throw new ProviderRequestError('INVALID_RESPONSE', 'Provider returned invalid streaming JSON');
+        }
+        const result = nonStreamProtocolResult(protocol, data);
+        const text = String(result.text || '');
+        if (text.length > MAX_NON_STREAM_FALLBACK_CHARS) {
+          throw new ProviderRequestError('INVALID_RESPONSE', 'Provider fallback text exceeded the limit');
+        }
+        if (text) {
+          sawText = true;
+          for (let offset = 0; offset < text.length; offset += MAX_PROVIDER_STREAM_EVENT_CHARS) {
+            yield { type: 'text_delta', text: text.slice(offset, offset + MAX_PROVIDER_STREAM_EVENT_CHARS) };
+          }
+        }
+        usageSeen = mergeStreamUsage(usage, result.usage) || usageSeen;
+        finishReason = result.finishReason || finishReason;
+      }
+
+      if (!sawText) {
+        throw new ProviderRequestError('INVALID_RESPONSE', 'Provider stream did not contain text');
+      }
+      emitProviderTelemetry(request, {
+        providerId, model, elapsedMs: Date.now() - startedAt,
+        finishReason, usage
+      });
+      if (usageSeen) yield { type: 'usage', usage: normalizeStreamUsage(usage) };
+      if (isTruncatedFinishReason(finishReason)) {
+        throw new ProviderRequestError('OUTPUT_TRUNCATED', 'Model output reached its token limit');
+      }
+      if (finishReason === 'insufficient_system_resource') {
+        throw new ProviderRequestError(
+          'PROVIDER_UNAVAILABLE', 'Provider inference resources are temporarily unavailable',
+          { retryable: true }
+        );
+      }
+      yield { type: 'completed', finishReason: finishReason || 'stop' };
+    } catch (error) {
+      if (error?.name === 'AbortError' || error?.code === 'CANCELLED') {
+        if (timedOut) {
+          const timeoutError = new ProviderRequestError(
+            'REQUEST_TIMEOUT', 'Provider request timed out', {
+              status: responseStatus,
+              retryable: true,
+              diagnosticStage: responseStatus ? 'response-body' : 'request',
+              requestBytes,
+              elapsedMs: Math.max(0, Date.now() - startedAt)
+            }
+          );
+          yield { type: 'error', error: publicStreamError(timeoutError) };
+        } else {
+          yield { type: 'cancelled' };
+        }
+      } else {
+        const normalized = error instanceof ProviderRequestError ? error : new ProviderRequestError(
+          'NETWORK_ERROR', 'Unable to reach the provider', {
+            status: responseStatus,
+            retryable: true,
+            diagnosticStage: responseStatus ? 'response-body' : 'request',
+            diagnosticType: error?.name || 'Error',
+            requestBytes,
+            elapsedMs: Math.max(0, Date.now() - startedAt)
+          }
+        );
+        yield { type: 'error', error: publicStreamError(normalized) };
+      }
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', forwardAbort);
+    }
+  }
+
   function parseSseContent(value) {
     const content = [];
     let sawEvent = false;
@@ -476,6 +955,7 @@
     parseRetryAfter,
     requestText,
     requestJson,
+    createProviderTextStream,
     requestSseJson,
     parseSseContent,
     parseJsonText,

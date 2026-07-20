@@ -6,6 +6,36 @@
   function createDeepSeekAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'deepseek',
+      generateTextStream(request) {
+        return shared.createProviderTextStream({
+          fetchImpl,
+          url: config.baseUrl || 'https://api.deepseek.com/chat/completions',
+          providerId: 'deepseek',
+          model: config.model,
+          protocol: 'openai-chat',
+          request,
+          options: {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+              model: config.model,
+              messages: [
+                { role: 'system', content: String(request.systemPrompt || '') },
+                { role: 'user', content: String(request.userPrompt || '') }
+              ],
+              thinking: { type: config.thinking === true ? 'enabled' : 'disabled' },
+              max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              stream: true,
+              stream_options: { include_usage: true }
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          }
+        });
+      },
       async generateJson(request) {
         const startedAt = Date.now();
         const responseText = await shared.requestText(fetchImpl, config.baseUrl || 'https://api.deepseek.com/chat/completions', {

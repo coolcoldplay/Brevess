@@ -93,3 +93,102 @@ test('forwards Retry-After metadata from the network worker', async () => {
   assert.equal(response.status, 503);
   assert.equal(response.headers.get('Retry-After'), '9');
 });
+
+function createFakePort(handlePost) {
+  const messageListeners = [];
+  const disconnectListeners = [];
+  return {
+    onMessage: { addListener(listener) { messageListeners.push(listener); } },
+    onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
+    postMessage(message) { handlePost(message, value => messageListeners.forEach(fn => fn(value))); },
+    disconnect() { disconnectListeners.forEach(listener => listener()); }
+  };
+}
+
+test('streams ordered worker chunks without buffering the full provider response', async () => {
+  const { createOffscreenFetch } = loadApi();
+  const posted = [];
+  const chromeApi = {
+    runtime: {
+      getURL: pathName => `chrome-extension://extension-id/${pathName}`,
+      async getContexts() { return [{ contextType: 'OFFSCREEN_DOCUMENT' }]; },
+      connect() {
+        return createFakePort((message, emit) => {
+          posted.push(message);
+          if (message.type !== 'SCI_OFFSCREEN_FETCH_STREAM') return;
+          queueMicrotask(() => {
+            emit({ requestId: message.requestId, type: 'started', status: 200, ok: true });
+            emit({ requestId: message.requestId, type: 'chunk', text: 'data: first\n\n' });
+            emit({ requestId: message.requestId, type: 'chunk', text: 'data: second\n\n' });
+            emit({ requestId: message.requestId, type: 'completed' });
+          });
+        });
+      }
+    },
+    offscreen: { async createDocument() {} }
+  };
+  const fetchImpl = createOffscreenFetch(chromeApi, {
+    requestIdFactory: () => 'stream-request-1'
+  });
+
+  const events = [];
+  for await (const event of fetchImpl.stream('https://api.example/v1/chat', {
+    method: 'POST', body: '{}'
+  })) events.push(event);
+
+  assert.deepEqual(events.map(event => event.type), [
+    'started', 'chunk', 'chunk', 'completed'
+  ]);
+  assert.equal(events[1].text, 'data: first\n\n');
+  assert.equal(posted[0].options.signal, undefined);
+  assert.equal(posted[0].requestId, 'stream-request-1');
+});
+
+test('aborting an offscreen stream sends cancellation to the network worker', async () => {
+  const { createOffscreenFetch } = loadApi();
+  const posted = [];
+  const chromeApi = {
+    runtime: {
+      getURL: pathName => `chrome-extension://extension-id/${pathName}`,
+      async getContexts() { return [{ contextType: 'OFFSCREEN_DOCUMENT' }]; },
+      connect() {
+        return createFakePort((message, emit) => {
+          posted.push(message);
+          if (message.type === 'SCI_OFFSCREEN_FETCH_STREAM') {
+            queueMicrotask(() => emit({
+              requestId: message.requestId, type: 'started', status: 200, ok: true
+            }));
+          }
+          if (message.type === 'SCI_OFFSCREEN_FETCH_CANCEL') {
+            queueMicrotask(() => emit({ requestId: message.requestId, type: 'cancelled' }));
+          }
+        });
+      }
+    },
+    offscreen: { async createDocument() {} }
+  };
+  const controller = new AbortController();
+  const iterator = createOffscreenFetch(chromeApi, {
+    requestIdFactory: () => 'stream-request-2'
+  }).stream('https://api.example/v1/chat', { signal: controller.signal })[Symbol.asyncIterator]();
+
+  assert.equal((await iterator.next()).value.type, 'started');
+  const terminal = iterator.next();
+  controller.abort();
+  assert.equal((await terminal).value.type, 'cancelled');
+  assert.equal(posted.at(-1).type, 'SCI_OFFSCREEN_FETCH_CANCEL');
+  assert.equal(posted.at(-1).requestId, 'stream-request-2');
+});
+
+test('offscreen worker stream branch reads response chunks and bounds each event', () => {
+  const worker = fs.readFileSync(
+    path.join(__dirname, '..', 'offscreen-network-worker.js'), 'utf8'
+  );
+  const bridge = fs.readFileSync(path.join(__dirname, '..', 'offscreen.js'), 'utf8');
+  assert.match(worker, /message\.type === 'stream'/);
+  assert.match(worker, /response\.body\?\.getReader/);
+  assert.match(worker, /MAX_STREAM_EVENT_BYTES/);
+  assert.match(worker, /controllers\.get\(message\.requestId\)\?\.abort\(\)/);
+  assert.match(bridge, /chrome\.runtime\.onConnect/);
+  assert.match(bridge, /SCI_OFFSCREEN_FETCH_STREAM/);
+});

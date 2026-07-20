@@ -6,6 +6,49 @@
   function createGeminiAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'gemini',
+      generateTextStream(request) {
+        const model = encodeURIComponent(config.model);
+        const defaultUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+        const configured = String(config.baseUrl || '').trim();
+        const baseUrl = configured
+          ? configured.replace(':generateContent', ':streamGenerateContent')
+          : defaultUrl;
+        const url = configured && !/[?&]alt=sse(?:&|$)/.test(baseUrl)
+          ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}alt=sse` : baseUrl;
+        const images = shared.normalizeImageInputs(request.images);
+        return shared.createProviderTextStream({
+          fetchImpl,
+          url,
+          providerId: 'gemini',
+          model: config.model,
+          protocol: 'gemini',
+          request,
+          options: {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': config.apiKey
+            },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: String(request.systemPrompt || '') }] },
+              contents: [{
+                role: 'user',
+                parts: [
+                  { text: String(request.userPrompt || '') },
+                  ...images.map(image => ({
+                    inlineData: { mimeType: image.mediaType, data: image.data }
+                  }))
+                ]
+              }],
+              generationConfig: {
+                maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens)
+              }
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          }
+        });
+      },
       async generateJson(request) {
         const startedAt = Date.now();
         const model = encodeURIComponent(config.model);

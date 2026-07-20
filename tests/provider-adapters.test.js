@@ -61,6 +61,44 @@ function sseResponse(content, status = 200) {
   };
 }
 
+function streamingTextResponse(chunks, status = 200) {
+  const values = chunks.map(chunk => new TextEncoder().encode(chunk));
+  let index = 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get() { return null; } },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            return index < values.length
+              ? { done: false, value: values[index++] }
+              : { done: true };
+          },
+          async cancel() {},
+          releaseLock() {}
+        };
+      }
+    },
+    async text() { return chunks.join(''); }
+  };
+}
+
+async function collectStream(iterable) {
+  const events = [];
+  for await (const event of iterable) events.push(event);
+  return events;
+}
+
+function sseEvents(events) {
+  return events.map(event => {
+    const eventName = event.event ? `event: ${event.event}\n` : '';
+    const data = event.data === '[DONE]' ? '[DONE]' : JSON.stringify(event.data);
+    return `${eventName}data: ${data}\n\n`;
+  });
+}
+
 function captureFetch(responseBody, inspect) {
   return async (url, options) => {
     inspect(url, options, JSON.parse(options.body));
@@ -151,6 +189,155 @@ test('all providers expose a generic structured JSON request', async () => {
     assert.equal(typeof adapter.generateJson, 'function');
     assert.equal((await adapter.generateJson(structuredRequest)).primary_type, 'clinical_trial');
   }
+});
+
+test('all providers stream normalized text, usage, and completion events', async () => {
+  const fixtures = {
+    openai: sseEvents([
+      { data: { type: 'response.output_text.delta', delta: '第一段' } },
+      { data: { type: 'response.output_text.delta', delta: '第二段' } },
+      { data: { type: 'response.completed', response: {
+        status: 'completed', usage: { input_tokens: 10, output_tokens: 6 }
+      } } },
+      { data: '[DONE]' }
+    ]),
+    anthropic: sseEvents([
+      { event: 'message_start', data: { type: 'message_start', message: {
+        usage: { input_tokens: 10 }
+      } } },
+      { event: 'content_block_delta', data: {
+        type: 'content_block_delta', delta: { type: 'text_delta', text: '第一段' }
+      } },
+      { event: 'content_block_delta', data: {
+        type: 'content_block_delta', delta: { type: 'text_delta', text: '第二段' }
+      } },
+      { event: 'message_delta', data: {
+        type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6 }
+      } },
+      { event: 'message_stop', data: { type: 'message_stop' } }
+    ]),
+    gemini: sseEvents([
+      { data: { candidates: [{ content: { parts: [{ text: '第一段' }] } }] } },
+      { data: { candidates: [{
+        content: { parts: [{ text: '第二段' }] }, finishReason: 'STOP'
+      }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 6 } } }
+    ]),
+    deepseek: sseEvents([
+      { data: { choices: [{ delta: { content: '第一段' }, finish_reason: null }] } },
+      { data: { choices: [{ delta: { content: '第二段' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 6, prompt_cache_hit_tokens: 4 } } },
+      { data: '[DONE]' }
+    ]),
+    'openai-compatible': sseEvents([
+      { data: { choices: [{ delta: { content: '第一段' }, finish_reason: null }] } },
+      { data: { choices: [{ delta: { content: '第二段' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 6 } } },
+      { data: '[DONE]' }
+    ])
+  };
+
+  for (const [providerId, chunks] of Object.entries(fixtures)) {
+    let requestBody;
+    let requestUrl;
+    const adapter = createProviderAdapter({
+      providerId,
+      config: providerConfigFor(providerId),
+      fetchImpl: async (url, options) => {
+        requestUrl = url;
+        requestBody = JSON.parse(options.body);
+        return streamingTextResponse(chunks);
+      }
+    });
+    assert.equal(typeof adapter.generateTextStream, 'function', providerId);
+    const events = await collectStream(adapter.generateTextStream({
+      systemPrompt: 'SYSTEM', userPrompt: 'QUESTION', maxOutputTokens: 4096
+    }));
+    assert.deepEqual(events.map(event => event.type), [
+      'started', 'text_delta', 'text_delta', 'usage', 'completed'
+    ], providerId);
+    assert.equal(events.filter(event => event.type === 'text_delta')
+      .map(event => event.text).join(''), '第一段第二段', providerId);
+    assert.equal(events.find(event => event.type === 'usage').usage.inputTokens, 10);
+    if (providerId === 'gemini') assert.match(requestUrl, /:streamGenerateContent\?alt=sse$/);
+    else assert.equal(requestBody.stream, true, providerId);
+  }
+});
+
+test('streaming adapters normalize cache telemetry and length termination', async () => {
+  const cacheAdapter = createProviderAdapter({
+    providerId: 'deepseek', config: providerConfigFor('deepseek'),
+    fetchImpl: async () => streamingTextResponse(sseEvents([
+      { data: { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }], usage: {
+        prompt_tokens: 9, completion_tokens: 2, prompt_cache_hit_tokens: 7,
+        prompt_cache_miss_tokens: 2
+      } } },
+      { data: '[DONE]' }
+    ]))
+  });
+  const cached = await collectStream(cacheAdapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION'
+  }));
+  assert.equal(cached.find(event => event.type === 'usage').usage.cacheHitTokens, 7);
+  assert.equal(cached.find(event => event.type === 'usage').usage.cacheMissTokens, 2);
+
+  const truncatedAdapter = createProviderAdapter({
+    providerId: 'openai-compatible', config: providerConfigFor('openai-compatible'),
+    fetchImpl: async () => streamingTextResponse(sseEvents([
+      { data: { choices: [{ delta: { content: 'partial' }, finish_reason: 'length' }] } },
+      { data: '[DONE]' }
+    ]))
+  });
+  const truncated = await collectStream(truncatedAdapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION'
+  }));
+  assert.deepEqual(truncated.map(event => event.type), ['started', 'text_delta', 'error']);
+  assert.equal(truncated.at(-1).error.code, 'OUTPUT_TRUNCATED');
+});
+
+test('streaming adapters report malformed events and support non-stream JSON fallback', async () => {
+  const malformedAdapter = createProviderAdapter({
+    providerId: 'anthropic', config: providerConfigFor('anthropic'),
+    fetchImpl: async () => streamingTextResponse(['event: content_block_delta\ndata: {bad json}\n\n'])
+  });
+  const malformed = await collectStream(malformedAdapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION'
+  }));
+  assert.equal(malformed.at(-1).type, 'error');
+  assert.equal(malformed.at(-1).error.code, 'INVALID_RESPONSE');
+
+  const fallbackAdapter = createProviderAdapter({
+    providerId: 'openai-compatible', config: providerConfigFor('openai-compatible'),
+    fetchImpl: async () => jsonResponse({
+      choices: [{ finish_reason: 'stop', message: { content: 'fallback text' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 }
+    })
+  });
+  const fallback = await collectStream(fallbackAdapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION'
+  }));
+  assert.equal(fallback.find(event => event.type === 'text_delta').text, 'fallback text');
+  assert.equal(fallback.at(-1).type, 'completed');
+});
+
+test('streaming adapters emit a terminal cancelled event when the request is aborted', async () => {
+  const adapter = createProviderAdapter({
+    providerId: 'openai-compatible', config: providerConfigFor('openai-compatible'),
+    fetchImpl: (url, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(Object.assign(
+        new Error('aborted'), { name: 'AbortError' }
+      )), { once: true });
+    })
+  });
+  const controller = new AbortController();
+  const iterator = adapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION', signal: controller.signal
+  })[Symbol.asyncIterator]();
+
+  assert.equal((await iterator.next()).value.type, 'started');
+  const terminal = iterator.next();
+  controller.abort();
+  assert.equal((await terminal).value.type, 'cancelled');
+  assert.equal((await iterator.next()).done, true);
 });
 
 test('normalizes bounded raster image data URLs for multimodal requests', () => {

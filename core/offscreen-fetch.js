@@ -101,7 +101,7 @@
       });
     }
 
-    return async function offscreenFetch(url, fetchOptions = {}) {
+    async function offscreenFetch(url, fetchOptions = {}) {
       await ensureOffscreenDocument();
       const { signal, ...serializableOptions } = fetchOptions || {};
       const result = await sendWithAbort({
@@ -112,7 +112,86 @@
         options: serializableOptions
       }, signal);
       return responseFromResult(result);
+    }
+
+    offscreenFetch.stream = async function* offscreenStream(url, fetchOptions = {}) {
+      await ensureOffscreenDocument();
+      const { signal, ...serializableOptions } = fetchOptions || {};
+      const requestId = requestIdFactory();
+      if (signal?.aborted) {
+        yield { requestId, type: 'cancelled' };
+        return;
+      }
+      const port = chromeApi.runtime.connect({ name: 'sci-offscreen-network-stream' });
+      const queue = [];
+      const waiters = [];
+      let terminal = false;
+      let cancelled = false;
+
+      const deliver = event => {
+        if (!event || event.requestId !== requestId || terminal) return;
+        const normalized = { ...event, requestId };
+        if (normalized.type === 'chunk') {
+          normalized.text = String(normalized.text || '').slice(0, 64 * 1024);
+        }
+        if (['completed', 'error', 'cancelled'].includes(normalized.type)) terminal = true;
+        const waiter = waiters.shift();
+        if (waiter) waiter(normalized);
+        else queue.push(normalized);
+      };
+      const disconnected = () => {
+        if (terminal) return;
+        deliver({
+          requestId,
+          type: cancelled ? 'cancelled' : 'error',
+          error: cancelled ? undefined : {
+            name: 'TypeError', message: 'Offscreen stream disconnected'
+          }
+        });
+      };
+      const nextEvent = () => queue.length
+        ? Promise.resolve(queue.shift())
+        : new Promise(resolve => waiters.push(resolve));
+      const cancel = () => {
+        if (terminal || cancelled) return;
+        cancelled = true;
+        try {
+          port.postMessage({
+            type: 'SCI_OFFSCREEN_FETCH_CANCEL',
+            target: OFFSCREEN_TARGET,
+            requestId
+          });
+        } catch {
+          deliver({ requestId, type: 'cancelled' });
+        }
+      };
+
+      port.onMessage.addListener(deliver);
+      port.onDisconnect.addListener(disconnected);
+      signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        port.postMessage({
+          type: 'SCI_OFFSCREEN_FETCH_STREAM',
+          target: OFFSCREEN_TARGET,
+          requestId,
+          url,
+          options: serializableOptions
+        });
+        while (!terminal || queue.length) {
+          const event = await nextEvent();
+          yield event;
+          if (['completed', 'error', 'cancelled'].includes(event.type)) break;
+        }
+      } finally {
+        signal?.removeEventListener('abort', cancel);
+        if (!terminal) cancel();
+        try { port.onMessage.removeListener?.(deliver); } catch { /* Best effort. */ }
+        try { port.onDisconnect.removeListener?.(disconnected); } catch { /* Best effort. */ }
+        try { port.disconnect(); } catch { /* Best effort. */ }
+      }
     };
+
+    return offscreenFetch;
   }
 
   return { createOffscreenFetch };

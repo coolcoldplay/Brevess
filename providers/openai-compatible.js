@@ -6,6 +6,43 @@
   function createOpenAICompatibleAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'openai-compatible',
+      generateTextStream(request) {
+        const compatibleImages = config.supportsVision === true ? request.images : [];
+        const authHeader = config.authHeader || 'Authorization';
+        const prefix = config.authPrefix === undefined ? 'Bearer ' :
+          (config.authPrefix ? `${String(config.authPrefix).trim()} ` : '');
+        const headers = Object.assign({}, config.customHeaders || {}, {
+          'Content-Type': 'application/json',
+          [authHeader]: `${prefix}${config.apiKey}`
+        });
+        return shared.createProviderTextStream({
+          fetchImpl,
+          url: shared.joinEndpoint(config.baseUrl, '/chat/completions'),
+          providerId: 'openai-compatible',
+          model: config.model,
+          protocol: 'openai-chat',
+          request,
+          options: {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: config.model,
+              messages: [
+                { role: 'system', content: String(request.systemPrompt || '') },
+                {
+                  role: 'user',
+                  content: shared.openAIChatUserContent(request.userPrompt, compatibleImages)
+                }
+              ],
+              max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              stream: true,
+              stream_options: { include_usage: true }
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          }
+        });
+      },
       async generateJson(request) {
         const startedAt = Date.now();
         const compatibleImages = config.supportsVision === true ? request.images : [];

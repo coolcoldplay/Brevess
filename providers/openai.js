@@ -16,6 +16,41 @@
   function createOpenAIAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'openai',
+      generateTextStream(request) {
+        const images = shared.normalizeImageInputs(request.images);
+        const input = images.length ? [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: request.userPrompt },
+            ...images.map(image => ({ type: 'input_image', image_url: image.dataUrl }))
+          ]
+        }] : request.userPrompt;
+        return shared.createProviderTextStream({
+          fetchImpl,
+          url: config.baseUrl || 'https://api.openai.com/v1/responses',
+          providerId: 'openai',
+          model: config.model,
+          protocol: 'openai-responses',
+          request,
+          options: {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+              model: config.model,
+              instructions: request.systemPrompt,
+              input,
+              max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              store: false,
+              stream: true
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          }
+        });
+      },
       async generateJson(request) {
         const startedAt = Date.now();
         const responseSchema = request.responseSchema ||
