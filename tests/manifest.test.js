@@ -29,6 +29,7 @@ test('manifest opens an action-activated native side panel and injects extractio
 
 test('background worker keeps routed LLM operations alive until completion', () => {
   const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
   assert.match(
     background,
     /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'2\.4\.0'/
@@ -73,9 +74,19 @@ test('background worker keeps routed LLM operations alive until completion', () 
     'sidePanel.open must be invoked synchronously inside the toolbar user gesture'
   );
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
+  const tabUpdatedStart = background.indexOf('chrome.tabs.onUpdated.addListener');
+  const tabUpdatedEnd = background.indexOf('chrome.tabs.onRemoved.addListener', tabUpdatedStart);
+  const tabUpdatedListener = background.slice(tabUpdatedStart, tabUpdatedEnd);
+  assert.match(tabUpdatedListener, /armTabSidePanelRestore/);
+  assert.doesNotMatch(tabUpdatedListener, /clearTabActivation/);
+  assert.match(background, /async function armTabSidePanelRestore/);
+  assert.match(background, /for \(const delayMs of \[0, 40, 120\]\)/);
   assert.match(background, /chrome\.tabs\.onActivated\.addListener/);
   assert.match(background, /const activatedSidePanelTabIds = new Set\(\)/);
   assert.match(background, /action: 'armSidePanelRestore'/);
+  assert.match(background, /message\?\.type === 'SIDE_PANEL_DOCUMENT_READY'/);
+  assert.match(content, /window\.addEventListener\('pageshow', announceSidePanelDocumentReady, true\)/);
+  assert.match(content, /type: 'SIDE_PANEL_DOCUMENT_READY'/);
   assert.match(background, /SIDE_PANEL_RESTORE_FROM_USER_GESTURE/);
   assert.match(background, /chrome\.sidePanel\.open\(\{ tabId \}\)/);
   assert.match(background, /activatedSidePanelTabIds\.delete\(tabId\)/);

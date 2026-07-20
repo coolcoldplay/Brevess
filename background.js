@@ -78,6 +78,8 @@ async function setTabSidePanelAvailability(tabId, enabled) {
 }
 
 const activatedSidePanelTabIds = new Set();
+const pendingSidePanelRestoreTabIds = new Set();
+const tabSidePanelNavigationGenerations = new Map();
 
 async function syncTabSidePanelAvailability(tab) {
   if (!tab?.id) return false;
@@ -92,6 +94,23 @@ async function syncActiveTabSidePanels() {
   if (!chrome.tabs?.query) return;
   const tabs = await chrome.tabs.query({});
   await Promise.all(tabs.map(syncTabSidePanelAvailability));
+}
+
+async function armTabSidePanelRestore(tabId, windowId) {
+  let lastError = null;
+  for (const delayMs of [0, 40, 120]) {
+    if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
+    try {
+      await SciLLM.sendTabMessageWithRecovery(chrome, tabId, {
+        action: 'armSidePanelRestore',
+        windowId
+      });
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('SIDE_PANEL_RESTORE_ARM_FAILED');
 }
 
 function beginToolbarSidePanelOpen(tab) {
@@ -169,31 +188,43 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
       // because the API requires a user gesture. Arm a lightweight page-level
       // restore action so the first real pointer/key gesture reopens this tab's
       // panel without changing the user's click target.
-      await chrome.tabs.sendMessage(tabId, {
-        action: 'armSidePanelRestore',
-        windowId
-      }).catch(() => {});
+      await armTabSidePanelRestore(tabId, windowId).catch(() => {});
     }
   }).catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!changeInfo.url) return;
-  SciLLM.isTabActivated(chrome.storage.session, tab).then(stillActivated => {
-    if (stillActivated) {
-      activatedSidePanelTabIds.add(tabId);
-      return setTabSidePanelAvailability(tabId, true);
+  if (!changeInfo.url && !changeInfo.status) return;
+  const generation = (tabSidePanelNavigationGenerations.get(tabId) || 0) + 1;
+  tabSidePanelNavigationGenerations.set(tabId, generation);
+  SciLLM.isTabActivated(chrome.storage.session, tab).then(async stillActivated => {
+    if (tabSidePanelNavigationGenerations.get(tabId) !== generation) return;
+    const wasAvailable = activatedSidePanelTabIds.has(tabId);
+    if (!stillActivated) {
+      activatedSidePanelTabIds.delete(tabId);
+      pendingSidePanelRestoreTabIds.delete(tabId);
+      await setTabSidePanelAvailability(tabId, false);
+      return;
     }
-    activatedSidePanelTabIds.delete(tabId);
-    return Promise.all([
-      SciLLM.clearTabActivation(chrome.storage.session, tabId),
-      setTabSidePanelAvailability(tabId, false)
-    ]);
+    activatedSidePanelTabIds.add(tabId);
+    if (!wasAvailable || changeInfo.status === 'loading') {
+      pendingSidePanelRestoreTabIds.add(tabId);
+    }
+    await setTabSidePanelAvailability(tabId, true);
+    const documentReady = changeInfo.status === 'complete' ||
+      (Boolean(changeInfo.url) && tab.status === 'complete');
+    if (!documentReady || !pendingSidePanelRestoreTabIds.has(tabId)) return;
+    await armTabSidePanelRestore(tabId, tab.windowId);
+    if (tabSidePanelNavigationGenerations.get(tabId) === generation) {
+      pendingSidePanelRestoreTabIds.delete(tabId);
+    }
   }).catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
   activatedSidePanelTabIds.delete(tabId);
+  pendingSidePanelRestoreTabIds.delete(tabId);
+  tabSidePanelNavigationGenerations.delete(tabId);
   SciLLM.clearTabActivation(chrome.storage.session, tabId).catch(() => {});
 });
 
@@ -375,6 +406,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: true, data });
       })
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
+  }
+
+  if (message?.type === 'SIDE_PANEL_DOCUMENT_READY' && sender.tab?.id) {
+    const tab = {
+      ...sender.tab,
+      // Treat the browser-owned sender URL as authoritative. The payload is
+      // only a fallback for older Chromium builds that omit it during pageshow.
+      url: String(sender.tab.url || message.url || '')
+    };
+    SciLLM.isTabActivated(chrome.storage.session, tab).then(async activated => {
+      if (activated) {
+        activatedSidePanelTabIds.add(tab.id);
+        pendingSidePanelRestoreTabIds.delete(tab.id);
+        await setTabSidePanelAvailability(tab.id, true);
+      }
+      sendResponse({ success: true, activated });
+    }).catch(error => sendResponse({
+      success: false,
+      activated: false,
+      error: error.message
+    }));
     return true;
   }
 

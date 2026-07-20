@@ -1833,6 +1833,18 @@ function armSidePanelRestore() {
     return true;
 }
 
+function announceSidePanelDocumentReady() {
+    chrome.runtime.sendMessage({
+        type: 'SIDE_PANEL_DOCUMENT_READY',
+        url: location.href
+    }).then(response => {
+        if (response?.success && response.activated) armSidePanelRestore();
+    }).catch(() => {});
+}
+
+window.addEventListener('pageshow', announceSidePanelDocumentReady, true);
+setTimeout(announceSidePanelDocumentReady, 0);
+
 function manualElementForNode(node) {
     if (!node) return null;
     return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;

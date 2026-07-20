@@ -350,6 +350,120 @@ async function readDiagnosticDownload(download) {
     actualExtractionRuns
   };
 
+  const awayUrl = 'https://example.org/non-article-navigation-target';
+  await fixture.route(awayUrl, route => route.fulfill({
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    body: '<!doctype html><title>Ordinary page</title><main><h1>Ordinary page</h1></main>'
+  }));
+  await fixture.goto(awayUrl, { waitUntil: 'domcontentloaded' });
+  let awaySidePanelOptions = null;
+  const awayStartedAt = Date.now();
+  while (Date.now() - awayStartedAt < 3000) {
+    awaySidePanelOptions = await worker.evaluate(
+      tabId => chrome.sidePanel.getOptions({ tabId }), fixtureTab.id
+    );
+    if (awaySidePanelOptions.enabled === false) break;
+    await fixture.waitForTimeout(40);
+  }
+  const activationWhileAway = await worker.evaluate(async ({ tabId, url }) => ({
+    record: await SciLLM.readTabActivation(chrome.storage.session, tabId),
+    awayActivated: await SciLLM.isTabActivated(chrome.storage.session, { id: tabId, url })
+  }), { tabId: fixtureTab.id, url: awayUrl });
+  await fixture.goBack({ waitUntil: 'domcontentloaded' });
+  await fixture.waitForFunction(() =>
+    document.documentElement.dataset.sciLlmContentRevision ===
+      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+  );
+  let returnedSidePanelOptions = null;
+  const returnStartedAt = Date.now();
+  while (Date.now() - returnStartedAt < 3000) {
+    returnedSidePanelOptions = await worker.evaluate(
+      tabId => chrome.sidePanel.getOptions({ tabId }), fixtureTab.id
+    );
+    if (returnedSidePanelOptions.enabled === true) break;
+    await fixture.waitForTimeout(40);
+  }
+  const returnHandleReady = await fixture.locator('#sci-side-panel-restore').waitFor({
+    state: 'visible', timeout: 3000
+  }).then(() => true).catch(() => false);
+  if (!returnHandleReady) {
+    const diagnostic = await worker.evaluate(async tabId => {
+      const tab = await chrome.tabs.get(tabId);
+      const options = await chrome.sidePanel.getOptions({ tabId });
+      const activation = await SciLLM.readTabActivation(chrome.storage.session, tabId);
+      const [{ result: content }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: () => ({
+          revision: document.documentElement.dataset.sciLlmContentRevision || '',
+          restoreArmed: sidePanelRestoreArmed,
+          restoreButton: Boolean(document.getElementById('sci-side-panel-restore'))
+        })
+      });
+      return {
+        tab: { url: tab.url, status: tab.status },
+        options,
+        activation,
+        activatedSet: activatedSidePanelTabIds.has(tabId),
+        pendingRestore: pendingSidePanelRestoreTabIds.has(tabId),
+        navigationGeneration: tabSidePanelNavigationGenerations.get(tabId) || 0,
+        content
+      };
+    }, fixtureTab.id);
+    throw new Error(`Returned paper did not arm side-panel restore: ${JSON.stringify(diagnostic)}`);
+  }
+  const returnRestoreHandleVisible = await fixture.locator(
+    '#sci-side-panel-restore'
+  ).isVisible();
+  await fixture.locator('h1').click();
+  await fixture.locator('#sci-side-panel-restore').waitFor({
+    state: 'detached', timeout: 1200
+  });
+  const returnRestoreHandleCleared =
+    await fixture.locator('#sci-side-panel-restore').count() === 0;
+  await sidePanel.waitForFunction(() =>
+    document.getElementById('sidePanelPaperTitle')?.textContent ===
+      'OA mechanism review test'
+  );
+  const activationAfterReturn = await worker.evaluate(async tabId => {
+    const record = await SciLLM.readTabActivation(chrome.storage.session, tabId);
+    return {
+      documentUrls: (record?.documents || []).map(document => document.url),
+      currentActivated: await SciLLM.isTabActivated(chrome.storage.session, {
+        id: tabId,
+        url: 'https://example.org/oa-mechanism-review'
+      })
+    };
+  }, fixtureTab.id);
+  await fixture.reload({ waitUntil: 'domcontentloaded' });
+  await fixture.waitForFunction(() =>
+    document.documentElement.dataset.sciLlmContentRevision ===
+      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+  );
+  await sidePanel.waitForFunction(() =>
+    document.getElementById('sidePanelPaperTitle')?.textContent ===
+      'OA mechanism review test'
+  );
+  const refreshedSidePanelOptions = await worker.evaluate(
+    tabId => chrome.sidePanel.getOptions({ tabId }), fixtureTab.id
+  );
+  const navigationLifecycleQa = {
+    awayDisabled: awaySidePanelOptions?.enabled === false,
+    awayNotActivated: activationWhileAway.awayActivated === false,
+    activationPreservedWhileAway: (activationWhileAway.record?.documents || [])
+      .some(document => document.url === 'https://example.org/oa-mechanism-review'),
+    returnedEnabled: returnedSidePanelOptions?.enabled === true,
+    returnRestoreHandleVisible,
+    returnRestoreHandleCleared,
+    returnedActivated: activationAfterReturn.currentActivated === true,
+    rememberedDocumentUrls: activationAfterReturn.documentUrls,
+    refreshContentInjected: await fixture.evaluate(() =>
+      document.documentElement.dataset.sciLlmContentRevision ===
+        '2.4.0-article-workspaces-r1'),
+    refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
+    titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
+  };
+
   await fixture.bringToFront();
   const [diagnosticDownload] = await Promise.all([
     sidePanel.waitForEvent('download', { timeout: 30000 }),
@@ -1757,6 +1871,7 @@ async function readDiagnosticDownload(download) {
     afterActivationRevision,
     activated,
     multiTab,
+    navigationLifecycleQa,
     pageOverlayCount,
     archive: {
       kind: archive.kind,
@@ -1829,6 +1944,19 @@ async function readDiagnosticDownload(download) {
     multiTab.actualExtractionRuns === 1 &&
     multiTab.switchBackMs < 1500 &&
     multiTab.restoreHandleCleared &&
+    results.navigationLifecycleQa.awayDisabled &&
+    results.navigationLifecycleQa.awayNotActivated &&
+    results.navigationLifecycleQa.activationPreservedWhileAway &&
+    results.navigationLifecycleQa.returnedEnabled &&
+    results.navigationLifecycleQa.returnRestoreHandleVisible &&
+    results.navigationLifecycleQa.returnRestoreHandleCleared &&
+    results.navigationLifecycleQa.returnedActivated &&
+    results.navigationLifecycleQa.rememberedDocumentUrls.includes(
+      'https://example.org/oa-mechanism-review'
+    ) &&
+    results.navigationLifecycleQa.refreshContentInjected &&
+    results.navigationLifecycleQa.refreshSidePanelEnabled &&
+    results.navigationLifecycleQa.titleAfterRefresh === 'OA mechanism review test' &&
     pageOverlayCount === 0 &&
     results.manualSelectionQa.toolbarVisible &&
     (results.manualSelectionQa.categoryActions > 0 || results.manualSelectionQa.hasMore) &&

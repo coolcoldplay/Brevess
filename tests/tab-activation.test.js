@@ -24,7 +24,7 @@ function createSessionStorage() {
   };
 }
 
-test('tab activation is scoped to one tab and one document URL', async () => {
+test('tab activation remembers a bounded set of document URLs within one tab', async () => {
   assert.equal(typeof activation.markTabActivated, 'function');
   const storage = createSessionStorage();
   const tab = {
@@ -45,14 +45,79 @@ test('tab activation is scoped to one tab and one document URL', async () => {
     ...tab,
     id: 43
   }), false);
+
+  const second = {
+    ...tab,
+    url: 'https://publisher.example/article/two#methods',
+    title: 'Paper two'
+  };
+  const secondMarked = await activation.markTabActivated(storage, second);
+  assert.equal(secondMarked.documents.length, 2);
+  assert.equal(await activation.isTabActivated(storage, tab), true);
+  assert.equal(await activation.isTabActivated(storage, second), true);
+  assert.equal(await activation.isTabActivated(storage, {
+    ...tab,
+    url: 'https://publisher.example/not-an-activated-paper'
+  }), false);
 });
 
-test('closing or navigating a tab clears its activation marker', async () => {
+test('closing a tab explicitly clears every remembered document activation', async () => {
   const storage = createSessionStorage();
   const tab = { id: 7, url: 'https://example.org/paper' };
   await activation.markTabActivated(storage, tab);
   assert.equal(await activation.isTabActivated(storage, tab), true);
   await activation.clearTabActivation(storage, tab.id);
   assert.equal(await activation.isTabActivated(storage, tab), false);
+});
+
+test('tab activation evicts the oldest paper after the per-tab history limit', async () => {
+  const storage = createSessionStorage();
+  const tabId = 88;
+  const total = activation.MAX_ACTIVATED_DOCUMENTS_PER_TAB + 3;
+  for (let index = 0; index < total; index += 1) {
+    await activation.markTabActivated(storage, {
+      id: tabId,
+      url: `https://publisher.example/article/${index}`,
+      title: `Paper ${index}`
+    });
+  }
+
+  const record = await activation.readTabActivation(storage, tabId);
+  assert.equal(record.documents.length, activation.MAX_ACTIVATED_DOCUMENTS_PER_TAB);
+  assert.equal(record.documents[0].url, `https://publisher.example/article/${total - 1}`);
+  assert.equal(await activation.isTabActivated(storage, {
+    id: tabId,
+    url: 'https://publisher.example/article/0'
+  }), false);
+  assert.equal(await activation.isTabActivated(storage, {
+    id: tabId,
+    url: `https://publisher.example/article/${total - 1}`
+  }), true);
+});
+
+test('legacy single-paper activation records remain readable', async () => {
+  const storage = createSessionStorage();
+  const tabId = 17;
+  await storage.set({
+    [activation.tabActivationStorageKey(tabId)]: {
+      tabId,
+      url: 'https://publisher.example/legacy-paper#figure-2',
+      title: 'Legacy paper',
+      activatedAt: 123
+    }
+  });
+
+  assert.equal(await activation.isTabActivated(storage, {
+    id: tabId,
+    url: 'https://publisher.example/legacy-paper'
+  }), true);
+  const updated = await activation.markTabActivated(storage, {
+    id: tabId,
+    url: 'https://publisher.example/new-paper'
+  });
+  assert.deepEqual(updated.documents.map(item => item.url), [
+    'https://publisher.example/new-paper',
+    'https://publisher.example/legacy-paper'
+  ]);
 });
 
