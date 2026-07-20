@@ -37,18 +37,32 @@ test('keeps article chat and Panel output budgets within their independent floor
   });
 });
 
+test('uses the model cap as the recovery ceiling without inflating the first request', () => {
+  assert.deepEqual(computeOutputTokenBudget('articleChat', {
+    units: 100, adapterCap: 384000
+  }), { initial: 32768, ceiling: 384000, mode: 'auto' });
+  assert.deepEqual(computeOutputTokenBudget('panelChat', {
+    units: 1, adapterCap: 384000
+  }), { initial: 2560, ceiling: 384000, mode: 'auto' });
+  assert.deepEqual(computeOutputTokenBudget('figurePanel', {
+    units: 1, adapterCap: 384000
+  }), { initial: 2048, ceiling: 384000, mode: 'auto' });
+});
+
 test('subtracts output and fixed reservations from the model context window', () => {
   assert.deepEqual(computeInputTokenBudget({
     contextWindowTokens: 32768,
     outputTokens: 8192,
     reservedTokens: 2048,
-    systemTokens: 1024
+    systemTokens: 1024,
+    safetyRatio: 0.9
   }), {
     contextWindowTokens: 32768,
     outputTokens: 8192,
     reservedTokens: 2048,
     systemTokens: 1024,
-    available: 21504
+    usableContextWindowTokens: 29491,
+    available: 18227
   });
 });
 
@@ -82,7 +96,10 @@ test('uses a bounded rounded manual budget', () => {
   }), { initial: 512, ceiling: 512, mode: 'manual' });
   assert.deepEqual(computeOutputTokenBudget('highlight', {
     tokenPolicy: { mode: 'manual', manualMax: 999999 }
-  }), { initial: 65536, ceiling: 65536, mode: 'manual' });
+  }), { initial: 1000192, ceiling: 1000192, mode: 'manual' });
+  assert.deepEqual(computeOutputTokenBudget('articleChat', {
+    tokenPolicy: { mode: 'manual', manualMax: 999999 }, adapterCap: 384000
+  }), { initial: 384000, ceiling: 384000, mode: 'manual' });
   for (const manualMax of ['not-a-number', '', 0, -1]) {
     assert.deepEqual(computeOutputTokenBudget('highlight', {
       tokenPolicy: { mode: 'manual', manualMax }

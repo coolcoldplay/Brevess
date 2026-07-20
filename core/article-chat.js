@@ -3,6 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const MAX_ARTICLE_CHAT_SEGMENTS = 8;
   function normalizeText(value, maximum = 16000) {
     return String(value || '').normalize('NFKC').replace(/\0/g, '')
       .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -291,10 +292,14 @@
     };
   }
 
-  function continuationOutputTokens(plan) {
+  function continuationOutputTokens(plan, currentOutputTokens) {
     const initial = Math.max(512, Number(plan?.outputBudgetTokens?.initial) || 4096);
     const ceiling = Math.max(initial, Number(plan?.outputBudgetTokens?.ceiling) || initial);
-    const contextWindow = Math.max(0, Number(plan?.contextWindowTokens) || 0);
+    const contextWindow = Math.max(
+      0,
+      Number(plan?.inputBudgetTokens?.usableContextWindowTokens) ||
+        Number(plan?.contextWindowTokens) || 0
+    );
     const estimatedInput = Math.max(0, Number(plan?.estimatedInputTokens) || 0);
     const reserved = Math.max(0, Number(plan?.inputBudgetTokens?.reservedTokens) || 0);
     const system = Math.max(0, Number(plan?.inputBudgetTokens?.systemTokens) || 0);
@@ -302,7 +307,9 @@
       0, contextWindow - estimatedInput - reserved - system - 512
     ) / 256) * 256;
     if (safeHeadroom <= initial) return initial;
-    return Math.min(ceiling, safeHeadroom);
+    const current = Math.max(initial, Number(currentOutputTokens) || initial);
+    const next = Math.ceil((current * 1.75) / 256) * 256;
+    return Math.min(ceiling, safeHeadroom, next);
   }
 
   function compatibilityMessage(state, limited) {
@@ -373,7 +380,7 @@
     let currentOutputTokens = prepared.plan.outputBudgetTokens.initial;
 
     try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (let attempt = 0; attempt < MAX_ARTICLE_CHAT_SEGMENTS; attempt += 1) {
         if (options.signal?.aborted) throw operationCancelledError();
         await options.waitIfPaused?.();
         const current = parser.snapshot();
@@ -446,12 +453,15 @@
           !validCompleteResponse || (parserError && !validCompleteResponse);
         if (!needsContinuation) break;
         parser.discardPending();
-        if (attempt === 0) {
+        if (attempt < MAX_ARTICLE_CHAT_SEGMENTS - 1) {
           continuationCount += 1;
           repairFormat = Boolean(parserError);
           recoverTruncation = terminalError?.code === 'OUTPUT_TRUNCATED';
           if (recoverTruncation) {
-            currentOutputTokens = continuationOutputTokens(prepared.plan);
+            currentOutputTokens = continuationOutputTokens(
+              prepared.plan,
+              currentOutputTokens
+            );
           }
           report(repairFormat ? {
             phase: 'chat_repairing_format',

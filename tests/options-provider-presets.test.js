@@ -16,6 +16,15 @@ test('renders a compatible provider preset selector that persists the selected p
   assert.match(script, /config\.presetId/);
 });
 
+test('provider selection offers model suggestions while preserving free text input', () => {
+  assert.match(html, /<input[^>]*id="model"[^>]*list="modelSuggestions"/);
+  assert.match(html, /<datalist[^>]*id="modelSuggestions"/);
+  assert.match(script, /function renderModelSuggestions\(/);
+  assert.match(script, /definition\?\.models/);
+  assert.match(script, /function handleProviderChange\(/);
+  assert.match(script, /defaultModel/);
+});
+
 test('compatible preset editing is scoped to the selected profile and preserves masked keys', () => {
   assert.match(script, /selectedProfileId/);
   assert.match(script, /function collectProfile\(/);

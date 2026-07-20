@@ -5,7 +5,8 @@ const {
   requestJson,
   requestSseJson,
   normalizeImageInputs,
-  splitDataUrl
+  splitDataUrl,
+  normalizeOutputTokenLimit
 } = require('../providers/provider-utils.js');
 require('../providers/openai.js');
 require('../providers/anthropic.js');
@@ -17,8 +18,15 @@ const {
   getProviderDefinitions,
   getCompatibleProviderPresets,
   getProviderCapabilities,
+  getProviderMaxOutputTokens,
   validateProviderConfig
 } = require('../providers/provider-registry.js');
+
+test('keeps large model-specific output limits instead of silently replacing them with 4096', () => {
+  assert.equal(normalizeOutputTokenLimit(384000), 384000);
+  assert.equal(getProviderMaxOutputTokens('openai', { model: 'deepseek-v4-pro' }), 384000);
+  assert.equal(normalizeOutputTokenLimit(2000001), 4096);
+});
 
 const analysisRequest = {
   systemPrompt: 'SYSTEM',

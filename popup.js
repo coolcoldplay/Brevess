@@ -349,6 +349,7 @@ let analysisMode = 'regex';
 let persistedAnalysisMode = 'regex';
 let llmSettingsState = null;
 const articleArchiveExportGuard = createInFlightActionGuard();
+const articleWorkspaceSaveGuard = createInFlightActionGuard();
 const settingsRouteSummaryRefresher = createLatestStateRefresher({
     load: () => sendLlmMessage({ type: 'LLM_GET_SETTINGS' }),
     apply: state => { llmSettingsState = state; }
@@ -696,6 +697,11 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             applyArticleChatStateEvent(message.event);
+        }
+        if (message?.type === 'FIGURE_WORKSPACE_STATE_CHANGED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            void refreshArticleWorkspace();
         }
     });
 }
@@ -2877,6 +2883,56 @@ function currentLocalArticleWorkspace() {
     return currentWorkspaceSnapshot?.localWorkspace || null;
 }
 
+async function saveCurrentArticleWorkspace() {
+    return articleWorkspaceSaveGuard.run(async () => {
+        const button = document.getElementById('saveCurrentArticleWorkspace');
+        const panelContext = capturePanelContext();
+        if (!isCurrentPanelContext(panelContext)) return;
+        if (button) {
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+        }
+        try {
+            const ensured = await sendTabMessage(panelContext.tabId, {
+                action: 'ensureArticleWorkspace', forceRefresh: true
+            });
+            if (!ensured?.success || !ensured.workspace) {
+                throw new Error(ensured?.error || '无法识别当前论文的本地工作区');
+            }
+            const permission = await sendLlmMessage({
+                type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+                identity: ensured.workspace,
+                requestPermission: true,
+                permissionOnly: true
+            });
+            if (permission.permission !== 'granted') {
+                throw new Error(permission.permission === 'unconfigured'
+                    ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+                    : '未获得本地文件夹读写权限，请再次点击并允许访问');
+            }
+            const saved = await sendTabMessage(panelContext.tabId, {
+                action: 'saveArticleWorkspaceNow'
+            });
+            if (!saved?.success) {
+                throw new Error(saved?.error || '当前论文工作区保存失败');
+            }
+            await sendLlmMessage({ type: 'USER_DATA_SYNC_NOW' });
+            if (!isCurrentPanelContext(panelContext)) return;
+            showStatus(
+                `已保存 ${saved.assetCount || 0} 个工作区文件和 ${saved.turnCount || 0} 轮问答到本地文件夹`,
+                'success'
+            );
+        } catch (error) {
+            showStatus(`保存到本地文件夹失败：${error.message}`, 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.removeAttribute('aria-busy');
+            }
+        }
+    });
+}
+
 function applyRestoredSidePanelUiState(uiState = null) {
     if (!uiState || typeof uiState !== 'object') return;
     if (Array.isArray(uiState.figureExpansion)) {
@@ -3014,6 +3070,8 @@ function setupArticleArchiveControls() {
     });
     document.getElementById('exportCurrentArticleArchive')
         ?.addEventListener('click', exportCurrentArticleArchive);
+    document.getElementById('saveCurrentArticleWorkspace')
+        ?.addEventListener('click', saveCurrentArticleWorkspace);
     document.getElementById('importCurrentArticleArchive')
         ?.addEventListener('change', importCurrentArticleArchive);
     document.getElementById('scanArticleWorkspace')

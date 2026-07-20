@@ -3,6 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+  const MAX_CONFIGURABLE_OUTPUT_TOKENS = 2000000;
   const RULES = Object.freeze({
     highlight: Object.freeze({ base: 2400, perUnit: 320, floor: 4096, ceiling: 16384 }),
     singleSummary: Object.freeze({ base: 800, perUnit: 160, floor: 1024, ceiling: 4096 }),
@@ -36,17 +37,32 @@
     if (tokenPolicy.mode === 'manual') {
       const requested = Number(tokenPolicy.manualMax);
       const manual = Number.isFinite(requested) && requested > 0
-        ? boundedNumber(requested, 512, 65536)
+        ? boundedNumber(requested, 512, MAX_CONFIGURABLE_OUTPUT_TOKENS)
         : 4096;
-      const fixed = roundUp256(manual);
+      const adapterCap = validCap(options.adapterCap);
+      const roundedAdapterCap = adapterCap
+        ? Math.max(512, Math.floor(adapterCap / 256) * 256)
+        : MAX_CONFIGURABLE_OUTPUT_TOKENS;
+      const fixed = Math.min(
+        MAX_CONFIGURABLE_OUTPUT_TOKENS,
+        roundedAdapterCap,
+        roundUp256(manual)
+      );
       return { initial: fixed, ceiling: fixed, mode: 'manual' };
     }
 
-    const caps = [rule.ceiling, validCap(tokenPolicy.autoCap), validCap(options.adapterCap)]
+    const recoveryCaps = [validCap(tokenPolicy.autoCap), validCap(options.adapterCap)]
       .filter(value => value !== null);
-    const ceiling = Math.max(rule.floor, Math.min(...caps));
+    const ceiling = Math.max(
+      rule.floor,
+      recoveryCaps.length ? Math.min(...recoveryCaps) : rule.ceiling
+    );
     const units = Math.max(1, Number(options.units) || 0);
-    const initial = Math.min(ceiling, Math.max(rule.floor, roundUp256(rule.base + rule.perUnit * units)));
+    const initial = Math.min(
+      ceiling,
+      rule.ceiling,
+      Math.max(rule.floor, roundUp256(rule.base + rule.perUnit * units))
+    );
     return { initial, ceiling, mode: 'auto' };
   }
 
@@ -55,18 +71,27 @@
     const outputTokens = Math.max(0, Math.floor(Number(options.outputTokens) || 0));
     const reservedTokens = Math.max(0, Math.floor(Number(options.reservedTokens) || 0));
     const systemTokens = Math.max(0, Math.floor(Number(options.systemTokens) || 0));
+    const requestedSafetyRatio = Number(options.safetyRatio);
+    const safetyRatio = Number.isFinite(requestedSafetyRatio)
+      ? Math.max(0.5, Math.min(1, requestedSafetyRatio)) : 1;
+    const usableContextWindowTokens = Math.floor(contextWindowTokens * safetyRatio);
     return {
       contextWindowTokens,
       outputTokens,
       reservedTokens,
       systemTokens,
-      available: Math.max(0, contextWindowTokens - outputTokens - reservedTokens - systemTokens)
+      usableContextWindowTokens,
+      available: Math.max(
+        0,
+        usableContextWindowTokens - outputTokens - reservedTokens - systemTokens
+      )
     };
   }
 
   function suggestedLimit(error) {
     const suggested = Number(error?.suggestedMaxOutputTokens);
-    return Number.isFinite(suggested) && suggested >= 512 && suggested <= 65536 ? suggested : null;
+    return Number.isFinite(suggested) && suggested >= 512 &&
+      suggested <= MAX_CONFIGURABLE_OUTPUT_TOKENS ? suggested : null;
   }
 
   function requestUnits(request) {

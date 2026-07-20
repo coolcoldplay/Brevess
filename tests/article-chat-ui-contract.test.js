@@ -100,6 +100,32 @@ test('side panel refreshes its shared paragraph snapshot after dynamic article c
   assert.match(popup, /void refreshArticleWorkspace\(\)/);
 });
 
+test('completed Figures publish an immediate workspace event and checkpoint before the batch ends', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const start = content.indexOf('async function analyzeFiguresWithLLM');
+  const end = content.indexOf('function setReviewOutlineDepth', start);
+  const workflow = content.slice(start, end);
+  assert.match(content, /function notifyFigureWorkspaceStateChanged\(/);
+  assert.match(workflow, /notifyFigureWorkspaceStateChanged\('figure_completed'/);
+  assert.match(workflow, /scheduleArticleWorkspaceArtifactsSave\(\{ immediate: true \}\)/);
+  assert.match(popup, /message\?\.type === 'FIGURE_WORKSPACE_STATE_CHANGED'/);
+  assert.match(popup, /void refreshArticleWorkspace/);
+});
+
+test('side panel can explicitly save all current workspace artifacts to the local folder', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  const content = read('content.js');
+  assert.match(html, /id="saveCurrentArticleWorkspace"/);
+  assert.match(popup, /async function saveCurrentArticleWorkspace\(/);
+  assert.match(popup, /action:\s*'saveArticleWorkspaceNow'/);
+  assert.match(popup, /type:\s*'USER_DATA_SYNC_NOW'/);
+  assert.match(content, /request\.action === 'saveArticleWorkspaceNow'/);
+  assert.match(content, /persistArticleWorkspaceArtifacts\(\{ force: true \}\)/);
+  assert.match(content, /persistWorkspaceTurnCheckpoint\(turn, \{[\s\S]{0,100}append: false,[\s\S]{0,100}force: true/);
+});
+
 test('article chat keeps unlimited turn and block state with immutable queued profiles', () => {
   const content = read('content.js');
   const start = content.indexOf('function createArticleChatTurn');

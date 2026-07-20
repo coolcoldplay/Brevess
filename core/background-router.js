@@ -1457,7 +1457,7 @@
       await waitForOperation(operation);
       const task = createTaskAdapter(
         settings, 'figure', { vision: true }, context, 'figurePanel',
-        { maxTokenLimitRetries: 0, maxTruncationRetries: 0, tokenPolicyCap: 4096 }
+        { maxTokenLimitRetries: 0, maxTruncationRetries: 3 }
       );
       const { adapter, rawAdapter, route, routePublic } = task;
       const profile = settings?.profiles?.[route.effectiveProfileId] || {};
@@ -2174,6 +2174,9 @@
           const permissionResult = await directorySync.requestDirectoryPermission();
           if (!permissionResult.granted) {
             return { permission: permissionResult.permission, manifests: [], matches: [] };
+          }
+          if (message.permissionOnly === true) {
+            return { permission: 'granted', manifests: [], matches: [] };
           }
         }
         requireDirectorySync('listWorkspaceManifests');

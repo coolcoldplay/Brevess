@@ -17,7 +17,7 @@
       this.retryAfterMs = Number.isFinite(options.retryAfterMs)
         ? Math.max(0, Math.min(300000, options.retryAfterMs)) : 0;
       this.suggestedMaxOutputTokens = Number.isFinite(options.suggestedMaxOutputTokens)
-        ? Math.max(512, Math.min(65536, Math.round(options.suggestedMaxOutputTokens))) : undefined;
+        ? Math.max(512, Math.min(2000000, Math.round(options.suggestedMaxOutputTokens))) : undefined;
     }
   }
 
@@ -70,7 +70,7 @@
       const match = text.match(new RegExp(pattern, 'i'));
       if (!match) continue;
       const suggested = Number(match[1]);
-      if (Number.isFinite(suggested) && suggested >= 512 && suggested <= 65536) return Math.round(suggested);
+      if (Number.isFinite(suggested) && suggested >= 512 && suggested <= 2000000) return Math.round(suggested);
     }
     return null;
   }
@@ -122,7 +122,7 @@
 
   function normalizeOutputTokenLimit(value) {
     const numeric = Number(value);
-    return Number.isFinite(numeric) && Number.isInteger(numeric) && numeric > 0 && numeric <= 65536
+    return Number.isFinite(numeric) && Number.isInteger(numeric) && numeric > 0 && numeric <= 2000000
       ? numeric : 4096;
   }
 

@@ -283,7 +283,7 @@ test('normalizes token policies, profile identity, and task routes', () => {
     mode: 'auto', autoCap: 768, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'auto', autoCap: 999999, manualMax: 8192 }), {
-    mode: 'auto', autoCap: 65536, manualMax: null
+    mode: 'auto', autoCap: 999936, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'manual', manualMax: 1, autoCap: 8192 }), {
     mode: 'manual', autoCap: null, manualMax: 512

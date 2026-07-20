@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindEvents() {
-  document.getElementById('providerId').addEventListener('change', renderProvider);
+  document.getElementById('providerId').addEventListener('change', handleProviderChange);
   document.getElementById('apiProfileList').addEventListener('click', event => {
     const button = event.target.closest('[data-profile-id]');
     if (!button) return;
@@ -1663,6 +1663,7 @@ function applyCompatiblePreset() {
   document.getElementById('supportsVision').checked = preset.supportsVision === true;
   markProfileEditorDirty();
   renderCompatiblePresetHint(preset);
+  renderModelSuggestions('openai-compatible');
   renderFigureRouteWarning();
 }
 
@@ -1822,6 +1823,36 @@ function renderCompatiblePresetOptions() {
   if (!select.value && select.options.length) select.selectedIndex = 0;
 }
 
+function renderModelSuggestions(providerId = document.getElementById('providerId')?.value) {
+  const list = document.getElementById('modelSuggestions');
+  const input = document.getElementById('model');
+  if (!list) return;
+  const definition = state?.providers?.[providerId];
+  const candidates = Array.isArray(definition?.models) ? [...definition.models] : [];
+  if (providerId === 'openai-compatible') {
+    const preset = compatiblePresetFor(document.getElementById('compatiblePreset')?.value);
+    if (preset?.defaultModel) candidates.push(preset.defaultModel);
+  }
+  if (input?.value) candidates.push(input.value);
+  list.replaceChildren();
+  [...new Set(candidates.map(value => String(value || '').trim()).filter(Boolean))]
+    .forEach(model => {
+      const option = document.createElement('option');
+      option.value = model;
+      list.appendChild(option);
+    });
+}
+
+function handleProviderChange() {
+  const providerId = document.getElementById('providerId').value;
+  const model = document.getElementById('model');
+  if (model.dataset.providerId && model.dataset.providerId !== providerId) {
+    model.value = state?.providers?.[providerId]?.defaultModel || '';
+  }
+  model.dataset.providerId = providerId;
+  renderProvider();
+}
+
 function renderProvider() {
   const providerId = document.getElementById('providerId').value;
   const compatible = providerId === 'openai-compatible';
@@ -1834,6 +1865,7 @@ function renderProvider() {
     renderCompatiblePresetOptions();
     renderCompatiblePresetHint(compatiblePresetFor(document.getElementById('compatiblePreset').value));
   }
+  renderModelSuggestions(providerId);
   renderFigureRouteWarning();
 }
 
@@ -1985,8 +2017,10 @@ function renderProfileEditor() {
   renderProviderOptions();
   document.getElementById('profileName').value = profile?.name || '';
   document.getElementById('providerId').value = profile?.providerId || entries[0][1]?.providerId || '';
-  document.getElementById('model').value = config.model ||
+  const model = document.getElementById('model');
+  model.value = config.model ||
     state.providers?.[profile?.providerId]?.defaultModel || '';
+  model.dataset.providerId = document.getElementById('providerId').value;
   const apiKey = document.getElementById('apiKey');
   apiKey.value = '';
   apiKey.placeholder = config.hasApiKey
@@ -2005,6 +2039,7 @@ function renderProfileEditor() {
     renderCompatiblePresetOptions();
     renderCompatiblePresetHint(compatiblePresetFor(config.presetId) || compatiblePresetFor('custom'));
   }
+  renderModelSuggestions(profile?.providerId);
   const tokenPolicy = profile?.tokenPolicy || {};
   document.getElementById('tokenModeAuto').checked = tokenPolicy.mode !== 'manual';
   document.getElementById('tokenModeManual').checked = tokenPolicy.mode === 'manual';

@@ -199,7 +199,7 @@
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
     const rounded = Math.round(numeric / 256) * 256;
-    return Math.max(512, Math.min(65536, rounded));
+    return Math.max(512, Math.min(2000000, rounded));
   }
 
   function createTokenPolicy(value = {}) {

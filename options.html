@@ -237,14 +237,14 @@
                 <label><input id="tokenModeAuto" name="tokenMode" type="radio" value="auto" checked> 自动（按任务预算）</label>
                 <label><input id="tokenModeManual" name="tokenMode" type="radio" value="manual"> 手动上限</label>
               </div>
-              <label id="autoTokenCapField" class="field"><span>自动上限（可留空）</span><input id="autoTokenCap" type="number" min="512" max="65536" step="256" placeholder="不设上限"></label>
-              <label id="manualMaxTokensField" class="field" hidden><span>手动最大 Token</span><input id="manualMaxTokens" type="number" min="512" max="65536" step="256" value="4096"></label>
+              <label id="autoTokenCapField" class="field"><span>自动上限（可留空）</span><input id="autoTokenCap" type="number" min="512" max="2000000" step="256" placeholder="按所选模型自动判断"></label>
+              <label id="manualMaxTokensField" class="field" hidden><span>手动最大 Token</span><input id="manualMaxTokens" type="number" min="512" max="2000000" step="256" value="4096"></label>
               <label class="field"><span>上下文窗口 Token（高级，可留空）</span><input id="contextWindowTokens" type="number" min="8192" max="2000000" step="1024" placeholder="使用插件的保守默认值"><small>仅在服务商明确给出窗口大小时填写；它与输出 Token 上限相互独立。</small></label>
             </fieldset>
             <div class="profile-connection-fields">
               <div class="form-grid two-columns">
                 <label class="field"><span>Provider</span><select id="providerId"></select></label>
-                <label class="field"><span>模型名称</span><input id="model" type="text" autocomplete="off" placeholder="输入模型 ID"></label>
+                <label class="field"><span>模型名称</span><input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID"><datalist id="modelSuggestions"></datalist><small>可从候选项选择，也可直接输入服务商支持的任意模型 ID。</small></label>
                 <label class="field"><span>API Key</span><input id="apiKey" type="password" autocomplete="new-password" placeholder="粘贴 API Key"><small>Key 仅保存在本机扩展存储中；保存后不会再次回显。</small></label>
               </div>
               <div id="compatibleFields" class="compatible-fields" hidden>

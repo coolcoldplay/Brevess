@@ -4216,6 +4216,22 @@ function notifyArticleChatStateChanged(kind, turn = null, extra = {}) {
     chrome.runtime.sendMessage({ type: 'ARTICLE_CHAT_STATE_CHANGED', event }).catch(() => {});
 }
 
+function notifyFigureWorkspaceStateChanged(kind, figure = null, extra = {}) {
+    const event = {
+        kind,
+        figureId: String(figure?.figureId || extra.figureId || ''),
+        figureLabel: String(figure?.figureLabel || extra.figureLabel || ''),
+        operationId: String(figureAnalysisStatus.operationId || ''),
+        completedFigures: Number(figureAnalysisStatus.completedFigures) || 0,
+        failedFigures: Number(figureAnalysisStatus.failedFigures) || 0,
+        totalFigures: Number(figureAnalysisStatus.totalFigures) || 0,
+        ...extra
+    };
+    chrome.runtime.sendMessage({
+        type: 'FIGURE_WORKSPACE_STATE_CHANGED', event
+    }).catch(() => {});
+}
+
 function attachArticleChatEvidenceIdentity(evidence, snapshot) {
     return (Array.isArray(evidence) ? evidence : []).map(item => {
         const candidate = {
@@ -4987,6 +5003,10 @@ async function analyzeFiguresWithLLM(options = {}) {
                         visionFallbacks,
                         message: figure.figureLabel + ' 已完成，准备下一张…'
                     });
+                    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
+                    notifyFigureWorkspaceStateChanged('figure_completed', figure, {
+                        analysisDepth
+                    });
                 } catch (error) {
                     if (error?.code === 'CANCELLED' || operation.cancelled) throw error;
                     const failure = {
@@ -5032,6 +5052,8 @@ async function analyzeFiguresWithLLM(options = {}) {
                             figure.figureLabel + '；' +
                             (SciLLM.isFatalFigureBatchError(error) ? '无法继续处理' : '继续下一张')
                     });
+                    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
+                    notifyFigureWorkspaceStateChanged('figure_failed', figure, { failure });
                     if (SciLLM.isFatalFigureBatchError(error)) throw error;
                     showLlmPageStatus(
                         figure.figureLabel + ' 解读失败，已保留成功结果并继续下一张：' + failure.message,
@@ -5648,7 +5670,7 @@ function persistWorkspaceAssetCheckpoint(relativePath, content, { force = false 
     return mutation;
 }
 
-function persistWorkspaceTurnCheckpoint(turn, { append = false } = {}) {
+function persistWorkspaceTurnCheckpoint(turn, { append = false, force = false } = {}) {
     if (!turn?.turnId || articleWorkspaceSaveFrozen) {
         return Promise.resolve({ saved: false, frozen: articleWorkspaceSaveFrozen });
     }
@@ -5657,7 +5679,7 @@ function persistWorkspaceTurnCheckpoint(turn, { append = false } = {}) {
     const fingerprint = articleWorkspaceAssetFingerprint(publicTurn);
     const mutation = articleWorkspaceMutationTail.then(async () => {
         if (articleWorkspaceSaveFrozen) return { saved: false, frozen: true };
-        if (!append && fingerprint &&
+        if (!append && !force && fingerprint &&
             articleWorkspaceAssetFingerprints.get(turnPath) === fingerprint) {
             return { saved: false, unchanged: true };
         }
@@ -5749,6 +5771,23 @@ async function persistArticleWorkspaceArtifacts({ force = false } = {}) {
         results.push(await persistWorkspaceAssetCheckpoint(path, content, { force }));
     }
     return { saved: true, results };
+}
+
+async function saveCurrentArticleWorkspaceNow() {
+    const artifacts = await persistArticleWorkspaceArtifacts({ force: true });
+    const turnResults = [];
+    for (const turn of articleChatState.turns) {
+        turnResults.push(await persistWorkspaceTurnCheckpoint(turn, {
+            append: false,
+            force: true
+        }));
+    }
+    return {
+        success: true,
+        workspace: currentArticleWorkspace,
+        assetCount: artifacts.results?.length || 0,
+        turnCount: turnResults.length
+    };
 }
 
 function scheduleArticleWorkspaceArtifactsSave({ immediate = false } = {}) {
@@ -7201,6 +7240,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === 'ensureArticleWorkspace') {
         ensureCurrentArticleWorkspace({ forceRefresh: request.forceRefresh === true })
             .then(workspace => sendResponse({ success: true, workspace }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'saveArticleWorkspaceNow') {
+        saveCurrentArticleWorkspaceNow()
+            .then(sendResponse)
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'saveArticleWorkspaceUiState') {
         articleWorkspaceSidePanelUiState = request.uiState && typeof request.uiState === 'object'

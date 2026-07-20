@@ -6,23 +6,32 @@
   const DEFINITIONS = {
     openai: {
       label: 'OpenAI', defaultModel: 'gpt-5-mini',
-      supportsVision: true, visionInputFormat: 'openai', contextWindowTokens: 128000
+      models: ['gpt-5-mini', 'gpt-5', 'gpt-4.1'],
+      supportsVision: true, visionInputFormat: 'openai',
+      contextWindowTokens: 128000, maxOutputTokens: 65536
     },
     anthropic: {
       label: 'Anthropic Claude', defaultModel: 'claude-sonnet-4-6',
-      supportsVision: true, visionInputFormat: 'anthropic', contextWindowTokens: 200000
+      models: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5'],
+      supportsVision: true, visionInputFormat: 'anthropic',
+      contextWindowTokens: 200000, maxOutputTokens: 65536
     },
     gemini: {
       label: 'Google Gemini', defaultModel: 'gemini-3.5-flash',
-      supportsVision: true, visionInputFormat: 'gemini', contextWindowTokens: 128000
+      models: ['gemini-3.5-flash', 'gemini-3.5-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+      supportsVision: true, visionInputFormat: 'gemini',
+      contextWindowTokens: 128000, maxOutputTokens: 65536
     },
     deepseek: {
       label: 'DeepSeek', defaultModel: 'deepseek-v4-flash',
-      supportsVision: false, visionInputFormat: 'none', contextWindowTokens: 65536
+      models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
+      supportsVision: false, visionInputFormat: 'none',
+      contextWindowTokens: 128000, maxOutputTokens: 65536
     },
     'openai-compatible': {
       label: '国内模型与兼容接口', defaultModel: '', requiresBaseUrl: true,
-      supportsVision: false, visionInputFormat: 'openai', contextWindowTokens: 32768
+      models: [], supportsVision: false, visionInputFormat: 'openai',
+      contextWindowTokens: 32768, maxOutputTokens: 65536
     }
   };
 
@@ -118,10 +127,48 @@
     return Math.round(numeric / 1024) * 1024;
   }
 
-  function getProviderContextWindowTokens(providerId, _config = {}, override = null) {
+  function normalizedModelName(config = {}) {
+    const model = String(config?.model || '').trim().toLowerCase();
+    return model.split('/').at(-1) || model;
+  }
+
+  function knownModelCapacity(config = {}) {
+    const model = normalizedModelName(config);
+    if (/^deepseek-v4-(?:pro|flash)(?:[-_.]|$)/.test(model)) {
+      return { contextWindowTokens: 1000000, maxOutputTokens: 384000 };
+    }
+    if (/^gpt-4\.1(?:[-_.]|$)/.test(model)) {
+      return { contextWindowTokens: 1047576, maxOutputTokens: 65536 };
+    }
+    if (/^gpt-5(?:[-_.]|$)/.test(model)) {
+      return { contextWindowTokens: 400000, maxOutputTokens: 65536 };
+    }
+    if (/^gemini-(?:2\.5|3(?:\.|-|$))/.test(model)) {
+      return { contextWindowTokens: 1000000, maxOutputTokens: 65536 };
+    }
+    return null;
+  }
+
+  function getProviderContextWindowTokens(providerId, config = {}, override = null) {
     const explicit = validContextWindowOverride(override);
     if (explicit) return explicit;
+    const known = knownModelCapacity(config);
+    if (known) return known.contextWindowTokens;
     return DEFINITIONS[providerId]?.contextWindowTokens || 32768;
+  }
+
+  function validOutputTokenOverride(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 512 || numeric > 2000000) return null;
+    return Math.round(numeric);
+  }
+
+  function getProviderMaxOutputTokens(providerId, config = {}, override = null) {
+    const explicit = validOutputTokenOverride(override);
+    if (explicit) return explicit;
+    const known = knownModelCapacity(config);
+    if (known) return known.maxOutputTokens;
+    return DEFINITIONS[providerId]?.maxOutputTokens || 65536;
   }
 
   function isHttpUrl(value) {
@@ -147,7 +194,10 @@
     const errors = validateProviderConfig(providerId, config);
     if (errors.length) throw new Error(`Invalid provider config: ${errors.join(',')}`);
     const factory = FACTORIES[providerId];
-    return factory(config, fetchImpl || fetch);
+    const adapter = factory(config, fetchImpl || fetch);
+    adapter.maxOutputTokens = getProviderMaxOutputTokens(providerId, config);
+    adapter.contextWindowTokens = getProviderContextWindowTokens(providerId, config);
+    return adapter;
   }
 
   return {
@@ -155,6 +205,7 @@
     getCompatibleProviderPresets,
     getProviderCapabilities,
     getProviderContextWindowTokens,
+    getProviderMaxOutputTokens,
     validateProviderConfig,
     createProviderAdapter
   };

@@ -10,7 +10,10 @@ require('../core/article-chat-memory.js');
 const { buildArticleChatIndex } = require('../core/article-chat-index.js');
 const { buildArticleChatMemory } = require('../core/article-chat-memory.js');
 const { planArticleChatContext } = require('../core/article-chat-context-planner.js');
-const { getProviderContextWindowTokens } = require('../providers/provider-registry.js');
+const {
+  getProviderContextWindowTokens,
+  getProviderMaxOutputTokens
+} = require('../providers/provider-registry.js');
 
 function makeIndex(count, chars = 600) {
   const records = Array.from({ length: count }, (_, index) => ({
@@ -51,6 +54,30 @@ test('uses conservative adapter defaults and a validated advanced context overri
   assert.equal(getProviderContextWindowTokens('openai-compatible', {}, 4096), 32768);
 });
 
+test('derives DeepSeek V4 context and output capacity from the selected model', () => {
+  const config = { model: 'deepseek-v4-pro' };
+  assert.equal(getProviderContextWindowTokens('deepseek', config), 1_000_000);
+  assert.equal(getProviderMaxOutputTokens('deepseek', config), 384_000);
+});
+
+test('plans DeepSeek V4 chat against its model capacity with a 90 percent safety window', async () => {
+  const plan = await planArticleChatContext({
+    index: makeIndex(40, 900),
+    query: 'Explain the complete evidence chain and its limitations.',
+    profile: profile({
+      providerId: 'deepseek',
+      config: { model: 'deepseek-v4-pro' },
+      tokenPolicy: { mode: 'auto', autoCap: null }
+    }),
+    history: []
+  });
+
+  assert.equal(plan.contextWindowTokens, 1_000_000);
+  assert.equal(plan.inputBudgetTokens.usableContextWindowTokens, 900_000);
+  assert.equal(plan.outputBudgetTokens.ceiling, 384_000);
+  assert.ok(plan.inputBudgetTokens.available < 900_000);
+});
+
 test('chooses full context for a fitting first turn and retrieval for a constrained paper', async () => {
   const full = await planArticleChatContext({
     index: makeIndex(3, 300), query: '概括全文', profile: profile(), history: []
@@ -85,7 +112,7 @@ test('keeps a 64k article chat usable when the manual output maximum was set to 
   assert.ok(plan.chunks.length > 0);
   assert.ok(plan.chunks.length <= 8);
   assert.ok(plan.outputBudgetTokens.initial <= 16384);
-  assert.equal(plan.outputBudgetTokens.ceiling, 32768);
+  assert.equal(plan.outputBudgetTokens.ceiling, 29440);
   assert.ok(plan.estimatedInputTokens < plan.inputBudgetTokens.available);
   assert.equal(plan.outputBudgetTokens.contextClamped, true);
 });

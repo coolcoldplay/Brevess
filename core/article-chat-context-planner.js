@@ -83,10 +83,19 @@
   function contextAwareOutputBudget(requested, options) {
     const minimumOutputTokens = options.kind === 'panelChat'
       ? MIN_PANEL_OUTPUT_TOKENS : MIN_ARTICLE_OUTPUT_TOKENS;
-    const maximumInitialByShare = roundDown256(options.contextWindowTokens * 0.25);
-    const maximumCeilingByShare = roundDown256(options.contextWindowTokens * 0.50);
+    const usableContextWindowTokens = Math.floor(
+      options.contextWindowTokens * (options.safetyRatio || 1)
+    );
+    const maximumInitialByShare = Math.max(
+      minimumOutputTokens,
+      roundDown256(usableContextWindowTokens * 0.25)
+    );
+    const maximumCeilingByShare = Math.max(
+      minimumOutputTokens,
+      roundDown256(usableContextWindowTokens * 0.50)
+    );
     const maximumBySpace = roundDown256(
-      options.contextWindowTokens - options.reservedTokens - options.systemTokens -
+      usableContextWindowTokens - options.reservedTokens - options.systemTokens -
       options.queryTokens - MIN_ARTICLE_CONTEXT_TOKENS
     );
     const maximumInitial = Math.min(maximumInitialByShare, maximumBySpace);
@@ -198,13 +207,19 @@
     const completeHistoryIds = history.map(historyId);
     const memory = input.memory || (typeof shared.buildArticleChatMemory === 'function'
       ? shared.buildArticleChatMemory(history) : { entries: [] });
+    const profile = input.profile || {};
+    const adapterCap = typeof shared.getProviderMaxOutputTokens === 'function'
+      ? shared.getProviderMaxOutputTokens(profile.providerId, profile.config || {})
+      : null;
     const requestedOutputBudgetTokens = shared.computeOutputTokenBudget(
       input.kind === 'panelChat' ? 'panelChat' : 'articleChat', {
         units: Math.max(1, Number(input.outputUnits) || 1),
-        tokenPolicy: input.profile?.tokenPolicy || {}
+        tokenPolicy: profile.tokenPolicy || {},
+        adapterCap
       }
     );
-    const contextWindowTokens = resolveContextWindow(input.profile || {});
+    const contextWindowTokens = resolveContextWindow(profile);
+    const safetyRatio = 0.9;
     const reservedTokens = input.reservedTokens ?? DEFAULT_RESERVED_TOKENS;
     const systemTokens = input.systemTokens ?? DEFAULT_SYSTEM_TOKENS;
     const queryTokens = estimateTokens(input.query) + 16;
@@ -213,7 +228,8 @@
       contextWindowTokens,
       reservedTokens,
       systemTokens,
-      queryTokens
+      queryTokens,
+      safetyRatio
     });
     if (!outputBudgetTokens) {
       throw contextError({
@@ -225,7 +241,8 @@
       contextWindowTokens,
       outputTokens: outputBudgetTokens.initial,
       reservedTokens,
-      systemTokens
+      systemTokens,
+      safetyRatio
     });
     if (inputBudgetTokens.available - queryTokens < 512) {
       throw contextError({

@@ -95,7 +95,7 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
 
   assert.equal(prepared.plan.mode, 'retrieval');
   assert.ok(prepared.plan.outputBudgetTokens.initial >= 4096);
-  assert.equal(prepared.plan.outputBudgetTokens.ceiling, 32768);
+  assert.equal(prepared.plan.outputBudgetTokens.ceiling, 29440);
   assert.equal(first.stablePrefix, followup.stablePrefix);
   assert.ok(first.userPrompt.startsWith(first.stablePrefix));
   assert.match(first.systemPrompt, /NDJSON/);
@@ -321,7 +321,7 @@ test('does not continue after a non-truncation provider error', async () => {
   assert.equal(progress.at(-1).phase, 'chat_error');
 });
 
-test('continues at most once and returns complete blocks after repeated truncation', async () => {
+test('continues through bounded segments and returns complete blocks after repeated truncation', async () => {
   let requestCount = 0;
   const adapter = {
     generateTextStream() {
@@ -341,11 +341,42 @@ test('continues at most once and returns complete blocks after repeated truncati
     input: normalizeArticleChatInput(articleMessage()), profile, adapter
   });
 
-  assert.equal(requestCount, 2);
+  assert.equal(requestCount, 8);
   assert.equal(result.message.status, 'truncated');
-  assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
-    'block-truncated-1', 'block-truncated-2'
-  ]);
+  assert.deepEqual(result.message.answerBlocks.map(block => block.blockId),
+    Array.from({ length: 8 }, (_, index) => `block-truncated-${index + 1}`));
+});
+
+test('keeps streaming until a later continuation produces a final record', async () => {
+  let requestCount = 0;
+  const adapter = {
+    generateTextStream() {
+      requestCount += 1;
+      const attempt = requestCount;
+      return (async function* stream() {
+        yield { type: 'started' };
+        yield { type: 'text_delta', text: `${blockLine(
+          `block-segment-${attempt}`, `Complete segment ${attempt}. [[1]]`
+        )}\n` };
+        if (attempt < 4) {
+          yield { type: 'error', error: { code: 'OUTPUT_TRUNCATED', message: 'limit' } };
+          return;
+        }
+        yield { type: 'text_delta', text: `${JSON.stringify({
+          type: 'turn_summary', summary: 'Recovered across four output segments.'
+        })}\n${JSON.stringify({ type: 'final', status: 'completed' })}\n` };
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter
+  });
+
+  assert.equal(requestCount, 4);
+  assert.equal(result.message.status, 'completed');
+  assert.equal(result.message.answerBlocks.length, 4);
 });
 
 function scaleParagraphs(count) {
