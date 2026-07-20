@@ -2420,7 +2420,9 @@
         let disk = { removed: true, permission: 'unconfigured' };
         if (typeof directorySync?.removeWorkspaceTree === 'function') {
           disk = await directorySync.removeWorkspaceTree(workspace);
-          if (!disk.removed) return { deleted: false, pending: true, permission: disk.permission };
+          if (!disk.removed && disk.permission !== 'unconfigured') {
+            return { deleted: false, pending: true, permission: disk.permission };
+          }
         }
         await articleWorkspaceStore.finalizeWorkspaceDeletion(
           workspace.workspaceId, message.tombstoneId

@@ -2,6 +2,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const {
+  CONTENT_SCRIPT_FILES,
+  CONTENT_STYLE_FILES
+} = require('../core/tab-messenger.js');
 
 const root = path.resolve(__dirname, '..');
 const targetUrl = process.env.SCI_DIAGNOSTIC_URL ||
@@ -117,20 +121,19 @@ async function sendTabMessageWithDeadline(worker, tabId, message, timeoutMs = 20
 
   const operations = [navigation];
   operations.push(await timeOperation('inject-content-dependencies', () =>
-    worker.evaluate(async tabId => {
-      const files = [
-        'core/category-store.js', 'core/confidence-policy.js',
-        'core/sentence-boundary.js', 'core/publisher-adapters.js',
-        'core/article-structure.js', 'core/article-extractor.js',
-        'core/publisher-diagnostics.js', 'core/highlight-distribution.js',
-        'core/figure-extractor.js', 'core/figure-analysis.js',
-        'core/manual-annotations.js', 'core/cache-planner.js',
-        'core/article-archive.js', 'content.js'
-      ];
-      await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
-      await chrome.scripting.executeScript({ target: { tabId }, files });
+    worker.evaluate(async ({ tabId, scriptFiles, styleFiles }) => {
+      await chrome.scripting.insertCSS({
+        target: { tabId }, files: styleFiles
+      });
+      await chrome.scripting.executeScript({
+        target: { tabId }, files: scriptFiles
+      });
       return { revision: 'injected' };
-    }, articleTab.id)
+    }, {
+      tabId: articleTab.id,
+      scriptFiles: CONTENT_SCRIPT_FILES,
+      styleFiles: CONTENT_STYLE_FILES
+    })
   ));
 
   for (const [name, action] of [

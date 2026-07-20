@@ -2684,6 +2684,41 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
   assert.equal(rejectedResurrection.data.tombstonedMatches, 1);
 });
 
+test('deletes browser-local workspace data when no filesystem directory was configured', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/browser-local-paper',
+    aliases: [], title: 'Browser-local paper',
+    directoryName: `Browser-local paper--${'b'.repeat(16)}`,
+    revision: '2'.repeat(64), contentHash: '2'.repeat(64), workspaceGeneration: 1
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    removeWorkspaceTree: async () => ({ permission: 'unconfigured', removed: false })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('browser-local deletion must stay local'); }
+  });
+
+  await router.handle({ type: 'ARTICLE_WORKSPACE_ENSURE', workspace });
+  const begun = await router.handle({
+    type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: workspace.workspaceId
+  });
+  const finalized = await router.handle({
+    type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE', workspaceId: workspace.workspaceId,
+    tombstoneId: begun.data.tombstoneId
+  });
+
+  assert.equal(finalized.success, true);
+  assert.equal(finalized.data.deleted, true);
+  assert.equal(finalized.data.permission, 'unconfigured');
+  assert.equal(finalized.data.removedFromDisk, false);
+  assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
+});
+
 test('scan restores validated workspace assets into IndexedDB before returning them', async () => {
   const workspace = {
     schemaVersion: 1,
