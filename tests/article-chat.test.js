@@ -156,6 +156,92 @@ test('retries once with a format-repair instruction after malformed streamed out
   assert.ok(progress.some(event => event.phase === 'chat_repairing_format'));
 });
 
+test('does not accept a final record after a later answer block failed validation', async () => {
+  const requests = [];
+  const adapter = {
+    generateTextStream(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (attempt === 1) {
+          yield { type: 'text_delta', text: `${JSON.stringify({
+            type: 'answer_block', block_id: 'block-intro',
+            markdown: 'The evidence chain has several stages.', evidence: []
+          })}\n` };
+          yield { type: 'text_delta', text: `${JSON.stringify({
+            type: 'answer_block', block_id: 'block-invalid',
+            markdown: 'The first stage is supported by the Results. [[2]]', evidence: []
+          })}\n` };
+          yield { type: 'text_delta', text: `${JSON.stringify({
+            type: 'turn_summary', summary: 'The response attempted an evidence chain.'
+          })}\n${JSON.stringify({ type: 'final', status: 'completed' })}\n` };
+        } else {
+          yield { type: 'text_delta', text: [
+            blockLine('block-step-1', 'The first stage is supported by the Results. [[1]]'),
+            JSON.stringify({ type: 'turn_summary', summary: 'The evidence chain is complete.' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        }
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].userPrompt, /invalid NDJSON/i);
+  assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
+    'block-intro', 'block-step-1'
+  ]);
+});
+
+test('continues an answer that ends with a dangling promise of following steps', async () => {
+  const requests = [];
+  const adapter = {
+    generateTextStream(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return (async function* stream() {
+        yield { type: 'started' };
+        if (attempt === 1) {
+          yield { type: 'text_delta', text: [
+            JSON.stringify({
+              type: 'answer_block', block_id: 'block-lead-in',
+              markdown: '作者采用了系统性筛选，主要分为以下几个步骤：', evidence: []
+            }),
+            JSON.stringify({ type: 'turn_summary', summary: 'An unfinished stepwise answer.' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        } else {
+          yield { type: 'text_delta', text: [
+            blockLine('block-step', 'The first step is supported by the Results. [[1]]'),
+            JSON.stringify({ type: 'turn_summary', summary: 'The stepwise answer is complete.' }),
+            JSON.stringify({ type: 'final', status: 'completed' }),
+            ''
+          ].join('\n') };
+        }
+        yield { type: 'completed', finishReason: 'stop' };
+      })();
+    }
+  };
+
+  const result = await runArticleChat({
+    input: normalizeArticleChatInput(articleMessage()), profile, adapter
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].userPrompt, /ended after promising details/i);
+  assert.deepEqual(result.message.answerBlocks.map(block => block.blockId), [
+    'block-lead-in', 'block-step'
+  ]);
+});
+
 test('streams verified blocks, continues once after truncation, and deduplicates continuation', async () => {
   const requests = [];
   const progress = [];

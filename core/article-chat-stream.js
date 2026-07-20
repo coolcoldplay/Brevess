@@ -329,6 +329,9 @@
         buffer = '';
         return discarded;
       },
+      clearFinalRecord() {
+        final = null;
+      },
       hasPending() { return Boolean(buffer); },
       snapshot() {
         return {

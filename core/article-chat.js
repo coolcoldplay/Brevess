@@ -217,6 +217,8 @@
           ? 'The previous response was invalid NDJSON. Retry using exactly one valid JSON object per line, beginning with a complete answer_block and ending with turn_summary and final records. Do not use Markdown code fences or introductory prose.'
           : continuation.truncationRecovery
             ? 'The previous response was truncated before completing the answer. Continue from the next missing step. If no complete block was preserved, restart the answer. Emit one complete answer_block per numbered step so each step is saved before generating the next one. Do not repeat preserved block IDs.'
+            : continuation.incompleteAnswer
+              ? 'The previous response ended after promising details, steps, evidence, or a list that it did not provide. Continue immediately with every missing item using new answer_block IDs, then emit a fresh turn_summary and final record. Do not repeat preserved blocks.'
           : 'Continue with new block IDs. Do not repeat earlier blocks.'
       } : null
     };
@@ -236,6 +238,7 @@
         'Ground every paper-specific factual sentence or list item with an evidence marker. If the supplied context does not contain a requested detail, say so explicitly instead of replacing it with a vague generalization.',
         'In markdown, append [[marker]] immediately after the supported sentence or list item. Never collect markers in a references paragraph.',
         'Use readable Markdown. Put every bullet or numbered item on its own line, preserve blank lines, and close every code fence and table inside its block.',
+        'Before declaring completion, verify that every promised explanation, step, list, comparison, and line of evidence has actually been emitted. Never end on a lead-in such as "the following steps:" or its equivalent.',
         'After all answer blocks, emit one turn_summary line: {"type":"turn_summary","summary":"brief factual memory"}.',
         'End with exactly one final line: {"type":"final","status":"completed"}.',
         'Never invent evidence, study details, usage data, or hidden reasoning.'
@@ -339,6 +342,14 @@
     };
   }
 
+  function hasDanglingAnswerLeadIn(blocks) {
+    const markdown = normalizeMarkdown(blocks?.at(-1)?.markdown, 64 * 1024)
+      .replace(/\[\[\d{1,3}\]\]\s*$/u, '').trim();
+    if (!markdown) return false;
+    return /(?:如下|(?:主要)?(?:分为|包括)以下(?:几个|这些|各个|若干)?(?:步骤|阶段|方面|部分|要点)|以下(?:几个|这些|各个|若干)?(?:步骤|阶段|方面|要点|证据|结果|内容))\s*[：:]?\s*$/u.test(markdown) ||
+      /\b(?:as follows|the following (?:steps|stages|points|items|lines of evidence|results))\s*[:：]?\s*$/iu.test(markdown);
+  }
+
   async function runArticleChat(options = {}) {
     const input = options.input;
     const profile = options.profile || {};
@@ -380,6 +391,7 @@
     let continuationCount = 0;
     let repairFormat = false;
     let recoverTruncation = false;
+    let recoverIncomplete = false;
     let currentOutputTokens = prepared.plan.outputBudgetTokens.initial;
 
     try {
@@ -392,7 +404,8 @@
             blockIds: current.blocks.map(block => block.blockId),
             summary: current.summary,
             formatRepair: repairFormat,
-            truncationRecovery: recoverTruncation
+            truncationRecovery: recoverTruncation,
+            incompleteAnswer: recoverIncomplete
           }
         } : {});
         const request = {
@@ -452,14 +465,18 @@
           throw terminalError;
         }
         const validCompleteResponse = finalized && Boolean(after.final) && after.blocks.length > 0;
+        const danglingAnswerLeadIn = validCompleteResponse &&
+          hasDanglingAnswerLeadIn(after.blocks);
         const needsContinuation = terminalError?.code === 'OUTPUT_TRUNCATED' ||
-          !validCompleteResponse || (parserError && !validCompleteResponse);
+          !validCompleteResponse || Boolean(parserError) || danglingAnswerLeadIn;
         if (!needsContinuation) break;
         parser.discardPending();
+        parser.clearFinalRecord?.();
         if (attempt < MAX_ARTICLE_CHAT_SEGMENTS - 1) {
           continuationCount += 1;
           repairFormat = Boolean(parserError);
           recoverTruncation = terminalError?.code === 'OUTPUT_TRUNCATED';
+          recoverIncomplete = danglingAnswerLeadIn;
           if (recoverTruncation) {
             currentOutputTokens = continuationOutputTokens(
               prepared.plan,
