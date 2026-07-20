@@ -549,6 +549,41 @@ async function readDiagnosticDownload(download) {
   await sidePanel.locator('.workspace-panel-followup-custom textarea').first()
     .fill('Why does this Panel use this comparison?');
   await sidePanel.evaluate(() => renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot));
+  const quickNavPreHover = await sidePanel.evaluate(async () => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const view = document.querySelector('[data-workspace-view="figures"]');
+    const nav = document.getElementById('figureQuickNav');
+    const marker = document.querySelector('.figure-quick-nav-marker');
+    const markerRect = marker?.getBoundingClientRect();
+    const navRect = nav?.getBoundingClientRect();
+    const markerStyle = marker ? getComputedStyle(marker) : null;
+    const navStyle = nav ? getComputedStyle(nav) : null;
+    return {
+      activeWorkspaceView,
+      viewHidden: view?.hidden,
+      navHidden: nav?.hidden,
+      navDisplay: navStyle?.display || '',
+      navVisibility: navStyle?.visibility || '',
+      navRect: navRect ? { width: navRect.width, height: navRect.height } : null,
+      markerDisplay: markerStyle?.display || '',
+      markerVisibility: markerStyle?.visibility || '',
+      markerOpacity: markerStyle?.opacity || '',
+      markerRect: markerRect ? {
+        width: markerRect.width,
+        height: markerRect.height,
+        top: markerRect.top,
+        bottom: markerRect.bottom
+      } : null,
+      markerVisible: marker?.checkVisibility?.({
+        checkOpacity: true,
+        checkVisibilityCSS: true
+      }) === true,
+      figureCount: currentWorkspaceSnapshot?.figures?.figures?.length || 0
+    };
+  });
+  if (!quickNavPreHover.markerVisible) {
+    throw new Error(`Figure quick navigation was hidden before hover: ${JSON.stringify(quickNavPreHover)}`);
+  }
   await sidePanel.locator('.figure-quick-nav-marker').first().hover({ force: true });
   await sidePanel.locator('.figure-quick-nav-label').first().hover({ force: true });
   await sidePanel.waitForTimeout(120);
@@ -857,6 +892,116 @@ async function readDiagnosticDownload(download) {
     document.querySelectorAll('#providerId option').length >= 5 &&
     document.querySelectorAll('#apiProfileList [data-profile-id]').length >= 1
   );
+  const workspaceOverviewFixture = await options.evaluate(async workspace => {
+    const ensure = await callBackground({
+      type: 'ARTICLE_WORKSPACE_ENSURE', workspace
+    });
+    const asset = await callBackground({
+      type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+      workspaceId: workspace.workspaceId,
+      relativePath: 'figures/inventory.json',
+      content: {
+        figures: [
+          { figureId: 'figure-qa-1', panelHints: ['A', 'B'] },
+          { figureId: 'figure-qa-2', panelHints: ['A'] }
+        ]
+      }
+    });
+    const turn = await callBackground({
+      type: 'ARTICLE_WORKSPACE_SAVE_TURN',
+      workspaceId: workspace.workspaceId,
+      turn: {
+        turnId: 'turn-qa-1',
+        question: 'How is the evidence organized?',
+        status: 'complete',
+        answerBlocks: [{ blockId: 'block-1', markdown: 'A bounded answer.' }]
+      }
+    });
+    await refreshArticleWorkspaceOverview();
+    return {
+      workspaceId: ensure.workspace.workspaceId,
+      ensured: Boolean(ensure.workspace),
+      assetSaved: asset.saved === true,
+      turnSaved: turn.saved === true
+    };
+  }, {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'e'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/qa-workspace-search-target',
+    aliases: [{ type: 'doi', value: '10.1000/qa-workspace' }],
+    title: 'QA Workspace Search Target',
+    directoryName: `QA Workspace Search Target--${'e'.repeat(16)}`,
+    revision: '5'.repeat(64),
+    contentHash: '5'.repeat(64),
+    workspaceGeneration: 1
+  });
+  await options.waitForFunction(workspaceId =>
+    articleWorkspaceOverviewUi.loading === false &&
+    articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId) &&
+    articleWorkspaceOverviewUi.details.has(workspaceId),
+  workspaceOverviewFixture.workspaceId);
+  const workspaceOverviewQa = await options.evaluate(workspaceId => {
+    const item = articleWorkspaceOverviewUi.items.find(entry => entry.workspaceId === workspaceId);
+    const detail = articleWorkspaceOverviewUi.details.get(workspaceId);
+    const search = document.getElementById('articleWorkspaceSearch');
+    search.value = 'qa workspace search target';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    const cards = Array.from(document.querySelectorAll('.article-workspace-card'));
+    const matchingTitle = cards[0]?.querySelector('.article-workspace-title')?.textContent || '';
+    const metrics = cards[0]?.querySelector('.article-workspace-metrics')?.textContent || '';
+    const checkbox = cards[0]?.querySelector('.article-workspace-select');
+    checkbox?.click();
+    const bulkClearEnabledAfterSelect =
+      document.getElementById('clearSelectedArticleWorkspaces')?.disabled === false;
+    checkbox?.click();
+    return {
+      listItemFound: Boolean(item),
+      detailLoaded: Boolean(detail),
+      detailCounts: detail ? {
+        chatTurns: detail.chatTurnCount,
+        figures: detail.figureCount,
+        panels: detail.panelCount
+      } : null,
+      filteredCardCount: cards.length,
+      matchingTitle,
+      metrics,
+      bulkClearEnabledAfterSelect,
+      bulkClearDisabledAfterDeselect:
+        document.getElementById('clearSelectedArticleWorkspaces')?.disabled === true
+    };
+  }, workspaceOverviewFixture.workspaceId);
+  const workspaceExportButton = options.locator(
+    `[data-workspace-action="export"][data-workspace-id="${workspaceOverviewFixture.workspaceId}"]`
+  );
+  const [workspaceDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    workspaceExportButton.click()
+  ]);
+  const workspaceExport = await readDiagnosticDownload(workspaceDownload);
+  workspaceOverviewQa.exportedWorkspaceId = workspaceExport.bundle.workspace?.workspaceId || '';
+  workspaceOverviewQa.exportContainsSecrets =
+    /apiKey|authorization|absolutePath/i.test(JSON.stringify(workspaceExport.bundle));
+  await options.locator(
+    `[data-workspace-action="restore"][data-workspace-id="${workspaceOverviewFixture.workspaceId}"]`
+  ).click();
+  await options.waitForFunction(() =>
+    /需要重新授权本地保存目录/.test(
+      document.getElementById('articleWorkspaceOverviewStatus')?.textContent || ''
+    )
+  );
+  workspaceOverviewQa.restoreWithoutDirectoryExplained = true;
+  options.once('dialog', dialog => dialog.accept());
+  await options.locator(
+    `[data-workspace-action="clear"][data-workspace-id="${workspaceOverviewFixture.workspaceId}"]`
+  ).click();
+  await options.waitForFunction(workspaceId =>
+    articleWorkspaceOverviewUi.loading === false &&
+    !articleWorkspaceOverviewUi.items.some(item => item.workspaceId === workspaceId),
+  workspaceOverviewFixture.workspaceId);
+  workspaceOverviewQa.deletedFromOverview = true;
+  workspaceOverviewQa.clearStatus = await options.locator(
+    '#articleWorkspaceOverviewStatus'
+  ).textContent();
   const modelConfigurationQa = await options.evaluate(async () => {
     const provider = document.getElementById('providerId');
     const model = document.getElementById('model');
@@ -959,11 +1104,14 @@ async function readDiagnosticDownload(download) {
     navigationStatus,
     manualSelectionQa,
     figureIncrementalQa,
+    quickNavPreHover,
     figureVisualQa,
     quickNavSwitchQa,
     quickNavExitQa,
     articleChatQa,
     dynamicParagraphQa,
+    workspaceOverviewFixture,
+    workspaceOverviewQa,
     migrationControls,
     supportEmail,
     modelConfigurationQa,
@@ -1077,6 +1225,27 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.citationJumpFocused &&
     results.dynamicParagraphQa.paragraphCount === 7 &&
     /7 段正文/.test(results.dynamicParagraphQa.status) &&
+    results.workspaceOverviewFixture.ensured &&
+    results.workspaceOverviewFixture.assetSaved &&
+    results.workspaceOverviewFixture.turnSaved &&
+    results.workspaceOverviewQa.listItemFound &&
+    results.workspaceOverviewQa.detailLoaded &&
+    results.workspaceOverviewQa.detailCounts?.chatTurns === 1 &&
+    results.workspaceOverviewQa.detailCounts?.figures === 2 &&
+    results.workspaceOverviewQa.detailCounts?.panels === 3 &&
+    results.workspaceOverviewQa.filteredCardCount === 1 &&
+    results.workspaceOverviewQa.matchingTitle === 'QA Workspace Search Target' &&
+    /问答 1/.test(results.workspaceOverviewQa.metrics) &&
+    /Figure 2/.test(results.workspaceOverviewQa.metrics) &&
+    /Panel 3/.test(results.workspaceOverviewQa.metrics) &&
+    results.workspaceOverviewQa.bulkClearEnabledAfterSelect &&
+    results.workspaceOverviewQa.bulkClearDisabledAfterDeselect &&
+    results.workspaceOverviewQa.exportedWorkspaceId ===
+      results.workspaceOverviewFixture.workspaceId &&
+    !results.workspaceOverviewQa.exportContainsSecrets &&
+    results.workspaceOverviewQa.restoreWithoutDirectoryExplained &&
+    results.workspaceOverviewQa.deletedFromOverview &&
+    /已清除 1 篇论文工作区/.test(results.workspaceOverviewQa.clearStatus) &&
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
     supportEmail?.trim() === 'brevess0729@163.com' &&

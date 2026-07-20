@@ -433,6 +433,29 @@ test('local data exposes a searchable paged workspace overview with exact manage
   assert.doesNotMatch(overviewScript, /fullPath|directoryPath|handle\.path|apiKey|authorization/i);
 });
 
+test('workspace restore and clear results remain visible after overview refreshes', () => {
+  const script = read('options.js');
+  const clearSource = script.slice(
+    script.indexOf('async function clearArticleWorkspaces('),
+    script.indexOf('function safeArticleWorkspaceFilename(')
+  );
+  const actionSource = script.slice(
+    script.indexOf('async function handleArticleWorkspaceAction('),
+    script.indexOf('// Article workspace overview: end.')
+  );
+
+  assert.match(clearSource, /let finalStatus\s*=\s*null/);
+  assert.match(
+    clearSource,
+    /await refreshArticleWorkspaceOverview\(\);\s*if \(finalStatus\) articleWorkspaceStatus\(\.\.\.finalStatus\)/s
+  );
+  assert.match(actionSource, /let finalStatus\s*=\s*null/);
+  assert.match(
+    actionSource,
+    /if \(refreshAfterAction\) await refreshArticleWorkspaceOverview\(\);\s*else renderArticleWorkspaceOverview\(\);\s*if \(finalStatus\) articleWorkspaceStatus\(\.\.\.finalStatus\)/s
+  );
+});
+
 test('settings reuse directory and API controls in a skippable two-step onboarding view', () => {
   const html = read('options.html');
   const script = read('options.js');

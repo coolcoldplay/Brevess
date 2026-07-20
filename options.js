@@ -949,6 +949,7 @@ async function clearArticleWorkspaces(workspaceIds) {
   if (!items.length) return;
   articleWorkspaceOverviewUi.loading = true;
   renderArticleWorkspaceOverview();
+  let finalStatus = null;
   try {
     await ensureArticleWorkspaceDetails(items);
     if (!confirm(workspaceDeleteConfirmation(items))) return;
@@ -967,17 +968,18 @@ async function clearArticleWorkspaces(workspaceIds) {
       else pending += 1;
     }
     items.forEach(item => articleWorkspaceOverviewUi.selected.delete(item.workspaceId));
-    articleWorkspaceStatus(
+    finalStatus = [
       pending
         ? `已清除 ${deleted} 篇；${pending} 篇等待目录重新授权后完成。`
         : `已清除 ${deleted} 篇论文工作区。`,
       pending ? 'info' : 'success'
-    );
+    ];
   } catch (error) {
-    articleWorkspaceStatus(`清除失败：${friendlyError(error)}`, 'error');
+    finalStatus = [`清除失败：${friendlyError(error)}`, 'error'];
   } finally {
     articleWorkspaceOverviewUi.loading = false;
     await refreshArticleWorkspaceOverview();
+    if (finalStatus) articleWorkspaceStatus(...finalStatus);
   }
 }
 
@@ -1000,6 +1002,8 @@ async function handleArticleWorkspaceAction(action, workspaceId) {
   }
   articleWorkspaceOverviewUi.loading = true;
   renderArticleWorkspaceOverview();
+  let refreshAfterAction = false;
+  let finalStatus = null;
   try {
     if (action === 'export') {
       const bundle = await callBackground({ type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId });
@@ -1008,7 +1012,7 @@ async function handleArticleWorkspaceAction(action, workspaceId) {
         'application/json;charset=utf-8',
         safeArticleWorkspaceFilename(item)
       );
-      articleWorkspaceStatus(`已导出“${item.title || '未命名论文'}”。`, 'success');
+      finalStatus = [`已导出“${item.title || '未命名论文'}”。`, 'success'];
     } else if (action === 'restore') {
       const result = await callBackground({
         type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
@@ -1021,23 +1025,25 @@ async function handleArticleWorkspaceAction(action, workspaceId) {
         }
       });
       if (result.restore) {
-        articleWorkspaceStatus(
+        refreshAfterAction = true;
+        finalStatus = [
           `已从本地文件恢复“${item.title || '未命名论文'}”，读取 ` +
           `${Array.isArray(result.restore.assets) ? result.restore.assets.length : 0} 个内容文件。`,
           'success'
-        );
+        ];
       } else if (result.permission !== 'granted') {
-        articleWorkspaceStatus('需要重新授权本地保存目录后才能扫描恢复。', 'error');
+        finalStatus = ['需要重新授权本地保存目录后才能扫描恢复。', 'error'];
       } else {
-        articleWorkspaceStatus('本地保存目录中没有找到匹配的论文工作区。', 'info');
+        finalStatus = ['本地保存目录中没有找到匹配的论文工作区。', 'info'];
       }
     }
   } catch (error) {
-    articleWorkspaceStatus(`操作失败：${friendlyError(error)}`, 'error');
+    finalStatus = [`操作失败：${friendlyError(error)}`, 'error'];
   } finally {
     articleWorkspaceOverviewUi.loading = false;
-    if (action === 'restore') await refreshArticleWorkspaceOverview();
+    if (refreshAfterAction) await refreshArticleWorkspaceOverview();
     else renderArticleWorkspaceOverview();
+    if (finalStatus) articleWorkspaceStatus(...finalStatus);
   }
 }
 // Article workspace overview: end.
