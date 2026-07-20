@@ -2141,12 +2141,13 @@ function createArticleChatInlineCitation(item, evidenceIndex, snapshot) {
 
 function appendArticleChatInlineMarkdown(parent, value, context = {}) {
     const text = String(value || '');
-    const tokenPattern = /(\[\[\d{1,2}\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+    const tokenPattern = /(\[\[\d{1,2}\]\]|<sup>[^<\n]+<\/sup>|<sub>[^<\n]+<\/sub>|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
     let cursor = 0;
     for (const match of text.matchAll(tokenPattern)) {
         if (match.index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
         const token = match[0];
         const citationMatch = token.match(/^\[\[(\d{1,2})\]\]$/);
+        const scriptMatch = token.match(/^<(sup|sub)>([^<\n]+)<\/\1>$/);
         if (citationMatch) {
             const marker = citationMatch[1];
             const evidenceIndex = (Array.isArray(context.evidence) ? context.evidence : [])
@@ -2160,6 +2161,10 @@ function appendArticleChatInlineMarkdown(parent, value, context = {}) {
             } else {
                 parent.appendChild(document.createTextNode(token));
             }
+        } else if (scriptMatch) {
+            parent.appendChild(createWorkspaceElement(
+                scriptMatch[1], '', scriptMatch[2]
+            ));
         } else if (token.startsWith('`')) {
             parent.appendChild(createWorkspaceElement('code', '', token.slice(1, -1)));
         } else if (token.startsWith('**') || token.startsWith('__')) {

@@ -15,6 +15,9 @@ const cases = [
   { id: 'pmc', url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4524386/' },
   { id: 'elsevier-sciencedirect', url: 'https://www.sciencedirect.com/science/article/pii/S2352304225004246' }
 ];
+const requestedCaseIds = new Set(process.argv.slice(2).map(value => String(value).trim()).filter(Boolean));
+const selectedCases = requestedCaseIds.size
+  ? cases.filter(item => requestedCaseIds.has(item.id)) : cases;
 
 function prepareExtension() {
   for (const directory of ['core', 'providers', 'vendor', 'icons']) {
@@ -79,12 +82,33 @@ async function inspectExtractionCore(page) {
     await page.addScriptTag({ content: fs.readFileSync(path.join(root, relative), 'utf8') });
   }
   return page.evaluate(() => {
+    const adapter = SciLLM.selectPublisherAdapter(globalThis.location, document);
     const structure = SciLLM.extractArticleStructure(document, {
       locationLike: globalThis.location
     });
+    const outlineLinkSamples = [];
+    const seenOutlineLinks = new Set();
+    (adapter?.outlineRootSelectors || []).forEach(rootSelector => {
+      [...document.querySelectorAll(rootSelector)].forEach(root => {
+        (adapter?.outlineLinkSelectors || []).forEach(linkSelector => {
+          [...root.querySelectorAll(linkSelector)].forEach(link => {
+            const target = String(
+              link.getAttribute('data-target') || link.getAttribute('href') || ''
+            ).trim();
+            const title = String(link.textContent || '').replace(/\s+/g, ' ').trim();
+            const identity = `${target}\n${title}`;
+            if (!target || !title || seenOutlineLinks.has(identity)) return;
+            seenOutlineLinks.add(identity);
+            if (outlineLinkSamples.length < 30) outlineLinkSamples.push({ title, target });
+          });
+        });
+      });
+    });
     return {
+      strategy: structure.strategy || '',
       publisherFamily: structure.publisherFamily || '',
       diagnostics: structure.diagnostics || {},
+      outlineLinkSamples,
       nodes: (structure.nodes || []).map(node => ({ title: node.title, level: node.level })),
       paragraphs: structure.paragraphs || []
     };
@@ -103,7 +127,7 @@ async function run() {
   const worker = await getWorker(context);
   const results = [];
   try {
-    for (const item of cases) {
+    for (const item of selectedCases) {
       const page = await context.newPage();
       const startedAt = Date.now();
       let navigationError = '';
@@ -129,11 +153,19 @@ async function run() {
           const workspace = await inspectExtractionCore(page);
           const diagnostics = workspace.diagnostics || {};
           row.extraction = {
+            strategy: workspace.strategy || '',
             publisherFamily: workspace.publisherFamily || '',
             headingCount: Number(diagnostics.headingCount) || 0,
             paragraphCount: Number(diagnostics.paragraphCount) || 0,
+            characterCount: Number(diagnostics.characterCount) || 0,
+            outlineEntryCount: Number(diagnostics.outlineEntryCount) || 0,
+            matchedOutlineEntryCount: Number(diagnostics.matchedOutlineEntryCount) || 0,
+            outlineCoverage: Number.isFinite(diagnostics.outlineCoverage)
+              ? diagnostics.outlineCoverage : null,
             nodeCount: Array.isArray(workspace.nodes) ? workspace.nodes.length : 0,
             warningCodes: Array.isArray(diagnostics.warnings) ? diagnostics.warnings : [],
+            outlineLinkSamples: Array.isArray(workspace.outlineLinkSamples)
+              ? workspace.outlineLinkSamples : [],
             topLevelTitles: (workspace.nodes || []).slice(0, 12).map(node => compact(node.title, 120))
           };
         } catch (error) {

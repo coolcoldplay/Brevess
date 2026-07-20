@@ -300,6 +300,10 @@ async function readDiagnosticDownload(download) {
     document.getElementById('sidePanelPaperTitle')?.textContent ===
       'OA translational review test'
   );
+  await secondFixture.waitForFunction(() =>
+    document.documentElement.dataset.sciLlmContentRevision ===
+      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+  );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
   const activatedSidePanelOptions = await worker.evaluate(
@@ -606,7 +610,7 @@ async function readDiagnosticDownload(download) {
       limitations: '网页正文没有提供效应量、置信区间或独立重复次数。', createdAt: Date.now()
     }];
     currentWorkspaceSnapshot.chat.messages[1].content =
-      '**建议先掌握以下背景**\n\n1. **信号转导**：理解激酶如何把外界刺激传入细胞。[[1]]\n2. **转录调控**：理解转录因子如何改变靶基因表达。[[1]]\n3. **必要性证据**：抑制关键节点后效应消失，比单纯相关性更有说服力。[[2]]\n4. **证据边界**：前临床结果不能直接等同于人群中的临床效果。[[2]]\n\n正文先用激活实验建立通路响应，再用遗传抑制检验关键节点是否不可替代。[[1]]\n\n这种“先观察、再干预”的组合，比只报告两个指标同时变化更接近机制论证。[[2]]\n\n阅读时还应区分细胞存活这一表型与临床获益，两者不能直接互换。[[2]]\n\n因此背景知识的重点不是记住术语，而是理解每类实验在因果链中的位置。[[1]]';
+      '**建议先掌握以下背景**\n\n1. **信号转导**：理解激酶 kinase A<sup>1</sup> 如何把外界刺激传入细胞。[[1]]\n2. **转录调控**：理解转录因子如何改变靶基因表达。[[1]]\n3. **必要性证据**：抑制关键节点后效应消失，比单纯相关性更有说服力。[[2]]\n4. **证据边界**：前临床结果不能直接等同于人群中的临床效果。[[2]]\n\n正文先用激活实验建立通路响应，再用遗传抑制检验关键节点是否不可替代。[[1]]\n\n这种“先观察、再干预”的组合，比只报告两个指标同时变化更接近机制论证。[[2]]\n\n阅读时还应区分细胞存活这一表型与临床获益，两者不能直接互换。[[2]]\n\n因此背景知识的重点不是记住术语，而是理解每类实验在因果链中的位置。[[1]]';
     currentWorkspaceSnapshot.chat.messages[3].content =
       '**实验逻辑分为三步**\n\n1. **先观察响应**：处理后检测 kinase A 与 target C 的变化。[[1]]\n2. **再做干预**：遗传抑制 kinase A，观察 target C 的诱导是否消失。[[2]]\n3. **最后界定结论**：现有结果支持通路中的必要关系，但尚不能证明临床普适性。[[2]]\n\n第一步回答通路是否随处理发生变化，第二步回答变化是否依赖 kinase A。[[1]]\n\n抑制后 target C 的诱导消失，是这里最关键的必要性证据。[[2]]\n\n不过，该设计仍不能单独排除所有旁路机制，也不能外推到独立人群。[[2]]\n\n因此更准确的结论是“支持一条可检验的必要关系”，而不是已经证明完整临床机制。[[2]]';
     const longAnswerAppendix = Array.from({ length: 12 }, (_, index) =>
@@ -668,6 +672,9 @@ async function readDiagnosticDownload(download) {
         '.article-chat-message.is-assistant .article-chat-message-meta'
       ).length,
       boldNodes: document.querySelectorAll('.article-chat-message-content strong').length,
+      superscriptNodes: document.querySelectorAll('.article-chat-message-content sup').length,
+      literalSupTagsVisible: Array.from(document.querySelectorAll('.article-chat-message-content'))
+        .some(element => element.textContent?.includes('<sup>')),
       listItems: document.querySelectorAll('.article-chat-message-content li').length,
       orderedLists: document.querySelectorAll('.article-chat-message-content ol').length,
       secondQuestionVisible: Array.from(document.querySelectorAll('.article-chat-message.is-user'))
@@ -872,6 +879,8 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.userLabels === 0 &&
     results.articleChatQa.assistantLabels === 2 &&
     results.articleChatQa.boldNodes >= 6 &&
+    results.articleChatQa.superscriptNodes === 1 &&
+    !results.articleChatQa.literalSupTagsVisible &&
     results.articleChatQa.listItems >= 7 &&
     results.articleChatQa.orderedLists === 2 &&
     results.articleChatQa.secondQuestionVisible &&

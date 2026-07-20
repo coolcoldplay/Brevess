@@ -15,7 +15,7 @@
     `${SEMANTIC_HEADING_SELECTOR},${SUPPLEMENTAL_HEADING_SELECTOR},p,li,caption,[role="paragraph"]`;
   const STRUCTURAL_TEXT_SELECTOR = `${CONTENT_BLOCK_SELECTOR},figcaption`;
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
-  const EXTRACTOR_VERSION = '2.1.0-extractor-r12';
+  const EXTRACTOR_VERSION = '2.1.0-extractor-r13';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
   const EXCLUDED_ANCESTOR_SELECTOR =
     'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],.references,.bibliography,' +
@@ -23,8 +23,8 @@
     '.recommended,.comments,.social-share,.article-outline,.outline-panel,.table-of-contents,' +
     '.article-tools,.article-header-actions,.supplementary-materials';
 
-  const REVIEW_UTILITY_SECTION = /^(?:article|outline|table of contents|tables?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|figures?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|extras?(?:\s*\(\d+\))?|keywords?|graphical abstract|highlights?|recommended articles?|related info links?|cited by(?:\s*\(\d+\))?|article metrics?|author information|information\s*&\s*authors|information|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|media|share|download(?:s| files?)?|show full outline|skip to\b.*)$/i;
-  const REVIEW_UTILITY_TEXT = /^(?:show more|view pdf|download full issue|add to mendeley|share|cite|get rights and content|open access|no articles found\.?)$/i;
+  const REVIEW_UTILITY_SECTION = /^(?:article|outline|table of contents|tables?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|fig(?:ure)?s?(?:\s+(?:\(\d+\)|\d+)(?:\b.*)?)?|extras?(?:\s*\(\d+\))?|keywords?|graphical abstract|highlights?|recommended articles?|related info links?|cited by(?:\s*\(\d+\))?|article metrics?|author information|information\s*&\s*authors|information|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|media|share|download(?:s| files?)?|show full outline|skip to\b.*)$/i;
+  const REVIEW_UTILITY_TEXT = /^(?:show more|view pdf|view in article|download full issue|add to mendeley|share|cite|get rights and content|open access|no articles found\.?)$/i;
   const OUTLINE_LINK_SELECTOR = [
     'nav a[href^="#"]', 'aside a[href^="#"]',
     '[class*="outline" i] a[href*="#"]', '[id*="outline" i] a[href*="#"]',
@@ -104,7 +104,7 @@
   function isReviewUtilitySectionTitle(value) {
     const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
     if (!text) return false;
-    if (/^cite$/i.test(text)) return true;
+    if (/^cite$/i.test(text) || REVIEW_UTILITY_TEXT.test(text)) return true;
     if (REFERENCE_SECTION.test(text) || EXCLUDED_SECTION.test(text)) return true;
     if (REVIEW_UTILITY_SECTION.test(text)) return true;
     return /^(?:review|research|original|clinical)\s*article$/i.test(text) ||
@@ -529,7 +529,8 @@
     const id = String(targetId || '').trim();
     const label = normalizeTextWithOffsets(title).text;
     if (/^\d+(?:\s*[-,]\s*\d+)*$/.test(label)) return true;
-    return /^(?:au|author|aff|affiliation|fn|footnote|xref|bib|ref|reference|fig|figure|tbl|table|note|correspondence)[-_]?\d*/i.test(id);
+    return /^(?:au|author|aff|affiliation|fn|footnote|xref|bib|ref|reference|fig|figure|tbl|table|note|correspondence)[-_]?\d*/i.test(id) ||
+      /^(?:f|t)[-_]?\d+$/i.test(id);
   }
 
   function isSectionLikeOutlineTarget(entry, matchingHeading) {
@@ -544,18 +545,13 @@
     });
   }
 
-  function extractArticleFromOutline(documentRef, options = {}) {
+  function collectOutlineEntries(documentRef, adapter = null) {
     if (!documentRef?.querySelectorAll || !documentRef?.getElementById) return [];
-    const adapter = options.adapter || (
-      typeof shared.selectPublisherAdapter === 'function'
-        ? shared.selectPublisherAdapter(documentRef?.location || {})
-        : null
-    );
     const links = [];
     const seenLinks = new Set();
     function appendLinks(items) {
       items.forEach(link => {
-        if (!link || seenLinks.has(link)) return;
+        if (!link || seenLinks.has(link) || !outlineTargetId(link)) return;
         seenLinks.add(link);
         links.push(link);
       });
@@ -567,10 +563,14 @@
         });
       });
     });
-    (adapter?.outlineLinkSelectors || []).forEach(selector => {
-      appendLinks(queryAllSafely(documentRef, selector));
-    });
-    appendLinks(queryAllSafely(documentRef, OUTLINE_LINK_SELECTOR));
+    if (links.length < 3) {
+      appendLinks(queryAllSafely(documentRef, OUTLINE_LINK_SELECTOR));
+    }
+    if (links.length < 3) {
+      (adapter?.outlineLinkSelectors || []).forEach(selector => {
+        appendLinks(queryAllSafely(documentRef, selector));
+      });
+    }
     if (links.length < 3) {
       appendLinks(queryAllSafely(documentRef, 'a[href^="#"]'));
     }
@@ -588,6 +588,18 @@
       seenTargets.add(target);
       entries.push({ targetId, target, root, link, title });
     });
+    return entries;
+  }
+
+  function extractArticleFromOutline(documentRef, options = {}) {
+    if (!documentRef?.querySelectorAll || !documentRef?.getElementById) return [];
+    const adapter = options.adapter || (
+      typeof shared.selectPublisherAdapter === 'function'
+        ? shared.selectPublisherAdapter(documentRef?.location || {})
+        : null
+    );
+    const entries = Array.isArray(options.entries)
+      ? options.entries : collectOutlineEntries(documentRef, adapter);
     if (entries.length < 3) return [];
 
     const boundaryTargets = new Set(entries.flatMap(entry => [entry.target, entry.root]));
@@ -802,6 +814,48 @@
     return true;
   }
 
+  function outlineCoverageForRecords(entries, records) {
+    const outlineEntries = (Array.isArray(entries) ? entries : [])
+      .filter(entry => !isReviewUtilitySectionTitle(entry?.title));
+    const recordHeadings = [];
+    const seenHeadings = new Set();
+    (Array.isArray(records) ? records : []).forEach(record => {
+      const path = Array.isArray(record?.headingPath) ? record.headingPath : [];
+      const candidates = path.length ? path : [{
+        sectionId: record?.sectionId,
+        title: record?.sectionTitle
+      }];
+      candidates.forEach(heading => {
+        const key = normalizedHeadingKey(heading?.title);
+        if (!key || key === 'article' || isReviewUtilitySectionTitle(heading?.title)) return;
+        const identity = `${String(heading?.sectionId || '')}\n${key}`;
+        if (seenHeadings.has(identity)) return;
+        seenHeadings.add(identity);
+        recordHeadings.push(key);
+      });
+    });
+
+    const unmatchedHeadings = [...recordHeadings];
+    let matchedOutlineEntryCount = 0;
+    outlineEntries.forEach(entry => {
+      const outlineKey = normalizedHeadingKey(entry?.title);
+      if (!outlineKey) return;
+      const matchIndex = unmatchedHeadings.findIndex(recordKey =>
+        recordKey === outlineKey || (
+          Math.min(recordKey.length, outlineKey.length) >= 6 &&
+          (recordKey.includes(outlineKey) || outlineKey.includes(recordKey))
+        )
+      );
+      if (matchIndex < 0) return;
+      matchedOutlineEntryCount += 1;
+      unmatchedHeadings.splice(matchIndex, 1);
+    });
+    return {
+      outlineEntryCount: outlineEntries.length,
+      matchedOutlineEntryCount
+    };
+  }
+
   function stripArticleTitleHeading(records, documentTitle) {
     const originalSource = Array.isArray(records) ? records : [];
     const hasExplicitBodySection = originalSource.some(record =>
@@ -908,7 +962,11 @@
         diagnostics: { warnings: ['NON_ARTICLE_CHALLENGE'] }
       });
     }
-    const outlinedRecords = extractArticleFromOutline(documentRef, { adapter });
+    const outlineEntries = collectOutlineEntries(documentRef, adapter);
+    const outlinedRecords = extractArticleFromOutline(documentRef, {
+      adapter,
+      entries: outlineEntries
+    });
     const rootExtraction = extractArticleFromRoot(documentRef, adapter, {
       markElements: false
     });
@@ -918,16 +976,16 @@
     );
     if (!useOutline) markRootExtraction(rootExtraction);
     const records = useOutline ? outlinedRecords : rootExtraction.records;
-    const outlineEntryCount = documentRef?.querySelectorAll
-      ? [...documentRef.querySelectorAll(OUTLINE_LINK_SELECTOR)].length : 0;
+    const outlineCoverage = outlineCoverageForRecords(
+      outlineEntries,
+      records
+    );
     const structure = buildArticleStructureFromRecords(documentRef, records, {
       locationLike,
       adapter,
       strategy: useOutline ? 'outline-anchors' : 'root-scoring',
       diagnostics: {
-        outlineEntryCount,
-        matchedOutlineEntryCount: useOutline
-          ? new Set(outlinedRecords.map(item => item.sectionId)).size : 0
+        ...outlineCoverage
       }
     });
     return structure;

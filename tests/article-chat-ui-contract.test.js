@@ -61,6 +61,8 @@ test('full-text chat renders a scrollable multi-turn Markdown stream with paragr
   assert.match(popup, /function renderArticleChatMarkdown/);
   assert.match(popup, /appendArticleChatInlineMarkdown/);
   assert.match(popup, /createWorkspaceElement\('strong'/);
+  assert.match(popup, /<sup>\[\^<\\n\]\+<\\\/sup>/);
+  assert.match(popup, /createWorkspaceElement\(\s*scriptMatch\[1\]/);
   assert.match(popup, /createWorkspaceElement\(ordered \? 'ol' : 'ul'\)/);
   assert.doesNotMatch(popup, /articleChatMessages[\s\S]{0,500}innerHTML/);
   assert.doesNotMatch(popup, /role === 'assistant'[\s\S]{0,220}:\s*['"](?:你|我)['"]/);

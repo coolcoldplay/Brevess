@@ -173,12 +173,12 @@ test('excludes references and other non-body sections', () => {
 
 test('treats numbered figure and table labels as outline chrome', () => {
   [
-    'Figure 1.', 'Figure 12. Study workflow',
+    'Figure 1.', 'Figure 12. Study workflow', 'Fig 1', 'Figs 2 and 3',
     'Table 1', 'Table 3. Baseline characteristics',
     'Skip to main content', 'REVIEW article', 'Related Info Links',
     'Author Information', 'Information & Authors', 'Metrics & Citations', 'Cite',
     'View Options', 'Publication History', 'License Summary', 'Subjects',
-    'Authors’ contributions', 'Declaration of AI use', 'Footnotes'
+    'Authors’ contributions', 'Declaration of AI use', 'Footnotes', 'View in article'
   ].forEach(title => assert.equal(
     isReviewUtilitySectionTitle(title), true, title
   ));
@@ -322,7 +322,7 @@ test('reports privacy-safe extraction diagnostics for the selected content root'
 
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.equal(diagnostics.version, '2.1.0-extractor-r12');
+  assert.equal(diagnostics.version, '2.1.0-extractor-r13');
   assert.equal(diagnostics.candidateCount, 2);
   assert.equal(diagnostics.selectedRoot, 'MAIN#paper.article-main.content');
   assert.deepEqual(diagnostics.selected, {
@@ -1266,6 +1266,13 @@ test('falls back to the article root when outline targets overlap the same conta
   assert.deepEqual(structure.nodes.map(node => node.title), [
     'Abstract', '1 Introduction', '2 Metabolism'
   ]);
+  assert.equal(structure.diagnostics.outlineEntryCount, 3);
+  assert.equal(structure.diagnostics.matchedOutlineEntryCount, 3);
+  assert.equal(structure.diagnostics.outlineCoverage, 1);
+  assert.equal(
+    structure.diagnostics.warnings.includes('OUTLINE_COVERAGE_LOW'),
+    false
+  );
 });
 
 test('falls back to the article root when publisher outline links omit many body headings', () => {
@@ -1331,6 +1338,68 @@ test('falls back to the article root when publisher outline links omit many body
 
   assert.equal(structure.strategy, 'root-scoring');
   assert.deepEqual(structure.nodes.map(node => node.title), sectionTitles);
+});
+
+test('keeps a low-coverage warning when the selected root genuinely misses outline sections', () => {
+  const root = {
+    tagName: 'MAIN', id: 'article-main', className: '', parentElement: null,
+    dataset: {}, getAttribute: () => null,
+    contains(element) { return element === root || element?.parentElement === root; }
+  };
+  const heading = {
+    tagName: 'H2', id: 'intro', className: '', textContent: 'Introduction',
+    parentElement: root, dataset: {}, getAttribute: () => null,
+    closest: selector => String(selector).startsWith('section,article') ? root : null,
+    querySelector: () => null, querySelectorAll: () => []
+  };
+  const paragraph = {
+    tagName: 'P', id: '', className: '', parentElement: root, dataset: {},
+    textContent: 'The selected article root contains only the introductory scientific evidence and misses the other sections listed in the outline.',
+    getAttribute: () => null, closest: () => null,
+    querySelector: () => null, querySelectorAll: () => []
+  };
+  const elements = [heading, paragraph];
+  root.textContent = elements.map(item => item.textContent).join(' ');
+  root.querySelector = () => heading;
+  root.querySelectorAll = selector => selector === '*' ? elements : [];
+
+  const titles = ['Introduction', 'Methods', 'Results', 'Discussion'];
+  const targets = new Map([['intro', heading]]);
+  titles.slice(1).forEach((title, index) => {
+    const section = {
+      tagName: 'SECTION', id: `missing-${index + 1}`, className: 'section',
+      textContent: title, parentElement: null, dataset: {},
+      getAttribute: () => null, contains: other => other === section,
+      querySelector: () => null, querySelectorAll: () => []
+    };
+    targets.set(section.id, section);
+  });
+  const links = titles.map((title, index) => ({
+    tagName: 'A', textContent: title, parentElement: null,
+    getAttribute: name => name === 'href'
+      ? `#${index === 0 ? 'intro' : `missing-${index}`}` : null
+  }));
+  const documentRef = {
+    title: 'Incomplete article root fixture',
+    location: { hostname: 'journal.example' },
+    body: root,
+    querySelectorAll: selector => selector.includes('a[') ? links : [root],
+    querySelector: () => root,
+    getElementById: id => targets.get(id) || null
+  };
+
+  const structure = extractArticleStructure(documentRef, {
+    locationLike: documentRef.location
+  });
+
+  assert.equal(structure.strategy, 'root-scoring');
+  assert.equal(structure.diagnostics.outlineEntryCount, 4);
+  assert.equal(structure.diagnostics.matchedOutlineEntryCount, 1);
+  assert.equal(structure.diagnostics.outlineCoverage, 0.25);
+  assert.equal(
+    structure.diagnostics.warnings.includes('OUTLINE_COVERAGE_LOW'),
+    true
+  );
 });
 
 test('omits skip links and figure labels without breaking the surrounding section', () => {
