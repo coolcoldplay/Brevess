@@ -139,7 +139,8 @@ input[type="color"] { padding: 4px; cursor: pointer; }
 .editor-status[data-state="failed"] { color: #A13434; }
 .editor-status[data-state="saved"] { color: #28724B; }
 .button { display: inline-flex; min-width: 118px; align-items: center; justify-content: center; gap: 7px; padding: 10px 15px; border: 1px solid transparent; border-radius: 7px; font-size: 12px; font-weight: 760; cursor: pointer; }
-.button:disabled { cursor: wait; opacity: .55; }
+.button:disabled { cursor: not-allowed; opacity: .55; }
+.button[aria-busy="true"]:disabled { cursor: wait; }
 .button.primary { color: #FFF; background: var(--navy); }
 .button.primary:hover { background: var(--navy-hover); }
 .button.secondary { border-color: #C7D5E3; color: var(--navy); background: var(--navy-soft); }

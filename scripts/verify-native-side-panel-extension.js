@@ -751,6 +751,25 @@ async function readDiagnosticDownload(download) {
     '#exportMigrationBundle,#importMigrationBundle,#confirmMigrationImport'
   ).count();
   const supportEmail = await options.locator('#support a[href^="mailto:"]').textContent();
+  await options.goto(`chrome-extension://${extensionId}/options.html#onboarding`, {
+    waitUntil: 'domcontentloaded'
+  });
+  await options.waitForFunction(() =>
+    document.body.dataset.onboardingStep === 'storage' &&
+    document.getElementById('onboardingContinue')?.disabled === false
+  );
+  const settingsDatabaseQa = await options.evaluate(async () => {
+    const database = await SciLLM.openUserDataDatabase(indexedDB);
+    return {
+      moduleAvailable: typeof SciLLM.openUserDataDatabase === 'function',
+      directoryStoreAvailable: database.objectStoreNames.contains('directoryHandles'),
+      continueEnabledAfterNoDirectory:
+        document.getElementById('onboardingContinue')?.disabled === false
+    };
+  });
+  await options.locator('#onboardingContinue').click();
+  await options.waitForFunction(() => document.body.dataset.onboardingStep === 'api');
+  settingsDatabaseQa.continuedToApi = true;
 
   const results = {
     extensionId,
@@ -777,6 +796,7 @@ async function readDiagnosticDownload(download) {
     dynamicParagraphQa,
     migrationControls,
     supportEmail,
+    settingsDatabaseQa,
     adapterDiagnostic: {
       extension: path.extname(firstDiagnostic.filename),
       filename: firstDiagnostic.filename,
@@ -872,6 +892,10 @@ async function readDiagnosticDownload(download) {
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
     supportEmail?.trim() === 'brevess0729@163.com' &&
+    results.settingsDatabaseQa.moduleAvailable &&
+    results.settingsDatabaseQa.directoryStoreAvailable &&
+    results.settingsDatabaseQa.continueEnabledAfterNoDirectory &&
+    results.settingsDatabaseQa.continuedToApi &&
     results.adapterDiagnostic.kind === 'sci-publisher-adapter-diagnostic' &&
     results.adapterDiagnostic.schemaVersion === 2 &&
     results.adapterDiagnostic.hasRenderedDom &&

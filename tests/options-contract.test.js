@@ -43,6 +43,16 @@ test('exposes named API profiles, token policy, and task routing controls', () =
   assert.match(script, /contextWindowTokens/);
 });
 
+test('settings load the unified IndexedDB schema before directory persistence', () => {
+  const html = read('options.html');
+  const database = html.indexOf('core/user-data-database.js');
+  const directory = html.indexOf('core/directory-sync.js');
+  const application = html.indexOf('options.js');
+  assert.ok(database >= 0, 'settings must load the shared user-data database module');
+  assert.ok(database < directory, 'database schema must load before directory sync');
+  assert.ok(directory < application, 'directory sync must load before settings behavior');
+});
+
 test('settings expose four editable Panel follow-up prompts and restore defaults', () => {
   const html = read('options.html');
   const script = read('options.js');
@@ -438,7 +448,38 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(script, /ONBOARDING_RESTART/);
   assert.match(script, /ONBOARDING_FINISH/);
   assert.match(script, /chooseUserDataDirectory/);
+  assert.match(script, /addEventListener\(['"]click['"],\s*continueOnboarding\)/);
   assert.match(script, /persistForm/);
   assert.match(css, /body\.is-onboarding/);
   assert.match(css, /data-onboarding-step/);
+  assert.match(css, /\.button:disabled\s*\{[^}]*cursor:\s*not-allowed/);
+  assert.match(css, /\.button\[aria-busy=["']true["']\]:disabled\s*\{[^}]*cursor:\s*wait/);
+});
+
+test('continuing to API implicitly skips an unfinished storage step and never stays busy', async () => {
+  const script = read('options.js');
+  const start = script.indexOf('async function continueOnboarding(');
+  const source = script.slice(start, script.indexOf('\n}', start) + 2);
+  const events = [];
+  const context = {
+    onboardingUi: {
+      active: true, step: 'storage', pending: false,
+      state: { steps: { storage: 'pending', api: 'pending' } }
+    },
+    userDataUi: { pendingAction: false },
+    async setOnboardingStepState(step, status) {
+      events.push([step, status]);
+      context.onboardingUi.state.steps[step] = status;
+    },
+    renderOnboarding() { events.push(['render', context.onboardingUi.step]); },
+    document: { getElementById() { return { textContent: '' }; } },
+    friendlyError: error => error.message,
+    Error
+  };
+  vm.runInNewContext(`${source}\nglobalThis.runContinue = continueOnboarding;`, context);
+  await context.runContinue();
+
+  assert.deepEqual(events[0], ['storage', 'skipped']);
+  assert.equal(context.onboardingUi.step, 'api');
+  assert.equal(context.onboardingUi.pending, false);
 });

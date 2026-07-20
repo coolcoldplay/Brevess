@@ -180,10 +180,8 @@ function bindEvents() {
     renderOnboarding();
   });
   document.getElementById('onboardingSkip').addEventListener('click', skipOnboardingStep);
-  document.getElementById('onboardingContinue').addEventListener('click', () => {
-    onboardingUi.step = 'api';
-    renderOnboarding();
-  });
+  document.getElementById('onboardingContinue')
+    .addEventListener('click', continueOnboarding);
   document.getElementById('onboardingFinish').addEventListener('click', finishOnboarding);
   document.getElementById('categorySearch').addEventListener('input', event => {
     categoryEditor.search = event.target.value.trim().toLocaleLowerCase();
@@ -321,14 +319,18 @@ function renderOnboarding() {
   const skip = document.getElementById('onboardingSkip');
   const next = document.getElementById('onboardingContinue');
   const finish = document.getElementById('onboardingFinish');
+  const busy = onboardingUi.pending || userDataUi.pendingAction;
   back.hidden = step !== 'api';
   skip.hidden = status !== 'pending';
   next.hidden = step !== 'storage';
   finish.hidden = step !== 'api';
-  back.disabled = onboardingUi.pending;
-  skip.disabled = onboardingUi.pending;
-  next.disabled = onboardingUi.pending || !['completed', 'skipped'].includes(status);
-  finish.disabled = onboardingUi.pending || onboardingUi.state?.acknowledged !== true;
+  [back, skip, next, finish].forEach(button => {
+    button.setAttribute('aria-busy', String(busy));
+  });
+  back.disabled = busy;
+  skip.disabled = busy;
+  next.disabled = busy;
+  finish.disabled = busy || onboardingUi.state?.acknowledged !== true;
 }
 
 async function initializeOnboarding() {
@@ -379,6 +381,22 @@ async function skipOnboardingStep() {
   } catch (error) {
     document.getElementById('onboardingStepState').textContent =
       `无法保存跳过状态：${friendlyError(error)}`;
+  }
+}
+
+async function continueOnboarding() {
+  if (onboardingUi.pending || userDataUi.pendingAction) return;
+  const status = onboardingUi.state?.steps?.storage || 'pending';
+  try {
+    if (!['completed', 'skipped'].includes(status)) {
+      await setOnboardingStepState('storage', 'skipped');
+    }
+    onboardingUi.step = 'api';
+  } catch (error) {
+    document.getElementById('onboardingStepState').textContent =
+      `无法继续 API 配置：${friendlyError(error)}`;
+  } finally {
+    renderOnboarding();
   }
 }
 
@@ -486,6 +504,7 @@ function setUserDataActionPending(pending) {
     document.getElementById(id).setAttribute('aria-busy', String(userDataUi.pendingAction));
   });
   updateUserDataActionButtons();
+  renderOnboarding();
 }
 
 function startUserDataStatusRequest() {
@@ -1825,7 +1844,11 @@ function friendlyError(error) {
     QUOTA_EXHAUSTED: 'API 额度不足',
     NETWORK_ERROR: '无法访问服务商，请检查域名权限和网络',
     INVALID_RESPONSE: '服务商返回了无法识别的格式',
-    INVALID_SETTINGS: `内容不完整或规则不安全：${(error.fields || []).join('、')}`
+    INVALID_SETTINGS: `内容不完整或规则不安全：${(error.fields || []).join('、')}`,
+    USER_DATA_DATABASE_UNAVAILABLE: '本地数据库模块不可用，请重新加载扩展后重试',
+    INDEXEDDB_UNAVAILABLE: '浏览器本地数据库不可用，请检查隐私设置后重试',
+    INDEXEDDB_OPEN_FAILED: '无法打开浏览器本地数据库，请重新加载扩展后重试',
+    INDEXEDDB_UPGRADE_BLOCKED: '本地数据库正在被旧页面占用，请关闭其他插件设置页后重试'
   };
   return messages[error.code] || error.message;
 }
