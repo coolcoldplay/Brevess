@@ -328,7 +328,9 @@ test('manual, LLM, and regex clear paths are strictly independent', () => {
   const classStart = script.indexOf('class SciPaperHighlighter');
   const classEnd = script.indexOf('// DOM-independent manual annotation UI helpers: start');
   const highlighterClass = script.slice(classStart, classEnd);
-  const regexClear = highlighterClass.match(/clearHighlight\(\)\s*\{([\s\S]*?)\n\s*\}\n\s*\/\/ 获取所有文本节点/)?.[1] || '';
+  const regexClear = highlighterClass.match(
+    /clearHighlight\(\)\s*\{([\s\S]*?)\r?\n\s*\}\r?\n\s*\/\/ 获取所有文本节点/
+  )?.[1] || '';
   const llmClear = script.match(/function clearLlmHighlights\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
   const manualClear = script.match(/function clearManualHighlightMarks\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
   assert.match(regexClear, /sci-highlight|highlightedElements/);
