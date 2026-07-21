@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const RUNTIME_REVISION = '2.4.0-article-workspaces-r3';
+  const RUNTIME_REVISION = '2.4.0-article-workspaces-r4';
   const TASK_TIMEOUTS_MS = Object.freeze({
     highlight: 180000,
     summary: 180000,
@@ -1075,6 +1075,73 @@
         'TOKEN_LIMIT_REJECTED', 'OUTPUT_TRUNCATED', 'REQUEST_TIMEOUT'
       ]);
 
+      // When the publisher DOM exposes no stable Panel labels, asking an
+      // economical text model for the full per-Panel schema is both wasteful
+      // and fragile. Use a smaller evidence-overview contract that preserves
+      // the Figure question, ordered reasoning chain, conclusion, and limits
+      // without inventing Panel letters.
+      if (panelBatches.length === 1 && panelBatches[0].length === 0) {
+        const overviewBase = {
+          ...progressBase,
+          expectedPanels: [],
+          expectedPanelCount: 0,
+          panelBatchIndex: 1,
+          totalPanelBatches: 1,
+          completedPanelBatches: 0,
+          unlabeledFigure: true
+        };
+        const runOverview = async visualInput => {
+          const prompt = shared.compileUnlabeledFigureOverviewPrompt(
+            figure, { visualInput, analysisDepth }
+          );
+          progress({
+            phase: 'figure_requesting', ...overviewBase,
+            basis: visualInput ? 'vision_text' : 'caption_context',
+            visionFallback
+          });
+          return requestValidated({
+            prompt,
+            request: {
+              ...prompt,
+              images: visualInput ? figure.images : [],
+              outputUnits: analysisDepth === 'deep' ? 2 : 1
+            },
+            progressDetails: overviewBase,
+            validate: raw => shared.validateUnlabeledFigureOverview(
+              raw, figure, { visualInput, analysisDepth }
+            )
+          });
+        };
+        let result;
+        let lastError = null;
+        try {
+          result = await runOverview(useVisualInput);
+        } catch (error) {
+          lastError = error;
+          if (useVisualInput && degradableResponseCodes.has(error?.code)) {
+            visionFallback = true;
+            useVisualInput = false;
+            progress({ phase: 'figure_fallback', ...overviewBase, errorCode: error.code });
+            result = await runOverview(false);
+            lastError = null;
+          }
+        }
+        if (!result) throw lastError || new Error('Figure overview did not return a result');
+        progress({
+          phase: 'figure_assembling', ...overviewBase,
+          recognizedPanelCount: 0
+        });
+        progress({
+          phase: 'figure_panel_batch_complete', ...overviewBase,
+          completedPanelBatches: 1,
+          recognizedPanelCount: 0,
+          basis: result.basis,
+          visionFallback,
+          partialFigureResult: result
+        });
+        return { result, visionFallback, totalPanelBatches: 1 };
+      }
+
       // A small Figure is fastest and most coherent as one structured request.
       if (panelBatches.length === 1) {
         const panelHints = panelBatches[0];
@@ -1088,28 +1155,6 @@
           completedPanelBatches: 0
         };
         const run = async visualInput => {
-          if (!panelHints.length) {
-            const prompt = shared.compileFigureSynthesisPrompt(
-              batchFigure, [], { visualInput, analysisDepth }
-            );
-            const request = {
-              ...prompt,
-              images: visualInput ? figure.images : [],
-              outputUnits: analysisDepth === 'deep' ? 4 : 2
-            };
-            progress({
-              phase: 'figure_requesting', ...batchBase,
-              basis: visualInput ? 'vision_text' : 'caption_context',
-              visionFallback,
-              unlabeledFigure: true
-            });
-            return requestValidated({
-              prompt, request, progressDetails: batchBase,
-              validate: raw => shared.validateFigureSynthesis(
-                raw, batchFigure, [], { visualInput, analysisDepth }
-              )
-            });
-          }
           const prompt = shared.compileFigureAnalysisPrompt(
             batchFigure, { visualInput, analysisDepth }
           );

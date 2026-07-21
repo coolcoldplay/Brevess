@@ -18,8 +18,12 @@ test('content script defines bounded Figure image preparation', () => {
   assert.match(script, /FIGURE_IMAGE_MAX_EDGE\s*=\s*1600/);
   assert.match(script, /FIGURE_IMAGE_MAX_BYTES\s*=\s*1572864/);
   assert.match(script, /FIGURE_IMAGE_LIMIT\s*=\s*4/);
+  assert.match(script, /FIGURE_IMAGE_LOAD_TIMEOUT_MS\s*=\s*8000/);
+  assert.match(script, /FIGURE_IMAGE_PREPARATION_TIMEOUT_MS\s*=\s*12000/);
   assert.match(script, /prepareFigureImages/);
   assert.match(script, /canvas\.toDataURL\(['"]image\/jpeg/);
+  assert.match(script, /FIGURE_IMAGE_TIMEOUT/);
+  assert.match(script, /signal:\s*controller\.signal/);
 });
 
 test('active Figure workflows never inject walkthrough cards beside webpage captions', () => {

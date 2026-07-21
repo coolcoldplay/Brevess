@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r3';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r4';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];
@@ -722,6 +722,8 @@ const REVIEW_ROLE_LABELS = Object.freeze({
 const FIGURE_IMAGE_MAX_EDGE = 1600;
 const FIGURE_IMAGE_MAX_BYTES = 1572864;
 const FIGURE_IMAGE_LIMIT = 4;
+const FIGURE_IMAGE_LOAD_TIMEOUT_MS = 8000;
+const FIGURE_IMAGE_PREPARATION_TIMEOUT_MS = 12000;
 const FIGURE_ROUTE_CAPABILITY_TTL_MS = 30000;
 let figureRouteCapabilityCache = null;
 const llmFeedbackByMark = new WeakMap();
@@ -3225,26 +3227,60 @@ function figureDataUrlBytes(value) {
     return Math.floor(base64.length * 3 / 4);
 }
 
-function loadFigureImage(source) {
+function figureImageTimeoutError() {
+    const error = new Error('Figure image loading timed out');
+    error.code = 'FIGURE_IMAGE_TIMEOUT';
+    return error;
+}
+
+function loadFigureImage(source, timeoutMs = FIGURE_IMAGE_LOAD_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         const image = new Image();
+        let settled = false;
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            image.onload = null;
+            image.onerror = null;
+            handler(value);
+        };
+        const timer = setTimeout(() => {
+            finish(reject, figureImageTimeoutError());
+            image.src = '';
+        }, Math.max(250, Number(timeoutMs) || FIGURE_IMAGE_LOAD_TIMEOUT_MS));
         image.crossOrigin = 'anonymous';
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error('Figure image could not be loaded'));
+        image.onload = () => finish(resolve, image);
+        image.onerror = () => finish(reject, new Error('Figure image could not be loaded'));
         image.src = source;
     });
 }
 
-async function fetchFigureImage(source) {
-    const response = await fetch(source, { credentials: 'include' });
-    if (!response.ok) throw new Error('Figure image request failed');
-    const blob = await response.blob();
-    if (!/^image\//i.test(blob.type || '')) throw new Error('Figure source was not an image');
-    const objectUrl = URL.createObjectURL(blob);
+async function fetchFigureImage(source, timeoutMs = FIGURE_IMAGE_LOAD_TIMEOUT_MS) {
+    const deadline = Date.now() + Math.max(
+        250, Number(timeoutMs) || FIGURE_IMAGE_LOAD_TIMEOUT_MS
+    );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(),
+        Math.max(250, deadline - Date.now()));
     try {
-        return await loadFigureImage(objectUrl);
+        const response = await fetch(source, {
+            credentials: 'include', signal: controller.signal
+        });
+        if (!response.ok) throw new Error('Figure image request failed');
+        const blob = await response.blob();
+        if (!/^image\//i.test(blob.type || '')) throw new Error('Figure source was not an image');
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            return await loadFigureImage(objectUrl, Math.max(250, deadline - Date.now()));
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
+    } catch (error) {
+        if (error?.name === 'AbortError') throw figureImageTimeoutError();
+        throw error;
     } finally {
-        URL.revokeObjectURL(objectUrl);
+        clearTimeout(timeout);
     }
 }
 
@@ -3310,7 +3346,8 @@ function encodeFigureImage(sourceImage) {
     return image;
 }
 
-async function loadPreparedFigureSource(imageElement) {
+async function loadPreparedFigureSource(imageElement, deadline =
+    Date.now() + FIGURE_IMAGE_LOAD_TIMEOUT_MS) {
     const fallbackSource = imageElement?.currentSrc || imageElement?.src ||
         imageElement?.getAttribute?.('src') ||
         imageElement?.getAttribute?.('data-src') ||
@@ -3322,14 +3359,20 @@ async function loadPreparedFigureSource(imageElement) {
     if (!candidates.length) throw new Error('Figure image source is missing');
     let lastError = null;
     for (const source of candidates) {
+        if (Date.now() >= deadline) {
+            lastError = figureImageTimeoutError();
+            break;
+        }
+        const remainingMs = () => Math.max(250, deadline - Date.now());
         try {
             return imageElement.complete && imageElement.naturalWidth &&
                 (imageElement.currentSrc === source || imageElement.src === source)
-                ? imageElement : await loadFigureImage(source);
+                ? imageElement : await loadFigureImage(source, remainingMs());
         } catch (error) {
             lastError = error;
+            if (Date.now() >= deadline) break;
             try {
-                return await fetchFigureImage(source);
+                return await fetchFigureImage(source, remainingMs());
             } catch (fetchError) {
                 lastError = fetchError;
             }
@@ -3338,8 +3381,8 @@ async function loadPreparedFigureSource(imageElement) {
     throw lastError || new Error('Figure image could not be loaded');
 }
 
-async function prepareFigureImage(imageElement) {
-    return encodeFigureImage(await loadPreparedFigureSource(imageElement));
+async function prepareFigureImage(imageElement, deadline) {
+    return encodeFigureImage(await loadPreparedFigureSource(imageElement, deadline));
 }
 
 async function figureRouteSupportsVision() {
@@ -3366,10 +3409,11 @@ async function figureRouteSupportsVision() {
 async function prepareFigureImages(figure) {
     if (!await figureRouteSupportsVision()) return [];
     const prepared = [];
+    const deadline = Date.now() + FIGURE_IMAGE_PREPARATION_TIMEOUT_MS;
     for (const imageElement of Array.from(figure?.imageElements || [])) {
-        if (prepared.length >= FIGURE_IMAGE_LIMIT) break;
+        if (prepared.length >= FIGURE_IMAGE_LIMIT || Date.now() >= deadline) break;
         try {
-            prepared.push(await prepareFigureImage(imageElement));
+            prepared.push(await prepareFigureImage(imageElement, deadline));
         } catch (error) {
             console.warn('SCI 逐图解读：跳过无法读取的图片', error.message);
         }

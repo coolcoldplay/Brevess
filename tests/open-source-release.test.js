@@ -60,8 +60,8 @@ test('2.4 release metadata and scale benchmark stay consistent', () => {
   assert.equal(packageJson.scripts['benchmark:article-chat'],
     'node scripts/benchmark-article-chat.mjs');
   assert.match(read('background.js'), /version:\s*'2\.4\.0'/);
-  assert.match(read('core/background-router.js'), /2\.4\.0-article-workspaces-r3/);
-  assert.match(read('content.js'), /2\.4\.0-article-workspaces-r3/);
+  assert.match(read('core/background-router.js'), /2\.4\.0-article-workspaces-r4/);
+  assert.match(read('content.js'), /2\.4\.0-article-workspaces-r4/);
   assert.match(read('scripts/build-unpacked-extension.ps1'), /v2\.4\.0-article-workspaces/);
   assert.match(read('README.md'), /2\.4\.0/);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'benchmark-article-chat.mjs')), true);

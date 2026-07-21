@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_ANALYSIS_VERSION = '7';
+  const FIGURE_ANALYSIS_VERSION = '8';
   const FIGURE_DEPTHS = new Set(['standard', 'deep']);
   const OBSERVATION_SOURCES = [
     'image_observation', 'caption_statement', 'body_statement', 'multi_source', 'inference'
@@ -200,6 +200,52 @@
         'control_analysis', 'evidence_relations', 'negative_result_value_zh',
         'qualitative_quantitative_link_zh', 'alternative_explanations',
         'missing_link_if_panel_removed', 'paper_argument_role_zh',
+        'deep_author_strategy_zh'
+      );
+    }
+    return { type: 'object', additionalProperties: false, properties, required };
+  }
+
+  function createUnlabeledFigureOverviewSchema(depth = 'standard') {
+    const analysisDepth = normalizeFigureDepth(depth);
+    const properties = {
+      figure_id: stringSchema(),
+      analysis_depth: { type: 'string', enum: [analysisDepth] },
+      basis: { type: 'string', enum: ['vision_text', 'caption_context'] },
+      figure_question_zh: stringSchema(),
+      evidence_steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            source_zh: stringSchema(),
+            established_zh: stringSchema(),
+            handoff_zh: stringSchema(),
+            evidence_level: { type: 'string', enum: EVIDENCE_RELATION_LEVELS }
+          },
+          required: [
+            'source_zh', 'established_zh', 'handoff_zh', 'evidence_level'
+          ]
+        }
+      },
+      author_assembly_zh: stringSchema(),
+      core_conclusion_zh: stringSchema(),
+      claim_boundary_zh: stringSchema()
+    };
+    const required = [
+      'figure_id', 'analysis_depth', 'basis', 'figure_question_zh',
+      'evidence_steps', 'author_assembly_zh', 'core_conclusion_zh',
+      'claim_boundary_zh'
+    ];
+    if (analysisDepth === 'deep') {
+      Object.assign(properties, {
+        alternative_explanations: stringArraySchema(),
+        paper_argument_role_zh: stringSchema(),
+        deep_author_strategy_zh: stringSchema()
+      });
+      required.push(
+        'alternative_explanations', 'paper_argument_role_zh',
         'deep_author_strategy_zh'
       );
     }
@@ -458,6 +504,45 @@
     };
   }
 
+  function compileUnlabeledFigureOverviewPrompt(input, options = {}) {
+    const analysisDepth = normalizeFigureDepth(options.analysisDepth);
+    const visualInput = options.visualInput === true;
+    return {
+      systemPrompt: [
+        'You are a rigorous biomedical figure-reading tutor.',
+        'The webpage did not expose stable Panel labels for this Figure. Produce a Figure-level evidence overview without inventing Panel letters or numbers.',
+        visualInput
+          ? 'Figure pixels are supplied. Describe only components and comparisons that are actually legible.'
+          : 'No Figure pixels are supplied. Use only the caption and related body text; never imply that you saw the image.',
+        'Order evidence_steps by the paper\'s reasoning sequence. source_zh should name a grounded source such as the caption statement, related Results text, left plot, or workflow schematic, without fabricating a Panel label.',
+        'Separate direct evidence from inference, state the handoff to the next step, and use the most conservative evidence_level.',
+        'Return detailed but non-repetitive Chinese. Keep the JSON small and include every required key.',
+        analysisDepth === 'deep'
+          ? 'Also state plausible alternatives, the Figure\'s role in the paper argument, and the author\'s evidence-ordering strategy.'
+          : 'Focus on the Figure question, ordered evidence, conclusion, and claim boundary.',
+        'Return strict JSON only, without Markdown.'
+      ].join('\n'),
+      userPrompt: JSON.stringify({
+        figure_id: cleanText(input?.figureId, 80),
+        figure_label: cleanText(input?.figureLabel, 80),
+        article_title: cleanText(input?.articleTitle, 500),
+        caption: cleanText(input?.caption, 8000),
+        related_body_context: (Array.isArray(input?.contextParagraphs)
+          ? input.contextParagraphs : []).slice(0, 8).map(item => ({
+          paragraph_id: cleanText(item?.paragraphId, 120),
+          section_title: cleanText(item?.sectionTitle, 240),
+          text: cleanText(item?.text, 1200)
+        })),
+        expected_panel_labels: [],
+        analysis_basis: visualInput ? 'vision_text' : 'caption_context',
+        analysis_depth: analysisDepth,
+        pass: 'unlabeled_figure_overview'
+      }),
+      responseSchema: createUnlabeledFigureOverviewSchema(analysisDepth),
+      schemaName: `figure_unlabeled_overview_${analysisDepth}`
+    };
+  }
+
   function normalizePanelFollowupTopics(value) {
     const seen = new Set();
     return (Array.isArray(value) ? value : []).map(item => String(item || '').trim())
@@ -633,6 +718,12 @@
       );
     });
     (Array.isArray(repaired.argument_chain) ? repaired.argument_chain : []).forEach(step => {
+      if (!isPlainObject(step)) return;
+      step.evidence_level = normalizedFigureEnum(
+        step.evidence_level, EVIDENCE_RELATION_LEVELS, 'other'
+      );
+    });
+    (Array.isArray(repaired.evidence_steps) ? repaired.evidence_steps : []).forEach(step => {
       if (!isPlainObject(step)) return;
       step.evidence_level = normalizedFigureEnum(
         step.evidence_level, EVIDENCE_RELATION_LEVELS, 'other'
@@ -1052,6 +1143,77 @@
     }, input, options);
   }
 
+  function validateUnlabeledFigureOverview(value, input, options = {}) {
+    const analysisDepth = normalizeFigureDepth(options.analysisDepth);
+    const schema = createUnlabeledFigureOverviewSchema(analysisDepth);
+    value = repairFigureResponseShape(value, input, options, schema);
+    requireExactFigureKeys(value, schema.required, 'unlabeled Figure overview root');
+    const expectedFigureId = cleanText(input?.figureId, 80);
+    if (cleanText(value.figure_id, 80) !== expectedFigureId) {
+      throw invalidResponse('Unlabeled Figure overview id did not match the request');
+    }
+    if (value.analysis_depth !== analysisDepth) {
+      throw invalidResponse('Unlabeled Figure overview depth did not match the request');
+    }
+    if (!['vision_text', 'caption_context'].includes(value.basis)) {
+      throw invalidResponse('Unlabeled Figure overview basis is invalid');
+    }
+    assertRawArrayOfObjects(value.evidence_steps, 'evidence_steps', [
+      'source_zh', 'established_zh', 'handoff_zh', 'evidence_level'
+    ], { evidence_level: EVIDENCE_RELATION_LEVELS });
+    const visualInput = options.visualInput === true;
+    const evidenceSteps = value.evidence_steps.slice(0, 12).map(step => {
+      const source = cleanFigureField(step.source_zh, 400);
+      const established = cleanFigureField(step.established_zh, 1800);
+      return {
+        panels: [],
+        established: source && established
+          ? `${source}\uff1a${established}` : (established || source),
+        handoff: cleanFigureField(step.handoff_zh, 1800),
+        evidenceLevel: EVIDENCE_RELATION_LEVELS.includes(step.evidence_level)
+          ? step.evidence_level : 'other'
+      };
+    }).filter(step => step.established || step.handoff);
+    const result = {
+      figureId: expectedFigureId,
+      analysisDepth,
+      basis: visualInput && value.basis !== 'caption_context'
+        ? 'vision_text' : 'caption_context',
+      figureQuestion: cleanFigureField(value.figure_question_zh, 2400),
+      panels: [],
+      panelGroups: [],
+      logicBridges: [],
+      argumentChain: evidenceSteps,
+      panelCoverage: {
+        expectedPanels: [], returnedPanels: [], missingPanels: [],
+        unexpectedPanels: [], ignoredUnexpectedPanelCount: 0
+      },
+      authorAssembly: cleanFigureField(value.author_assembly_zh, 3200),
+      coreConclusion: cleanFigureField(value.core_conclusion_zh, 2400),
+      claimBoundary: cleanFigureField(value.claim_boundary_zh, 2400),
+      unlabeledOverview: true
+    };
+    if (!result.figureQuestion && !result.coreConclusion && !result.argumentChain.length) {
+      throw invalidResponse('Unlabeled Figure overview did not contain usable content');
+    }
+    if (analysisDepth === 'deep') Object.assign(result, {
+      controlAnalysis: [],
+      evidenceRelations: evidenceSteps.map(step => ({
+        panels: [], relationLevel: step.evidenceLevel,
+        rationale: step.established
+      })),
+      negativeResultValue: '',
+      qualitativeQuantitativeLink: '',
+      alternativeExplanations: normalizedStringList(
+        value.alternative_explanations, 20
+      ),
+      missingLinksIfPanelRemoved: [],
+      paperArgumentRole: cleanFigureField(value.paper_argument_role_zh, 2400),
+      deepAuthorStrategy: cleanFigureField(value.deep_author_strategy_zh, 3200)
+    });
+    return result;
+  }
+
   function validateCachedFigureAnalysis(value, input, options = {}) {
     if (!isPlainObject(value)) throw invalidResponse('Cached Figure analysis must be an object');
     const analysisDepth = normalizeFigureDepth(options.analysisDepth);
@@ -1107,11 +1269,13 @@
       paper_argument_role_zh: value.paperArgumentRole,
       deep_author_strategy_zh: value.deepAuthorStrategy
     });
-    return validateFigureAnalysis(raw, input, {
+    const validated = validateFigureAnalysis(raw, input, {
       analysisDepth,
       visualInput: value.basis === 'vision_text',
       repairResponse: false
     });
+    if (value.unlabeledOverview === true) validated.unlabeledOverview = true;
+    return validated;
   }
 
   function validatePanelFollowup(value, input, options = {}) {
@@ -1190,6 +1354,7 @@
     PANEL_FOLLOWUP_TOPICS,
     DEFAULT_PANEL_FOLLOWUP_PROMPTS,
     createFigureAnalysisSchema,
+    createUnlabeledFigureOverviewSchema,
     createFigurePanelBatchSchema,
     createFigureSynthesisSchema,
     createFigurePanelInterpretationSchema,
@@ -1197,6 +1362,7 @@
     compileFigureAnalysisPrompt,
     compileFigurePanelBatchPrompt,
     compileFigureSynthesisPrompt,
+    compileUnlabeledFigureOverviewPrompt,
     compileFigurePanelInterpretationPrompt,
     compilePanelFollowupPrompt,
     isFatalFigureBatchError,
@@ -1204,6 +1370,7 @@
     validateFigureAnalysis,
     validateFigurePanelBatch,
     validateFigureSynthesis,
+    validateUnlabeledFigureOverview,
     validateCachedFigureAnalysis,
     validateFigurePanelInterpretation,
     validatePanelFollowup,

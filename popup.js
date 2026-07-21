@@ -2237,6 +2237,12 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
                 ['\u8bc1\u636e\u8fb9\u754c', result.claimBoundary],
                 ['\u7ec4\u56fe\u601d\u60f3', result.authorAssembly]
             ].forEach(([label, value]) => appendFigureWorkspaceField(details, label, value));
+            if (result.unlabeledOverview === true) {
+                details.appendChild(createWorkspaceElement(
+                    'p', 'workspace-figure-coverage',
+                    '网页图注未提供稳定的 Panel 标签；以下为整图证据概览，未臆造 Panel 编号。'
+                ));
+            }
             const coverage = result.panelCoverage;
             if (coverage?.expectedPanels?.length) {
                 const coverageText = coverage.missingPanels?.length
@@ -2254,7 +2260,10 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
                 );
                 argumentChain.forEach((step, index) => {
                     const block = createWorkspaceElement('section', 'workspace-figure-chain-step');
-                    appendFigureWorkspaceField(block, `\u6b65\u9aa4 ${index + 1} Panel`, (step.panels || []).join('\u3001'));
+                    const panelRefs = (step.panels || []).join('\u3001');
+                    if (panelRefs) {
+                        appendFigureWorkspaceField(block, `\u6b65\u9aa4 ${index + 1} Panel`, panelRefs);
+                    }
                     appendFigureWorkspaceField(block, '\u786e\u7acb\u4e86\u4ec0\u4e48', step.established);
                     appendFigureWorkspaceField(block, '\u4e3a\u4f55\u8fdb\u5165\u4e0b\u4e00\u6b65', step.handoff);
                     appendFigureWorkspaceField(block, '\u8bc1\u636e\u7b49\u7ea7', step.evidenceLevel);
@@ -2308,7 +2317,8 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
                 });
                 (Array.isArray(result.evidenceRelations) ? result.evidenceRelations : []).forEach(relation => {
                     const block = createWorkspaceElement('section', 'workspace-figure-chain-step');
-                    appendFigureWorkspaceField(block, 'Panel', (relation.panels || []).join('\u3001'));
+                    const panelRefs = (relation.panels || []).join('\u3001');
+                    if (panelRefs) appendFigureWorkspaceField(block, 'Panel', panelRefs);
                     appendFigureWorkspaceField(block, '\u8bc1\u636e\u5173\u7cfb', relation.relationLevel);
                     appendFigureWorkspaceField(block, '\u5224\u65ad\u4f9d\u636e', relation.rationale);
                     details.appendChild(block);

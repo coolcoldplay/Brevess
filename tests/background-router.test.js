@@ -1377,7 +1377,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r3');
+  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r4');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);
@@ -2636,6 +2636,64 @@ test('degrades a repeatedly invalid small Figure into Panel extraction plus synt
     'single_pass', 'single_pass', 'panel_extraction', 'figure_synthesis'
   ]);
   assert.ok(progress.some(item => item.phase === 'figure_compact_fallback'));
+});
+
+test('recovers an unlabeled Figure through the compact overview contract', async () => {
+  const storageArea = createMemoryStorage();
+  const schemaNames = [];
+  const passes = [];
+  const progress = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      schemaNames.push(body.text?.format?.name || '');
+      passes.push(input.pass || '');
+      if (calls === 1) {
+        return jsonResponse({ output_text: 'not valid JSON' });
+      }
+      return jsonResponse({
+        output_text: JSON.stringify({
+          figure_id: input.figure_id,
+          analysis_depth: input.analysis_depth,
+          basis: input.analysis_basis,
+          figure_question_zh: 'What does the supplied Figure establish?',
+          evidence_steps: [{
+            source_zh: 'Figure caption and related Results text',
+            established_zh: 'The intervention changes the reported phenotype.',
+            handoff_zh: 'The next experiment should test the proposed mechanism.',
+            evidence_level: 'intervention_effect'
+          }],
+          author_assembly_zh: 'The author moves from phenotype to mechanism.',
+          core_conclusion_zh: 'The intervention changes the phenotype.',
+          claim_boundary_zh: 'The Figure alone does not establish the full mechanism.'
+        })
+      });
+    }
+  });
+  await configureOpenAIRouter(router);
+
+  const response = await router.handle(figureMessage([figureInput(1)]), {
+    onProgress: event => progress.push(event)
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(calls, 2);
+  assert.deepEqual(schemaNames, [
+    'figure_unlabeled_overview_deep',
+    'figure_unlabeled_overview_deep'
+  ]);
+  assert.deepEqual(passes, [
+    'unlabeled_figure_overview',
+    'unlabeled_figure_overview'
+  ]);
+  assert.equal(response.data.figureResults[0].unlabeledOverview, true);
+  assert.equal(response.data.figureResults[0].panels.length, 0);
+  assert.equal(response.data.figureResults[0].argumentChain.length, 1);
+  assert.ok(progress.some(event => event.phase === 'figure_schema_retry'));
 });
 
 test('expands a truncated whole-Figure output budget before using structural degradation', async () => {

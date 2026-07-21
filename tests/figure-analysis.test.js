@@ -5,6 +5,7 @@ require('../providers/provider-utils.js');
 const {
   FIGURE_ANALYSIS_VERSION,
   createFigureAnalysisSchema,
+  createUnlabeledFigureOverviewSchema,
   createFigurePanelBatchSchema,
   createFigureSynthesisSchema,
   createFigurePanelInterpretationSchema,
@@ -12,12 +13,14 @@ const {
   compileFigureAnalysisPrompt,
   compileFigurePanelBatchPrompt,
   compileFigureSynthesisPrompt,
+  compileUnlabeledFigureOverviewPrompt,
   compileFigurePanelInterpretationPrompt,
   compilePanelFollowupPrompt,
   isFatalFigureBatchError,
   validateFigureAnalysis,
   validateFigurePanelBatch,
   validateFigureSynthesis,
+  validateUnlabeledFigureOverview,
   validateFigurePanelInterpretation,
   validatePanelFollowup,
   normalizePanelFollowupPrompts
@@ -92,7 +95,7 @@ function validStandardFigureOutput(depth = 'standard') {
 }
 
 test('defines a versioned strict Figure walkthrough response schema', () => {
-  assert.equal(FIGURE_ANALYSIS_VERSION, '7');
+  assert.equal(FIGURE_ANALYSIS_VERSION, '8');
   const schema = createFigureAnalysisSchema('standard');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.basis.enum, ['vision_text', 'caption_context']);
@@ -117,6 +120,44 @@ test('defines a versioned strict Figure walkthrough response schema', () => {
   assert.deepEqual(panel.properties.method_source.enum, [
     'image', 'caption', 'body', 'inference'
   ]);
+});
+
+test('uses a compact evidence overview when the webpage exposes no stable Panel labels', () => {
+  const prompt = compileUnlabeledFigureOverviewPrompt(figureInput, {
+    visualInput: false,
+    analysisDepth: 'standard'
+  });
+  const schema = createUnlabeledFigureOverviewSchema('standard');
+  const payload = JSON.parse(prompt.userPrompt);
+  assert.equal(prompt.schemaName, 'figure_unlabeled_overview_standard');
+  assert.equal(payload.pass, 'unlabeled_figure_overview');
+  assert.deepEqual(payload.expected_panel_labels, []);
+  assert.equal(schema.additionalProperties, false);
+  assert.ok(schema.required.includes('evidence_steps'));
+  assert.equal(Object.hasOwn(schema.properties, 'panels'), false);
+
+  const result = validateUnlabeledFigureOverview({
+    figure_id: 'figure-2',
+    analysis_depth: 'standard',
+    basis: 'caption_context',
+    figure_question_zh: 'Does the treatment reduce tumor burden?',
+    evidence_steps: [{
+      source_zh: 'Figure caption',
+      established_zh: 'Treatment reduced tumor volume relative to control.',
+      handoff_zh: 'This motivates testing whether the effect is reproducible.',
+      evidence_level: 'intervention_effect'
+    }],
+    author_assembly_zh: 'The author orders the evidence from phenotype to validation.',
+    core_conclusion_zh: 'The treatment reduces tumor burden in the supplied model.',
+    claim_boundary_zh: 'The supplied evidence does not establish a direct mechanism.'
+  }, figureInput, { visualInput: false, analysisDepth: 'standard' });
+
+  assert.equal(result.unlabeledOverview, true);
+  assert.equal(result.panels.length, 0);
+  assert.equal(result.argumentChain.length, 1);
+  assert.match(result.argumentChain[0].established, /Figure caption/);
+  assert.equal(result.argumentChain[0].evidenceLevel, 'intervention_effect');
+  assert.equal(result.basis, 'caption_context');
 });
 
 test('splits large Figure output into strict Panel extraction and synthesis passes', () => {
