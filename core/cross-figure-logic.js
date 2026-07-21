@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const CROSS_FIGURE_LOGIC_VERSION = '2';
+  const CROSS_FIGURE_LOGIC_VERSION = '3';
   const NODE_ROLE_VALUES = [
     'problem_setup', 'phenomenon', 'association', 'mechanism', 'causal_test',
     'necessity', 'sufficiency', 'rescue', 'functional_outcome', 'translation', 'other'
@@ -45,7 +45,7 @@
 
   function classifyNodeRole(value, evidenceText = '') {
     const token = codeToken(value);
-    if (NODE_ROLES.has(token)) return token;
+    if (NODE_ROLES.has(token) && token !== 'other') return token;
     const explicitText = `${token} ${clean(value, 240)}`.toLowerCase();
     const evidence = clean(evidenceText, 2400).toLowerCase();
     const rules = [
@@ -66,7 +66,7 @@
 
   function classifyEvidenceLevel(value, evidenceText = '', priorLevels = []) {
     const token = codeToken(value);
-    if (EVIDENCE_LEVELS.has(token)) return token;
+    if (EVIDENCE_LEVELS.has(token) && token !== 'other') return token;
     const explicitText = `${token} ${clean(value, 240)}`.toLowerCase();
     const evidence = clean(evidenceText, 2400).toLowerCase();
     const rules = [
@@ -86,10 +86,10 @@
     return prior || 'other';
   }
 
-  function classifyRelationType(value) {
+  function classifyRelationType(value, evidenceText = '') {
     const token = codeToken(value);
-    if (RELATION_TYPES.has(token)) return token;
-    const text = clean(value, 300).toLowerCase();
+    if (RELATION_TYPES.has(token) && token !== 'other') return token;
+    const text = `${clean(value, 300)} ${clean(evidenceText, 1800)}`.toLowerCase();
     const rules = [
       ['problem_to_phenomenon', /problem.*phenomen|question.*phenotyp|问题.*现象|问题.*表型/],
       ['phenomenon_to_mechanism', /phenomen.*mechan|phenotyp.*pathway|现象.*机制|表型.*通路/],
@@ -214,6 +214,9 @@
       `Use only these exact role tokens: ${NODE_ROLE_VALUES.join(', ')}.`,
       `Use only these exact evidence_level tokens: ${EVIDENCE_LEVEL_VALUES.join(', ')}.`,
       `Use only these exact relation_type tokens: ${RELATION_TYPE_VALUES.join(', ')}.`,
+      'Classify each current Figure from what that Figure directly establishes; do not let its transition_zh description of a future experiment determine the current role or evidence_level.',
+      'Choose evidence_level from the strongest direct design actually supplied for that Figure (association, intervention, necessity, sufficiency, rescue, mechanism, or functional validation).',
+      'Use other only as a last resort after checking the caption, prior analysis, and argument-chain evidence; never assign other to every node merely because labels are uncertain.',
       'Return exactly one figure_nodes entry for every main figure id, even when its evidence is weak; state the uncertainty rather than omitting it.',
       'For each transition, explain what the previous figure establishes, why that makes the next figure necessary, and what remains unproven at that point.',
       'Do not turn association into causation, and do not claim that a supplement proves a result unless its supplied caption or analysis supports that claim.',
@@ -272,7 +275,7 @@
       const priorLevels = sourceFigure?.analysis?.argumentChain
         ?.map(item => item.evidence_level).filter(Boolean) || [];
       const evidenceText = [
-        raw?.established_zh, raw?.transition_zh,
+        raw?.established_zh,
         sourceFigure?.analysis?.figureQuestion,
         sourceFigure?.analysis?.coreConclusion,
         sourceFigure?.analysis?.authorAssembly,
@@ -298,7 +301,9 @@
           toFigureId,
           fromFigureLabel: figuresById.get(fromFigureId)?.figureLabel || fromFigureId,
           toFigureLabel: figuresById.get(toFigureId)?.figureLabel || toFigureId,
-          relationType: classifyRelationType(raw?.relation_type),
+          relationType: classifyRelationType(raw?.relation_type, [
+            raw?.established_zh, raw?.transition_zh, raw?.evidence_boundary_zh
+          ].filter(Boolean).join(' ')),
           established: clean(raw?.established_zh),
           transition: clean(raw?.transition_zh),
           evidenceBoundary: clean(raw?.evidence_boundary_zh)

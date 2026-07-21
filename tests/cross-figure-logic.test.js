@@ -73,10 +73,12 @@ function validOutput() {
 test('compiles a strict cross-figure domino request with ordered main figures', () => {
   const prompt = compileCrossFigureLogicPrompt(input);
   const payload = JSON.parse(prompt.userPrompt);
-  assert.equal(CROSS_FIGURE_LOGIC_VERSION, '2');
+  assert.equal(CROSS_FIGURE_LOGIC_VERSION, '3');
   assert.equal(prompt.schemaName, 'cross_figure_domino_logic');
   assert.deepEqual(payload.main_figure_ids, ['figure-1', 'figure-2']);
   assert.match(prompt.systemPrompt, /exact document order/);
+  assert.match(prompt.systemPrompt, /Use other only as a last resort/);
+  assert.match(prompt.systemPrompt, /do not let its transition_zh/);
   assert.ok(prompt.responseSchema.required.includes('domino_chain'));
   assert.ok(prompt.responseSchema.required.includes('supplemental_support'));
   assert.deepEqual(
@@ -98,6 +100,39 @@ test('normalizes common Chinese and English role and evidence aliases instead of
     normalized.nodes.map(node => node.evidenceLevel),
     ['intervention_effect', 'mechanistic_support']
   );
+});
+
+test('recovers semantic roles when the model returns the generic other token', () => {
+  const inputWithPriorEvidence = structuredClone(input);
+  inputWithPriorEvidence.figures[0].analysis.argumentChain[0].evidenceLevel =
+    'intervention_effect';
+  const output = validOutput();
+  output.figure_nodes[0] = {
+    ...output.figure_nodes[0],
+    role: 'other',
+    established_zh: 'The metabolic phenotype is observed across heat-exposure conditions.',
+    evidence_level: 'other'
+  };
+  output.figure_nodes[1] = {
+    ...output.figure_nodes[1],
+    role: 'other',
+    established_zh: 'The receptor signaling pathway mediates the response.',
+    evidence_level: 'other'
+  };
+  output.domino_chain[0] = {
+    ...output.domino_chain[0],
+    relation_type: 'other',
+    established_zh: 'The phenomenon is established.',
+    transition_zh: 'The next Figure tests the mechanism.'
+  };
+
+  const normalized = validateCrossFigureLogic(output, inputWithPriorEvidence);
+  assert.deepEqual(normalized.nodes.map(node => node.role), ['phenomenon', 'mechanism']);
+  assert.deepEqual(
+    normalized.nodes.map(node => node.evidenceLevel),
+    ['intervention_effect', 'mechanistic_support']
+  );
+  assert.equal(normalized.dominoChain[0].relationType, 'phenomenon_to_mechanism');
 });
 
 test('normalizes only supplied Figure ids and preserves the main-figure order', () => {

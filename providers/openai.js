@@ -21,11 +21,52 @@
     throw new shared.ProviderRequestError('INVALID_RESPONSE', 'OpenAI response did not contain output text');
   }
 
+  function usesChatCompletionsEndpoint(value) {
+    return /\/chat\/completions(?:[/?#]|$)/i.test(String(value || '').trim());
+  }
+
+  function openAIHeaders(config) {
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`
+    };
+  }
+
   function createOpenAIAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'openai',
       generateTextStream(request) {
         const images = shared.normalizeImageInputs(request.images);
+        const chatCompletions = usesChatCompletionsEndpoint(config.baseUrl);
+        if (chatCompletions) {
+          return shared.createProviderTextStream({
+            fetchImpl,
+            url: config.baseUrl,
+            providerId: 'openai',
+            model: config.model,
+            protocol: 'openai-chat',
+            request,
+            options: {
+              method: 'POST',
+              headers: openAIHeaders(config),
+              body: JSON.stringify({
+                model: config.model,
+                messages: [
+                  { role: 'system', content: String(request.systemPrompt || '') },
+                  {
+                    role: 'user',
+                    content: shared.openAIChatUserContent(request.userPrompt, images)
+                  }
+                ],
+                max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+                stream: true,
+                stream_options: { include_usage: true }
+              }),
+              signal: request.signal,
+              timeoutMs: request.timeoutMs
+            }
+          });
+        }
         const input = images.length ? [{
           role: 'user',
           content: [
@@ -42,10 +83,7 @@
           request,
           options: {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${config.apiKey}`
-            },
+            headers: openAIHeaders(config),
             body: JSON.stringify({
               model: config.model,
               instructions: request.systemPrompt,
@@ -64,6 +102,8 @@
         const responseSchema = request.responseSchema ||
           shared.createAnnotationSchema(request.requestedCategoryIds || []);
         const images = shared.normalizeImageInputs(request.images);
+        const chatCompletions = usesChatCompletionsEndpoint(config.baseUrl);
+        const url = config.baseUrl || 'https://api.openai.com/v1/responses';
         const input = images.length ? [{
           role: 'user',
           content: [
@@ -74,27 +114,37 @@
             }))
           ]
         }] : request.userPrompt;
-        const data = await shared.requestJson(fetchImpl, config.baseUrl || 'https://api.openai.com/v1/responses', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.apiKey}`
-          },
-          body: JSON.stringify({
-            model: config.model,
-            instructions: request.systemPrompt,
-            input,
-            max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
-            store: false,
-            text: {
-              format: {
-                type: 'json_schema',
-                name: request.schemaName || 'structured_response',
-                strict: true,
-                schema: responseSchema
-              }
+        const body = chatCompletions ? {
+          model: config.model,
+          messages: [
+            { role: 'system', content: shared.withStructuredSchemaPrompt(request) },
+            {
+              role: 'user',
+              content: shared.openAIChatUserContent(request.userPrompt, images)
             }
-          }),
+          ],
+          max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+          response_format: { type: 'json_object' },
+          stream: false
+        } : {
+          model: config.model,
+          instructions: request.systemPrompt,
+          input,
+          max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+          store: false,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: request.schemaName || 'structured_response',
+              strict: true,
+              schema: responseSchema
+            }
+          }
+        };
+        const data = await shared.requestJson(fetchImpl, url, {
+          method: 'POST',
+          headers: openAIHeaders(config),
+          body: JSON.stringify(body),
           signal: request.signal,
           timeoutMs: request.timeoutMs
         });

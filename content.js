@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r1';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r2';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];

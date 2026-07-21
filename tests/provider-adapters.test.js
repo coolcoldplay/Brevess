@@ -154,6 +154,12 @@ test('registers all supported providers and validates required fields', () => {
   assert.deepEqual(validateProviderConfig('openai-compatible', {
     apiKey: 'key', model: 'model', baseUrl: 'http://gateway.example/v1'
   }), ['baseUrl']);
+  assert.deepEqual(validateProviderConfig('openai', {
+    apiKey: 'key', model: 'model', baseUrl: 'file:///tmp/api'
+  }), ['baseUrl']);
+  assert.deepEqual(validateProviderConfig('openai', {
+    apiKey: 'key', model: 'model', baseUrl: 'https://gateway.example/v1/chat/completions'
+  }), []);
 });
 
 test('publishes official Chinese-model compatible presets without coupling them to credentials', () => {
@@ -369,6 +375,61 @@ test('OpenAI structured requests tolerate a chat-completions shaped gateway resp
   assert.deepEqual(await adapter.generateJson({
     systemPrompt: 'SYSTEM', userPrompt: '{}', responseSchema: { type: 'object' }
   }), { ok: true });
+});
+
+test('OpenAI profiles use Chat Completions request bodies for saved chat endpoints', async () => {
+  const config = {
+    apiKey: 'gateway-key',
+    model: 'deepseek-v4-pro',
+    baseUrl: 'https://gateway.example/v1/chat/completions'
+  };
+  let streamUrl = '';
+  let streamBody;
+  const streamAdapter = createProviderAdapter({
+    providerId: 'openai', config,
+    fetchImpl: async (url, options) => {
+      streamUrl = url;
+      streamBody = JSON.parse(options.body);
+      return streamingTextResponse(sseEvents([
+        { data: { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] } },
+        { data: '[DONE]' }
+      ]));
+    }
+  });
+  const events = await collectStream(streamAdapter.generateTextStream({
+    systemPrompt: 'SYSTEM', userPrompt: 'QUESTION', maxOutputTokens: 2048
+  }));
+  assert.equal(events.at(-1).type, 'completed');
+  assert.equal(streamUrl, config.baseUrl);
+  assert.deepEqual(streamBody.messages.map(message => message.role), ['system', 'user']);
+  assert.equal(streamBody.messages[1].content, 'QUESTION');
+  assert.equal(streamBody.max_tokens, 2048);
+  assert.equal(streamBody.input, undefined);
+  assert.equal(streamBody.instructions, undefined);
+
+  let jsonBody;
+  const jsonAdapter = createProviderAdapter({
+    providerId: 'openai', config,
+    fetchImpl: async (url, options) => {
+      assert.equal(url, config.baseUrl);
+      jsonBody = JSON.parse(options.body);
+      return jsonResponse({
+        choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }]
+      });
+    }
+  });
+  assert.deepEqual(await jsonAdapter.generateJson({
+    systemPrompt: 'SYSTEM', userPrompt: '{}', schemaName: 'qa_schema',
+    responseSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { ok: { type: 'boolean' } }, required: ['ok']
+    }
+  }), { ok: true });
+  assert.deepEqual(jsonBody.messages.map(message => message.role), ['system', 'user']);
+  assert.match(jsonBody.messages[0].content, /RESPONSE_JSON_SCHEMA=/);
+  assert.deepEqual(jsonBody.response_format, { type: 'json_object' });
+  assert.equal(jsonBody.text, undefined);
+  assert.equal(jsonBody.input, undefined);
 });
 
 test('streaming adapters emit a terminal cancelled event when the request is aborted', async () => {

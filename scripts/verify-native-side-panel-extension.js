@@ -470,6 +470,39 @@ async function readTextDownload(download) {
       document.getElementById('manualAnnotationSummary')?.textContent || ''
     ) && document.getElementById('clearManualAnnotations')?.disabled === false,
   null, { timeout: 2500 });
+  await sidePanel.locator('[data-workspace-target="highlights"]').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelectorAll('.workspace-distribution-cell.is-manual').length > 0 &&
+    document.querySelectorAll('.workspace-distribution-cell.is-regex').length > 0,
+  null, { timeout: 2500 });
+  const manualDistributionBeforeClearQa = await sidePanel.evaluate(() => ({
+    totalHighlights: Number(currentWorkspaceSnapshot?.highlightDistribution?.totalHighlights) || 0,
+    manualCount: Number(currentWorkspaceSnapshot?.highlightDistribution?.sourceCounts?.manual) || 0,
+    regexCount: Number(currentWorkspaceSnapshot?.highlightDistribution?.sourceCounts?.regex) || 0,
+    manualLegend: document.querySelector(
+      '.workspace-distribution-legend-item.is-manual'
+    )?.textContent || '',
+    regexLegend: document.querySelector(
+      '.workspace-distribution-legend-item.is-regex'
+    )?.textContent || '',
+    manualCells: document.querySelectorAll(
+      '.workspace-distribution-cell.is-manual'
+    ).length,
+    regexCells: document.querySelectorAll(
+      '.workspace-distribution-cell.is-regex'
+    ).length
+  }));
+  await sidePanel.locator('.workspace-distribution-cell.is-manual').first().click();
+  await fixture.waitForFunction(() =>
+    Boolean(document.querySelector('.sci-manual-highlight.sci-article-source-focus'))
+  );
+  manualDistributionBeforeClearQa.manualJumpFocused = true;
+  await sidePanel.locator('.workspace-distribution-cell.is-regex').first().click();
+  await fixture.waitForFunction(() =>
+    Boolean(document.querySelector('.sci-highlight.sci-article-source-focus'))
+  );
+  manualDistributionBeforeClearQa.regexJumpFocused = true;
+  await sidePanel.locator('[data-workspace-target="analysis"]').click();
   await sidePanel.locator('#clearAutomaticHighlights').click();
   await fixture.waitForFunction(() =>
     document.querySelectorAll('.sci-highlight,.sci-llm-highlight').length === 0
@@ -691,7 +724,7 @@ async function readTextDownload(download) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -762,7 +795,7 @@ async function readTextDownload(download) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -827,7 +860,7 @@ async function readTextDownload(download) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r1', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -848,7 +881,7 @@ async function readTextDownload(download) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r1'),
+        '2.4.0-article-workspaces-r2'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -1469,11 +1502,76 @@ async function readTextDownload(download) {
       call.action === 'analyzeCrossFigureLogicWithLLM') &&
     crossFigureLogicRunning === false
   );
-  const crossFigureButtonQa = await sidePanel.evaluate(() => ({
-    disabledAfterCompletion: document.getElementById('analyzeCrossFigureLogic')?.disabled,
-    running: crossFigureLogicRunning,
-    status: document.getElementById('statusMessage')?.textContent || ''
-  }));
+  const crossFigureSemanticFixture = await worker.evaluate(({ raw, input }) =>
+    SciLLM.validateCrossFigureLogic(raw, input), {
+    raw: {
+      article_title: 'QA semantic fallback',
+      overall_thesis_zh: '先建立表型，再解析受体信号机制。',
+      figure_nodes: [
+        {
+          figure_id: 'figure-1', role: 'other',
+          established_zh: '本图观察到可重复的代谢表型。',
+          transition_zh: '下一图需要解释该表型的机制。', evidence_level: 'other'
+        },
+        {
+          figure_id: 'figure-2', role: 'other',
+          established_zh: '受体信号通路介导该表型。',
+          transition_zh: '下一步需要功能验证。', evidence_level: 'other'
+        }
+      ],
+      domino_chain: [{
+        from_figure_id: 'figure-1', to_figure_id: 'figure-2', relation_type: 'other',
+        established_zh: '前图建立现象。', transition_zh: '后图解析机制。',
+        evidence_boundary_zh: '尚未证明充分性。'
+      }],
+      supplemental_support: [],
+      claim_boundary_zh: '仅限所给图注与逐图解读。'
+    },
+    input: {
+      articleTitle: 'QA semantic fallback',
+      figures: [
+        {
+          figureId: 'figure-1', figureLabel: 'Figure 1',
+          caption: 'A reproducible metabolic phenotype is observed.',
+          analysis: {
+            coreConclusion: '建立代谢表型。',
+            argumentChain: [{ panels: ['A'], evidenceLevel: 'association' }]
+          }
+        },
+        {
+          figureId: 'figure-2', figureLabel: 'Figure 2',
+          caption: 'A receptor signaling pathway mediates the phenotype.',
+          analysis: { coreConclusion: '受体信号通路介导表型。' }
+        }
+      ]
+    }
+  });
+  const crossFigureButtonQa = await sidePanel.evaluate(normalized => {
+    const originalSnapshot = currentWorkspaceSnapshot;
+    currentWorkspaceSnapshot = {
+      ...currentWorkspaceSnapshot,
+      figures: {
+        ...(currentWorkspaceSnapshot?.figures || {}),
+        crossFigureLogic: { result: normalized, loading: false, error: '' }
+      }
+    };
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    const renderedText = document.querySelector('.workspace-cross-figure-card')?.textContent || '';
+    const result = {
+      disabledAfterCompletion: document.getElementById('analyzeCrossFigureLogic')?.disabled,
+      running: crossFigureLogicRunning,
+      status: document.getElementById('statusMessage')?.textContent || '',
+      roles: normalized.nodes.map(node => node.role),
+      evidenceLevels: normalized.nodes.map(node => node.evidenceLevel),
+      relationTypes: normalized.dominoChain.map(link => link.relationType),
+      semanticLabelsVisible: /建立现象/.test(renderedText) && /解析机制/.test(renderedText) &&
+        /关联证据/.test(renderedText) && /机制支持/.test(renderedText),
+      genericOtherVisible: /尚无法归类|证据等级待确认/.test(renderedText)
+    };
+    currentWorkspaceSnapshot = originalSnapshot;
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    return result;
+  }, crossFigureSemanticFixture);
   await sidePanel.locator('[data-workspace-target="navigation"]').click();
   await sidePanel.locator('#generateOutlineSummaries').click();
   await sidePanel.waitForFunction(() =>
@@ -3882,6 +3980,7 @@ async function readTextDownload(download) {
     automaticHighlightsCreated,
     manualSelectionQa,
     manualAnnotationCreatedQa,
+    manualDistributionBeforeClearQa,
     afterAutomaticClearQa,
     manualClearCancelledQa,
     manualAnnotationLifecycleQa,
@@ -3976,7 +4075,7 @@ async function readTextDownload(download) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r1' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r2' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -4004,7 +4103,7 @@ async function readTextDownload(download) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r1' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r2' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     multiTab.actualExtractionRuns === 1 &&
     multiTab.switchBackMs < 1500 &&
@@ -4031,6 +4130,13 @@ async function readTextDownload(download) {
     results.manualAnnotationCreatedQa.created &&
     results.manualAnnotationCreatedQa.categoryName.length > 0 &&
     results.manualAnnotationCreatedQa.createdMs < 2500 &&
+    results.manualDistributionBeforeClearQa.totalHighlights > 1 &&
+    results.manualDistributionBeforeClearQa.manualCount === 1 &&
+    results.manualDistributionBeforeClearQa.regexCount > 0 &&
+    results.manualDistributionBeforeClearQa.manualCells > 0 &&
+    results.manualDistributionBeforeClearQa.regexCells > 0 &&
+    results.manualDistributionBeforeClearQa.manualJumpFocused &&
+    results.manualDistributionBeforeClearQa.regexJumpFocused &&
     results.afterAutomaticClearQa.automaticMarks === 0 &&
     results.afterAutomaticClearQa.manualMarks === 1 &&
     results.afterAutomaticClearQa.annotationCount === 1 &&
@@ -4124,6 +4230,13 @@ async function readTextDownload(download) {
     results.figureBatchButtonQa.totalFigures === 3 &&
     !results.crossFigureButtonQa.disabledAfterCompletion &&
     !results.crossFigureButtonQa.running &&
+    results.crossFigureButtonQa.roles.join('|') === 'phenomenon|mechanism' &&
+    results.crossFigureButtonQa.evidenceLevels.join('|') ===
+      'association|mechanistic_support' &&
+    results.crossFigureButtonQa.relationTypes.join('|') ===
+      'phenomenon_to_mechanism' &&
+    results.crossFigureButtonQa.semanticLabelsVisible &&
+    !results.crossFigureButtonQa.genericOtherVisible &&
     !results.outlineSummaryButtonQa.disabledAfterCompletion &&
     results.outlineSummaryButtonQa.phase === 'completed' &&
     results.outlineSummaryButtonQa.completedParagraphs === 6 &&

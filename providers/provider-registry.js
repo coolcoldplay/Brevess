@@ -186,7 +186,10 @@
     if (!DEFINITIONS[providerId]) return ['providerId'];
     if (!String(config?.apiKey || '').trim()) errors.push('apiKey');
     if (!String(config?.model || '').trim()) errors.push('model');
-    if (DEFINITIONS[providerId].requiresBaseUrl && !isHttpUrl(config?.baseUrl)) errors.push('baseUrl');
+    const baseUrl = String(config?.baseUrl || '').trim();
+    if ((DEFINITIONS[providerId].requiresBaseUrl || baseUrl) && !isHttpUrl(baseUrl)) {
+      errors.push('baseUrl');
+    }
     return errors;
   }
 
