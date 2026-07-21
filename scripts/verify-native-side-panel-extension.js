@@ -48,7 +48,7 @@ function articleFixture() {
     <section><h2>Abstract</h2><p>This open-access review summarizes a defined molecular mechanism and its translational implications across experimental systems.</p></section>
     <section><h2>Introduction</h2><p>Metabolic signaling regulates immune adaptation through coordinated transcriptional and epigenetic programs in disease.</p></section>
     <section><h2>Mechanisms</h2><h3>Signal integration</h3><p>Activation of kinase A increased transcription factor B, which directly induced target C and promoted cellular survival.</p><p>Genetic inhibition of kinase A abolished target C induction, supporting a necessary mechanistic relationship.</p></section>
-    <section><h2>Limitations</h2><p>Available studies used small preclinical cohorts and require validation in independent human samples.</p></section>
+    <section><h2>Limitations</h2><p>One limitation is that available studies used small preclinical cohorts and require validation in independent human samples.</p></section>
     <section><h2>Conclusions</h2><p>The evidence supports a testable pathway while leaving its clinical generalizability unresolved.</p></section>
   </article></main></body></html>`;
 }
@@ -278,6 +278,23 @@ async function readDiagnosticDownload(download) {
   const pageOverlayCount = await fixture.locator(
     '#sci-reading-panel,#sci-review-outline-panel,#sci-article-navigator,.sci-figure-walkthrough'
   ).count();
+  await sidePanel.waitForFunction(() =>
+    analysisMode === 'regex' &&
+    selectedCategories.size > 0 &&
+    document.getElementById('applyHighlight')?.disabled === false
+  );
+  await sidePanel.locator('#applyHighlight').click();
+  await sidePanel.waitForFunction(() =>
+    regexApplyPending === false &&
+    document.getElementById('applyHighlight')?.disabled === false &&
+    /高亮已应用/.test(document.getElementById('statusMessage')?.textContent || '')
+  );
+  await fixture.waitForFunction(() =>
+    document.querySelectorAll('.sci-highlight,.sci-llm-highlight').length > 0
+  );
+  const automaticHighlightsCreated = await fixture.locator(
+    '.sci-highlight,.sci-llm-highlight'
+  ).count();
   const manualSelectionQa = await fixture.evaluate(async () => {
     const paragraph = document.querySelector('article section:nth-of-type(3) p');
     const node = paragraph?.firstChild;
@@ -312,6 +329,117 @@ async function readDiagnosticDownload(download) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     return result;
   });
+  const manualAnnotationCreatedQa = await fixture.evaluate(async () => {
+    const paragraph = document.querySelector('article section:nth-of-type(2) p');
+    const node = paragraph?.firstChild;
+    if (!node) return { created: false, reason: 'missing-manual-annotation-text' };
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, Math.min(48, node.textContent.length));
+    const selection = document.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const startedAt = performance.now();
+    document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    while (!document.querySelector('#sci-manual-toolbar .sci-manual-category') &&
+        performance.now() - startedAt < 800) {
+      await new Promise(resolve => setTimeout(resolve, 4));
+    }
+    const category = document.querySelector('#sci-manual-toolbar .sci-manual-category');
+    const categoryName = category?.textContent || '';
+    category?.click();
+    while (document.querySelectorAll('.sci-manual-highlight').length === 0 &&
+        performance.now() - startedAt < 2500) {
+      await new Promise(resolve => setTimeout(resolve, 8));
+    }
+    return {
+      created: document.querySelectorAll('.sci-manual-highlight').length === 1,
+      categoryName,
+      createdMs: Math.round(performance.now() - startedAt)
+    };
+  });
+  await sidePanel.waitForFunction(() =>
+    /本文手动标注 1 条/.test(
+      document.getElementById('manualAnnotationSummary')?.textContent || ''
+    ) && document.getElementById('clearManualAnnotations')?.disabled === false,
+  null, { timeout: 2500 });
+  await sidePanel.locator('#clearAutomaticHighlights').click();
+  await fixture.waitForFunction(() =>
+    document.querySelectorAll('.sci-highlight,.sci-llm-highlight').length === 0
+  );
+  await sidePanel.waitForFunction(() =>
+    /自动高亮已清除/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    ) &&
+    document.getElementById('clearAutomaticHighlights')?.disabled === false
+  );
+  const afterAutomaticClearQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const response = await chrome.runtime.sendMessage({
+          type: 'ARTICLE_WORKSPACE_EXPORT',
+          workspaceId: currentArticleWorkspace?.workspaceId || ''
+        });
+        const highlightAsset = response?.data?.assets?.find(
+          asset => asset.relativePath === 'annotations/highlights.json'
+        )?.content || null;
+        const analysisAsset = response?.data?.assets?.find(
+          asset => asset.relativePath === 'analysis/full-analysis.json'
+        )?.content || null;
+        return {
+          automaticMarks: document.querySelectorAll(
+            '.sci-highlight,.sci-llm-highlight'
+          ).length,
+          manualMarks: document.querySelectorAll('.sci-manual-highlight').length,
+          annotationCount:
+            currentManualDocument?.record?.annotations?.length || 0,
+          lastRegexRequestCleared: lastRegexHighlightRequest === null,
+          lastLlmAnalysisCleared: lastLlmAnalysis === null,
+          persistedActiveEngine: highlightAsset?.activeEngine || '',
+          persistedRegexRequest: highlightAsset?.lastRegexRequest ?? null,
+          persistedManualAnnotations: highlightAsset?.annotations?.length || 0,
+          persistedLlmAnalysis: analysisAsset?.llm ?? null
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  await sidePanel.locator('#clearManualAnnotations').click();
+  await sidePanel.locator('#clearManualDialog[open]').waitFor({ state: 'visible' });
+  await sidePanel.locator('#cancelClearManual').click();
+  await sidePanel.locator('#clearManualDialog').waitFor({ state: 'hidden' });
+  const manualClearCancelledQa = {
+    marks: await fixture.locator('.sci-manual-highlight').count(),
+    annotations: await worker.evaluate(async tabId => {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        action: 'prepareManualAnnotations'
+      });
+      return response?.annotationCount || 0;
+    }, fixtureTab.id)
+  };
+  await sidePanel.locator('#clearManualAnnotations').click();
+  await sidePanel.locator('#clearManualDialog[open]').waitFor({ state: 'visible' });
+  await sidePanel.locator('#confirmClearManual').click();
+  await fixture.waitForFunction(() =>
+    document.querySelectorAll('.sci-manual-highlight').length === 0
+  );
+  await sidePanel.waitForFunction(() =>
+    /本文手动标注 0 条/.test(
+      document.getElementById('manualAnnotationSummary')?.textContent || ''
+    ) && document.getElementById('clearManualAnnotations')?.disabled === true
+  );
+  const manualAnnotationLifecycleQa = {
+    marksAfterConfirm: await fixture.locator('.sci-manual-highlight').count(),
+    annotationsAfterConfirm: await worker.evaluate(async tabId => {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        action: 'prepareManualAnnotations'
+      });
+      return response?.annotationCount || 0;
+    }, fixtureTab.id)
+  };
 
   const secondFixture = await context.newPage();
   secondFixture.on('pageerror', error => pageErrors.push(`fixture-2: ${error.message}`));
@@ -2721,7 +2849,12 @@ async function readDiagnosticDownload(download) {
     },
     restored,
     navigationStatus,
+    automaticHighlightsCreated,
     manualSelectionQa,
+    manualAnnotationCreatedQa,
+    afterAutomaticClearQa,
+    manualClearCancelledQa,
+    manualAnnotationLifecycleQa,
     figureIncrementalQa,
     quickNavPreHover,
     figureVisualQa,
@@ -2825,10 +2958,27 @@ async function readDiagnosticDownload(download) {
     results.navigationLifecycleQa.refreshSidePanelEnabled &&
     results.navigationLifecycleQa.titleAfterRefresh === 'OA mechanism review test' &&
     pageOverlayCount === 0 &&
+    results.automaticHighlightsCreated > 0 &&
     results.manualSelectionQa.toolbarVisible &&
     (results.manualSelectionQa.categoryActions > 0 || results.manualSelectionQa.hasMore) &&
     results.manualSelectionQa.firstOpenMs < 120 &&
     results.manualSelectionQa.secondOpenMs < 120 &&
+    results.manualAnnotationCreatedQa.created &&
+    results.manualAnnotationCreatedQa.categoryName.length > 0 &&
+    results.manualAnnotationCreatedQa.createdMs < 2500 &&
+    results.afterAutomaticClearQa.automaticMarks === 0 &&
+    results.afterAutomaticClearQa.manualMarks === 1 &&
+    results.afterAutomaticClearQa.annotationCount === 1 &&
+    results.afterAutomaticClearQa.lastRegexRequestCleared &&
+    results.afterAutomaticClearQa.lastLlmAnalysisCleared &&
+    results.afterAutomaticClearQa.persistedActiveEngine === '' &&
+    results.afterAutomaticClearQa.persistedRegexRequest === null &&
+    results.afterAutomaticClearQa.persistedManualAnnotations === 1 &&
+    results.afterAutomaticClearQa.persistedLlmAnalysis === null &&
+    results.manualClearCancelledQa.marks === 1 &&
+    results.manualClearCancelledQa.annotations === 1 &&
+    results.manualAnnotationLifecycleQa.marksAfterConfirm === 0 &&
+    results.manualAnnotationLifecycleQa.annotationsAfterConfirm === 0 &&
     archive.kind === 'sci-logic-highlighter-article' &&
     !results.archive.containsSecrets &&
     restored?.success === true &&

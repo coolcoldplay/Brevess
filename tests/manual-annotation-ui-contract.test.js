@@ -341,6 +341,41 @@ test('manual, LLM, and regex clear paths are strictly independent', () => {
   assert.doesNotMatch(manualClear, /sci-llm-highlight|sci-highlight['"]/);
 });
 
+test('manual mutations push fresh counts to the active side panel without polling', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const notifier = content.slice(
+    content.indexOf('function notifyManualAnnotationStateChanged'),
+    content.indexOf('function updateCurrentManualRecord')
+  );
+  assert.match(notifier, /MANUAL_ANNOTATION_STATE_CHANGED/);
+  assert.match(notifier, /annotationCount/);
+  assert.match(notifier, /unresolvedCount/);
+  assert.match(content, /updateCurrentManualRecord[\s\S]{0,240}notifyManualAnnotationStateChanged\('mutated'\)/);
+  assert.match(content, /clearManualAnnotationsAfterBackground[\s\S]{0,600}notifyManualAnnotationStateChanged\('cleared'\)/);
+  assert.match(popup, /message\?\.type === 'MANUAL_ANNOTATION_STATE_CHANGED'/);
+  assert.match(popup, /applyManualAnnotationStateEvent\(message\.event, sender\.tab\.id\)/);
+  assert.match(popup, /manualSummarySequence \+= 1/);
+  assert.match(popup, /target === 'analysis'[\s\S]{0,80}refreshManualAnnotationSummary/);
+});
+
+test('clearing automatic highlights clears restorable state and persists an empty engine', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const clear = content.slice(
+    content.indexOf('async function clearAutomaticHighlightsAndPersist'),
+    content.indexOf('function clearManualAnnotationsAfterBackground')
+  );
+  assert.match(clear, /lastRegexHighlightRequest = null/);
+  assert.match(clear, /lastLlmAnalysis = null/);
+  assert.match(clear, /llmProgressiveAnalysis = null/);
+  assert.match(clear, /lastLlmDiagnostics = null/);
+  assert.match(clear, /persistArticleWorkspaceArtifacts\(\{ force: true \}\)/);
+  assert.doesNotMatch(clear, /currentManualDocument\s*=\s*null/);
+  assert.match(popup, /await persistCurrentArticleArchive\(\)\.catch\(\(\) => null\)/);
+  assert.match(popup, /response\.persisted === false/);
+});
+
 test('manual fluorescent and automatic underline channels follow Evidence Lens tokens', () => {
   const css = read('content.css');
   const manualCss = css.slice(

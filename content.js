@@ -2077,9 +2077,27 @@ function manualCategoryById(categoryId) {
     return currentManualCategories.find(category => category.categoryId === categoryId) || null;
 }
 
+function notifyManualAnnotationStateChanged(kind = 'updated') {
+    const record = currentManualDocument?.record;
+    if (!currentManualDocument?.documentId || !record) return;
+    chrome.runtime.sendMessage({
+        type: 'MANUAL_ANNOTATION_STATE_CHANGED',
+        event: {
+            kind,
+            documentId: currentManualDocument.documentId,
+            documentHash: record.documentHash || '',
+            canonicalUrl: record.canonicalUrl || location.href,
+            title: record.title || document.title,
+            annotationCount: record.annotations?.length || 0,
+            unresolvedCount: currentManualUnresolved.length
+        }
+    }).catch(() => {});
+}
+
 function updateCurrentManualRecord(record) {
     if (!currentManualDocument || !record) return;
     currentManualDocument = { ...currentManualDocument, record };
+    notifyManualAnnotationStateChanged('mutated');
 }
 
 function rehydrateLlmFeedbackInsideManualMark(manualMark, samplesByAnnotationIds) {
@@ -2815,6 +2833,25 @@ function clearAutomaticHighlights() {
     clearLlmHighlights();
 }
 
+async function clearAutomaticHighlightsAndPersist() {
+    clearAutomaticHighlights();
+    lastRegexHighlightRequest = null;
+    lastLlmAnalysis = null;
+    llmProgressiveAnalysis = null;
+    lastLlmDiagnostics = null;
+    restoredWorkspaceLlmTask = null;
+    try {
+        await persistArticleWorkspaceArtifacts({ force: true });
+        return { success: true, persisted: true };
+    } catch (error) {
+        return {
+            success: true,
+            persisted: false,
+            persistenceError: String(error?.message || error || '本地状态保存失败')
+        };
+    }
+}
+
 function clearManualAnnotationsAfterBackground(completionType) {
     if (completionType !== MANUAL_CLEAR_COMPLETION_TYPE) return false;
     clearManualHighlightMarks();
@@ -2827,6 +2864,7 @@ function clearManualAnnotationsAfterBackground(completionType) {
     currentManualUnresolved = [];
     manualUiLifecycle.retain({ unresolved: [], selection: null });
     showManualStatus(null);
+    notifyManualAnnotationStateChanged('cleared');
     return true;
 }
 
@@ -7633,8 +7671,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }))
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'clearAutomaticHighlights') {
-        clearAutomaticHighlights();
-        sendResponse({ success: true });
+        clearAutomaticHighlightsAndPersist()
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
     } else if (request.action === 'clearManualAnnotations') {
         const cleared = request.completed === true &&
             clearManualAnnotationsAfterBackground(request.completionType);

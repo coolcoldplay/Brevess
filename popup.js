@@ -711,6 +711,12 @@ function setupActiveTabSynchronization() {
             activePanelTabContext.activated) {
             void refreshArticleWorkspace();
         }
+        if (message?.type === 'MANUAL_ANNOTATION_STATE_CHANGED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            applyManualAnnotationStateEvent(message.event, sender.tab.id);
+            if (activeWorkspaceView === 'highlights') void refreshArticleWorkspace();
+        }
     });
 }
 
@@ -786,6 +792,7 @@ function setupWorkspaceNavigation() {
             const target = button.dataset.workspaceTarget;
             switchWorkspaceView(target);
             if (target !== 'analysis') void refreshArticleWorkspace();
+            if (target === 'analysis') void refreshManualAnnotationSummary();
         });
     });
     document.getElementById('refreshArticleNavigation')?.addEventListener('click', () => {
@@ -5203,6 +5210,23 @@ function renderManualAnnotationSummary() {
     }
 }
 
+function applyManualAnnotationStateEvent(event = {}, tabId = null) {
+    const documentId = String(event.documentId || '');
+    if (!documentId || Number(tabId) !== Number(activePanelTabContext.tabId)) return false;
+    manualSummarySequence += 1;
+    manualAnnotationState = {
+        tabId: Number(tabId),
+        documentId,
+        documentHash: String(event.documentHash || ''),
+        canonicalUrl: String(event.canonicalUrl || ''),
+        title: String(event.title || ''),
+        annotationCount: Math.max(0, Number(event.annotationCount) || 0),
+        unresolvedCount: Math.max(0, Number(event.unresolvedCount) || 0)
+    };
+    renderManualAnnotationSummary();
+    return true;
+}
+
 async function refreshManualAnnotationSummary(tabId = null) {
     const requestId = ++manualSummarySequence;
     try {
@@ -5260,7 +5284,12 @@ async function clearAutomaticHighlightsFromCurrentTab() {
         if (!response?.success) throw new Error(response?.error || '清除自动高亮失败');
         matchCounts = {};
         renderCategories();
-        showStatus('自动高亮已清除，手动标注保留不变', 'success');
+        await persistCurrentArticleArchive().catch(() => null);
+        showStatus(response.persisted === false
+            ? `自动高亮已清除，手动标注保留不变；本地状态保存失败：` +
+                `${response.persistenceError || '请稍后重试'}`
+            : '自动高亮已清除，手动标注保留不变',
+        response.persisted === false ? 'error' : 'success');
     } catch (error) {
         showStatus(`清除自动高亮失败：${error.message}`, 'error');
     } finally {
