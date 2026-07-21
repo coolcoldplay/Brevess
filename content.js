@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r4';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r5';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];
@@ -1146,6 +1146,11 @@ function formatFigureProgressMessage(progress = {}) {
     if (progress.phase === 'output_token_retry') return `${label}${position}：正在增加输出令牌后重试。`;
     if (progress.phase === 'output_compact_retry') return `${label}${position}：输出过长，正改用紧凑 JSON 重试。`;
     if (progress.phase === 'figure_schema_retry') return `${label}${position}：返回结构不完整，正在按精确字段要求重试。`;
+    if (progress.phase === 'figure_panel_schema_retry') return `${label}${position}：Panel 返回结构不完整，正在按精确字段要求重试。`;
+    if (progress.phase === 'figure_panel_transient_retry') {
+        const seconds = Math.max(1, Math.ceil((Number(progress.waitMs) || 0) / 1000));
+        return `${label}${position}：Panel 请求暂时失败，${seconds} 秒后自动重试。`;
+    }
     if (progress.phase === 'figure_compact_fallback') return `${label}${position}：整图结构连续不稳定，已切换为 Panel 提取后再综合。`;
     if (progress.phase === 'figure_panel_batch_complete') {
         const ignored = Number(progress.ignoredUnexpectedPanelCount) || 0;
@@ -1175,6 +1180,13 @@ function formatFigureProgressMessage(progress = {}) {
         figure_synthesis_complete: '整图证据链综合完成',
         provider_telemetry: '模型已返回，正在读取完成状态',
         figure_schema_retry: '正在修正模型返回结构',
+        figure_panel_planning: '正在规划 Panel 证据输入',
+        figure_panel_schema_retry: '正在修正 Panel 返回结构',
+        figure_panel_transient_retry: 'Panel 请求暂时失败，正在等待重试',
+        figure_panel_token_retry: '正在调整 Panel 输出令牌上限',
+        figure_panel_output_retry: '正在增加 Panel 输出令牌上限',
+        figure_panel_retry: '正在降低 Panel 输入容量',
+        figure_panel_complete: 'Panel 解读已完成',
         figure_compact_fallback: '已切换为 Panel 提取后再综合',
         figure: 'Figure 解读已完成',
         failed: 'Figure 解读失败'

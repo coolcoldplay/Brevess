@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const RUNTIME_REVISION = '2.4.0-article-workspaces-r4';
+  const RUNTIME_REVISION = '2.4.0-article-workspaces-r5';
   const TASK_TIMEOUTS_MS = Object.freeze({
     highlight: 180000,
     summary: 180000,
@@ -1719,6 +1719,8 @@
       let recordIndex = 0;
       let currentOutputTokens = outputBudget.initial;
       let degradationOverride = '';
+      let providerRequestCount = 0;
+      const transientRetries = new Set();
       const availableInputTokens = outputTokens => Math.max(
         0,
         Math.floor(contextWindowTokens * 0.9) - Math.max(512, outputTokens) - 768
@@ -1737,21 +1739,42 @@
           })
           : shared.compileFigurePanelInterpretationPrompt(promptInput, { visualInput });
         try {
-          const raw = await rawAdapter.generateJson({
-            ...prompt,
-            images: plan.images,
-            outputUnits: 1,
-            maxOutputTokens: currentOutputTokens,
-            timeoutMs: TASK_TIMEOUTS_MS.figure,
-            signal: operation?.controller?.signal
-          });
-          const validated = requestMode === 'followup'
+          const validate = raw => requestMode === 'followup'
             ? shared.validatePanelFollowup(raw, input, { visualInput })
             : shared.validateFigurePanelInterpretation(raw, input, { visualInput });
+          const requestPanelJson = async requestPrompt => {
+            providerRequestCount += 1;
+            return rawAdapter.generateJson({
+              ...requestPrompt,
+              images: plan.images,
+              outputUnits: 1,
+              maxOutputTokens: currentOutputTokens,
+              timeoutMs: TASK_TIMEOUTS_MS.figure,
+              signal: operation?.controller?.signal
+            });
+          };
+          let validated;
+          try {
+            validated = validate(await requestPanelJson(prompt));
+          } catch (error) {
+            if (error?.code !== 'INVALID_RESPONSE') throw error;
+            context.onProgress?.({
+              phase: 'figure_panel_schema_retry', ...progressBase,
+              attempt: providerRequestCount + 1,
+              inputMode: plan.inputMode,
+              maxOutputTokens: currentOutputTokens,
+              errorCode: error.code
+            });
+            const repairedRaw = await requestPanelJson({
+              ...prompt,
+              systemPrompt: `${prompt.systemPrompt}\nSCHEMA_REPAIR_PASS: Return only one JSON object that exactly matches the supplied schema. Include every required key, preserve the requested Figure and Panel ids, use empty strings or arrays for unsupported details, and do not add keys.`
+            });
+            validated = validate(repairedRaw);
+          }
           const panelResult = {
             ...validated,
             inputBasis: {
-              ...publicFigurePanelPlan(plan, providerAttempt + 1),
+              ...publicFigurePanelPlan(plan, providerRequestCount),
               ...(degradationOverride ? { degradationReason: degradationOverride } : {}),
               outputBudgetTokens: currentOutputTokens
             },
@@ -1760,7 +1783,7 @@
           await cacheStore.setMany([{ key, createdAt: Date.now(), panelResult }]);
           context.onProgress?.({
             phase: 'figure_panel_complete', ...progressBase,
-            inputMode: plan.inputMode, attempts: providerAttempt + 1
+            inputMode: plan.inputMode, attempts: providerRequestCount
           });
           const resultKey = requestMode === 'followup' ? 'panelFollowup' : 'panelAnalysis';
           return {
@@ -1771,9 +1794,27 @@
           };
         } catch (error) {
           lastError = error;
+          const transientKey = `${recordIndex}:${error?.code || 'NETWORK_ERROR'}`;
+          if (error?.retryable && error?.code !== 'INVALID_RESPONSE' &&
+              !transientRetries.has(transientKey)) {
+            transientRetries.add(transientKey);
+            const waitMs = Math.max(Number(error?.retryAfterMs) || 0, 1500);
+            context.onProgress?.({
+              phase: 'figure_panel_transient_retry', ...progressBase,
+              attempt: providerRequestCount + 1,
+              waitMs,
+              inputMode: plan.inputMode,
+              errorCode: error.code || 'NETWORK_ERROR'
+            });
+            await sleepForOperation(waitMs, operation);
+            continue;
+          }
           const rejectedVisualInput = plan.pixelsSupplied &&
             error?.code === 'PROVIDER_REJECTED';
+          const invalidVisualOutput = plan.pixelsSupplied &&
+            error?.code === 'INVALID_RESPONSE';
           if (rejectedVisualInput) degradationOverride = 'provider_rejected_pixels';
+          if (invalidVisualOutput) degradationOverride = 'invalid_visual_response';
           if (error?.code === 'TOKEN_LIMIT_REJECTED') {
             const suggested = Number(error?.suggestedMaxOutputTokens);
             const reduced = Number.isFinite(suggested) && suggested >= 512
@@ -1821,12 +1862,13 @@
             continue;
           }
           if (error?.code === 'OUTPUT_TRUNCATED') throw error;
-          const nextIndex = rejectedVisualInput
+          const nextIndex = rejectedVisualInput || invalidVisualOutput
             ? records.findIndex((record, index) =>
               index > recordIndex && record.plan.pixelsSupplied === false)
             : recordIndex + 1;
           const next = nextIndex >= 0 ? records[nextIndex]?.plan : null;
-          if ((!shared.isFigurePanelCapacityError(error) && !rejectedVisualInput) || !next ||
+          if ((!shared.isFigurePanelCapacityError(error) && !rejectedVisualInput &&
+              !invalidVisualOutput) || !next ||
               next.estimatedInputTokens >= plan.estimatedInputTokens) throw error;
           context.onProgress?.({
             phase: 'figure_panel_retry', ...progressBase,

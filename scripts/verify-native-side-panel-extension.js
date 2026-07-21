@@ -751,7 +751,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r4', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -822,7 +822,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r4', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -887,7 +887,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r4', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -908,7 +908,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r4'),
+        '2.4.0-article-workspaces-r5'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -1872,6 +1872,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   const streamRequests = [];
   const panelCapacityRequests = [];
   const panelTruncationRequests = [];
+  const panelUiInterpretationRequests = [];
+  const panelUiFollowupRequests = [];
   const unlabeledFigureRequests = [];
   const highlightRequests = [];
   const evidenceLedgerRequests = [];
@@ -1931,6 +1933,35 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       contribution_zh: '该 Panel 建立主要表型证据。'
     },
     claim_boundary_zh: '这一结果本身不能证明直接分子机制。'
+  });
+  const panelUiInterpretationOutput = figureId => ({
+    figure_id: figureId,
+    panel: 'A',
+    basis: 'caption_context',
+    panel_interpretation: {
+      panel: 'A',
+      role: 'phenotype',
+      phenotype_name_zh: '目标表型',
+      method_category: 'other',
+      methods: [],
+      method_source: 'caption',
+      purpose_zh: '比较处理组与匹配对照组。',
+      design_zh: '处理组与匹配对照组接受同一指标检测。',
+      comparison_zh: '处理组对比匹配对照组。',
+      direct_observation_zh: '图注明确报告处理组的目标表型降低。',
+      observation_source: 'caption_statement',
+      local_inference_zh: '结果支持处理与表型下降相关。',
+      contribution_zh: '该 Panel 建立主要表型证据。'
+    },
+    claim_boundary_zh: '仅凭该 Panel 不能证明直接分子机制。'
+  });
+  const panelUiFollowupOutput = parsedUser => ({
+    figure_id: parsedUser.figure_id,
+    panel: parsedUser.panel,
+    topics: parsedUser.requested_topics,
+    basis: 'caption_context',
+    answer_zh: '匹配对照使主要差异集中于处理因素，并减少基础条件差异的解释空间。',
+    claim_boundary_zh: '仍不能排除输入中未描述的混杂因素。'
   });
   const unlabeledFigureOutput = figureId => ({
     figure_id: figureId,
@@ -2033,6 +2064,58 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
           }
           let parsedUser = null;
           try { parsedUser = JSON.parse(userText || '{}'); } catch (_) {}
+          if (parsedUser?.request_mode === 'single_panel_interpretation' &&
+              parsedUser?.figure_id === 'figure-78') {
+            const requestRecord = {
+              figureId: String(parsedUser.figure_id || ''),
+              panel: String(parsedUser.panel || ''),
+              repairPass: systemText.includes('SCHEMA_REPAIR_PASS'),
+              maxTokens: Number(body.max_tokens) || 0,
+              hasImage: Boolean(imageUrl)
+            };
+            panelUiInterpretationRequests.push(requestRecord);
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              model: 'qa-stream-model',
+              choices: [{
+                finish_reason: 'stop',
+                message: {
+                  content: JSON.stringify(panelUiInterpretationRequests.length === 1
+                    ? { figure_id: parsedUser.figure_id }
+                    : panelUiInterpretationOutput(parsedUser.figure_id))
+                }
+              }],
+              usage: { prompt_tokens: 540, completion_tokens: 260 }
+            }));
+            return;
+          }
+          if (parsedUser?.figure_id === 'figure-78' &&
+              Array.isArray(parsedUser?.requested_topics)) {
+            const requestRecord = {
+              figureId: String(parsedUser.figure_id || ''),
+              panel: String(parsedUser.panel || ''),
+              topics: parsedUser.requested_topics,
+              customQuestion: String(parsedUser.custom_question || ''),
+              repairPass: systemText.includes('SCHEMA_REPAIR_PASS'),
+              maxTokens: Number(body.max_tokens) || 0,
+              hasImage: Boolean(imageUrl)
+            };
+            panelUiFollowupRequests.push(requestRecord);
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              model: 'qa-stream-model',
+              choices: [{
+                finish_reason: 'stop',
+                message: {
+                  content: JSON.stringify(panelUiFollowupRequests.length === 1
+                    ? { answer_zh: '字段不完整' }
+                    : panelUiFollowupOutput(parsedUser))
+                }
+              }],
+              usage: { prompt_tokens: 620, completion_tokens: 220 }
+            }));
+            return;
+          }
           if (parsedUser?.pass === 'unlabeled_figure_overview') {
             unlabeledFigureRequests.push({
               figureId: String(parsedUser.figure_id || ''),
@@ -2843,6 +2926,185 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     persisted: unlabeledFigurePersistedQa,
     requestCount: unlabeledFigureRequests.length,
     requests: unlabeledFigureRequests
+  };
+  reportQaStage('starting real side-panel Panel interpretation and follow-up scenario');
+  const panelUiSetupQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const figure = {
+          figureId: 'figure-78',
+          figureLabel: 'Figure 78',
+          caption: 'Figure 78. (A) Treatment reduced the target phenotype compared with the matched control.',
+          panelHints: ['A'],
+          contextParagraphs: [{
+            paragraphId: 'panel-ui-r1',
+            sectionTitle: 'Results',
+            text: 'Figure 78A compares the treated group with a matched control group.'
+          }],
+          imageElements: [],
+          isSupplemental: false
+        };
+        figureWorkspaceInventory = [figure];
+        figureWalkthroughState.clear();
+        figureProgressById.clear();
+        restoredFigureWorkspaceSnapshot = null;
+        lastFigureAnalysis = null;
+        crossFigureLogicState = { result: null, loading: false, error: '' };
+        figureAnalysisStatus = {
+          running: false, paused: false, phase: 'idle', currentFigure: 0,
+          totalFigures: 1, completedFigures: 0, failedFigures: 0,
+          figureProgress: [], failures: []
+        };
+        const state = ensureFigureWalkthroughState(figure.figureId);
+        state.expanded = true;
+        return {
+          figureId: figure.figureId,
+          panels: figure.panelHints,
+          snapshotFigures: buildFigureWorkspaceSnapshot().figures.length
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  await sidePanel.evaluate(async () => {
+    switchWorkspaceView('figures');
+    await refreshArticleWorkspace();
+  });
+  const panelUiFigureCard = sidePanel.locator(
+    '.workspace-figure-card[data-figure-id="figure-78"]'
+  );
+  await panelUiFigureCard.waitFor({ state: 'visible' });
+  if (!await panelUiFigureCard.evaluate(card => card.open)) {
+    await panelUiFigureCard.locator('summary').first().click();
+  }
+  const panelUiCard = panelUiFigureCard.locator(
+    '.workspace-figure-panel-card[data-panel-id="A"]'
+  );
+  if (!await panelUiCard.evaluate(card => card.open)) {
+    await panelUiCard.locator('summary').first().click();
+  }
+  await panelUiCard.locator('.workspace-panel-analyze').click();
+  await sidePanel.waitForFunction(() => {
+    const figure = currentWorkspaceSnapshot?.figures?.figures?.find(
+      item => item.figureId === 'figure-78'
+    );
+    const card = document.querySelector(
+      '.workspace-figure-card[data-figure-id="figure-78"] ' +
+      '.workspace-figure-panel-card[data-panel-id="A"]'
+    );
+    return Boolean(figure?.panelAnalyses?.A?.purpose) &&
+      figure?.panelAnalysisLoading?.A !== true &&
+      /重新解读此 Panel/.test(card?.querySelector('.workspace-panel-analyze')?.textContent || '');
+  }, null, { timeout: 20000 });
+  const panelUiInterpretationQa = await sidePanel.evaluate(() => {
+    const card = document.querySelector(
+      '.workspace-figure-card[data-figure-id="figure-78"] ' +
+      '.workspace-figure-panel-card[data-panel-id="A"]'
+    );
+    const figure = currentWorkspaceSnapshot?.figures?.figures?.find(
+      item => item.figureId === 'figure-78'
+    );
+    return {
+      figureOpen: card?.closest('.workspace-figure-card')?.open === true,
+      panelOpen: card?.open === true,
+      buttonText: card?.querySelector('.workspace-panel-analyze')?.textContent || '',
+      text: card?.textContent || '',
+      inputBasis: Array.from(card?.querySelectorAll('.workspace-figure-field') || [])
+        .find(field => /本次解读依据/.test(field.textContent || ''))?.textContent || '',
+      error: figure?.panelAnalysisErrors?.A || '',
+      attempts: figure?.panelAnalyses?.A?.inputBasis?.attempts || 0,
+      inputMode: figure?.panelAnalyses?.A?.inputBasis?.inputMode || ''
+    };
+  });
+  await panelUiCard.locator('.workspace-panel-ask').click();
+  await panelUiCard.locator(
+    '.workspace-panel-followup-options input[value="grouping"]'
+  ).check();
+  await panelUiCard.locator('.workspace-panel-followup-custom textarea')
+    .fill('为什么匹配对照对于解释这个 Panel 很重要？');
+  await panelUiCard.locator('.workspace-panel-followup-submit').click();
+  await sidePanel.waitForFunction(() => {
+    const answer = document.querySelector(
+      '[data-panel-followup-answer="figure-78::A"]'
+    );
+    return /匹配对照使主要差异集中于处理因素/.test(answer?.textContent || '');
+  }, null, { timeout: 20000 });
+  await sidePanel.waitForFunction(() => {
+    const answer = document.querySelector('[data-panel-followup-answer="figure-78::A"]');
+    const view = document.querySelector('[data-workspace-view="figures"]');
+    const answerRect = answer?.getBoundingClientRect();
+    const viewRect = view?.getBoundingClientRect();
+    return document.activeElement === answer && Boolean(
+      answerRect && viewRect && answerRect.bottom >= viewRect.top && answerRect.top <= viewRect.bottom
+    );
+  }, null, { timeout: 3000 });
+  const panelUiFollowupQa = await sidePanel.evaluate(() => {
+    const answer = document.querySelector(
+      '[data-panel-followup-answer="figure-78::A"]'
+    );
+    const card = answer?.closest('.workspace-figure-panel-card');
+    const followup = answer?.closest('.workspace-panel-followup');
+    const view = document.querySelector('[data-workspace-view="figures"]');
+    const answerRect = answer?.getBoundingClientRect();
+    const viewRect = view?.getBoundingClientRect();
+    const figure = currentWorkspaceSnapshot?.figures?.figures?.find(
+      item => item.figureId === 'figure-78'
+    );
+    return {
+      rendered: Boolean(answer),
+      panelOpen: card?.open === true,
+      answerText: answer?.textContent || '',
+      questionText: answer?.querySelector('.workspace-panel-followup-question')?.textContent || '',
+      statusText: followup?.querySelector('.workspace-panel-followup-status')?.textContent || '',
+      focused: document.activeElement === answer,
+      inViewport: Boolean(answerRect && viewRect && answerRect.bottom >= viewRect.top &&
+        answerRect.top <= viewRect.bottom),
+      historyLength: figure?.panelFollowupHistories?.A?.length || 0,
+      loading: figure?.panelFollowupLoading?.A === true,
+      error: figure?.panelFollowupErrors?.A || '',
+      attempts: figure?.panelFollowups?.A?.inputBasis?.attempts || 0
+    };
+  });
+  const panelUiPersistedQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: async () => {
+        let savedFigure = null;
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 5000) {
+          const response = await chrome.runtime.sendMessage({
+            type: 'ARTICLE_WORKSPACE_EXPORT',
+            workspaceId: currentArticleWorkspace?.workspaceId || ''
+          });
+          const asset = response?.data?.assets?.find(
+            item => item.relativePath === 'figures/inventory.json'
+          );
+          savedFigure = asset?.content?.figures?.find(item => item.figureId === 'figure-78') || null;
+          if (savedFigure?.panelAnalyses?.A && savedFigure?.panelFollowups?.A &&
+              savedFigure?.panelFollowupHistories?.A?.length === 2) break;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        const state = figureWalkthroughState.get('figure-78');
+        return {
+          analysisInMemory: Boolean(state?.panelAnalyses?.A),
+          followupInMemory: Boolean(state?.panelFollowups?.A),
+          historyInMemory: state?.panelFollowupHistories?.A?.length || 0,
+          analysisPersisted: Boolean(savedFigure?.panelAnalyses?.A),
+          followupPersisted: Boolean(savedFigure?.panelFollowups?.A),
+          historyPersisted: savedFigure?.panelFollowupHistories?.A?.length || 0
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const panelUiEndToEndQa = {
+    setup: panelUiSetupQa,
+    interpretation: panelUiInterpretationQa,
+    followup: panelUiFollowupQa,
+    persisted: panelUiPersistedQa,
+    interpretationRequests: panelUiInterpretationRequests,
+    followupRequests: panelUiFollowupRequests
   };
   await worker.evaluate(async tabId => {
     await chrome.scripting.executeScript({
@@ -4549,6 +4811,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     panelCapacityQa,
     panelTruncationQa,
     unlabeledSingleFigureQa,
+    panelUiEndToEndQa,
     largeChatHistorySetup,
     largeChatInitialQa,
     largeChatPage2Qa,
@@ -4615,7 +4878,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r4' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r5' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -4643,9 +4906,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r4' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r5' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
-    multiTab.actualExtractionRuns === 1 &&
+    // A warm canonical snapshot legitimately needs no new extraction; a cold
+    // return may perform exactly one. More than one indicates duplicate work.
+    Number.isInteger(multiTab.actualExtractionRuns) &&
+    multiTab.actualExtractionRuns >= 0 && multiTab.actualExtractionRuns <= 1 &&
     multiTab.switchBackMs < 1500 &&
     multiTab.restoreHandleCleared &&
     results.navigationLifecycleQa.awayDisabled &&
@@ -4918,6 +5184,49 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.unlabeledSingleFigureQa.persisted.argumentSteps === 1 &&
     results.unlabeledSingleFigureQa.persisted.panels === 0 &&
     results.unlabeledSingleFigureQa.persisted.standardError === '' &&
+    results.panelUiEndToEndQa.setup.figureId === 'figure-78' &&
+    JSON.stringify(results.panelUiEndToEndQa.setup.panels) === JSON.stringify(['A']) &&
+    results.panelUiEndToEndQa.setup.snapshotFigures === 1 &&
+    results.panelUiEndToEndQa.interpretationRequests.length === 2 &&
+    !results.panelUiEndToEndQa.interpretationRequests[0].repairPass &&
+    results.panelUiEndToEndQa.interpretationRequests[1].repairPass &&
+    results.panelUiEndToEndQa.interpretationRequests.every(item =>
+      item.figureId === 'figure-78' && item.panel === 'A' && !item.hasImage &&
+      item.maxTokens === 3072) &&
+    results.panelUiEndToEndQa.interpretation.figureOpen &&
+    results.panelUiEndToEndQa.interpretation.panelOpen &&
+    /重新解读此 Panel/.test(results.panelUiEndToEndQa.interpretation.buttonText) &&
+    /比较处理组与匹配对照组/.test(results.panelUiEndToEndQa.interpretation.text) &&
+    /图注与相关正文/.test(results.panelUiEndToEndQa.interpretation.inputBasis) &&
+    results.panelUiEndToEndQa.interpretation.error === '' &&
+    results.panelUiEndToEndQa.interpretation.attempts === 2 &&
+    results.panelUiEndToEndQa.interpretation.inputMode === 'caption_context' &&
+    results.panelUiEndToEndQa.followupRequests.length === 2 &&
+    !results.panelUiEndToEndQa.followupRequests[0].repairPass &&
+    results.panelUiEndToEndQa.followupRequests[1].repairPass &&
+    results.panelUiEndToEndQa.followupRequests.every(item =>
+      item.figureId === 'figure-78' && item.panel === 'A' && !item.hasImage &&
+      item.maxTokens === 4096 && item.topics.includes('grouping') &&
+      item.customQuestion === '为什么匹配对照对于解释这个 Panel 很重要?') &&
+    results.panelUiEndToEndQa.followup.rendered &&
+    results.panelUiEndToEndQa.followup.panelOpen &&
+    /匹配对照使主要差异集中于处理因素/.test(
+      results.panelUiEndToEndQa.followup.answerText) &&
+    /为什么匹配对照对于解释这个 Panel 很重要/.test(
+      results.panelUiEndToEndQa.followup.questionText) &&
+    /回答已生成并显示在下方/.test(results.panelUiEndToEndQa.followup.statusText) &&
+    results.panelUiEndToEndQa.followup.focused &&
+    results.panelUiEndToEndQa.followup.inViewport &&
+    results.panelUiEndToEndQa.followup.historyLength === 2 &&
+    !results.panelUiEndToEndQa.followup.loading &&
+    results.panelUiEndToEndQa.followup.error === '' &&
+    results.panelUiEndToEndQa.followup.attempts === 2 &&
+    results.panelUiEndToEndQa.persisted.analysisInMemory &&
+    results.panelUiEndToEndQa.persisted.followupInMemory &&
+    results.panelUiEndToEndQa.persisted.historyInMemory === 2 &&
+    results.panelUiEndToEndQa.persisted.analysisPersisted &&
+    results.panelUiEndToEndQa.persisted.followupPersisted &&
+    results.panelUiEndToEndQa.persisted.historyPersisted === 2 &&
     results.largeChatHistorySetup.totalTurns === 95 &&
     results.largeChatInitialQa.totalTurns === 95 &&
     results.largeChatInitialQa.snapshotTurns === 30 &&

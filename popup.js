@@ -1448,7 +1448,7 @@ function formatFigurePanelInputBasis(value) {
     }[value.inputMode] || '按容量规划的证据';
     const size = value.pixelsSupplied && value.imageWidth && value.imageHeight
         ? ` · ${value.imageWidth}×${value.imageHeight} px` : '';
-    const retry = Number(value.attempts) > 1 ? ` · 第 ${value.attempts} 次降级请求` : '';
+    const retry = Number(value.attempts) > 1 ? ` · 共 ${value.attempts} 次模型请求` : '';
     return `${mode}${size}${retry}`;
 }
 
@@ -1575,6 +1575,20 @@ function revealPanelFollowupAnswer(followupKey) {
     answer.scrollIntoView({ behavior: 'smooth', block: 'center' });
     answer.focus({ preventScroll: true });
     setTimeout(() => answer.classList.remove('is-newly-revealed'), 520);
+    return true;
+}
+
+function stabilizePanelFollowupAnswer(followupKey) {
+    const selector = `[data-panel-followup-answer="${CSS.escape(followupKey)}"]`;
+    const answer = document.querySelector(selector);
+    if (!answer) return false;
+    const view = answer.closest('[data-workspace-view="figures"]');
+    const answerRect = answer.getBoundingClientRect();
+    const viewRect = view?.getBoundingClientRect();
+    const inViewport = Boolean(viewRect && answerRect.bottom >= viewRect.top &&
+        answerRect.top <= viewRect.bottom);
+    if (!inViewport) answer.scrollIntoView({ behavior: 'auto', block: 'center' });
+    if (document.activeElement !== answer) answer.focus({ preventScroll: true });
     return true;
 }
 
@@ -1871,6 +1885,13 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
         figure_synthesizing: 'Panel 已提取，正在综合整图证据链',
         figure_synthesis_complete: '整图证据链综合完成',
         figure_schema_retry: '返回结构不完整，正在自动修正',
+        figure_panel_planning: '正在规划 Panel 证据输入',
+        figure_panel_schema_retry: 'Panel 返回结构不完整，正在自动修正',
+        figure_panel_transient_retry: 'Panel 请求暂时失败，正在等待自动重试',
+        figure_panel_token_retry: '正在调整 Panel 输出令牌上限',
+        figure_panel_output_retry: '正在增加 Panel 输出令牌上限',
+        figure_panel_retry: '正在降低 Panel 输入容量',
+        figure_panel_complete: 'Panel 解读已完成',
         figure_compact_fallback: '整图返回不稳定，已切换为 Panel 提取后再综合',
         provider_telemetry: '模型已返回，正在读取用量与完成状态',
         figure: progress.cacheHit ? '已从本地缓存恢复解读' : 'Figure 解读已完成',
@@ -5247,7 +5268,11 @@ async function runFigurePanelFollowup(figureId, panelId, topics, customQuestion 
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             revealPanelFollowupAnswer(followupKey);
-            if (panelFollowupRevealKey === followupKey) panelFollowupRevealKey = '';
+            setTimeout(() => {
+                if (panelFollowupRevealKey !== followupKey) return;
+                stabilizePanelFollowupAnswer(followupKey);
+                panelFollowupRevealKey = '';
+            }, 280);
         });
     });
     showStatus(`已完成 ${figureId} · Panel ${panelId} 的定向追问`, 'success');

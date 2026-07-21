@@ -88,6 +88,8 @@ test('DOM-discovered Panels are available before LLM analysis and can be analyze
   assert.match(panelCatalog, /createPanelFollowupControl\(figure, panel\)/);
   assert.match(content, /async function analyzeSingleFigurePanelWithLLM/);
   assert.match(content, /type: 'LLM_ANALYZE_FIGURE_PANEL'/);
+  assert.match(content, /figure_panel_schema_retry/);
+  assert.match(content, /figure_panel_transient_retry/);
   assert.match(content, /computePageDocumentHash\(\)/);
   assert.match(content, /prepareFigurePanelImageVariants\(state\.figure, normalizedPanelId\)/);
   assert.match(content, /request\.action === 'analyzeSingleFigurePanelWithLLM'/);
@@ -194,6 +196,7 @@ test('Panel cards provide a bounded follow-up menu using the same dedicated Pane
   assert.match(popup, /formatFigurePanelInputBasis/);
   assert.match(popup, /dataset\.panelFollowupAnswer/);
   assert.match(popup, /function revealPanelFollowupAnswer\(/);
+  assert.match(popup, /function stabilizePanelFollowupAnswer\(/);
   assert.match(popup, /完成后会自动定位到这里/);
   assert.match(css, /\.workspace-panel-followup-answer\.is-newly-revealed/);
 });

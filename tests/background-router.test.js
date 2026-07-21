@@ -1377,7 +1377,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r4');
+  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r5');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);
@@ -2817,6 +2817,48 @@ test('routes a targeted Panel follow-up through the configured Figure API', asyn
   assert.equal(response.data.panelFollowup.inputBasis.pixelsSupplied, false);
 });
 
+test('repairs one structurally invalid targeted Panel follow-up response', async () => {
+  const storageArea = createMemoryStorage();
+  const inputs = [];
+  const instructions = [];
+  const progress = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      inputs.push(input);
+      instructions.push(body.instructions);
+      if (inputs.length === 1) {
+        return jsonResponse({ output_text: JSON.stringify({ answer_zh: 'missing required keys' }) });
+      }
+      return jsonResponse({ output_text: JSON.stringify(panelFollowupOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+
+  const response = await router.handle({
+    type: 'LLM_ASK_FIGURE_PANEL',
+    document: { title: 'Panel schema repair' },
+    figure: { ...figureInput(1), panelHints: ['A'] },
+    panel: {
+      panel: 'A', role: 'phenotype', purpose: 'Measure the target phenotype',
+      design: 'treated versus matched control', comparison: 'treated vs control'
+    },
+    topics: ['grouping'],
+    customQuestion: 'Why is the matched control important?',
+    forceRefresh: true
+  }, { onProgress: event => progress.push(event) });
+
+  assert.equal(response.success, true);
+  assert.equal(inputs.length, 2);
+  assert.deepEqual(inputs[0], inputs[1]);
+  assert.doesNotMatch(instructions[0], /SCHEMA_REPAIR_PASS/);
+  assert.match(instructions[1], /SCHEMA_REPAIR_PASS/);
+  assert.equal(response.data.panelFollowup.inputBasis.attempts, 2);
+  assert.ok(progress.some(event => event.phase === 'figure_panel_schema_retry'));
+});
+
 test('routes credential-free multi-file workspace save, scan, export, and crash-safe deletion', async () => {
   const workspace = {
     schemaVersion: 1,
@@ -3181,6 +3223,94 @@ test('routes one Panel interpretation through one dedicated Provider call', asyn
   assert.equal(response.data.panelAnalysis.panel, 'A');
   assert.equal(response.data.panelAnalysis.inputBasis.imageMaxEdge, 1200);
   assert.equal(response.data.panelAnalysis.inputBasis.attempts, 1);
+});
+
+test('repairs one structurally invalid Panel interpretation without degrading its evidence', async () => {
+  const storageArea = createMemoryStorage();
+  const inputs = [];
+  const imageSizes = [];
+  const instructions = [];
+  const progress = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      const image = Array.isArray(body.input)
+        ? body.input[0].content.find(item => item.type === 'input_image')?.image_url || ''
+        : '';
+      inputs.push(input);
+      imageSizes.push(image.length);
+      instructions.push(body.instructions);
+      if (inputs.length === 1) {
+        return jsonResponse({ output_text: JSON.stringify({ figure_id: input.figure_id }) });
+      }
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: '8'.repeat(64),
+    document: { title: 'Panel schema repair' },
+    figure: {
+      ...figureInput(8), panelHints: ['A'],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }, forceRefresh: true
+  }, { onProgress: event => progress.push(event) });
+
+  assert.equal(response.success, true);
+  assert.equal(inputs.length, 2);
+  assert.deepEqual(inputs[0], inputs[1]);
+  assert.equal(imageSizes[0] > 0, true);
+  assert.equal(imageSizes[1], imageSizes[0]);
+  assert.doesNotMatch(instructions[0], /SCHEMA_REPAIR_PASS/);
+  assert.match(instructions[1], /SCHEMA_REPAIR_PASS/);
+  assert.equal(response.data.panelAnalysis.inputBasis.inputMode, 'figure_image');
+  assert.equal(response.data.panelAnalysis.inputBasis.attempts, 2);
+  assert.ok(progress.some(event => event.phase === 'figure_panel_schema_retry'));
+});
+
+test('retries one transient Panel provider failure without degrading its evidence', async () => {
+  const storageArea = createMemoryStorage();
+  const imageSizes = [];
+  const waits = [];
+  const progress = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    sleepImpl: async delay => { waits.push(delay); },
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      const image = Array.isArray(body.input)
+        ? body.input[0].content.find(item => item.type === 'input_image')?.image_url || ''
+        : '';
+      imageSizes.push(image.length);
+      if (calls === 1) return jsonResponse({ error: { message: 'temporary rate limit' } }, 429);
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: '7'.repeat(64),
+    document: { title: 'Transient Panel failure' },
+    figure: {
+      ...figureInput(7), panelHints: ['A'],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }, forceRefresh: true
+  }, { onProgress: event => progress.push(event) });
+
+  assert.equal(response.success, true);
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1500]);
+  assert.equal(imageSizes[0] > 0, true);
+  assert.equal(imageSizes[1], imageSizes[0]);
+  assert.equal(response.data.panelAnalysis.inputBasis.inputMode, 'figure_image');
+  assert.equal(response.data.panelAnalysis.inputBasis.attempts, 2);
+  assert.ok(progress.some(event => event.phase === 'figure_panel_transient_retry'));
 });
 
 test('retries a rejected Panel output limit without needlessly degrading the image', async () => {
