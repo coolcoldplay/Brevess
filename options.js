@@ -2291,6 +2291,18 @@ async function persistForm(silent) {
 
 async function testProvider() {
   if (!beginProfileAction('test')) return;
+  const controls = [...document.querySelectorAll(
+    '#providerSettings input, #providerSettings select, ' +
+    '#providerSettings textarea, #providerSettings button'
+  )];
+  const previousDisabledStates = new Map(
+    controls.map(control => [control, control.disabled === true])
+  );
+  const section = document.getElementById('providerSettings');
+  const testButton = document.getElementById('testProvider');
+  controls.forEach(control => { control.disabled = true; });
+  section?.setAttribute('aria-busy', 'true');
+  testButton?.setAttribute('aria-busy', 'true');
   showStatus('正在使用合成文本测试连接。', 'info');
   try {
     const saved = await persistForm(true);
@@ -2301,6 +2313,12 @@ async function testProvider() {
   } catch (error) {
     showStatus(`连接失败：${friendlyError(error)}`, 'error');
   } finally {
+    controls.forEach(control => {
+      control.disabled = previousDisabledStates.get(control) === true;
+    });
+    section?.removeAttribute('aria-busy');
+    testButton?.removeAttribute('aria-busy');
     endProfileAction('test');
+    renderOnboarding();
   }
 }

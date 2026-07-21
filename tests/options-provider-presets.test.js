@@ -126,6 +126,11 @@ test('save guard always releases and test action handles a guarded save result',
   const testSource = script.slice(testStart, testEnd);
   assert.match(testSource, /persistForm\(true\)/);
   assert.match(testSource, /if\s*\(!saved\)/);
+  assert.match(testSource, /#providerSettings input/);
+  assert.match(testSource, /previousDisabledStates\s*=\s*new Map/);
+  assert.match(testSource, /testButton\?\.setAttribute\(['"]aria-busy['"], ['"]true['"]\)/);
+  assert.match(testSource, /testButton\?\.removeAttribute\(['"]aria-busy['"]\)/);
+  assert.match(testSource, /controls\.forEach\(control\s*=>\s*\{[\s\S]*previousDisabledStates\.get\(control\)/);
   const beginStart = script.indexOf('function beginProfileAction(');
   const beginEnd = script.indexOf('\n}', beginStart) + 2;
   const endStart = script.indexOf('function endProfileAction(');

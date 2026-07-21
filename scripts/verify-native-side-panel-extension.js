@@ -14,6 +14,8 @@ const outputDir = process.env.SCI_QA_OUTPUT_DIR
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-side-panel-edge-'));
 const extensionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-side-panel-extension-'));
 let activeContext = null;
+let providerServer = null;
+let releaseProviderResponse = null;
 
 function prepareQaExtension() {
   for (const directory of ['core', 'providers', 'vendor', 'icons']) {
@@ -144,6 +146,51 @@ async function readDiagnosticDownload(download) {
     ]
   });
   activeContext = context;
+  let observeProviderRequest;
+  let providerRequestQa = null;
+  const providerRequestObserved = new Promise(resolve => {
+    observeProviderRequest = resolve;
+  });
+  const providerResponseGate = new Promise(resolve => {
+    releaseProviderResponse = resolve;
+  });
+  providerServer = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    let body = {};
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (_) {}
+    providerRequestQa = {
+      method: request.method || '',
+      path: new URL(request.url || '/', 'http://127.0.0.1').pathname,
+      model: String(body.model || ''),
+      authorizationPresent: /^Bearer\s+qa-onboarding-secret$/u.test(
+        request.headers.authorization || ''
+      ),
+      syntheticPromptPresent: JSON.stringify(body).includes('Treatment increased survival.'),
+      stream: body.stream === false
+    };
+    observeProviderRequest(providerRequestQa);
+    await providerResponseGate;
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({
+      model: 'qa-onboarding-model',
+      choices: [{
+        finish_reason: 'stop',
+        message: {
+          content: JSON.stringify({
+            paragraphs_reviewed: ['connection-p1'], annotations: []
+          })
+        }
+      }],
+      usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    providerServer.once('error', reject);
+    providerServer.listen(0, '127.0.0.1', resolve);
+  });
+  const providerBaseUrl =
+    `http://127.0.0.1:${providerServer.address().port}/v1`;
   const pageErrors = [];
   const consoleErrors = [];
   const fixture = context.pages()[0] || await context.newPage();
@@ -2416,6 +2463,17 @@ async function readDiagnosticDownload(download) {
     renderRouteOptions();
     return result;
   });
+  await worker.evaluate(async tab => {
+    await SciLLM.clearTabActivation(chrome.storage.session, tab.id);
+    await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'popup.html', enabled: false });
+  }, fixtureTab);
+  await options.evaluate(sourceTab => callBackground({
+    type: 'ONBOARDING_RESTART', sourceTab
+  }), {
+    tabId: fixtureTab.id,
+    windowId: fixtureTab.windowId,
+    url: fixtureTab.url
+  });
   await options.goto(`chrome-extension://${extensionId}/options.html#onboarding`, {
     waitUntil: 'domcontentloaded'
   });
@@ -2436,6 +2494,68 @@ async function readDiagnosticDownload(download) {
   await options.locator('#onboardingContinue').click();
   await options.waitForFunction(() => document.body.dataset.onboardingStep === 'api');
   settingsDatabaseQa.continuedToApi = true;
+  await options.locator('#profileName').fill('QA onboarding profile');
+  await options.locator('#providerId').selectOption('openai-compatible');
+  await options.locator('#model').fill('qa-onboarding-model');
+  await options.locator('#apiKey').fill('qa-onboarding-secret');
+  await options.locator('#baseUrl').fill(providerBaseUrl);
+  await options.locator('#authHeader').fill('Authorization');
+  await options.locator('#authPrefix').fill('Bearer');
+  await options.locator('#consentGranted').check();
+  await options.locator('#testProvider').click();
+  await Promise.race([
+    providerRequestObserved,
+    new Promise((_, reject) => setTimeout(() =>
+      reject(new Error('Timed out waiting for the onboarding connection-test request')), 10000))
+  ]);
+  const providerPendingUiQa = await options.evaluate(() => ({
+    disabled: document.getElementById('testProvider')?.disabled === true,
+    busy: document.getElementById('testProvider')?.getAttribute('aria-busy') === 'true',
+    saveDisabled: document.getElementById('saveSettings')?.disabled === true,
+    status: document.getElementById('status')?.textContent || '',
+    testGuardActive: profileActionInFlight.test === true
+  }));
+  releaseProviderResponse();
+  await options.waitForFunction(() =>
+    /连接成功/.test(document.getElementById('status')?.textContent || '') &&
+    document.getElementById('testProvider')?.disabled === false &&
+    document.getElementById('onboardingFinish')?.disabled === false,
+  null, { timeout: 10000 });
+  const providerCompletedUiQa = await options.evaluate(() => ({
+    testRecovered: document.getElementById('testProvider')?.disabled === false,
+    saveRecovered: document.getElementById('saveSettings')?.disabled === false,
+    busyReleased: document.getElementById('testProvider')?.getAttribute('aria-busy') !== 'true',
+    status: document.getElementById('status')?.textContent || '',
+    apiKeyCleared: document.getElementById('apiKey')?.value === '',
+    apiKeyMasked: /已保存/.test(document.getElementById('apiKey')?.placeholder || ''),
+    finishEnabled: document.getElementById('onboardingFinish')?.disabled === false,
+    testGuardReleased: profileActionInFlight.test !== true
+  }));
+  const optionsClosed = options.waitForEvent('close', { timeout: 10000 })
+    .then(() => true, () => false);
+  await options.locator('#onboardingFinish').click().catch(error => {
+    if (!options.isClosed()) throw error;
+  });
+  const onboardingOptionsClosed = await optionsClosed;
+  const onboardingReturnQa = await worker.evaluate(async tabId => {
+    const [tab, activeTabs, panelOptions, activated, stored] = await Promise.all([
+      chrome.tabs.get(tabId),
+      chrome.tabs.query({ active: true, currentWindow: true }),
+      chrome.sidePanel.getOptions({ tabId }),
+      chrome.tabs.get(tabId).then(current =>
+        SciLLM.isTabActivated(chrome.storage.session, current)),
+      onboardingController.get()
+    ]);
+    return {
+      sourceTabStillOpen: Boolean(tab?.id),
+      sourceTabActive: activeTabs[0]?.id === tabId,
+      sidePanelEnabled: panelOptions.enabled === true,
+      activated,
+      acknowledged: stored.acknowledged === true,
+      storageStep: stored.steps?.storage || '',
+      apiStep: stored.steps?.api || ''
+    };
+  }, fixtureTab.id);
 
   const results = {
     extensionId,
@@ -2492,6 +2612,11 @@ async function readDiagnosticDownload(download) {
     supportEmail,
     modelConfigurationQa,
     settingsDatabaseQa,
+    providerRequestQa,
+    providerPendingUiQa,
+    providerCompletedUiQa,
+    onboardingOptionsClosed,
+    onboardingReturnQa,
     adapterDiagnostic: {
       extension: path.extname(firstDiagnostic.filename),
       filename: firstDiagnostic.filename,
@@ -2791,6 +2916,32 @@ async function readDiagnosticDownload(download) {
     results.settingsDatabaseQa.directoryStoreAvailable &&
     results.settingsDatabaseQa.continueEnabledAfterNoDirectory &&
     results.settingsDatabaseQa.continuedToApi &&
+    results.providerRequestQa.method === 'POST' &&
+    results.providerRequestQa.path === '/v1/chat/completions' &&
+    results.providerRequestQa.model === 'qa-onboarding-model' &&
+    results.providerRequestQa.authorizationPresent &&
+    results.providerRequestQa.syntheticPromptPresent &&
+    results.providerRequestQa.stream &&
+    results.providerPendingUiQa.disabled &&
+    results.providerPendingUiQa.busy &&
+    results.providerPendingUiQa.saveDisabled &&
+    results.providerPendingUiQa.testGuardActive &&
+    results.providerCompletedUiQa.testRecovered &&
+    results.providerCompletedUiQa.saveRecovered &&
+    results.providerCompletedUiQa.busyReleased &&
+    /连接成功/.test(results.providerCompletedUiQa.status) &&
+    results.providerCompletedUiQa.apiKeyCleared &&
+    results.providerCompletedUiQa.apiKeyMasked &&
+    results.providerCompletedUiQa.finishEnabled &&
+    results.providerCompletedUiQa.testGuardReleased &&
+    results.onboardingOptionsClosed &&
+    results.onboardingReturnQa.sourceTabStillOpen &&
+    results.onboardingReturnQa.sourceTabActive &&
+    results.onboardingReturnQa.sidePanelEnabled &&
+    results.onboardingReturnQa.activated &&
+    results.onboardingReturnQa.acknowledged &&
+    results.onboardingReturnQa.storageStep === 'skipped' &&
+    results.onboardingReturnQa.apiStep === 'completed' &&
     results.adapterDiagnostic.kind === 'sci-publisher-adapter-diagnostic' &&
     results.adapterDiagnostic.schemaVersion === 2 &&
     results.adapterDiagnostic.hasRenderedDom &&
@@ -2807,13 +2958,20 @@ async function readDiagnosticDownload(download) {
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
   await context.close();
   activeContext = null;
+  await new Promise(resolve => providerServer.close(resolve));
+  providerServer = null;
   fs.rmSync(userDataDir, { recursive: true, force: true });
   fs.rmSync(extensionDir, { recursive: true, force: true });
   if (!passed) process.exitCode = 1;
 })().catch(async error => {
   console.error(error.stack || error);
+  try { releaseProviderResponse?.(); } catch (_) {}
   try { await activeContext?.close(); } catch (_) {}
   activeContext = null;
+  try {
+    if (providerServer) await new Promise(resolve => providerServer.close(resolve));
+  } catch (_) {}
+  providerServer = null;
   try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch (_) {}
   try { fs.rmSync(extensionDir, { recursive: true, force: true }); } catch (_) {}
   process.exitCode = 1;

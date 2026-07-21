@@ -295,6 +295,81 @@ async function saveRestartFixture(options, workspace) {
   }, workspace);
 }
 
+async function seedBulkWorkspaceFixtures(options) {
+  return options.evaluate(async () => {
+    const fixtures = [
+      {
+        workspaceId: `workspace:${'b'.repeat(64)}`,
+        canonicalUrl: 'https://example.org/bulk-qa-one',
+        title: 'BULK QA workspace one',
+        directoryName: `BULK QA workspace one--${'b'.repeat(16)}`,
+        doi: '10.1000/bulk-qa-one',
+        marker: 'BULK WORKSPACE SENTINEL ONE',
+        hash: 'b'
+      },
+      {
+        workspaceId: `workspace:${'c'.repeat(64)}`,
+        canonicalUrl: 'https://example.org/bulk-qa-two',
+        title: 'BULK QA workspace two',
+        directoryName: `BULK QA workspace two--${'c'.repeat(16)}`,
+        doi: '10.1000/bulk-qa-two',
+        marker: 'BULK WORKSPACE SENTINEL TWO',
+        hash: 'c'
+      }
+    ];
+    const saved = [];
+    for (const fixture of fixtures) {
+      const identity = {
+        schemaVersion: 1,
+        workspaceId: fixture.workspaceId,
+        canonicalUrl: fixture.canonicalUrl,
+        aliases: [{ type: 'doi', value: fixture.doi }],
+        title: fixture.title,
+        directoryName: fixture.directoryName,
+        revision: fixture.hash.repeat(64),
+        contentHash: fixture.hash.repeat(64),
+        workspaceGeneration: 1
+      };
+      const ensured = await callBackground({
+        type: 'ARTICLE_WORKSPACE_ENSURE', workspace: identity
+      });
+      const workspace = ensured.workspace;
+      const turn = {
+        turnId: `bulk-turn-${fixture.hash}`,
+        question: fixture.marker,
+        answerBlocks: [{
+          blockId: `bulk-block-${fixture.hash}`,
+          markdown: `${fixture.marker} ANSWER`, evidence: []
+        }],
+        status: 'completed', createdAt: Date.now(), updatedAt: Date.now()
+      };
+      const asset = await callBackground({
+        type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+        workspaceId: workspace.workspaceId,
+        workspaceGeneration: workspace.workspaceGeneration,
+        relativePath: 'chat/index.json',
+        content: {
+          turns: [turn], totalTurns: 1, returnedTurns: 1,
+          windowStart: 0, loading: false, error: ''
+        }
+      });
+      const storedTurn = await callBackground({
+        type: 'ARTICLE_WORKSPACE_SAVE_TURN',
+        workspaceId: workspace.workspaceId,
+        workspaceGeneration: workspace.workspaceGeneration,
+        turn
+      });
+      saved.push({
+        workspaceId: workspace.workspaceId,
+        directoryName: workspace.directoryName,
+        assetSaved: asset.saved === true,
+        turnSaved: storedTurn.saved === true
+      });
+    }
+    return saved;
+  });
+}
+
 async function flushAndInspectDirectory(options) {
   return options.evaluate(async () => {
     let sync = null;
@@ -309,6 +384,7 @@ async function flushAndInspectDirectory(options) {
       restartQuestion: false,
       restartAnswer: false,
       restartFigureConclusion: false,
+      bulkWorkspaceSentinel: false,
       chatTurnCount: null,
       figureCount: null,
       workspaceGeneration: null
@@ -325,6 +401,8 @@ async function flushAndInspectDirectory(options) {
             inspection.restartAnswer ||= text.includes('RESTART ANSWER');
             inspection.restartFigureConclusion ||=
               text.includes('RESTART FIGURE CONCLUSION');
+            inspection.bulkWorkspaceSentinel ||=
+              text.includes('BULK WORKSPACE SENTINEL');
             try {
               const parsed = JSON.parse(text);
               const payload = parsed?.data && typeof parsed.data === 'object'
@@ -376,6 +454,48 @@ async function clearWorkspaceThroughPanel(panel) {
     workspaceGeneration:
       Number(currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration) || 0
   }));
+}
+
+async function clearBulkWorkspacesThroughOptions(options, workspaceIds) {
+  await options.locator('#refreshArticleWorkspaceOverview').click();
+  await options.waitForFunction(ids =>
+    articleWorkspaceOverviewUi.loading === false &&
+    ids.every(id => articleWorkspaceOverviewUi.items.some(item => item.workspaceId === id)),
+  workspaceIds, { timeout: 10000 });
+  await options.locator('#articleWorkspaceSearch').fill('BULK QA');
+  await options.waitForFunction(ids => {
+    const cards = [...document.querySelectorAll('.article-workspace-card')];
+    return cards.length === ids.length && ids.every(id =>
+      cards.some(card =>
+        card.querySelector('.article-workspace-select')?.dataset.workspaceSelect === id)
+    );
+  }, workspaceIds, { timeout: 10000 });
+  await options.locator('#articleWorkspaceSelectAll').check();
+  const selectedBeforeClear = await options.evaluate(() => ({
+    selectedCount: articleWorkspaceOverviewUi.selected.size,
+    selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+    clearEnabled: document.getElementById('clearSelectedArticleWorkspaces')?.disabled === false
+  }));
+  options.once('dialog', dialog => dialog.accept());
+  await options.locator('#clearSelectedArticleWorkspaces').click();
+  await options.waitForFunction(ids =>
+    articleWorkspaceOverviewUi.loading === false &&
+    ids.every(id => !articleWorkspaceOverviewUi.items.some(item => item.workspaceId === id)) &&
+    /已清除 2 篇论文工作区/.test(
+      document.getElementById('articleWorkspaceOverviewStatus')?.textContent || ''
+    ), workspaceIds, { timeout: 10000 });
+  return options.evaluate(before => ({
+    ...before,
+    selectedAfterClear: articleWorkspaceOverviewUi.selected.size,
+    matchingCardsAfterClear:
+      document.querySelectorAll('.article-workspace-card').length,
+    clearButtonRecovered:
+      document.getElementById('clearSelectedArticleWorkspaces')?.disabled === true,
+    refreshButtonRecovered:
+      document.getElementById('refreshArticleWorkspaceOverview')?.disabled === false,
+    status: document.getElementById('articleWorkspaceOverviewStatus')?.textContent || '',
+    remainingWorkspaceCount: articleWorkspaceOverviewUi.items.length
+  }), selectedBeforeClear);
 }
 
 async function clearBrowserWorkspaceStores(options) {
@@ -538,6 +658,19 @@ async function clearBrowserWorkspaceStores(options) {
     };
   }, clearedContent.workspaceId);
   const clearedDirectory = await flushAndInspectDirectory(preRestoreOptions);
+  const bulkSeed = await seedBulkWorkspaceFixtures(preRestoreOptions);
+  const bulkDirectoryBefore = await flushAndInspectDirectory(preRestoreOptions);
+  const bulkUi = await clearBulkWorkspacesThroughOptions(
+    preRestoreOptions, bulkSeed.map(item => item.workspaceId)
+  );
+  const bulkDirectoryAfter = await flushAndInspectDirectory(preRestoreOptions);
+  const bulkOverviewAfter = await preRestoreOptions.evaluate(async () => {
+    const overview = await callBackground({ type: 'ARTICLE_WORKSPACE_LIST' });
+    return {
+      workspaceCount: overview.workspaces.length,
+      workspaceIds: overview.workspaces.map(item => item.workspaceId)
+    };
+  });
 
   const results = {
     firstExtensionId,
@@ -559,7 +692,12 @@ async function clearBrowserWorkspaceStores(options) {
     clearedUi,
     clearedContent,
     clearedOverview,
-    clearedDirectory
+    clearedDirectory,
+    bulkSeed,
+    bulkDirectoryBefore,
+    bulkUi,
+    bulkDirectoryAfter,
+    bulkOverviewAfter
   };
   const requiredFiles = [
     '/manifest.json', '/chat/index.json', '/chat/turns/restart-turn-1.json',
@@ -637,7 +775,28 @@ async function clearBrowserWorkspaceStores(options) {
     !results.clearedDirectory.inspection.restartFigureConclusion &&
     results.clearedDirectory.inspection.chatTurnCount === 0 &&
     results.clearedDirectory.inspection.workspaceGeneration ===
-      results.clearedContent.workspaceGeneration;
+      results.clearedContent.workspaceGeneration &&
+    results.bulkSeed.length === 2 &&
+    results.bulkSeed.every(item => item.assetSaved && item.turnSaved) &&
+    results.bulkDirectoryBefore.sync.pendingCount === 0 &&
+    results.bulkDirectoryBefore.inspection.bulkWorkspaceSentinel &&
+    results.bulkSeed.every(item => results.bulkDirectoryBefore.files.some(file =>
+      file.startsWith(`SCI-Highlighter/workspaces/${item.directoryName}/`))) &&
+    results.bulkUi.selectedCount === 2 &&
+    results.bulkUi.selectAllChecked &&
+    results.bulkUi.clearEnabled &&
+    results.bulkUi.selectedAfterClear === 0 &&
+    results.bulkUi.matchingCardsAfterClear === 0 &&
+    results.bulkUi.clearButtonRecovered &&
+    results.bulkUi.refreshButtonRecovered &&
+    /已清除 2 篇论文工作区/.test(results.bulkUi.status) &&
+    results.bulkUi.remainingWorkspaceCount === 1 &&
+    results.bulkDirectoryAfter.sync.pendingCount === 0 &&
+    !results.bulkDirectoryAfter.inspection.bulkWorkspaceSentinel &&
+    results.bulkSeed.every(item => !results.bulkDirectoryAfter.files.some(file =>
+      file.includes(`/${item.directoryName}/`))) &&
+    results.bulkOverviewAfter.workspaceCount === 1 &&
+    results.bulkOverviewAfter.workspaceIds[0] === results.clearedContent.workspaceId;
 
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
   await secondContext.close();
