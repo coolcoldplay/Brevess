@@ -4252,10 +4252,18 @@ function publicArticleChatTurn(turn = {}) {
     };
 }
 
-function getPublicArticleChatState() {
+function getPublicArticleChatState(options = {}) {
+    const totalTurns = articleChatState.turns.length;
+    const requestedLimit = Math.max(0, Math.floor(Number(options.limit) || 0));
+    const windowStart = requestedLimit > 0
+        ? Math.max(0, totalTurns - requestedLimit) : 0;
+    const visibleTurns = articleChatState.turns.slice(windowStart);
     return {
-        turns: articleChatState.turns.map(publicArticleChatTurn),
-        totalTurns: articleChatState.turns.length,
+        turns: visibleTurns.map(publicArticleChatTurn),
+        totalTurns,
+        returnedTurns: visibleTurns.length,
+        windowStart,
+        hasEarlier: windowStart > 0,
         loading: articleChatState.loading === true,
         error: String(articleChatState.error || ''),
         operationId: String(articleChatState.operationId || ''),
@@ -5708,7 +5716,7 @@ function buildFigureWorkspaceSnapshot({ forceRefresh = false } = {}) {
     };
 }
 
-function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
+function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } = {}) {
     const canonicalSnapshot = getCanonicalArticleSnapshot({ forceRefresh });
     const structure = canonicalSnapshot.structure;
     const paragraphCounts = new Map();
@@ -5755,7 +5763,7 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false } = {}) {
         studyProfile: lastLlmAnalysis?.rawAnalysis?.studyProfile || null,
         reviewOutline: lastReviewOutline || null,
         paragraphSummaries: Array.from(standaloneReviewParagraphSummaries.values()),
-        chat: getPublicArticleChatState(),
+        chat: getPublicArticleChatState({ limit: chatLimit }),
         llmTask: llmOperationState.active ? {
             running: Boolean(llmOperationState.active && !llmOperationState.active.cancelled),
             paused: llmOperationState.active?.paused === true,
@@ -7505,7 +7513,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === 'getArticleWorkspaceSnapshot') {
         Promise.resolve().then(async () => {
             const snapshot = buildArticleWorkspaceSnapshot({
-                forceRefresh: request.forceRefresh === true
+                forceRefresh: request.forceRefresh === true,
+                chatLimit: Math.max(0, Math.floor(Number(request.chatLimit) || 0))
             });
             const localWorkspace = await ensureCurrentArticleWorkspace({
                 forceRefresh: request.forceRefresh === true

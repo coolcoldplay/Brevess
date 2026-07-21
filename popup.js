@@ -497,6 +497,7 @@ function cacheCurrentPanelTabState() {
         activeWorkspaceView,
         workspaceGeneration,
         currentWorkspaceSnapshot,
+        articleChatVisibleTurnCount,
         currentArticleArchiveProbe,
         figureAnalysisState: { ...figureAnalysisState },
         reviewOutlineState: { ...reviewOutlineState }
@@ -607,6 +608,11 @@ function restorePanelTabState(cached) {
     activeWorkspaceView = cached.activeWorkspaceView || 'analysis';
     workspaceGeneration = Math.max(1, Number(cached.workspaceGeneration) || 1);
     currentWorkspaceSnapshot = cached.currentWorkspaceSnapshot || null;
+    articleChatVisibleTurnCount = Math.max(
+        articleChatHistoryPageSize,
+        Number(cached.articleChatVisibleTurnCount) ||
+            Number(currentWorkspaceSnapshot?.chat?.turns?.length) || 0
+    );
     currentArticleArchiveProbe = cached.currentArticleArchiveProbe || null;
     reviewOutlineState = { ...reviewOutlineState, ...cached.reviewOutlineState };
     document.getElementById('sidePanelApp')?.classList.remove('is-tab-inactive');
@@ -2533,8 +2539,13 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
 
     const chat = snapshot?.chat || { turns: [], loading: false, error: '' };
     const turns = Array.isArray(chat.turns) ? chat.turns : [];
-    const visibleStart = Math.max(0, turns.length - articleChatVisibleTurnCount);
-    const visibleTurns = turns.slice(visibleStart);
+    const totalTurns = Math.max(turns.length, Number(chat.totalTurns) || 0);
+    const visibleStart = Math.max(
+        0,
+        Number.isFinite(Number(chat.windowStart))
+            ? Number(chat.windowStart) : totalTurns - turns.length
+    );
+    const visibleTurns = turns;
     const visibleIds = new Set(visibleTurns.map(turn => String(turn.turnId || '')));
     const wasNearBottom = isArticleChatNearBottom(container);
 
@@ -2595,12 +2606,22 @@ function applyArticleChatStateEvent(event = {}) {
         if (index >= 0) turns[index] = event.turn;
         else turns.push(event.turn);
     }
+    if (turns.length > articleChatVisibleTurnCount) {
+        turns = turns.slice(-articleChatVisibleTurnCount);
+    }
+    const eventTotalTurns = Number(event.totalTurns);
+    const totalTurns = Number.isFinite(eventTotalTurns)
+        ? Math.max(0, eventTotalTurns)
+        : Math.max(turns.length, Number(currentChat.totalTurns) || 0);
     currentWorkspaceSnapshot = {
         ...currentWorkspaceSnapshot,
         chat: {
             ...currentChat,
             turns,
-            totalTurns: Number(event.totalTurns) || turns.length,
+            totalTurns,
+            returnedTurns: turns.length,
+            windowStart: Math.max(0, totalTurns - turns.length),
+            hasEarlier: totalTurns > turns.length,
             loading: event.loading === true,
             operationId: String(event.operationId || ''),
             activeTurnId: String(event.activeTurnId || ''),
@@ -2642,13 +2663,17 @@ async function submitArticleChat(event) {
         }
         if (response.turn) {
             const existingTurns = currentWorkspaceSnapshot?.chat?.turns || [];
+            const existingTotalTurns = Math.max(
+                existingTurns.length,
+                Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0
+            );
             const alreadyPresent = existingTurns.some(turn =>
                 turn.turnId === response.turn.turnId
             );
             applyArticleChatStateEvent({
                 kind: 'turn_added',
                 turn: response.turn,
-                totalTurns: existingTurns.length + (alreadyPresent ? 0 : 1),
+                totalTurns: existingTotalTurns + (alreadyPresent ? 0 : 1),
                 loading: currentWorkspaceSnapshot?.chat?.loading === true
             });
         }
@@ -2689,6 +2714,47 @@ async function mutateArticleChatTurn(action, turnId) {
     if (!isCurrentPanelContext(panelContext)) return;
     if (!response?.success) throw new Error(response?.error || 'ARTICLE_CHAT_MUTATION_FAILED');
     await refreshArticleWorkspace({ panelContext });
+}
+
+async function loadEarlierArticleChatHistory() {
+    const container = document.getElementById('articleChatMessages');
+    const button = document.getElementById('articleChatLoadEarlier');
+    const totalTurns = Math.max(
+        0, Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0
+    );
+    if (!container || !button || button.disabled ||
+        articleChatVisibleTurnCount >= totalTurns) return;
+    const previousCount = articleChatVisibleTurnCount;
+    const containerRect = container.getBoundingClientRect();
+    const anchor = Array.from(container.querySelectorAll(':scope > [data-turn-id]'))
+        .find(node => node.getBoundingClientRect().bottom > containerRect.top) ||
+        container.querySelector(':scope > [data-turn-id]');
+    const anchorTop = anchor?.getBoundingClientRect().top || 0;
+    const previousOverflowAnchor = container.style.overflowAnchor;
+    button.disabled = true;
+    container.style.overflowAnchor = 'none';
+    try {
+        articleChatFollowLatest = false;
+        articleChatVisibleTurnCount = Math.min(
+            totalTurns,
+            articleChatVisibleTurnCount + articleChatHistoryPageSize
+        );
+        const snapshot = await refreshArticleWorkspace();
+        if (!snapshot) {
+            articleChatVisibleTurnCount = previousCount;
+            throw new Error('ARTICLE_CHAT_HISTORY_LOAD_FAILED');
+        }
+        if (anchor?.isConnected) {
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                const offset = anchor.getBoundingClientRect().top - anchorTop;
+                if (Math.abs(offset) < 0.25) break;
+                container.scrollTop += offset;
+            }
+        }
+    } finally {
+        container.style.overflowAnchor = previousOverflowAnchor;
+        button.disabled = false;
+    }
 }
 
 function handleArticleChatTurnAction(event) {
@@ -2765,7 +2831,8 @@ async function refreshArticleWorkspace({
     try {
         const response = await sendTabMessage(panelContext.tabId, {
             action: 'getArticleWorkspaceSnapshot',
-            forceRefresh: announce
+            forceRefresh: announce,
+            chatLimit: Math.max(articleChatHistoryPageSize, articleChatVisibleTurnCount)
         });
         if (!response?.success || !response.snapshot) {
             throw new Error(response?.error || '当前页面结构不可用');
@@ -5295,14 +5362,8 @@ function setupEventListeners() {
         'click', handleArticleChatTurnAction
     );
     document.getElementById('articleChatLoadEarlier')?.addEventListener('click', () => {
-        const container = document.getElementById('articleChatMessages');
-        const previousHeight = container?.scrollHeight || 0;
-        articleChatVisibleTurnCount += articleChatHistoryPageSize;
-        articleChatFollowLatest = false;
-        renderArticleChatSnapshot(currentWorkspaceSnapshot);
-        requestAnimationFrame(() => {
-            if (container) container.scrollTop += container.scrollHeight - previousHeight;
-        });
+        void loadEarlierArticleChatHistory().catch(error =>
+            showStatus('无法加载更早问答：' + error.message, 'error'));
     });
     document.getElementById('articleChatReturnLatest')?.addEventListener('click', () => {
         scrollArticleChatToLatest({ smooth: true });

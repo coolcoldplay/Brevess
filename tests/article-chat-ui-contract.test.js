@@ -35,7 +35,7 @@ test('content sends canonical workspace paragraphs and persists only public chat
   assert.match(chat, /profileId: turn\.selectedProfileId/);
   assert.match(chat, /history/);
   assert.doesNotMatch(chat, /apiKey|customHeaders|authorization/i);
-  assert.match(content, /chat:\s*getPublicArticleChatState\(\)/);
+  assert.match(content, /chat:\s*getPublicArticleChatState\(\{ limit: chatLimit \}\)/);
   assert.match(content, /function articleChatFailureMessage/);
   assert.match(content, /OUTPUT_TRUNCATED:\s*'模型连续达到输出上限/);
   assert.match(content, /'completed', 'truncated', 'incomplete'/);
@@ -201,4 +201,23 @@ test('side panel incrementally renders keyed turns and complete blocks', () => {
   assert.match(css, /\.article-chat-return-latest/);
   assert.match(css, /\.article-chat-turn-actions/);
   assert.doesNotMatch(renderer, /['"]我['"]/);
+});
+
+test('side panel pages large chat histories without limiting persisted history', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+
+  assert.match(content, /function getPublicArticleChatState\(options = \{\}\)/);
+  assert.match(content, /const requestedLimit =/);
+  assert.match(content, /articleChatState\.turns\.slice\(windowStart\)/);
+  assert.match(content, /function buildArticleWorkspaceSnapshot\(\{ forceRefresh = false, chatLimit = 0 \} = \{\}\)/);
+  assert.match(content, /chat:\s*getPublicArticleChatState\(\{ limit: chatLimit \}\)/);
+  assert.match(content, /persistWorkspaceAssetCheckpoint\('chat\/index\.json', getPublicArticleChatState\(\)\)/);
+  assert.match(popup, /chatLimit:\s*Math\.max\(articleChatHistoryPageSize, articleChatVisibleTurnCount\)/);
+  assert.match(popup, /async function loadEarlierArticleChatHistory\(\)/);
+  assert.match(popup, /const snapshot = await refreshArticleWorkspace\(\)/);
+  assert.match(popup, /container\.style\.overflowAnchor = 'none'/);
+  assert.match(popup, /anchor\.getBoundingClientRect\(\)\.top - anchorTop/);
+  assert.match(popup, /const visibleTurns = turns;/);
+  assert.match(popup, /articleChatVisibleTurnCount,/);
 });

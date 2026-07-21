@@ -973,6 +973,103 @@ async function readDiagnosticDownload(download) {
     fullPage: true
   });
 
+  const largeChatHistorySetup = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const turns = Array.from({ length: 95 }, (_, index) => {
+          const sequence = index + 1;
+          const padded = String(sequence).padStart(3, '0');
+          const turn = createArticleChatTurn(
+            '历史问题 ' + padded,
+            'profile_qa_openai',
+            { turnId: 'turn-history-' + padded }
+          );
+          turn.answerBlocks = [{
+            blockId: 'block-history-' + sequence,
+            markdown: '**历史回答 ' + sequence + '**：用于验证无限问答分页。',
+            evidence: [],
+            createdAt: turn.createdAt
+          }];
+          turn.status = 'completed';
+          turn.profileName = 'GPT 5 Mini';
+          turn.model = 'gpt-5-mini';
+          turn.updatedAt = turn.createdAt;
+          return turn;
+        });
+        articleChatGeneration += 1;
+        articleChatPumpPromise = null;
+        articleChatState = {
+          turns,
+          loading: false,
+          error: '',
+          operationId: '',
+          activeTurnId: '',
+          coverage: null,
+          memoryNeedsRebuild: false
+        };
+        notifyArticleChatStateChanged('workspace_restored');
+        return { totalTurns: turns.length };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const largeChatInitialQa = await sidePanel.evaluate(async () => {
+    articleChatVisibleTurnCount = articleChatHistoryPageSize;
+    await refreshArticleWorkspace();
+    switchWorkspaceView('chat');
+    const turns = currentWorkspaceSnapshot?.chat?.turns || [];
+    return {
+      totalTurns: currentWorkspaceSnapshot?.chat?.totalTurns || 0,
+      snapshotTurns: turns.length,
+      renderedTurns: document.querySelectorAll('.article-chat-turn').length,
+      firstTurnId: document.querySelector('.article-chat-turn')?.dataset.turnId || '',
+      lastTurnId: document.querySelector('.article-chat-turn:last-child')?.dataset.turnId || '',
+      remainingLabel: document.getElementById('articleChatLoadEarlier')?.textContent || ''
+    };
+  });
+  const loadEarlierHistoryPage = async expectedTurns => sidePanel.evaluate(async expected => {
+    const container = document.getElementById('articleChatMessages');
+    const anchor = container?.querySelector('.article-chat-turn');
+    if (container) container.scrollTop = 0;
+    const anchorBefore = anchor?.getBoundingClientRect().top || 0;
+    const startedAt = performance.now();
+    document.getElementById('articleChatLoadEarlier')?.click();
+    while ((document.querySelectorAll('.article-chat-turn').length !== expected ||
+        document.getElementById('articleChatLoadEarlier')?.disabled) &&
+        performance.now() - startedAt < 1800) {
+      await new Promise(resolve => setTimeout(resolve, 8));
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const anchorAfter = anchor?.getBoundingClientRect().top || 0;
+    const turns = currentWorkspaceSnapshot?.chat?.turns || [];
+    return {
+      loadMs: Math.round(performance.now() - startedAt),
+      snapshotTurns: turns.length,
+      renderedTurns: document.querySelectorAll('.article-chat-turn').length,
+      firstTurnId: document.querySelector('.article-chat-turn')?.dataset.turnId || '',
+      anchorShiftPx: Math.round(Math.abs(anchorAfter - anchorBefore)),
+      remainingLabel: document.getElementById('articleChatLoadEarlier')?.textContent || '',
+      loadButtonHidden: document.getElementById('articleChatLoadEarlier')?.hidden === true
+    };
+  }, expectedTurns);
+  const largeChatPage2Qa = await loadEarlierHistoryPage(60);
+  const largeChatPage3Qa = await loadEarlierHistoryPage(90);
+  const largeChatPage4Qa = await loadEarlierHistoryPage(95);
+  await sidePanel.locator(
+    '[data-turn-id="turn-history-001"] [data-article-chat-action="delete-turn"]'
+  ).click();
+  await sidePanel.waitForFunction(() =>
+    !document.querySelector('[data-turn-id="turn-history-001"]') &&
+    document.querySelectorAll('.article-chat-turn').length === 94
+  );
+  const largeChatDeleteQa = await sidePanel.evaluate(() => ({
+    totalTurns: currentWorkspaceSnapshot?.chat?.totalTurns || 0,
+    snapshotTurns: currentWorkspaceSnapshot?.chat?.turns?.length || 0,
+    renderedTurns: document.querySelectorAll('.article-chat-turn').length,
+    deletedAbsent: !document.querySelector('[data-turn-id="turn-history-001"]')
+  }));
+
   const chatMutationSetup = await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -1930,6 +2027,12 @@ async function readDiagnosticDownload(download) {
     quickNavSwitchQa,
     quickNavExitQa,
     articleChatQa,
+    largeChatHistorySetup,
+    largeChatInitialQa,
+    largeChatPage2Qa,
+    largeChatPage3Qa,
+    largeChatPage4Qa,
+    largeChatDeleteQa,
     chatMutationQa,
     dynamicParagraphQa,
     dynamicRemovalAndTextQa,
@@ -2065,6 +2168,33 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.returnLatestRestored &&
     results.articleChatQa.composerOutsideMessages &&
     results.articleChatQa.citationJumpFocused &&
+    results.largeChatHistorySetup.totalTurns === 95 &&
+    results.largeChatInitialQa.totalTurns === 95 &&
+    results.largeChatInitialQa.snapshotTurns === 30 &&
+    results.largeChatInitialQa.renderedTurns === 30 &&
+    results.largeChatInitialQa.firstTurnId === 'turn-history-066' &&
+    results.largeChatInitialQa.lastTurnId === 'turn-history-095' &&
+    /65/.test(results.largeChatInitialQa.remainingLabel) &&
+    results.largeChatPage2Qa.snapshotTurns === 60 &&
+    results.largeChatPage2Qa.renderedTurns === 60 &&
+    results.largeChatPage2Qa.firstTurnId === 'turn-history-036' &&
+    results.largeChatPage2Qa.anchorShiftPx <= 3 &&
+    results.largeChatPage2Qa.loadMs < 500 &&
+    results.largeChatPage3Qa.snapshotTurns === 90 &&
+    results.largeChatPage3Qa.renderedTurns === 90 &&
+    results.largeChatPage3Qa.firstTurnId === 'turn-history-006' &&
+    results.largeChatPage3Qa.anchorShiftPx <= 3 &&
+    results.largeChatPage3Qa.loadMs < 500 &&
+    results.largeChatPage4Qa.snapshotTurns === 95 &&
+    results.largeChatPage4Qa.renderedTurns === 95 &&
+    results.largeChatPage4Qa.firstTurnId === 'turn-history-001' &&
+    results.largeChatPage4Qa.loadButtonHidden &&
+    results.largeChatPage4Qa.anchorShiftPx <= 3 &&
+    results.largeChatPage4Qa.loadMs < 500 &&
+    results.largeChatDeleteQa.totalTurns === 94 &&
+    results.largeChatDeleteQa.snapshotTurns === 94 &&
+    results.largeChatDeleteQa.renderedTurns === 94 &&
+    results.largeChatDeleteQa.deletedAbsent &&
     results.chatMutationQa.queuedDeleted &&
     !results.chatMutationQa.queuedRemaining &&
     results.chatMutationQa.answerDeleteState.status === 'unanswered' &&
