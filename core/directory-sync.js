@@ -1110,11 +1110,39 @@
         if (error?.name === 'NotFoundError') return { permission, removed: true, missing: true };
         throw error;
       }
-      try {
-        const parent = await root.getDirectoryHandle(WORKSPACE_ROOT_PATH, { create: false });
-        await parent.removeEntry(location.manifest.directoryName, { recursive: true });
-      } catch (error) {
-        if (error?.name !== 'NotFoundError') throw error;
+      const workspaceParents = [
+        WORKSPACE_ROOT_PATH,
+        `backups/${WORKSPACE_ROOT_PATH}`,
+        `conflicts/${WORKSPACE_ROOT_PATH}`
+      ];
+      for (const parentPath of workspaceParents) {
+        try {
+          let parent = root;
+          for (const segment of parentPath.split('/')) {
+            parent = await parent.getDirectoryHandle(segment, { create: false });
+          }
+          await parent.removeEntry(location.manifest.directoryName, { recursive: true });
+        } catch (error) {
+          if (error?.name !== 'NotFoundError') throw error;
+        }
+      }
+      const meta = await queueStore.getMeta();
+      const conflicts = Array.isArray(meta.conflicts) ? meta.conflicts : [];
+      const workspacePrefix = `${location.rootPath}/`;
+      const conflictPrefix = `conflicts/${workspacePrefix}`;
+      const retainedConflicts = conflicts.filter(entry =>
+        !String(entry?.path || '').startsWith(workspacePrefix) &&
+        !String(entry?.conflictPath || '').startsWith(conflictPrefix)
+      );
+      const removedConflicts = conflicts.length - retainedConflicts.length;
+      if (removedConflicts > 0) {
+        const lastConflict = retainedConflicts.at(-1) || null;
+        await queueStore.setMeta({
+          conflictCount: Math.max(0,
+            (Number(meta.conflictCount) || 0) - removedConflicts),
+          conflicts: retainedConflicts,
+          lastConflict
+        });
       }
       const content = await readText(root, WORKSPACE_INDEX_PATH);
       if (content) {
@@ -1132,7 +1160,12 @@
           await rebuildWorkspaceIndex();
         }
       }
-      return { permission, removed: true, workspaceId: location.manifest.workspaceId };
+      return {
+        permission,
+        removed: true,
+        removedConflicts,
+        workspaceId: location.manifest.workspaceId
+      };
     }
 
     async function exportBundle(bundleOverride) {

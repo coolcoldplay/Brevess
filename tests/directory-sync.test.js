@@ -739,7 +739,7 @@ test('rebuilds a workspace index from manifests, quarantines malformed data, and
   assert.deepEqual(titleOnly.matches, []);
 });
 
-test('workspace conflicts remain divergent and deletion cancels its queue and removes only its tree', async () => {
+test('workspace deletion removes its active, backup, and conflict trees without touching another workspace', async () => {
   const handles = createFakeHandleStore();
   const queue = createMemorySyncQueue();
   const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
@@ -762,6 +762,18 @@ test('workspace conflicts remain divergent and deletion cancels its queue and re
 
   await sync.enqueueWorkspaceAsset(first, 'ui/state.json', { view: 'chat' }, { revision: 2 });
   await sync.enqueueWorkspaceAsset(second, 'ui/state.json', { view: 'figure' }, { revision: 2 });
+  const firstBackup =
+    `SCI-Highlighter/backups/workspaces/${first.directoryName}/chat/index.previous.json`;
+  const secondBackup =
+    `SCI-Highlighter/backups/workspaces/${second.directoryName}/chat/index.previous.json`;
+  const firstConflict =
+    `SCI-Highlighter/conflicts/workspaces/${first.directoryName}/chat/index.r2.extension.json`;
+  const secondConflict =
+    `SCI-Highlighter/conflicts/workspaces/${second.directoryName}/chat/index.r2.extension.json`;
+  handles.writeText(firstBackup, JSON.stringify({ answer: 'first-backup' }));
+  handles.writeText(secondBackup, JSON.stringify({ answer: 'second-backup' }));
+  handles.writeText(firstConflict, JSON.stringify({ answer: 'first-conflict' }));
+  handles.writeText(secondConflict, JSON.stringify({ answer: 'second-conflict' }));
   const cancelled = await sync.cancelWorkspaceQueue(first);
   assert.ok(cancelled.cancelled >= 1);
   assert.ok((await queue.getAll()).some(item => item.relativePath.includes(second.directoryName)));
@@ -769,4 +781,10 @@ test('workspace conflicts remain divergent and deletion cancels its queue and re
   assert.equal(removed.removed, true);
   assert.equal(handles.has(`SCI-Highlighter/workspaces/${first.directoryName}/chat/turns/turn-1.json`), false);
   assert.equal(handles.has(`SCI-Highlighter/workspaces/${second.directoryName}/chat/turns/turn-1.json`), true);
+  assert.equal(handles.has(firstBackup), false);
+  assert.equal(handles.has(firstConflict), false);
+  assert.equal(handles.has(secondBackup), true);
+  assert.equal(handles.has(secondConflict), true);
+  assert.equal(removed.removedConflicts, 1);
+  assert.equal((await sync.status()).conflictCount, 0);
 });

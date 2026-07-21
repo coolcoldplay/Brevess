@@ -120,16 +120,61 @@ async function openPanelPage(context, extensionId, articlePageRef) {
 
 async function configureOpfsDirectory(context, extensionId) {
   const options = await context.newPage();
+  await options.addInitScript(() => {
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: async () => {
+        const root = await navigator.storage.getDirectory();
+        return root.getDirectoryHandle('qa-selected-directory', { create: true });
+      }
+    });
+  });
   await options.goto(`chrome-extension://${extensionId}/options.html`, {
     waitUntil: 'domcontentloaded'
   });
+  const chooseButton = options.locator('#chooseUserDataDirectory');
+  await chooseButton.waitFor({ state: 'visible' });
+  await options.waitForFunction(() =>
+    document.getElementById('chooseUserDataDirectory')?.disabled === false);
+  await chooseButton.click();
+  await options.waitForFunction(() =>
+    document.getElementById('userDataPermission')?.dataset.permission === 'granted' &&
+    document.getElementById('chooseUserDataDirectory')?.disabled === false &&
+    document.getElementById('chooseUserDataDirectory')?.getAttribute('aria-busy') === 'false',
+  null, { timeout: 10000 });
   const result = await options.evaluate(async () => {
-    const handle = await navigator.storage.getDirectory();
-    await SciLLM.saveDirectoryHandle(indexedDB, handle);
+    const handle = await SciLLM.loadDirectoryHandle(indexedDB);
     const permission = await handle.queryPermission({ mode: 'readwrite' });
-    return { permission, kind: handle.kind, queryPermission: typeof handle.queryPermission };
+    return {
+      permission,
+      kind: handle.kind,
+      queryPermission: typeof handle.queryPermission,
+      directoryName: document.getElementById('userDataDirectory')?.textContent || '',
+      status: document.getElementById('userDataStatus')?.textContent || '',
+      pendingReleased: userDataUi.pendingAction === false,
+      buttonRecovered: document.getElementById('chooseUserDataDirectory')?.disabled === false
+    };
   });
   return { options, result };
+}
+
+async function saveWorkspaceThroughPanel(panel) {
+  await panel.locator('[data-workspace-target="highlights"]').click();
+  const button = panel.locator('#saveCurrentArticleWorkspace');
+  await button.waitFor({ state: 'visible' });
+  await button.click();
+  await panel.waitForFunction(() =>
+    document.getElementById('saveCurrentArticleWorkspace')?.disabled === false &&
+    document.getElementById('saveCurrentArticleWorkspace')?.hasAttribute('aria-busy') === false &&
+    document.getElementById('statusMessage')?.textContent.includes('已保存'),
+  null, { timeout: 10000 });
+  return panel.evaluate(() => ({
+    buttonRecovered: document.getElementById('saveCurrentArticleWorkspace')?.disabled === false,
+    busyReleased:
+      document.getElementById('saveCurrentArticleWorkspace')?.hasAttribute('aria-busy') === false,
+    status: document.getElementById('statusMessage')?.textContent || '',
+    statusType: document.getElementById('statusMessage')?.className || ''
+  }));
 }
 
 async function ensureArticleWorkspace(worker, tabId) {
@@ -260,16 +305,77 @@ async function flushAndInspectDirectory(options) {
     }
     const handle = await SciLLM.loadDirectoryHandle(indexedDB);
     const files = [];
+    const inspection = {
+      restartQuestion: false,
+      restartAnswer: false,
+      restartFigureConclusion: false,
+      chatTurnCount: null,
+      figureCount: null,
+      workspaceGeneration: null
+    };
     const walk = async (directory, prefix = '') => {
       for await (const [name, entry] of directory.entries()) {
         const relativePath = prefix ? `${prefix}/${name}` : name;
         if (entry.kind === 'directory') await walk(entry, relativePath);
-        else files.push(relativePath);
+        else {
+          files.push(relativePath);
+          if (relativePath.endsWith('.json')) {
+            const text = await (await entry.getFile()).text();
+            inspection.restartQuestion ||= text.includes('RESTART QUESTION');
+            inspection.restartAnswer ||= text.includes('RESTART ANSWER');
+            inspection.restartFigureConclusion ||=
+              text.includes('RESTART FIGURE CONCLUSION');
+            try {
+              const parsed = JSON.parse(text);
+              const payload = parsed?.data && typeof parsed.data === 'object'
+                ? parsed.data : parsed;
+              const activeWorkspaceFile =
+                relativePath.startsWith('SCI-Highlighter/workspaces/');
+              if (activeWorkspaceFile && relativePath.endsWith('/chat/index.json')) {
+                inspection.chatTurnCount = Array.isArray(payload.turns)
+                  ? payload.turns.length : Number(payload.totalTurns) || 0;
+              } else if (activeWorkspaceFile &&
+                  relativePath.endsWith('/figures/inventory.json')) {
+                inspection.figureCount = Array.isArray(payload.figures)
+                  ? payload.figures.length : Number(payload.totalFigures) || 0;
+              } else if (activeWorkspaceFile && relativePath.endsWith('/manifest.json')) {
+                inspection.workspaceGeneration =
+                  Math.max(1, Number(payload.workspaceGeneration) || 1);
+              }
+            } catch (_) {}
+          }
+        }
       }
     };
     await walk(handle);
-    return { sync, files: files.sort() };
+    return { sync, files: files.sort(), inspection };
   });
+}
+
+async function clearWorkspaceThroughPanel(panel) {
+  await panel.locator('[data-workspace-target="highlights"]').click();
+  const button = panel.locator('#clearArticleWorkspace');
+  await button.waitFor({ state: 'visible' });
+  panel.once('dialog', dialog => dialog.accept());
+  await button.click();
+  await panel.waitForFunction(() =>
+    document.getElementById('clearArticleWorkspace')?.disabled === false &&
+    document.getElementById('statusMessage')?.textContent.includes('已清除') &&
+    (Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0) === 0 &&
+    !document.body.textContent.includes('RESTART QUESTION') &&
+    !document.body.textContent.includes('RESTART FIGURE CONCLUSION'),
+  null, { timeout: 10000 });
+  return panel.evaluate(() => ({
+    buttonRecovered: document.getElementById('clearArticleWorkspace')?.disabled === false,
+    status: document.getElementById('statusMessage')?.textContent || '',
+    statusType: document.getElementById('statusMessage')?.className || '',
+    activeView: activeWorkspaceView,
+    chatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
+    restartQuestionVisible: document.body.textContent.includes('RESTART QUESTION'),
+    restartFigureVisible: document.body.textContent.includes('RESTART FIGURE CONCLUSION'),
+    workspaceGeneration:
+      Number(currentWorkspaceSnapshot?.localWorkspace?.workspaceGeneration) || 0
+  }));
 }
 
 async function clearBrowserWorkspaceStores(options) {
@@ -312,6 +418,7 @@ async function clearBrowserWorkspaceStores(options) {
     document.documentElement.dataset.sciLlmContentRevision ===
       '2.4.0-article-workspaces-r1', null, { timeout: 10000 });
   const workspace = await ensureArticleWorkspace(firstWorker, firstTab.id);
+  const saveUi = await saveWorkspaceThroughPanel(firstPanel);
   const saved = await saveRestartFixture(firstOptions, workspace);
   const directory = await flushAndInspectDirectory(firstOptions);
   const browserStoresCleared = await clearBrowserWorkspaceStores(firstOptions);
@@ -380,7 +487,8 @@ async function clearBrowserWorkspaceStores(options) {
         figureConclusion:
           restoredFigureWorkspaceSnapshot?.figures?.[0]?.standard?.coreConclusion || '',
         sidePanelView: articleWorkspaceSidePanelUiState?.activeWorkspaceView || '',
-        workspaceId: currentArticleWorkspace?.workspaceId || ''
+        workspaceId: currentArticleWorkspace?.workspaceId || '',
+        workspaceGeneration: Number(currentArticleWorkspace?.workspaceGeneration) || 0
       })
     });
     return result;
@@ -401,6 +509,35 @@ async function clearBrowserWorkspaceStores(options) {
   const sidePanelOptions = await secondWorker.evaluate(
     tabId => chrome.sidePanel.getOptions({ tabId }), secondTab.id
   );
+  const clearedUi = await clearWorkspaceThroughPanel(secondPanel);
+  const clearedContent = await secondWorker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => ({
+        turnCount: articleChatState.turns.length,
+        restartQuestionPresent: articleChatState.turns.some(turn =>
+          String(turn.question || '').includes('RESTART QUESTION')),
+        restartFigurePresent: Boolean(restoredFigureWorkspaceSnapshot?.figures?.some(figure =>
+          figure.standard?.coreConclusion === 'RESTART FIGURE CONCLUSION')),
+        workspaceId: currentArticleWorkspace?.workspaceId || '',
+        workspaceGeneration: Number(currentArticleWorkspace?.workspaceGeneration) || 0
+      })
+    });
+    return result;
+  }, secondTab.id);
+  const clearedOverview = await preRestoreOptions.evaluate(async workspaceId => {
+    const overview = await callBackground({ type: 'ARTICLE_WORKSPACE_LIST' });
+    const detail = await callBackground({ type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId });
+    const exported = await callBackground({ type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId });
+    return {
+      workspaceCount: overview.workspaces.length,
+      chatTurnCount: detail.chatTurnCount,
+      assetCount: detail.assetCount,
+      turnCount: exported.turns.length,
+      workspaceGeneration: Number(exported.workspace?.workspaceGeneration) || 0
+    };
+  }, clearedContent.workspaceId);
+  const clearedDirectory = await flushAndInspectDirectory(preRestoreOptions);
 
   const results = {
     firstExtensionId,
@@ -409,6 +546,7 @@ async function clearBrowserWorkspaceStores(options) {
     articleUrl,
     browserRestoredArticleTab: secondArticle.restored,
     directorySetup,
+    saveUi,
     saved,
     directory,
     browserStoresCleared,
@@ -417,7 +555,11 @@ async function clearBrowserWorkspaceStores(options) {
     restoredUi,
     restoredContent,
     restoredOverview,
-    sidePanelEnabled: sidePanelOptions.enabled === true
+    sidePanelEnabled: sidePanelOptions.enabled === true,
+    clearedUi,
+    clearedContent,
+    clearedOverview,
+    clearedDirectory
   };
   const requiredFiles = [
     '/manifest.json', '/chat/index.json', '/chat/turns/restart-turn-1.json',
@@ -427,11 +569,19 @@ async function clearBrowserWorkspaceStores(options) {
     results.extensionIdStable &&
     results.directorySetup.permission === 'granted' &&
     results.directorySetup.kind === 'directory' &&
+    results.directorySetup.directoryName === 'qa-selected-directory' &&
+    results.directorySetup.pendingReleased &&
+    results.directorySetup.buttonRecovered &&
+    results.saveUi.buttonRecovered &&
+    results.saveUi.busyReleased &&
+    results.saveUi.statusType.includes('success') &&
     results.saved.success &&
     results.saved.assetCount === 7 &&
     results.saved.turnCount === 1 &&
     results.directory.sync.permission === 'granted' &&
     results.directory.sync.pendingCount === 0 &&
+    results.directory.inspection.chatTurnCount === 1 &&
+    results.directory.inspection.figureCount === 1 &&
     requiredFiles.every(suffix => results.directory.files.some(file => file.endsWith(suffix))) &&
     results.browserStoresCleared.workspaceCount === 0 &&
     results.beforeRestore.handleRestored &&
@@ -459,7 +609,35 @@ async function clearBrowserWorkspaceStores(options) {
     results.restoredOverview.panelCount === 1 &&
     results.restoredOverview.assetCount === 7 &&
     results.restoredOverview.turnCount === 1 &&
-    results.sidePanelEnabled;
+    results.sidePanelEnabled &&
+    results.clearedUi.buttonRecovered &&
+    results.clearedUi.statusType.includes('success') &&
+    results.clearedUi.activeView === 'analysis' &&
+    results.clearedUi.chatTurns === 0 &&
+    !results.clearedUi.restartQuestionVisible &&
+    !results.clearedUi.restartFigureVisible &&
+    results.clearedUi.workspaceGeneration > results.restoredContent.workspaceGeneration &&
+    results.clearedContent.turnCount === 0 &&
+    !results.clearedContent.restartQuestionPresent &&
+    !results.clearedContent.restartFigurePresent &&
+    results.clearedContent.workspaceId === results.restoredContent.workspaceId &&
+    results.clearedContent.workspaceGeneration > results.restoredContent.workspaceGeneration &&
+    results.clearedOverview.workspaceCount === 1 &&
+    results.clearedOverview.chatTurnCount === 0 &&
+    results.clearedOverview.turnCount === 0 &&
+    results.clearedOverview.assetCount === 7 &&
+    results.clearedOverview.workspaceGeneration ===
+      results.clearedContent.workspaceGeneration &&
+    results.clearedDirectory.sync.permission === 'granted' &&
+    results.clearedDirectory.sync.pendingCount === 0 &&
+    !results.clearedDirectory.files.some(file =>
+      file.endsWith('/chat/turns/restart-turn-1.json')) &&
+    !results.clearedDirectory.inspection.restartQuestion &&
+    !results.clearedDirectory.inspection.restartAnswer &&
+    !results.clearedDirectory.inspection.restartFigureConclusion &&
+    results.clearedDirectory.inspection.chatTurnCount === 0 &&
+    results.clearedDirectory.inspection.workspaceGeneration ===
+      results.clearedContent.workspaceGeneration;
 
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
   await secondContext.close();
