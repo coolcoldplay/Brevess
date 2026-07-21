@@ -1,6 +1,7 @@
 importScripts(
   'core/onboarding.js',
   'core/tab-activation.js',
+  'core/tab-messenger.js',
   'core/category-store.js',
   'core/adaptive-catalog.js',
   'core/study-profile.js',

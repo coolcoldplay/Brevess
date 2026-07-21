@@ -54,6 +54,12 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /LLM_ANALYZE_REVIEW_OUTLINE/);
   assert.match(background, /setPanelBehavior\(\{\s*openPanelOnActionClick:\s*false\s*\}\)/);
   assert.match(background, /core\/tab-activation\.js/);
+  assert.match(background, /core\/tab-messenger\.js/);
+  assert.ok(
+    background.indexOf("'core/tab-messenger.js'") <
+      background.indexOf('SciLLM.sendTabMessageWithRecovery'),
+    'background must load the tab recovery messenger before using it'
+  );
   assert.match(background, /chrome\.action\.onClicked\.addListener/);
   assert.match(background, /markTabActivated/);
   assert.match(background, /chrome\.sidePanel\.open/);

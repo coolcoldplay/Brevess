@@ -2273,7 +2273,7 @@
         if (message.type === 'ARTICLE_WORKSPACE_SCAN_RESTORE' && result.matches.length &&
             !result.restore) {
           const selected = result.matches[0];
-          const assets = [];
+          const loadedAssets = [];
           if (typeof directorySync?.readWorkspaceAsset === 'function') {
             for (const asset of selected.manifest?.assets || []) {
               try {
@@ -2282,7 +2282,7 @@
                 );
                 const envelope = loaded?.value;
                 if (loaded?.found && envelope?.data !== undefined) {
-                  assets.push({
+                  loadedAssets.push({
                     relativePath: asset.path,
                     content: cloneJsonLike(envelope.data),
                     revision: Number(envelope.revision) || Number(asset.revision) || 0,
@@ -2293,6 +2293,25 @@
               } catch (_) {}
             }
           }
+          const isTurnPath = value => /^chat\/turns\/[^/]+\.json$/u.test(
+            String(value || '')
+          );
+          const isTurnTombstonePath = value => /^chat\/tombstones\/[^/]+\.json$/u.test(
+            String(value || '')
+          );
+          const turnAssets = loadedAssets.filter(asset =>
+            isTurnPath(asset.relativePath) && asset.content?.turnId
+          );
+          const turnTombstones = loadedAssets.filter(asset =>
+            isTurnTombstonePath(asset.relativePath) &&
+            asset.content?.entityType === 'turn' && asset.content?.entityId
+          );
+          const deletedTurnIds = new Set(turnTombstones.map(asset =>
+            String(asset.content.entityId)
+          ));
+          const assets = loadedAssets.filter(asset =>
+            !isTurnPath(asset.relativePath) && !isTurnTombstonePath(asset.relativePath)
+          );
           if (articleWorkspaceStore?.ensureWorkspace && articleWorkspaceStore?.putAsset) {
             const currentWorkspace = typeof articleWorkspaceStore.getWorkspace === 'function'
               ? await articleWorkspaceStore.getWorkspace(selected.manifest.workspaceId) : null;
@@ -2306,6 +2325,49 @@
                 importedWorkspace.workspaceId, asset.relativePath, asset.content,
                 { contentHash: asset.contentHash }
               );
+            }
+            if (typeof articleWorkspaceStore.deleteTurn === 'function') {
+              for (const turnId of deletedTurnIds) {
+                await articleWorkspaceStore.deleteTurn(importedWorkspace.workspaceId, turnId);
+              }
+            }
+            const existingTurnIds = new Set();
+            if (typeof articleWorkspaceStore.pageTurns === 'function') {
+              let afterSequence = 0;
+              while (true) {
+                const page = await articleWorkspaceStore.pageTurns(
+                  importedWorkspace.workspaceId, { limit: 1000, afterSequence }
+                );
+                (page.items || []).forEach(turn => existingTurnIds.add(String(turn.turnId || '')));
+                if (!page.hasMore || Number(page.nextSequence) <= afterSequence) break;
+                afterSequence = Number(page.nextSequence);
+              }
+            }
+            turnAssets.sort((left, right) =>
+              Number(left.content?.sequence || 0) - Number(right.content?.sequence || 0) ||
+              String(left.content?.createdAt || '').localeCompare(
+                String(right.content?.createdAt || '')
+              ) || String(left.content?.turnId || '').localeCompare(
+                String(right.content?.turnId || '')
+              )
+            );
+            for (const asset of turnAssets) {
+              const turnId = String(asset.content.turnId || '');
+              if (!turnId || deletedTurnIds.has(turnId)) continue;
+              if (existingTurnIds.has(turnId)) {
+                if (typeof articleWorkspaceStore.updateTurn === 'function') {
+                  await articleWorkspaceStore.updateTurn(
+                    importedWorkspace.workspaceId, turnId, asset.content
+                  );
+                }
+                continue;
+              }
+              if (typeof articleWorkspaceStore.appendTurn === 'function') {
+                await articleWorkspaceStore.appendTurn(
+                  importedWorkspace.workspaceId, asset.content
+                );
+                existingTurnIds.add(turnId);
+              }
             }
           }
           result.restore = {

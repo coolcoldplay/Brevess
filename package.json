@@ -16,6 +16,7 @@
     "test": "node --test tests/*.test.js",
     "test:foundation": "node --test tests/category-store.test.js tests/prompt-compiler.test.js tests/chunker.test.js tests/result-validator.test.js tests/cache-planner.test.js tests/article-extractor.test.js tests/analysis-pipeline.test.js",
     "test:edge-side-panel": "node scripts/verify-native-side-panel-extension.js",
+    "test:edge-restart": "node scripts/verify-native-side-panel-restart.js",
     "benchmark:article-chat": "node scripts/benchmark-article-chat.mjs",
     "build:unpacked": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-unpacked-extension.ps1"
   },

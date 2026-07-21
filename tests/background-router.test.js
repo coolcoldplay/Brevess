@@ -2752,12 +2752,38 @@ test('scan restores validated workspace assets into IndexedDB before returning t
     kind: 'sci-logic-highlighter-workspace',
     createdAt: '2026-07-20T00:00:00.000Z',
     updatedAt: '2026-07-20T00:00:00.000Z',
-    assets: [{
-      path: 'chat/index.json', type: 'json', revision: 4,
-      contentHash: 'asset-hash', updatedAt: '2026-07-20T00:00:00.000Z'
-    }]
+    assets: [
+      {
+        path: 'chat/index.json', type: 'json', revision: 4,
+        contentHash: 'asset-hash', updatedAt: '2026-07-20T00:00:00.000Z'
+      },
+      {
+        path: 'chat/turns/turn-1.json', type: 'json', revision: 4,
+        contentHash: 'turn-1-hash', updatedAt: '2026-07-20T00:00:00.000Z'
+      },
+      {
+        path: 'chat/turns/turn-deleted.json', type: 'json', revision: 3,
+        contentHash: 'turn-deleted-hash', updatedAt: '2026-07-19T00:00:00.000Z'
+      },
+      {
+        path: 'chat/tombstones/turn-deleted.json', type: 'json', revision: 5,
+        contentHash: 'tombstone-hash', updatedAt: '2026-07-20T01:00:00.000Z'
+      }
+    ]
   };
   const chat = { turns: [{ turnId: 'turn-1', question: 'What changed?' }] };
+  const storedFiles = {
+    'chat/index.json': chat,
+    'chat/turns/turn-1.json': {
+      turnId: 'turn-1', question: 'What changed?', sequence: 1
+    },
+    'chat/turns/turn-deleted.json': {
+      turnId: 'turn-deleted', question: 'This turn was deleted.', sequence: 2
+    },
+    'chat/tombstones/turn-deleted.json': {
+      entityType: 'turn', entityId: 'turn-deleted', deletedAt: '2026-07-20T01:00:00.000Z'
+    }
+  };
   const workspaceStore = createArticleWorkspaceStoreDouble();
   const directorySync = createDirectorySyncDouble({
     listWorkspaceManifests: async () => ({
@@ -2765,12 +2791,12 @@ test('scan restores validated workspace assets into IndexedDB before returning t
       matches: [{ match: 'exact', manifest }]
     }),
     readWorkspaceAsset: async (_manifest, path) => ({
-      permission: 'granted', found: path === 'chat/index.json',
+      permission: 'granted', found: Boolean(storedFiles[path]),
       value: {
         kind: 'sci-logic-highlighter-workspace-asset',
         revision: 4,
         contentHash: 'asset-hash',
-        data: chat
+        data: storedFiles[path]
       }
     })
   });
@@ -2786,7 +2812,12 @@ test('scan restores validated workspace assets into IndexedDB before returning t
   assert.equal(result.success, true);
   assert.equal(result.data.restore.match, 'exact');
   assert.deepEqual(result.data.restore.assets[0].content, chat);
+  assert.equal(result.data.restore.assets.length, 1);
   assert.deepEqual((await workspaceStore.listAssets(workspace.workspaceId))[0].content, chat);
+  assert.deepEqual(
+    (await workspaceStore.pageTurns(workspace.workspaceId)).items.map(turn => turn.turnId),
+    ['turn-1']
+  );
 });
 
 test('workspace overview returns safe summaries and loads one detail on demand', async () => {
