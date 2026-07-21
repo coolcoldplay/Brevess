@@ -15,7 +15,14 @@ const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-side-panel-edge-'
 const extensionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-side-panel-extension-'));
 let activeContext = null;
 let providerServer = null;
+let analysisProviderServer = null;
 let releaseProviderResponse = null;
+const qaStartedAt = Date.now();
+
+function reportQaStage(stage) {
+  const elapsedSeconds = ((Date.now() - qaStartedAt) / 1000).toFixed(1);
+  process.stderr.write(`[edge-qa +${elapsedSeconds}s] ${stage}\n`);
+}
 
 function prepareQaExtension() {
   for (const directory of ['core', 'providers', 'vendor', 'icons']) {
@@ -149,6 +156,26 @@ async function readTextDownload(download) {
     bytes: Buffer.byteLength(content, 'utf8'),
     content
   };
+}
+
+async function closeHttpServer(server, forceAfterMs = 1500) {
+  if (!server) return;
+  await new Promise(resolve => {
+    let settled = false;
+    let forceTimer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (forceTimer) clearTimeout(forceTimer);
+      resolve();
+    };
+    server.close(finish);
+    server.closeIdleConnections?.();
+    forceTimer = setTimeout(() => {
+      server.closeAllConnections?.();
+      finish();
+    }, forceAfterMs);
+  });
 }
 
 (async () => {
@@ -724,7 +751,7 @@ async function readTextDownload(download) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r3', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -795,7 +822,7 @@ async function readTextDownload(download) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r3', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -860,7 +887,7 @@ async function readTextDownload(download) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r2', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r3', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -881,7 +908,7 @@ async function readTextDownload(download) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r2'),
+        '2.4.0-article-workspaces-r3'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -1845,6 +1872,12 @@ async function readTextDownload(download) {
   const streamRequests = [];
   const panelCapacityRequests = [];
   const panelTruncationRequests = [];
+  const highlightRequests = [];
+  const evidenceLedgerRequests = [];
+  let releaseEvidenceLedger = null;
+  const evidenceLedgerGate = new Promise(resolve => {
+    releaseEvidenceLedger = resolve;
+  });
   let releaseStreamContinuation = null;
   let streamContinuationReleased = false;
   const sseBody = (pieces, finishReason, usage) => [
@@ -1909,6 +1942,7 @@ async function readTextDownload(download) {
       try {
         const body = JSON.parse(requestBody || '{}');
         if (body.stream === false) {
+          const systemText = String(body.messages?.[0]?.content || '');
           const userContent = body.messages?.[1]?.content;
           const userText = Array.isArray(userContent)
             ? userContent.find(item => item?.type === 'text')?.text || ''
@@ -1916,6 +1950,71 @@ async function readTextDownload(download) {
           const imageUrl = Array.isArray(userContent)
             ? userContent.find(item => item?.type === 'image_url')?.image_url?.url || ''
             : '';
+          if (systemText.includes('scientific discourse annotation engine') &&
+              userText.includes('"chunk_id"') && userText.includes('"paragraphs"')) {
+            const input = JSON.parse(userText || '{}');
+            const paragraphs = Array.isArray(input.paragraphs) ? input.paragraphs : [];
+            const limitation = paragraphs.find(item =>
+              String(item.text || '').includes('One limitation is that available studies')
+            );
+            highlightRequests.push({
+              chunkId: String(input.chunk_id || ''),
+              paragraphIds: paragraphs.map(item => String(item.paragraph_id || '')),
+              categoryBounded: systemText.includes('"category_id":"limitation"') ||
+                systemText.includes('"category_id"') && systemText.includes('limitation'),
+              maxTokens: Number(body.max_tokens) || 0
+            });
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              model: 'qa-stream-model',
+              choices: [{
+                finish_reason: 'stop',
+                message: {
+                  content: JSON.stringify({
+                    chunk_id: input.chunk_id,
+                    paragraphs_reviewed: paragraphs.map(item => item.paragraph_id),
+                    annotations: limitation ? [{
+                      paragraph_id: limitation.paragraph_id,
+                      quote: limitation.text,
+                      occurrence: 0,
+                      category_id: 'limitation',
+                      confidence: 0.97,
+                      reason_zh: '原文明示了样本量与外部验证方面的研究局限。'
+                    }] : []
+                  })
+                }
+              }],
+              usage: { prompt_tokens: 980, completion_tokens: 180 }
+            }));
+            return;
+          }
+          if (systemText.includes('synthesize an evidence ledger')) {
+            evidenceLedgerRequests.push({
+              receivedAt: Date.now(),
+              hasValidatedAnnotation: userText.includes('limitation')
+            });
+            await Promise.race([
+              evidenceLedgerGate,
+              new Promise(resolve => setTimeout(resolve, 30000))
+            ]);
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              model: 'qa-stream-model',
+              choices: [{
+                finish_reason: 'stop',
+                message: {
+                  content: JSON.stringify({
+                    key_annotation_ids: [],
+                    relation_summaries: [],
+                    review_warnings: [],
+                    audit_items: []
+                  })
+                }
+              }],
+              usage: { prompt_tokens: 260, completion_tokens: 40 }
+            }));
+            return;
+          }
           const truncationRequest = userText.includes('"figure_id":"figure-92"');
           const requestRecord = {
             maxTokens: Number(body.max_tokens) || 0,
@@ -1994,8 +2093,10 @@ async function readTextDownload(download) {
     streamServer.once('error', reject);
     streamServer.listen(0, '127.0.0.1', resolve);
   });
+  analysisProviderServer = streamServer;
   const streamAddress = streamServer.address();
   const streamProviderBaseUrl = `http://127.0.0.1:${streamAddress.port}/v1`;
+  reportQaStage('starting full-text LLM highlighting scenario');
   const streamingProfileQa = await sidePanel.evaluate(async baseUrl => {
     const saved = await chrome.runtime.sendMessage({
       type: 'LLM_SAVE_PROFILE',
@@ -2032,6 +2133,239 @@ async function readTextDownload(download) {
       routingError: routing?.error || null
     };
   }, streamProviderBaseUrl);
+  reportQaStage('full-text LLM profile configured');
+  await sidePanel.evaluate(async () => {
+    await loadLlmSettings();
+    switchWorkspaceView('analysis');
+    await Promise.race([
+      queueAnalysisModeMutation('llm'),
+      new Promise((_, reject) => setTimeout(() =>
+        reject(new Error('QA_ANALYSIS_MODE_MUTATION_TIMEOUT')), 20000))
+    ]);
+  });
+  reportQaStage('full-text LLM mode and article preparation completed');
+  await sidePanel.waitForFunction(() =>
+    analysisMode === 'llm' &&
+    llmSettingsState?.effectiveMode === 'llm' &&
+    prepareState === 'prepared' &&
+    Boolean(preparedDocumentState?.documentHash)
+  );
+  const studyTypeAlreadySelected = await sidePanel.evaluate(() =>
+    Boolean(getSelectedStudyType()));
+  if (!studyTypeAlreadySelected) {
+    await sidePanel.locator('#study-type-narrative_review').check();
+    await sidePanel.waitForFunction(() =>
+      getSelectedStudyType() === 'narrative_review' &&
+      studyTypeSelectionInFlight === false &&
+      prepareState === 'prepared'
+    );
+  }
+  reportQaStage('full-text LLM study type selected');
+  const limitationSelected = await sidePanel.locator('#cat-limitation').isChecked();
+  if (!limitationSelected) {
+    await sidePanel.locator('#cat-limitation').check();
+    await sidePanel.waitForFunction(() =>
+      llmSelectedCategories.has('limitation') &&
+      preferenceMutationCoordinator.isPending() === false
+    );
+  }
+  await sidePanel.waitForFunction(() =>
+    document.getElementById('applyHighlight')?.disabled === false &&
+    /分析全文|重新分析全文/.test(
+      document.getElementById('applyHighlight')?.textContent || ''
+    )
+  );
+  await worker.evaluate(async tabId => {
+    await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        globalThis.__sciQaProgressiveHighlightTrace = [];
+        const original = renderProgressiveLlmChunk;
+        globalThis.__sciQaOriginalProgressiveHighlight = original;
+        renderProgressiveLlmChunk = progress => {
+          const before = {
+            phase: String(progress?.phase || ''),
+            checkpointAnnotations: Array.isArray(progress?.checkpointAnnotations)
+              ? progress.checkpointAnnotations.length : -1,
+            hasProgressiveState: Boolean(llmProgressiveAnalysis),
+            currentAnnotations:
+              llmProgressiveAnalysis?.rawAnalysis?.annotations?.length || 0,
+            checkpointShape: (() => {
+              const item = progress?.checkpointAnnotations?.[0];
+              if (!item) return null;
+              return {
+                keys: Object.keys(item).sort(),
+                paragraphId: String(item.paragraphId || ''),
+                categoryId: String(item.categoryId || ''),
+                confidence: Number(item.confidence),
+                groupedCategories: Array.isArray(item.categories)
+                  ? item.categories.length : -1
+              };
+            })()
+          };
+          const result = original(progress);
+          const afterItem = llmProgressiveAnalysis?.rawAnalysis?.annotations?.[0];
+          const filtered = SciLLM.filterAnnotationGroupsByConfidence(
+            llmProgressiveAnalysis?.rawAnalysis?.annotations || [],
+            llmProgressiveAnalysis?.threshold || 0.8
+          );
+          globalThis.__sciQaProgressiveHighlightTrace.push({
+            ...before,
+            afterShape: afterItem ? {
+              keys: Object.keys(afterItem).sort(),
+              paragraphId: String(afterItem.paragraphId || ''),
+              categoryCount: Array.isArray(afterItem.categories)
+                ? afterItem.categories.length : -1
+            } : null,
+            filteredAnnotations: filtered.annotations.length,
+            filteredHidden: filtered.hiddenCount,
+            anchorPresent: Boolean(afterItem?.paragraphId && document.querySelector(
+              `[data-sci-llm-paragraph-id="${CSS.escape(afterItem.paragraphId)}"]`
+            )),
+            resultHighlightedCount: Number(result?.highlightedCount) || 0,
+            marksAfter: document.querySelectorAll('.sci-llm-highlight').length
+          });
+          return result;
+        };
+      }
+    });
+  }, fixtureTab.id);
+  await sidePanel.locator('#applyHighlight').click();
+  reportQaStage('full-text LLM analysis request started');
+  await sidePanel.waitForFunction(() =>
+    highlightTaskState.running === true &&
+    prepareState === 'analyzing',
+  null, { timeout: 3000 });
+  try {
+    await fixture.waitForFunction(() =>
+      document.querySelectorAll('.sci-llm-highlight').length === 1,
+    null, { timeout: 15000 });
+  } catch (error) {
+    const ui = await sidePanel.evaluate(() => ({
+      status: document.getElementById('statusMessage')?.textContent || '',
+      prepareState,
+      highlightTaskState,
+      applyButton: document.getElementById('applyHighlight')?.textContent || ''
+    }));
+    const content = await worker.evaluate(async tabId => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: () => ({
+          trace: globalThis.__sciQaProgressiveHighlightTrace || [],
+          hasProgressiveState: Boolean(llmProgressiveAnalysis),
+          progressiveAnnotations:
+            llmProgressiveAnalysis?.rawAnalysis?.annotations?.length || 0,
+          lastDiagnostics: lastLlmDiagnostics,
+          marks: document.querySelectorAll('.sci-llm-highlight').length
+        })
+      });
+      return result;
+    }, fixtureTab.id);
+    throw new Error(`Full-text highlight did not render: ${JSON.stringify({
+      ui,
+      content,
+      highlightRequests,
+      evidenceLedgerRequests,
+      panelCapacityRequests
+    })}`, { cause: error });
+  }
+  reportQaStage('full-text LLM progressive highlight rendered');
+  const progressiveHighlightQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const startedAt = Date.now();
+        let highlightAsset = null;
+        let analysisAsset = null;
+        while (Date.now() - startedAt < 3000) {
+          const response = await chrome.runtime.sendMessage({
+            type: 'ARTICLE_WORKSPACE_EXPORT',
+            workspaceId: currentArticleWorkspace?.workspaceId || ''
+          });
+          highlightAsset = response?.data?.assets?.find(
+            asset => asset.relativePath === 'annotations/highlights.json'
+          )?.content || null;
+          analysisAsset = response?.data?.assets?.find(
+            asset => asset.relativePath === 'analysis/full-analysis.json'
+          )?.content || null;
+          if ((analysisAsset?.llm?.rawAnalysis?.annotations?.length || 0) > 0) break;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        const mark = document.querySelector('.sci-llm-highlight');
+        return {
+          marks: document.querySelectorAll('.sci-llm-highlight').length,
+          markText: mark?.textContent || '',
+          diagnosticsStage: lastLlmDiagnostics?.stage || '',
+          inMemoryAnnotations: lastLlmAnalysis?.rawAnalysis?.annotations?.length || 0,
+          persistedActiveEngine: highlightAsset?.activeEngine || '',
+          persistedAnnotations:
+            analysisAsset?.llm?.rawAnalysis?.annotations?.length || 0,
+          persistedDiagnosticsStage: analysisAsset?.diagnostics?.stage || ''
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  releaseEvidenceLedger();
+  await sidePanel.waitForFunction(() =>
+    regexApplyPending === false &&
+    highlightTaskState.running === false &&
+    prepareState === 'prepared' &&
+    /LLM 已高亮 1 处/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    )
+  );
+  const completedHighlightQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: async () => {
+        const response = await chrome.runtime.sendMessage({
+          type: 'ARTICLE_WORKSPACE_EXPORT',
+          workspaceId: currentArticleWorkspace?.workspaceId || ''
+        });
+        const highlightAsset = response?.data?.assets?.find(
+          asset => asset.relativePath === 'annotations/highlights.json'
+        )?.content || null;
+        const analysisAsset = response?.data?.assets?.find(
+          asset => asset.relativePath === 'analysis/full-analysis.json'
+        )?.content || null;
+        return {
+          marks: document.querySelectorAll('.sci-llm-highlight').length,
+          diagnosticsStage: lastLlmDiagnostics?.stage || '',
+          relationCount: lastLlmDiagnostics?.relationCount || 0,
+          persistedActiveEngine: highlightAsset?.activeEngine || '',
+          persistedAnnotations:
+            analysisAsset?.llm?.rawAnalysis?.annotations?.length || 0,
+          persistedDiagnosticsStage: analysisAsset?.diagnostics?.stage || '',
+          workspaceTaskRunning: analysisAsset?.task?.running === true
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const fullTextHighlightQa = {
+    requestCount: highlightRequests.length,
+    requests: highlightRequests,
+    evidenceLedgerRequestCount: evidenceLedgerRequests.length,
+    evidenceLedgerRequests,
+    progressive: progressiveHighlightQa,
+    completed: completedHighlightQa
+  };
+  await worker.evaluate(async tabId => {
+    await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        if (globalThis.__sciQaOriginalProgressiveHighlight) {
+          renderProgressiveLlmChunk = globalThis.__sciQaOriginalProgressiveHighlight;
+        }
+        delete globalThis.__sciQaOriginalProgressiveHighlight;
+        delete globalThis.__sciQaProgressiveHighlightTrace;
+      }
+    });
+  }, fixtureTab.id);
+  reportQaStage('full-text LLM highlighting completed');
   await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'ISOLATED',
@@ -2336,7 +2670,9 @@ async function readTextDownload(download) {
     outputBudgetTokens:
       panelTruncationResponse?.data?.panelAnalysis?.inputBasis?.outputBudgetTokens || 0
   };
-  await new Promise(resolve => streamServer.close(resolve));
+  await closeHttpServer(streamServer);
+  analysisProviderServer = null;
+  reportQaStage('streaming chat and Panel provider scenarios completed');
   await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'ISOLATED',
@@ -2445,6 +2781,7 @@ async function readTextDownload(download) {
     renderedTurns: document.querySelectorAll('.article-chat-turn').length,
     deletedAbsent: !document.querySelector('[data-turn-id="turn-history-001"]')
   }));
+  reportQaStage('large chat history scenarios completed');
 
   const chatMutationSetup = await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -2764,6 +3101,7 @@ async function readTextDownload(download) {
     replacementIndexed: (currentWorkspaceSnapshot?.paragraphs || []).some(item =>
       item.text.includes(marker))
   }), rootReplacementFixture.marker);
+  reportQaStage('workspace mutation and dynamic article scenarios completed');
 
   const options = await context.newPage();
   options.on('pageerror', error => pageErrors.push(`options: ${error.message}`));
@@ -2991,6 +3329,7 @@ async function readTextDownload(download) {
         document.getElementById('clearSelectedArticleWorkspaces')?.disabled === true
     };
   }, workspaceOverviewFixture.workspaceId);
+  reportQaStage('settings workspace overview loaded');
   const workspaceExportButton = options.locator(
     `[data-workspace-action="export"][data-workspace-id="${workspaceOverviewFixture.workspaceId}"]`
   );
@@ -3571,6 +3910,7 @@ async function readTextDownload(download) {
     status: await options.locator('#userDataStatus').textContent(),
     dialogClosed: await options.locator('#rebuildUserDataDialog').isHidden()
   };
+  reportQaStage('directory persistence scenarios completed');
   await options.evaluate(async () => {
     for (const [index, documentHash] of ['qa-corpus-a', 'qa-corpus-b', 'qa-corpus-c'].entries()) {
       await callBackground({
@@ -3898,6 +4238,7 @@ async function readTextDownload(download) {
     finishEnabled: document.getElementById('onboardingFinish')?.disabled === false,
     testGuardReleased: profileActionInFlight.test !== true
   }));
+  reportQaStage('onboarding provider scenarios completed');
   const optionsClosed = options.waitForEvent('close', { timeout: 10000 })
     .then(() => true, () => false);
   await options.locator('#onboardingFinish').click().catch(error => {
@@ -3957,6 +4298,7 @@ async function readTextDownload(download) {
     reusedExistingPage: settingsPagesBefore.includes(reopenedSettingsPage)
   };
   await reopenedSettingsPage.close();
+  reportQaStage('all browser interactions completed; evaluating assertions');
 
   const results = {
     extensionId,
@@ -4000,6 +4342,7 @@ async function readTextDownload(download) {
     outlineSummaryButtonQa,
     articleChatQa,
     streamingProfileQa,
+    fullTextHighlightQa,
     streamingComposerQa,
     streamingMidUiQa,
     streamingMidStateQa,
@@ -4075,7 +4418,7 @@ async function readTextDownload(download) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r2' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r3' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -4103,7 +4446,7 @@ async function readTextDownload(download) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r2' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r3' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     multiTab.actualExtractionRuns === 1 &&
     multiTab.switchBackMs < 1500 &&
@@ -4276,6 +4619,30 @@ async function readTextDownload(download) {
     results.streamingProfileQa.preferencesSaved &&
     results.streamingProfileQa.routingSaved &&
     results.streamingProfileQa.effectiveMode === 'llm' &&
+    results.fullTextHighlightQa.requestCount === 4 &&
+    results.fullTextHighlightQa.requests
+      .flatMap(request => request.paragraphIds).length === 6 &&
+    new Set(results.fullTextHighlightQa.requests
+      .flatMap(request => request.paragraphIds)).size === 6 &&
+    results.fullTextHighlightQa.requests.every(request => request.categoryBounded) &&
+    results.fullTextHighlightQa.requests.every(request => request.maxTokens >= 512) &&
+    results.fullTextHighlightQa.evidenceLedgerRequestCount === 1 &&
+    results.fullTextHighlightQa.evidenceLedgerRequests[0].hasValidatedAnnotation &&
+    results.fullTextHighlightQa.progressive.marks === 1 &&
+    /One limitation is that available studies/.test(
+      results.fullTextHighlightQa.progressive.markText
+    ) &&
+    results.fullTextHighlightQa.progressive.diagnosticsStage === 'streaming' &&
+    results.fullTextHighlightQa.progressive.inMemoryAnnotations === 1 &&
+    results.fullTextHighlightQa.progressive.persistedActiveEngine === 'llm' &&
+    results.fullTextHighlightQa.progressive.persistedAnnotations === 1 &&
+    results.fullTextHighlightQa.progressive.persistedDiagnosticsStage === 'streaming' &&
+    results.fullTextHighlightQa.completed.marks === 1 &&
+    results.fullTextHighlightQa.completed.diagnosticsStage === 'complete' &&
+    results.fullTextHighlightQa.completed.persistedActiveEngine === 'llm' &&
+    results.fullTextHighlightQa.completed.persistedAnnotations === 1 &&
+    results.fullTextHighlightQa.completed.persistedDiagnosticsStage === 'complete' &&
+    !results.fullTextHighlightQa.completed.workspaceTaskRunning &&
     results.streamingComposerQa.effectiveMode === 'llm' &&
     results.streamingComposerQa.selectValue === 'profile_qa_stream' &&
     !results.streamingComposerQa.sendDisabled &&
@@ -4602,7 +4969,7 @@ async function readTextDownload(download) {
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
   await context.close();
   activeContext = null;
-  await new Promise(resolve => providerServer.close(resolve));
+  await closeHttpServer(providerServer);
   providerServer = null;
   fs.rmSync(userDataDir, { recursive: true, force: true });
   fs.rmSync(extensionDir, { recursive: true, force: true });
@@ -4613,7 +4980,11 @@ async function readTextDownload(download) {
   try { await activeContext?.close(); } catch (_) {}
   activeContext = null;
   try {
-    if (providerServer) await new Promise(resolve => providerServer.close(resolve));
+    if (analysisProviderServer) await closeHttpServer(analysisProviderServer);
+  } catch (_) {}
+  analysisProviderServer = null;
+  try {
+    if (providerServer) await closeHttpServer(providerServer);
   } catch (_) {}
   providerServer = null;
   try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch (_) {}

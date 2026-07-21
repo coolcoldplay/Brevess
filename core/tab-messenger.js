@@ -6,6 +6,7 @@
   const CONTENT_SCRIPT_FILES = [
     'core/category-store.js',
     'core/confidence-policy.js',
+    'core/result-validator.js',
     'core/sentence-boundary.js',
     'core/publisher-adapters.js',
     'core/article-structure.js',
@@ -24,6 +25,7 @@
     'content.js'
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
+  const CONTENT_SCRIPT_REVISION = '2.4.0-article-workspaces-r3';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';
@@ -33,24 +35,32 @@
     return /Could not establish connection|Receiving end does not exist/i.test(message);
   }
 
-  async function inspectContentInjection(chromeApi, target, claim) {
+  async function inspectContentInjection(chromeApi, target, claim, forceClaim = false) {
     const results = await chromeApi.scripting.executeScript({
       target,
-      func: (shouldClaim, claimKey, readyKey) => {
+      func: (shouldClaim, claimKey, readyKey, expectedRevision, shouldForceClaim) => {
         const root = document.documentElement;
         if (!root) return 'waiting';
-        if (root.dataset[readyKey] === 'true') return 'ready';
-        if (root.dataset.sciLlmContentRevision) {
-          root.dataset[readyKey] = 'true';
-          return 'ready';
+        if (!shouldClaim) {
+          return root.dataset[readyKey] === expectedRevision ? 'ready' : 'waiting';
         }
-        if (!shouldClaim || root.dataset[claimKey] === 'true') {
+        // ensureContentScript is reached only after a real message-receiver
+        // failure. A DOM revision marker can outlive an invalidated extension
+        // world after reload/update, so it must never suppress reinjection.
+        delete root.dataset[readyKey];
+        if (!shouldForceClaim && root.dataset[claimKey] === expectedRevision) {
           return 'waiting';
         }
-        root.dataset[claimKey] = 'true';
+        root.dataset[claimKey] = expectedRevision;
         return 'claimed';
       },
-      args: [claim === true, CONTENT_INJECTION_CLAIM, CONTENT_INJECTION_READY]
+      args: [
+        claim === true,
+        CONTENT_INJECTION_CLAIM,
+        CONTENT_INJECTION_READY,
+        CONTENT_SCRIPT_REVISION,
+        forceClaim === true
+      ]
     });
     return results?.[0]?.result || (claim ? 'claimed' : 'waiting');
   }
@@ -66,13 +76,23 @@
   async function setContentInjectionState(chromeApi, target, ready) {
     await chromeApi.scripting.executeScript({
       target,
-      func: (isReady, claimKey, readyKey) => {
+      func: (isReady, claimKey, readyKey, expectedRevision) => {
         const root = document.documentElement;
         if (!root) return;
-        if (isReady) root.dataset[readyKey] = 'true';
-        else delete root.dataset[claimKey];
+        if (isReady) {
+          root.dataset[readyKey] = expectedRevision;
+          delete root.dataset[claimKey];
+        } else {
+          delete root.dataset[claimKey];
+          delete root.dataset[readyKey];
+        }
       },
-      args: [ready === true, CONTENT_INJECTION_CLAIM, CONTENT_INJECTION_READY]
+      args: [
+        ready === true,
+        CONTENT_INJECTION_CLAIM,
+        CONTENT_INJECTION_READY,
+        CONTENT_SCRIPT_REVISION
+      ]
     });
   }
 
@@ -84,8 +104,14 @@
       const state = await inspectContentInjection(chromeApi, target, true);
       if (state === 'ready') return;
       if (state === 'waiting') {
-        await waitForContentInjection(chromeApi, target);
-        return;
+        try {
+          await waitForContentInjection(chromeApi, target);
+          return;
+        } catch (error) {
+          if (error?.message !== 'CONTENT_SCRIPT_INJECTION_TIMEOUT') throw error;
+          const takeover = await inspectContentInjection(chromeApi, target, true, true);
+          if (takeover !== 'claimed') throw error;
+        }
       }
       try {
         await chromeApi.scripting.insertCSS({ target, files: CONTENT_STYLE_FILES });
@@ -126,6 +152,7 @@
   return {
     CONTENT_SCRIPT_FILES,
     CONTENT_STYLE_FILES,
+    CONTENT_SCRIPT_REVISION,
     CONTENT_INJECTION_CLAIM,
     CONTENT_INJECTION_READY,
     isMissingReceiverError,

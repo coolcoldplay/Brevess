@@ -1377,7 +1377,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r2');
+  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r3');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);
@@ -1608,6 +1608,82 @@ test('analyzes every supplied paragraph using only selected categories', async (
   assert.deepEqual(articlePayload.paragraphs.map(item => item.paragraph_id), ['p1', 'p2']);
   assert.deepEqual(result.data.analyzedCategoryIds, ['limitation']);
   assert.equal(result.data.annotations[0].categories[0].categoryId, 'limitation');
+});
+
+test('delivers each full-text checkpoint before starting the evidence ledger', async () => {
+  const storageArea = createMemoryStorage();
+  let ledgerRequested = false;
+  let releaseCheckpoint;
+  let observeCheckpoint;
+  const checkpointGate = new Promise(resolve => { releaseCheckpoint = resolve; });
+  const checkpointObserved = new Promise(resolve => { observeCheckpoint = resolve; });
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const schemaName = body.text?.format?.name;
+      if (schemaName === 'evidence_ledger') {
+        ledgerRequested = true;
+        return jsonResponse({
+          output_text: JSON.stringify({
+            key_annotation_ids: [], relation_summaries: [],
+            review_warnings: [], audit_items: []
+          })
+        });
+      }
+      const input = JSON.parse(body.input);
+      return jsonResponse({
+        output_text: JSON.stringify({
+          chunk_id: input.chunk_id,
+          paragraphs_reviewed: input.paragraphs.map(item => item.paragraph_id),
+          annotations: [{
+            paragraph_id: 'p1',
+            quote: 'The small sample size limits generalizability.',
+            occurrence: 0,
+            category_id: 'limitation',
+            confidence: 0.96,
+            reason_zh: '明确陈述样本量局限'
+          }]
+        })
+      });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER', providerId: 'openai',
+    config: { apiKey: 'key', model: 'gpt-5-mini' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: {
+      mode: 'llm', providerId: 'openai', consentGranted: true,
+      selectedCategoryIds: ['limitation']
+    }
+  });
+  const document = {
+    title: 'Checkpoint ordering study',
+    paragraphs: [{
+      paragraphId: 'p1', sectionTitle: 'Discussion',
+      text: 'The small sample size limits generalizability.'
+    }]
+  };
+  await selectStudyType(router, document);
+  const analysis = router.handle({
+    type: 'LLM_ANALYZE_DOCUMENT', document
+  }, {
+    onProgress: async event => {
+      if (event.phase !== 'chunk_checkpoint') return;
+      observeCheckpoint(event);
+      await checkpointGate;
+    }
+  });
+  const checkpoint = await checkpointObserved;
+  assert.equal(checkpoint.checkpointAnnotations.length, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ledgerRequested, false);
+  releaseCheckpoint();
+  const result = await analysis;
+  assert.equal(result.success, true);
+  assert.equal(ledgerRequested, true);
 });
 
 test('keeps the selected study type when a dynamically loaded article gains more body text', async () => {

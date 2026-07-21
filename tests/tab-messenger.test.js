@@ -62,6 +62,59 @@ test('reinjects the content script and retries when a tab has no message receive
   );
 });
 
+test('stale DOM revision markers never suppress reinjection after a receiver failure', async () => {
+  const dataset = {
+    sciLlmContentRevision: '2.4.0-article-workspaces-r2',
+    [messenger.CONTENT_INJECTION_READY]: messenger.CONTENT_SCRIPT_REVISION,
+    [messenger.CONTENT_INJECTION_CLAIM]: messenger.CONTENT_SCRIPT_REVISION
+  };
+  let injected = false;
+  let scriptCount = 0;
+  const chromeApi = {
+    tabs: {
+      async sendMessage() {
+        if (!injected) {
+          throw new Error('Could not establish connection. Receiving end does not exist.');
+        }
+        return { success: true };
+      }
+    },
+    scripting: {
+      async insertCSS() {},
+      async executeScript(details) {
+        if (details.files) {
+          scriptCount += 1;
+          assert.ok(details.files.includes('core/result-validator.js'));
+          injected = true;
+          return [];
+        }
+        const previousDocument = global.document;
+        global.document = { documentElement: { dataset } };
+        try {
+          return [{ result: details.func(...(details.args || [])) }];
+        } finally {
+          if (previousDocument === undefined) delete global.document;
+          else global.document = previousDocument;
+        }
+      }
+    }
+  };
+
+  const result = await messenger.sendTabMessageWithRecovery(
+    chromeApi,
+    77,
+    { action: 'extractArticleForLLM' }
+  );
+
+  assert.deepEqual(result, { success: true });
+  assert.equal(scriptCount, 1);
+  assert.equal(
+    dataset[messenger.CONTENT_INJECTION_READY],
+    messenger.CONTENT_SCRIPT_REVISION
+  );
+  assert.equal(dataset[messenger.CONTENT_INJECTION_CLAIM], undefined);
+});
+
 test('coalesces concurrent recovery injection for the same tab', async () => {
   let receiverReady = false;
   let sendCount = 0;

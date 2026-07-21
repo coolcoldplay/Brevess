@@ -12,6 +12,7 @@ test('loads category metadata and article extraction before the content script',
   const expected = [
     'core/category-store.js',
     'core/confidence-policy.js',
+    'core/result-validator.js',
     'core/sentence-boundary.js',
     'core/publisher-adapters.js',
     'core/article-structure.js',
@@ -24,6 +25,10 @@ test('loads category metadata and article extraction before the content script',
     'content.js'
   ];
   expected.forEach(file => assert.match(messenger, new RegExp(file.replace(/[./]/g, '\\$&'))));
+  assert.ok(
+    messenger.indexOf("'core/result-validator.js'") < messenger.indexOf("'content.js'"),
+    'progressive highlights require mergeAnnotations before content.js loads'
+  );
 });
 
 test('content exposes serializable side-panel workspace snapshots and source focus actions', () => {
@@ -208,7 +213,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /2\.4\.0-article-workspaces-r2/);
+  assert.match(script, /2\.4\.0-article-workspaces-r3/);
   assert.match(script, /dataset\.sciLlmBackgroundRevision/);
   assert.match(script, /errorMessage:\s*error\.message/);
   assert.match(script, /dataset\.sciLlmErrorCode/);
