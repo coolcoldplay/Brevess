@@ -6,6 +6,7 @@ const {
   FIGURE_PANEL_IMAGE_EDGES,
   FIGURE_PANEL_PROMPT_VERSION,
   classifyFigurePanelQuestion,
+  figurePanelFollowupOutputUnits,
   extractFigurePanelCaption,
   selectFigurePanelParagraphs,
   estimateFigurePanelInputTokens,
@@ -40,6 +41,19 @@ test('classifies visual, grouping/statistics, methods, and argument-role Panel q
   assert.equal(classifyFigurePanelQuestion({ topics: ['technique_principle'] }), 'methods');
   assert.equal(classifyFigurePanelQuestion({ customQuestion: '这个 Panel 在全文论证链中起什么作用？' }), 'argument_role');
   assert.equal(classifyFigurePanelQuestion({ customQuestion: 'How does the curve change over time?' }), 'visual');
+});
+
+test('scales Panel follow-up output room to the actual question depth', () => {
+  assert.equal(figurePanelFollowupOutputUnits({ customQuestion: '纵轴表示什么？' }), 1);
+  assert.equal(figurePanelFollowupOutputUnits({
+    customQuestion: '为什么作者选择这种统计比较？'
+  }), 4);
+  assert.equal(figurePanelFollowupOutputUnits({
+    customQuestion: '请详细、一步一步解释这个 Panel 的完整证据链。'
+  }), 8);
+  assert.equal(figurePanelFollowupOutputUnits({
+    topics: ['grouping', 'technique_principle', 'axes_reading']
+  }), 3);
 });
 
 test('extracts only the shared legend and target-Panel caption range', () => {
@@ -125,6 +139,17 @@ test('bounds follow-up history with the same capacity calculation', () => {
   assert.equal(plans.length, 1);
   assert.ok(plans[0].history.length < history.length);
   assert.ok(plans[0].estimatedInputTokens <= plans[0].inputBudgetTokens);
+});
+
+test('never invents input capacity when the requested output leaves too little context', () => {
+  const plans = buildFigurePanelPlans({
+    requestMode: 'followup', documentHash: 'f'.repeat(64),
+    figureId: 'figure-1', figureLabel: 'Figure 1', panelId: 'A',
+    caption: 'Figure 1. (A) Result.', contextParagraphs: paragraphs,
+    customQuestion: 'Please provide a detailed explanation.',
+    imageVariants: [], contextWindowTokens: 8192, outputTokens: 6144
+  });
+  assert.deepEqual(plans, []);
 });
 
 test('estimates larger images as larger inputs and isolates every Panel cache key', () => {

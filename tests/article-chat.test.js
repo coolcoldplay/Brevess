@@ -15,6 +15,7 @@ require('../core/article-chat-context-planner.js');
 require('../core/article-chat-stream.js');
 const {
   normalizeArticleChatInput,
+  articleChatOutputUnits,
   prepareArticleChatRequest,
   compileArticleChatPrompt,
   runArticleChat
@@ -120,6 +121,12 @@ test('allocates a larger initial answer budget for a stepwise evidence-chain que
   assert.ok(prepared.plan.outputBudgetTokens.initial >= 8192);
   assert.ok(prepared.plan.outputBudgetTokens.initial <=
     prepared.plan.outputBudgetTokens.ceiling);
+});
+
+test('reserves more answer room for explanatory questions without inflating simple lookups', () => {
+  assert.equal(articleChatOutputUnits('GAL4 品系是什么？'), 1);
+  assert.equal(articleChatOutputUnits('作者如何定义热暴露的标准？'), 4);
+  assert.equal(articleChatOutputUnits('为什么这条证据链能够支持该机制？'), 8);
 });
 
 test('retries once with a format-repair instruction after malformed streamed output', async () => {

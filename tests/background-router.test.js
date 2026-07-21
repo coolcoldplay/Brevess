@@ -2577,11 +2577,14 @@ test('splits a deep Figure, ignores repeated out-of-batch Panels, and exposes ea
 test('routes a targeted Panel follow-up through the configured Figure API', async () => {
   const storageArea = createMemoryStorage();
   const requested = [];
+  const outputBudgets = [];
   const router = createBackgroundRouter({
     storageArea,
     fetchImpl: async (url, options) => {
-      const input = openAIInputPayload(JSON.parse(options.body));
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
       requested.push(input);
+      outputBudgets.push(body.max_output_tokens);
       return jsonResponse({ output_text: JSON.stringify(panelFollowupOutput(input)) });
     }
   });
@@ -2617,6 +2620,7 @@ test('routes a targeted Panel follow-up through the configured Figure API', asyn
   assert.equal(requested[0].requested_topic_instructions.grouping,
     'Use only the grouping explicitly supported by this paper.');
   assert.equal(requested[0].panel, 'A');
+  assert.deepEqual(outputBudgets, [4096]);
   assert.equal(response.data.panelFollowup.inputBasis.inputMode, 'caption_context');
   assert.equal(response.data.panelFollowup.inputBasis.pixelsSupplied, false);
 });
@@ -2976,7 +2980,7 @@ test('routes one Panel interpretation through one dedicated Provider call', asyn
 
   assert.equal(response.success, true);
   assert.equal(inputs.length, 1);
-  assert.deepEqual(outputBudgets, [2048]);
+  assert.deepEqual(outputBudgets, [3072]);
   assert.equal(inputs[0].request_mode, 'single_panel_interpretation');
   assert.equal(inputs[0].panel, 'A');
   assert.equal(inputs[0].related_body_context.length <= 4, true);
@@ -2987,7 +2991,7 @@ test('routes one Panel interpretation through one dedicated Provider call', asyn
   assert.equal(response.data.panelAnalysis.inputBasis.attempts, 1);
 });
 
-test('retries a Panel capacity failure at most twice with strictly smaller payloads', async () => {
+test('retries a rejected Panel output limit without needlessly degrading the image', async () => {
   const storageArea = createMemoryStorage();
   const requestSizes = [];
   const inputs = [];
@@ -3022,12 +3026,53 @@ test('retries a Panel capacity failure at most twice with strictly smaller paylo
 
   assert.equal(response.success, true);
   assert.equal(requestSizes.length, 3);
-  assert.ok(requestSizes[1] < requestSizes[0]);
-  assert.ok(requestSizes[2] < requestSizes[1]);
-  assert.deepEqual(outputBudgets, [2048, 1024, 768]);
+  assert.deepEqual(requestSizes, [requestSizes[0], requestSizes[0], requestSizes[0]]);
+  assert.deepEqual(outputBudgets, [3072, 1024, 768]);
   assert.equal(response.data.panelAnalysis.inputBasis.attempts, 3);
   assert.equal(response.data.panelAnalysis.inputBasis.outputBudgetTokens, 768);
   assert.deepEqual(inputs.map(input => input.panel), ['A', 'A', 'A']);
+});
+
+test('expands a truncated Panel answer before sacrificing visual evidence', async () => {
+  const storageArea = createMemoryStorage();
+  const requestSizes = [];
+  const outputBudgets = [];
+  const progress = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      const input = openAIInputPayload(body);
+      const image = Array.isArray(body.input)
+        ? body.input[0].content.find(item => item.type === 'input_image')?.image_url || ''
+        : '';
+      requestSizes.push(image.length);
+      outputBudgets.push(body.max_output_tokens);
+      if (requestSizes.length === 1) {
+        return jsonResponse({
+          status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+          output_text: '{}'
+        });
+      }
+      return jsonResponse({ output_text: JSON.stringify(panelInterpretationOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_FIGURE_PANEL', documentHash: '9'.repeat(64),
+    document: { title: 'Output expansion' },
+    figure: {
+      ...figureInput(9), panelHints: ['A'],
+      imageVariants: [panelImageVariant(1200), panelImageVariant(960), panelImageVariant(768)]
+    },
+    panel: { panel: 'A' }, forceRefresh: true
+  }, { onProgress: event => progress.push(event) });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(outputBudgets, [3072, 5376]);
+  assert.equal(requestSizes[1], requestSizes[0]);
+  assert.equal(response.data.panelAnalysis.inputBasis.outputBudgetTokens, 5376);
+  assert.ok(progress.some(event => event.phase === 'figure_panel_output_retry'));
 });
 
 test('jumps directly to text evidence when a nominally visual model rejects Panel pixels', async () => {

@@ -528,7 +528,8 @@
         'Answer only the requested built-in topics and/or custom question for one Panel.',
         'Use the image only when supplied; otherwise use the caption, body context, and existing Panel interpretation.',
         'Do not invent grouping, sample size, axes, assay conditions, or experimental results.',
-        'Write concise Chinese prose with short labelled paragraphs, not Markdown tables.',
+        'Match the depth and length to the requested topics and custom question. Explain the relevant evidence, comparison, reasoning, and boundary fully; do not shorten a substantive answer merely for brevity.',
+        'Use readable Chinese with short labelled paragraphs, not Markdown tables.',
         ...topics.map(topic => topicInstructions[topic])
       ].join('\n'),
       userPrompt: JSON.stringify({

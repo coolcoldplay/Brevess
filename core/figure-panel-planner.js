@@ -37,6 +37,18 @@
     return 'general';
   }
 
+  function figurePanelFollowupOutputUnits(input = {}) {
+    const topics = Array.isArray(input.topics) ? input.topics : [];
+    const question = cleanText(input.customQuestion || input.question, 1600);
+    let units = Math.max(1, topics.length, Math.ceil(question.length / 400));
+    if (/(?:一步一步|逐步|分步骤|详细|详述|深入|完整|全面|系统(?:地|性)?|证据链|论证链|推理链|step[ -]?by[ -]?step|in detail|comprehensive|evidence chain|argument chain)/iu.test(question)) {
+      units = Math.max(units, 8);
+    } else if (/(?:如何|为什么|为何|机制|原理|比较|区别|联系|how|why|mechanism|compare|difference|relationship)/iu.test(question)) {
+      units = Math.max(units, 4);
+    }
+    return Math.min(24, units);
+  }
+
   function markerPanels(match) {
     const start = String(match[1] || match[3] || '').toUpperCase();
     const end = String(match[2] || match[4] || start).toUpperCase();
@@ -195,7 +207,10 @@
     });
     const contextWindowTokens = Math.max(8192, Math.floor(Number(input.contextWindowTokens) || 32768));
     const outputTokens = Math.max(512, Math.floor(Number(input.outputTokens) || 2048));
-    const inputBudgetTokens = Math.max(2048, Math.floor(contextWindowTokens * 0.9) - outputTokens - 768);
+    const inputBudgetTokens = Math.max(
+      0,
+      Math.floor(contextWindowTokens * 0.9) - outputTokens - 768
+    );
     const commonText = [
       cleanText(input.figureLabel, 80), panelId, topic, captionEvidence.combined, question,
       contextParagraphs.map(item => `${item.sectionTitle}\n${item.text}`).join('\n'),
@@ -245,7 +260,7 @@
           ? (image ? '' : 'vision_unavailable_or_no_image')
           : (image ? 'smaller_image_for_capacity' : 'text_only_for_capacity')
       };
-    }).filter(plan => plan.estimatedInputTokens <= inputBudgetTokens || !plan.pixelsSupplied);
+    }).filter(plan => plan.estimatedInputTokens <= inputBudgetTokens);
     const strictlySmaller = [];
     for (const plan of candidates) {
       const previous = strictlySmaller.at(-1);
@@ -294,6 +309,7 @@
     FIGURE_PANEL_PROMPT_VERSION,
     FIGURE_PANEL_IMAGE_EDGES,
     classifyFigurePanelQuestion,
+    figurePanelFollowupOutputUnits,
     extractFigurePanelCaption,
     selectFigurePanelParagraphs,
     estimateFigurePanelInputTokens,

@@ -96,6 +96,8 @@
     let units = Math.max(1, Math.ceil(text.length / 600));
     if (/(?:一步一步|逐步|分步骤|详细|详述|证据链|论证链|推理链|step[ -]?by[ -]?step|evidence chain|argument chain)/iu.test(text)) {
       units = Math.max(units, 8);
+    } else if (/(?:如何|为什么|为何|机制|原理|比较|区别|联系|how|why|mechanism|compare|difference|relationship)/iu.test(text)) {
+      units = Math.max(units, 4);
     }
     if (typeof shared.isBroadArticleChatQuery === 'function' &&
         shared.isBroadArticleChatQuery(text)) {
@@ -621,6 +623,7 @@
 
   return {
     normalizeArticleChatHistory: normalizeArticleHistory,
+    articleChatOutputUnits,
     normalizeArticleChatInput,
     prepareArticleChatRequest,
     compileArticleChatPrompt,

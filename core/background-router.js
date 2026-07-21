@@ -1469,8 +1469,11 @@
       const input = normalizeSinglePanelInput(message, requestMode);
       const operation = operationFor(message);
       await waitForOperation(operation);
+      const outputUnits = requestMode === 'followup'
+        ? shared.figurePanelFollowupOutputUnits(input) : 1;
+      const budgetKind = requestMode === 'followup' ? 'panelChat' : 'figurePanel';
       const task = createTaskAdapter(
-        settings, 'figure', { vision: true }, context, 'figurePanel',
+        settings, 'figure', { vision: true }, context, budgetKind,
         { maxTokenLimitRetries: 0, maxTruncationRetries: 3 }
       );
       const { adapter, rawAdapter, route, routePublic } = task;
@@ -1478,11 +1481,29 @@
       const contextWindowTokens = shared.getProviderContextWindowTokens(
         route.providerId, route.config, profile.contextWindowTokens
       );
-      const outputBudget = shared.computeOutputTokenBudget('figurePanel', {
+      const requestedOutputBudget = shared.computeOutputTokenBudget(budgetKind, {
         tokenPolicy: task.tokenPolicy,
         adapterCap: adapter.maxOutputTokens,
-        units: 1
+        units: outputUnits
       });
+      const maximumOutputByContext = Math.max(512, Math.floor(
+        (Math.floor(contextWindowTokens * 0.9) - 768 - 2048) / 256
+      ) * 256);
+      const automaticRuleCeiling = requestedOutputBudget.mode === 'auto'
+        ? Number(shared.RULES?.[budgetKind]?.ceiling) || requestedOutputBudget.ceiling
+        : requestedOutputBudget.ceiling;
+      const outputBudget = {
+        ...requestedOutputBudget,
+        initial: Math.min(requestedOutputBudget.initial, maximumOutputByContext),
+        ceiling: Math.min(
+          requestedOutputBudget.ceiling,
+          automaticRuleCeiling,
+          maximumOutputByContext
+        ),
+        contextClamped: requestedOutputBudget.initial > maximumOutputByContext ||
+          requestedOutputBudget.ceiling > maximumOutputByContext ||
+          requestedOutputBudget.ceiling > automaticRuleCeiling
+      };
       const planInput = {
         ...input,
         existingPanelInterpretation: requestMode === 'followup' ? input.panel : null,
@@ -1560,8 +1581,12 @@
       let recordIndex = 0;
       let currentOutputTokens = outputBudget.initial;
       let degradationOverride = '';
+      const availableInputTokens = outputTokens => Math.max(
+        0,
+        Math.floor(contextWindowTokens * 0.9) - Math.max(512, outputTokens) - 768
+      );
       for (let providerAttempt = 0;
-        providerAttempt < 3 && recordIndex < records.length;
+        providerAttempt < 6 && recordIndex < records.length;
         providerAttempt += 1) {
         const { plan, key } = records[recordIndex];
         await waitForOperation(operation);
@@ -1615,11 +1640,49 @@
             const suggested = Number(error?.suggestedMaxOutputTokens);
             const reduced = Number.isFinite(suggested) && suggested >= 512
               ? suggested : currentOutputTokens * 0.75;
-            currentOutputTokens = Math.max(
+            const nextOutputTokens = Math.max(
               512,
               Math.min(currentOutputTokens - 256, Math.floor(reduced / 256) * 256)
             );
+            if (nextOutputTokens >= currentOutputTokens) throw error;
+            currentOutputTokens = nextOutputTokens;
+            context.onProgress?.({
+              phase: 'figure_panel_token_retry', ...progressBase,
+              attempt: providerAttempt + 2,
+              inputMode: plan.inputMode,
+              maxOutputTokens: currentOutputTokens,
+              errorCode: error.code
+            });
+            continue;
           }
+          if (error?.code === 'OUTPUT_TRUNCATED' &&
+              outputBudget.mode === 'auto' && currentOutputTokens < outputBudget.ceiling) {
+            const expandedOutputTokens = Math.min(
+              outputBudget.ceiling,
+              Math.ceil((currentOutputTokens * 1.75) / 256) * 256
+            );
+            const fittingRecordIndex = records.findIndex((record, index) =>
+              index >= recordIndex &&
+              record.plan.estimatedInputTokens <= availableInputTokens(expandedOutputTokens)
+            );
+            if (fittingRecordIndex < 0 || expandedOutputTokens <= currentOutputTokens) {
+              throw error;
+            }
+            currentOutputTokens = expandedOutputTokens;
+            recordIndex = fittingRecordIndex;
+            const next = records[recordIndex].plan;
+            context.onProgress?.({
+              phase: 'figure_panel_output_retry', ...progressBase,
+              attempt: providerAttempt + 2,
+              previousEstimatedInputTokens: plan.estimatedInputTokens,
+              estimatedInputTokens: next.estimatedInputTokens,
+              inputMode: next.inputMode,
+              maxOutputTokens: currentOutputTokens,
+              errorCode: error.code
+            });
+            continue;
+          }
+          if (error?.code === 'OUTPUT_TRUNCATED') throw error;
           const nextIndex = rejectedVisualInput
             ? records.findIndex((record, index) =>
               index > recordIndex && record.plan.pixelsSupplied === false)

@@ -369,6 +369,8 @@ test('batch and single Figure workflows share one operation gate and stamp only 
   assert.match(content, /function isCurrentFigureOperation/);
   assert.match(content, /function finishFigureOperation/);
   assert.match(content, /FIGURE_ANALYSIS_BUSY/);
+  assert.match(content, /正在精读 \$\{activeLabel\}，请完成后再分析/);
+  assert.doesNotMatch(content, /姝ｅ湪绮捐/);
   assert.match(single, /beginFigureOperation\('single'/);
   assert.match(batch, /beginFigureOperation\('batch'/);
   assert.match(single, /operationId:\s*operation\.operationId/);

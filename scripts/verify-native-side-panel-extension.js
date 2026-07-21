@@ -1602,6 +1602,7 @@ async function readTextDownload(download) {
   }
   const streamRequests = [];
   const panelCapacityRequests = [];
+  const panelTruncationRequests = [];
   let releaseStreamContinuation = null;
   let streamContinuationReleased = false;
   const sseBody = (pieces, finishReason, usage) => [
@@ -1634,8 +1635,8 @@ async function readTextDownload(download) {
     markdown: '2. **验证必要性**\n\n遗传抑制 kinase A 会消除靶点 C 的诱导，因此把相关性推进为必要性证据。[[1]]',
     evidence: [evidenceRecord(streamEvidenceParagraphs[1], 1)]
   };
-  const panelCapacityOutput = {
-    figure_id: 'figure-91',
+  const panelCapacityOutput = figureId => ({
+    figure_id: figureId,
     panel: 'A',
     basis: 'vision_text',
     panel_interpretation: {
@@ -1654,7 +1655,7 @@ async function readTextDownload(download) {
       contribution_zh: '该 Panel 建立主要表型证据。'
     },
     claim_boundary_zh: '这一结果本身不能证明直接分子机制。'
-  };
+  });
   const streamServer = http.createServer((request, response) => {
     let requestBody = '';
     request.setEncoding('utf8');
@@ -1667,16 +1668,32 @@ async function readTextDownload(download) {
         const body = JSON.parse(requestBody || '{}');
         if (body.stream === false) {
           const userContent = body.messages?.[1]?.content;
+          const userText = Array.isArray(userContent)
+            ? userContent.find(item => item?.type === 'text')?.text || ''
+            : String(userContent || '');
           const imageUrl = Array.isArray(userContent)
             ? userContent.find(item => item?.type === 'image_url')?.image_url?.url || ''
             : '';
-          panelCapacityRequests.push({
+          const truncationRequest = userText.includes('"figure_id":"figure-92"');
+          const requestRecord = {
             maxTokens: Number(body.max_tokens) || 0,
             imageLength: imageUrl.length,
             hasImage: Boolean(imageUrl)
-          });
-          if (panelCapacityRequests.length < 3) {
-            const maximum = panelCapacityRequests.length === 1 ? 1024 : 768;
+          };
+          const requests = truncationRequest
+            ? panelTruncationRequests : panelCapacityRequests;
+          requests.push(requestRecord);
+          if (truncationRequest && requests.length === 1) {
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              model: 'qa-stream-model',
+              choices: [{ finish_reason: 'length', message: { content: '{}' } }],
+              usage: { prompt_tokens: 720, completion_tokens: requestRecord.maxTokens }
+            }));
+            return;
+          }
+          if (!truncationRequest && requests.length < 3) {
+            const maximum = requests.length === 1 ? 1024 : 768;
             response.writeHead(400, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({
               error: { message: `max_tokens cannot exceed ${maximum}` }
@@ -1688,7 +1705,11 @@ async function readTextDownload(download) {
             model: 'qa-stream-model',
             choices: [{
               finish_reason: 'stop',
-              message: { content: JSON.stringify(panelCapacityOutput) }
+              message: {
+                content: JSON.stringify(panelCapacityOutput(
+                  truncationRequest ? 'figure-92' : 'figure-91'
+                ))
+              }
             }],
             usage: { prompt_tokens: 720, completion_tokens: 640 }
           }));
@@ -2015,6 +2036,63 @@ async function readTextDownload(download) {
     outputBudgetTokens:
       panelCapacityResponse?.data?.panelAnalysis?.inputBasis?.outputBudgetTokens || 0,
     routeModel: panelCapacityResponse?.data?.route?.model || ''
+  };
+  const panelTruncationResponse = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: async () => chrome.runtime.sendMessage({
+        type: 'LLM_ANALYZE_FIGURE_PANEL',
+        workspaceLifecycle: articleWorkspaceLifecycleGeneration,
+        operationId: 'qa-panel-output-expansion',
+        documentHash: 'c'.repeat(64),
+        document: {
+          title: 'Panel output expansion QA',
+          documentHash: 'c'.repeat(64)
+        },
+        figure: {
+          figureId: 'figure-92',
+          figureLabel: 'Figure output expansion QA',
+          caption: 'Figure output expansion QA. (A) Treatment reduced the target phenotype compared with matched control.',
+          panelHints: ['A'],
+          contextParagraphs: [{
+            paragraphId: 'panel-output-r1',
+            sectionTitle: 'Results',
+            text: 'Figure output expansion QA Panel A compares treatment with matched control.'
+          }],
+          imageVariants: [
+            {
+              mediaType: 'image/jpeg',
+              dataUrl: `data:image/jpeg;base64,${'A'.repeat(1200)}`,
+              width: 1200, height: 900, maxEdge: 1200,
+              inputMode: 'figure_image', pixelsSupplied: true
+            },
+            {
+              mediaType: 'image/jpeg',
+              dataUrl: `data:image/jpeg;base64,${'A'.repeat(960)}`,
+              width: 960, height: 720, maxEdge: 960,
+              inputMode: 'figure_image', pixelsSupplied: true
+            }
+          ]
+        },
+        panel: { panel: 'A' },
+        forceRefresh: true
+      })
+    });
+    return result;
+  }, fixtureTab.id);
+  const panelTruncationQa = {
+    success: panelTruncationResponse?.success === true,
+    error: panelTruncationResponse?.error || null,
+    requestCount: panelTruncationRequests.length,
+    imageLengths: panelTruncationRequests.map(item => item.imageLength),
+    outputBudgets: panelTruncationRequests.map(item => item.maxTokens),
+    allRequestsHaveImages: panelTruncationRequests.every(item => item.hasImage),
+    panel: panelTruncationResponse?.data?.panelAnalysis?.panel || '',
+    attempts: panelTruncationResponse?.data?.panelAnalysis?.inputBasis?.attempts || 0,
+    imageMaxEdge:
+      panelTruncationResponse?.data?.panelAnalysis?.inputBasis?.imageMaxEdge || 0,
+    outputBudgetTokens:
+      panelTruncationResponse?.data?.panelAnalysis?.inputBasis?.outputBudgetTokens || 0
   };
   await new Promise(resolve => streamServer.close(resolve));
   await worker.evaluate(async tabId => {
@@ -3685,6 +3763,7 @@ async function readTextDownload(download) {
     streamingFinalStateQa,
     streamingPersistedQa,
     panelCapacityQa,
+    panelTruncationQa,
     largeChatHistorySetup,
     largeChatInitialQa,
     largeChatPage2Qa,
@@ -3949,18 +4028,27 @@ async function readTextDownload(download) {
     results.streamingPersistedQa &&
     results.panelCapacityQa.success &&
     results.panelCapacityQa.requestCount === 3 &&
-    results.panelCapacityQa.imageLengths.every((value, index, values) =>
-      index === 0 || value < values[index - 1]) &&
+    new Set(results.panelCapacityQa.imageLengths).size === 1 &&
     JSON.stringify(results.panelCapacityQa.outputBudgets) ===
-      JSON.stringify([2048, 1024, 768]) &&
+      JSON.stringify([3072, 1024, 768]) &&
     results.panelCapacityQa.allRequestsHaveImages &&
     results.panelCapacityQa.panel === 'A' &&
     results.panelCapacityQa.basis === 'vision_text' &&
     results.panelCapacityQa.attempts === 3 &&
     results.panelCapacityQa.inputMode === 'figure_image' &&
-    results.panelCapacityQa.imageMaxEdge === 768 &&
+    results.panelCapacityQa.imageMaxEdge === 1200 &&
     results.panelCapacityQa.outputBudgetTokens === 768 &&
     results.panelCapacityQa.routeModel === 'qa-stream-model' &&
+    results.panelTruncationQa.success &&
+    results.panelTruncationQa.requestCount === 2 &&
+    new Set(results.panelTruncationQa.imageLengths).size === 1 &&
+    JSON.stringify(results.panelTruncationQa.outputBudgets) ===
+      JSON.stringify([3072, 5376]) &&
+    results.panelTruncationQa.allRequestsHaveImages &&
+    results.panelTruncationQa.panel === 'A' &&
+    results.panelTruncationQa.attempts === 2 &&
+    results.panelTruncationQa.imageMaxEdge === 1200 &&
+    results.panelTruncationQa.outputBudgetTokens === 5376 &&
     results.largeChatHistorySetup.totalTurns === 95 &&
     results.largeChatInitialQa.totalTurns === 95 &&
     results.largeChatInitialQa.snapshotTurns === 30 &&

@@ -222,6 +222,9 @@ test('compiles and validates a bounded Panel follow-up request', () => {
   assert.equal(answer.basis, 'vision_text');
   assert.equal(answer.customQuestion, '为什么作者使用这一统计方法?');
   assert.match(prompt.userPrompt, /existing_panel_interpretation/);
+  assert.match(prompt.systemPrompt, /Match the depth and length to the requested topics/i);
+  assert.match(prompt.systemPrompt, /do not shorten a substantive answer merely for brevity/i);
+  assert.doesNotMatch(prompt.systemPrompt, /Write concise Chinese prose/i);
   const payload = JSON.parse(prompt.userPrompt);
   assert.equal(payload.custom_question, '为什么作者使用这一统计方法?');
   assert.equal(payload.requested_topic_instructions.grouping, '只解释本文实际采用的分组。');

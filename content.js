@@ -873,7 +873,7 @@ function createInitialFigureAnalysisStatus() {
 function throwFigureOperationBusy(requestedFigureId) {
     const active = figureOperationState.active;
     const activeLabel = active?.figureId || active?.mode || figureDepthAnalysisId || 'Figure';
-    const error = new Error(`姝ｅ湪绮捐 ${activeLabel}锛岃瀹屾垚鍚庡啀鍒嗘瀽 ${requestedFigureId}`);
+    const error = new Error(`正在精读 ${activeLabel}，请完成后再分析 ${requestedFigureId}`);
     error.code = 'FIGURE_ANALYSIS_BUSY';
     error.requestedFigureId = requestedFigureId;
     error.activeFigureId = active?.figureId || figureDepthAnalysisId;
