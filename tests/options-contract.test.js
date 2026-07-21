@@ -89,6 +89,24 @@ test('profile editor guards unsaved navigation and exposes a reusable in-flight 
   assert.match(script, /canLeaveProfileEditor\(['"]切换/);
 });
 
+test('profile save snapshots auto-analysis before async state re-rendering', () => {
+  const script = read('options.js');
+  const start = script.indexOf('async function persistForm(');
+  const end = script.indexOf('\nasync function testProvider', start);
+  const persist = script.slice(start, end);
+  const snapshotIndex = persist.indexOf(
+    "autoAnalyze: document.getElementById('autoAnalyze').checked"
+  );
+  const firstAwaitIndex = persist.indexOf('await requestEndpointPermission');
+  const updateIndex = persist.indexOf("type: 'LLM_UPDATE_PREFERENCES'");
+  assert.ok(start >= 0 && end > start);
+  assert.ok(snapshotIndex >= 0);
+  assert.ok(firstAwaitIndex > snapshotIndex);
+  assert.ok(updateIndex > firstAwaitIndex);
+  assert.match(persist, /type: 'LLM_UPDATE_PREFERENCES',[\s\S]*preferences\s*\n/);
+  assert.equal((persist.match(/document\.getElementById\('autoAnalyze'\)\.checked/g) || []).length, 1);
+});
+
 test('settings UI uses background messages and never sync storage', () => {
   const script = read('options.js');
   assert.match(script, /LLM_GET_SETTINGS/);

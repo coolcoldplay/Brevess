@@ -2295,6 +2295,15 @@ async function persistForm(silent) {
     const globalProfileId = document.getElementById('globalProfileId').value;
     const taskRoutes = collectTaskRoutes();
     const figurePanelFollowupPrompts = collectPanelFollowupPrompts();
+    // Freeze every user-edited value before the first asynchronous save.
+    // applyState() re-renders the form after saving the Profile and must not
+    // replace a preference changed in the same click with its previous value.
+    const preferences = {
+      mode: preferredMode,
+      autoAnalyze: document.getElementById('autoAnalyze').checked,
+      consentGranted,
+      figurePanelFollowupPrompts
+    };
     await requestEndpointPermission(profile.providerId, profile.config);
     const saved = await callBackground({ type: 'LLM_SAVE_PROFILE', profile });
     selectedProfileId = saved.profile?.id || profile.id;
@@ -2307,12 +2316,7 @@ async function persistForm(silent) {
     applyState(routed);
     const updated = await callBackground({
       type: 'LLM_UPDATE_PREFERENCES',
-      preferences: {
-        mode: preferredMode,
-        autoAnalyze: document.getElementById('autoAnalyze').checked,
-        consentGranted,
-        figurePanelFollowupPrompts
-      }
+      preferences
     });
     applyState(updated);
     profileEditorDirty = false;

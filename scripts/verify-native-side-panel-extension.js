@@ -751,7 +751,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -822,7 +822,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -887,7 +887,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r5', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -908,7 +908,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r5'),
+        '2.4.0-article-workspaces-r6'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -4597,6 +4597,104 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     renderRouteOptions();
     return result;
   });
+  await options.locator(
+    `#apiProfileList [data-profile-id="${migrationProfileId}"]`
+  ).click();
+  await options.locator('#tokenModeManual').check();
+  await options.locator('#manualMaxTokens').fill('65536');
+  await options.locator('#contextWindowTokens').fill('131072');
+  await options.locator('#routeHighlight').selectOption(migrationProfileId);
+  await options.locator('#autoAnalyze').check();
+  await options.locator('#saveSettings').click();
+  await options.waitForFunction(() => profileActionInFlight.save !== true &&
+    document.getElementById('saveSettings')?.disabled === false);
+  const manualTokenLiveQa = await options.evaluate(profileId => {
+    const profile = state?.settings?.profiles?.[profileId];
+    return {
+      mode: profile?.tokenPolicy?.mode || '',
+      manualMax: profile?.tokenPolicy?.manualMax || 0,
+      autoCap: profile?.tokenPolicy?.autoCap ?? null,
+      contextWindowTokens: profile?.contextWindowTokens || 0,
+      highlightRouteMode: state?.settings?.taskRoutes?.highlight?.mode || '',
+      highlightRoute: state?.settings?.taskRoutes?.highlight?.profileId || '',
+      autoAnalyze: state?.settings?.autoAnalyze === true,
+      dirty: profileEditorDirty,
+      status: document.getElementById('status')?.textContent || ''
+    };
+  }, migrationProfileId);
+  const manualTokenStoredQa = await options.evaluate(async profileId => {
+    const stored = await chrome.storage.local.get('sciLlmSettingsV2');
+    const profile = stored.sciLlmSettingsV2?.profiles?.[profileId];
+    return {
+      mode: profile?.tokenPolicy?.mode || '',
+      manualMax: profile?.tokenPolicy?.manualMax || 0,
+      autoCap: profile?.tokenPolicy?.autoCap ?? null,
+      contextWindowTokens: profile?.contextWindowTokens || 0,
+      highlightRoute: stored.sciLlmSettingsV2?.taskRoutes?.highlight?.profileId || '',
+      autoAnalyze: stored.sciLlmSettingsV2?.autoAnalyze === true
+    };
+  }, migrationProfileId);
+  await options.reload({ waitUntil: 'domcontentloaded' });
+  await options.waitForFunction(profileId =>
+    Boolean(state?.settings?.profiles?.[profileId]) &&
+    selectedProfileId === profileId && userDataUi.handleLoaded === true,
+  migrationProfileId);
+  const manualTokenReloadQa = await options.evaluate(profileId => ({
+    manualChecked: document.getElementById('tokenModeManual')?.checked === true,
+    manualFieldVisible: document.getElementById('manualMaxTokensField')?.hidden === false,
+    autoFieldHidden: document.getElementById('autoTokenCapField')?.hidden === true,
+    manualValue: document.getElementById('manualMaxTokens')?.value || '',
+    contextValue: document.getElementById('contextWindowTokens')?.value || '',
+    highlightRoute: document.getElementById('routeHighlight')?.value || '',
+    autoAnalyze: document.getElementById('autoAnalyze')?.checked === true,
+    selectedProfileId,
+    profileId
+  }), migrationProfileId);
+  await options.locator('#tokenModeAuto').check();
+  await options.locator('#autoTokenCap').fill('');
+  await options.locator('#contextWindowTokens').fill('');
+  await options.locator('#saveSettings').click();
+  await options.waitForFunction(() => profileActionInFlight.save !== true &&
+    document.getElementById('saveSettings')?.disabled === false);
+  const automaticTokenLiveQa = await options.evaluate(profileId => {
+    const profile = state?.settings?.profiles?.[profileId];
+    return {
+      mode: profile?.tokenPolicy?.mode || '',
+      manualMax: profile?.tokenPolicy?.manualMax ?? null,
+      autoCap: profile?.tokenPolicy?.autoCap ?? null,
+      contextWindowTokens: profile?.contextWindowTokens ?? null,
+      highlightRouteMode: state?.settings?.taskRoutes?.highlight?.mode || '',
+      highlightRoute: state?.settings?.taskRoutes?.highlight?.profileId || '',
+      autoAnalyze: state?.settings?.autoAnalyze === true,
+      dirty: profileEditorDirty,
+      status: document.getElementById('status')?.textContent || ''
+    };
+  }, migrationProfileId);
+  await options.reload({ waitUntil: 'domcontentloaded' });
+  await options.waitForFunction(profileId =>
+    Boolean(state?.settings?.profiles?.[profileId]) &&
+    selectedProfileId === profileId && userDataUi.handleLoaded === true,
+  migrationProfileId);
+  const automaticTokenReloadQa = await options.evaluate(profileId => ({
+    autoChecked: document.getElementById('tokenModeAuto')?.checked === true,
+    autoFieldVisible: document.getElementById('autoTokenCapField')?.hidden === false,
+    manualFieldHidden: document.getElementById('manualMaxTokensField')?.hidden === true,
+    autoCapValue: document.getElementById('autoTokenCap')?.value || '',
+    contextValue: document.getElementById('contextWindowTokens')?.value || '',
+    highlightRoute: document.getElementById('routeHighlight')?.value || '',
+    autoAnalyze: document.getElementById('autoAnalyze')?.checked === true,
+    selectedProfileId,
+    profileId,
+    saveButtonRecovered: document.getElementById('saveSettings')?.disabled === false,
+    dirtyCleared: profileEditorDirty === false
+  }), migrationProfileId);
+  const tokenRoutingUiQa = {
+    manualLive: manualTokenLiveQa,
+    manualStored: manualTokenStoredQa,
+    manualReload: manualTokenReloadQa,
+    automaticLive: automaticTokenLiveQa,
+    automaticReload: automaticTokenReloadQa
+  };
   await worker.evaluate(async tab => {
     await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'popup.html', enabled: false });
   }, fixtureTab);
@@ -4847,6 +4945,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     migrationDialogQa,
     migrationImportQa,
     modelConfigurationQa,
+    tokenRoutingUiQa,
     onboardingControlsQa,
     settingsDatabaseQa,
     providerRequestQa,
@@ -4878,7 +4977,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r5' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r6' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -4906,7 +5005,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r5' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r6' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.
@@ -5437,6 +5536,48 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.modelConfigurationQa.testButtonRecovered &&
     results.modelConfigurationQa.preDisabledButtonPreserved &&
     results.modelConfigurationQa.saveGuardReleased &&
+    results.tokenRoutingUiQa.manualLive.mode === 'manual' &&
+    results.tokenRoutingUiQa.manualLive.manualMax === 65536 &&
+    results.tokenRoutingUiQa.manualLive.autoCap === null &&
+    results.tokenRoutingUiQa.manualLive.contextWindowTokens === 131072 &&
+    results.tokenRoutingUiQa.manualLive.highlightRouteMode === 'profile' &&
+    results.tokenRoutingUiQa.manualLive.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.manualLive.autoAnalyze &&
+    !results.tokenRoutingUiQa.manualLive.dirty &&
+    /模型与路由设置已保存/.test(results.tokenRoutingUiQa.manualLive.status) &&
+    results.tokenRoutingUiQa.manualStored.mode === 'manual' &&
+    results.tokenRoutingUiQa.manualStored.manualMax === 65536 &&
+    results.tokenRoutingUiQa.manualStored.autoCap === null &&
+    results.tokenRoutingUiQa.manualStored.contextWindowTokens === 131072 &&
+    results.tokenRoutingUiQa.manualStored.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.manualStored.autoAnalyze &&
+    results.tokenRoutingUiQa.manualReload.manualChecked &&
+    results.tokenRoutingUiQa.manualReload.manualFieldVisible &&
+    results.tokenRoutingUiQa.manualReload.autoFieldHidden &&
+    results.tokenRoutingUiQa.manualReload.manualValue === '65536' &&
+    results.tokenRoutingUiQa.manualReload.contextValue === '131072' &&
+    results.tokenRoutingUiQa.manualReload.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.manualReload.autoAnalyze &&
+    results.tokenRoutingUiQa.manualReload.selectedProfileId === migrationProfileId &&
+    results.tokenRoutingUiQa.automaticLive.mode === 'auto' &&
+    results.tokenRoutingUiQa.automaticLive.manualMax === null &&
+    results.tokenRoutingUiQa.automaticLive.autoCap === null &&
+    results.tokenRoutingUiQa.automaticLive.contextWindowTokens === null &&
+    results.tokenRoutingUiQa.automaticLive.highlightRouteMode === 'profile' &&
+    results.tokenRoutingUiQa.automaticLive.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.automaticLive.autoAnalyze &&
+    !results.tokenRoutingUiQa.automaticLive.dirty &&
+    /模型与路由设置已保存/.test(results.tokenRoutingUiQa.automaticLive.status) &&
+    results.tokenRoutingUiQa.automaticReload.autoChecked &&
+    results.tokenRoutingUiQa.automaticReload.autoFieldVisible &&
+    results.tokenRoutingUiQa.automaticReload.manualFieldHidden &&
+    results.tokenRoutingUiQa.automaticReload.autoCapValue === '' &&
+    results.tokenRoutingUiQa.automaticReload.contextValue === '' &&
+    results.tokenRoutingUiQa.automaticReload.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.automaticReload.autoAnalyze &&
+    results.tokenRoutingUiQa.automaticReload.selectedProfileId === migrationProfileId &&
+    results.tokenRoutingUiQa.automaticReload.saveButtonRecovered &&
+    results.tokenRoutingUiQa.automaticReload.dirtyCleared &&
     results.onboardingControlsQa.reopen.active &&
     results.onboardingControlsQa.reopen.step === 'storage' &&
     !results.onboardingControlsQa.reopen.acknowledged &&
