@@ -192,3 +192,15 @@ test('offscreen worker stream branch reads response chunks and bounds each event
   assert.match(bridge, /chrome\.runtime\.onConnect/);
   assert.match(bridge, /SCI_OFFSCREEN_FETCH_STREAM/);
 });
+
+test('offscreen worker preserves only a bounded HTTP error body for token-limit classification', () => {
+  const worker = fs.readFileSync(
+    path.join(__dirname, '..', 'offscreen-network-worker.js'), 'utf8'
+  );
+
+  assert.match(worker, /MAX_ERROR_RESPONSE_BYTES\s*=\s*16\s*\*\s*1024/);
+  assert.match(worker, /readBoundedResponseText\(response\)/);
+  assert.match(worker, /body\s*=\s*await readBoundedResponseText\(response\)/);
+  assert.match(worker, /status:\s*response\.status,\s*\n\s*body,/);
+  assert.doesNotMatch(worker, /status:\s*response\.status,\s*\n\s*body:\s*''/);
+});

@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
@@ -972,6 +973,440 @@ async function readDiagnosticDownload(download) {
     path: path.join(outputDir, 'edge-article-chat.png'),
     fullPage: true
   });
+
+  const streamEvidenceParagraphs = (chatSourceSnapshot?.snapshot?.paragraphs || [])
+    .filter(item => /Activation of kinase A|Genetic inhibition of kinase A/.test(item.text || ''));
+  if (streamEvidenceParagraphs.length < 2) {
+    throw new Error('Unable to resolve fixture evidence for streaming chat QA');
+  }
+  const streamRequests = [];
+  const panelCapacityRequests = [];
+  let releaseStreamContinuation = null;
+  let streamContinuationReleased = false;
+  const sseBody = (pieces, finishReason, usage) => [
+    ...pieces.map(content => `data: ${JSON.stringify({
+      choices: [{ delta: { content }, finish_reason: null }]
+    })}\n\n`),
+    `data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: finishReason }], usage
+    })}\n\n`,
+    'data: [DONE]\n\n'
+  ].join('');
+  const evidenceRecord = (paragraph, marker) => ({
+    marker: String(marker),
+    paragraph_id: paragraph.paragraphId,
+    source_key: paragraph.sourceKey,
+    text_hash: paragraph.textHash,
+    quote: paragraph.text,
+    section_path: Array.isArray(paragraph.sectionPath)
+      ? paragraph.sectionPath.map(item => typeof item === 'string' ? item : item.title)
+        .filter(Boolean)
+      : []
+  });
+  const streamBlock1 = {
+    type: 'answer_block', block_id: 'stream-step-1',
+    markdown: '1. **锁定候选通路**\n\n激活 kinase A 会提高转录因子 B，并进一步诱导靶点 C。[[1]]',
+    evidence: [evidenceRecord(streamEvidenceParagraphs[0], 1)]
+  };
+  const streamBlock2 = {
+    type: 'answer_block', block_id: 'stream-step-2',
+    markdown: '2. **验证必要性**\n\n遗传抑制 kinase A 会消除靶点 C 的诱导，因此把相关性推进为必要性证据。[[1]]',
+    evidence: [evidenceRecord(streamEvidenceParagraphs[1], 1)]
+  };
+  const panelCapacityOutput = {
+    figure_id: 'figure-91',
+    panel: 'A',
+    basis: 'vision_text',
+    panel_interpretation: {
+      panel: 'A',
+      role: 'phenotype',
+      phenotype_name_zh: '目标表型',
+      method_category: 'wet_lab',
+      methods: ['CCK-8'],
+      method_source: 'image',
+      purpose_zh: '比较处理组与匹配对照组。',
+      design_zh: '两组使用相同指标进行检测。',
+      comparison_zh: '处理组对比匹配对照组。',
+      direct_observation_zh: '处理组的目标表型低于对照组。',
+      observation_source: 'image_observation',
+      local_inference_zh: '结果支持处理产生抑制作用。',
+      contribution_zh: '该 Panel 建立主要表型证据。'
+    },
+    claim_boundary_zh: '这一结果本身不能证明直接分子机制。'
+  };
+  const streamServer = http.createServer((request, response) => {
+    let requestBody = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => {
+      requestBody += chunk;
+      if (requestBody.length > 4 * 1024 * 1024) request.destroy();
+    });
+    request.on('end', async () => {
+      try {
+        const body = JSON.parse(requestBody || '{}');
+        if (body.stream === false) {
+          const userContent = body.messages?.[1]?.content;
+          const imageUrl = Array.isArray(userContent)
+            ? userContent.find(item => item?.type === 'image_url')?.image_url?.url || ''
+            : '';
+          panelCapacityRequests.push({
+            maxTokens: Number(body.max_tokens) || 0,
+            imageLength: imageUrl.length,
+            hasImage: Boolean(imageUrl)
+          });
+          if (panelCapacityRequests.length < 3) {
+            const maximum = panelCapacityRequests.length === 1 ? 1024 : 768;
+            response.writeHead(400, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+              error: { message: `max_tokens cannot exceed ${maximum}` }
+            }));
+            return;
+          }
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({
+            model: 'qa-stream-model',
+            choices: [{
+              finish_reason: 'stop',
+              message: { content: JSON.stringify(panelCapacityOutput) }
+            }],
+            usage: { prompt_tokens: 720, completion_tokens: 640 }
+          }));
+          return;
+        }
+        streamRequests.push(body);
+        const requestNumber = streamRequests.length;
+        if (requestNumber === 2 && !streamContinuationReleased) {
+          await Promise.race([
+            new Promise(resolve => { releaseStreamContinuation = resolve; }),
+            new Promise(resolve => setTimeout(resolve, 5000))
+          ]);
+        }
+        const responseBody = requestNumber === 1
+          ? sseBody([
+            `${JSON.stringify(streamBlock1)}\n`,
+            '{"type":"answer_block","block_id":"stream-step-2","markdown":"2. 未完成'
+          ], 'length', { prompt_tokens: 1200, completion_tokens: 8192 })
+          : sseBody([
+            `${JSON.stringify(streamBlock1)}\n`,
+            `${JSON.stringify(streamBlock2)}\n`,
+            `${JSON.stringify({
+              type: 'turn_summary', summary: '先定位候选通路，再用遗传抑制验证必要性。'
+            })}\n`,
+            `${JSON.stringify({ type: 'final', status: 'completed' })}\n`
+          ], 'stop', { prompt_tokens: 980, completion_tokens: 1400 });
+        response.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'close'
+        });
+        response.end(responseBody);
+      } catch (error) {
+        response.writeHead(500, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: error.message } }));
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    streamServer.once('error', reject);
+    streamServer.listen(0, '127.0.0.1', resolve);
+  });
+  const streamAddress = streamServer.address();
+  const streamProviderBaseUrl = `http://127.0.0.1:${streamAddress.port}/v1`;
+  const streamingProfileQa = await sidePanel.evaluate(async baseUrl => {
+    const saved = await chrome.runtime.sendMessage({
+      type: 'LLM_SAVE_PROFILE',
+      profile: {
+        id: 'profile_qa_stream',
+        name: 'Edge Streaming QA',
+        providerId: 'openai-compatible',
+        config: {
+          apiKey: 'qa-stream-secret',
+          model: 'qa-stream-model',
+          baseUrl,
+          supportsVision: true
+        },
+        capabilities: { vision: true },
+        contextWindowTokens: 32768,
+        tokenPolicy: { mode: 'auto', autoCap: 16384 }
+      }
+    });
+    const preferences = await chrome.runtime.sendMessage({
+      type: 'LLM_UPDATE_PREFERENCES',
+      preferences: { mode: 'llm', consentGranted: true }
+    });
+    const routing = await chrome.runtime.sendMessage({
+      type: 'LLM_UPDATE_PROFILE_ROUTING',
+      globalProfileId: 'profile_qa_stream'
+    });
+    return {
+      profileSaved: saved?.success === true,
+      preferencesSaved: preferences?.success === true,
+      routingSaved: routing?.success === true,
+      effectiveMode: preferences?.data?.effectiveMode || '',
+      profileError: saved?.error || null,
+      preferencesError: preferences?.error || null,
+      routingError: routing?.error || null
+    };
+  }, streamProviderBaseUrl);
+  await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => clearArticleChat()
+    });
+    return result;
+  }, fixtureTab.id);
+  await sidePanel.evaluate(async () => {
+    await loadLlmSettings();
+    await refreshArticleWorkspace();
+    switchWorkspaceView('chat');
+    const select = document.getElementById('articleChatProfile');
+    select.value = 'profile_qa_stream';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  const streamingComposerQa = await sidePanel.evaluate(() => ({
+    effectiveMode: llmSettingsState?.effectiveMode || '',
+    selectedProfileId: articleChatSelectedProfileId,
+    selectValue: document.getElementById('articleChatProfile')?.value || '',
+    profileOptions: Array.from(document.querySelectorAll('#articleChatProfile option'))
+      .map(option => ({ value: option.value, text: option.textContent })),
+    sendDisabled: document.getElementById('sendArticleChat')?.disabled === true
+  }));
+  if (streamingComposerQa.sendDisabled ||
+      streamingComposerQa.selectValue !== 'profile_qa_stream') {
+    throw new Error(`Streaming chat profile unavailable: ${JSON.stringify({
+      streamingProfileQa, streamingComposerQa
+    })}`);
+  }
+  await sidePanel.locator('#articleChatQuestion').fill(
+    '请分步骤说明作者如何从相关性推进到必要性证据。'
+  );
+  await sidePanel.locator('#sendArticleChat').click();
+  try {
+    await sidePanel.waitForFunction(() => {
+      const turn = document.querySelector('.article-chat-turn:last-child');
+      return turn?.querySelectorAll('.article-chat-answer-block').length === 1 &&
+        turn.textContent.includes('锁定候选通路') &&
+        turn.textContent.includes('正在继续生成');
+    }, null, { timeout: 5000 });
+  } catch (error) {
+    const sideState = await sidePanel.evaluate(() => ({
+      text: document.querySelector('.article-chat-turn:last-child')?.textContent || '',
+      html: document.querySelector('.article-chat-turn:last-child')?.outerHTML || '',
+      status: document.getElementById('status')?.textContent || ''
+    }));
+    const contentState = await worker.evaluate(async tabId => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: () => ({
+          state: getPublicArticleChatState(),
+          workspaceId: currentArticleWorkspace?.workspaceId || ''
+        })
+      });
+      return result;
+    }, fixtureTab.id);
+    throw new Error(`Streaming block did not render: ${JSON.stringify({
+      sideState,
+      contentState,
+      requestCount: streamRequests.length,
+      requestUrls: streamRequests.map(item => item?.model || ''),
+      consoleErrors
+    })}; original=${error.message}`);
+  }
+  const streamingMidUiQa = await sidePanel.evaluate(() => {
+    const turn = document.querySelector('.article-chat-turn:last-child');
+    return {
+      renderedBlocks: turn?.querySelectorAll('.article-chat-answer-block').length || 0,
+      visibleText: turn?.textContent || '',
+      citationButtons: turn?.querySelectorAll('.article-chat-inline-citation').length || 0,
+      actionsHiddenWhileGenerating:
+        (turn?.querySelectorAll('.article-chat-turn-action').length || 0) === 0
+    };
+  });
+  const streamingMidStateQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const turn = articleChatState.turns.at(-1);
+        return {
+          turnId: turn?.turnId || '',
+          status: turn?.status || '',
+          blocks: turn?.answerBlocks?.length || 0,
+          continuationCount: turn?.continuationCount || 0,
+          loading: articleChatState.loading === true,
+          workspaceId: currentArticleWorkspace?.workspaceId || ''
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  const streamRequestStartedAt = Date.now();
+  while (streamRequests.length < 2 && Date.now() - streamRequestStartedAt < 3000) {
+    await sidePanel.waitForTimeout(10);
+  }
+  const continuationPrompt = JSON.stringify(streamRequests[1] || {});
+  const streamingContinuationQa = {
+    requestCountBeforeRelease: streamRequests.length,
+    promptIncludesPriorBlock: continuationPrompt.includes('stream-step-1'),
+    promptIncludesContinuationContract: continuationPrompt.includes('continue_after_block_ids'),
+    firstMaxOutputTokens: Number(streamRequests[0]?.max_tokens) || 0,
+    continuationMaxOutputTokens: Number(streamRequests[1]?.max_tokens) || 0
+  };
+  streamContinuationReleased = true;
+  releaseStreamContinuation?.();
+  await sidePanel.waitForFunction(() => {
+    const turn = document.querySelector('.article-chat-turn:last-child');
+    return turn?.querySelectorAll('.article-chat-answer-block').length === 2 &&
+      turn.textContent.includes('验证必要性') &&
+      !turn.classList.contains('is-generating');
+  }, null, { timeout: 5000 });
+  const streamingFinalUiQa = await sidePanel.evaluate(() => {
+    const turn = document.querySelector('.article-chat-turn:last-child');
+    return {
+      renderedBlocks: turn?.querySelectorAll('.article-chat-answer-block').length || 0,
+      blockIds: Array.from(turn?.querySelectorAll('[data-block-id]') || [])
+        .map(node => node.dataset.blockId),
+      citationButtons: turn?.querySelectorAll('.article-chat-inline-citation').length || 0,
+      statusText: turn?.querySelector('.article-chat-turn-status')?.textContent || '',
+      actions: Array.from(turn?.querySelectorAll('.article-chat-turn-action') || [])
+        .map(button => button.dataset.articleChatAction)
+    };
+  });
+  const streamingFinalStateQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const turn = articleChatState.turns.at(-1);
+        return {
+          turnId: turn?.turnId || '',
+          status: turn?.status || '',
+          blocks: turn?.answerBlocks?.length || 0,
+          blockIds: turn?.answerBlocks?.map(block => block.blockId) || [],
+          continuationCount: turn?.continuationCount || 0,
+          model: turn?.model || '',
+          loading: articleChatState.loading === true
+        };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
+  let streamingPersistedQa = false;
+  const streamingPersistStartedAt = Date.now();
+  while (!streamingPersistedQa && Date.now() - streamingPersistStartedAt < 5000) {
+    streamingPersistedQa = await worker.evaluate(async ({ workspaceId, tabId, turnId }) => {
+      const [{ result: response }] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'ISOLATED',
+        func: workspaceId => chrome.runtime.sendMessage({
+          type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId
+        }),
+        args: [workspaceId]
+      });
+      if (!response?.success) return false;
+      const stored = response.data.turns.find(turn => turn.turnId === turnId);
+      const index = response.data.assets.find(asset =>
+        asset.relativePath === 'chat/index.json');
+      const indexed = index?.content?.turns?.find(turn => turn.turnId === turnId);
+      return stored?.status === 'completed' && stored.answerBlocks?.length === 2 &&
+        indexed?.status === 'completed' && indexed.answerBlocks?.length === 2;
+    }, {
+      workspaceId: streamingMidStateQa.workspaceId,
+      tabId: fixtureTab.id,
+      turnId: streamingFinalStateQa.turnId
+    });
+    if (!streamingPersistedQa) await sidePanel.waitForTimeout(50);
+  }
+  const panelCapacityResponse = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: async () => chrome.runtime.sendMessage({
+        type: 'LLM_ANALYZE_FIGURE_PANEL',
+        workspaceLifecycle: articleWorkspaceLifecycleGeneration,
+        operationId: 'qa-panel-capacity',
+        documentHash: 'b'.repeat(64),
+        document: {
+          title: 'Panel capacity QA',
+          documentHash: 'b'.repeat(64)
+        },
+        figure: {
+          figureId: 'figure-91',
+          figureLabel: 'Figure capacity QA',
+          caption: 'Figure capacity QA. (A) Treatment reduced the target phenotype compared with matched control.',
+          panelHints: ['A'],
+          contextParagraphs: [
+            {
+              paragraphId: 'panel-r1',
+              sectionTitle: 'Results',
+              text: 'Figure capacity QA Panel A compares treatment with matched control.'
+            },
+            {
+              paragraphId: 'panel-m1',
+              sectionTitle: 'Methods',
+              text: 'Samples were randomized before the same assay was applied.'
+            }
+          ],
+          imageVariants: [
+            {
+              mediaType: 'image/jpeg',
+              dataUrl: `data:image/jpeg;base64,${'A'.repeat(1200)}`,
+              width: 1200,
+              height: 900,
+              maxEdge: 1200,
+              inputMode: 'figure_image',
+              pixelsSupplied: true
+            },
+            {
+              mediaType: 'image/jpeg',
+              dataUrl: `data:image/jpeg;base64,${'A'.repeat(960)}`,
+              width: 960,
+              height: 720,
+              maxEdge: 960,
+              inputMode: 'figure_image',
+              pixelsSupplied: true
+            },
+            {
+              mediaType: 'image/jpeg',
+              dataUrl: `data:image/jpeg;base64,${'A'.repeat(768)}`,
+              width: 768,
+              height: 576,
+              maxEdge: 768,
+              inputMode: 'figure_image',
+              pixelsSupplied: true
+            }
+          ]
+        },
+        panel: { panel: 'A' },
+        forceRefresh: true
+      })
+    });
+    return result;
+  }, fixtureTab.id);
+  const panelCapacityQa = {
+    success: panelCapacityResponse?.success === true,
+    error: panelCapacityResponse?.error || null,
+    requestCount: panelCapacityRequests.length,
+    imageLengths: panelCapacityRequests.map(item => item.imageLength),
+    outputBudgets: panelCapacityRequests.map(item => item.maxTokens),
+    allRequestsHaveImages: panelCapacityRequests.every(item => item.hasImage),
+    panel: panelCapacityResponse?.data?.panelAnalysis?.panel || '',
+    basis: panelCapacityResponse?.data?.panelAnalysis?.basis || '',
+    attempts: panelCapacityResponse?.data?.panelAnalysis?.inputBasis?.attempts || 0,
+    inputMode: panelCapacityResponse?.data?.panelAnalysis?.inputBasis?.inputMode || '',
+    imageMaxEdge: panelCapacityResponse?.data?.panelAnalysis?.inputBasis?.imageMaxEdge || 0,
+    outputBudgetTokens:
+      panelCapacityResponse?.data?.panelAnalysis?.inputBasis?.outputBudgetTokens || 0,
+    routeModel: panelCapacityResponse?.data?.route?.model || ''
+  };
+  await new Promise(resolve => streamServer.close(resolve));
+  await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: async () => {
+        clearArticleChat();
+        await articleWorkspaceMutationTail;
+        return { turns: articleChatState.turns.length };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
 
   const largeChatHistorySetup = await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -2027,6 +2462,15 @@ async function readDiagnosticDownload(download) {
     quickNavSwitchQa,
     quickNavExitQa,
     articleChatQa,
+    streamingProfileQa,
+    streamingComposerQa,
+    streamingMidUiQa,
+    streamingMidStateQa,
+    streamingContinuationQa,
+    streamingFinalUiQa,
+    streamingFinalStateQa,
+    streamingPersistedQa,
+    panelCapacityQa,
     largeChatHistorySetup,
     largeChatInitialQa,
     largeChatPage2Qa,
@@ -2168,6 +2612,56 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.returnLatestRestored &&
     results.articleChatQa.composerOutsideMessages &&
     results.articleChatQa.citationJumpFocused &&
+    results.streamingProfileQa.profileSaved &&
+    results.streamingProfileQa.preferencesSaved &&
+    results.streamingProfileQa.routingSaved &&
+    results.streamingProfileQa.effectiveMode === 'llm' &&
+    results.streamingComposerQa.effectiveMode === 'llm' &&
+    results.streamingComposerQa.selectValue === 'profile_qa_stream' &&
+    !results.streamingComposerQa.sendDisabled &&
+    results.streamingMidUiQa.renderedBlocks === 1 &&
+    /锁定候选通路/.test(results.streamingMidUiQa.visibleText) &&
+    /正在继续生成/.test(results.streamingMidUiQa.visibleText) &&
+    results.streamingMidUiQa.citationButtons === 1 &&
+    results.streamingMidUiQa.actionsHiddenWhileGenerating &&
+    results.streamingMidStateQa.status === 'generating' &&
+    results.streamingMidStateQa.blocks === 1 &&
+    results.streamingMidStateQa.continuationCount === 1 &&
+    results.streamingMidStateQa.loading &&
+    results.streamingContinuationQa.requestCountBeforeRelease === 2 &&
+    results.streamingContinuationQa.promptIncludesPriorBlock &&
+    results.streamingContinuationQa.promptIncludesContinuationContract &&
+    results.streamingContinuationQa.firstMaxOutputTokens >= 4096 &&
+    results.streamingContinuationQa.continuationMaxOutputTokens >
+      results.streamingContinuationQa.firstMaxOutputTokens &&
+    results.streamingFinalUiQa.renderedBlocks === 2 &&
+    new Set(results.streamingFinalUiQa.blockIds).size === 2 &&
+    results.streamingFinalUiQa.blockIds[0] === 'stream-step-1' &&
+    results.streamingFinalUiQa.blockIds[1] === 'stream-step-2' &&
+    results.streamingFinalUiQa.citationButtons === 2 &&
+    results.streamingFinalUiQa.statusText === '' &&
+    results.streamingFinalUiQa.actions.includes('delete-answer') &&
+    results.streamingFinalUiQa.actions.includes('regenerate') &&
+    results.streamingFinalStateQa.status === 'completed' &&
+    results.streamingFinalStateQa.blocks === 2 &&
+    results.streamingFinalStateQa.continuationCount === 1 &&
+    results.streamingFinalStateQa.model === 'qa-stream-model' &&
+    !results.streamingFinalStateQa.loading &&
+    results.streamingPersistedQa &&
+    results.panelCapacityQa.success &&
+    results.panelCapacityQa.requestCount === 3 &&
+    results.panelCapacityQa.imageLengths.every((value, index, values) =>
+      index === 0 || value < values[index - 1]) &&
+    JSON.stringify(results.panelCapacityQa.outputBudgets) ===
+      JSON.stringify([2048, 1024, 768]) &&
+    results.panelCapacityQa.allRequestsHaveImages &&
+    results.panelCapacityQa.panel === 'A' &&
+    results.panelCapacityQa.basis === 'vision_text' &&
+    results.panelCapacityQa.attempts === 3 &&
+    results.panelCapacityQa.inputMode === 'figure_image' &&
+    results.panelCapacityQa.imageMaxEdge === 768 &&
+    results.panelCapacityQa.outputBudgetTokens === 768 &&
+    results.panelCapacityQa.routeModel === 'qa-stream-model' &&
     results.largeChatHistorySetup.totalTurns === 95 &&
     results.largeChatInitialQa.totalTurns === 95 &&
     results.largeChatInitialQa.snapshotTurns === 30 &&

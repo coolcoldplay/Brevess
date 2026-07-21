@@ -1,6 +1,32 @@
 const controllers = new Map();
 const MAX_STREAM_EVENT_BYTES = 64 * 1024;
 const MAX_STREAM_ERROR_BYTES = 16 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 16 * 1024;
+
+async function readBoundedResponseText(response, maximumBytes = MAX_ERROR_RESPONSE_BYTES) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return String(await response.text()).slice(0, maximumBytes);
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+  try {
+    while (bytesRead < maximumBytes) {
+      const item = await reader.read();
+      if (item.done) break;
+      const value = item.value instanceof Uint8Array
+        ? item.value : new Uint8Array(item.value || []);
+      const allowed = Math.min(value.length, maximumBytes - bytesRead);
+      text += decoder.decode(value.subarray(0, allowed), { stream: true });
+      bytesRead += allowed;
+      if (allowed < value.length) break;
+    }
+    text += decoder.decode();
+    if (bytesRead >= maximumBytes) await reader.cancel();
+    return text;
+  } finally {
+    try { reader.releaseLock(); } catch { /* Best effort. */ }
+  }
+}
 
 function postStreamEvent(requestId, type, value = {}) {
   self.postMessage({ requestId, type, ...value });
@@ -121,11 +147,17 @@ self.onmessage = async event => {
   }
 
   if (!response.ok) {
+    let body = '';
+    try {
+      body = await readBoundedResponseText(response);
+    } catch {
+      // Preserve the HTTP status even when its diagnostic body cannot be read.
+    }
     self.postMessage({
       requestId: message.requestId,
       success: true,
       status: response.status,
-      body: '',
+      body,
       retryAfter: response.headers.get('Retry-After') || ''
     });
     controllers.delete(message.requestId);
