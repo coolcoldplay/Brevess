@@ -258,10 +258,22 @@ async function readTextDownload(download) {
     waitUntil: 'domcontentloaded'
   });
   await fixture.bringToFront();
-  await sidePanel.waitForFunction(() =>
-    document.getElementById('sidePanelPaperTitle')?.textContent ===
-      'OA mechanism review test'
-  );
+  try {
+    await sidePanel.waitForFunction(() =>
+      document.getElementById('sidePanelPaperTitle')?.textContent ===
+        'OA mechanism review test'
+    );
+  } catch (error) {
+    const panelState = await sidePanel.evaluate(() => ({
+      title: document.getElementById('sidePanelPaperTitle')?.textContent || '',
+      status: document.getElementById('sidePanelDocumentStatusText')?.textContent || '',
+      displayMode: document.body.dataset.displayMode || '',
+      readyState: document.readyState
+    })).catch(() => ({}));
+    throw new Error(`Side panel did not bind the fixture: ${JSON.stringify({
+      panelState, pageErrors, consoleErrors, cause: error.message
+    })}`);
+  }
   const activated = await sidePanel.evaluate(async () => {
     await refreshManualAnnotationSummary();
     await refreshArticleWorkspace();
@@ -286,6 +298,87 @@ async function readTextDownload(download) {
       migrationScriptsLoaded: typeof SciLLM.validateArticleArchive === 'function'
     };
   });
+  await sidePanel.locator('#toggleFloatingSidePanel').click();
+  await sidePanel.waitForFunction(() => {
+    const pipWindow = documentPictureInPicture?.window;
+    const frame = pipWindow?.document.querySelector('iframe');
+    return Boolean(frame?.contentDocument?.getElementById('sidePanelApp'));
+  });
+  await sidePanel.waitForFunction(() => {
+    const pipWindow = documentPictureInPicture?.window;
+    const framePin = pipWindow?.document.querySelector('iframe')?.contentDocument
+      ?.getElementById('toggleFloatingSidePanel');
+    const sourcePin = document.getElementById('toggleFloatingSidePanel');
+    return framePin?.getAttribute('aria-pressed') === 'true' &&
+      sourcePin?.getAttribute('aria-pressed') === 'true';
+  });
+  await sidePanel.waitForFunction(() =>
+    documentPictureInPicture?.window?.document.querySelector('iframe')?.contentDocument
+      ?.getElementById('sidePanelPaperTitle')?.textContent === 'OA mechanism review test');
+  const floatingPanelQa = await sidePanel.evaluate(() => {
+    const pipWindow = documentPictureInPicture.window;
+    const frame = pipWindow.document.querySelector('iframe');
+    const resetEdge = pipWindow.document.querySelector('.floating-panel-width-reset-edge');
+    resetEdge?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    const frameUrl = new URL(frame?.src || location.href);
+    return {
+      supported: typeof documentPictureInPicture?.requestWindow === 'function',
+      title: pipWindow.document.title,
+      defaultWidth: pipWindow.document.body.dataset.defaultWidth || '',
+      resetRequested: Boolean(pipWindow.document.body.dataset.widthResetRequested),
+      requestedWidth: pipWindow.document.body.dataset.requestedWidth || '',
+      embeddedMode: frameUrl.searchParams.get('displayMode'),
+      targetTabId: frameUrl.searchParams.get('targetTabId'),
+      frameTitle: frame?.contentDocument?.title || '',
+      framePinPressed:
+        frame?.contentDocument?.getElementById('toggleFloatingSidePanel')
+          ?.getAttribute('aria-pressed') || '',
+      sourcePinPressed:
+        document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || ''
+    };
+  });
+  const floatingAway = await context.newPage();
+  await floatingAway.route('https://example.org/pinned-away', route => route.fulfill({
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    body: '<title>Pinned away tab</title><p>Another webpage</p>'
+  }));
+  await floatingAway.goto('https://example.org/pinned-away', {
+    waitUntil: 'domcontentloaded'
+  });
+  const floatingAwayTab = (await worker.evaluate(() => chrome.tabs.query({})))
+    .find(tab => tab.title === 'Pinned away tab');
+  const floatingAwayOptions = floatingAwayTab?.id
+    ? await worker.evaluate(async tabId => {
+      const startedAt = Date.now();
+      let options = await chrome.sidePanel.getOptions({ tabId });
+      while (!options.enabled && Date.now() - startedAt < 2000) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        options = await chrome.sidePanel.getOptions({ tabId });
+      }
+      return options;
+    }, floatingAwayTab.id)
+    : null;
+  const floatingSwitchQa = await sidePanel.evaluate(() => {
+    const pipWindow = documentPictureInPicture?.window;
+    const frame = pipWindow?.document.querySelector('iframe');
+    return {
+      remainsOpen: Boolean(pipWindow && !pipWindow.closed),
+      targetTabId: new URL(frame?.src || location.href).searchParams.get('targetTabId'),
+      paperTitle: frame?.contentDocument?.getElementById('sidePanelPaperTitle')?.textContent || ''
+    };
+  });
+  Object.assign(floatingPanelQa, {
+    awayTabEnabledWhilePinned: floatingAwayOptions?.enabled === true,
+    remainsOpenAfterTabSwitch: floatingSwitchQa.remainsOpen,
+    targetStableAfterTabSwitch: floatingSwitchQa.targetTabId === String(fixtureTab.id),
+    paperStableAfterTabSwitch: floatingSwitchQa.paperTitle === 'OA mechanism review test'
+  });
+  await fixture.bringToFront();
+  await floatingAway.close();
+  await sidePanel.evaluate(() => documentPictureInPicture.window?.close());
+  await sidePanel.waitForFunction(() =>
+    document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') === 'false');
   const afterActivationRevision = await fixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
   const pageOverlayCount = await fixture.locator(
@@ -1017,8 +1110,13 @@ async function readTextDownload(download) {
     throw new Error(`Figure quick navigation was hidden before hover: ${JSON.stringify(quickNavPreHover)}`);
   }
   await sidePanel.locator('.figure-quick-nav-marker').first().hover({ force: true });
-  await sidePanel.locator('.figure-quick-nav-label').first().hover({ force: true });
-  await sidePanel.waitForTimeout(120);
+  await sidePanel.waitForFunction(() => {
+    const popover = document.querySelector(
+      '.figure-quick-nav-item.show-panels .figure-quick-nav-panel-popover'
+    );
+    const style = popover ? getComputedStyle(popover) : null;
+    return style?.opacity === '1' && style.visibility === 'visible';
+  });
   const figureVisualQa = await sidePanel.evaluate(() => {
     const panelPopover = document.querySelector(
       '.figure-quick-nav-item.show-panels .figure-quick-nav-panel-popover'
@@ -1060,12 +1158,58 @@ async function readTextDownload(download) {
       ).every(section => section.open === false)
     };
   });
+  const panelFollowupAnswerQa = await sidePanel.evaluate(async () => {
+    const figure = currentWorkspaceSnapshot?.figures?.figures?.[0];
+    if (!figure) return { rendered: false };
+    const panelId = 'A';
+    const followupKey = panelWorkspaceKey(figure.figureId, panelId);
+    figure.panelFollowups ||= {};
+    figure.panelFollowups[panelId] = {
+      panel: panelId,
+      topics: ['grouping'],
+      customQuestion: 'Why does this Panel use this comparison?',
+      answer: 'The comparison isolates the treatment effect against the matched control.',
+      claimBoundary: 'This answer is limited to the supplied Panel evidence.',
+      inputBasis: { inputMode: 'figure_image', pixelsSupplied: true, imageWidth: 960,
+        imageHeight: 720, attempts: 1 }
+    };
+    const draft = getPanelFollowupDraft(figure.figureId, panelId);
+    draft.open = true;
+    figureExpansionState.set(figure.figureId, true);
+    figurePanelExpansionState.set(followupKey, true);
+    panelFollowupRevealKey = followupKey;
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const revealed = revealPanelFollowupAnswer(followupKey);
+    panelFollowupRevealKey = '';
+    await new Promise(resolve => setTimeout(resolve, 90));
+    const answer = document.querySelector(`[data-panel-followup-answer="${CSS.escape(followupKey)}"]`);
+    const followup = answer?.closest('.workspace-panel-followup');
+    const details = answer?.closest('.workspace-figure-panel-card');
+    const view = document.querySelector('[data-workspace-view="figures"]');
+    const answerRect = answer?.getBoundingClientRect();
+    const viewRect = view?.getBoundingClientRect();
+    return {
+      rendered: Boolean(answer),
+      revealed,
+      followupVisible: followup?.hidden === false,
+      panelOpen: details?.open === true,
+      answerText: answer?.textContent || '',
+      statusText: followup?.querySelector('.workspace-panel-followup-status')?.textContent || '',
+      focused: document.activeElement === answer,
+      inViewport: Boolean(answerRect && viewRect && answerRect.bottom >= viewRect.top &&
+        answerRect.top <= viewRect.bottom)
+    };
+  });
   await sidePanel.screenshot({
     path: path.join(outputDir, 'edge-figure-interaction-controls.png'),
     fullPage: true
   });
+  // Let the answer reveal's deliberate smooth scroll finish before measuring a
+  // separate pointer gesture against the fixed quick-navigation rail.
+  await sidePanel.waitForTimeout(450);
   await sidePanel.locator('.figure-quick-nav-marker').nth(1).hover({ force: true });
-  await sidePanel.waitForTimeout(35);
+  await sidePanel.waitForTimeout(25);
   const quickNavSwitchQa = await sidePanel.evaluate(() => ({
     expandedFigureIds: Array.from(
       document.querySelectorAll('.figure-quick-nav-item.show-panels')
@@ -3722,6 +3866,7 @@ async function readTextDownload(download) {
     beforeActivationRevision,
     afterActivationRevision,
     activated,
+    floatingPanelQa,
     multiTab,
     navigationLifecycleQa,
     pageOverlayCount,
@@ -3745,6 +3890,7 @@ async function readTextDownload(download) {
     figureIncrementalQa,
     quickNavPreHover,
     figureVisualQa,
+    panelFollowupAnswerQa,
     quickNavSwitchQa,
     quickNavExitQa,
     figureToolbarControlsQa,
@@ -3840,6 +3986,20 @@ async function readTextDownload(download) {
     activated.removedAnalysisActions &&
     activated.feedbackRemoved &&
     activated.migrationScriptsLoaded &&
+    floatingPanelQa.supported &&
+    floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
+    floatingPanelQa.defaultWidth === '780' &&
+    floatingPanelQa.resetRequested &&
+    floatingPanelQa.requestedWidth === '780' &&
+    floatingPanelQa.embeddedMode === 'pip' &&
+    floatingPanelQa.targetTabId === String(fixtureTab.id) &&
+    floatingPanelQa.frameTitle === 'SCI论文阅读助手' &&
+    floatingPanelQa.framePinPressed === 'true' &&
+    floatingPanelQa.sourcePinPressed === 'true' &&
+    floatingPanelQa.awayTabEnabledWhilePinned &&
+    floatingPanelQa.remainsOpenAfterTabSwitch &&
+    floatingPanelQa.targetStableAfterTabSwitch &&
+    floatingPanelQa.paperStableAfterTabSwitch &&
     multiTab.untouchedRevision === '' &&
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
@@ -3927,7 +4087,16 @@ async function readTextDownload(download) {
     results.figureVisualQa.panelSingleColumn &&
     results.figureVisualQa.panelPopoverVisual?.opacity === '1' &&
     results.figureVisualQa.collapsedResultSections &&
-    results.quickNavSwitchQa.expandedFigureIds.length === 0 &&
+    results.panelFollowupAnswerQa.rendered &&
+    results.panelFollowupAnswerQa.revealed &&
+    results.panelFollowupAnswerQa.followupVisible &&
+    results.panelFollowupAnswerQa.panelOpen &&
+    /isolates the treatment effect/.test(results.panelFollowupAnswerQa.answerText) &&
+    /回答已生成并显示在下方/.test(results.panelFollowupAnswerQa.statusText) &&
+    results.panelFollowupAnswerQa.focused &&
+    results.panelFollowupAnswerQa.inViewport &&
+    results.quickNavSwitchQa.expandedFigureIds.length === 1 &&
+    results.quickNavSwitchQa.expandedFigureIds[0] === 'figure-2' &&
     !results.quickNavSwitchQa.firstFigureStillExpanded &&
     results.quickNavExitQa.expandedItems === 0 &&
     results.quickNavExitQa.hoveredItems === 0 &&

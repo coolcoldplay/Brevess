@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_ANALYSIS_VERSION = '6';
+  const FIGURE_ANALYSIS_VERSION = '7';
   const FIGURE_DEPTHS = new Set(['standard', 'deep']);
   const OBSERVATION_SOURCES = [
     'image_observation', 'caption_statement', 'body_statement', 'multi_source', 'inference'
@@ -516,6 +516,137 @@
     };
   }
 
+  function normalizedEnumToken(value) {
+    return cleanText(value, 120).toLowerCase()
+      .replace(/[\s\-/]+/g, '_')
+      .replace(/[^a-z0-9_\u3400-\u9fff]/g, '')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function normalizedFigureEnum(value, allowed, fallback) {
+    const token = normalizedEnumToken(value);
+    if (allowed.includes(token)) return token;
+    if (token === '图像') {
+      if (allowed.includes('image_observation')) return 'image_observation';
+      if (allowed.includes('image')) return 'image';
+    }
+    if (token === '图注') {
+      if (allowed.includes('caption_statement')) return 'caption_statement';
+      if (allowed.includes('caption')) return 'caption';
+    }
+    if (token === '正文') {
+      if (allowed.includes('body_statement')) return 'body_statement';
+      if (allowed.includes('body')) return 'body';
+    }
+    const aliases = {
+      setup: 'model_setup', model: 'model_setup', validation: 'manipulation_validation',
+      manipulation: 'manipulation_validation', phenotype_validation: 'phenotype',
+      quantitative: 'quantification', causal_mechanism: 'mechanism',
+      control: 'negative_control', specificity_control: 'specificity',
+      loss_of_function: 'necessity', gain_of_function: 'sufficiency',
+      rescue_experiment: 'rescue', function: 'functional_outcome',
+      external: 'external_validation', computational: 'bioinformatics',
+      bioinformatic: 'bioinformatics', wetlab: 'wet_lab', diagram: 'schematic',
+      image: 'image_observation', caption: 'caption_statement', body: 'body_statement',
+      combined: 'multi_source', inferred: 'inference', perturbation: 'intervention_effect',
+      intervention: 'intervention_effect', mechanistic: 'mechanistic_support',
+      function_validation: 'functional_validation', correlation: 'association',
+      模型建立: 'model_setup', 操作验证: 'manipulation_validation', 表型: 'phenotype',
+      表型验证: 'phenotype', 定量: 'quantification', 机制: 'mechanism',
+      阴性对照: 'negative_control', 特异性: 'specificity', 必要性: 'necessity',
+      充分性: 'sufficiency', 挽救: 'rescue', 功能结局: 'functional_outcome',
+      外部验证: 'external_validation', 湿实验: 'wet_lab', 成像: 'imaging',
+      生物信息学: 'bioinformatics', 生信: 'bioinformatics', 临床: 'clinical',
+      示意图: 'schematic', 图像: 'image', 图像观察: 'image_observation',
+      图注: 'caption_statement', 正文: 'body_statement', 多来源: 'multi_source',
+      推断: 'inference', 关联: 'association', 干预效应: 'intervention_effect',
+      机制支持: 'mechanistic_support', 功能验证: 'functional_validation',
+      现象到机制: 'phenomenon_to_mechanism', 关联到干预: 'association_to_intervention',
+      定性到定量: 'qualitative_to_quantitative', 一般效应到特异性: 'general_effect_to_specificity',
+      机制到功能结局: 'mechanism_to_functional_outcome', 初始证据到挽救: 'initial_evidence_to_rescue',
+      单系统到外部验证: 'single_system_to_external_validation'
+    };
+    const alias = aliases[token];
+    if (alias && allowed.includes(alias)) return alias;
+    return allowed.includes(fallback) ? fallback : allowed[0];
+  }
+
+  function schemaDefault(schema) {
+    if (schema?.type === 'array') return [];
+    if (schema?.type === 'object') return {};
+    if (schema?.type === 'boolean') return false;
+    if (schema?.type === 'number' || schema?.type === 'integer') return 0;
+    return '';
+  }
+
+  function projectFigureResponseToSchema(value, schema) {
+    if (schema?.type === 'object') {
+      if (!isPlainObject(value)) return value;
+      const source = value;
+      return Object.fromEntries(Object.entries(schema.properties || {}).map(([key, child]) => [
+        key,
+        projectFigureResponseToSchema(
+          !Object.prototype.hasOwnProperty.call(source, key) || source[key] === null
+            ? schemaDefault(child) : source[key],
+          child
+        )
+      ]));
+    }
+    if (schema?.type === 'array') {
+      if (!Array.isArray(value)) return value;
+      return value.map(item => projectFigureResponseToSchema(item, schema.items));
+    }
+    if (schema?.type === 'string') {
+      return value;
+    }
+    return value;
+  }
+
+  function repairFigureResponseShape(value, input, options, schema) {
+    const repaired = projectFigureResponseToSchema(value, schema);
+    const analysisDepth = normalizeFigureDepth(options?.analysisDepth);
+    const visualInput = options?.visualInput === true;
+    const expectedId = cleanText(input?.figureId, 80);
+    if (!cleanText(repaired.figure_id, 80)) repaired.figure_id = expectedId;
+    if ('analysis_depth' in repaired) repaired.analysis_depth = analysisDepth;
+    if ('basis' in repaired) {
+      repaired.basis = ['vision_text', 'caption_context'].includes(repaired.basis)
+        ? repaired.basis : (visualInput ? 'vision_text' : 'caption_context');
+    }
+    (Array.isArray(repaired.panels) ? repaired.panels : []).forEach(panel => {
+      if (!isPlainObject(panel)) return;
+      panel.role = normalizedFigureEnum(panel.role, PANEL_ROLES, 'other');
+      panel.method_category = normalizedFigureEnum(
+        panel.method_category, METHOD_CATEGORIES, 'other'
+      );
+      panel.method_source = normalizedFigureEnum(
+        panel.method_source, METHOD_SOURCES, 'inference'
+      );
+      panel.observation_source = normalizedFigureEnum(
+        panel.observation_source, OBSERVATION_SOURCES, 'inference'
+      );
+    });
+    (Array.isArray(repaired.logic_bridges) ? repaired.logic_bridges : []).forEach(bridge => {
+      if (!isPlainObject(bridge)) return;
+      bridge.relation_type = normalizedFigureEnum(
+        bridge.relation_type, LOGIC_RELATION_TYPES, 'other'
+      );
+    });
+    (Array.isArray(repaired.argument_chain) ? repaired.argument_chain : []).forEach(step => {
+      if (!isPlainObject(step)) return;
+      step.evidence_level = normalizedFigureEnum(
+        step.evidence_level, EVIDENCE_RELATION_LEVELS, 'other'
+      );
+    });
+    (Array.isArray(repaired.evidence_relations) ? repaired.evidence_relations : []).forEach(relation => {
+      if (!isPlainObject(relation)) return;
+      relation.relation_level = normalizedFigureEnum(
+        relation.relation_level, EVIDENCE_RELATION_LEVELS, 'other'
+      );
+    });
+    return repaired;
+  }
+
   function compilePanelFollowupPrompt(input, options = {}) {
     const visualInput = options.visualInput === true;
     const topics = normalizePanelFollowupTopics(input?.topics);
@@ -714,11 +845,16 @@
     if (!isPlainObject(value)) {
       throw invalidResponse('Figure analysis must be an object');
     }
+    const analysisDepth = normalizeFigureDepth(options.analysisDepth);
+    if (options.repairResponse !== false) {
+      value = repairFigureResponseShape(
+        value, input, options, createFigureAnalysisSchema(analysisDepth)
+      );
+    }
     const expectedId = cleanText(input?.figureId, 80);
     if (cleanText(value.figure_id, 80) !== expectedId) {
       throw invalidResponse('Figure response id did not match the request');
     }
-    const analysisDepth = normalizeFigureDepth(options.analysisDepth);
     assertRawFigureAnalysis(value, analysisDepth);
     const visualInput = options.visualInput === true;
     const expectedPanels = normalizedPanelRefs(input?.panelHints);
@@ -761,6 +897,9 @@
         localInference: cleanFigureField(raw?.local_inference_zh),
         contribution: cleanFigureField(raw?.contribution_zh)
       });
+    }
+    if (expectedPanels.length && !panels.length) {
+      throw invalidResponse('Figure response did not contain any requested Panel');
     }
     const panelGroups = (Array.isArray(value.panel_groups) ? value.panel_groups : [])
       .slice(0, 6).map(raw => ({
@@ -880,6 +1019,9 @@
 
   function validateFigurePanelBatch(value, input, options = {}) {
     const analysisDepth = normalizeFigureDepth(options.analysisDepth);
+    value = repairFigureResponseShape(
+      value, input, options, createFigurePanelBatchSchema(analysisDepth)
+    );
     requireExactFigureKeys(
       value,
       createFigurePanelBatchSchema(analysisDepth).required,
@@ -896,6 +1038,9 @@
 
   function validateFigureSynthesis(value, input, panelEvidence, options = {}) {
     const analysisDepth = normalizeFigureDepth(options.analysisDepth);
+    value = repairFigureResponseShape(
+      value, input, options, createFigureSynthesisSchema(analysisDepth)
+    );
     requireExactFigureKeys(
       value,
       createFigureSynthesisSchema(analysisDepth).required,
@@ -964,7 +1109,8 @@
     });
     return validateFigureAnalysis(raw, input, {
       analysisDepth,
-      visualInput: value.basis === 'vision_text'
+      visualInput: value.basis === 'vision_text',
+      repairResponse: false
     });
   }
 

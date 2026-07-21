@@ -27,6 +27,7 @@
 .ph.ph-eraser::before { content: "\e21e"; }
 .ph.ph-highlighter::before { content: "\ec76"; }
 .ph.ph-folder::before { content: "\e24a"; }
+.ph.ph-folder-open::before { content: "\e256"; }
 .ph.ph-arrows-clockwise::before { content: "\e094"; }
 .ph.ph-download::before { content: "\e20a"; }
 .ph.ph-floppy-disk::before { content: "\e248"; }
@@ -41,6 +42,8 @@
 .ph.ph-upload::before { content: "\e4be"; }
 .ph.ph-export::before { content: "\eaf0"; }
 .ph.ph-x::before { content: "\e4f6"; }
+.ph.ph-push-pin::before { content: "\e3e2"; }
+.ph.ph-trash::before { content: "\e4a6"; }
 .ph.ph-magnifying-glass::before { content: "\e30c"; }
 .ph.ph-database::before { content: "\e1de"; }
 .ph.ph-check-circle::before { content: "\e184"; }

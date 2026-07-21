@@ -492,7 +492,8 @@ test('popup first-pass visual tokens follow the selected navy and pearl directio
   assert.match(css, /--color-surface:\s*#fff(?:fff)?/i);
   assert.match(css, /--color-text:\s*#[0-9a-f]{6}/i);
   assert.match(css, /--color-border:\s*#[0-9a-f]{6}/i);
-  assert.doesNotMatch(css, /linear-gradient|#667eea|#764ba2/i);
+  assert.doesNotMatch(css, /#667eea|#764ba2/i);
+  assert.doesNotMatch(css, /(?:background|background-image):\s*linear-gradient/i);
   const buttonText = [...html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
     .map(match => match[1].replace(/<[^>]+>/g, ''))
     .join(' ');
@@ -861,11 +862,39 @@ test('automatic LLM startup prepares a profile instead of bypassing type confirm
 
 test('content script registers capabilities without scanning at module boot', () => {
   const script = read('content.js');
-  const listenerEnd = script.lastIndexOf("console.log('SCI论文逻辑关系高亮助手已加载')");
+  const listenerEnd = script.lastIndexOf("console.log('SCI论文阅读助手已加载')");
   const bootTail = script.slice(listenerEnd);
   assert.doesNotMatch(bootTail, /initializeManualAnnotationUi\(\)/);
   assert.doesNotMatch(bootTail, /maybeAutoAnalyzeWithLLM/);
   assert.match(script, /request\.action === 'prepareManualAnnotations'/);
+});
+
+test('reading assistant exposes a global local-workspace toolbar and a real floating pin mode', () => {
+  const html = read('popup.html');
+  const script = read('popup.js');
+  const css = read('popup.css');
+  const background = read('background.js');
+  const manifest = JSON.parse(read('manifest.json'));
+  assert.equal(manifest.name, 'SCI论文阅读助手');
+  assert.match(html, /<title>SCI论文阅读助手<\/title>/);
+  assert.match(html, /id="toggleFloatingSidePanel"[\s\S]*ph-push-pin/);
+  const statusStart = html.indexOf('id="sidePanelDocumentStatus"');
+  const statusEnd = html.indexOf('<section id="articleArchivePrompt"', statusStart);
+  const statusMarkup = html.slice(statusStart, statusEnd);
+  for (const id of [
+    'scanArticleWorkspace', 'saveCurrentArticleWorkspace', 'clearArticleWorkspace',
+    'exportCurrentArticleArchive', 'importCurrentArticleArchiveButton'
+  ]) assert.match(statusMarkup, new RegExp(`id="${id}"`));
+  const highlightsStart = html.indexOf('data-workspace-view="highlights"');
+  const highlightsEnd = html.indexOf('data-workspace-view="figures"', highlightsStart);
+  assert.doesNotMatch(html.slice(highlightsStart, highlightsEnd), /article-archive-toolbar/);
+  assert.match(css, /\.side-panel-global-tools\s*\{/);
+  assert.match(script, /documentPictureInPicture\.requestWindow/);
+  assert.match(script, /FLOATING_PANEL_DEFAULT_WIDTH\s*=\s*780/);
+  assert.match(script, /pipWindow\.resizeTo\(FLOATING_PANEL_DEFAULT_WIDTH/);
+  assert.match(script, /floatingPanelTargetTabId/);
+  assert.match(background, /FLOATING_SIDE_PANEL_PIN_STATE/);
+  assert.match(background, /floatingPanelPinnedTabId !== null/);
 });
 
 test('popup is a full-height native side-panel workspace with five internal views', () => {

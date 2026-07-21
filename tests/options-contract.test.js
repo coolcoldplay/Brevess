@@ -471,7 +471,12 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(script, /ONBOARDING_GET/);
   assert.match(script, /ONBOARDING_SET_STEP/);
   assert.match(script, /ONBOARDING_RESTART/);
+  assert.match(script, /ONBOARDING_PREPARE_FINISH/);
   assert.match(script, /ONBOARDING_FINISH/);
+  assert.match(script, /finish\.disabled\s*=\s*busy[\s\S]*onboardingUi\.finishPrepared !== true/);
+  assert.match(script, /chrome\.tabs\.getCurrent/);
+  assert.match(script, /if \(result\.opened\)[\s\S]*chrome\.tabs\.remove\(settingsTabId\)/);
+  assert.match(script, /chrome\.tabs\.remove\(settingsTabId\)\.catch\(\(\) => window\.close\(\)\)/);
   assert.match(script, /chooseUserDataDirectory/);
   assert.match(script, /addEventListener\(['"]click['"],\s*continueOnboarding\)/);
   assert.match(script, /persistForm/);

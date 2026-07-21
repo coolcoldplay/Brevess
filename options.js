@@ -49,6 +49,7 @@ const onboardingUi = {
   active: false,
   step: 'storage',
   pending: false,
+  finishPrepared: false,
   state: null
 };
 let pendingMigrationBundle = null;
@@ -263,11 +264,27 @@ async function setOnboardingStepState(step, status) {
     onboardingUi.state = await callBackground({
       type: 'ONBOARDING_SET_STEP', step, status
     });
+    await prepareOnboardingFinish();
     return onboardingUi.state;
   } finally {
     onboardingUi.pending = false;
     renderOnboarding();
   }
+}
+
+async function prepareOnboardingFinish() {
+  if (onboardingUi.state?.acknowledged !== true) {
+    onboardingUi.finishPrepared = false;
+    return false;
+  }
+  const result = await callBackground({
+    type: 'ONBOARDING_PREPARE_FINISH', sourceTab: onboardingUi.state.sourceTab
+  });
+  // A missing source tab is a valid fallback: Finish keeps this settings page
+  // open and exits the onboarding layout instead of trying to open a panel.
+  onboardingUi.finishPrepared = result.prepared === true ||
+    result.reason === 'source-tab-missing';
+  return onboardingUi.finishPrepared;
 }
 
 async function reconcileOnboardingConfiguration() {
@@ -330,7 +347,8 @@ function renderOnboarding() {
   back.disabled = busy;
   skip.disabled = busy;
   next.disabled = busy;
-  finish.disabled = busy || onboardingUi.state?.acknowledged !== true;
+  finish.disabled = busy || onboardingUi.state?.acknowledged !== true ||
+    onboardingUi.finishPrepared !== true;
 }
 
 async function initializeOnboarding() {
@@ -342,6 +360,7 @@ async function initializeOnboarding() {
     }
     enterOnboardingLayout();
     await reconcileOnboardingConfiguration();
+    await prepareOnboardingFinish();
     onboardingUi.step = onboardingUi.state.steps?.storage === 'pending'
       ? 'storage' : 'api';
     renderOnboarding();
@@ -355,6 +374,7 @@ async function initializeOnboarding() {
 async function reopenOnboarding() {
   if (onboardingUi.pending) return;
   onboardingUi.pending = true;
+  onboardingUi.finishPrepared = false;
   try {
     onboardingUi.state = await callBackground({ type: 'ONBOARDING_RESTART' });
     onboardingUi.step = 'storage';
@@ -401,14 +421,29 @@ async function continueOnboarding() {
 }
 
 async function finishOnboarding() {
-  if (onboardingUi.pending || onboardingUi.state?.acknowledged !== true) return;
+  if (onboardingUi.pending || onboardingUi.state?.acknowledged !== true ||
+      onboardingUi.finishPrepared !== true) return;
   onboardingUi.pending = true;
   renderOnboarding();
   try {
+    // Capture this extension tab before the background focuses the source
+    // article. chrome.tabs.getCurrent() identifies the tab that owns this
+    // document even when it is no longer the active tab.
+    const settingsTab = await chrome.tabs.getCurrent?.().catch(() => null);
     const result = await callBackground({
       type: 'ONBOARDING_FINISH', sourceTab: onboardingUi.state.sourceTab
     });
-    if (!result.opened) {
+    if (result.opened) {
+      const settingsTabId = Number(settingsTab?.id ?? result.settingsTabId);
+      if (Number.isInteger(settingsTabId) && settingsTabId !== Number(result.tabId)) {
+        // Close only after the background has opened the source side panel and
+        // replied. This avoids racing tab removal against the response channel.
+        chrome.tabs.remove(settingsTabId).catch(() => window.close());
+      } else {
+        window.close();
+      }
+      return;
+    } else {
       leaveOnboardingLayout();
       history.replaceState(null, '', `${location.pathname}${location.search}#providerSettings`);
       showStatus('原论文标签页已关闭；引导已完成，可从任意论文页再次点击插件图标。', 'info');

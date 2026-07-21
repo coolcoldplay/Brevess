@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SCI论文逻辑关系高亮助手",
+  "name": "SCI论文阅读助手",
   "version": "2.4.0",
-  "description": "支持正则模式与可扩展LLM全文识别的SCI论文逻辑关系高亮助手",
+  "description": "支持论文导航、逻辑高亮、Figure/Panel 解读与全文问答的 SCI 论文阅读助手",
   "permissions": [
     "activeTab",
     "storage",

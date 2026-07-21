@@ -92,7 +92,7 @@ function validStandardFigureOutput(depth = 'standard') {
 }
 
 test('defines a versioned strict Figure walkthrough response schema', () => {
-  assert.equal(FIGURE_ANALYSIS_VERSION, '6');
+  assert.equal(FIGURE_ANALYSIS_VERSION, '7');
   const schema = createFigureAnalysisSchema('standard');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.basis.enum, ['vision_text', 'caption_context']);
@@ -355,24 +355,25 @@ test('validates fields strips duplicated labels and forces safe text provenance'
   assert.equal(normalized.argumentChain.length, 1);
 });
 
-test('rejects malformed Figure panel fields and unsupported enum values before normalization', () => {
+test('repairs missing fields and enum aliases but still rejects incompatible field shapes', () => {
   const missingField = validStandardFigureOutput();
   delete missingField.panels[0].method_source;
-  assert.throws(
-    () => validateFigureAnalysis(missingField, figureInput, {
-      visualInput: true, analysisDepth: 'standard'
-    }),
-    error => error.code === 'INVALID_RESPONSE'
-  );
+  const repairedMissing = validateFigureAnalysis(missingField, figureInput, {
+    visualInput: true, analysisDepth: 'standard'
+  });
+  assert.equal(repairedMissing.panels[0].methodSource, 'inference');
 
   const unknownEnum = validStandardFigureOutput();
-  unknownEnum.panels[0].method_category = 'unknown_category';
-  assert.throws(
-    () => validateFigureAnalysis(unknownEnum, figureInput, {
-      visualInput: true, analysisDepth: 'standard'
-    }),
-    error => error.code === 'INVALID_RESPONSE'
-  );
+  unknownEnum.panels[0].method_category = 'computational';
+  unknownEnum.panels[0].role = '表型验证';
+  unknownEnum.argument_chain[0].evidence_level = '干预效应';
+  unknownEnum.panels[0].unsupported_extra = 'drop me';
+  const repairedEnum = validateFigureAnalysis(unknownEnum, figureInput, {
+    visualInput: true, analysisDepth: 'standard'
+  });
+  assert.equal(repairedEnum.panels[0].methodCategory, 'bioinformatics');
+  assert.equal(repairedEnum.panels[0].role, 'phenotype');
+  assert.equal(repairedEnum.argumentChain[0].evidenceLevel, 'intervention_effect');
 
   const malformedShape = validStandardFigureOutput();
   malformedShape.panels[0].methods = 'CCK-8';

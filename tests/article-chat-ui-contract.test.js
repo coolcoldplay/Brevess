@@ -119,6 +119,27 @@ test('completed Figures publish an immediate workspace event and checkpoint befo
   assert.match(popup, /void refreshArticleWorkspace/);
 });
 
+test('every progressive LLM surface captures an immutable immediate workspace checkpoint', () => {
+  const content = read('content.js');
+  const router = read('core/background-router.js');
+  const progressive = content.slice(
+    content.indexOf('function renderProgressiveLlmChunk'),
+    content.indexOf('function closeLlmFeedbackPopover')
+  );
+  const figureProgress = content.slice(
+    content.indexOf('function applyFigureProgressEvent'),
+    content.indexOf('function updateFigureAnalysisStatus')
+  );
+  assert.match(progressive, /scheduleArticleWorkspaceArtifactsSave\(\{ immediate: true \}\)/);
+  assert.match(figureProgress, /figure_checkpoint/);
+  assert.match(figureProgress, /scheduleArticleWorkspaceArtifactsSave\(\{ immediate: true \}\)/);
+  assert.match(content, /function captureArticleWorkspaceAssets\(/);
+  assert.match(content, /persistArticleWorkspaceArtifacts\(\{ force = false, assets = null \} = \{\}\)/);
+  assert.match(content, /const assets = captureArticleWorkspaceAssets\(\)/);
+  assert.match(content, /review_chunk_checkpoint[\s\S]{0,500}scheduleArticleWorkspaceArtifactsSave\(\{ immediate: true \}\)/);
+  assert.match(router, /phase:\s*'review_chunk_checkpoint'/);
+});
+
 test('side panel can explicitly save all current workspace artifacts to the local folder', () => {
   const html = read('popup.html');
   const popup = read('popup.js');

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SCI论文逻辑关系高亮</title>
+    <title>SCI论文阅读助手</title>
     <link rel="stylesheet" href="vendor/phosphor/icons.css">
     <link rel="stylesheet" href="popup.css">
 </head>
@@ -11,6 +11,11 @@
     <div id="sidePanelApp" class="side-panel-app">
       <header id="sidePanelHeader" class="side-panel-header compact-paper-header">
         <div id="sidePanelPaperTitle" class="side-panel-paper-title">正在连接当前论文…</div>
+        <button id="toggleFloatingSidePanel" class="side-panel-icon-button" type="button"
+          aria-label="悬浮置顶阅读助手" aria-pressed="false"
+          title="悬浮在所有软件上方（默认宽度 780px，双击悬浮窗左缘恢复）">
+          <i class="ph ph-push-pin" aria-hidden="true"></i>
+        </button>
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
           aria-label="打开设置与诊断菜单" aria-haspopup="menu" aria-expanded="false">
           <i class="ph ph-gear" aria-hidden="true"></i>
@@ -21,12 +26,35 @@
           <button id="exportAdapterDiagnosticBundle" role="menuitem" type="button">导出适配诊断包</button>
         </div>
       </header>
-      <div id="sidePanelDocumentStatus" class="side-panel-document-status" role="status" aria-live="polite">
+      <div id="sidePanelDocumentStatus" class="side-panel-document-status">
         <span class="side-panel-live-dot" aria-hidden="true"></span>
-        <span id="sidePanelDocumentStatusText">已激活，正在读取当前页面</span>
+        <span id="sidePanelDocumentStatusText" role="status" aria-live="polite">已激活，正在读取当前页面</span>
         <button id="retryArticlePreparation" class="diagnostic-retry-button" type="button" hidden>
           <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>重新提取
         </button>
+        <div class="side-panel-global-tools" role="group" aria-label="当前论文的本地工作区与档案">
+          <button id="scanArticleWorkspace" class="side-panel-tool-button" type="button"
+            aria-label="扫描并恢复本地工作区" title="扫描并恢复本地工作区">
+            <i class="ph ph-folder-open" aria-hidden="true"></i>
+          </button>
+          <button id="saveCurrentArticleWorkspace" class="side-panel-tool-button" type="button"
+            aria-label="保存全部到本地文件夹" title="保存全部到本地文件夹">
+            <i class="ph ph-floppy-disk" aria-hidden="true"></i>
+          </button>
+          <button id="clearArticleWorkspace" class="side-panel-tool-button is-danger" type="button"
+            aria-label="清除当前页本地内容" title="清除当前页本地内容">
+            <i class="ph ph-trash" aria-hidden="true"></i>
+          </button>
+          <button id="exportCurrentArticleArchive" class="side-panel-tool-button" type="button"
+            aria-label="导出本文档案" title="导出本文档案">
+            <i class="ph ph-download" aria-hidden="true"></i>
+          </button>
+          <button id="importCurrentArticleArchiveButton" class="side-panel-tool-button" type="button"
+            aria-label="导入本文档案" title="导入本文档案">
+            <i class="ph ph-upload" aria-hidden="true"></i>
+          </button>
+          <input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden>
+        </div>
       </div>
       <section id="articleArchivePrompt" class="article-archive-prompt" hidden aria-live="polite">
         <div>
@@ -185,13 +213,6 @@
           <h3>高亮分布</h3>
           <div class="workspace-empty">当前页面还没有可归类的高亮。</div>
         </section>
-        <div class="article-archive-toolbar">
-          <button id="scanArticleWorkspace" class="btn btn-secondary" type="button"><i class="ph ph-folder-open" aria-hidden="true"></i>扫描并恢复本地工作区</button>
-          <button id="saveCurrentArticleWorkspace" class="btn btn-secondary" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存全部到本地文件夹</button>
-          <button id="clearArticleWorkspace" class="btn btn-secondary article-workspace-clear" type="button"><i class="ph ph-trash" aria-hidden="true"></i>清除当前页本地内容</button>
-          <button id="exportCurrentArticleArchive" class="btn btn-secondary" type="button"><i class="ph ph-download" aria-hidden="true"></i>导出本文档案</button>
-          <label class="btn btn-secondary article-archive-import-label"><i class="ph ph-upload" aria-hidden="true"></i>导入本文档案<input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden></label>
-        </div>
       </section>
 
       <section class="workspace-view" data-workspace-view="figures" hidden>

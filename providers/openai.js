@@ -8,7 +8,15 @@
     for (const output of Array.isArray(data.output) ? data.output : []) {
       for (const content of Array.isArray(output.content) ? output.content : []) {
         if (content.type === 'output_text' && typeof content.text === 'string') return content.text;
+        if (content?.parsed && typeof content.parsed === 'object') {
+          return JSON.stringify(content.parsed);
+        }
       }
+    }
+    const message = data?.choices?.[0]?.message;
+    if (typeof message?.content === 'string') return message.content;
+    if (message?.parsed && typeof message.parsed === 'object') {
+      return JSON.stringify(message.parsed);
     }
     throw new shared.ProviderRequestError('INVALID_RESPONSE', 'OpenAI response did not contain output text');
   }
@@ -98,6 +106,9 @@
           usage: data?.usage
         });
         if (data?.status === 'incomplete' && data?.incomplete_details?.reason === 'max_output_tokens') {
+          throw new shared.ProviderRequestError('OUTPUT_TRUNCATED', 'Model output reached its token limit');
+        }
+        if (data?.choices?.[0]?.finish_reason === 'length') {
           throw new shared.ProviderRequestError('OUTPUT_TRUNCATED', 'Model output reached its token limit');
         }
         return shared.parseJsonText(extractOutputText(data));

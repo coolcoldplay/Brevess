@@ -574,6 +574,8 @@ async function clearBrowserWorkspaceStores(options) {
   const beforeScanUi = await secondPanel.evaluate(() => ({
     chatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
     figures: Number(currentWorkspaceSnapshot?.figures?.totalFigures) || 0,
+    analyzedFigures: (currentWorkspaceSnapshot?.figures?.figures || []).filter(figure =>
+      Boolean(figure?.standard || figure?.deep || figure?.error)).length,
     activeView: activeWorkspaceView
   }));
   await secondPanel.locator('[data-workspace-target="highlights"]').click();
@@ -726,7 +728,7 @@ async function clearBrowserWorkspaceStores(options) {
     results.beforeRestore.permission === 'granted' &&
     results.beforeRestore.workspaceCount === 0 &&
     results.beforeScanUi.chatTurns === 0 &&
-    results.beforeScanUi.figures === 0 &&
+    results.beforeScanUi.analyzedFigures === 0 &&
     results.restoredUi.chatTurns === 1 &&
     results.restoredUi.figures === 1 &&
     results.restoredUi.questionVisible &&

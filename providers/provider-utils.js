@@ -792,21 +792,85 @@
 
   function parseJsonText(value) {
     let text = String(value || '').trim();
-    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    try {
-      return JSON.parse(text);
-    } catch {
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
-      if (start >= 0 && end > start) {
-        try {
-          return JSON.parse(text.slice(start, end + 1));
-        } catch {
-          // Fall through to a provider-safe error.
+    text = text
+      .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+    function balancedObjects(input) {
+      const values = [];
+      let start = -1;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = 0; index < input.length; index += 1) {
+        const character = input[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character === '\\') escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+        if (character === '"') {
+          inString = true;
+          continue;
+        }
+        if (character === '{') {
+          if (depth === 0) start = index;
+          depth += 1;
+        } else if (character === '}' && depth > 0) {
+          depth -= 1;
+          if (depth === 0 && start >= 0) {
+            values.push(input.slice(start, index + 1));
+            start = -1;
+          }
         }
       }
-      throw new ProviderRequestError('INVALID_RESPONSE', 'Model output was not valid annotation JSON');
+      return values;
     }
+
+    function escapeStringControls(input) {
+      let output = '';
+      let inString = false;
+      let escaped = false;
+      for (const character of input) {
+        if (inString && !escaped) {
+          if (character === '\n') { output += '\\n'; continue; }
+          if (character === '\r') { output += '\\r'; continue; }
+          if (character === '\t') { output += '\\t'; continue; }
+        }
+        output += character;
+        if (!inString && character === '"') inString = true;
+        else if (inString && escaped) escaped = false;
+        else if (inString && character === '\\') escaped = true;
+        else if (inString && character === '"') inString = false;
+      }
+      return output;
+    }
+
+    const candidates = [...new Set([text, ...balancedObjects(text)].filter(Boolean))];
+    for (const candidate of candidates) {
+      const repairs = [...new Set([
+        candidate,
+        candidate.replace(/,\s*([}\]])/g, '$1'),
+        escapeStringControls(candidate),
+        escapeStringControls(candidate).replace(/,\s*([}\]])/g, '$1')
+      ])];
+      for (const repaired of repairs) {
+        try {
+          const parsed = JSON.parse(repaired);
+          if (typeof parsed === 'string') {
+            try { return JSON.parse(parsed); } catch { /* Try the next candidate. */ }
+          } else {
+            return parsed;
+          }
+        } catch {
+          // Keep checking bounded, deterministic repairs.
+        }
+      }
+    }
+    throw new ProviderRequestError('INVALID_RESPONSE', 'Model output was not valid annotation JSON');
   }
 
   function splitDataUrl(value) {

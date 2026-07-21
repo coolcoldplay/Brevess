@@ -341,6 +341,18 @@ const {
     shouldApplyPreparedResult
 } = PopupUiHelpers;
 
+const floatingPanelParams = new URLSearchParams(window.location.search);
+const floatingPanelEmbedded = floatingPanelParams.get('displayMode') === 'pip';
+const floatingPanelTargetTabId = (() => {
+    const rawValue = floatingPanelParams.get('targetTabId');
+    if (rawValue === null || rawValue.trim() === '') return null;
+    const value = Number(rawValue);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+})();
+const FLOATING_PANEL_DEFAULT_WIDTH = 780;
+const FLOATING_PANEL_MIN_HEIGHT = 560;
+let floatingPanelWindow = null;
+
 let selectedCategories = new Set();
 let regexSelectionStored = false;
 let llmSelectedCategories = new Set();
@@ -401,6 +413,7 @@ const figureExpansionState = new Map();
 const figurePanelExpansionState = new Map();
 const figureSectionExpansionState = new Map();
 const panelFollowupDraftState = new Map();
+let panelFollowupRevealKey = '';
 let figureQuickNavActiveId = '';
 let figureQuickNavHoverTimer = null;
 let figureQuickNavExpandedFigureId = '';
@@ -411,6 +424,17 @@ const METHOD_CATEGORY_LABELS = Object.freeze({
     clinical: '\u4e34\u5e8a',
     schematic: '\u793a\u610f\u56fe',
     other: '\u5176\u4ed6'
+});
+const CROSS_FIGURE_ROLE_LABELS = Object.freeze({
+    problem_setup: '提出问题/建立模型', phenomenon: '建立现象', association: '建立关联',
+    mechanism: '解析机制', causal_test: '因果检验', necessity: '必要性检验',
+    sufficiency: '充分性检验', rescue: '挽救实验', functional_outcome: '功能结局',
+    translation: '转化验证', other: '尚无法归类'
+});
+const CROSS_FIGURE_EVIDENCE_LABELS = Object.freeze({
+    association: '关联证据', intervention_effect: '干预效应', necessity: '必要性证据',
+    sufficiency: '充分性证据', rescue: '挽救证据', mechanistic_support: '机制支持',
+    functional_validation: '功能验证', other: '证据等级待确认'
 });
 let figureTaskGeneration = 0;
 let reviewOutlineState = {
@@ -457,6 +481,14 @@ let panelUiReady = false;
 let tabContextSequence = 0;
 let tabContextRequestSequence = 0;
 let tabContextSyncTimer = null;
+
+async function queryPanelTargetTab() {
+    if (floatingPanelTargetTabId !== null) {
+        return chrome.tabs.get(floatingPanelTargetTabId).catch(() => null);
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+}
 
 function capturePanelContext(taskToken = 0) {
     return SciLLM.capturePanelContext(activePanelTabContext, taskToken);
@@ -630,7 +662,7 @@ function restorePanelTabState(cached) {
 async function synchronizeActiveTabContext({ force = false } = {}) {
     if (!panelUiReady) return null;
     const requestId = ++tabContextRequestSequence;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (requestId !== tabContextRequestSequence) return null;
     const key = panelTabDocumentKey(tab);
     const activated = Boolean(key &&
@@ -679,8 +711,11 @@ function scheduleActiveTabContextSync(options = {}) {
 }
 
 function setupActiveTabSynchronization() {
-    chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
+    if (!floatingPanelEmbedded) {
+        chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
+    }
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+        if (floatingPanelTargetTabId !== null && tabId !== floatingPanelTargetTabId) return;
         if (changeInfo.url) {
             scheduleActiveTabContextSync();
         } else if (changeInfo.status === 'complete' &&
@@ -689,13 +724,18 @@ function setupActiveTabSynchronization() {
         }
     });
     chrome.tabs.onRemoved.addListener(tabId => {
+        if (floatingPanelTargetTabId !== null && tabId === floatingPanelTargetTabId) {
+            renderInactiveTabState({ title: '原论文标签页已关闭' });
+        }
         const prefix = `${Number(tabId)}|`;
         [...panelTabStateCache.keys()].forEach(key => {
             if (key.startsWith(prefix)) panelTabStateCache.delete(key);
         });
     });
     chrome.runtime.onMessage.addListener((message, sender) => {
-        if (message?.type === 'PANEL_TAB_ACTIVATED') scheduleActiveTabContextSync();
+        if (message?.type === 'PANEL_TAB_ACTIVATED' && !floatingPanelEmbedded) {
+            scheduleActiveTabContextSync();
+        }
         if (message?.type === 'ARTICLE_STRUCTURE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
@@ -715,7 +755,7 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             applyManualAnnotationStateEvent(message.event, sender.tab.id);
-            if (activeWorkspaceView === 'highlights') void refreshArticleWorkspace();
+            void refreshArticleWorkspace();
         }
     });
 }
@@ -861,6 +901,171 @@ function setupSidePanelSettingsMenu() {
     openLlmSettingsMenuItem?.addEventListener('click', () => {
         closeSidePanelSettingsMenu();
         chrome.runtime.openOptionsPage();
+    });
+}
+
+function updateFloatingPanelButton(active = false) {
+    const button = document.getElementById('toggleFloatingSidePanel');
+    if (!button) return;
+    const pinned = floatingPanelEmbedded || active;
+    button.setAttribute('aria-pressed', String(pinned));
+    button.setAttribute('aria-label', pinned
+        ? '关闭悬浮置顶阅读助手' : '悬浮置顶阅读助手');
+    button.title = pinned
+        ? '关闭悬浮置顶阅读助手'
+        : '悬浮在所有软件上方（默认宽度 780px，双击悬浮窗左缘恢复）';
+}
+
+function notifyFloatingPanelPinState(pinned, tabId = null) {
+    return chrome.runtime.sendMessage({
+        type: 'FLOATING_SIDE_PANEL_PIN_STATE',
+        pinned: pinned === true,
+        tabId: Number.isInteger(Number(tabId)) ? Number(tabId) : null
+    }).catch(() => null);
+}
+
+function restoreFloatingPanelDefaultWidth(pipWindow) {
+    if (!pipWindow || pipWindow.closed) return false;
+    const currentHeight = Math.max(
+        FLOATING_PANEL_MIN_HEIGHT,
+        Math.round(pipWindow.outerHeight || pipWindow.innerHeight || FLOATING_PANEL_MIN_HEIGHT)
+    );
+    pipWindow.document.body.dataset.widthResetRequested = String(Date.now());
+    pipWindow.document.body.dataset.requestedWidth = String(FLOATING_PANEL_DEFAULT_WIDTH);
+    try {
+        pipWindow.resizeTo(FLOATING_PANEL_DEFAULT_WIDTH, currentHeight);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function configureFloatingPanelWindow(pipWindow, targetTabId) {
+    const pipDocument = pipWindow.document;
+    pipDocument.title = 'SCI论文阅读助手 · 悬浮置顶';
+    pipDocument.documentElement.lang = 'zh-CN';
+    pipDocument.documentElement.style.height = '100%';
+    pipDocument.body.replaceChildren();
+    pipDocument.body.style.cssText = 'margin:0;height:100%;overflow:hidden;background:#eef3f7';
+    pipDocument.body.dataset.defaultWidth = String(FLOATING_PANEL_DEFAULT_WIDTH);
+
+    const frame = pipDocument.createElement('iframe');
+    const frameUrl = new URL(chrome.runtime.getURL('popup.html'));
+    frameUrl.searchParams.set('displayMode', 'pip');
+    if (Number.isInteger(Number(targetTabId))) {
+        frameUrl.searchParams.set('targetTabId', String(Number(targetTabId)));
+    }
+    frame.src = frameUrl.href;
+    frame.title = 'SCI论文阅读助手悬浮侧栏';
+    frame.style.cssText = 'display:block;width:100%;height:100%;border:0;background:#eef3f7';
+
+    const resetEdge = pipDocument.createElement('button');
+    resetEdge.type = 'button';
+    resetEdge.className = 'floating-panel-width-reset-edge';
+    resetEdge.setAttribute('aria-label', '双击恢复悬浮侧栏默认宽度');
+    resetEdge.title = '双击恢复默认宽度 780px';
+    resetEdge.style.cssText = [
+        'position:fixed', 'z-index:2147483647', 'inset:0 auto 0 0', 'width:8px',
+        'padding:0', 'border:0', 'border-radius:0', 'background:transparent',
+        'cursor:col-resize', 'transition:background .1s ease'
+    ].join(';');
+    resetEdge.addEventListener('pointerenter', () => {
+        resetEdge.style.background = 'rgba(11,71,120,.18)';
+    });
+    resetEdge.addEventListener('pointerleave', () => {
+        resetEdge.style.background = 'transparent';
+    });
+    resetEdge.addEventListener('dblclick', event => {
+        event.preventDefault();
+        restoreFloatingPanelDefaultWidth(pipWindow);
+    });
+    resetEdge.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        restoreFloatingPanelDefaultWidth(pipWindow);
+    });
+    pipDocument.body.append(frame, resetEdge);
+    await Promise.race([
+        new Promise((resolve, reject) => {
+            frame.addEventListener('load', resolve, { once: true });
+            frame.addEventListener('error', () => reject(new Error('悬浮侧栏加载失败')), {
+                once: true
+            });
+        }),
+        new Promise((_, reject) => setTimeout(
+            () => reject(new Error('悬浮侧栏加载超时')), 5000
+        ))
+    ]);
+}
+
+async function openFloatingSidePanel() {
+    const button = document.getElementById('toggleFloatingSidePanel');
+    if (floatingPanelEmbedded) {
+        await notifyFloatingPanelPinState(false, floatingPanelTargetTabId);
+        window.top.close();
+        return;
+    }
+    const existing = globalThis.documentPictureInPicture?.window || floatingPanelWindow;
+    if (existing && !existing.closed) {
+        existing.close();
+        return;
+    }
+    if (!globalThis.documentPictureInPicture?.requestWindow) {
+        throw new Error('当前浏览器版本不支持悬浮置顶侧栏');
+    }
+    if (button) {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+    }
+    try {
+        const requestedHeight = Math.max(
+            FLOATING_PANEL_MIN_HEIGHT,
+            Math.min(960, Math.round((screen.availHeight || 960) - 56))
+        );
+        const pipWindow = await documentPictureInPicture.requestWindow({
+            width: FLOATING_PANEL_DEFAULT_WIDTH,
+            height: requestedHeight,
+            preferInitialWindowPlacement: true
+        });
+        floatingPanelWindow = pipWindow;
+        const targetTab = activePanelTabContext.tabId !== null
+            ? { id: activePanelTabContext.tabId } : await queryPanelTargetTab();
+        await notifyFloatingPanelPinState(true, targetTab?.id);
+        await configureFloatingPanelWindow(pipWindow, targetTab?.id);
+        updateFloatingPanelButton(true);
+        pipWindow.addEventListener('pagehide', () => {
+            floatingPanelWindow = null;
+            updateFloatingPanelButton(false);
+            void notifyFloatingPanelPinState(false, targetTab?.id);
+        }, { once: true });
+    } catch (error) {
+        if (floatingPanelWindow && !floatingPanelWindow.closed) floatingPanelWindow.close();
+        floatingPanelWindow = null;
+        updateFloatingPanelButton(false);
+        await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
+        throw error;
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+        }
+    }
+}
+
+function setupFloatingSidePanelControls() {
+    const button = document.getElementById('toggleFloatingSidePanel');
+    if (!button) return;
+    document.body.dataset.displayMode = floatingPanelEmbedded ? 'pip' : 'side-panel';
+    updateFloatingPanelButton(false);
+    if (!floatingPanelEmbedded && !globalThis.documentPictureInPicture?.requestWindow) {
+        button.disabled = true;
+        button.title = '当前浏览器版本不支持悬浮置顶侧栏';
+        return;
+    }
+    button.addEventListener('click', () => {
+        void openFloatingSidePanel().catch(error => {
+            showStatus(`无法打开悬浮侧栏：${error.message}`, 'error');
+        });
     });
 }
 
@@ -1139,6 +1344,22 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
         container.appendChild(createWorkspaceElement('div', 'workspace-empty', '当前页面还没有可归类的高亮。'));
         return;
     }
+    const sourceMeta = {
+        manual: { label: '手动标注', className: 'is-manual' },
+        llm: { label: 'AI 自动', className: 'is-llm' },
+        regex: { label: '规则自动', className: 'is-regex' },
+        other: { label: '其他来源', className: 'is-other' }
+    };
+    const legend = createWorkspaceElement('div', 'workspace-distribution-legend');
+    Object.entries(sourceMeta).forEach(([source, meta]) => {
+        const count = Number(distribution.sourceCounts?.[source]) || 0;
+        if (!count) return;
+        legend.appendChild(createWorkspaceElement(
+            'span', `workspace-distribution-legend-item ${meta.className}`,
+            `${meta.label} ${count}`
+        ));
+    });
+    if (legend.childElementCount) container.appendChild(legend);
     (distribution.rows || []).forEach(row => {
         const block = createWorkspaceElement('section', 'workspace-distribution-row');
         const title = createWorkspaceElement('button', 'workspace-distribution-title', row.title);
@@ -1151,15 +1372,29 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
         (distribution.categories || []).forEach(category => {
             const value = row.cells?.[category.categoryId];
             if (!value?.count) return;
-            const button = createWorkspaceElement(
-                'button', 'workspace-distribution-cell', `${category.name} ${value.count}`
-            );
-            button.type = 'button';
-            button.style.borderLeftColor = category.color || '#0b4778';
-            button.addEventListener('click', () => void focusWorkspaceSource({
-                kind: 'highlight', highlightId: value.items?.[0]?.highlightId || ''
-            }));
-            cells.appendChild(button);
+            const sourceGroups = value.sources && typeof value.sources === 'object'
+                ? value.sources : Object.fromEntries((value.items || []).map(item => [
+                    item.source || 'other', {
+                        count: (value.items || []).filter(candidate =>
+                            (candidate.source || 'other') === (item.source || 'other')).length,
+                        items: (value.items || []).filter(candidate =>
+                            (candidate.source || 'other') === (item.source || 'other'))
+                    }
+                ]));
+            Object.entries(sourceMeta).forEach(([source, meta]) => {
+                const sourceValue = sourceGroups[source];
+                if (!sourceValue?.count) return;
+                const button = createWorkspaceElement(
+                    'button', `workspace-distribution-cell ${meta.className}`,
+                    `${meta.label} · ${category.name} ${sourceValue.count}`
+                );
+                button.type = 'button';
+                button.style.setProperty('--workspace-highlight-color', category.color || '#0b4778');
+                button.addEventListener('click', () => void focusWorkspaceSource({
+                    kind: 'highlight', highlightId: sourceValue.items?.[0]?.highlightId || ''
+                }));
+                cells.appendChild(button);
+            });
         });
         block.appendChild(cells);
         container.appendChild(block);
@@ -1227,6 +1462,7 @@ function getPanelFollowupDraft(figureId, panelId) {
 
 function createPanelFollowupControl(figure, panel) {
     const panelId = String(panel?.panel || '').toUpperCase();
+    const followupKey = panelWorkspaceKey(figure.figureId, panelId);
     const followups = figure?.panelFollowups && typeof figure.panelFollowups === 'object'
         ? figure.panelFollowups : {};
     const errors = figure?.panelFollowupErrors && typeof figure.panelFollowupErrors === 'object'
@@ -1234,6 +1470,7 @@ function createPanelFollowupControl(figure, panel) {
     const loading = figure?.panelFollowupLoading?.[panelId] === true;
     const draft = getPanelFollowupDraft(figure.figureId, panelId);
     const root = createWorkspaceElement('section', 'workspace-panel-followup');
+    root.dataset.panelFollowupKey = followupKey;
     const toggle = createWorkspaceElement(
         'button', 'btn btn-secondary workspace-panel-followup-toggle', '追问此 Panel'
     );
@@ -1278,6 +1515,11 @@ function createPanelFollowupControl(figure, panel) {
         }
         submit.disabled = true;
         submit.textContent = '正在向 LLM 追问…';
+        const localStatus = root.querySelector('.workspace-panel-followup-status');
+        if (localStatus) {
+            localStatus.classList.add('is-loading');
+            localStatus.textContent = `正在生成 Panel ${panelId} 的回答，完成后会自动定位到这里…`;
+        }
         void runFigurePanelFollowup(figure.figureId, panelId, topics, question)
             .catch(error => showStatus('Panel 追问失败：' + error.message, 'error'));
     });
@@ -1289,9 +1531,21 @@ function createPanelFollowupControl(figure, panel) {
     });
     root.append(toggle, chooser);
     const answer = followups[panelId];
+    root.appendChild(createWorkspaceElement(
+        'p', `workspace-panel-followup-status${loading ? ' is-loading' : ''}`,
+        loading
+            ? `正在生成 Panel ${panelId} 的回答，完成后会自动定位到这里…`
+            : (answer?.answer ? '回答已生成并显示在下方。' : '提交后，回答会直接显示在此 Panel 内。')
+    ));
     if (answer?.answer) {
         const result = createWorkspaceElement('section', 'workspace-panel-followup-answer');
-        result.appendChild(createWorkspaceElement('strong', '', 'LLM 追问回答'));
+        result.tabIndex = -1;
+        result.setAttribute('aria-live', 'polite');
+        result.dataset.panelFollowupAnswer = followupKey;
+        if (panelFollowupRevealKey === followupKey) {
+            result.classList.add('is-newly-revealed');
+        }
+        result.appendChild(createWorkspaceElement('strong', '', `Panel ${panelId} 追问回答`));
         if (answer.customQuestion) {
             result.appendChild(createWorkspaceElement(
                 'p', 'workspace-panel-followup-question', `你的问题：${answer.customQuestion}`
@@ -1311,6 +1565,17 @@ function createPanelFollowupControl(figure, panel) {
         root.appendChild(createWorkspaceElement('p', 'workspace-figure-error', errors[panelId]));
     }
     return root;
+}
+
+function revealPanelFollowupAnswer(followupKey) {
+    const selector = `[data-panel-followup-answer="${CSS.escape(followupKey)}"]`;
+    const answer = document.querySelector(selector);
+    if (!answer) return false;
+    answer.classList.add('is-newly-revealed');
+    answer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    answer.focus({ preventScroll: true });
+    setTimeout(() => answer.classList.remove('is-newly-revealed'), 520);
+    return true;
 }
 
 function figureCatalogPanelIds(figure, result) {
@@ -1485,10 +1750,15 @@ function renderCrossFigureLogicSnapshot(container, crossFigureLogic) {
                 kind: 'figure', figureId: node.figureId
             }));
             block.appendChild(jump);
-            appendFigureWorkspaceField(block, '本图任务', node.role);
+            appendFigureWorkspaceField(
+                block, '本图任务', CROSS_FIGURE_ROLE_LABELS[node.role] || node.role
+            );
             appendFigureWorkspaceField(block, '本图确立', node.established);
             appendFigureWorkspaceField(block, '为何进入下一图', node.transition);
-            appendFigureWorkspaceField(block, '证据等级', node.evidenceLevel);
+            appendFigureWorkspaceField(
+                block, '证据等级',
+                CROSS_FIGURE_EVIDENCE_LABELS[node.evidenceLevel] || node.evidenceLevel
+            );
             details.appendChild(block);
         });
         const dominoChain = Array.isArray(logic.dominoChain) ? logic.dominoChain : [];
@@ -1601,6 +1871,7 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
         figure_synthesizing: 'Panel 已提取，正在综合整图证据链',
         figure_synthesis_complete: '整图证据链综合完成',
         figure_schema_retry: '返回结构不完整，正在自动修正',
+        figure_compact_fallback: '整图返回不稳定，已切换为 Panel 提取后再综合',
         provider_telemetry: '模型已返回，正在读取用量与完成状态',
         figure: progress.cacheHit ? '已从本地缓存恢复解读' : 'Figure 解读已完成',
         failed: 'Figure 解读失败',
@@ -1838,9 +2109,8 @@ function renderFigureQuickNav(figures) {
             nav.querySelectorAll('.figure-quick-nav-item.show-panels').forEach(other => {
                 if (other !== item) other.classList.remove('show-panels');
             });
-            if (figureQuickNavExpandedFigureId !== figure.figureId) {
-                figureQuickNavExpandedFigureId = '';
-            }
+            figureQuickNavExpandedFigureId = panelIds.length ? figure.figureId : '';
+            item.classList.toggle('show-panels', panelIds.length > 0);
             figureQuickNavActiveId = figure.figureId;
             nav.querySelectorAll('.figure-quick-nav-marker').forEach(button => {
                 const owner = button.closest('.figure-quick-nav-item');
@@ -1848,19 +2118,15 @@ function renderFigureQuickNav(figures) {
             });
         };
         item.addEventListener('mouseenter', activateItem);
-        label.addEventListener('mouseenter', () => {
-            if (!panelIds.length) return;
-            clearTimeout(figureQuickNavHoverTimer);
-            figureQuickNavHoverTimer = setTimeout(() => {
-                nav.querySelectorAll('.figure-quick-nav-item.show-panels')
-                    .forEach(other => other.classList.remove('show-panels'));
-                figureQuickNavExpandedFigureId = figure.figureId;
-                item.classList.add('show-panels');
-            }, 60);
-        });
+        item.addEventListener('focusin', activateItem);
         item.addEventListener('mouseleave', () => {
             clearTimeout(figureQuickNavHoverTimer);
-            figureQuickNavHoverTimer = setTimeout(closePanels, 70);
+            figureQuickNavHoverTimer = setTimeout(closePanels, 45);
+        });
+        item.addEventListener('focusout', event => {
+            if (item.contains(event.relatedTarget)) return;
+            clearTimeout(figureQuickNavHoverTimer);
+            figureQuickNavHoverTimer = setTimeout(closePanels, 45);
         });
         item.append(marker, flyout);
         figureMarkers.appendChild(item);
@@ -1882,7 +2148,10 @@ function syncFigureQuickNavFromScroll() {
     const figureId = closest?.dataset.figureId || '';
     if (!figureId || figureId === figureQuickNavActiveId) return;
     figureQuickNavActiveId = figureId;
-    renderFigureQuickNav(currentWorkspaceSnapshot?.figures?.figures || []);
+    document.querySelectorAll('#figureQuickNav .figure-quick-nav-marker').forEach(marker => {
+        const owner = marker.closest('.figure-quick-nav-item');
+        marker.setAttribute('aria-current', String(owner?.dataset.figureId === figureId));
+    });
 }
 
 function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
@@ -2944,7 +3213,7 @@ async function persistCurrentArticleArchive({
 
 async function applyLoadedArticleArchive(archive, { imported = false } = {}) {
     const identity = currentArticleArchiveIdentity();
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (!tab?.id || !identity.documentId) throw new Error('当前论文尚未准备完成');
     if (imported) {
         await sendLlmMessage({
@@ -3233,6 +3502,10 @@ function setupArticleArchiveControls() {
         ?.addEventListener('click', saveCurrentArticleWorkspace);
     document.getElementById('importCurrentArticleArchive')
         ?.addEventListener('change', importCurrentArticleArchive);
+    document.getElementById('importCurrentArticleArchiveButton')
+        ?.addEventListener('click', () => {
+            document.getElementById('importCurrentArticleArchive')?.click();
+        });
     document.getElementById('scanArticleWorkspace')
         ?.addEventListener('click', scanCurrentArticleWorkspace);
     document.getElementById('clearArticleWorkspace')
@@ -3305,6 +3578,7 @@ async function initializeCurrentArticle({ retry = false } = {}) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    setupFloatingSidePanelControls();
     setupWorkspaceNavigation();
     setupSidePanelSettingsMenu();
     setupArticleArchiveControls();
@@ -3613,7 +3887,7 @@ function updateApplyButton() {
 }
 
 async function controlActiveAnalysis(scope, command) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (!tab?.id) throw new Error('无法获取当前论文页面');
     const response = await sendTabMessage(tab.id, {
         action: 'controlLlmOperation', scope, command
@@ -3800,7 +4074,7 @@ async function exportAdapterDiagnosticBundle() {
         button.textContent = '正在生成诊断包…';
     });
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('无法获取当前论文页面');
         const response = await sendTabMessage(tab.id, {
             action: 'buildAdapterDiagnosticBundle'
@@ -3809,7 +4083,7 @@ async function exportAdapterDiagnosticBundle() {
             throw new Error(response?.error || '页面没有返回适配诊断数据');
         }
         const bundle = validateAdapterDiagnosticBundle(response.bundle);
-        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const currentTab = await queryPanelTargetTab();
         if (currentTab?.id !== tab.id) {
             throw new Error('活动页面已变化，请在目标论文页重新导出');
         }
@@ -3901,7 +4175,7 @@ function startReviewOutlineProgressPolling(
 
 async function restoreReviewOutlineProgress() {
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (!tab?.id) return;
         const status = await refreshReviewOutlineProgress(tab.id, false);
         if (hasRunningFigureProgress(status)) {
@@ -4015,7 +4289,7 @@ function startFigureProgressPolling(tabId, { waitForSnapshot = false } = {}) {
 
 async function restoreFigureAnalysisProgress() {
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (!tab?.id) return;
         const status = await refreshFigureAnalysisProgress(tab.id, false);
         if (hasRunningFigureProgress(status)) {
@@ -4284,7 +4558,7 @@ function queueConfidenceThresholdMutation(targetThreshold) {
                 });
             }
             if (!isCurrent()) return { applied: false, reason: 'superseded' };
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const tab = await queryPanelTargetTab();
             if (!tab?.id) throw new Error('无法获取当前论文页面');
             const response = await sendTabMessage(tab.id, {
                 action: 'applyLlmConfidenceThreshold',
@@ -4368,7 +4642,7 @@ async function prepareCurrentArticleCore({
     expectedViewId = readingViewId,
     forceRefresh = false
 } = {}) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (!tab?.id) throw new Error('无法获取当前论文页面');
     return prepareArticleForAdaptiveAnalysis(tab.id, {
         isCurrent,
@@ -4490,7 +4764,7 @@ async function refreshLlmDiagnostics() {
     element.hidden = false;
     element.textContent = '正在读取当前页面的正文提取诊断…';
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         const response = await sendTabMessage(tab.id, { action: 'getLlmDiagnostics' });
         if (!response?.success) throw new Error(response?.error || '诊断不可用');
         const diagnostics = response.diagnostics || {};
@@ -4740,7 +5014,7 @@ function updateTotalMatchCount() {
 // 请求匹配计数
 async function requestMatchCounts() {
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (!tab?.id || analysisMode !== 'regex') return;
         const rules = await fetchCurrentRegexRules(tab.id);
         const response = await sendTabMessage(tab.id, {
@@ -4826,7 +5100,7 @@ async function runFigureAnalysis() {
     let tab = null;
     let taskToken = null;
     try {
-        [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('无法获取当前论文页面');
         taskToken = figureTaskGeneration;
         if (!isCurrentFigureTask(taskToken, tab.id)) return;
@@ -4922,7 +5196,7 @@ async function runFigureAnalysis() {
 }
 
 async function showFigureOriginalImage(figureId) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (!tab?.id) throw new Error('无法获取当前论文页面');
     const response = await sendTabMessage(tab.id, {
         action: 'showFigureOriginalImage', figureId
@@ -4937,7 +5211,7 @@ async function runFigurePanelFollowup(figureId, panelId, topics, customQuestion 
     if (llmSettingsState?.effectiveMode !== 'llm') {
         throw new Error('请先配置可用的 LLM API');
     }
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await queryPanelTargetTab();
     if (!tab?.id || !isCurrentFigureTask(figureTaskGeneration, tab.id)) {
         throw new Error('当前论文页面已切换，请返回后重试');
     }
@@ -4950,9 +5224,22 @@ async function runFigurePanelFollowup(figureId, panelId, topics, customQuestion 
         error.code = response?.code;
         throw error;
     }
-    panelFollowupDraftState.delete(panelWorkspaceKey(figureId, panelId));
+    const followupKey = panelWorkspaceKey(figureId, panelId);
+    const draft = getPanelFollowupDraft(figureId, panelId);
+    draft.open = true;
+    draft.topics.clear();
+    draft.question = '';
+    figureExpansionState.set(figureId, true);
+    figurePanelExpansionState.set(followupKey, true);
+    panelFollowupRevealKey = followupKey;
     await refreshArticleWorkspace();
     await persistCurrentArticleArchive().catch(() => null);
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            revealPanelFollowupAnswer(followupKey);
+            if (panelFollowupRevealKey === followupKey) panelFollowupRevealKey = '';
+        });
+    });
     showStatus(`已完成 ${figureId} · Panel ${panelId} 的定向追问`, 'success');
     return response;
 }
@@ -4965,7 +5252,7 @@ async function runSingleFigureAnalysis(figureId) {
     const taskToken = figureTaskGeneration;
     let tab = null;
     try {
-        [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('ACTIVE_TAB_NOT_FOUND');
         if (!isCurrentFigureTask(taskToken, tab.id)) return;
         startFigureProgressPolling(tab.id, { waitForSnapshot: true });
@@ -5006,7 +5293,7 @@ async function runSingleFigurePanelAnalysis(figureId, panelId) {
     const taskToken = figureTaskGeneration;
     let tab = null;
     try {
-        [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('ACTIVE_TAB_NOT_FOUND');
         if (!isCurrentFigureTask(taskToken, tab.id)) return;
         figureExpansionState.set(figureId, true);
@@ -5053,7 +5340,7 @@ async function runCrossFigureLogic() {
     let tab = null;
     let taskToken = null;
     try {
-        [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('ACTIVE_TAB_NOT_FOUND');
         taskToken = figureTaskGeneration;
         if (!isCurrentFigureTask(taskToken, tab.id)) return;
@@ -5227,14 +5514,14 @@ async function refreshManualAnnotationSummary(tabId = null) {
     try {
         let targetTabId = tabId;
         if (!targetTabId) {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const tab = await queryPanelTargetTab();
             targetTabId = tab?.id;
         }
         if (!targetTabId) throw new Error('无法获取当前论文页面');
         const response = await sendTabMessage(targetTabId, {
             action: 'prepareManualAnnotations'
         });
-        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const currentTab = await queryPanelTargetTab();
         if (requestId !== manualSummarySequence || currentTab?.id !== targetTabId) return null;
         if (!response?.success || !response.documentId) {
             throw new Error(response?.error || '手动标注数据不可用');
@@ -5271,7 +5558,7 @@ async function clearAutomaticHighlightsFromCurrentTab() {
     automaticClearPending = true;
     renderManualAnnotationSummary();
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (!tab?.id) throw new Error('无法获取当前论文页面');
         const response = await sendTabMessage(tab.id, {
             action: 'clearAutomaticHighlights'
@@ -5312,7 +5599,7 @@ async function confirmManualAnnotationClear(event) {
     const confirmButton = document.getElementById('confirmClearManual');
     confirmButton.disabled = true;
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryPanelTargetTab();
         if (tab?.id !== snapshot.tabId ||
             manualAnnotationState.documentId !== snapshot.documentId) {
             throw new Error('当前论文已变化，请重新确认');
@@ -5504,7 +5791,7 @@ function setupEventListeners() {
         updateApplyButton();
         try {
             await preferenceMutationCoordinator.drainLatest();
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const tab = await queryPanelTargetTab();
             if (!tab?.id) throw new Error('无法获取当前论文页面');
             // The tab lookup yields; drain again before validating the final mode,
             // type and prepared composition used by the analysis request.

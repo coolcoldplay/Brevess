@@ -352,11 +352,25 @@ test('manual mutations push fresh counts to the active side panel without pollin
   assert.match(notifier, /annotationCount/);
   assert.match(notifier, /unresolvedCount/);
   assert.match(content, /updateCurrentManualRecord[\s\S]{0,240}notifyManualAnnotationStateChanged\('mutated'\)/);
+  assert.match(content, /updateCurrentManualRecord[\s\S]{0,240}scheduleArticleWorkspaceArtifactsSave\(\{ immediate: true \}\)/);
   assert.match(content, /clearManualAnnotationsAfterBackground[\s\S]{0,600}notifyManualAnnotationStateChanged\('cleared'\)/);
   assert.match(popup, /message\?\.type === 'MANUAL_ANNOTATION_STATE_CHANGED'/);
   assert.match(popup, /applyManualAnnotationStateEvent\(message\.event, sender\.tab\.id\)/);
+  assert.match(popup, /MANUAL_ANNOTATION_STATE_CHANGED[\s\S]{0,300}void refreshArticleWorkspace\(\)/);
   assert.match(popup, /manualSummarySequence \+= 1/);
   assert.match(popup, /target === 'analysis'[\s\S]{0,80}refreshManualAnnotationSummary/);
+});
+
+test('side-panel highlight distribution separates manual, AI, and rule-generated marks', () => {
+  const popup = read('popup.js');
+  const css = read('popup.css');
+  assert.match(popup, /manual:\s*\{ label:\s*'手动标注', className:\s*'is-manual' \}/);
+  assert.match(popup, /llm:\s*\{ label:\s*'AI 自动', className:\s*'is-llm' \}/);
+  assert.match(popup, /regex:\s*\{ label:\s*'规则自动', className:\s*'is-regex' \}/);
+  assert.match(popup, /value\.sources/);
+  assert.match(css, /\.workspace-distribution-cell\.is-manual/);
+  assert.match(css, /\.workspace-distribution-cell\.is-llm/);
+  assert.match(css, /\.workspace-distribution-cell\.is-regex/);
 });
 
 test('clearing automatic highlights clears restorable state and persists an empty engine', () => {

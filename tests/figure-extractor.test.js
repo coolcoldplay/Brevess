@@ -176,6 +176,25 @@ test('recognizes common unparenthesized caption and DOM panel labels without an 
   assert.deepEqual(result.panelHints, ['A', 'B', 'F']);
 });
 
+test('recognizes lowercase Nature legend markers and ranges without an LLM', () => {
+  assert.deepEqual(
+    extractPanelHints('Fig. 1 | Study overview. a, cohort design. b–d, UMAP and quantification. e: validation.'),
+    ['A', 'B', 'C', 'D', 'E']
+  );
+});
+
+test('keeps caption-only Figures so protected or canvas images can use text evidence fallback', () => {
+  const candidate = figure({
+    caption: 'Figure 6. Caption-only mechanistic summary.',
+    images: []
+  });
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-6');
+  assert.deepEqual(result.imageElements, []);
+  assert.equal(result.caption, 'Figure 6. Caption-only mechanistic summary.');
+});
+
 test('keeps lazy-loaded publisher images from data-src attributes', () => {
   const lazyImage = {
     currentSrc: '',

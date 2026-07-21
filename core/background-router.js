@@ -873,9 +873,10 @@
         figureLabel: String(value?.figureLabel || figureId).trim().slice(0, 80),
         caption,
         articleTitle: String(articleTitle || '').trim().slice(0, 500),
-        panelHints: (Array.isArray(value?.panelHints) ? value.panelHints : []).slice(0, 30)
+        panelHints: [...new Set((Array.isArray(value?.panelHints) ? value.panelHints : [])
+          .slice(0, 30)
           .map(item => String(item || '').trim().toUpperCase())
-          .filter(item => /^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(item)),
+          .filter(item => /^[A-Z0-9][A-Z0-9.+-]{0,7}$/.test(item)))],
         contextParagraphs: (Array.isArray(value?.contextParagraphs)
           ? value.contextParagraphs : []).slice(0, 12).map(item => ({
           paragraphId: String(item?.paragraphId || '').slice(0, 120),
@@ -1049,25 +1050,30 @@
         validate,
         progressDetails
       }) {
-        let raw = await requestFigureJson(
-          adapter, request, { onProgress: progress }, progressDetails,
-          { emitLifecycle: true, operation }
-        );
-        progress({ phase: 'figure_validating', ...progressDetails });
         try {
+          const raw = await requestFigureJson(
+            adapter, request, { onProgress: progress }, progressDetails,
+            { emitLifecycle: true, operation }
+          );
+          progress({ phase: 'figure_validating', ...progressDetails });
           return validate(raw);
         } catch (error) {
           if (error?.code !== 'INVALID_RESPONSE') throw error;
           progress({ phase: 'figure_schema_retry', ...progressDetails });
-          raw = await requestFigureJson(adapter, {
+          const repairedRaw = await requestFigureJson(adapter, {
             ...request,
             systemPrompt: `${prompt.systemPrompt}\nSCHEMA_REPAIR_PASS: Return only the exact JSON object, include every required key, use empty strings or empty arrays when evidence is absent, and do not add unsupported keys.`
           }, { onProgress: progress }, progressDetails,
           { emitLifecycle: true, operation });
           progress({ phase: 'figure_validating', ...progressDetails });
-          return validate(raw);
+          return validate(repairedRaw);
         }
       }
+
+      const degradableResponseCodes = new Set([
+        'PROVIDER_REJECTED', 'INVALID_RESPONSE', 'CONTEXT_BUDGET_EXCEEDED',
+        'TOKEN_LIMIT_REJECTED', 'OUTPUT_TRUNCATED', 'REQUEST_TIMEOUT'
+      ]);
 
       // A small Figure is fastest and most coherent as one structured request.
       if (panelBatches.length === 1) {
@@ -1082,6 +1088,28 @@
           completedPanelBatches: 0
         };
         const run = async visualInput => {
+          if (!panelHints.length) {
+            const prompt = shared.compileFigureSynthesisPrompt(
+              batchFigure, [], { visualInput, analysisDepth }
+            );
+            const request = {
+              ...prompt,
+              images: visualInput ? figure.images : [],
+              outputUnits: analysisDepth === 'deep' ? 4 : 2
+            };
+            progress({
+              phase: 'figure_requesting', ...batchBase,
+              basis: visualInput ? 'vision_text' : 'caption_context',
+              visionFallback,
+              unlabeledFigure: true
+            });
+            return requestValidated({
+              prompt, request, progressDetails: batchBase,
+              validate: raw => shared.validateFigureSynthesis(
+                raw, batchFigure, [], { visualInput, analysisDepth }
+              )
+            });
+          }
           const prompt = shared.compileFigureAnalysisPrompt(
             batchFigure, { visualInput, analysisDepth }
           );
@@ -1102,16 +1130,81 @@
             )
           });
         };
+        const runCompactTwoPass = async visualInput => {
+          const panelPrompt = shared.compileFigurePanelBatchPrompt(
+            batchFigure, { visualInput, analysisDepth }
+          );
+          progress({
+            phase: 'figure_compact_fallback', ...batchBase,
+            basis: visualInput ? 'vision_text' : 'caption_context',
+            visionFallback: !visualInput
+          });
+          const panelResult = await requestValidated({
+            prompt: panelPrompt,
+            request: {
+              ...panelPrompt,
+              images: visualInput ? figure.images : [],
+              outputUnits: Math.max(1, panelHints.length)
+            },
+            progressDetails: batchBase,
+            validate: raw => shared.validateFigurePanelBatch(
+              raw, batchFigure, { visualInput, analysisDepth }
+            )
+          });
+          progress({
+            phase: 'figure_panel_batch_complete', ...batchBase,
+            completedPanelBatches: 1,
+            recognizedPanelCount: panelResult.panels.length,
+            basis: panelResult.basis,
+            visionFallback: !visualInput,
+            partialFigureResult: panelResult
+          });
+          const synthesisPrompt = shared.compileFigureSynthesisPrompt(
+            batchFigure, panelResult.panels, { visualInput, analysisDepth }
+          );
+          progress({
+            phase: 'figure_synthesizing', ...batchBase,
+            completedPanelBatches: 1,
+            recognizedPanelCount: panelResult.panels.length
+          });
+          return requestValidated({
+            prompt: synthesisPrompt,
+            request: {
+              ...synthesisPrompt,
+              images: [],
+              outputUnits: Math.max(1, panelResult.panels.length)
+            },
+            progressDetails: batchBase,
+            validate: raw => shared.validateFigureSynthesis(
+              raw, batchFigure, panelResult.panels,
+              { visualInput, analysisDepth }
+            )
+          });
+        };
         let result;
+        let lastError = null;
         try {
           result = await run(useVisualInput);
         } catch (error) {
-          if (!useVisualInput || error?.code !== 'PROVIDER_REJECTED') throw error;
+          lastError = error;
+          if (useVisualInput && degradableResponseCodes.has(error?.code)) {
+            visionFallback = true;
+            useVisualInput = false;
+            progress({ phase: 'figure_fallback', ...batchBase, errorCode: error.code });
+            try {
+              result = await run(false);
+              lastError = null;
+            } catch (fallbackError) {
+              lastError = fallbackError;
+            }
+          }
+        }
+        if (!result && panelHints.length && degradableResponseCodes.has(lastError?.code)) {
           visionFallback = true;
           useVisualInput = false;
-          progress({ phase: 'figure_fallback', ...batchBase, errorCode: error.code });
-          result = await run(false);
+          result = await runCompactTwoPass(false);
         }
+        if (!result) throw lastError || new Error('Figure analysis did not return a result');
         progress({
           phase: 'figure_assembling', ...batchBase,
           recognizedPanelCount: result.panels.length
@@ -1197,7 +1290,7 @@
       try {
         batchResults = await runExtraction(useVisualInput);
       } catch (error) {
-        if (!useVisualInput || error?.code !== 'PROVIDER_REJECTED') throw error;
+        if (!useVisualInput || !degradableResponseCodes.has(error?.code)) throw error;
         visionFallback = true;
         useVisualInput = false;
         progress({ phase: 'figure_fallback', ...progressBase, errorCode: error.code });
@@ -3444,6 +3537,17 @@
               createdAt: Date.now(),
               chunks: progressChunks
             }]);
+            progress({
+              phase: 'review_chunk_checkpoint',
+              chunkId: completed.chunkId,
+              checkpointSummaries: completed.summaries,
+              scopeId: String(message.scopeId || ''),
+              paragraphOnly: message.paragraphOnly === true,
+              completedChunks: Object.keys(progressChunks).length,
+              completedParagraphs: new Set(Object.values(progressChunks)
+                .flatMap(item => item?.paragraphIds || [])).size,
+              totalParagraphs: analysisParagraphs.length
+            });
           }
         });
         await cacheStore.setMany([{

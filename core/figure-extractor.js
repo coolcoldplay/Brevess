@@ -84,8 +84,8 @@
       for (let code = start; code <= end; code += 1) panels.add(String.fromCharCode(code));
     };
     for (const match of normalizeText(caption).matchAll(/\(([^)]{1,80})\)/g)) {
-      const content = match[1];
-      if (!/^[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*$/.test(content)) continue;
+      const content = match[1].toUpperCase();
+      if (!/^[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*$/i.test(content)) continue;
       for (const range of content.matchAll(/\b([A-Z])\s*[-\u2013\u2014]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
       }
@@ -104,8 +104,12 @@
     for (const match of text.matchAll(/\b(?:fig(?:ure)?s?\.?\s*S?\s*\d{1,3})\s*([A-Z])\b/g)) {
       addRange(match[1]);
     }
-    for (const match of text.matchAll(/(?:^|[.;]\s+)\(?([A-Z])\)?\s*(?=[:,])/g)) {
-      addRange(match[1]);
+    // Nature and several other publishers commonly write legend markers as
+    // lowercase `a, ... b, ...` or `a–d, ...`, sometimes after a vertical bar.
+    for (const match of text.matchAll(
+      /(?:^|[.;|]\s+)\(?([A-Z])(?:\s*[-\u2013\u2014]\s*([A-Z]))?\)?\s*(?=[:,])/gi
+    )) {
+      addRange(match[1].toUpperCase(), (match[2] || match[1]).toUpperCase());
     }
     return [...panels];
   }
@@ -114,7 +118,7 @@
     const panels = new Set(extractPanelHints(caption));
     const add = value => {
       const text = normalizeText(value).toUpperCase();
-      const direct = text.match(/^(?:PANEL\s*)?([A-Z])$/);
+      const direct = text.match(/^(?:PANEL\s*)?([A-Z])$/i);
       if (direct) panels.add(direct[1]);
     };
     for (const node of Array.from(element?.querySelectorAll?.(PANEL_LABEL_SELECTOR) || [])) {
@@ -225,7 +229,6 @@
       const parsed = parseFigureLabel(labelText) || parseFigureLabel(caption);
       if (!parsed) continue;
       const imageElements = collectImages(element);
-      if (!imageElements.length) continue;
       const item = {
         ...parsed,
         caption,

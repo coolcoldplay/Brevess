@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  HIGHLIGHT_DISTRIBUTION_VERSION,
   buildHighlightDistribution
 } = require('../core/highlight-distribution.js');
 
@@ -63,12 +64,21 @@ test('highlight distribution groups automatic and manual marks by leaf section a
   ]);
 
   assert.equal(result.totalHighlights, 3);
+  assert.equal(HIGHLIGHT_DISTRIBUTION_VERSION, '2');
+  assert.deepEqual(result.sourceCounts, {
+    manual: 1, llm: 1, regex: 1, other: 0
+  });
   assert.deepEqual(result.categories.map(item => item.categoryId), [
     'background', 'limitation', 'result'
   ]);
   assert.equal(
     result.rows.find(row => row.sectionId === 'sec-gap')
       .cells.limitation.count,
+    1
+  );
+  assert.equal(
+    result.rows.find(row => row.sectionId === 'sec-gap')
+      .cells.limitation.sources.manual.count,
     1
   );
   assert.equal(

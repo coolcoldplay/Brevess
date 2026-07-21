@@ -69,12 +69,43 @@ async function configureSidePanelAction() {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
 }
 
+const FLOATING_PANEL_SESSION_KEY = 'sciFloatingPanelPin';
+let floatingPanelPinnedTabId = null;
+const floatingPanelStateReady = chrome.storage.session.get(FLOATING_PANEL_SESSION_KEY)
+  .then(stored => {
+    const tabId = Number(stored?.[FLOATING_PANEL_SESSION_KEY]?.tabId);
+    floatingPanelPinnedTabId = Number.isInteger(tabId) && tabId >= 0 ? tabId : null;
+  })
+  .catch(() => {});
+
+async function setFloatingPanelPinState(pinned, tabId = null) {
+  await floatingPanelStateReady;
+  const normalizedTabId = Number(tabId);
+  floatingPanelPinnedTabId = pinned === true && Number.isInteger(normalizedTabId) &&
+    normalizedTabId >= 0 ? normalizedTabId : null;
+  if (floatingPanelPinnedTabId === null) {
+    await chrome.storage.session.remove(FLOATING_PANEL_SESSION_KEY);
+  } else {
+    await chrome.storage.session.set({
+      [FLOATING_PANEL_SESSION_KEY]: {
+        tabId: floatingPanelPinnedTabId,
+        pinnedAt: Date.now()
+      }
+    });
+  }
+  await syncActiveTabSidePanels();
+  return floatingPanelPinnedTabId;
+}
+
 async function setTabSidePanelAvailability(tabId, enabled) {
   if (!chrome.sidePanel?.setOptions || !Number.isInteger(Number(tabId))) return;
+  await floatingPanelStateReady;
   await chrome.sidePanel.setOptions({
     tabId: Number(tabId),
     path: 'popup.html',
-    enabled: enabled === true
+    // A pinned Document Picture-in-Picture window must keep its side-panel
+    // opener alive while the user moves through other tabs.
+    enabled: enabled === true || floatingPanelPinnedTabId !== null
   });
 }
 
@@ -269,10 +300,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
+  if (Number(tabId) === Number(floatingPanelPinnedTabId)) {
+    void setFloatingPanelPinState(false).catch(() => {});
+  }
   activatedSidePanelTabIds.delete(tabId);
   pendingSidePanelRestoreTabIds.delete(tabId);
   tabSidePanelNavigationGenerations.delete(tabId);
   SciLLM.clearTabActivation(chrome.storage.session, tabId).catch(() => {});
+});
+
+chrome.tabs.onCreated.addListener(tab => {
+  if (floatingPanelPinnedTabId !== null && tab?.id) {
+    void setTabSidePanelAvailability(tab.id, true).catch(() => {});
+  }
 });
 
 if (chrome.sidePanel?.onOpened?.addListener) {
@@ -478,12 +518,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'FLOATING_SIDE_PANEL_PIN_STATE') {
+    setFloatingPanelPinState(message.pinned === true, message.tabId)
+      .then(tabId => sendResponse({
+        success: true,
+        pinned: tabId !== null,
+        tabId
+      }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   if (message?.type === 'ONBOARDING_SET_STEP') {
     onboardingController.setStep(message.step, message.status)
       .then(data => {
         onboardingSnapshot = data;
         sendResponse({ success: true, data });
       })
+      .catch(error => sendResponse({ success: false, error: { message: error.message } }));
+    return true;
+  }
+
+  if (message?.type === 'ONBOARDING_PREPARE_FINISH') {
+    resolveOnboardingSourceTab(message.sourceTab || {}, sender.tab?.windowId)
+      .then(async sourceTab => {
+        if (!Number.isInteger(sourceTab?.tabId)) {
+          return { prepared: false, reason: 'source-tab-missing' };
+        }
+        await setTabSidePanelAvailability(sourceTab.tabId, true);
+        return { prepared: true, tabId: sourceTab.tabId };
+      })
+      .then(data => sendResponse({ success: true, data }))
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
     return true;
   }
@@ -510,22 +575,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Keep sidePanel.open in the completion click's user gesture. State is
     // already terminal before options.js enables this button.
     activatedSidePanelTabIds.add(tabId);
-    const enablePromise = setTabSidePanelAvailability(tabId, true);
+    // The source tab was enabled by ONBOARDING_PREPARE_FINISH before the
+    // Finish button became clickable, so open() cannot race setOptions().
     const openPromise = chrome.sidePanel.open({ tabId });
-    const focusPromise = chrome.tabs.update(tabId, { active: true });
-    const windowPromise = Number.isInteger(windowId) && chrome.windows?.update
-      ? chrome.windows.update(windowId, { focused: true }) : Promise.resolve();
-    const activationPromise = focusPromise.then(currentTab =>
+    // Persist activation before focusing the source tab. Focusing fires
+    // tabs.onActivated synchronously enough that the listener could otherwise
+    // observe a stale inactive state and disable the panel we just opened.
+    const activationPromise = chrome.tabs.get(tabId).then(currentTab =>
       SciLLM.markTabActivated(chrome.storage.session, currentTab)
     );
-    Promise.all([enablePromise, openPromise, focusPromise, windowPromise, activationPromise])
-      .then(([, , , , activation]) => {
+    const focusPromise = activationPromise.then(() =>
+      chrome.tabs.update(tabId, { active: true })
+    );
+    const windowPromise = Number.isInteger(windowId) && chrome.windows?.update
+      ? chrome.windows.update(windowId, { focused: true }) : Promise.resolve();
+    Promise.all([openPromise, activationPromise, focusPromise, windowPromise])
+      .then(([, activation]) => {
         chrome.runtime.sendMessage({ type: 'PANEL_TAB_ACTIVATED', activation }).catch(() => {});
         chrome.tabs.sendMessage(tabId, { action: 'disarmSidePanelRestore' }).catch(() => {});
-        if (sender.tab?.id && sender.tab.id !== tabId) {
-          chrome.tabs.remove(sender.tab.id).catch(() => {});
-        }
-        sendResponse({ success: true, data: { opened: true, tabId } });
+        // Let options.js close its own tab after this response arrives. Closing
+        // the sender here can destroy the message channel before completion.
+        sendResponse({
+          success: true,
+          data: { opened: true, tabId, settingsTabId: sender.tab?.id || null }
+        });
       })
       .catch(error => sendResponse({ success: false, error: { message: error.message } }));
     return true;

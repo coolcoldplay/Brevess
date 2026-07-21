@@ -188,6 +188,10 @@ test('Panel cards provide a bounded follow-up menu using the same dedicated Pane
   assert.match(popup, /workspace-panel-followup-custom/);
   assert.match(css, /\.workspace-panel-followup-chooser/);
   assert.match(popup, /formatFigurePanelInputBasis/);
+  assert.match(popup, /dataset\.panelFollowupAnswer/);
+  assert.match(popup, /function revealPanelFollowupAnswer\(/);
+  assert.match(popup, /完成后会自动定位到这里/);
+  assert.match(css, /\.workspace-panel-followup-answer\.is-newly-revealed/);
 });
 
 test('single Panel images use one best source, reliable canvas crop, and a 1200/960/768 ladder', () => {
@@ -348,14 +352,21 @@ test('Figure quick navigator opens and closes promptly with Panels in one ordere
   const renderer = functionBody(popup, 'renderFigureQuickNav', 'syncFigureQuickNavFromScroll');
 
   assert.match(renderer, /\.slice\(\)\.sort\(/);
-  assert.match(renderer, /setTimeout\(\(\) => \{[\s\S]*?\}, 60\)/);
-  assert.match(renderer, /setTimeout\(closePanels, 70\)/);
+  assert.doesNotMatch(renderer, /setTimeout\(\(\) => \{[\s\S]*?\}, 60\)/);
+  assert.match(renderer, /item\.classList\.toggle\('show-panels', panelIds\.length > 0\)/);
+  assert.match(renderer, /item\.addEventListener\('mouseenter', activateItem\)/);
+  assert.match(renderer, /setTimeout\(closePanels, 45\)/);
   assert.match(renderer, /figure-quick-nav-item\.show-panels/);
   assert.match(renderer, /if \(other !== item\) other\.classList\.remove\('show-panels'\)/);
   assert.match(css, /\.figure-quick-nav-panel-popover\s*\{[^}]*display:\s*grid;/);
   assert.match(css, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.doesNotMatch(css, /\.figure-quick-nav-panel-popover\s*\{[^}]*flex-wrap:/);
   assert.match(css, /\.figure-quick-nav-panel-button\s*\{[^}]*width:\s*100%/);
+  const scrollSync = functionBody(
+    popup, 'syncFigureQuickNavFromScroll', 'renderFigureWorkspaceSnapshot'
+  );
+  assert.doesNotMatch(scrollSync, /renderFigureQuickNav\(/);
+  assert.match(scrollSync, /marker\.setAttribute\('aria-current'/);
 });
 
 test('batch and single Figure workflows share one operation gate and stamp only current results', () => {

@@ -2529,8 +2529,66 @@ test('analyzes Figures sequentially, checkpoints results and reuses identical ca
   assert.equal(panelCheckpoint.completedPanelBatches, 1);
   assert.equal(panelCheckpoint.totalPanelBatches, 1);
   assert.equal(panelCheckpoint.partialFigureResult.figureId, 'figure-1');
-  assert.equal(firstFigureProgress[4].recognizedPanelCount, 1);
-  assert.equal(firstFigureProgress[5].recognizedPanelCount, 1);
+  assert.equal(firstFigureProgress[4].recognizedPanelCount, 0);
+  assert.equal(firstFigureProgress[5].recognizedPanelCount, 0);
+});
+
+test('degrades a repeatedly invalid small Figure into Panel extraction plus synthesis', async () => {
+  const storageArea = createMemoryStorage();
+  const passes = [];
+  const progress = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      passes.push(input.pass || 'single_pass');
+      if (calls <= 2) return jsonResponse({ output_text: 'not valid JSON' });
+      return jsonResponse({ output_text: JSON.stringify(figurePassOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const figure = { ...figureInput(1), panelHints: ['A'] };
+  const result = await router.handle(figureMessage([figure]), {
+    onProgress: value => progress.push(value)
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.figureResults[0].panels.length, 1);
+  assert.deepEqual(passes, [
+    'single_pass', 'single_pass', 'panel_extraction', 'figure_synthesis'
+  ]);
+  assert.ok(progress.some(item => item.phase === 'figure_compact_fallback'));
+});
+
+test('expands a truncated whole-Figure output budget before using structural degradation', async () => {
+  const storageArea = createMemoryStorage();
+  const progress = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      if (calls === 1) {
+        return jsonResponse({
+          status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }
+        });
+      }
+      const input = openAIInputPayload(JSON.parse(options.body));
+      return jsonResponse({ output_text: JSON.stringify(figurePassOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const result = await router.handle(figureMessage([figureInput(1)]), {
+    onProgress: event => progress.push(event)
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(calls, 2);
+  assert.ok(progress.some(item => item.phase === 'output_token_retry'));
+  assert.equal(progress.some(item => item.phase === 'figure_compact_fallback'), false);
 });
 
 test('splits a deep Figure, ignores repeated out-of-batch Panels, and exposes each checkpoint', async () => {
@@ -3314,7 +3372,7 @@ test('evicts an invalid cached Figure result and recomputes it from the provider
   const message = figureMessage([figureInput(1)], { analysisDepth: 'standard' });
   await router.handle(message);
   const cachedKey = [...entries.keys()][0];
-  entries.get(cachedKey).figureResult.panels[0].methodCategory = 'invalid_category';
+  entries.get(cachedKey).figureResult.coreConclusion = { damaged: true };
   const recomputed = await router.handle(message);
 
   assert.equal(calls, 2);
@@ -3542,11 +3600,19 @@ test('routes a review outline through map reduce and returns subtype metadata', 
   const fixture = await configuredReviewRouter({ reviewSubtype: 'systematic' });
   const message = reviewOutlineMessage(outlineParagraphs(2));
   await selectStudyType(fixture.router, message.document, 'systematic_review_meta');
-  const response = await fixture.router.handle(message);
+  const progress = [];
+  const response = await fixture.router.handle(message, {
+    onProgress: event => progress.push(event)
+  });
   assert.equal(response.success, true);
   assert.equal(response.data.outline.reviewSubtype, 'narrative');
   assert.equal(response.data.outline.paragraphCount, 2);
   assert.equal(response.data.cacheHit, false);
+  const checkpoint = progress.find(event => event.phase === 'review_chunk_checkpoint');
+  assert.ok(checkpoint);
+  assert.equal(checkpoint.completedParagraphs, 2);
+  assert.equal(checkpoint.totalParagraphs, 2);
+  assert.equal(checkpoint.checkpointSummaries.length, 2);
 });
 
 test('reuses a complete review outline without another provider request', async () => {

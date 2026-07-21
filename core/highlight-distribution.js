@@ -3,7 +3,8 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const HIGHLIGHT_DISTRIBUTION_VERSION = '1';
+  const HIGHLIGHT_DISTRIBUTION_VERSION = '2';
+  const HIGHLIGHT_SOURCES = ['manual', 'llm', 'regex', 'other'];
 
   function normalize(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
@@ -19,6 +20,14 @@
       result.push(...flatten(node.children));
     });
     return result;
+  }
+
+  function normalizeSource(value) {
+    const source = normalize(value).toLowerCase();
+    if (source === 'manual') return 'manual';
+    if (source === 'llm' || source === 'ai') return 'llm';
+    if (source === 'regex' || source === 'rule') return 'regex';
+    return 'other';
   }
 
   function buildHighlightDistribution(structure = {}, occurrences = []) {
@@ -40,6 +49,7 @@
       }
     ]));
     const unresolved = [];
+    const sourceCounts = Object.fromEntries(HIGHLIGHT_SOURCES.map(source => [source, 0]));
 
     (Array.isArray(occurrences) ? occurrences : []).forEach((item, index) => {
       const categoryId = normalize(item?.categoryId) || 'uncategorized';
@@ -60,16 +70,22 @@
         categoryId,
         categoryName: category.name,
         color: category.color,
-        sectionId
+        sectionId,
+        source: normalizeSource(item?.source)
       };
+      sourceCounts[occurrence.source] += 1;
       const row = rowMap.get(sectionId);
       if (!row) {
         unresolved.push(occurrence);
         return;
       }
-      const cell = row.cells[categoryId] || { count: 0, items: [] };
+      const cell = row.cells[categoryId] || { count: 0, items: [], sources: {} };
       cell.count += 1;
       cell.items.push(occurrence);
+      const sourceCell = cell.sources[occurrence.source] || { count: 0, items: [] };
+      sourceCell.count += 1;
+      sourceCell.items.push(occurrence);
+      cell.sources[occurrence.source] = sourceCell;
       row.cells[categoryId] = cell;
       row.total += 1;
     });
@@ -84,12 +100,14 @@
       categories,
       rows,
       unresolved,
+      sourceCounts,
       totalHighlights: (Array.isArray(occurrences) ? occurrences : []).length
     };
   }
 
   return {
     HIGHLIGHT_DISTRIBUTION_VERSION,
+    HIGHLIGHT_SOURCES,
     buildHighlightDistribution
   };
 });

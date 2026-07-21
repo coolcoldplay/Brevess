@@ -4,10 +4,21 @@ const assert = require('node:assert/strict');
 const {
   requestJson,
   requestSseJson,
+  parseJsonText,
   normalizeImageInputs,
   splitDataUrl,
   normalizeOutputTokenLimit
 } = require('../providers/provider-utils.js');
+
+test('recovers bounded JSON from reasoning wrappers, trailing commas, and raw line breaks', () => {
+  assert.deepEqual(parseJsonText('<think>reason {not json}</think>\n```json\n{"ok":true,}\n```'), {
+    ok: true
+  });
+  assert.deepEqual(parseJsonText('preface {"answer":"line one\nline two"} epilogue'), {
+    answer: 'line one\nline two'
+  });
+  assert.deepEqual(parseJsonText(JSON.stringify('{"nested":true}')), { nested: true });
+});
 require('../providers/openai.js');
 require('../providers/anthropic.js');
 require('../providers/gemini.js');
@@ -345,6 +356,19 @@ test('OpenAI Responses streaming tolerates a chat-completions shaped gateway res
   assert.equal(events.filter(event => event.type === 'text_delta')
     .map(event => event.text).join(''), '兼容成功');
   assert.equal(events.at(-1).type, 'completed');
+});
+
+test('OpenAI structured requests tolerate a chat-completions shaped gateway response', async () => {
+  const adapter = createProviderAdapter({
+    providerId: 'openai', config: providerConfigFor('openai'),
+    fetchImpl: async () => jsonResponse({
+      choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }]
+    })
+  });
+
+  assert.deepEqual(await adapter.generateJson({
+    systemPrompt: 'SYSTEM', userPrompt: '{}', responseSchema: { type: 'object' }
+  }), { ok: true });
 });
 
 test('streaming adapters emit a terminal cancelled event when the request is aborted', async () => {
