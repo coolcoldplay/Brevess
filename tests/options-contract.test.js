@@ -395,6 +395,7 @@ test('local data export uses a dated safe download and never renders an operatin
   assert.match(script, /downloadTextFile\(/);
   assert.match(script, /sci-highlighter-user-data-\$\{date\}\.json/);
   assert.match(script, /URL\.revokeObjectURL\(objectUrl\)/);
+  assert.match(script, /setTimeout\(\(\) => URL\.revokeObjectURL\(objectUrl\), 1000\)/);
   assert.match(script, /directoryName/);
   assert.doesNotMatch(script, /webkitRelativePath|fullPath|directoryPath|handle\.path/);
   assert.doesNotMatch(html, /data-(?:full-)?path=|[A-Z]:\\Users|\/Users\//);

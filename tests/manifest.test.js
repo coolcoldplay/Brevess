@@ -106,6 +106,14 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /options\.html#onboarding/);
   assert.match(background, /shouldStartOnboarding/);
   assert.match(background, /ONBOARDING_FINISH/);
+  assert.match(background, /async function resolveOnboardingSourceTab\(/);
+  assert.match(background, /activatedSidePanelTabIds\.has\(tab\.id\)/);
+  assert.match(background, /rightPreferred - leftPreferred/);
+  assert.match(background, /Number\(right\.lastAccessed\)/);
+  assert.match(
+    background,
+    /ONBOARDING_RESTART[\s\S]*resolveOnboardingSourceTab\(message\.sourceTab \|\| \{\}, sender\.tab\?\.windowId\)/
+  );
   assert.doesNotMatch(
     background,
     /onInstalled\.addListener\([\s\S]{0,500}options\.html#onboarding|onStartup\.addListener\([\s\S]{0,500}options\.html#onboarding/

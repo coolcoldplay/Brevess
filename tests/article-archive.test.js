@@ -140,6 +140,10 @@ test('content and side panel expose archive snapshot, restore, probe, and portab
   assert.match(popup, /ARTICLE_ARCHIVE_PROBE/);
   assert.match(popup, /ARTICLE_ARCHIVE_SAVE/);
   assert.match(popup, /ARTICLE_ARCHIVE_LOAD/);
+  assert.match(
+    popup,
+    /function downloadArticleArchive\(archive\)[\s\S]*downloadBlob\(blob, `\$\{title\}\.sci-archive\.json`\)/
+  );
   assert.match(html, /id="loadArticleArchive"/);
   assert.match(html, /id="reanalyzeArticle"/);
   assert.match(html, /id="exportCurrentArticleArchive"/);

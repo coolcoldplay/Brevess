@@ -138,6 +138,19 @@ async function readDiagnosticDownload(download) {
   };
 }
 
+async function readTextDownload(download) {
+  const filename = download.suggestedFilename();
+  const downloadPath = await download.path();
+  if (!downloadPath) throw new Error(`Text download has no local path: ${filename}`);
+  const content = fs.readFileSync(downloadPath, 'utf8');
+  return {
+    filename,
+    path: downloadPath,
+    bytes: Buffer.byteLength(content, 'utf8'),
+    content
+  };
+}
+
 (async () => {
   fs.mkdirSync(outputDir, { recursive: true });
   prepareQaExtension();
@@ -440,6 +453,108 @@ async function readDiagnosticDownload(download) {
       return response?.annotationCount || 0;
     }, fixtureTab.id)
   };
+
+  await fixture.bringToFront();
+  await sidePanel.locator('[data-workspace-target="highlights"]').click();
+  await sidePanel.locator('[data-workspace-view="highlights"]').waitFor({ state: 'visible' });
+  await sidePanel.locator('#exportCurrentArticleArchive').waitFor({ state: 'visible' });
+  const archiveControlFixture = await sidePanel.evaluate(async () =>
+    (await getCurrentArticleArchiveFromTab()).archive);
+  await sidePanel.evaluate(archiveValue => {
+    globalThis.__sciQaArchiveControlFixture = archiveValue;
+    globalThis.__sciQaArchiveOriginalSendLlmMessage = sendLlmMessage;
+    globalThis.__sciQaArchiveOriginalDownloadBlob = downloadBlob;
+    globalThis.__sciQaArchiveDownloadCapture = null;
+    downloadBlob = (blob, filename) => {
+      globalThis.__sciQaArchiveDownloadCapture = blob.text().then(text => ({
+        filename,
+        text
+      }));
+    };
+    sendLlmMessage = async message => {
+      if (message?.type === 'ARTICLE_ARCHIVE_SAVE') {
+        return { saved: true, queued: true, relativePath: 'articles/qa.json' };
+      }
+      if (message?.type === 'ARTICLE_ARCHIVE_LOAD') {
+        return { archive: message.archive || globalThis.__sciQaArchiveControlFixture };
+      }
+      return globalThis.__sciQaArchiveOriginalSendLlmMessage(message);
+    };
+  }, archiveControlFixture);
+  await sidePanel.locator('#exportCurrentArticleArchive').click();
+  await sidePanel.waitForFunction(() => Boolean(globalThis.__sciQaArchiveDownloadCapture));
+  const articleArchiveCapture = await sidePanel.evaluate(() =>
+    globalThis.__sciQaArchiveDownloadCapture);
+  const articleArchivePath = path.join(outputDir, articleArchiveCapture.filename);
+  fs.writeFileSync(articleArchivePath, articleArchiveCapture.text, 'utf8');
+  const articleArchiveExport = {
+    filename: articleArchiveCapture.filename,
+    path: articleArchivePath,
+    bytes: Buffer.byteLength(articleArchiveCapture.text, 'utf8'),
+    bundle: JSON.parse(articleArchiveCapture.text)
+  };
+  await sidePanel.locator('#importCurrentArticleArchive').setInputFiles(
+    articleArchiveExport.path
+  );
+  await sidePanel.waitForFunction(() =>
+    /上次的高亮、备注与 AI 分析结果已恢复/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    ) && document.getElementById('importCurrentArticleArchive')?.value === ''
+  );
+  await sidePanel.evaluate(() => setArticleArchivePrompt({
+    found: true,
+    savedAt: new Date().toISOString(),
+    annotationCount: 0,
+    hasLlmAnalysis: false,
+    hasReviewOutline: false,
+    figureCount: 0
+  }));
+  await sidePanel.locator('#articleArchivePrompt').waitFor({ state: 'visible' });
+  await sidePanel.locator('#reanalyzeArticle').click();
+  const archiveReanalyzeQa = await sidePanel.evaluate(() => ({
+    promptHidden: document.getElementById('articleArchivePrompt')?.hidden === true,
+    analysisActive:
+      document.querySelector('[data-workspace-view="analysis"]')?.hidden === false,
+    status: document.getElementById('statusMessage')?.textContent || ''
+  }));
+  await sidePanel.evaluate(() => setArticleArchivePrompt({
+    found: true,
+    savedAt: new Date().toISOString(),
+    annotationCount: 0,
+    hasLlmAnalysis: false,
+    hasReviewOutline: false,
+    figureCount: 0
+  }));
+  await sidePanel.locator('#loadArticleArchive').click();
+  await sidePanel.waitForFunction(() =>
+    /上次的高亮、备注与 AI 分析结果已恢复/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    ) && document.getElementById('articleArchivePrompt')?.hidden === true
+  );
+  const articleArchiveControlsQa = await sidePanel.evaluate(() => {
+    const result = {
+      importInputCleared:
+        document.getElementById('importCurrentArticleArchive')?.value === '',
+      loadPromptHidden: document.getElementById('articleArchivePrompt')?.hidden === true,
+      loadStatus: document.getElementById('statusMessage')?.textContent || ''
+    };
+    sendLlmMessage = globalThis.__sciQaArchiveOriginalSendLlmMessage;
+    downloadBlob = globalThis.__sciQaArchiveOriginalDownloadBlob;
+    delete globalThis.__sciQaArchiveOriginalSendLlmMessage;
+    delete globalThis.__sciQaArchiveOriginalDownloadBlob;
+    delete globalThis.__sciQaArchiveDownloadCapture;
+    delete globalThis.__sciQaArchiveControlFixture;
+    return result;
+  });
+  articleArchiveControlsQa.exportKind = articleArchiveExport.bundle.kind;
+  articleArchiveControlsQa.exportSchemaVersion =
+    articleArchiveExport.bundle.schemaVersion;
+  articleArchiveControlsQa.exportBytes = articleArchiveExport.bytes;
+  articleArchiveControlsQa.exportContainsSecrets =
+    /apiKey|authorization|data:image|pageHtml/i.test(
+      JSON.stringify(articleArchiveExport.bundle)
+    );
+  articleArchiveControlsQa.reanalyze = archiveReanalyzeQa;
 
   const secondFixture = await context.newPage();
   secondFixture.on('pageerror', error => pageErrors.push(`fixture-2: ${error.message}`));
@@ -821,10 +936,32 @@ async function readDiagnosticDownload(download) {
   // A real Edge side panel never becomes the active browser tab. Keep the
   // article active while exercising the panel's navigation handler.
   await fixture.bringToFront();
-  await sidePanel.evaluate(() =>
-    document.querySelector('[data-workspace-target="navigation"]')?.click());
+  await sidePanel.locator('[data-workspace-target="navigation"]').click();
   await sidePanel.waitForFunction(() =>
     document.querySelector('[data-workspace-view="navigation"]')?.classList.contains('active'));
+  await sidePanel.locator('#refreshArticleNavigation').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelectorAll('#articleNavigationTree details.workspace-tree-node').length > 0
+  );
+  await sidePanel.locator('#expandAllOutlineLevels').click();
+  const expandedOutlineQa = await sidePanel.evaluate(() => {
+    const branches = Array.from(document.querySelectorAll(
+      '#articleNavigationTree details.workspace-tree-node:not([data-leaf="true"])'
+    ));
+    return {
+      branchCount: branches.length,
+      openCount: branches.filter(details => details.open).length
+    };
+  });
+  await sidePanel.locator('#collapseAllOutlineLevels').click();
+  const navigationControlsQa = await sidePanel.evaluate(expanded => ({
+    branchCount: expanded.branchCount,
+    expandedAll: expanded.branchCount > 0 && expanded.openCount === expanded.branchCount,
+    openAfterCollapse: document.querySelectorAll(
+      '#articleNavigationTree details.workspace-tree-node[open]'
+    ).length,
+    refreshStatus: document.getElementById('articleNavigationStatus')?.textContent || ''
+  }), expandedOutlineQa);
   const navigationStatus = await sidePanel.locator('#articleNavigationStatus').textContent();
   await sidePanel.screenshot({
     path: path.join(outputDir, 'edge-native-side-panel-extension.png'),
@@ -947,6 +1084,276 @@ async function readDiagnosticDownload(download) {
     focusedItems: Array.from(document.querySelectorAll('.figure-quick-nav-item'))
       .filter(item => item.matches(':focus-within')).length
   }));
+  await sidePanel.locator('#expandAllFigureLevels').click();
+  const expandedFigureControlsQa = await sidePanel.evaluate(() => ({
+    totalFigures: document.querySelectorAll('.workspace-figure-card').length,
+    openFigures: document.querySelectorAll('.workspace-figure-card[open]').length
+  }));
+  await sidePanel.locator('#collapseAllFigureLevels').click();
+  const collapsedFigureControlsQa = await sidePanel.evaluate(() => ({
+    openFigures: document.querySelectorAll('.workspace-figure-card[open]').length,
+    openPanels: document.querySelectorAll('.workspace-figure-panel-card[open]').length
+  }));
+  await sidePanel.locator('#refreshFigureInventory').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelectorAll('.workspace-figure-card').length === 3
+  );
+  const figureToolbarControlsQa = await sidePanel.evaluate(
+    ({ expanded, collapsed }) => ({
+      totalFigures: expanded.totalFigures,
+      expandedAll:
+        expanded.totalFigures > 0 && expanded.openFigures === expanded.totalFigures,
+      collapsedFigures: collapsed.openFigures,
+      collapsedPanels: collapsed.openPanels,
+      refreshedFigures: document.querySelectorAll('.workspace-figure-card').length
+    }),
+    { expanded: expandedFigureControlsQa, collapsed: collapsedFigureControlsQa }
+  );
+  const taskControlButtonsQa = await sidePanel.evaluate(async () => {
+    const originalControlActiveAnalysis = controlActiveAnalysis;
+    const calls = [];
+    controlActiveAnalysis = async (scope, command) => {
+      calls.push(`${scope}:${command}`);
+      if (scope === 'highlight') {
+        highlightTaskState = {
+          ...highlightTaskState,
+          running: command !== 'cancel',
+          paused: command === 'pause' ? true : command === 'resume' ? false
+            : highlightTaskState.paused,
+          cancelled: command === 'cancel'
+        };
+        updateHighlightTaskControls();
+      } else {
+        figureAnalysisState = {
+          ...figureAnalysisState,
+          running: command !== 'cancel',
+          paused: command === 'pause' ? true : command === 'resume' ? false
+            : figureAnalysisState.paused,
+          phase: command === 'cancel' ? 'cancelled'
+            : command === 'pause' ? 'paused' : 'analyzing'
+        };
+        updateFigureTaskControls();
+      }
+      return { success: true };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    highlightTaskState = { running: true, paused: false, cancelled: false };
+    updateHighlightTaskControls();
+    document.getElementById('pauseHighlightAnalysis')?.click();
+    await settle();
+    document.getElementById('pauseHighlightAnalysis')?.click();
+    await settle();
+    document.getElementById('cancelHighlightAnalysis')?.click();
+    await settle();
+    figureAnalysisState = {
+      ...figureAnalysisState,
+      running: true,
+      paused: false,
+      phase: 'analyzing'
+    };
+    updateFigureTaskControls();
+    document.getElementById('pauseFigureAnalysis')?.click();
+    await settle();
+    document.getElementById('pauseFigureAnalysis')?.click();
+    await settle();
+    document.getElementById('cancelFigureAnalysis')?.click();
+    await settle();
+    const result = {
+      calls,
+      highlightControlsHidden:
+        document.getElementById('highlightTaskControls')?.hidden === true,
+      figureControlsHidden:
+        document.getElementById('figureTaskControls')?.hidden === true
+    };
+    controlActiveAnalysis = originalControlActiveAnalysis;
+    highlightTaskState = { running: false, paused: false, cancelled: false };
+    figureAnalysisState = {
+      ...figureAnalysisState,
+      running: false,
+      paused: false,
+      phase: 'completed'
+    };
+    updateHighlightTaskControls();
+    updateFigureTaskControls();
+    return result;
+  });
+
+  await sidePanel.evaluate(() => {
+    globalThis.__sciQaOriginalLlmActionSendTabMessage = sendTabMessage;
+    globalThis.__sciQaLlmActionCalls = [];
+    sendTabMessage = async (tabId, message) => {
+      const action = message?.action || '';
+      if ([
+        'analyzeFiguresWithLLM',
+        'getFigureAnalysisStatus',
+        'analyzeCrossFigureLogicWithLLM',
+        'analyzeReviewOutlineWithLLM',
+        'getReviewOutlineStatus'
+      ].includes(action)) {
+        globalThis.__sciQaLlmActionCalls.push({ tabId, action, message: { ...message } });
+      }
+      if (action === 'analyzeFiguresWithLLM') {
+        return {
+          success: true,
+          analyzedCount: 3,
+          failedCount: 0,
+          totalCount: 3,
+          cacheHits: 1,
+          visionFallbacks: 0
+        };
+      }
+      if (action === 'getFigureAnalysisStatus') {
+        return {
+          success: true,
+          status: {
+            running: false,
+            paused: false,
+            phase: 'completed',
+            currentFigure: 3,
+            totalFigures: 3,
+            completedFigures: 3,
+            failedFigures: 0,
+            figureProgress: []
+          }
+        };
+      }
+      if (action === 'analyzeCrossFigureLogicWithLLM') {
+        return {
+          success: true,
+          result: {
+            nodes: [{ id: 'figure-1' }, { id: 'figure-2' }, { id: 'figure-3' }],
+            dominoChain: [{ from: 'figure-1', to: 'figure-2' }, { from: 'figure-2', to: 'figure-3' }]
+          }
+        };
+      }
+      if (action === 'analyzeReviewOutlineWithLLM') {
+        return {
+          success: true,
+          outline: { paragraphCount: 6, globalSynthesisAvailable: true }
+        };
+      }
+      if (action === 'getReviewOutlineStatus') {
+        return {
+          success: true,
+          hasOutline: true,
+          status: {
+            running: false,
+            phase: 'completed',
+            completedParagraphs: 6,
+            totalParagraphs: 6,
+            globalSynthesisAvailable: true
+          }
+        };
+      }
+      return globalThis.__sciQaOriginalLlmActionSendTabMessage(tabId, message);
+    };
+    analysisMode = 'llm';
+    llmSettingsState = {
+      ...(llmSettingsState || {}),
+      effectiveMode: 'llm',
+      settings: llmSettingsState?.settings || {}
+    };
+    const paragraphs = Array.isArray(currentWorkspaceSnapshot?.paragraphs)
+      ? currentWorkspaceSnapshot.paragraphs
+      : [];
+    preparedDocumentState = {
+      documentId: manualAnnotationState.documentId || 'qa-document',
+      documentHash: manualAnnotationState.documentHash || 'qa-document-hash',
+      studyProfile: { primaryType: 'review', reviewSubtype: 'systematic_review' },
+      document: { paragraphs: paragraphs.length ? paragraphs : Array.from({ length: 6 }, (_, index) => ({
+        paragraphId: `qa-outline-${index + 1}`,
+        text: `QA outline paragraph ${index + 1}`
+      })) }
+    };
+    updateAnalysisModeUi();
+    renderCategories();
+    updateFigureButton();
+    updateReviewOutlineButton();
+  });
+  await fixture.bringToFront();
+  await sidePanel.locator('[data-workspace-target="analysis"]').click();
+  await sidePanel.locator('#moreCategories').click();
+  await sidePanel.locator('#moreCategoriesPanel').waitFor({ state: 'visible' });
+  const moreCategoriesOpenQa = await sidePanel.evaluate(() => ({
+    expanded: document.getElementById('moreCategories')?.getAttribute('aria-expanded'),
+    panelVisible: document.getElementById('moreCategoriesPanel')?.hidden === false,
+    searchFocused: document.activeElement?.id === 'categorySearch',
+    groupCount: document.querySelectorAll('#moreCategoryGroups .more-category-group').length
+  }));
+  await sidePanel.locator('#moreCategories').click();
+  await sidePanel.locator('#moreCategoriesPanel').waitFor({ state: 'hidden' });
+  await sidePanel.evaluate(() => {
+    globalThis.__sciQaOriginalRestoreViewPreset = queueRestoreViewPreset;
+    globalThis.__sciQaRestoreViewCalls = [];
+    queueRestoreViewPreset = async targetViewId => {
+      globalThis.__sciQaRestoreViewCalls.push(targetViewId);
+      return { status: 'refreshed' };
+    };
+  });
+  await sidePanel.locator('#restoreViewPreset').click();
+  await sidePanel.waitForFunction(() => globalThis.__sciQaRestoreViewCalls?.length === 1);
+  const analysisCategoryControlsQa = await sidePanel.evaluate(openQa => {
+    const result = {
+      more: openQa,
+      moreCollapsed:
+        document.getElementById('moreCategories')?.getAttribute('aria-expanded') === 'false' &&
+        document.getElementById('moreCategoriesPanel')?.hidden === true,
+      restoreCalls: [...globalThis.__sciQaRestoreViewCalls],
+      restoreVisible: document.getElementById('restoreViewPreset')?.hidden === false
+    };
+    queueRestoreViewPreset = globalThis.__sciQaOriginalRestoreViewPreset;
+    delete globalThis.__sciQaOriginalRestoreViewPreset;
+    delete globalThis.__sciQaRestoreViewCalls;
+    return result;
+  }, moreCategoriesOpenQa);
+  await sidePanel.locator('[data-workspace-target="figures"]').click();
+  await sidePanel.locator('#analyzeFiguresFromFigures').click();
+  await sidePanel.waitForFunction(() =>
+    globalThis.__sciQaLlmActionCalls?.some(call => call.action === 'analyzeFiguresWithLLM') &&
+    figureAnalysisState.running === false
+  );
+  const figureBatchButtonQa = await sidePanel.evaluate(() => ({
+    disabledAfterCompletion: document.getElementById('analyzeFiguresFromFigures')?.disabled,
+    phase: figureAnalysisState.phase,
+    completedFigures: figureAnalysisState.completedFigures,
+    totalFigures: figureAnalysisState.totalFigures,
+    status: document.getElementById('statusMessage')?.textContent || ''
+  }));
+  await sidePanel.locator('#analyzeCrossFigureLogic').click();
+  await sidePanel.waitForFunction(() =>
+    globalThis.__sciQaLlmActionCalls?.some(call =>
+      call.action === 'analyzeCrossFigureLogicWithLLM') &&
+    crossFigureLogicRunning === false
+  );
+  const crossFigureButtonQa = await sidePanel.evaluate(() => ({
+    disabledAfterCompletion: document.getElementById('analyzeCrossFigureLogic')?.disabled,
+    running: crossFigureLogicRunning,
+    status: document.getElementById('statusMessage')?.textContent || ''
+  }));
+  await sidePanel.locator('[data-workspace-target="navigation"]').click();
+  await sidePanel.locator('#generateOutlineSummaries').click();
+  await sidePanel.waitForFunction(() =>
+    globalThis.__sciQaLlmActionCalls?.some(call =>
+      call.action === 'analyzeReviewOutlineWithLLM') &&
+    reviewOutlineState.running === false && reviewOutlineState.hasOutline === true &&
+    /\u5df2\u751f\u6210/.test(document.getElementById('statusMessage')?.textContent || '')
+  );
+  const outlineSummaryButtonQa = await sidePanel.evaluate(() => ({
+    disabledAfterCompletion: document.getElementById('generateOutlineSummaries')?.disabled,
+    phase: reviewOutlineState.phase,
+    completedParagraphs: reviewOutlineState.completedParagraphs,
+    totalParagraphs: reviewOutlineState.totalParagraphs,
+    hasOutline: reviewOutlineState.hasOutline,
+    status: document.getElementById('statusMessage')?.textContent || '',
+    calls: globalThis.__sciQaLlmActionCalls.map(call => call.action)
+  }));
+  await sidePanel.evaluate(() => {
+    sendTabMessage = globalThis.__sciQaOriginalLlmActionSendTabMessage;
+    delete globalThis.__sciQaOriginalLlmActionSendTabMessage;
+    delete globalThis.__sciQaLlmActionCalls;
+    stopFigureProgressPolling();
+    stopReviewOutlineProgressPolling();
+  });
 
   const chatSourceSnapshot = await worker.evaluate(
     tabId => chrome.tabs.sendMessage(tabId, {
@@ -1148,6 +1555,40 @@ async function readDiagnosticDownload(download) {
     const messages = document.getElementById('articleChatMessages');
     return Boolean(messages && messages.scrollTop + messages.clientHeight >=
       messages.scrollHeight - 3);
+  });
+  await sidePanel.evaluate(() => {
+    globalThis.__sciQaOriginalChatSendTabMessage = sendTabMessage;
+    globalThis.__sciQaChatCancelCalls = [];
+    sendTabMessage = async (tabId, message) => {
+      if (message?.action === 'cancelArticleChatWithLLM') {
+        globalThis.__sciQaChatCancelCalls.push({ tabId, action: message.action });
+        return { success: true, cancelled: true };
+      }
+      return globalThis.__sciQaOriginalChatSendTabMessage(tabId, message);
+    };
+    currentWorkspaceSnapshot.chat = {
+      ...(currentWorkspaceSnapshot.chat || {}),
+      loading: true
+    };
+    renderArticleChatSnapshot(currentWorkspaceSnapshot);
+  });
+  await sidePanel.locator('#cancelArticleChat').click();
+  await sidePanel.waitForTimeout(80);
+  articleChatQa.cancelControl = await sidePanel.evaluate(() => {
+    const result = {
+      calls: [...globalThis.__sciQaChatCancelCalls],
+      visibleWhileLoading: document.getElementById('cancelArticleChat')?.hidden === false
+    };
+    sendTabMessage = globalThis.__sciQaOriginalChatSendTabMessage;
+    delete globalThis.__sciQaOriginalChatSendTabMessage;
+    delete globalThis.__sciQaChatCancelCalls;
+    currentWorkspaceSnapshot.chat = {
+      ...(currentWorkspaceSnapshot.chat || {}),
+      loading: false
+    };
+    renderArticleChatSnapshot(currentWorkspaceSnapshot);
+    result.hiddenAfterCompletion = document.getElementById('cancelArticleChat')?.hidden === true;
+    return result;
   });
   await sidePanel.screenshot({
     path: path.join(outputDir, 'edge-article-chat.png'),
@@ -2017,6 +2458,141 @@ async function readDiagnosticDownload(download) {
     document.querySelectorAll('#providerId option').length >= 5 &&
     document.querySelectorAll('#apiProfileList [data-profile-id]').length >= 1
   );
+  const panelPromptResetQa = await options.evaluate(() => {
+    const field = document.getElementById('panelPromptGrouping');
+    const expected = state?.panelFollowupDefaults?.grouping || '';
+    field.value = 'QA modified panel follow-up prompt';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('resetPanelFollowupPrompts').click();
+    const result = {
+      restored: field.value === expected,
+      expectedLength: expected.length,
+      editorDirty: profileEditorDirty
+    };
+    profileEditorDirty = false;
+    renderProfileEditor();
+    return result;
+  });
+  await options.waitForFunction(() =>
+    document.querySelectorAll('#categoryList .category-list-item').length >= 2
+  );
+  const categoryIds = await options.locator('#categoryList .category-list-item')
+    .evaluateAll(buttons => buttons.slice(0, 2).map(button => button.dataset.categoryId));
+  const firstCategory = options.locator(
+    `#categoryList .category-list-item[data-category-id="${categoryIds[0]}"]`
+  );
+  const secondCategory = options.locator(
+    `#categoryList .category-list-item[data-category-id="${categoryIds[1]}"]`
+  );
+  await firstCategory.click();
+  await options.waitForFunction(categoryId =>
+    categoryEditor.categoryId === categoryId && categoryEditor.pending === false,
+  categoryIds[0]);
+  const originalCategoryName = await options.locator('#categoryName').inputValue();
+  await options.locator('#categoryRegexTab').click();
+  const initialPhrases = await options.locator('#categoryRegexPhrases').inputValue();
+  await options.locator('#categoryRegexPhrases').fill(
+    `${initialPhrases}\nQA_MATCH_TOKEN`.trim()
+  );
+  await options.locator('#categoryRegexTestText').fill(
+    'This paragraph contains QA_MATCH_TOKEN for the safe regex laboratory.'
+  );
+  await options.locator('#testCategoryRegex').click();
+  await options.waitForFunction(() =>
+    categoryEditor.pending === false &&
+    document.querySelectorAll('#categoryRegexResults .regex-result-text').length > 0
+  );
+  const regexLabQa = await options.evaluate(() => ({
+    regexSelected:
+      document.getElementById('categoryRegexTab')?.getAttribute('aria-selected') === 'true',
+    promptPanelHidden: document.getElementById('categoryPromptPanel')?.hidden === true,
+    matchCount: document.querySelectorAll('#categoryRegexResults .regex-result-text').length,
+    matchedText: document.querySelector('#categoryRegexResults .regex-result-text')?.textContent || ''
+  }));
+  await options.locator('#categoryPromptTab').click();
+  await options.locator('#categoryName').fill(`${originalCategoryName} QA unsaved`);
+  await secondCategory.click();
+  await options.locator('#unsavedCategoryDialog[open]').waitFor({ state: 'visible' });
+  await options.locator('#cancelCategoryNavigation').click();
+  await options.locator('#unsavedCategoryDialog').waitFor({ state: 'hidden' });
+  const cancelNavigationQa = await options.evaluate(categoryId => ({
+    stayedOnCategory: categoryEditor.categoryId === categoryId,
+    dirtyPreserved: categoryEditor.dirty,
+    promptSelected:
+      document.getElementById('categoryPromptTab')?.getAttribute('aria-selected') === 'true'
+  }), categoryIds[0]);
+  await secondCategory.click();
+  await options.locator('#unsavedCategoryDialog[open]').waitFor({ state: 'visible' });
+  await options.locator('#discardCategoryChanges').click();
+  await options.waitForFunction(categoryId =>
+    categoryEditor.categoryId === categoryId && categoryEditor.pending === false &&
+    categoryEditor.dirty === false,
+  categoryIds[1]);
+  const discardNavigationQa = await options.evaluate(categoryId => ({
+    navigated: categoryEditor.categoryId === categoryId,
+    dirtyCleared: categoryEditor.dirty === false
+  }), categoryIds[1]);
+  await firstCategory.click();
+  await options.waitForFunction(categoryId =>
+    categoryEditor.categoryId === categoryId && categoryEditor.pending === false,
+  categoryIds[0]);
+  await options.locator('#categoryName').fill(`${originalCategoryName} QA Override`);
+  await options.locator('#saveCategoryOverride').click();
+  await options.waitForFunction(() =>
+    categoryEditor.pending === false && categoryEditor.detail?.metadata?.overridden === true
+  );
+  const savedOverrideQa = await options.evaluate(() => ({
+    overridden: categoryEditor.detail?.metadata?.overridden === true,
+    dirtyCleared: categoryEditor.dirty === false,
+    name: document.getElementById('categoryName')?.value || ''
+  }));
+  await options.locator('#resetCategoryOverride').click();
+  await options.locator('#resetCategoryDialog[open]').waitFor({ state: 'visible' });
+  await options.locator('#confirmResetCategory').click();
+  await options.waitForFunction(expectedName =>
+    categoryEditor.pending === false &&
+    categoryEditor.detail?.metadata?.overridden === false &&
+    document.getElementById('categoryName')?.value === expectedName,
+  originalCategoryName);
+  const categoryEditorControlsQa = await options.evaluate((input) => ({
+    categoryIds: input.categoryIds,
+    regexLab: input.regexLab,
+    cancelNavigation: input.cancelNavigation,
+    discardNavigation: input.discardNavigation,
+    savedOverride: input.savedOverride,
+    resetRestoredBuiltIn: categoryEditor.detail?.metadata?.overridden === false,
+    resetName: document.getElementById('categoryName')?.value || ''
+  }), {
+    categoryIds,
+    regexLab: regexLabQa,
+    cancelNavigation: cancelNavigationQa,
+    discardNavigation: discardNavigationQa,
+    savedOverride: savedOverrideQa
+  });
+  await options.locator('#customCategoryName').fill('QA transient category');
+  await options.locator('#customCategoryDefinition').fill(
+    'Identify a sentence containing the dedicated QA category token.'
+  );
+  await options.locator('#customCategoryInclude').fill('Contains QA category token');
+  await options.locator('#saveCustomCategory').click();
+  await options.waitForFunction(() =>
+    (state?.customCategories || []).some(category => category.name === 'QA transient category')
+  );
+  const customCategoryCreatedQa = await options.evaluate(() => ({
+    created: (state?.customCategories || []).some(category =>
+      category.name === 'QA transient category'),
+    formCleared: document.getElementById('customCategoryName')?.value === ''
+  }));
+  const customCategoryRow = options.locator('#customCategoriesList .custom-category-row')
+    .filter({ hasText: 'QA transient category' });
+  await customCategoryRow.locator('.category-delete').click();
+  await options.waitForFunction(() =>
+    !(state?.customCategories || []).some(category => category.name === 'QA transient category')
+  );
+  const customCategoryControlsQa = {
+    ...customCategoryCreatedQa,
+    deleted: await customCategoryRow.count() === 0
+  };
   const workspaceOverviewFixture = await options.evaluate(async workspace => {
     const ensure = await callBackground({
       type: 'ARTICLE_WORKSPACE_ENSURE', workspace
@@ -2127,6 +2703,74 @@ async function readDiagnosticDownload(download) {
   workspaceOverviewQa.clearStatus = await options.locator(
     '#articleWorkspaceOverviewStatus'
   ).textContent();
+  const workspacePaginationFixture = await options.evaluate(async () => {
+    const workspaceIds = [];
+    for (let index = 1; index <= 21; index += 1) {
+      const digest = index.toString(16).padStart(64, '0');
+      const workspaceId = `workspace:${digest}`;
+      workspaceIds.push(workspaceId);
+      await callBackground({
+        type: 'ARTICLE_WORKSPACE_ENSURE',
+        workspace: {
+          schemaVersion: 1,
+          workspaceId,
+          canonicalUrl: `https://example.org/qa-pagination-${index}`,
+          aliases: [],
+          title: `QA Pagination ${String(index).padStart(2, '0')}`,
+          directoryName: `QA-Pagination-${String(index).padStart(2, '0')}--${digest.slice(0, 16)}`,
+          revision: digest,
+          contentHash: digest,
+          workspaceGeneration: 1
+        }
+      });
+    }
+    const search = document.getElementById('articleWorkspaceSearch');
+    search.value = 'qa pagination';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await refreshArticleWorkspaceOverview();
+    return { workspaceIds };
+  });
+  await options.waitForFunction(() =>
+    articleWorkspaceOverviewUi.loading === false &&
+    document.getElementById('articleWorkspaceNextPage')?.disabled === false
+  );
+  await options.locator('#articleWorkspaceNextPage').click();
+  await options.waitForFunction(() =>
+    articleWorkspaceOverviewUi.page === 2 &&
+    document.querySelectorAll('#articleWorkspaceList .article-workspace-card').length === 1
+  );
+  const workspaceNextPageQa = await options.evaluate(() => ({
+    page: articleWorkspaceOverviewUi.page,
+    cards: document.querySelectorAll('#articleWorkspaceList .article-workspace-card').length,
+    pageStatus: document.getElementById('articleWorkspacePageStatus')?.textContent || '',
+    previousEnabled: document.getElementById('articleWorkspacePreviousPage')?.disabled === false,
+    nextDisabled: document.getElementById('articleWorkspaceNextPage')?.disabled === true
+  }));
+  await options.locator('#articleWorkspacePreviousPage').click();
+  await options.waitForFunction(() => articleWorkspaceOverviewUi.page === 1);
+  const workspacePaginationQa = {
+    ...workspaceNextPageQa,
+    returnedToFirst: await options.evaluate(() =>
+      articleWorkspaceOverviewUi.page === 1 &&
+      document.getElementById('articleWorkspacePreviousPage')?.disabled === true)
+  };
+  await options.evaluate(async workspaceIds => {
+    for (const workspaceId of workspaceIds) {
+      const started = await callBackground({
+        type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId, coordinateOpenTabs: false
+      });
+      await callBackground({
+        type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
+        workspaceId,
+        tombstoneId: started.tombstoneId,
+        coordinateOpenTabs: false
+      });
+    }
+    const search = document.getElementById('articleWorkspaceSearch');
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await refreshArticleWorkspaceOverview();
+  }, workspacePaginationFixture.workspaceIds);
   const activeWorkspaceBeforeDeletion = await worker.evaluate(async tabId => {
     await chrome.tabs.sendMessage(tabId, { action: 'saveArticleWorkspaceNow' });
     return chrome.tabs.sendMessage(tabId, { action: 'getArticleWorkspaceSnapshot' });
@@ -2552,6 +3196,104 @@ async function readDiagnosticDownload(download) {
         document.getElementById('userDataDirectory')?.textContent || ''
     };
   });
+  await options.locator('#syncUserDataNow').click();
+  await options.waitForFunction(() =>
+    userDataUi.pendingAction === false &&
+    /\u540c\u6b65\u5b8c\u6210/.test(document.getElementById('userDataStatus')?.textContent || '')
+  );
+  const directorySyncButtonQa = await options.evaluate(() => ({
+    pendingReleased: userDataUi.pendingAction === false,
+    status: document.getElementById('userDataStatus')?.textContent || '',
+    syncEnabled: document.getElementById('syncUserDataNow')?.disabled === false
+  }));
+  await options.evaluate(() => {
+    userDataUi.lastStatus = { ...(userDataUi.lastStatus || {}), permission: 'prompt' };
+    updateUserDataActionButtons();
+  });
+  await options.locator('#reauthorizeUserDataDirectory').click();
+  await options.waitForFunction(() =>
+    userDataUi.pendingAction === false &&
+    /\u6743\u9650\u5df2\u6062\u590d/.test(
+      document.getElementById('userDataStatus')?.textContent || ''
+    )
+  );
+  const directoryReauthorizationQa = await options.evaluate(() => ({
+    pendingReleased: userDataUi.pendingAction === false,
+    permission: userDataUi.lastStatus?.permission || '',
+    status: document.getElementById('userDataStatus')?.textContent || ''
+  }));
+  const [userDataDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    options.locator('#exportUserDataBundle').click()
+  ]);
+  const userDataExport = await readDiagnosticDownload(userDataDownload);
+  const userDataExportQa = {
+    filename: userDataExport.filename,
+    bytes: userDataExport.bytes,
+    containsSecrets: /apiKey|authorization/i.test(JSON.stringify(userDataExport.bundle)),
+    hasSettings: Boolean(userDataExport.bundle.settings || userDataExport.bundle.categories),
+    buttonRecovered: await options.locator('#exportUserDataBundle').isEnabled()
+  };
+  await options.locator('#rebuildUserDataIndex').click();
+  await options.locator('#rebuildUserDataDialog[open]').waitFor({ state: 'visible' });
+  const rebuildDialogQa = await options.evaluate(() => ({
+    open: document.getElementById('rebuildUserDataDialog')?.open === true,
+    description: document.getElementById('rebuildUserDataDialogDescription')?.textContent || ''
+  }));
+  await options.locator('#confirmRebuildUserDataIndex').click();
+  await options.waitForFunction(() =>
+    userDataUi.pendingAction === false &&
+    /\u91cd\u5efa\u5b8c\u6210/.test(document.getElementById('userDataStatus')?.textContent || '')
+  );
+  const directoryRebuildQa = {
+    ...rebuildDialogQa,
+    completed: true,
+    status: await options.locator('#userDataStatus').textContent(),
+    dialogClosed: await options.locator('#rebuildUserDataDialog').isHidden()
+  };
+  await options.evaluate(async () => {
+    for (const [index, documentHash] of ['qa-corpus-a', 'qa-corpus-b', 'qa-corpus-c'].entries()) {
+      await callBackground({
+        type: 'LLM_RECORD_FEEDBACK',
+        sample: {
+          documentHash,
+          paragraphId: `qa-corpus-p-${index + 1}`,
+          quote: `We found that QA corpus treatment ${index + 1} improved survival.`,
+          categoryId: 'result',
+          userAction: 'accepted',
+          url: 'https://must-not-export.example/secret'
+        }
+      });
+    }
+    await refreshCorpusStatus();
+  });
+  const [corpusJsonlDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    options.locator('#exportCorpusJsonl').click()
+  ]);
+  const corpusJsonl = await readTextDownload(corpusJsonlDownload);
+  const [corpusCsvDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    options.locator('#exportCorpusCsv').click()
+  ]);
+  const corpusCsv = await readTextDownload(corpusCsvDownload);
+  const [distilledRulesDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    options.locator('#distillRules').click()
+  ]);
+  const distilledRules = await readDiagnosticDownload(distilledRulesDownload);
+  const corpusControlsQa = {
+    jsonlFilename: corpusJsonl.filename,
+    jsonlLines: corpusJsonl.content.trim().split(/\r?\n/).filter(Boolean).length,
+    jsonlContainsForbiddenUrl: corpusJsonl.content.includes('must-not-export.example'),
+    csvFilename: corpusCsv.filename,
+    csvHasHeader: /documentHash|document_hash/i.test(corpusCsv.content.split(/\r?\n/, 1)[0]),
+    csvContainsForbiddenUrl: corpusCsv.content.includes('must-not-export.example'),
+    distilledFilename: distilledRules.filename,
+    distilledResultPatterns: distilledRules.bundle?.result?.patterns || [],
+    downloadsNonEmpty:
+      corpusJsonl.bytes > 0 && corpusCsv.bytes > 0 && distilledRules.bytes > 0
+  };
   const initialProfileCount = await options.locator(
     '#apiProfileList [data-profile-id]'
   ).count();
@@ -2738,20 +3480,51 @@ async function readDiagnosticDownload(download) {
     return result;
   });
   await worker.evaluate(async tab => {
-    await SciLLM.clearTabActivation(chrome.storage.session, tab.id);
     await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'popup.html', enabled: false });
   }, fixtureTab);
-  await options.evaluate(sourceTab => callBackground({
-    type: 'ONBOARDING_RESTART', sourceTab
-  }), {
-    tabId: fixtureTab.id,
-    windowId: fixtureTab.windowId,
-    url: fixtureTab.url
+  await options.locator('#reopenOnboarding').click();
+  await options.waitForFunction(() =>
+    location.hash === '#onboarding' && onboardingUi.active === true &&
+    document.body.dataset.onboardingStep === 'storage'
+  );
+  const onboardingReopenQa = await options.evaluate(() => ({
+    active: onboardingUi.active,
+    step: onboardingUi.step,
+    acknowledged: onboardingUi.state?.acknowledged === true,
+    sourceTabId: onboardingUi.state?.sourceTab?.tabId || null
+  }));
+  await options.locator('#onboardingContinue').click();
+  await options.waitForFunction(() => document.body.dataset.onboardingStep === 'api');
+  const onboardingContinueQa = await options.evaluate(() => ({
+    step: onboardingUi.step,
+    storageState: onboardingUi.state?.steps?.storage || ''
+  }));
+  await options.locator('#onboardingBack').click();
+  await options.waitForFunction(() => document.body.dataset.onboardingStep === 'storage');
+  const onboardingBackQa = await options.evaluate(() => ({
+    step: onboardingUi.step,
+    guideVisible: document.getElementById('onboardingGuide')?.hidden === false
+  }));
+  await options.locator('#onboardingSkip').click();
+  await options.waitForFunction(() =>
+    document.body.dataset.onboardingStep === 'api' &&
+    onboardingUi.state?.steps?.storage === 'skipped'
+  );
+  const onboardingSkipQa = await options.evaluate(() => ({
+    step: onboardingUi.step,
+    storageState: onboardingUi.state?.steps?.storage || ''
+  }));
+  await options.evaluate(async () => {
+    await setOnboardingStepState('storage', 'completed');
+    onboardingUi.step = 'api';
+    renderOnboarding();
   });
-  await options.goto(`chrome-extension://${extensionId}/options.html#onboarding`, {
-    waitUntil: 'domcontentloaded'
-  });
-  await options.reload({ waitUntil: 'domcontentloaded' });
+  const onboardingControlsQa = {
+    reopen: onboardingReopenQa,
+    continue: onboardingContinueQa,
+    back: onboardingBackQa,
+    skip: onboardingSkipQa
+  };
   await options.waitForFunction(() =>
     document.body.dataset.onboardingStep === 'api' &&
     document.getElementById('onboardingFinish')?.hidden === false
@@ -2780,7 +3553,7 @@ async function readDiagnosticDownload(download) {
   await Promise.race([
     providerRequestObserved,
     new Promise((_, reject) => setTimeout(() =>
-      reject(new Error('Timed out waiting for the onboarding connection-test request')), 10000))
+      reject(new Error('Timed out waiting for the onboarding connection-test request')), 20000))
   ]);
   const providerPendingUiQa = await options.evaluate(() => ({
     disabled: document.getElementById('testProvider')?.disabled === true,
@@ -2830,6 +3603,40 @@ async function readDiagnosticDownload(download) {
       apiStep: stored.steps?.api || ''
     };
   }, fixtureTab.id);
+  await fixture.bringToFront();
+  await sidePanel.locator('#openSidePanelSettings').click();
+  await sidePanel.locator('#sidePanelSettingsMenu').waitFor({ state: 'visible' });
+  const firstSettingsMenuQa = await sidePanel.evaluate(() => ({
+    expanded:
+      document.getElementById('openSidePanelSettings')?.getAttribute('aria-expanded'),
+    routeSummary: document.getElementById('settingsRouteSummary')?.textContent || ''
+  }));
+  await sidePanel.keyboard.press('Escape');
+  await sidePanel.locator('#sidePanelSettingsMenu').waitFor({ state: 'hidden' });
+  const menuClosedWithEscape = await sidePanel.evaluate(() =>
+    document.getElementById('openSidePanelSettings')?.getAttribute('aria-expanded') === 'false');
+  await sidePanel.locator('#openSidePanelSettings').click();
+  const settingsPagesBefore = context.pages().filter(page =>
+    !page.isClosed() && new URL(page.url()).pathname.endsWith('/options.html'));
+  const createdSettingsPage = context.waitForEvent('page', { timeout: 2000 })
+    .catch(() => null);
+  await sidePanel.locator('#openLlmSettingsMenuItem').click();
+  const createdPage = await createdSettingsPage;
+  await sidePanel.waitForTimeout(200);
+  const reopenedSettingsPage = createdPage || context.pages().find(page =>
+    !page.isClosed() && new URL(page.url()).pathname.endsWith('/options.html'));
+  if (!reopenedSettingsPage) throw new Error('Settings menu did not open or reuse options.html');
+  await reopenedSettingsPage.waitForLoadState('domcontentloaded');
+  const sidePanelSettingsMenuQa = {
+    firstExpanded: firstSettingsMenuQa.expanded === 'true',
+    routeSummaryVisible: firstSettingsMenuQa.routeSummary.trim().length > 0,
+    closedWithEscape: menuClosedWithEscape,
+    menuClosedAfterOpen: await sidePanel.locator('#sidePanelSettingsMenu').isHidden(),
+    openedOptionsPage:
+      new URL(reopenedSettingsPage.url()).pathname.endsWith('/options.html'),
+    reusedExistingPage: settingsPagesBefore.includes(reopenedSettingsPage)
+  };
+  await reopenedSettingsPage.close();
 
   const results = {
     extensionId,
@@ -2855,11 +3662,19 @@ async function readDiagnosticDownload(download) {
     afterAutomaticClearQa,
     manualClearCancelledQa,
     manualAnnotationLifecycleQa,
+    articleArchiveControlsQa,
+    navigationControlsQa,
     figureIncrementalQa,
     quickNavPreHover,
     figureVisualQa,
     quickNavSwitchQa,
     quickNavExitQa,
+    figureToolbarControlsQa,
+    taskControlButtonsQa,
+    analysisCategoryControlsQa,
+    figureBatchButtonQa,
+    crossFigureButtonQa,
+    outlineSummaryButtonQa,
     articleChatQa,
     streamingProfileQa,
     streamingComposerQa,
@@ -2880,8 +3695,12 @@ async function readDiagnosticDownload(download) {
     dynamicParagraphQa,
     dynamicRemovalAndTextQa,
     articleRootReplacementQa,
+    panelPromptResetQa,
+    categoryEditorControlsQa,
+    customCategoryControlsQa,
     workspaceOverviewFixture,
     workspaceOverviewQa,
+    workspacePaginationQa,
     activeWorkspaceDeletionQa,
     lateFigureSetup,
     lateFigureDeletionQa,
@@ -2890,18 +3709,25 @@ async function readDiagnosticDownload(download) {
     migrationControls,
     supportEmail,
     migrationDirectoryQa,
+    directorySyncButtonQa,
+    directoryReauthorizationQa,
+    userDataExportQa,
+    directoryRebuildQa,
+    corpusControlsQa,
     duplicatedProfileQa,
     profileMutationQa,
     migrationExportQa,
     migrationDialogQa,
     migrationImportQa,
     modelConfigurationQa,
+    onboardingControlsQa,
     settingsDatabaseQa,
     providerRequestQa,
     providerPendingUiQa,
     providerCompletedUiQa,
     onboardingOptionsClosed,
     onboardingReturnQa,
+    sidePanelSettingsMenuQa,
     adapterDiagnostic: {
       extension: path.extname(firstDiagnostic.filename),
       filename: firstDiagnostic.filename,
@@ -2979,9 +3805,20 @@ async function readDiagnosticDownload(download) {
     results.manualClearCancelledQa.annotations === 1 &&
     results.manualAnnotationLifecycleQa.marksAfterConfirm === 0 &&
     results.manualAnnotationLifecycleQa.annotationsAfterConfirm === 0 &&
+    results.articleArchiveControlsQa.exportKind === 'sci-logic-highlighter-article' &&
+    Number(results.articleArchiveControlsQa.exportSchemaVersion) >= 1 &&
+    results.articleArchiveControlsQa.exportBytes > 0 &&
+    !results.articleArchiveControlsQa.exportContainsSecrets &&
+    results.articleArchiveControlsQa.importInputCleared &&
+    results.articleArchiveControlsQa.loadPromptHidden &&
+    results.articleArchiveControlsQa.reanalyze.promptHidden &&
+    results.articleArchiveControlsQa.reanalyze.analysisActive &&
     archive.kind === 'sci-logic-highlighter-article' &&
     !results.archive.containsSecrets &&
     restored?.success === true &&
+    results.navigationControlsQa.branchCount > 0 &&
+    results.navigationControlsQa.expandedAll &&
+    results.navigationControlsQa.openAfterCollapse === 0 &&
     results.figureIncrementalQa.cardCount === 3 &&
     results.figureIncrementalQa.firstHasPartialResult &&
     results.figureIncrementalQa.firstPanelCatalogSize === 3 &&
@@ -3016,6 +3853,37 @@ async function readDiagnosticDownload(download) {
     results.quickNavExitQa.expandedItems === 0 &&
     results.quickNavExitQa.hoveredItems === 0 &&
     results.quickNavExitQa.focusedItems === 0 &&
+    results.figureToolbarControlsQa.totalFigures === 3 &&
+    results.figureToolbarControlsQa.expandedAll &&
+    results.figureToolbarControlsQa.collapsedFigures === 0 &&
+    results.figureToolbarControlsQa.collapsedPanels === 0 &&
+    results.figureToolbarControlsQa.refreshedFigures === 3 &&
+    results.taskControlButtonsQa.calls.join('|') ===
+      'highlight:pause|highlight:resume|highlight:cancel|' +
+      'figure:pause|figure:resume|figure:cancel' &&
+    results.taskControlButtonsQa.highlightControlsHidden &&
+    results.taskControlButtonsQa.figureControlsHidden &&
+    results.analysisCategoryControlsQa.more.expanded === 'true' &&
+    results.analysisCategoryControlsQa.more.panelVisible &&
+    results.analysisCategoryControlsQa.more.searchFocused &&
+    results.analysisCategoryControlsQa.more.groupCount > 0 &&
+    results.analysisCategoryControlsQa.moreCollapsed &&
+    results.analysisCategoryControlsQa.restoreCalls.length === 1 &&
+    results.analysisCategoryControlsQa.restoreVisible &&
+    !results.figureBatchButtonQa.disabledAfterCompletion &&
+    results.figureBatchButtonQa.phase === 'completed' &&
+    results.figureBatchButtonQa.completedFigures === 3 &&
+    results.figureBatchButtonQa.totalFigures === 3 &&
+    !results.crossFigureButtonQa.disabledAfterCompletion &&
+    !results.crossFigureButtonQa.running &&
+    !results.outlineSummaryButtonQa.disabledAfterCompletion &&
+    results.outlineSummaryButtonQa.phase === 'completed' &&
+    results.outlineSummaryButtonQa.completedParagraphs === 6 &&
+    results.outlineSummaryButtonQa.totalParagraphs === 6 &&
+    results.outlineSummaryButtonQa.hasOutline &&
+    results.outlineSummaryButtonQa.calls.includes('analyzeFiguresWithLLM') &&
+    results.outlineSummaryButtonQa.calls.includes('analyzeCrossFigureLogicWithLLM') &&
+    results.outlineSummaryButtonQa.calls.includes('analyzeReviewOutlineWithLLM') &&
     results.articleChatQa.active &&
     results.articleChatQa.profileOptions === 2 &&
     results.articleChatQa.messages === 4 &&
@@ -3039,6 +3907,10 @@ async function readDiagnosticDownload(download) {
     results.articleChatQa.returnLatestRestored &&
     results.articleChatQa.composerOutsideMessages &&
     results.articleChatQa.citationJumpFocused &&
+    results.articleChatQa.cancelControl.calls.length === 1 &&
+    results.articleChatQa.cancelControl.calls[0].action === 'cancelArticleChatWithLLM' &&
+    results.articleChatQa.cancelControl.visibleWhileLoading &&
+    results.articleChatQa.cancelControl.hiddenAfterCompletion &&
     results.streamingProfileQa.profileSaved &&
     results.streamingProfileQa.preferencesSaved &&
     results.streamingProfileQa.routingSaved &&
@@ -3133,6 +4005,27 @@ async function readDiagnosticDownload(download) {
     results.articleRootReplacementQa.paragraphCount === 7 &&
     results.articleRootReplacementQa.replacementIndexed &&
     /7 段正文/.test(results.dynamicParagraphQa.status) &&
+    results.panelPromptResetQa.restored &&
+    results.panelPromptResetQa.expectedLength > 0 &&
+    results.panelPromptResetQa.editorDirty &&
+    results.categoryEditorControlsQa.categoryIds.length === 2 &&
+    results.categoryEditorControlsQa.regexLab.regexSelected &&
+    results.categoryEditorControlsQa.regexLab.promptPanelHidden &&
+    results.categoryEditorControlsQa.regexLab.matchCount > 0 &&
+    results.categoryEditorControlsQa.regexLab.matchedText === 'QA_MATCH_TOKEN' &&
+    results.categoryEditorControlsQa.cancelNavigation.stayedOnCategory &&
+    results.categoryEditorControlsQa.cancelNavigation.dirtyPreserved &&
+    results.categoryEditorControlsQa.cancelNavigation.promptSelected &&
+    results.categoryEditorControlsQa.discardNavigation.navigated &&
+    results.categoryEditorControlsQa.discardNavigation.dirtyCleared &&
+    results.categoryEditorControlsQa.savedOverride.overridden &&
+    results.categoryEditorControlsQa.savedOverride.dirtyCleared &&
+    /QA Override$/.test(results.categoryEditorControlsQa.savedOverride.name) &&
+    results.categoryEditorControlsQa.resetRestoredBuiltIn &&
+    !/QA Override$/.test(results.categoryEditorControlsQa.resetName) &&
+    results.customCategoryControlsQa.created &&
+    results.customCategoryControlsQa.formCleared &&
+    results.customCategoryControlsQa.deleted &&
     results.workspaceOverviewFixture.ensured &&
     results.workspaceOverviewFixture.assetSaved &&
     results.workspaceOverviewFixture.turnSaved &&
@@ -3154,6 +4047,11 @@ async function readDiagnosticDownload(download) {
     results.workspaceOverviewQa.restoreWithoutDirectoryExplained &&
     results.workspaceOverviewQa.deletedFromOverview &&
     /已清除 1 篇论文工作区/.test(results.workspaceOverviewQa.clearStatus) &&
+    results.workspacePaginationQa.page === 2 &&
+    results.workspacePaginationQa.cards === 1 &&
+    results.workspacePaginationQa.previousEnabled &&
+    results.workspacePaginationQa.nextDisabled &&
+    results.workspacePaginationQa.returnedToFirst &&
     results.activeWorkspaceDeletionQa.workspaceIdStable &&
     results.activeWorkspaceDeletionQa.generationAfter >
       results.activeWorkspaceDeletionQa.generationBefore &&
@@ -3201,6 +4099,24 @@ async function readDiagnosticDownload(download) {
     results.migrationDirectoryQa.permission === 'granted' &&
     results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
     results.migrationDirectoryQa.displayedDirectory === 'migration-directory-sentinel' &&
+    results.directorySyncButtonQa.pendingReleased &&
+    results.directorySyncButtonQa.syncEnabled &&
+    results.directoryReauthorizationQa.pendingReleased &&
+    results.directoryReauthorizationQa.permission === 'granted' &&
+    results.userDataExportQa.bytes > 0 &&
+    !results.userDataExportQa.containsSecrets &&
+    results.userDataExportQa.hasSettings &&
+    results.userDataExportQa.buttonRecovered &&
+    results.directoryRebuildQa.open &&
+    results.directoryRebuildQa.description.length > 0 &&
+    results.directoryRebuildQa.completed &&
+    results.directoryRebuildQa.dialogClosed &&
+    results.corpusControlsQa.jsonlLines >= 3 &&
+    !results.corpusControlsQa.jsonlContainsForbiddenUrl &&
+    results.corpusControlsQa.csvHasHeader &&
+    !results.corpusControlsQa.csvContainsForbiddenUrl &&
+    results.corpusControlsQa.distilledResultPatterns.includes('we found') &&
+    results.corpusControlsQa.downloadsNonEmpty &&
     results.duplicatedProfileQa.isDistinct &&
     /Migration QA Profile 副本/.test(results.duplicatedProfileQa.name) &&
     results.duplicatedProfileQa.apiKeyMasked &&
@@ -3255,6 +4171,16 @@ async function readDiagnosticDownload(download) {
     results.modelConfigurationQa.testButtonRecovered &&
     results.modelConfigurationQa.preDisabledButtonPreserved &&
     results.modelConfigurationQa.saveGuardReleased &&
+    results.onboardingControlsQa.reopen.active &&
+    results.onboardingControlsQa.reopen.step === 'storage' &&
+    !results.onboardingControlsQa.reopen.acknowledged &&
+    results.onboardingControlsQa.reopen.sourceTabId === fixtureTab.id &&
+    results.onboardingControlsQa.continue.step === 'api' &&
+    results.onboardingControlsQa.continue.storageState === 'completed' &&
+    results.onboardingControlsQa.back.step === 'storage' &&
+    results.onboardingControlsQa.back.guideVisible &&
+    results.onboardingControlsQa.skip.step === 'api' &&
+    results.onboardingControlsQa.skip.storageState === 'skipped' &&
     results.settingsDatabaseQa.moduleAvailable &&
     results.settingsDatabaseQa.directoryStoreAvailable &&
     results.settingsDatabaseQa.configuredDirectorySkipsStorage &&
@@ -3285,6 +4211,11 @@ async function readDiagnosticDownload(download) {
     results.onboardingReturnQa.acknowledged &&
     results.onboardingReturnQa.storageStep === 'completed' &&
     results.onboardingReturnQa.apiStep === 'completed' &&
+    results.sidePanelSettingsMenuQa.firstExpanded &&
+    results.sidePanelSettingsMenuQa.routeSummaryVisible &&
+    results.sidePanelSettingsMenuQa.closedWithEscape &&
+    results.sidePanelSettingsMenuQa.menuClosedAfterOpen &&
+    results.sidePanelSettingsMenuQa.openedOptionsPage &&
     results.adapterDiagnostic.kind === 'sci-publisher-adapter-diagnostic' &&
     results.adapterDiagnostic.schemaVersion === 2 &&
     results.adapterDiagnostic.hasRenderedDom &&

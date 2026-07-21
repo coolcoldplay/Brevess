@@ -82,6 +82,52 @@ const activatedSidePanelTabIds = new Set();
 const pendingSidePanelRestoreTabIds = new Set();
 const tabSidePanelNavigationGenerations = new Map();
 
+async function resolveOnboardingSourceTab(source = {}, preferredWindowId = null) {
+  const suppliedTabId = Number(source?.tabId);
+  if (Number.isInteger(suppliedTabId) && suppliedTabId >= 0) {
+    const supplied = await chrome.tabs.get(suppliedTabId).catch(() => null);
+    if (supplied) {
+      return {
+        tabId: supplied.id,
+        windowId: supplied.windowId,
+        url: supplied.url || source.url || ''
+      };
+    }
+  }
+  const tabs = await chrome.tabs.query({});
+  const activationStates = await Promise.all(tabs.map(async tab => ({
+    tab,
+    activated: Boolean(tab?.id) &&
+      !String(tab.url || '').startsWith(chrome.runtime.getURL('')) &&
+      (activatedSidePanelTabIds.has(tab.id) ||
+        await SciLLM.isTabActivated(chrome.storage.session, tab).catch(() => false))
+  })));
+  const candidates = activationStates.filter(item => item.activated).map(item => item.tab);
+  candidates.sort((left, right) => {
+    const leftPreferred = Number(left.windowId) === Number(preferredWindowId) ? 1 : 0;
+    const rightPreferred = Number(right.windowId) === Number(preferredWindowId) ? 1 : 0;
+    return rightPreferred - leftPreferred ||
+      (Number(right.lastAccessed) || 0) - (Number(left.lastAccessed) || 0);
+  });
+  const candidate = candidates[0];
+  if (candidate) {
+    return {
+      tabId: candidate.id,
+      windowId: candidate.windowId,
+      url: candidate.url || ''
+    };
+  }
+  const remembered = onboardingSnapshot?.sourceTab || {};
+  const rememberedTabId = Number(remembered.tabId);
+  if (Number.isInteger(rememberedTabId) && rememberedTabId >= 0) {
+    const tab = await chrome.tabs.get(rememberedTabId).catch(() => null);
+    if (tab) {
+      return { tabId: tab.id, windowId: tab.windowId, url: tab.url || remembered.url || '' };
+    }
+  }
+  return {};
+}
+
 async function syncTabSidePanelAvailability(tab) {
   if (!tab?.id) return false;
   const activated = await SciLLM.isTabActivated(chrome.storage.session, tab);
@@ -443,7 +489,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'ONBOARDING_RESTART') {
-    onboardingController.restart(message.sourceTab || {})
+    resolveOnboardingSourceTab(message.sourceTab || {}, sender.tab?.windowId)
+      .then(sourceTab => onboardingController.restart(sourceTab))
       .then(data => {
         onboardingSnapshot = data;
         sendResponse({ success: true, data });

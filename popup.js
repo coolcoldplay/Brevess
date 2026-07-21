@@ -2992,14 +2992,9 @@ function downloadArticleArchive(archive) {
     const blob = new Blob([`${JSON.stringify(archive, null, 2)}\n`], {
         type: 'application/json;charset=utf-8'
     });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
     const title = String(archive.title || 'article')
         .replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || 'article';
-    link.href = objectUrl;
-    link.download = `${title}.sci-archive.json`;
-    link.click();
-    URL.revokeObjectURL(objectUrl);
+    downloadBlob(blob, `${title}.sci-archive.json`);
 }
 
 function exportCurrentArticleArchive() {
