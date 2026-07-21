@@ -130,7 +130,12 @@ async function readDiagnosticDownload(download) {
   if (!downloadPath) throw new Error(`Diagnostic download has no local path: ${filename}`);
   const bytes = fs.readFileSync(downloadPath);
   const json = filename.endsWith('.gz') ? zlib.gunzipSync(bytes) : bytes;
-  return { filename, bytes: bytes.length, bundle: JSON.parse(json.toString('utf8')) };
+  return {
+    filename,
+    path: downloadPath,
+    bytes: bytes.length,
+    bundle: JSON.parse(json.toString('utf8'))
+  };
 }
 
 (async () => {
@@ -2401,6 +2406,145 @@ async function readDiagnosticDownload(download) {
       'STALE ANSWER MUST NOT BE SAVED'
     )
   })));
+  const migrationDirectoryQa = await options.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getDirectoryHandle(
+      'migration-directory-sentinel', { create: true }
+    );
+    await SciLLM.saveDirectoryHandle(indexedDB, handle);
+    globalThis.__qaMigrationDirectoryHandle = handle;
+    userDataUi.directoryHandle = handle;
+    userDataUi.handleLoaded = true;
+    await callBackground({ type: 'USER_DATA_SYNC_NOW' });
+    await refreshUserDataStatus();
+    return {
+      permission: await handle.queryPermission({ mode: 'readwrite' }),
+      directoryName: handle.name,
+      displayedDirectory:
+        document.getElementById('userDataDirectory')?.textContent || ''
+    };
+  });
+  const initialProfileCount = await options.locator(
+    '#apiProfileList [data-profile-id]'
+  ).count();
+  await options.locator('#addApiProfile').click();
+  await options.waitForFunction(expected =>
+    document.querySelectorAll('#apiProfileList [data-profile-id]').length === expected &&
+    /API Profile 已新增/.test(document.getElementById('status')?.textContent || ''),
+  initialProfileCount + 1);
+  await options.locator('#profileName').fill('Migration QA Profile');
+  await options.locator('#providerId').selectOption('deepseek');
+  await options.locator('#model').fill('deepseek-v4-pro');
+  await options.locator('#apiKey').fill('qa-migration-secret');
+  await options.locator('#consentGranted').check();
+  await options.locator('#saveSettings').click();
+  await options.waitForFunction(() =>
+    /模型与路由设置已保存/.test(document.getElementById('status')?.textContent || '') &&
+    document.getElementById('saveSettings')?.disabled === false &&
+    document.getElementById('apiKey')?.value === '');
+  const migrationProfileId = await options.evaluate(() => selectedProfileId);
+  await options.locator('#globalProfileId').selectOption(migrationProfileId);
+  await options.locator('#routeFigure').selectOption(migrationProfileId);
+  await options.locator('#routeCrossFigure').selectOption(migrationProfileId);
+  await options.locator('#saveSettings').click();
+  await options.waitForFunction(profileId =>
+    state?.settings?.globalProfileId === profileId &&
+    state?.settings?.taskRoutes?.figure?.profileId === profileId &&
+    state?.settings?.taskRoutes?.crossFigure?.profileId === profileId,
+  migrationProfileId);
+  await options.locator('#duplicateApiProfile').click();
+  await options.waitForFunction(expected =>
+    document.querySelectorAll('#apiProfileList [data-profile-id]').length === expected &&
+    /API Profile 已复制/.test(document.getElementById('status')?.textContent || ''),
+  initialProfileCount + 2);
+  const duplicatedProfileQa = await options.evaluate(sourceProfileId => ({
+    profileId: selectedProfileId,
+    isDistinct: selectedProfileId !== sourceProfileId,
+    name: document.getElementById('profileName')?.value || '',
+    apiKeyMasked: /已保存/.test(document.getElementById('apiKey')?.placeholder || '')
+  }), migrationProfileId);
+  await options.locator('#deleteApiProfile').click();
+  await options.waitForFunction((expected) =>
+    document.querySelectorAll('#apiProfileList [data-profile-id]').length === expected &&
+    /API Profile 已删除/.test(document.getElementById('status')?.textContent || ''),
+  initialProfileCount + 1);
+  const profileMutationQa = await options.evaluate(profileId => ({
+    selectedOriginalAfterDuplicateDelete: selectedProfileId === profileId,
+    globalProfileId: state?.settings?.globalProfileId || '',
+    figureRouteProfileId: state?.settings?.taskRoutes?.figure?.profileId || '',
+    crossFigureRouteProfileId:
+      state?.settings?.taskRoutes?.crossFigure?.profileId || '',
+    profileCount: document.querySelectorAll('#apiProfileList [data-profile-id]').length
+  }), migrationProfileId);
+  const [migrationDownload] = await Promise.all([
+    options.waitForEvent('download', { timeout: 30000 }),
+    options.locator('#exportMigrationBundle').click()
+  ]);
+  const migrationExport = await readDiagnosticDownload(migrationDownload);
+  const migrationExportQa = {
+    kind: migrationExport.bundle.kind,
+    schemaVersion: migrationExport.bundle.schemaVersion,
+    containsApiKey:
+      migrationExport.bundle.settings?.profiles?.[migrationProfileId]
+        ?.config?.apiKey === 'qa-migration-secret',
+    globalProfileId: migrationExport.bundle.settings?.globalProfileId || '',
+    figureRouteProfileId:
+      migrationExport.bundle.settings?.taskRoutes?.figure?.profileId || '',
+    crossFigureRouteProfileId:
+      migrationExport.bundle.settings?.taskRoutes?.crossFigure?.profileId || '',
+    bytes: migrationExport.bytes
+  };
+  await options.locator('#deleteApiProfile').click();
+  await options.waitForFunction(({ profileId, expected }) =>
+    !state?.settings?.profiles?.[profileId] &&
+    document.querySelectorAll('#apiProfileList [data-profile-id]').length === expected,
+  { profileId: migrationProfileId, expected: initialProfileCount });
+  await options.locator('#importMigrationBundle').setInputFiles(migrationExport.path);
+  await options.locator('#migrationImportDialog[open]').waitFor({ state: 'visible' });
+  const migrationDialogQa = await options.evaluate(() => ({
+    open: document.getElementById('migrationImportDialog')?.open === true,
+    description:
+      document.getElementById('migrationImportDialogDescription')?.textContent || '',
+    pendingBundleReady: Boolean(pendingMigrationBundle)
+  }));
+  await options.locator('#confirmMigrationImport').click();
+  await options.waitForFunction(profileId =>
+    userDataUi.pendingAction === false &&
+    Boolean(state?.settings?.profiles?.[profileId]) &&
+    /迁移完成/.test(document.getElementById('migrationStatus')?.textContent || ''),
+  migrationProfileId, { timeout: 10000 });
+  await options.locator(
+    `#apiProfileList [data-profile-id="${migrationProfileId}"]`
+  ).click();
+  const migrationImportQa = await options.evaluate(async profileId => {
+    const loadedDirectory = await SciLLM.loadDirectoryHandle(indexedDB);
+    const originalDirectory = globalThis.__qaMigrationDirectoryHandle;
+    const stored = await chrome.storage.local.get('sciLlmSettingsV2');
+    const storedSettings = stored.sciLlmSettingsV2 || {};
+    return {
+      profileRestored: Boolean(state?.settings?.profiles?.[profileId]),
+      profileName: document.getElementById('profileName')?.value || '',
+      apiKeyCleared: document.getElementById('apiKey')?.value === '',
+      apiKeyMasked: /已保存/.test(document.getElementById('apiKey')?.placeholder || ''),
+      apiKeyStored:
+        storedSettings.profiles?.[profileId]?.config?.apiKey === 'qa-migration-secret',
+      globalProfileId: state?.settings?.globalProfileId || '',
+      figureRouteProfileId: state?.settings?.taskRoutes?.figure?.profileId || '',
+      crossFigureRouteProfileId:
+        state?.settings?.taskRoutes?.crossFigure?.profileId || '',
+      directoryHandlePresent: Boolean(loadedDirectory),
+      directoryName: loadedDirectory?.name || '',
+      directoryPermission: loadedDirectory
+        ? await loadedDirectory.queryPermission({ mode: 'readwrite' }) : 'unconfigured',
+      sameDirectoryHandle: Boolean(originalDirectory && loadedDirectory &&
+        await originalDirectory.isSameEntry(loadedDirectory)),
+      displayedDirectory:
+        document.getElementById('userDataDirectory')?.textContent || '',
+      status: document.getElementById('migrationStatus')?.textContent || '',
+      importButtonRecovered:
+        document.getElementById('exportMigrationBundle')?.disabled === false
+    };
+  }, migrationProfileId);
   const modelConfigurationQa = await options.evaluate(async () => {
     const provider = document.getElementById('providerId');
     const model = document.getElementById('model');
@@ -2410,6 +2554,8 @@ async function readDiagnosticDownload(download) {
     const change = element => element.dispatchEvent(
       new Event('change', { bubbles: true })
     );
+    provider.value = 'openai';
+    change(provider);
     provider.value = 'deepseek';
     change(provider);
     const deepseekDefault = model.value;
@@ -2479,21 +2625,21 @@ async function readDiagnosticDownload(download) {
   });
   await options.reload({ waitUntil: 'domcontentloaded' });
   await options.waitForFunction(() =>
-    document.body.dataset.onboardingStep === 'storage' &&
-    document.getElementById('onboardingContinue')?.disabled === false
+    document.body.dataset.onboardingStep === 'api' &&
+    document.getElementById('onboardingFinish')?.hidden === false
   );
   const settingsDatabaseQa = await options.evaluate(async () => {
     const database = await SciLLM.openUserDataDatabase(indexedDB);
     return {
       moduleAvailable: typeof SciLLM.openUserDataDatabase === 'function',
       directoryStoreAvailable: database.objectStoreNames.contains('directoryHandles'),
-      continueEnabledAfterNoDirectory:
-        document.getElementById('onboardingContinue')?.disabled === false
+      configuredDirectorySkipsStorage:
+        document.body.dataset.onboardingStep === 'api' &&
+        onboardingUi.state?.steps?.storage === 'completed'
     };
   });
-  await options.locator('#onboardingContinue').click();
-  await options.waitForFunction(() => document.body.dataset.onboardingStep === 'api');
-  settingsDatabaseQa.continuedToApi = true;
+  settingsDatabaseQa.continuedToApi =
+    await options.locator('#onboardingFinish').isVisible();
   await options.locator('#profileName').fill('QA onboarding profile');
   await options.locator('#providerId').selectOption('openai-compatible');
   await options.locator('#model').fill('qa-onboarding-model');
@@ -2610,6 +2756,12 @@ async function readDiagnosticDownload(download) {
     lateChatDeletionQa,
     migrationControls,
     supportEmail,
+    migrationDirectoryQa,
+    duplicatedProfileQa,
+    profileMutationQa,
+    migrationExportQa,
+    migrationDialogQa,
+    migrationImportQa,
     modelConfigurationQa,
     settingsDatabaseQa,
     providerRequestQa,
@@ -2896,6 +3048,47 @@ async function readDiagnosticDownload(download) {
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
     supportEmail?.trim() === 'brevess0729@163.com' &&
+    results.migrationDirectoryQa.permission === 'granted' &&
+    results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
+    results.migrationDirectoryQa.displayedDirectory === 'migration-directory-sentinel' &&
+    results.duplicatedProfileQa.isDistinct &&
+    /Migration QA Profile 副本/.test(results.duplicatedProfileQa.name) &&
+    results.duplicatedProfileQa.apiKeyMasked &&
+    results.profileMutationQa.selectedOriginalAfterDuplicateDelete &&
+    results.profileMutationQa.globalProfileId === migrationProfileId &&
+    results.profileMutationQa.figureRouteProfileId === migrationProfileId &&
+    results.profileMutationQa.crossFigureRouteProfileId === migrationProfileId &&
+    results.profileMutationQa.profileCount === initialProfileCount + 1 &&
+    results.migrationExportQa.kind === 'sci-logic-highlighter-migration' &&
+    results.migrationExportQa.schemaVersion === 1 &&
+    results.migrationExportQa.containsApiKey &&
+    results.migrationExportQa.globalProfileId === migrationProfileId &&
+    results.migrationExportQa.figureRouteProfileId === migrationProfileId &&
+    results.migrationExportQa.crossFigureRouteProfileId === migrationProfileId &&
+    results.migrationExportQa.bytes > 0 &&
+    results.migrationDialogQa.open &&
+    results.migrationDialogQa.pendingBundleReady &&
+    /完整模型与分类配置/.test(results.migrationDialogQa.description) &&
+    /当前浏览器已有的目录授权不会改变/.test(
+      results.migrationDialogQa.description
+    ) &&
+    !/本地目录需稍后重新选择/.test(results.migrationDialogQa.description) &&
+    results.migrationImportQa.profileRestored &&
+    results.migrationImportQa.profileName === 'Migration QA Profile' &&
+    results.migrationImportQa.apiKeyCleared &&
+    results.migrationImportQa.apiKeyMasked &&
+    results.migrationImportQa.apiKeyStored &&
+    results.migrationImportQa.globalProfileId === migrationProfileId &&
+    results.migrationImportQa.figureRouteProfileId === migrationProfileId &&
+    results.migrationImportQa.crossFigureRouteProfileId === migrationProfileId &&
+    results.migrationImportQa.directoryHandlePresent &&
+    results.migrationImportQa.directoryName === 'migration-directory-sentinel' &&
+    results.migrationImportQa.directoryPermission === 'granted' &&
+    results.migrationImportQa.sameDirectoryHandle &&
+    results.migrationImportQa.displayedDirectory === 'migration-directory-sentinel' &&
+    /当前本地目录授权保持不变/.test(results.migrationImportQa.status) &&
+    !/请重新选择本地保存目录/.test(results.migrationImportQa.status) &&
+    results.migrationImportQa.importButtonRecovered &&
     results.modelConfigurationQa.deepseekDefault === 'deepseek-v4-flash' &&
     results.modelConfigurationQa.deepseekSuggestions.includes('deepseek-v4-pro') &&
     results.modelConfigurationQa.deepseekSuggestions.includes('deepseek-v4-flash') &&
@@ -2914,7 +3107,7 @@ async function readDiagnosticDownload(download) {
     results.modelConfigurationQa.saveGuardReleased &&
     results.settingsDatabaseQa.moduleAvailable &&
     results.settingsDatabaseQa.directoryStoreAvailable &&
-    results.settingsDatabaseQa.continueEnabledAfterNoDirectory &&
+    results.settingsDatabaseQa.configuredDirectorySkipsStorage &&
     results.settingsDatabaseQa.continuedToApi &&
     results.providerRequestQa.method === 'POST' &&
     results.providerRequestQa.path === '/v1/chat/completions' &&
@@ -2940,7 +3133,7 @@ async function readDiagnosticDownload(download) {
     results.onboardingReturnQa.sidePanelEnabled &&
     results.onboardingReturnQa.activated &&
     results.onboardingReturnQa.acknowledged &&
-    results.onboardingReturnQa.storageStep === 'skipped' &&
+    results.onboardingReturnQa.storageStep === 'completed' &&
     results.onboardingReturnQa.apiStep === 'completed' &&
     results.adapterDiagnostic.kind === 'sci-publisher-adapter-diagnostic' &&
     results.adapterDiagnostic.schemaVersion === 2 &&

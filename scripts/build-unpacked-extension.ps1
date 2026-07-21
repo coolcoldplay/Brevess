@@ -5,7 +5,7 @@ param(
 if ([string]::IsNullOrWhiteSpace($BuildName)) {
   $BuildName = 'SCI' + [char]0x8BBA + [char]0x6587 + [char]0x903B +
     [char]0x8F91 + [char]0x52A9 + [char]0x624B +
-    '-v2.4.0-article-workspaces-build26'
+    '-v2.4.0-article-workspaces-build27'
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot

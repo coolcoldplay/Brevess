@@ -179,4 +179,8 @@ test('service worker and settings page expose full migration import and export c
   assert.match(html, /API Key/);
   assert.match(script, /async function exportMigrationBundle/);
   assert.match(script, /async function importMigrationBundle/);
+  assert.match(script, /当前浏览器已有的目录授权不会改变/);
+  assert.match(script, /当前本地目录授权保持不变/);
+  assert.match(script, /当前本地目录记录已保留；如浏览器要求，请重新授权/);
+  assert.match(script, /迁移文件不包含目录授权，请选择本地保存目录/);
 });

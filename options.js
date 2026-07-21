@@ -1098,7 +1098,8 @@ async function importMigrationBundle(event) {
     const feedbackCount = pendingMigrationBundle.feedbackSamples.length;
     document.getElementById('migrationImportDialogDescription').textContent =
       `将恢复完整模型与分类配置、${documentCount} 篇文献记录和 ${feedbackCount} 条反馈语料。` +
-      '迁移文件中的 API Key 会写入本机扩展存储；本地目录需稍后重新选择。';
+      '迁移文件中的 API Key 会写入本机扩展存储；迁移文件不包含目录授权，' +
+      '当前浏览器已有的目录授权不会改变。';
     document.getElementById('migrationImportDialog').showModal();
   } catch (error) {
     pendingMigrationBundle = null;
@@ -1119,9 +1120,18 @@ async function confirmMigrationImport(event) {
     await refreshSettings();
     await refreshCorpusStatus();
     await refreshUserDataStatus();
+    const directoryName = String(userDataUi.lastStatus?.directoryName || '').trim();
+    const directoryPermission = String(
+      userDataUi.lastStatus?.permission || 'unconfigured'
+    );
+    const directoryNotice = directoryName
+      ? (directoryPermission === 'granted'
+        ? '当前本地目录授权保持不变。'
+        : '当前本地目录记录已保留；如浏览器要求，请重新授权。')
+      : '迁移文件不包含目录授权，请选择本地保存目录。';
     showMigrationStatus(
       `迁移完成：恢复 ${result.importedDocuments || 0} 篇文献记录和 ` +
-      `${result.importedFeedback || 0} 条反馈。请重新选择本地保存目录。`,
+      `${result.importedFeedback || 0} 条反馈。${directoryNotice}`,
       'success'
     );
   } catch (error) {
