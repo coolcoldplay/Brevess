@@ -362,10 +362,6 @@ let persistedAnalysisMode = 'regex';
 let llmSettingsState = null;
 const articleArchiveExportGuard = createInFlightActionGuard();
 const articleWorkspaceSaveGuard = createInFlightActionGuard();
-const settingsRouteSummaryRefresher = createLatestStateRefresher({
-    load: () => sendLlmMessage({ type: 'LLM_GET_SETTINGS' }),
-    apply: state => { llmSettingsState = state; }
-});
 let confidenceThreshold = 0.8;
 let persistedConfidenceThreshold = 0.8;
 let readingViewId = 'quick_story';
@@ -861,46 +857,23 @@ function setupWorkspaceNavigation() {
     switchWorkspaceView(activeWorkspaceView);
 }
 
-function closeSidePanelSettingsMenu({ restoreFocus = true } = {}) {
+function setupSidePanelSettingsShortcut() {
     const openSidePanelSettings = document.getElementById('openSidePanelSettings');
-    const menu = document.getElementById('sidePanelSettingsMenu');
-    if (!menu || menu.hidden) return;
-    menu.hidden = true;
-    openSidePanelSettings?.setAttribute('aria-expanded', 'false');
-    if (restoreFocus && openSidePanelSettings) openSidePanelSettings.focus();
-}
-
-function setupSidePanelSettingsMenu() {
-    const openSidePanelSettings = document.getElementById('openSidePanelSettings');
-    const menu = document.getElementById('sidePanelSettingsMenu');
-    const openLlmSettingsMenuItem = document.getElementById('openLlmSettingsMenuItem');
-    if (!openSidePanelSettings || !menu) return;
-
+    if (!openSidePanelSettings) return;
     openSidePanelSettings.addEventListener('click', async () => {
-        const expanded = openSidePanelSettings.getAttribute('aria-expanded') === 'true';
-        if (expanded) {
-            closeSidePanelSettingsMenu();
-            return;
+        if (openSidePanelSettings.dataset.pending === 'true') return;
+        openSidePanelSettings.dataset.pending = 'true';
+        openSidePanelSettings.disabled = true;
+        try {
+            await chrome.tabs.create({
+                url: chrome.runtime.getURL('options.html#categoryWorkspace')
+            });
+        } catch (error) {
+            showStatus(`打开设置页面失败：${error.message}`, 'error');
+        } finally {
+            delete openSidePanelSettings.dataset.pending;
+            openSidePanelSettings.disabled = false;
         }
-        menu.hidden = false;
-        openSidePanelSettings.setAttribute('aria-expanded', 'true');
-        await refreshSettingsRouteSummary();
-    });
-    document.addEventListener('pointerdown', event => {
-        if (!menu.hidden && !menu.contains(event.target) &&
-            !openSidePanelSettings.contains(event.target)) {
-            closeSidePanelSettingsMenu();
-        }
-    });
-    document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && !menu.hidden) {
-            event.preventDefault();
-            closeSidePanelSettingsMenu();
-        }
-    });
-    openLlmSettingsMenuItem?.addEventListener('click', () => {
-        closeSidePanelSettingsMenu();
-        chrome.runtime.openOptionsPage();
     });
 }
 
@@ -1074,16 +1047,6 @@ function createWorkspaceElement(tagName, className = '', text = '') {
     if (className) element.className = className;
     if (text) element.textContent = text;
     return element;
-}
-
-async function refreshSettingsRouteSummary() {
-    try {
-        const result = await settingsRouteSummaryRefresher.refresh();
-        if (result.status === 'applied') renderSettingsRouteSummary();
-        return result;
-    } catch (error) {
-        return { status: 'failed', error };
-    }
 }
 
 async function focusWorkspaceSource(target, panelContext = capturePanelContext()) {
@@ -3611,7 +3574,7 @@ async function initializeCurrentArticle({ retry = false } = {}) {
 document.addEventListener('DOMContentLoaded', async () => {
     setupFloatingSidePanelControls();
     setupWorkspaceNavigation();
-    setupSidePanelSettingsMenu();
+    setupSidePanelSettingsShortcut();
     setupArticleArchiveControls();
     setupAdapterDiagnosticControls();
     setupActiveTabSynchronization();
@@ -4756,20 +4719,6 @@ function renderConfidenceControl() {
         `${Math.round(confidenceThreshold * 100)}%`;
 }
 
-function renderSettingsRouteSummary() {
-    const target = document.getElementById('settingsRouteSummary');
-    if (!target) return;
-    target.replaceChildren();
-    getPublicRouteSummaryRows(llmSettingsState?.settings).forEach(([label, value]) => {
-        const row = createWorkspaceElement('div', 'settings-route-row');
-        row.append(
-            createWorkspaceElement('span', '', label),
-            createWorkspaceElement('strong', '', value)
-        );
-        target.appendChild(row);
-    });
-}
-
 function updateAnalysisModeUi() {
     const isLlm = analysisMode === 'llm';
     document.getElementById('spanModeSection').hidden = isLlm;
@@ -4783,7 +4732,6 @@ function updateAnalysisModeUi() {
     updateFigureButton();
     updateReviewOutlineButton();
     renderConfidenceControl();
-    renderSettingsRouteSummary();
 }
 
 async function refreshLlmDiagnostics() {

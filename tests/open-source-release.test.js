@@ -55,14 +55,14 @@ test('gitignore excludes credentials, browser profiles, and generated archives',
 test('2.4 release metadata and scale benchmark stay consistent', () => {
   const manifest = JSON.parse(read('manifest.json'));
   const packageJson = JSON.parse(read('package.json'));
-  assert.equal(manifest.version, '2.4.3');
-  assert.equal(packageJson.version, '2.4.3');
+  assert.equal(manifest.version, '2.4.4');
+  assert.equal(packageJson.version, '2.4.4');
   assert.equal(packageJson.scripts['benchmark:article-chat'],
     'node scripts/benchmark-article-chat.mjs');
-  assert.match(read('background.js'), /version:\s*'2\.4\.3'/);
-  assert.match(read('core/background-router.js'), /2\.4\.3-build39-panel-perf-r3/);
-  assert.match(read('content.js'), /2\.4\.3-build39-panel-perf-r3/);
-  assert.match(read('scripts/build-unpacked-extension.ps1'), /v2\.4\.3-panel-performance-build39/);
-  assert.match(read('README.md'), /2\.4\.3/);
+  assert.match(read('background.js'), /version:\s*'2\.4\.4'/);
+  assert.match(read('core/background-router.js'), /2\.4\.4-build39-figure-isolation-r4/);
+  assert.match(read('content.js'), /2\.4\.4-build39-figure-isolation-r4/);
+  assert.match(read('scripts/build-unpacked-extension.ps1'), /v2\.4\.4-figure-isolation-build39/);
+  assert.match(read('README.md'), /2\.4\.4/);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'benchmark-article-chat.mjs')), true);
 });

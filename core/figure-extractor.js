@@ -25,6 +25,15 @@
     '[class*="figure"][class*="caption"]'
   ].join(',');
   const LABEL_SELECTOR = '.fig-label,.figure-label,[class*="fig-label"]';
+  const STRUCTURAL_CAPTION_SELECTOR = [
+    'figcaption',
+    '.caption',
+    '.figure__caption',
+    '.figure-caption',
+    '.fig-caption',
+    '[data-test="figure-caption"]',
+    '[class*="figure"][class*="caption"]'
+  ].join(',');
   const PANEL_LABEL_SELECTOR = [
     '[data-panel]',
     '[data-panel-label]',
@@ -124,6 +133,27 @@
       left.localeCompare(right, undefined, { numeric: true }));
   }
 
+  function parseLeadingFigureLabel(value) {
+    return parseFigureLabel(normalizeText(value).slice(0, 240));
+  }
+
+  function collectFigureIdentities(element) {
+    const identities = new Map();
+    const add = value => {
+      const parsed = parseLeadingFigureLabel(value);
+      if (parsed) identities.set(parsed.figureId, parsed);
+    };
+    for (const label of Array.from(
+      element?.querySelectorAll?.(LABEL_SELECTOR) || []
+    )) add(label?.textContent);
+    for (const caption of Array.from(
+      element?.querySelectorAll?.(STRUCTURAL_CAPTION_SELECTOR) || []
+    )) add(caption?.textContent);
+    add(element?.getAttribute?.('aria-label'));
+    if (!identities.size) add(element?.textContent);
+    return identities;
+  }
+
   function extractElementPanelHints(element, caption) {
     const panels = new Set(extractPanelHints(caption));
     const add = value => {
@@ -160,7 +190,7 @@
     });
   }
 
-  function resolveCaptionSource(element) {
+  function resolveCaptionSource(element, expectedFigureId = '') {
     const candidates = [];
     const add = candidate => {
       if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
@@ -176,8 +206,11 @@
         candidate?.textContent || candidate?.getAttribute?.('aria-label')
       );
       if (!caption) continue;
+      const leadingIdentity = parseLeadingFigureLabel(caption);
+      if (expectedFigureId && leadingIdentity &&
+          leadingIdentity.figureId !== expectedFigureId) continue;
       const panelCount = extractPanelHints(caption).length;
-      const hasFigureLabel = Boolean(parseFigureLabel(caption));
+      const hasFigureLabel = Boolean(leadingIdentity);
       const score = panelCount * 100000 + (hasFigureLabel ? 10000 : 0) +
         Math.min(caption.length, 8000) - (candidate === element ? 250 : 0);
       if (!best || score > best.score) best = { element: candidate, caption, score };
@@ -266,13 +299,16 @@
     const candidates = Array.from(documentLike?.querySelectorAll?.(FIGURE_SELECTOR) || []);
     for (const [documentOrder, element] of candidates.entries()) {
       if (element?.closest?.(EXCLUDED_ANCESTOR_SELECTOR)) continue;
-      const captionSource = resolveCaptionSource(element);
+      const identities = collectFigureIdentities(element);
+      if (identities.size > 1) continue;
+      const expectedIdentity = identities.values().next().value || null;
+      const captionSource = resolveCaptionSource(element, expectedIdentity?.figureId || '');
       const captionElement = captionSource.element || element;
       const caption = captionSource.caption;
       const labelText = normalizeText(
         captionElement?.querySelector?.(LABEL_SELECTOR)?.textContent || ''
       );
-      const parsed = parseFigureLabel(labelText) || parseFigureLabel(caption) ||
+      const parsed = expectedIdentity || parseFigureLabel(labelText) || parseFigureLabel(caption) ||
         parseFigureLabel(element?.textContent);
       if (!parsed) continue;
       const imageElements = collectImages(element);

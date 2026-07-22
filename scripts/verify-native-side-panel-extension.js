@@ -399,6 +399,66 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     updated: dynamicNaturePanelUpdated,
     cleanup: dynamicNaturePanelCleanup
   };
+  await fixture.evaluate(() => {
+    const aggregate = document.createElement('div');
+    aggregate.id = 'nested-figure-aggregate-qa';
+    aggregate.className = 'figure';
+    aggregate.innerHTML =
+      '<figure id="nested-figure-90"><figcaption>' +
+      '<span class="figure-label">Figure 90.</span> Study overview. ' +
+      '<b>a-c,</b>Workflow and cohorts.</figcaption></figure>' +
+      '<figure id="nested-figure-91"><figcaption>' +
+      '<span class="figure-label">Figure 91.</span> Dendritic-cell atlas. ' +
+      '<b>a-m,</b>UMAP, heatmaps, and validation.</figcaption></figure>';
+    document.querySelector('article')?.appendChild(aggregate);
+  });
+  await sidePanel.waitForFunction(() => {
+    const figures = currentWorkspaceSnapshot?.figures?.figures || [];
+    const figure90 = figures.find(item => item.figureId === 'figure-90');
+    const figure91 = figures.find(item => item.figureId === 'figure-91');
+    return JSON.stringify(figure90?.panelHints || []) === JSON.stringify(['A', 'B', 'C']) &&
+      JSON.stringify(figure91?.panelHints || []) ===
+        JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M']);
+  }, null, { timeout: 5000 });
+  const nestedFigureIsolationBeforeJump = await sidePanel.evaluate(() => {
+    const figures = currentWorkspaceSnapshot?.figures?.figures || [];
+    const figure90 = figures.find(item => item.figureId === 'figure-90');
+    const figure91 = figures.find(item => item.figureId === 'figure-91');
+    return {
+      figure90Panels: figure90?.panelHints || [],
+      figure91Panels: figure91?.panelHints || [],
+      figure90Caption: figure90?.caption || '',
+      figure91Caption: figure91?.caption || ''
+    };
+  });
+  await sidePanel.locator('[data-workspace-target="figures"]').click();
+  await sidePanel.locator(
+    '.workspace-figure-card[data-figure-id="figure-90"] > summary'
+  ).click();
+  await sidePanel.locator(
+    '.workspace-figure-card[data-figure-id="figure-90"] .workspace-figure-action'
+  ).first().click();
+  await fixture.waitForFunction(() => Boolean(
+    document.querySelector('#nested-figure-90 .sci-article-source-focus')
+  ));
+  const nestedFigureJumpQa = await fixture.evaluate(() => ({
+    figure90Focused: Boolean(document.querySelector(
+      '#nested-figure-90 .sci-article-source-focus'
+    )),
+    figure91Focused: Boolean(document.querySelector(
+      '#nested-figure-91 .sci-article-source-focus'
+    ))
+  }));
+  await fixture.evaluate(() => document.getElementById('nested-figure-aggregate-qa')?.remove());
+  await sidePanel.waitForFunction(() => {
+    const figures = currentWorkspaceSnapshot?.figures?.figures || [];
+    return !figures.some(item => ['figure-90', 'figure-91'].includes(item.figureId));
+  }, null, { timeout: 5000 });
+  const nestedFigureIsolationQa = {
+    ...nestedFigureIsolationBeforeJump,
+    ...nestedFigureJumpQa,
+    cleanup: true
+  };
   await sidePanel.locator('#toggleFloatingSidePanel').click();
   await sidePanel.waitForFunction(() => {
     const pipWindow = documentPictureInPicture?.window;
@@ -870,7 +930,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
+      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -941,7 +1001,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
+      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -1006,7 +1066,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
+      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -1027,7 +1087,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.3-build39-panel-perf-r3'),
+        '2.4.4-build39-figure-isolation-r4'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -5036,37 +5096,18 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     };
   }, fixtureTab.id);
   await fixture.bringToFront();
+  const createdSettingsPage = context.waitForEvent('page', { timeout: 3000 });
   await sidePanel.locator('#openSidePanelSettings').click();
-  await sidePanel.locator('#sidePanelSettingsMenu').waitFor({ state: 'visible' });
-  const firstSettingsMenuQa = await sidePanel.evaluate(() => ({
-    expanded:
-      document.getElementById('openSidePanelSettings')?.getAttribute('aria-expanded'),
-    routeSummary: document.getElementById('settingsRouteSummary')?.textContent || ''
-  }));
-  await sidePanel.keyboard.press('Escape');
-  await sidePanel.locator('#sidePanelSettingsMenu').waitFor({ state: 'hidden' });
-  const menuClosedWithEscape = await sidePanel.evaluate(() =>
-    document.getElementById('openSidePanelSettings')?.getAttribute('aria-expanded') === 'false');
-  await sidePanel.locator('#openSidePanelSettings').click();
-  const settingsPagesBefore = context.pages().filter(page =>
-    !page.isClosed() && new URL(page.url()).pathname.endsWith('/options.html'));
-  const createdSettingsPage = context.waitForEvent('page', { timeout: 2000 })
-    .catch(() => null);
-  await sidePanel.locator('#openLlmSettingsMenuItem').click();
-  const createdPage = await createdSettingsPage;
-  await sidePanel.waitForTimeout(200);
-  const reopenedSettingsPage = createdPage || context.pages().find(page =>
-    !page.isClosed() && new URL(page.url()).pathname.endsWith('/options.html'));
-  if (!reopenedSettingsPage) throw new Error('Settings menu did not open or reuse options.html');
+  const reopenedSettingsPage = await createdSettingsPage;
   await reopenedSettingsPage.waitForLoadState('domcontentloaded');
-  const sidePanelSettingsMenuQa = {
-    firstExpanded: firstSettingsMenuQa.expanded === 'true',
-    routeSummaryVisible: firstSettingsMenuQa.routeSummary.trim().length > 0,
-    closedWithEscape: menuClosedWithEscape,
-    menuClosedAfterOpen: await sidePanel.locator('#sidePanelSettingsMenu').isHidden(),
-    openedOptionsPage:
-      new URL(reopenedSettingsPage.url()).pathname.endsWith('/options.html'),
-    reusedExistingPage: settingsPagesBefore.includes(reopenedSettingsPage)
+  const settingsUrl = new URL(reopenedSettingsPage.url());
+  const sidePanelSettingsShortcutQa = {
+    openedOptionsPage: settingsUrl.pathname.endsWith('/options.html'),
+    categoryWorkspaceHash: settingsUrl.hash === '#categoryWorkspace',
+    categoryWorkspaceVisible: await reopenedSettingsPage.locator('#categoryWorkspace').isVisible(),
+    categoryHeadingVisible: await reopenedSettingsPage.locator('#categoryInspectorTitle').isVisible(),
+    gearRecovered: await sidePanel.locator('#openSidePanelSettings').isEnabled(),
+    legacyMenuRemoved: await sidePanel.locator('#sidePanelSettingsMenu').count() === 0
   };
   await reopenedSettingsPage.close();
   reportQaStage('all browser interactions completed; evaluating assertions');
@@ -5079,6 +5120,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     activated,
     dynamicNaturePanelQa,
     figureInventoryCacheQa,
+    nestedFigureIsolationQa,
     floatingPanelQa,
     globalToolbarFeedbackQa,
     multiTab,
@@ -5172,7 +5214,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     providerCompletedUiQa,
     onboardingOptionsClosed,
     onboardingReturnQa,
-    sidePanelSettingsMenuQa,
+    sidePanelSettingsShortcutQa,
     adapterDiagnostic: {
       extension: path.extname(firstDiagnostic.filename),
       filename: firstDiagnostic.filename,
@@ -5196,7 +5238,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.3-build39-panel-perf-r3' &&
+    afterActivationRevision === '2.4.4-build39-figure-isolation-r4' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5214,6 +5256,15 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.dynamicNaturePanelQa.cleanup &&
     results.figureInventoryCacheQa.freshnessChecks <= 1 &&
     results.figureInventoryCacheQa.extractions === 0 &&
+    JSON.stringify(results.nestedFigureIsolationQa.figure90Panels) ===
+      JSON.stringify(['A', 'B', 'C']) &&
+    JSON.stringify(results.nestedFigureIsolationQa.figure91Panels) ===
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M']) &&
+    !/Figure 91/.test(results.nestedFigureIsolationQa.figure90Caption) &&
+    !/Figure 90/.test(results.nestedFigureIsolationQa.figure91Caption) &&
+    results.nestedFigureIsolationQa.figure90Focused &&
+    !results.nestedFigureIsolationQa.figure91Focused &&
+    results.nestedFigureIsolationQa.cleanup &&
     floatingPanelQa.supported &&
     floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
     floatingPanelQa.defaultWidth === '780' &&
@@ -5242,7 +5293,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.3-build39-panel-perf-r3' &&
+    multiTab.secondActivatedRevision === '2.4.4-build39-figure-isolation-r4' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.
@@ -5874,11 +5925,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.onboardingReturnQa.acknowledged &&
     results.onboardingReturnQa.storageStep === 'completed' &&
     results.onboardingReturnQa.apiStep === 'completed' &&
-    results.sidePanelSettingsMenuQa.firstExpanded &&
-    results.sidePanelSettingsMenuQa.routeSummaryVisible &&
-    results.sidePanelSettingsMenuQa.closedWithEscape &&
-    results.sidePanelSettingsMenuQa.menuClosedAfterOpen &&
-    results.sidePanelSettingsMenuQa.openedOptionsPage &&
+    results.sidePanelSettingsShortcutQa.openedOptionsPage &&
+    results.sidePanelSettingsShortcutQa.categoryWorkspaceHash &&
+    results.sidePanelSettingsShortcutQa.categoryWorkspaceVisible &&
+    results.sidePanelSettingsShortcutQa.categoryHeadingVisible &&
+    results.sidePanelSettingsShortcutQa.gearRecovered &&
+    results.sidePanelSettingsShortcutQa.legacyMenuRemoved &&
     results.adapterDiagnostic.kind === 'sci-publisher-adapter-diagnostic' &&
     results.adapterDiagnostic.schemaVersion === 2 &&
     results.adapterDiagnostic.hasRenderedDom &&

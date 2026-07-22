@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.3-build39-panel-perf-r3';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.4-build39-figure-isolation-r4';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];

@@ -2,7 +2,9 @@
 
 build39 基于 build38 冻结点 `389ab42`，重点降低全文高亮和 Figure/Panel 解读中的重复 Token、输出截断与无效重算，同时保持旧模型接口可降级使用。
 
-2.4.3 Panel 修复版会在 Nature 等分层 Figure DOM 中选择 Panel 信息最完整的 caption 来源，覆盖 `a-c`、`d-f`、`g,h`、`i,j` 等逗号、句点与区间组合。目录缓存改为 MutationObserver 精确置脏、普通读取直接复用，并保留 2 秒低成本兜底检查，避免侧栏快照反复遍历所有 Figure 造成页面卡顿。
+2.4.4 Panel 修复版会在 Nature 等分层 Figure DOM 中选择 Panel 信息最完整的 caption 来源，覆盖 `a-c`、`d-f`、`g,h`、`i,j` 等逗号、句点与区间组合；检测到包含多个不同 Figure 身份的聚合容器时会将其排除，并拒绝使用身份不一致的 caption，防止编号、图片、Panel 和定位目标跨图串位。目录缓存采用 MutationObserver 精确置脏、普通读取直接复用，并保留 2 秒低成本兜底检查，避免侧栏快照反复遍历所有 Figure 造成页面卡顿。
+
+侧栏标题栏的齿轮改为直接打开 `options.html#categoryWorkspace`，即“类别规则/识别规则与模型设置”工作区；适配诊断包入口移至当前论文全局工具栏的虫形图标。
 
 ## 全文高亮
 

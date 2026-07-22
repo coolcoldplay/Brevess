@@ -7,14 +7,16 @@ function read(file) {
   return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 }
 
-test('popup offers explicit regex and LLM modes plus a gear-owned settings menu', () => {
+test('popup offers explicit regex and LLM modes plus a direct settings gear', () => {
   const html = read('popup.html');
+  const script = read('popup.js');
   assert.match(html, /name="analysisMode"[^>]*value="regex"|value="regex"[^>]*name="analysisMode"/);
   assert.match(html, /name="analysisMode"[^>]*value="llm"|value="llm"[^>]*name="analysisMode"/);
-  assert.match(html, /id="openSidePanelSettings"[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"/);
-  assert.match(html, /id="sidePanelSettingsMenu"[^>]*role="menu"/);
-  assert.match(html, /id="settingsRouteSummary"/);
-  assert.match(html, /id="openLlmSettingsMenuItem"[^>]*role="menuitem"/);
+  assert.match(html, /id="openSidePanelSettings"[^>]*aria-label="打开识别规则与模型设置"/);
+  assert.doesNotMatch(html, /id="sidePanelSettingsMenu"/);
+  assert.match(script, /function setupSidePanelSettingsShortcut\(/);
+  assert.match(script, /options\.html#categoryWorkspace/);
+  assert.match(script, /chrome\.tabs\.create/);
   assert.match(html, /id="llmDiagnostics"/);
 });
 
@@ -26,7 +28,7 @@ test('popup routes LLM analysis and falls back to regex on failure', () => {
   assert.doesNotMatch(script, /chrome\.tabs\.sendMessage/);
   assert.match(script, /analyzeArticleWithLLM/);
   assert.match(script, /LLM_UPDATE_PREFERENCES/);
-  assert.match(script, /openOptionsPage/);
+  assert.match(script, /options\.html#categoryWorkspace/);
   assert.match(script, /availableCategories/);
   assert.match(script, /LLM_PREPARE_DOCUMENT/);
   assert.match(script, /回退.*正则|正则.*回退/);

@@ -25,7 +25,7 @@
     'content.js'
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
-  const CONTENT_SCRIPT_REVISION = '2.4.3-build39-panel-perf-r3';
+  const CONTENT_SCRIPT_REVISION = '2.4.4-build39-figure-isolation-r4';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';

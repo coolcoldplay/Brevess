@@ -274,7 +274,7 @@ test('latest public settings refresh leaves the route summary on fresh external 
   assert.equal(renderedRows[0][1], 'Fresh profile · fresh-model');
 });
 
-test('archive export disables while guarded and gear opening reloads public route settings', () => {
+test('archive export disables while guarded and gear opens the category workspace directly', () => {
   const script = read('popup.js');
   const archiveStart = script.indexOf('function exportCurrentArticleArchive');
   const archiveEnd = script.indexOf('async function importCurrentArticleArchive', archiveStart);
@@ -283,12 +283,13 @@ test('archive export disables while guarded and gear opening reloads public rout
   assert.match(archive, /button\.disabled\s*=\s*true/);
   assert.match(archive, /finally[\s\S]*button\.disabled\s*=\s*false/);
 
-  const menuStart = script.indexOf('function setupSidePanelSettingsMenu');
-  const menuEnd = script.indexOf('function createWorkspaceElement', menuStart);
-  const menu = script.slice(menuStart, menuEnd);
-  assert.match(menu, /await refreshSettingsRouteSummary\(\)/);
-  assert.match(script, /load:\s*\(\)\s*=>\s*sendLlmMessage\(\{ type: 'LLM_GET_SETTINGS' \}\)/);
-  assert.match(script, /createLatestStateRefresher/);
+  const shortcutStart = script.indexOf('function setupSidePanelSettingsShortcut');
+  const shortcutEnd = script.indexOf('function updateFloatingPanelButton', shortcutStart);
+  const shortcut = script.slice(shortcutStart, shortcutEnd);
+  assert.match(shortcut, /chrome\.runtime\.getURL\('options\.html#categoryWorkspace'\)/);
+  assert.match(shortcut, /chrome\.tabs\.create/);
+  assert.match(shortcut, /openSidePanelSettings\.disabled = true/);
+  assert.match(shortcut, /finally[\s\S]*openSidePanelSettings\.disabled = false/);
 });
 
 test('draining the latest mutation blocks analysis until settings settle', async () => {
@@ -657,7 +658,7 @@ test('popup exposes the local article navigator in regex and LLM modes', () => {
   assert.doesNotMatch(handler, /effectiveMode|LLM|studyType/);
 });
 
-test('side panel keeps one compact paper header and one gear-owned diagnostic action', () => {
+test('side panel keeps one compact paper header, a direct gear, and one diagnostic action', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   const css = read('popup.css');
@@ -665,19 +666,15 @@ test('side panel keeps one compact paper header and one gear-owned diagnostic ac
   assert.doesNotMatch(html, />SCI 论文逻辑助手</);
   assert.doesNotMatch(html, /<h1>分析工作区<\/h1>/);
   assert.doesNotMatch(html, /class="llm-provider-row"/);
-  assert.equal((html.match(/导出适配诊断包/g) || []).length, 1);
-  assert.match(html, /id="sidePanelSettingsMenu"/);
-  assert.match(html, /id="settingsRouteSummary"/);
-  assert.match(script, /Escape/);
-  assert.match(script, /pointerdown/);
-  assert.match(script, /openSidePanelSettings\.focus/);
-  assert.match(script, /openLlmSettingsMenuItem[\s\S]*openOptionsPage/);
+  assert.equal((html.match(/id="exportAdapterDiagnosticBundle"/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="sidePanelSettingsMenu"/);
+  assert.match(html, /id="openSidePanelSettings"[^>]*title="打开识别规则与模型设置"/);
+  assert.match(script, /setupSidePanelSettingsShortcut/);
+  assert.match(script, /options\.html#categoryWorkspace/);
   assert.match(css, /\.compact-paper-header\s*\{[^}]*position:\s*relative/s);
-  assert.match(css, /\.side-panel-settings-menu\s*\{[^}]*position:\s*absolute/s);
-  assert.match(css, /\.settings-route-row\s*\{[^}]*grid-template-columns:\s*42px\s+minmax\(0,\s*1fr\)/s);
 });
 
-test('side panel exposes one gear-owned adapter diagnostic export', () => {
+test('side panel exposes one toolbar adapter diagnostic export', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   assert.match(html, /id="exportAdapterDiagnosticBundle"/);

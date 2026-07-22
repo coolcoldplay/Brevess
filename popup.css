@@ -174,56 +174,6 @@ body {
 .diagnostic-retry-button { flex: 0 0 auto; margin-left: auto; }
 .diagnostic-retry-button:hover { border-color: var(--color-primary); background: #edf4f9; }
 .diagnostic-retry-button:disabled { cursor: not-allowed; opacity: 0.55; }
-.side-panel-settings-menu {
-    position: absolute;
-    z-index: 20;
-    top: calc(100% - 2px);
-    right: 10px;
-    width: min(320px, calc(100vw - 20px));
-    padding: 8px;
-    border: 1px solid var(--color-border);
-    border-radius: 9px;
-    background: var(--color-surface);
-    box-shadow: 0 12px 24px rgba(10, 63, 107, 0.18);
-}
-.settings-route-summary {
-    display: grid;
-    gap: 6px;
-    padding: 4px 2px 8px;
-    border-bottom: 1px solid var(--color-border);
-    color: var(--color-text-muted);
-    font-size: 11px;
-}
-.settings-route-row {
-    display: grid;
-    grid-template-columns: 42px minmax(0, 1fr);
-    gap: 8px;
-    align-items: baseline;
-}
-.settings-route-row strong {
-    overflow: hidden;
-    color: var(--color-text);
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.side-panel-settings-menu [role="menuitem"] {
-    display: block;
-    width: 100%;
-    padding: 9px 8px;
-    border: 0;
-    border-radius: 6px;
-    color: var(--color-primary-strong);
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    text-align: left;
-}
-.side-panel-settings-menu [role="menuitem"]:hover,
-.side-panel-settings-menu [role="menuitem"]:focus-visible {
-    background: #edf4f9;
-}
 .workspace-main { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
 .workspace-view {
     height: 100%;

@@ -17,14 +17,9 @@
           <i class="ph ph-push-pin" aria-hidden="true"></i>
         </button>
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
-          aria-label="打开设置与诊断菜单" aria-haspopup="menu" aria-expanded="false">
+          aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
           <i class="ph ph-gear" aria-hidden="true"></i>
         </button>
-        <div id="sidePanelSettingsMenu" class="side-panel-settings-menu" role="menu" hidden>
-          <div id="settingsRouteSummary" class="settings-route-summary"></div>
-          <button id="openLlmSettingsMenuItem" role="menuitem" type="button">API 与任务路由设置</button>
-          <button id="exportAdapterDiagnosticBundle" role="menuitem" type="button">导出适配诊断包</button>
-        </div>
       </header>
       <div id="sidePanelDocumentStatus" class="side-panel-document-status">
         <span class="side-panel-live-dot" aria-hidden="true"></span>
@@ -52,6 +47,10 @@
           <button id="importCurrentArticleArchiveButton" class="side-panel-tool-button" type="button"
             aria-label="导入本文档案" title="导入本文档案">
             <i class="ph ph-upload" aria-hidden="true"></i>
+          </button>
+          <button id="exportAdapterDiagnosticBundle" class="side-panel-tool-button" type="button"
+            aria-label="导出网页适配诊断包" title="导出网页适配诊断包">
+            <i class="ph ph-bug" aria-hidden="true"></i>
           </button>
           <input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden>
         </div>

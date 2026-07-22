@@ -6,8 +6,8 @@ const path = require('node:path');
 test('manifest opens an action-activated native side panel and injects extraction on demand', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.4.3');
-  assert.equal(packageJson.version, '2.4.3');
+  assert.equal(manifest.version, '2.4.4');
+  assert.equal(packageJson.version, '2.4.4');
   assert.equal(packageJson.license, 'AGPL-3.0-or-later');
   assert.equal(
     packageJson.repository.url,
@@ -32,7 +32,7 @@ test('background worker keeps routed LLM operations alive until completion', () 
   const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
   assert.match(
     background,
-    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'2\.4\.3'/
+    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'2\.4\.4'/
   );
   assert.match(background, /core\/service-worker-keepalive\.js/);
   assert.match(background, /SciLLM\.keepAliveUntil\(\s*handleRoutedMessage/);

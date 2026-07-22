@@ -185,4 +185,4 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 
 ## 版本
 
-当前版本：`2.4.3`（运行修订 `2.4.3-build39-panel-perf-r3`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.3 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，覆盖 Nature `a-c`、`d-f`、`g,h`、`i,j` 等格式，并通过事件驱动失效和限频兜底避免重复扫描拖慢网页。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。
+当前版本：`2.4.4`（运行修订 `2.4.4-build39-figure-isolation-r4`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.4 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，覆盖 Nature `a-c`、`d-f`、`g,h`、`i,j` 等格式；同时排除包含多个 Figure 身份的聚合父容器，使 Figure 编号、图注、图片、Panel 与定位目标保持在同一最小根节点。目录缓存采用事件驱动失效和限频兜底，避免重复扫描拖慢网页。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。

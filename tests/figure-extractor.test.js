@@ -231,6 +231,55 @@ test('prefers a detailed Nature description when the first caption node is title
   assert.equal(result.captionElement, candidate);
 });
 
+test('rejects an aggregate wrapper so Figure identity, image, and Panels cannot cross', () => {
+  const figure1 = figure({
+    caption: 'Figure 1. Study overview. a-c,Workflow and cohorts.',
+    captionLabel: 'Figure 1',
+    images: [image('https://journal.example/figure-1.jpg')]
+  });
+  const figure2 = figure({
+    caption: 'Figure 2. Dendritic-cell atlas. a-m,UMAP, heatmaps, and validation.',
+    captionLabel: 'Figure 2',
+    images: [image('https://journal.example/figure-2.jpg')]
+  });
+  const children = [figure1, figure2];
+  const captions = children.map(child => child.captionElement);
+  const labels = captions.map(caption => caption.querySelector('.figure-label'));
+  const aggregate = {
+    textContent: children.map(child => child.textContent).join(' '),
+    querySelector(selector) {
+      if (/fig-label|figure-label/i.test(selector)) return labels[0];
+      if (/figcaption|caption|description/i.test(selector)) return captions[0];
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (/img/i.test(selector)) {
+        return children.flatMap(child => child.querySelectorAll('img'));
+      }
+      if (/fig-label|figure-label/i.test(selector)) return labels;
+      if (/panel/i.test(selector)) return [];
+      if (/figcaption|caption|description/i.test(selector)) return captions;
+      return [];
+    },
+    getAttribute() { return ''; },
+    closest() { return null; }
+  };
+
+  const results = extractArticleFigures(documentWith([aggregate, figure1, figure2]), []);
+  const extractedFigure1 = results.find(item => item.figureId === 'figure-1');
+  const extractedFigure2 = results.find(item => item.figureId === 'figure-2');
+
+  assert.equal(extractedFigure1.element, figure1);
+  assert.equal(extractedFigure1.imageElements[0].src, 'https://journal.example/figure-1.jpg');
+  assert.deepEqual(extractedFigure1.panelHints, ['A', 'B', 'C']);
+  assert.equal(extractedFigure2.element, figure2);
+  assert.equal(extractedFigure2.imageElements[0].src, 'https://journal.example/figure-2.jpg');
+  assert.deepEqual(
+    extractedFigure2.panelHints,
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M']
+  );
+});
+
 test('invalidates an early Figure inventory after a dynamic caption finishes rendering', () => {
   const candidate = figure({
     caption: 'Figure 1. Loading figure…',

@@ -227,7 +227,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /2\.4\.3-build39-panel-perf-r3/);
+  assert.match(script, /2\.4\.4-build39-figure-isolation-r4/);
   assert.match(script, /dataset\.sciLlmBackgroundRevision/);
   assert.match(script, /errorMessage:\s*error\.message/);
   assert.match(script, /dataset\.sciLlmErrorCode/);
