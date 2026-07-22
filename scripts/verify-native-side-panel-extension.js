@@ -406,6 +406,51 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await sidePanel.evaluate(() => documentPictureInPicture.window?.close());
   await sidePanel.waitForFunction(() =>
     document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') === 'false');
+  await sidePanel.locator('[data-workspace-target="figures"]').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelector('[data-workspace-view="figures"]')?.hidden === false
+  );
+  await sidePanel.locator('#saveCurrentArticleWorkspace').click();
+  await sidePanel.waitForFunction(() =>
+    document.getElementById('saveCurrentArticleWorkspace')?.disabled === false &&
+    /\u5c1a\u672a\u8bbe\u7f6e\u672c\u5730\u4fdd\u5b58\u6587\u4ef6\u5939/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    )
+  );
+  const globalToolbarSaveFailureQa = await sidePanel.evaluate(() => {
+    const status = document.getElementById('statusMessage');
+    const button = document.getElementById('saveCurrentArticleWorkspace');
+    return {
+      figureViewActive:
+        document.querySelector('[data-workspace-view="figures"]')?.hidden === false,
+      visible: Boolean(status && status.offsetParent !== null &&
+        getComputedStyle(status).display !== 'none'),
+      text: status?.textContent || '',
+      buttonRecovered: button?.disabled === false,
+      busyReleased: button?.hasAttribute('aria-busy') === false
+    };
+  });
+  await sidePanel.evaluate(() => showStatus('QA first global status', 'success'));
+  await sidePanel.waitForTimeout(2600);
+  await sidePanel.evaluate(() => showStatus('QA latest global status', 'success'));
+  await sidePanel.waitForTimeout(550);
+  const globalToolbarTimerQa = await sidePanel.evaluate(() => {
+    const status = document.getElementById('statusMessage');
+    return {
+      latestTextRetained: status?.textContent === 'QA latest global status',
+      latestStillVisible: Boolean(status?.classList.contains('show') &&
+        status.offsetParent !== null && getComputedStyle(status).display !== 'none'),
+      timerActive: statusMessageTimer !== null
+    };
+  });
+  const globalToolbarFeedbackQa = {
+    saveFailure: globalToolbarSaveFailureQa,
+    timerIsolation: globalToolbarTimerQa
+  };
+  await sidePanel.locator('[data-workspace-target="analysis"]').click();
+  await sidePanel.waitForFunction(() =>
+    document.querySelector('[data-workspace-view="analysis"]')?.hidden === false
+  );
   const afterActivationRevision = await fixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
   const pageOverlayCount = await fixture.locator(
@@ -751,7 +796,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -822,7 +867,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -887,7 +932,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r6', null, { timeout: 5000 }
+      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -908,7 +953,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r6'),
+        '2.4.0-article-workspaces-r7'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -3851,6 +3896,22 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     articleWorkspaceOverviewUi.loading === false &&
     document.getElementById('articleWorkspaceNextPage')?.disabled === false
   );
+  await options.locator('#articleWorkspaceSort').selectOption('title_asc');
+  await options.waitForFunction(() =>
+    document.querySelector('.article-workspace-title')?.textContent === 'QA Pagination 01'
+  );
+  await options.locator('#articleWorkspaceSelectAll').check();
+  const workspaceSelectionPageOneQa = await options.evaluate(() => ({
+    sort: articleWorkspaceOverviewUi.sort,
+    firstTitle: document.querySelector('.article-workspace-title')?.textContent || '',
+    visibleCards: document.querySelectorAll('.article-workspace-card').length,
+    selected: articleWorkspaceOverviewUi.selected.size,
+    selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+    selectAllIndeterminate:
+      document.getElementById('articleWorkspaceSelectAll')?.indeterminate === true,
+    bulkClearEnabled:
+      document.getElementById('clearSelectedArticleWorkspaces')?.disabled === false
+  }));
   await options.locator('#articleWorkspaceNextPage').click();
   await options.waitForFunction(() =>
     articleWorkspaceOverviewUi.page === 2 &&
@@ -3863,8 +3924,45 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     previousEnabled: document.getElementById('articleWorkspacePreviousPage')?.disabled === false,
     nextDisabled: document.getElementById('articleWorkspaceNextPage')?.disabled === true
   }));
+  const workspaceSelectionBeforePageTwoQa = await options.evaluate(() => ({
+    selected: articleWorkspaceOverviewUi.selected.size,
+    selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+    selectAllIndeterminate:
+      document.getElementById('articleWorkspaceSelectAll')?.indeterminate === true
+  }));
+  await options.locator('#articleWorkspaceSelectAll').check();
+  const workspaceSelectionPageTwoQa = await options.evaluate(() => ({
+    selected: articleWorkspaceOverviewUi.selected.size,
+    selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+    bulkClearEnabled:
+      document.getElementById('clearSelectedArticleWorkspaces')?.disabled === false
+  }));
   await options.locator('#articleWorkspacePreviousPage').click();
   await options.waitForFunction(() => articleWorkspaceOverviewUi.page === 1);
+  await options.locator('#articleWorkspaceSelectAll').uncheck();
+  const workspaceSelectionAfterPageOneClearQa = await options.evaluate(() => ({
+    selected: articleWorkspaceOverviewUi.selected.size,
+    selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+    bulkClearEnabled:
+      document.getElementById('clearSelectedArticleWorkspaces')?.disabled === false
+  }));
+  await options.locator('#articleWorkspaceNextPage').click();
+  await options.waitForFunction(() => articleWorkspaceOverviewUi.page === 2);
+  await options.locator('#articleWorkspaceSelectAll').uncheck();
+  await options.locator('#articleWorkspacePreviousPage').click();
+  await options.waitForFunction(() => articleWorkspaceOverviewUi.page === 1);
+  const workspaceSelectionSortQa = {
+    pageOne: workspaceSelectionPageOneQa,
+    beforePageTwo: workspaceSelectionBeforePageTwoQa,
+    pageTwo: workspaceSelectionPageTwoQa,
+    afterPageOneClear: workspaceSelectionAfterPageOneClearQa,
+    final: await options.evaluate(() => ({
+      selected: articleWorkspaceOverviewUi.selected.size,
+      selectAllChecked: document.getElementById('articleWorkspaceSelectAll')?.checked === true,
+      bulkClearDisabled:
+        document.getElementById('clearSelectedArticleWorkspaces')?.disabled === true
+    }))
+  };
   const workspacePaginationQa = {
     ...workspaceNextPageQa,
     returnedToFirst: await options.evaluate(() =>
@@ -4863,6 +4961,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     afterActivationRevision,
     activated,
     floatingPanelQa,
+    globalToolbarFeedbackQa,
     multiTab,
     navigationLifecycleQa,
     pageOverlayCount,
@@ -4925,6 +5024,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     customCategoryControlsQa,
     workspaceOverviewFixture,
     workspaceOverviewQa,
+    workspaceSelectionSortQa,
     workspacePaginationQa,
     activeWorkspaceDeletionQa,
     lateFigureSetup,
@@ -4977,7 +5077,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r6' &&
+    afterActivationRevision === '2.4.0-article-workspaces-r7' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5001,11 +5101,21 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     floatingPanelQa.remainsOpenAfterTabSwitch &&
     floatingPanelQa.targetStableAfterTabSwitch &&
     floatingPanelQa.paperStableAfterTabSwitch &&
+    results.globalToolbarFeedbackQa.saveFailure.figureViewActive &&
+    results.globalToolbarFeedbackQa.saveFailure.visible &&
+    /\u5c1a\u672a\u8bbe\u7f6e\u672c\u5730\u4fdd\u5b58\u6587\u4ef6\u5939/.test(
+      results.globalToolbarFeedbackQa.saveFailure.text
+    ) &&
+    results.globalToolbarFeedbackQa.saveFailure.buttonRecovered &&
+    results.globalToolbarFeedbackQa.saveFailure.busyReleased &&
+    results.globalToolbarFeedbackQa.timerIsolation.latestTextRetained &&
+    results.globalToolbarFeedbackQa.timerIsolation.latestStillVisible &&
+    results.globalToolbarFeedbackQa.timerIsolation.timerActive &&
     multiTab.untouchedRevision === '' &&
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r6' &&
+    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r7' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.
@@ -5412,6 +5522,25 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.workspaceOverviewQa.restoreWithoutDirectoryExplained &&
     results.workspaceOverviewQa.deletedFromOverview &&
     /已清除 1 篇论文工作区/.test(results.workspaceOverviewQa.clearStatus) &&
+    results.workspaceSelectionSortQa.pageOne.sort === 'title_asc' &&
+    results.workspaceSelectionSortQa.pageOne.firstTitle === 'QA Pagination 01' &&
+    results.workspaceSelectionSortQa.pageOne.visibleCards === 20 &&
+    results.workspaceSelectionSortQa.pageOne.selected === 20 &&
+    results.workspaceSelectionSortQa.pageOne.selectAllChecked &&
+    !results.workspaceSelectionSortQa.pageOne.selectAllIndeterminate &&
+    results.workspaceSelectionSortQa.pageOne.bulkClearEnabled &&
+    results.workspaceSelectionSortQa.beforePageTwo.selected === 20 &&
+    !results.workspaceSelectionSortQa.beforePageTwo.selectAllChecked &&
+    !results.workspaceSelectionSortQa.beforePageTwo.selectAllIndeterminate &&
+    results.workspaceSelectionSortQa.pageTwo.selected === 21 &&
+    results.workspaceSelectionSortQa.pageTwo.selectAllChecked &&
+    results.workspaceSelectionSortQa.pageTwo.bulkClearEnabled &&
+    results.workspaceSelectionSortQa.afterPageOneClear.selected === 1 &&
+    !results.workspaceSelectionSortQa.afterPageOneClear.selectAllChecked &&
+    results.workspaceSelectionSortQa.afterPageOneClear.bulkClearEnabled &&
+    results.workspaceSelectionSortQa.final.selected === 0 &&
+    !results.workspaceSelectionSortQa.final.selectAllChecked &&
+    results.workspaceSelectionSortQa.final.bulkClearDisabled &&
     results.workspacePaginationQa.page === 2 &&
     results.workspacePaginationQa.cards === 1 &&
     results.workspacePaginationQa.previousEnabled &&

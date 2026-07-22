@@ -5934,13 +5934,17 @@ function setupEventListeners() {
 }
 
 // 显示状态消息
+let statusMessageTimer = null;
+
 function showStatus(message, type) {
     const statusEl = document.getElementById('statusMessage');
     statusEl.textContent = message;
-    statusEl.className = `status-message ${type} show`;
-    
-    setTimeout(() => {
+    statusEl.className = `status-message side-panel-global-status ${type} show`;
+
+    if (statusMessageTimer !== null) clearTimeout(statusMessageTimer);
+    statusMessageTimer = setTimeout(() => {
         statusEl.classList.remove('show');
+        statusMessageTimer = null;
     }, 3000);
 }
 

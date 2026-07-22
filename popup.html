@@ -56,6 +56,8 @@
           <input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden>
         </div>
       </div>
+      <div id="statusMessage" class="status-message side-panel-global-status" role="status"
+          aria-live="polite" aria-atomic="true"></div>
       <section id="articleArchivePrompt" class="article-archive-prompt" hidden aria-live="polite">
         <div>
           <strong>发现这篇论文的本地历史档案</strong>
@@ -176,10 +178,6 @@
                 </div>
             </div>
         </div>
-
-        <!-- 状态显示 -->
-        <div id="statusMessage" class="status-message" role="status"
-            aria-live="polite" aria-atomic="true"></div>
 
       </div>
       </section>

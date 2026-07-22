@@ -1209,6 +1209,11 @@ h3 {
     display: block;
 }
 
+.side-panel-global-status {
+    flex: 0 0 auto;
+    margin: 8px 12px 0;
+}
+
 .status-message.success {
     background: #d4edda;
     color: #155724;

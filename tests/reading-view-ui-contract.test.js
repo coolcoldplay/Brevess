@@ -885,6 +885,13 @@ test('reading assistant exposes a global local-workspace toolbar and a real floa
     'scanArticleWorkspace', 'saveCurrentArticleWorkspace', 'clearArticleWorkspace',
     'exportCurrentArticleArchive', 'importCurrentArticleArchiveButton'
   ]) assert.match(statusMarkup, new RegExp(`id="${id}"`));
+  const feedbackIndex = html.indexOf('id="statusMessage"');
+  const workspaceMainIndex = html.indexOf('<main class="workspace-main">');
+  assert.ok(feedbackIndex > statusStart && feedbackIndex < workspaceMainIndex);
+  assert.match(statusMarkup, /id="statusMessage"[^>]*side-panel-global-status/);
+  assert.match(css, /\.side-panel-global-status\s*\{/);
+  assert.match(script, /if \(statusMessageTimer !== null\) clearTimeout\(statusMessageTimer\)/);
+  assert.match(script, /statusMessageTimer = null;[\s\S]*function showStatus/);
   const highlightsStart = html.indexOf('data-workspace-view="highlights"');
   const highlightsEnd = html.indexOf('data-workspace-view="figures"', highlightsStart);
   assert.doesNotMatch(html.slice(highlightsStart, highlightsEnd), /article-archive-toolbar/);
