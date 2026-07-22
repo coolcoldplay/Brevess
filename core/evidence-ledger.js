@@ -120,6 +120,12 @@
           section_title: String(group.sectionTitle || sectionByParagraph.get(group.paragraphId) || ''),
           quote: String(group.quote || ''),
           quote_role: String(group.quoteRole || 'statement'),
+          support_quotes: (Array.isArray(group.supportSpans) ? group.supportSpans : [])
+            .map(item => ({
+              paragraph_id: String(item?.paragraphId || ''),
+              quote: String(item?.quote || ''),
+              quote_role: String(item?.quoteRole || 'statement')
+            })).filter(item => item.paragraph_id && item.quote),
           slots: Array.isArray(group.slots) ? group.slots : [],
           confidence: Number(group.confidence)
         }];
@@ -133,6 +139,12 @@
         section_title: String(sectionByParagraph.get(group.paragraphId) || ''),
         quote: String(group.quote || ''),
         quote_role: String(category.quoteRole || 'statement'),
+        support_quotes: (Array.isArray(category.supportSpans) ? category.supportSpans : [])
+          .map(item => ({
+            paragraph_id: String(item?.paragraphId || ''),
+            quote: String(item?.quote || ''),
+            quote_role: String(item?.quoteRole || 'statement')
+          })).filter(item => item.paragraph_id && item.quote),
         slots: Array.isArray(category.slots) ? category.slots : [],
         confidence: Number(category.confidence)
       }));

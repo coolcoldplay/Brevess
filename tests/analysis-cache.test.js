@@ -6,6 +6,7 @@ require('../providers/provider-utils.js');
 require('../core/prompt-compiler.js');
 require('../core/chunker.js');
 require('../core/result-validator.js');
+require('../core/highlight-stream.js');
 require('../core/cache-planner.js');
 require('../core/analysis-pipeline.js');
 const {
@@ -23,7 +24,8 @@ const paragraphs = [{
 
 test('uses adaptive prompt, classifier, and ledger cache versions', () => {
   assert.deepEqual(ANALYSIS_CACHE_VERSIONS, {
-    prompt: '9', chunker: '4', classifier: '2', ledger: '2'
+    prompt: '10-ndjson-census', chunker: '5-paragraph-checkpoint',
+    classifier: '2', ledger: '2'
   });
 });
 
@@ -213,4 +215,46 @@ test('does not resume progress created for a different effective category defini
     'chunk-001', 'chunk-002', 'chunk-003',
     'chunk-001', 'chunk-002', 'chunk-003'
   ]);
+});
+
+test('persists paragraph checkpoints and resumes a truncated stream from only missing indices', async () => {
+  const categories = createBuiltInCategories();
+  const cacheStore = createMemoryAnalysisCache();
+  const source = [
+    { paragraphId: 'p1', sectionTitle: 'Results', text: 'Treatment increased survival.' },
+    { paragraphId: 'p2', sectionTitle: 'Results', text: 'Controls were unchanged.' }
+  ];
+  let fail = true;
+  const payloads = [];
+  const adapter = {
+    async *generateTextStream(request) {
+      const payload = JSON.parse(request.userPrompt);
+      payloads.push(payload.source_data.map(item => item.i));
+      if (fail && payloads.length === 1) {
+        yield { type: 'text_delta', text: '{"t":"p","i":0,"a":[{"c":"C0","prov":"current","d":[{"x":"Treatment increased survival.","r":"statement"}],"s":[],"sl":{},"need":false}]}\n' };
+      }
+      if (fail) {
+        yield { type: 'error', error: { code: 'AUTH_INVALID', message: 'stop' } };
+        return;
+      }
+      yield { type: 'text_delta', text: '{"t":"p","i":1,"a":[]}\n{"t":"final","n":1}\n' };
+      yield { type: 'completed', finishReason: 'stop' };
+    }
+  };
+  await assert.rejects(analyzeWithCategoryCache({
+    paragraphs: source,
+    selectedCategories: [categories.result],
+    providerId: 'openai', model: 'model', adapter, cacheStore,
+    maxChars: 1000, concurrency: 1
+  }), error => error.code === 'AUTH_INVALID');
+  fail = false;
+  const start = payloads.length;
+  const result = await analyzeWithCategoryCache({
+    paragraphs: source,
+    selectedCategories: [categories.result],
+    providerId: 'openai', model: 'model', adapter, cacheStore,
+    maxChars: 1000, concurrency: 1
+  });
+  assert.deepEqual(payloads[start], [1]);
+  assert.equal(result.annotations.length, 1);
 });

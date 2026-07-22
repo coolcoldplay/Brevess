@@ -4,8 +4,8 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const ANALYSIS_CACHE_VERSIONS = {
-    prompt: '9',
-    chunker: '4',
+    prompt: '10-ndjson-census',
+    chunker: '5-paragraph-checkpoint',
     classifier: shared.PROFILE_CLASSIFIER_VERSION || '2',
     ledger: shared.EVIDENCE_LEDGER_VERSION || '2'
   };
@@ -142,6 +142,7 @@
       claimMode: category.claimMode || 'explicit',
       quoteRole: category.quoteRole || 'statement',
       slots: Array.isArray(category.slots) ? category.slots : [],
+      supportSpans: Array.isArray(category.supportSpans) ? category.supportSpans : [],
       minimumConfidence: Number(category.minimumConfidence) || 0.8
     })));
   }
@@ -170,7 +171,8 @@
     signal,
     waitIfPaused,
     onProgress,
-    onChunkComplete = async () => {}
+    onChunkComplete = async () => {},
+    onParagraphComplete = async () => {}
   }) {
     const documentHash = await hashDocument(paragraphs);
     const signatureByCategory = new Map(selectedCategories.map(category => [
@@ -223,6 +225,18 @@
       })}`;
       const storedProgress = await cacheStore.getMany([progressKey]);
       const progressChunks = { ...(storedProgress.get(progressKey)?.chunks || {}) };
+      const progressParagraphs = { ...(storedProgress.get(progressKey)?.paragraphs || {}) };
+      let progressWriteTail = Promise.resolve();
+      function saveProgress() {
+        const operation = progressWriteTail.then(() => cacheStore.setMany([{
+          key: progressKey,
+          createdAt: Date.now(),
+          chunks: progressChunks,
+          paragraphs: progressParagraphs
+        }]));
+        progressWriteTail = operation.catch(() => {});
+        return operation;
+      }
       fresh = await shared.analyzeDocument({
         paragraphs,
         selectedCategories: missingCategories,
@@ -235,17 +249,20 @@
         signal,
         waitIfPaused,
         resumeChunks: progressChunks,
+        resumeParagraphs: progressParagraphs,
+        onParagraphComplete: async completed => {
+          progressParagraphs[`${completed.chunkId}:${completed.paragraphIndex}`] = completed;
+          await saveProgress();
+          await onParagraphComplete(completed);
+        },
         onChunkComplete: async completed => {
           progressChunks[completed.chunkId] = completed;
-          await cacheStore.setMany([{
-            key: progressKey,
-            createdAt: Date.now(),
-            chunks: progressChunks
-          }]);
+          await saveProgress();
           await onChunkComplete(completed);
         },
         onProgress
       });
+      await progressWriteTail;
       const now = Date.now();
       await cacheStore.setMany(missingCategories.map(category => ({
         key: keyByCategory.get(category.categoryId),

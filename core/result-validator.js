@@ -255,15 +255,98 @@
     return `${scope}:${local}`;
   }
 
+  function stableLocalId(prefix, value) {
+    const text = JSON.stringify(value);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+    }
+    return `${prefix}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  }
+
+  function localConfidence(provenance, category, displayQuotes, supportQuotes, slots) {
+    let confidence = provenance === 'current' ? 0.94
+      : provenance === 'prior' ? 0.86 : 0.82;
+    if (category?.relationRequired && supportQuotes.length) confidence += 0.01;
+    if ((category?.requiredSlots || []).length && slots.length >= category.requiredSlots.length) {
+      confidence += 0.01;
+    }
+    if (displayQuotes.some(item => item.quote.length < 12)) confidence -= 0.04;
+    return Math.max(0.5, Math.min(0.98, Math.round(confidence * 100) / 100));
+  }
+
+  /** Convert the model's compact claim census into the existing validator input.
+   * Identity, occurrence, confidence and the Chinese explanation are all local,
+   * deterministic fields; the model is never asked to fabricate them.
+   */
+  function materializeHighlightStreamRecord({ record, paragraphs, categories }) {
+    const paragraphMap = new Map((Array.isArray(paragraphs) ? paragraphs : [])
+      .map((item, index) => [index, item]));
+    const categoryMap = new Map((Array.isArray(categories) ? categories : [])
+      .map(item => [item.categoryId, item]));
+    const reviewedParagraph = paragraphMap.get(record?.paragraphIndex);
+    const annotations = (Array.isArray(record?.annotations) ? record.annotations : [])
+      .map((item, annotationIndex) => {
+        const category = categoryMap.get(item.categoryId);
+        if (!category || item.needsContext) return null;
+        const mapQuote = quote => {
+          const paragraph = paragraphMap.get(quote.paragraphIndex);
+          return {
+            paragraph_id: paragraph?.paragraphId || '',
+            quote: quote.quote,
+            occurrence: 0,
+            role: quote.role || 'statement'
+          };
+        };
+        const displayQuotes = item.displayQuotes.map(mapQuote);
+        const supportQuotes = item.supportQuotes.map(mapQuote);
+        const slots = Array.isArray(item.slots) ? item.slots : [];
+        const identity = {
+          categoryId: item.categoryId,
+          provenance: item.provenance,
+          displayQuotes,
+          supportQuotes,
+          slots
+        };
+        const relationId = category.relationRequired
+          ? stableLocalId('relation', identity) : '';
+        return {
+          annotation_id: stableLocalId('annotation', [identity, annotationIndex]),
+          relation_id: relationId,
+          category_id: item.categoryId,
+          claim_mode: category.claimMode === 'inferred' ? 'inferred' : 'explicit',
+          provenance: item.provenance,
+          highlight_quotes: displayQuotes,
+          support_quotes: supportQuotes,
+          slots,
+          confidence: localConfidence(
+            item.provenance, category, displayQuotes, supportQuotes, slots
+          ),
+          reason_zh: `本地规则核验：原文满足“${String(category.name || item.categoryId).slice(0, 40)}”判定条件。`,
+          locally_derived: true
+        };
+      }).filter(Boolean);
+    return {
+      paragraphs_reviewed: reviewedParagraph ? [reviewedParagraph.paragraphId] : [],
+      annotations
+    };
+  }
+
   function normalizeRawAnnotation(raw, index, namespace) {
     if (Array.isArray(raw?.highlight_quotes)) {
+      const locallyDerived = raw.locally_derived === true;
       return {
-        annotationId: scopedId(namespace, raw.annotation_id, `annotation-${index}`),
+        annotationId: locallyDerived
+          ? String(raw.annotation_id || stableLocalId('annotation', [raw, index]))
+          : scopedId(namespace, raw.annotation_id, `annotation-${index}`),
         relationId: raw.relation_id
-          ? scopedId(namespace, raw.relation_id, `relation-${index}`) : '',
+          ? (locallyDerived
+            ? String(raw.relation_id)
+            : scopedId(namespace, raw.relation_id, `relation-${index}`)) : '',
         categoryId: String(raw.category_id || ''),
         claimMode: raw.claim_mode === 'inferred' ? 'inferred' : 'explicit',
         highlightQuotes: raw.highlight_quotes,
+        supportQuotes: Array.isArray(raw.support_quotes) ? raw.support_quotes : [],
         slots: Array.isArray(raw.slots) ? raw.slots : [],
         confidence: Number(raw.confidence),
         reasonZh: String(raw.reason_zh || '').slice(0, 120),
@@ -283,6 +366,7 @@
         occurrence: raw?.occurrence,
         role: 'statement'
       }],
+      supportQuotes: [],
       slots: [],
       confidence: Number(raw?.confidence),
       reasonZh: String(raw?.reason_zh || '').slice(0, 120),
@@ -406,17 +490,18 @@
         rejected.push({ annotation: raw, reason: 'MISSING_HIGHLIGHT_QUOTE' });
         return;
       }
+      const allQuotes = [...normalized.highlightQuotes, ...normalized.supportQuotes];
       const calibrated = calibrateAnnotationEpistemics({
-        quotes: normalized.highlightQuotes,
+        quotes: allQuotes,
         confidence: normalized.confidence,
         reasonZh: normalized.reasonZh
       });
       const quoteRoles = new Set(
-        normalized.highlightQuotes.map(item => String(item?.role || ''))
+        allQuotes.map(item => String(item?.role || ''))
       );
       const allowedRoles = Array.isArray(category.allowedQuoteRoles)
         ? new Set(category.allowedQuoteRoles) : null;
-      if (!normalized.legacy && allowedRoles && normalized.highlightQuotes.some(item =>
+      if (!normalized.legacy && allowedRoles && allQuotes.some(item =>
         !allowedRoles.has(String(item?.role || ''))
       )) {
         rejected.push({ annotation: raw, reason: 'INVALID_QUOTE_ROLE' });
@@ -434,7 +519,8 @@
       }
 
       const pending = [];
-      for (const rawQuote of normalized.highlightQuotes) {
+      const validationPending = [];
+      for (const [quoteIndex, rawQuote] of allQuotes.entries()) {
         const paragraph = paragraphMap.get(rawQuote?.paragraph_id);
         const quote = typeof rawQuote?.quote === 'string' ? rawQuote.quote : '';
         const occurrence = Number.isInteger(rawQuote?.occurrence) && rawQuote.occurrence >= 0
@@ -453,7 +539,7 @@
           rejected.push({ annotation: raw, reason: semantics.reason });
           return;
         }
-        pending.push({
+        const groundedAnnotation = {
           paragraphId: rawQuote.paragraph_id,
           start: grounded.start,
           end: grounded.end,
@@ -467,11 +553,22 @@
           quoteRole: String(rawQuote.role || ''),
           slots,
           minimumConfidence: Number(category.minimumConfidence) || 0.8
-        });
+        };
+        validationPending.push(groundedAnnotation);
+        if (quoteIndex < normalized.highlightQuotes.length) pending.push(groundedAnnotation);
       }
+      const supportSpans = validationPending.slice(normalized.highlightQuotes.length)
+        .map(item => ({
+          paragraphId: item.paragraphId,
+          start: item.start,
+          end: item.end,
+          quote: item.quote,
+          quoteRole: item.quoteRole
+        }));
+      pending.forEach(item => { item.supportSpans = supportSpans; });
       const structureSemantics = validateAnnotationStructureSemantics({
         categoryId: normalized.categoryId,
-        quotes: normalized.highlightQuotes,
+        quotes: allQuotes,
         slots
       });
       if (!structureSemantics.valid) {
@@ -479,7 +576,7 @@
         return;
       }
       if (REVIEW_RELATION_CATEGORIES.has(normalized.categoryId)) {
-        reviewCandidates.push({ normalized, pending, slots, raw });
+        reviewCandidates.push({ normalized, pending, validationPending, slots, raw });
       } else {
         annotations.push(...pending);
       }
@@ -490,16 +587,17 @@
       const key = `${candidate.normalized.categoryId}:${candidate.normalized.relationId}`;
       const group = reviewGroups.get(key) || {
         categoryId: candidate.normalized.categoryId,
-        pending: [], slots: [], raw: []
+        pending: [], validationPending: [], slots: [], raw: []
       };
       group.pending.push(...candidate.pending);
+      group.validationPending.push(...candidate.validationPending);
       group.slots.push(...candidate.slots);
       group.raw.push(candidate.raw);
       reviewGroups.set(key, group);
     });
     reviewGroups.forEach(group => {
       const semantics = validateReviewRelationGroup(
-        group.categoryId, group.pending, group.slots
+        group.categoryId, group.validationPending, group.slots
       );
       if (!semantics.valid) {
         rejected.push({ annotation: group.raw.length === 1 ? group.raw[0] : group.raw,
@@ -548,6 +646,7 @@
           claimMode: annotation.claimMode || 'explicit',
           quoteRole: annotation.quoteRole || 'statement',
           slots: Array.isArray(annotation.slots) ? annotation.slots : [],
+          supportSpans: Array.isArray(annotation.supportSpans) ? annotation.supportSpans : [],
           minimumConfidence: Number(annotation.minimumConfidence) || 0.8
       };
       if (existingIndex < 0) {
@@ -566,6 +665,7 @@
     validateAnnotationSemantics,
     validateAnnotationStructureSemantics,
     validateReviewRelationGroup,
-    calibrateAnnotationEpistemics
+    calibrateAnnotationEpistemics,
+    materializeHighlightStreamRecord
   };
 });

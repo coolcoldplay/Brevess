@@ -12,6 +12,7 @@ importScripts(
   'core/prompt-compiler.js',
   'core/chunker.js',
   'core/result-validator.js',
+  'core/highlight-stream.js',
   'core/evidence-ledger.js',
   'core/figure-panel-planner.js',
   'core/figure-analysis.js',
@@ -477,7 +478,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({
       success: true,
       data: {
-        version: '2.4.0',
+        version: '2.4.1',
         categoryIds: Object.keys(SciLLM.createAdaptiveCategoryCatalog()),
         providerReady: true,
         adaptiveReadingReady: true

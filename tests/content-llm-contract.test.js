@@ -213,7 +213,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /2\.4\.0-article-workspaces-r7/);
+  assert.match(script, /2\.4\.1-build39-token-ir-r1/);
   assert.match(script, /dataset\.sciLlmBackgroundRevision/);
   assert.match(script, /errorMessage:\s*error\.message/);
   assert.match(script, /dataset\.sciLlmErrorCode/);
@@ -264,8 +264,11 @@ test('validated highlight chunks are rendered progressively before the final doc
   assert.match(script, /renderProgressiveLlmChunk\(progress\)/);
   assert.match(script, /SciLLM\.mergeAnnotations/);
   assert.match(script, /chunk_checkpoint/);
+  assert.match(script, /paragraph_checkpoint/);
+  assert.match(script, /scheduleCurrentArticleArchiveSave\(\)/);
   assert.match(router, /checkpointAnnotations:\s*Array\.isArray\(completed\.annotations\)/);
   assert.match(pipeline, /await serializeCheckpoint\(completed\)/);
+  assert.match(pipeline, /serializeParagraphCheckpoint\(completed\)/);
 });
 
 test('content presents only public effective-route metadata and token recovery states', () => {

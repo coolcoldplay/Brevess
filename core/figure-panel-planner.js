@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_PANEL_PROMPT_VERSION = '1';
+  const FIGURE_PANEL_PROMPT_VERSION = '2-panel-ir-memory';
   const FIGURE_PANEL_IMAGE_EDGES = Object.freeze([1200, 960, 768]);
   const CAPACITY_ERROR_CODES = new Set([
     'TOKEN_LIMIT_REJECTED', 'CONTEXT_BUDGET_EXCEEDED', 'OUTPUT_TRUNCATED'
@@ -182,19 +182,88 @@
     return history.map(item => `${item.role}: ${item.content}`).join('\n');
   }
 
-  function boundedHistory(history, baseText, image, inputBudgetTokens) {
+  function historyRelevance(content, terms) {
+    const haystack = cleanText(content, 4000).toLowerCase();
+    const stopWords = new Set([
+      'the', 'and', 'for', 'with', 'this', 'that', 'what', 'how', 'why',
+      'explain', 'panel', 'figure', 'please', 'about'
+    ]);
+    let score = 0;
+    for (const term of terms) {
+      if (!stopWords.has(term) && haystack.includes(term)) score += 1;
+    }
+    return score;
+  }
+
+  function retrievePanelHistory(history, baseText, options = {}) {
     const normalized = (Array.isArray(history) ? history : []).map((item, index) => ({
       historyId: cleanText(item?.historyId || item?.turnId, 120) || `history-${index + 1}`,
       role: item?.role === 'assistant' ? 'assistant' : 'user',
-      content: cleanText(item?.content || item?.answer || item?.question, 3200)
+      content: cleanText(item?.content || item?.answer || item?.question, 3200),
+      order: index
     })).filter(item => item.content);
-    while (normalized.length && estimateFigurePanelInputTokens({
+    const recentCount = Math.max(2, Math.min(8, Number(options.recentCount) || 5));
+    const retrievedCount = Math.max(0, Math.min(8, Number(options.retrievedCount) || 4));
+    const recentStart = Math.max(0, normalized.length - recentCount);
+    const recent = normalized.slice(recentStart).map(item => ({
+      ...item, memoryClass: 'recent'
+    }));
+    const terms = queryTerms(baseText);
+    const retrieved = normalized.slice(0, recentStart)
+      .map(item => ({
+        ...item,
+        content: cleanText(item.content, 1200),
+        relevance: historyRelevance(item.content, terms),
+        memoryClass: 'retrieved'
+      }))
+      .filter(item => item.relevance > 0)
+      .sort((left, right) => right.relevance - left.relevance || right.order - left.order)
+      .slice(0, retrievedCount);
+    const selected = [...retrieved, ...recent]
+      .sort((left, right) => left.order - right.order)
+      .map(({ relevance, ...item }) => item);
+    return selected;
+  }
+
+  function boundedHistory(history, baseText, image, inputBudgetTokens) {
+    const selected = retrievePanelHistory(history, baseText);
+    while (selected.length && estimateFigurePanelInputTokens({
       fixedTokens: 1600,
-      text: `${baseText}\n${historyText(normalized)}`,
+      text: `${baseText}\n${historyText(selected)}`,
       width: image?.width,
       height: image?.height
-    }) > inputBudgetTokens) normalized.shift();
-    return normalized;
+    }) > inputBudgetTokens) {
+      const retrievedIndex = selected.findIndex(item => item.memoryClass === 'retrieved');
+      if (retrievedIndex >= 0) selected.splice(retrievedIndex, 1);
+      else if (selected.length > 2) selected.shift();
+      else return [];
+    }
+    return selected;
+  }
+
+  function buildPanelIR(input, panelId, topic, captionEvidence, contextParagraphs) {
+    const existing = input.existingPanelInterpretation || {};
+    return {
+      version: 'panel-ir-v1',
+      figureId: cleanText(input.figureId, 80),
+      panelId,
+      topic,
+      sharedLegend: captionEvidence.sharedLegend,
+      panelCaption: captionEvidence.targetText || captionEvidence.combined,
+      bodyEvidence: contextParagraphs.map(item => ({
+        paragraphId: item.paragraphId,
+        sectionTitle: item.sectionTitle,
+        text: item.text
+      })),
+      priorInterpretation: {
+        role: cleanText(existing.role, 80),
+        phenotype: cleanText(existing.phenotypeName || existing.phenotype, 240),
+        methods: (Array.isArray(existing.methods) ? existing.methods : [])
+          .map(item => cleanText(item, 240)).filter(Boolean).slice(0, 12),
+        observation: cleanText(existing.directObservation || existing.observation, 1200),
+        contribution: cleanText(existing.contribution, 1200)
+      }
+    };
   }
 
   function buildFigurePanelPlans(input = {}) {
@@ -205,17 +274,15 @@
     const contextParagraphs = selectFigurePanelParagraphs(input.contextParagraphs, {
       panelId, figureLabel: input.figureLabel, topic, question
     });
+    const panelIR = buildPanelIR(input, panelId, topic, captionEvidence, contextParagraphs);
     const contextWindowTokens = Math.max(8192, Math.floor(Number(input.contextWindowTokens) || 32768));
     const outputTokens = Math.max(512, Math.floor(Number(input.outputTokens) || 2048));
     const inputBudgetTokens = Math.max(
       0,
       Math.floor(contextWindowTokens * 0.9) - outputTokens - 768
     );
-    const commonText = [
-      cleanText(input.figureLabel, 80), panelId, topic, captionEvidence.combined, question,
-      contextParagraphs.map(item => `${item.sectionTitle}\n${item.text}`).join('\n'),
-      cleanText(input.existingPanelInterpretation && JSON.stringify(input.existingPanelInterpretation), 5000)
-    ].filter(Boolean).join('\n');
+    const commonText = [cleanText(input.figureLabel, 80), question, JSON.stringify(panelIR)]
+      .filter(Boolean).join('\n');
     const variants = (Array.isArray(input.imageVariants) ? input.imageVariants : [])
       .map(normalizeImageVariant).filter(Boolean)
       .filter(item => item.maxEdge <= 1200)
@@ -248,6 +315,7 @@
         pixelsSupplied: Boolean(image),
         captionEvidence,
         contextParagraphs,
+        panelIR,
         history,
         selectedSources: [
           ...(captionEvidence.sharedLegend ? ['caption:shared_legend'] : []),
@@ -314,6 +382,8 @@
     selectFigurePanelParagraphs,
     estimateFigurePanelInputTokens,
     buildFigurePanelPlans,
+    retrievePanelHistory,
+    buildPanelIR,
     buildFigurePanelCacheKey,
     isFigurePanelCapacityError
   };

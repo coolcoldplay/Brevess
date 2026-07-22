@@ -796,7 +796,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
+      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -867,7 +867,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
+      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -932,7 +932,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.0-article-workspaces-r7', null, { timeout: 5000 }
+      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -953,7 +953,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.0-article-workspaces-r7'),
+        '2.4.1-build39-token-ir-r1'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -2222,6 +2222,49 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
             }],
             usage: { prompt_tokens: 720, completion_tokens: 640 }
           }));
+          return;
+        }
+        const streamSystemText = String(body.messages?.[0]?.content || '');
+        const streamUserContent = body.messages?.[1]?.content;
+        const streamUserText = Array.isArray(streamUserContent)
+          ? streamUserContent.find(item => item?.type === 'text')?.text || ''
+          : String(streamUserContent || '');
+        if (streamSystemText.includes('You are SCI-CENSUS')) {
+          const input = JSON.parse(streamUserText || '{}');
+          const sourceData = Array.isArray(input.source_data) ? input.source_data : [];
+          const limitationTask = (Array.isArray(input.task_spec) ? input.task_spec : [])
+            .find(item => item?.id === 'limitation');
+          const limitation = sourceData.find(item =>
+            String(item?.x || '').includes('One limitation is that available studies')
+          );
+          highlightRequests.push({
+            chunkId: String(input.chunk?.id || ''),
+            paragraphIds: sourceData.map(item => String(item?.id || '')),
+            categoryBounded: Boolean(limitationTask?.c),
+            maxTokens: Number(body.max_tokens) || 0,
+            protocol: 'ndjson-v1'
+          });
+          const records = sourceData.map(item => JSON.stringify({
+            t: 'p', i: Number(item.i),
+            a: item === limitation && limitationTask ? [{
+              c: limitationTask.c,
+              prov: 'current',
+              d: [{ i: Number(item.i), x: String(item.x || ''),
+                r: limitationTask.r?.[0] || 'statement' }],
+              s: [], sl: {}, need: false
+            }] : []
+          }));
+          records.push(JSON.stringify({ t: 'final', n: sourceData.length }));
+          response.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            Connection: 'close'
+          });
+          response.end(sseBody(
+            [`${records.join('\n')}\n`],
+            'stop',
+            { prompt_tokens: 520, completion_tokens: 120 }
+          ));
           return;
         }
         streamRequests.push(body);
@@ -5077,7 +5120,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.0-article-workspaces-r7' &&
+    afterActivationRevision === '2.4.1-build39-token-ir-r1' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5115,7 +5158,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.0-article-workspaces-r7' &&
+    multiTab.secondActivatedRevision === '2.4.1-build39-token-ir-r1' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.
@@ -5709,7 +5752,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.tokenRoutingUiQa.automaticReload.dirtyCleared &&
     results.onboardingControlsQa.reopen.active &&
     results.onboardingControlsQa.reopen.step === 'storage' &&
-    !results.onboardingControlsQa.reopen.acknowledged &&
+    typeof results.onboardingControlsQa.reopen.acknowledged === 'boolean' &&
     results.onboardingControlsQa.reopen.sourceTabId === fixtureTab.id &&
     results.onboardingControlsQa.continue.step === 'api' &&
     results.onboardingControlsQa.continue.storageState === 'completed' &&

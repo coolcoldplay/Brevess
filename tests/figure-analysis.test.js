@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 require('../providers/provider-utils.js');
+require('../core/figure-panel-planner.js');
 const {
   FIGURE_ANALYSIS_VERSION,
   createFigureAnalysisSchema,
@@ -23,7 +24,9 @@ const {
   validateUnlabeledFigureOverview,
   validateFigurePanelInterpretation,
   validatePanelFollowup,
-  normalizePanelFollowupPrompts
+  normalizePanelFollowupPrompts,
+  buildFigureContext,
+  normalizeMethodEvidence
 } = require('../core/figure-analysis.js');
 const { buildFigureCacheKey } = require('../core/cache-planner.js');
 
@@ -95,7 +98,7 @@ function validStandardFigureOutput(depth = 'standard') {
 }
 
 test('defines a versioned strict Figure walkthrough response schema', () => {
-  assert.equal(FIGURE_ANALYSIS_VERSION, '8');
+  assert.equal(FIGURE_ANALYSIS_VERSION, '9-figure-context-open-methods');
   const schema = createFigureAnalysisSchema('standard');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.basis.enum, ['vision_text', 'caption_context']);
@@ -347,12 +350,13 @@ test('text evidence permits explicit caption descriptions but forbids invented i
   assert.equal(JSON.parse(prompt.userPrompt).analysis_basis, 'caption_context');
 });
 
-test('prompt separates role, concrete phenotype, and recognized methods without guessing', () => {
+test('prompt separates role, phenotype, and open method evidence without guessing', () => {
   const prompt = compileFigureAnalysisPrompt(figureInput, { visualInput: true });
   assert.match(prompt.systemPrompt, /role, phenotype_name_zh, and methods separate/i);
   assert.match(prompt.systemPrompt, /role is "phenotype"/i);
-  assert.match(prompt.systemPrompt, /WB, IF, IHC, H&E, CCK-8, Flow cytometry, RNA-seq, scRNA-seq, KEGG, GSEA/);
-  assert.match(prompt.systemPrompt, /Do not guess a method/i);
+  assert.match(prompt.systemPrompt, /open list of method phrases/i);
+  assert.match(prompt.systemPrompt, /do not force it into a closed vocabulary/i);
+  assert.match(prompt.systemPrompt, /do not guess/i);
 });
 
 test('deep prompt asks why panels are grouped and what breaks when one is removed', () => {
@@ -465,7 +469,10 @@ test('normalizes recognized method aliases and panel phenotype provenance', () =
   });
 
   assert.equal(normalized.panels[0].phenotypeName, '\u80bf\u7624\u4f53\u79ef');
-  assert.deepEqual(normalized.panels[0].methods, ['WB', 'IF', 'CCK-8']);
+  assert.deepEqual(normalized.panels[0].methods, ['WB', 'IF', 'CCK-8', 'unknown assay']);
+  assert.deepEqual(normalized.panels[0].methodDetails.at(-1), {
+    methodText: 'unknown assay', methodFamily: 'wet_lab', normalizedMethod: 'unknown assay'
+  });
   assert.equal(normalized.panels[0].methodCategory, 'wet_lab');
   assert.equal(normalized.panels[0].methodSource, 'inference');
 });
@@ -491,6 +498,44 @@ test('keeps phenotype names empty outside phenotype panels and falls back safely
   assert.deepEqual(normalized.panels[0].methods, ['GSEA', 'scRNA-seq']);
   assert.equal(normalized.panels[0].methodSource, 'body');
   assert.equal(normalized.panels[1].phenotypeName, '');
+});
+
+test('builds one compact FigureContext with Panel slices and deduplicated body references', () => {
+  const input = {
+    figureId: 'figure-3', figureLabel: 'Figure 3',
+    caption: 'Figure 3. Values are mean ± SEM. (A) Western blot in treated and control cells. (B) Validation cohort by single-cell RNA sequencing.',
+    contextParagraphs: [
+      { paragraphId: 'r1', sectionTitle: 'Results', text: 'Figure 3A compares treated and control cells (n = 6).' },
+      { paragraphId: 'r2', sectionTitle: 'Results', text: 'Figure 3B validates the finding in an independent cohort.' }
+    ]
+  };
+  const context = buildFigureContext(input, ['A', 'B']);
+  assert.equal(context.version, 'figure-context-v1');
+  assert.match(context.shared_legend, /mean ± SEM/);
+  assert.match(context.panel_caption_slices.A, /Western blot/);
+  assert.doesNotMatch(context.panel_caption_slices.A, /Validation cohort/);
+  assert.ok(context.method_registry.some(item => /Western blot/i.test(item)));
+  assert.ok(context.method_registry.some(item => /single-cell RNA sequencing/i.test(item)));
+  assert.ok(Object.keys(context.body_registry).length <= 2);
+  assert.ok(context.panel_body_refs.A.includes('r1'));
+
+  const prompt = compileFigurePanelBatchPrompt(
+    { ...input, panelHints: ['A'] }, { visualInput: false, analysisDepth: 'standard' }
+  );
+  const payload = JSON.parse(prompt.userPrompt);
+  assert.equal(payload.caption, undefined);
+  assert.match(payload.figure_context.panel_caption_slices.A, /Western blot/);
+  assert.doesNotMatch(JSON.stringify(payload.figure_context.panel_caption_slices), /Validation cohort/);
+});
+
+test('normalizes known methods locally while retaining new method text and family', () => {
+  assert.deepEqual(normalizeMethodEvidence([
+    'Western blot', 'spatial transcriptomics', 'patch-clamp electrophysiology'
+  ], 'other'), [
+    { methodText: 'Western blot', methodFamily: 'wet_lab', normalizedMethod: 'WB' },
+    { methodText: 'spatial transcriptomics', methodFamily: 'bioinformatics', normalizedMethod: 'spatial transcriptomics' },
+    { methodText: 'patch-clamp electrophysiology', methodFamily: 'wet_lab', normalizedMethod: 'patch-clamp electrophysiology' }
+  ]);
 });
 
 test('normalizes every required deep field', () => {

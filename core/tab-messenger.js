@@ -25,7 +25,7 @@
     'content.js'
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
-  const CONTENT_SCRIPT_REVISION = '2.4.0-article-workspaces-r7';
+  const CONTENT_SCRIPT_REVISION = '2.4.1-build39-token-ir-r1';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';

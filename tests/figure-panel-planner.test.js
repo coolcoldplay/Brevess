@@ -11,6 +11,7 @@ const {
   selectFigurePanelParagraphs,
   estimateFigurePanelInputTokens,
   buildFigurePanelPlans,
+  retrievePanelHistory,
   buildFigurePanelCacheKey,
   isFigurePanelCapacityError
 } = require('../core/figure-panel-planner.js');
@@ -139,6 +140,27 @@ test('bounds follow-up history with the same capacity calculation', () => {
   assert.equal(plans.length, 1);
   assert.ok(plans[0].history.length < history.length);
   assert.ok(plans[0].estimatedInputTokens <= plans[0].inputBudgetTokens);
+});
+
+test('keeps five recent turns and retrieves only topic-relevant older Panel memory', () => {
+  const history = [
+    { historyId: 'old-method', role: 'user', content: 'How was RNA sequencing normalized?' },
+    { historyId: 'old-noise', role: 'assistant', content: 'The weather is unrelated.' },
+    { historyId: 'old-axis', role: 'user', content: 'What does the survival curve axis show?' },
+    ...Array.from({ length: 7 }, (_, index) => ({
+      historyId: `recent-${index + 1}`,
+      role: index % 2 ? 'assistant' : 'user',
+      content: `recent discussion ${index + 1}`
+    }))
+  ];
+  const selected = retrievePanelHistory(
+    history, 'Explain the RNA sequencing method and normalization.'
+  );
+  assert.ok(selected.some(item => item.historyId === 'old-method' &&
+    item.memoryClass === 'retrieved'));
+  assert.equal(selected.some(item => item.historyId === 'old-noise'), false);
+  assert.deepEqual(selected.filter(item => item.memoryClass === 'recent')
+    .map(item => item.historyId), ['recent-3', 'recent-4', 'recent-5', 'recent-6', 'recent-7']);
 });
 
 test('never invents input capacity when the requested output leaves too little context', () => {

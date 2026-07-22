@@ -171,10 +171,39 @@
       }
     }
 
-    return Object.assign({}, rawAdapter, {
+    async function* stream(request = {}) {
+      if (typeof rawAdapter.generateTextStream !== 'function') {
+        throw new Error('The selected provider does not support text streaming');
+      }
+      const budget = computeOutputTokenBudget(kind, {
+        tokenPolicy,
+        adapterCap,
+        units: requestUnits(request)
+      });
+      const suppliedLimit = validCap(request.maxOutputTokens);
+      const maxOutputTokens = suppliedLimit
+        ? Math.min(suppliedLimit, budget.ceiling)
+        : budget.initial;
+      const upstreamTelemetry = request.onProviderTelemetry;
+      yield* rawAdapter.generateTextStream({
+        ...request,
+        maxOutputTokens,
+        timeoutMs: request.timeoutMs || requestTimeoutMs || undefined,
+        onProviderTelemetry: event => {
+          try { upstreamTelemetry?.(event); } catch { /* Keep provider stream intact. */ }
+          report({ phase: 'provider_telemetry', maxOutputTokens, ...event });
+        }
+      });
+    }
+
+    const managedAdapter = Object.assign({}, rawAdapter, {
       generateJson(request) { return invoke('generateJson', request); },
       analyzeChunk(request) { return invoke('analyzeChunk', request); }
     });
+    if (typeof rawAdapter.generateTextStream === 'function') {
+      managedAdapter.generateTextStream = request => stream(request);
+    }
+    return managedAdapter;
   }
 
   return {

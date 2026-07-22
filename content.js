@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.0-article-workspaces-r7';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.1-build39-token-ir-r1';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];
@@ -1742,6 +1742,9 @@ function renderProgressiveLlmChunk(progress = {}) {
         extractionDiagnostics: state.extractionDiagnostics,
         threshold: filtered.threshold
     };
+    // Paragraph-level Claim Census results are durable immediately instead of
+    // waiting for every remaining chunk and the evidence-ledger pass.
+    scheduleCurrentArticleArchiveSave();
     lastLlmDiagnostics = {
         extraction: state.extractionDiagnostics,
         stage: 'streaming',
@@ -7639,6 +7642,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         : '当前分块需要降载';
             showLlmPageStatus(
                 `${reason}，已自动拆分为更小分块并继续分析（已完成 ${progress.completedChunks}/${progress.totalChunks}）…`
+            );
+        } else if (progress.phase === 'paragraph_checkpoint') {
+            renderProgressiveLlmChunk(progress);
+            showLlmPageStatus(
+                `当前段落已完成并保存（${progress.checkpointedAnnotations || 0} 条候选），正在继续分析…`
             );
         } else if (progress.phase === 'chunk_checkpoint') {
             renderProgressiveLlmChunk(progress);

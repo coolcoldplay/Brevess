@@ -254,6 +254,10 @@ test('registers only the one-type study selection message in the service worker'
   assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
   assert.ok(source.indexOf('core/figure-panel-planner.js') <
     source.indexOf('core/figure-analysis.js'));
+  assert.ok(source.indexOf('core/result-validator.js') <
+    source.indexOf('core/highlight-stream.js'));
+  assert.ok(source.indexOf('core/highlight-stream.js') <
+    source.indexOf('core/analysis-pipeline.js'));
   assert.ok(source.indexOf('core/article-chat-tokenizer.js') <
     source.indexOf('core/article-chat-index.js'));
   assert.ok(source.indexOf('core/article-chat-index.js') <
@@ -1377,7 +1381,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.0-article-workspaces-r7');
+  assert.equal(response.error.runtimeRevision, '2.4.1-build39-token-ir-r1');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);

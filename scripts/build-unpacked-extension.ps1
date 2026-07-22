@@ -3,9 +3,9 @@ param(
 )
 
 if ([string]::IsNullOrWhiteSpace($BuildName)) {
-  $BuildName = 'SCI' + [char]0x8BBA + [char]0x6587 + [char]0x903B +
-    [char]0x8F91 + [char]0x52A9 + [char]0x624B +
-    '-v2.4.0-article-workspaces-build38'
+  $BuildName = 'SCI' + [char]0x8BBA + [char]0x6587 +
+    [char]0x9605 + [char]0x8BFB + [char]0x52A9 + [char]0x624B +
+    '-v2.4.1-token-ir-build39'
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -27,7 +27,8 @@ foreach ($file in @(
   'popup.html', 'popup.js', 'popup.css',
   'options.html', 'options.js', 'options.css',
   'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js',
-  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md'
+  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md',
+  'BUILD39_OPTIMIZATION.md'
 )) {
   Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $target
 }

@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_ANALYSIS_VERSION = '8';
+  const FIGURE_ANALYSIS_VERSION = '9-figure-context-open-methods';
   const FIGURE_DEPTHS = new Set(['standard', 'deep']);
   const OBSERVATION_SOURCES = [
     'image_observation', 'caption_statement', 'body_statement', 'multi_source', 'inference'
@@ -352,9 +352,48 @@
     return match ? match[0] : '';
   }
 
-  function normalizeMethods(value) {
-    const methods = Array.isArray(value) ? value : [];
-    return [...new Set(methods.map(normalizeRecognizedMethod).filter(Boolean))].slice(0, 12);
+  function inferMethodFamily(value, fallback = 'other') {
+    const text = methodAliasKey(value);
+    if (!text) return fallback;
+    if (/(?:rna|dna|sequenc|transcript|single-cell|scrna|kegg|gsea|pathway|bioinformatic|clustering|umap|pca)/i.test(text)) {
+      return 'bioinformatics';
+    }
+    if (/(?:microscop|imaging|image|fluorescen|histolog|ihc|h&e|tomograph|mri|pet|ultrasound)/i.test(text)) {
+      return 'imaging';
+    }
+    if (/(?:cohort|patient|clinical|survival analysis|kaplan|hazard ratio|randomi[sz]ed)/i.test(text)) {
+      return 'clinical';
+    }
+    if (/(?:schematic|diagram|model illustration)/i.test(text)) return 'schematic';
+    if (/(?:blot|pcr|qpcr|elisa|cytometry|facs|assay|stain|culture|immuno|mass spect|chromatograph|electrophysi|patch clamp)/i.test(text)) {
+      return 'wet_lab';
+    }
+    return METHOD_CATEGORIES.includes(fallback) ? fallback : 'other';
+  }
+
+  function normalizeMethodEvidence(value, fallbackCategory = 'other') {
+    const source = Array.isArray(value) ? value : [];
+    const details = [];
+    const seen = new Set();
+    for (const item of source.slice(0, 24)) {
+      const methodText = cleanFigureField(item, 240);
+      if (!methodText) continue;
+      const normalizedMethod = normalizeRecognizedMethod(methodText) || methodText;
+      const key = methodAliasKey(normalizedMethod);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      details.push({
+        methodText,
+        methodFamily: inferMethodFamily(methodText, fallbackCategory),
+        normalizedMethod
+      });
+    }
+    return details.slice(0, 12);
+  }
+
+  function normalizeMethods(value, fallbackCategory = 'other') {
+    return normalizeMethodEvidence(value, fallbackCategory)
+      .map(item => item.normalizedMethod);
   }
 
   function invalidResponse(message) {
@@ -385,7 +424,7 @@
       'For every Panel, keep role, phenotype_name_zh, and methods separate: role is the evidence function, phenotype_name_zh is the concrete measured phenotype, and methods are the named assay or analysis.',
       'When role is "phenotype", phenotype_name_zh must be a concrete phenotype supported by the input; use "\u672a\u660e\u786e" when it is not stated. For every other role, phenotype_name_zh must be an empty string.',
       'Set method_category to wet_lab, imaging, bioinformatics, clinical, schematic, or other, and method_source to image, caption, body, or inference. In text-only mode, do not use image as method_source.',
-      'methods may contain only these normalized recognized methods: WB, IF, IHC, H&E, CCK-8, Flow cytometry, RNA-seq, scRNA-seq, KEGG, GSEA. Normalize aliases such as Western blot/WB, immunofluorescence/IF, immunohistochemistry/IHC, hematoxylin and eosin/H&E, Cell Counting Kit-8/CCK-8, RNA sequencing/RNA-seq, single-cell RNA sequencing/scRNA-seq, and Gene Set Enrichment Analysis/GSEA. Do not guess a method; use an empty methods array when no recognized method is explicitly supported.'
+      'methods is an open list of method phrases explicitly supported by the image, caption, or body text. Copy the most specific method wording available; do not force it into a closed vocabulary and do not guess. Use an empty array when no method is supported. Known aliases and method families are normalized locally after the response.'
     );
     common.push(visualInput
       ? '你已获得该 Figure 的图片像素；看不清或图中未显示时必须明确说明，不能猜测。'
@@ -438,15 +477,80 @@
     };
   }
 
+  function uniqueMatches(text, pattern, limit = 16) {
+    const values = [];
+    const seen = new Set();
+    let match;
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(text)) && values.length < limit) {
+      const value = cleanText(match[1] || match[0], 240);
+      const key = value.toLowerCase();
+      if (value && !seen.has(key)) {
+        seen.add(key);
+        values.push(value);
+      }
+      if (!pattern.global) break;
+    }
+    return values;
+  }
+
+  function buildFigureContext(input, requestedPanels = []) {
+    const caption = cleanText(input?.caption, 12000);
+    const paragraphs = (Array.isArray(input?.contextParagraphs)
+      ? input.contextParagraphs : []).slice(0, 16);
+    const panelCaptionSlices = {};
+    const panelBodyRefs = {};
+    const bodyRegistry = {};
+    let sharedLegend = '';
+    requestedPanels.forEach(panel => {
+      const evidence = typeof shared.extractFigurePanelCaption === 'function'
+        ? shared.extractFigurePanelCaption(caption, panel)
+        : { sharedLegend: '', targetText: caption };
+      if (!sharedLegend && evidence.sharedLegend) sharedLegend = evidence.sharedLegend;
+      panelCaptionSlices[panel] = cleanText(evidence.targetText || evidence.combined, 3200);
+      const selected = typeof shared.selectFigurePanelParagraphs === 'function'
+        ? shared.selectFigurePanelParagraphs(paragraphs, {
+          panelId: panel,
+          figureLabel: input?.figureLabel,
+          topic: 'general',
+          question: panelCaptionSlices[panel]
+        })
+        : paragraphs.slice(0, 4);
+      panelBodyRefs[panel] = [];
+      selected.slice(0, 4).forEach((item, index) => {
+        const paragraphId = cleanText(item?.paragraphId, 120) || `${panel}-body-${index + 1}`;
+        panelBodyRefs[panel].push(paragraphId);
+        if (!bodyRegistry[paragraphId]) {
+          bodyRegistry[paragraphId] = {
+            section_title: cleanText(item?.sectionTitle, 240),
+            text: cleanText(item?.text, 1400)
+          };
+        }
+      });
+    });
+    const registryText = [caption, ...paragraphs.map(item => item?.text || '')].join(' ');
+    const methodRegistry = uniqueMatches(registryText,
+      /\b((?:single[- ]cell\s+)?(?:RNA|DNA)[ -]?seq(?:uencing)?|Western blot|immunoblot|immunofluorescence|immunohistochemistry|flow cytometry|FACS|q?PCR|ELISA|mass spectrometry|patch[- ]clamp|electrophysiology|microscopy|GSEA|KEGG(?: pathway)?(?: analysis| enrichment)?)\b/gi, 20);
+    const groupRegistry = uniqueMatches(registryText,
+      /\b([A-Za-z0-9+./-]{1,24}(?:\s+[A-Za-z0-9+./-]{1,24}){0,4}\s+(?:group|control|cohort|cells?|mice|patients?|samples?))\b/gi, 20);
+    const setupRegistry = uniqueMatches(registryText,
+      /\b(n\s*=\s*\d+|mean\s*(?:\u00b1|\+\/-)\s*(?:SEM|SD)|\d+\s+(?:biological|technical)?\s*replicates?|paired|unpaired|randomi[sz]ed|blinded)\b/gi, 16);
+    return {
+      version: 'figure-context-v1',
+      shared_legend: cleanText(sharedLegend, 2400),
+      panel_caption_slices: panelCaptionSlices,
+      body_registry: bodyRegistry,
+      panel_body_refs: panelBodyRefs,
+      group_registry: groupRegistry,
+      method_registry: methodRegistry,
+      setup_registry: setupRegistry
+    };
+  }
+
   function compileFigurePanelBatchPrompt(input, options = {}) {
     const analysisDepth = normalizeFigureDepth(options.analysisDepth);
     const visualInput = options.visualInput === true;
-    const contextParagraphs = (Array.isArray(input?.contextParagraphs)
-      ? input.contextParagraphs : []).slice(0, 12).map(item => ({
-      paragraph_id: cleanText(item?.paragraphId, 120),
-      section_title: cleanText(item?.sectionTitle, 240),
-      text: cleanText(item?.text, 1200)
-    }));
+    const figureContext = buildFigureContext(input, normalizedPanelRefs(input?.panelHints));
     return {
       systemPrompt: [
         compileFigureSystemPrompt({ visualInput, analysisDepth: 'standard' }),
@@ -458,8 +562,7 @@
         figure_id: cleanText(input?.figureId, 80),
         figure_label: cleanText(input?.figureLabel, 80),
         article_title: cleanText(input?.articleTitle, 500),
-        caption: cleanText(input?.caption, 8000),
-        related_body_context: contextParagraphs,
+        figure_context: figureContext,
         expected_panel_labels: normalizedPanelRefs(input?.panelHints),
         analysis_basis: visualInput ? 'vision_text' : 'caption_context',
         analysis_depth: analysisDepth,
@@ -777,8 +880,28 @@
         bounded_panel_history: (Array.isArray(input?.history) ? input.history : [])
           .map(item => ({
             role: item?.role === 'assistant' ? 'assistant' : 'user',
-            content: cleanText(item?.content, 3200)
+            content: cleanText(item?.content, 3200),
+            memory_class: item?.memoryClass === 'retrieved' ? 'retrieved' : 'recent'
           })).filter(item => item.content),
+        panel_ir: {
+          version: cleanText(input?.panelIR?.version, 40) || 'panel-ir-v1',
+          figure_id: cleanText(input?.panelIR?.figureId || input?.figureId, 80),
+          panel_id: cleanText(input?.panelIR?.panelId || panel?.panel, 20),
+          topic: cleanText(input?.panelIR?.topic || input?.topic, 40),
+          role: cleanText(input?.panelIR?.priorInterpretation?.role || panel?.role, 80),
+          phenotype: cleanText(
+            input?.panelIR?.priorInterpretation?.phenotype || panel?.phenotypeName, 240
+          ),
+          methods: (Array.isArray(input?.panelIR?.priorInterpretation?.methods)
+            ? input.panelIR.priorInterpretation.methods
+            : Array.isArray(panel?.methods) ? panel.methods : []).slice(0, 12),
+          observation: cleanFigureField(
+            input?.panelIR?.priorInterpretation?.observation || panel?.directObservation, 1000
+          ),
+          contribution: cleanFigureField(
+            input?.panelIR?.priorInterpretation?.contribution || panel?.contribution, 1000
+          )
+        },
         existing_panel_interpretation: {
           role: cleanText(panel?.role, 80),
           phenotype: cleanText(panel?.phenotypeName, 240),
@@ -971,14 +1094,17 @@
       let methodSource = METHOD_SOURCES.includes(raw?.method_source)
         ? raw.method_source : 'inference';
       if (!visualInput && methodSource === 'image') methodSource = 'inference';
+      const methodCategory = METHOD_CATEGORIES.includes(raw?.method_category)
+        ? raw.method_category : 'other';
+      const methodDetails = normalizeMethodEvidence(raw?.methods, methodCategory);
       panels.push({
         panel,
         role,
         phenotypeName: role === 'phenotype'
           ? (cleanPhenotypeName(raw?.phenotype_name_zh) || '\u672a\u660e\u786e') : '',
-        methodCategory: METHOD_CATEGORIES.includes(raw?.method_category)
-          ? raw.method_category : 'other',
-        methods: normalizeMethods(raw?.methods),
+        methodCategory,
+        methods: methodDetails.map(item => item.normalizedMethod),
+        methodDetails,
         methodSource,
         purpose: cleanFigureField(raw?.purpose_zh),
         design: cleanFigureField(raw?.design_zh),
@@ -1376,6 +1502,8 @@
     validatePanelFollowup,
     normalizePanelFollowupTopics,
     normalizePanelFollowupPrompts,
-    normalizePanelCustomQuestion
+    normalizePanelCustomQuestion,
+    buildFigureContext,
+    normalizeMethodEvidence
   };
 });

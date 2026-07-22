@@ -15,7 +15,9 @@
     paperBlueprint = {},
     studyProfile = null,
     resumeChunks = {},
+    resumeParagraphs = {},
     onChunkComplete = async () => {},
+    onParagraphComplete = async () => {},
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
     signal,
     waitIfPaused = async () => {},
@@ -36,12 +38,16 @@
     const queue = [...chunks];
     const resumed = resumeChunks instanceof Map
       ? resumeChunks : new Map(Object.entries(resumeChunks || {}));
+    const resumedParagraphs = resumeParagraphs instanceof Map
+      ? resumeParagraphs : new Map(Object.entries(resumeParagraphs || {}));
     const completedByChunk = new Map();
     const retrySchedule = [2000, 5000, 12000, 25000];
     const workerLimit = Math.max(1, Math.min(6, Math.floor(Number(concurrency) || 1)));
     let completedChunks = 0;
     let totalChunks = queue.length;
     let checkpointTail = Promise.resolve();
+    let paragraphCheckpointTail = Promise.resolve();
+    let paragraphCheckpointError = null;
 
     function cancelledError() {
       return shared.operationError
@@ -105,6 +111,14 @@
       return operation;
     }
 
+    function serializeParagraphCheckpoint(completed) {
+      const operation = paragraphCheckpointTail.then(() => onParagraphComplete(completed));
+      paragraphCheckpointTail = operation.catch(error => {
+        paragraphCheckpointError ||= error;
+      });
+      return operation;
+    }
+
     async function finishChunk(chunk, completed, options = {}) {
       await checkpoint();
       completedByChunk.set(chunk.chunkId, completed);
@@ -121,12 +135,168 @@
       });
     }
 
+    async function processStreamingChunk(chunk) {
+      const paragraphResults = new Map();
+      chunk.paragraphs.forEach((item, paragraphIndex) => {
+        const saved = resumedParagraphs.get(`${chunk.chunkId}:${paragraphIndex}`);
+        if (saved?.paragraphId === item.paragraphId) paragraphResults.set(paragraphIndex, saved);
+      });
+      let attempt = 1;
+      let continuation = 0;
+      const maximumContinuations = Math.max(3, Math.min(12, chunk.paragraphs.length + 2));
+
+      while (paragraphResults.size < chunk.paragraphs.length) {
+        await checkpoint();
+        const completedIndices = [...paragraphResults.keys()];
+        const prompt = shared.compileAnalysisStreamPrompt({
+          categories: missingCategories,
+          chunkId: chunk.chunkId,
+          sectionTitle: chunk.sectionTitle,
+          sectionKind: chunk.sectionKind,
+          paragraphs: chunk.paragraphs,
+          viewId,
+          paperBlueprint,
+          studyProfile,
+          completedIndices
+        });
+        const beforeCount = paragraphResults.size;
+        const parser = shared.createHighlightNdjsonParser({
+          categoryCodeMap: prompt.categoryCodeMap,
+          pendingIndices: prompt.pendingIndices,
+          onParagraph: record => {
+            const materialized = shared.materializeHighlightStreamRecord({
+              record,
+              paragraphs: chunk.paragraphs,
+              categories: missingCategories
+            });
+            const validated = shared.validateChunkResult({
+              paragraphs: chunk.paragraphs,
+              requestedCategoryIds: prompt.requestedCategoryIds,
+              requestedCategories: prompt.requestedCategories,
+              response: materialized,
+              expectedChunkId: `${chunk.chunkId}:p${record.paragraphIndex}`
+            });
+            const completed = {
+              chunkId: chunk.chunkId,
+              paragraphIndex: record.paragraphIndex,
+              paragraphId: chunk.paragraphs[record.paragraphIndex]?.paragraphId || '',
+              annotations: validated.annotations,
+              rejected: validated.rejected,
+              protocol: 'ndjson-v1'
+            };
+            paragraphResults.set(record.paragraphIndex, completed);
+            resumedParagraphs.set(`${chunk.chunkId}:${record.paragraphIndex}`, completed);
+            serializeParagraphCheckpoint(completed);
+            report({
+              phase: 'paragraph_checkpoint',
+              chunkId: chunk.chunkId,
+              paragraphId: completed.paragraphId,
+              completedParagraphs: paragraphResults.size,
+              totalParagraphs: chunk.paragraphs.length
+            });
+          }
+        });
+        let terminalError = null;
+        report({
+          phase: continuation ? 'stream_continuation' : 'analyzing',
+          chunkId: chunk.chunkId,
+          completedChunks,
+          totalChunks,
+          attempt,
+          completedParagraphs: paragraphResults.size,
+          totalParagraphs: chunk.paragraphs.length
+        });
+        try {
+          const request = {
+            ...prompt,
+            paragraphs: chunk.paragraphs.filter((item, index) =>
+              prompt.pendingIndices.includes(index)),
+            outputUnits: prompt.pendingIndices.length,
+            signal
+          };
+          for await (const event of adapter.generateTextStream(request)) {
+            if (event?.type === 'text_delta') parser.push(event.text);
+            else if (event?.type === 'usage') report({
+              phase: 'provider_usage', chunkId: chunk.chunkId, usage: event.usage
+            });
+            else if (event?.type === 'error') throw shared.providerStreamEventError(event);
+            else if (event?.type === 'cancelled') throw cancelledError();
+          }
+          parser.finish();
+        } catch (error) {
+          terminalError = error;
+          parser.discardPending();
+        }
+        await paragraphCheckpointTail;
+        if (paragraphCheckpointError) throw paragraphCheckpointError;
+        const madeProgress = paragraphResults.size > beforeCount;
+        if (paragraphResults.size >= chunk.paragraphs.length) {
+          const completed = {
+            chunkId: chunk.chunkId,
+            annotations: [...paragraphResults.values()].flatMap(item => item.annotations || []),
+            rejected: [...paragraphResults.values()].flatMap(item => item.rejected || []),
+            missingParagraphIds: [],
+            protocol: 'ndjson-v1'
+          };
+          await finishChunk(chunk, completed, { attempt });
+          return null;
+        }
+
+        const canContinueImmediately = !terminalError || [
+          'OUTPUT_TRUNCATED', 'INVALID_RESPONSE', 'REQUEST_TIMEOUT'
+        ].includes(terminalError.code);
+        if (madeProgress && canContinueImmediately && continuation < maximumContinuations) {
+          continuation += 1;
+          report({
+            phase: 'coverage_continuation',
+            chunkId: chunk.chunkId,
+            completedChunks,
+            totalChunks,
+            remainingParagraphCount: chunk.paragraphs.length - paragraphResults.size,
+            errorCode: terminalError?.code || ''
+          });
+          continue;
+        }
+        const effectiveError = terminalError || Object.assign(
+          new Error('Highlight stream ended without covering pending paragraphs'),
+          { code: 'INVALID_RESPONSE', retryable: true }
+        );
+        if (shouldSplitAfterError(effectiveError, attempt, chunk.paragraphs.length) &&
+            paragraphResults.size === 0) {
+          const children = splitChunk(chunk);
+          report({
+            phase: 'split', chunkId: chunk.chunkId,
+            completedChunks, totalChunks: totalChunks + 1,
+            errorCode: effectiveError.code
+          });
+          return { split: children };
+        }
+        if (!effectiveError.retryable || attempt > maxRetries ||
+            continuation >= maximumContinuations) throw effectiveError;
+        const waitMs = retryDelay(effectiveError, attempt - 1);
+        attempt += 1;
+        report({
+          phase: 'retry', chunkId: chunk.chunkId,
+          completedChunks, totalChunks, attempt, waitMs,
+          errorCode: effectiveError.code || 'NETWORK_ERROR'
+        });
+        await controlledSleep(waitMs);
+      }
+      return null;
+    }
+
     async function processChunk(chunk) {
       await checkpoint();
       const savedCheckpoint = resumed.get(chunk.chunkId);
       if (savedCheckpoint) {
         await finishChunk(chunk, savedCheckpoint, { resumed: true });
         return null;
+      }
+
+      if (typeof adapter.generateTextStream === 'function' &&
+          typeof shared.compileAnalysisStreamPrompt === 'function' &&
+          typeof shared.createHighlightNdjsonParser === 'function') {
+        return processStreamingChunk(chunk);
       }
 
       const prompt = shared.compileAnalysisPrompt({
@@ -321,7 +491,7 @@
       };
       pump();
     });
-    await checkpointTail;
+    await Promise.all([checkpointTail, paragraphCheckpointTail]);
 
     const ordered = [...completedByChunk.entries()]
       .sort(([first], [second]) => first.localeCompare(second, 'en'))

@@ -280,3 +280,14 @@ test('ignores missing or throwing progress callbacks while retaining retry behav
   });
   await assert.rejects(() => noCallback.generateJson({ outputUnits: 5 }), error => error === limit);
 });
+
+test('does not advertise streaming when the raw provider has no streaming capability', () => {
+  const adapter = createTokenManagedAdapter({
+    rawAdapter: {
+      async generateJson() { return { ok: true }; },
+      async analyzeChunk() { return { annotations: [] }; }
+    },
+    kind: 'highlight'
+  });
+  assert.equal(adapter.generateTextStream, undefined);
+});

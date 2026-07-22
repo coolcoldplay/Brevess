@@ -1,6 +1,6 @@
 {
   "name": "sci-logic-highlighter",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "AGPL browser extension for evidence-aware reading and full-text Q&A of scientific articles",
   "private": true,
   "license": "AGPL-3.0-or-later",
@@ -18,6 +18,7 @@
     "test:edge-side-panel": "node scripts/verify-native-side-panel-extension.js",
     "test:edge-restart": "node scripts/verify-native-side-panel-restart.js",
     "benchmark:article-chat": "node scripts/benchmark-article-chat.mjs",
+    "benchmark:build39": "node scripts/benchmark-build39-prompts.mjs",
     "build:unpacked": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-unpacked-extension.ps1"
   },
   "devDependencies": {

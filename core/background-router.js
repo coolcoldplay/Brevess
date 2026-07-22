@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const RUNTIME_REVISION = '2.4.0-article-workspaces-r7';
+  const RUNTIME_REVISION = '2.4.1-build39-token-ir-r1';
   const TASK_TIMEOUTS_MS = Object.freeze({
     highlight: 180000,
     summary: 180000,
@@ -3406,6 +3406,19 @@
           signal: operation?.controller?.signal,
           waitIfPaused: () => waitForOperation(operation),
           onProgress: progress,
+          onParagraphComplete: async completed => {
+            await progress({
+              phase: 'paragraph_checkpoint',
+              chunkId: completed.chunkId,
+              paragraphId: completed.paragraphId,
+              checkpointedAnnotations: Array.isArray(completed.annotations)
+                ? completed.annotations.length : 0,
+              checkpointAnnotations: Array.isArray(completed.annotations)
+                ? completed.annotations : [],
+              checkpointRejected: Array.isArray(completed.rejected)
+                ? completed.rejected : []
+            });
+          },
           onChunkComplete: async completed => {
             await progress({
               phase: 'chunk_checkpoint',
