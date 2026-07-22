@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.1-build39-token-ir-r1';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.2-build39-panel-r2';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];
@@ -3659,10 +3659,18 @@ function buildFigureInputHash(figure, images) {
 }
 
 function getFigureWorkspaceInventory({ forceRefresh = false } = {}) {
-    if (!forceRefresh && figureWorkspaceInventory.length) return figureWorkspaceInventory;
+    const inventoryChanged = typeof SciLLM.figureInventoryNeedsRefresh === 'function' &&
+        SciLLM.figureInventoryNeedsRefresh(figureWorkspaceInventory);
+    if (!forceRefresh && figureWorkspaceInventory.length && !inventoryChanged) {
+        return figureWorkspaceInventory;
+    }
     clearFigureWalkthroughs();
     const extractedParagraphs = extractArticleWithTrace('figure_workspace_inventory');
     figureWorkspaceInventory = SciLLM.extractArticleFigures(document, extractedParagraphs);
+    figureWorkspaceInventory.forEach(figure => {
+        const state = figureWalkthroughState.get(figure.figureId);
+        if (state?.figure) state.figure = figure;
+    });
     return figureWorkspaceInventory;
 }
 
@@ -3844,6 +3852,7 @@ async function analyzeSingleFigureDeep(figureId) {
         if (figureDepthAnalysisId === figureId) return figureDepthAnalysisPromise;
         throwBusyFigureAnalysis(figureId);
     }
+    getFigureWorkspaceInventory();
     const state = figureWalkthroughState.get(figureId);
     if (!state?.standard || !state.figure) throw new Error('请先生成该图的标准解读');
     const operation = beginFigureOperation('single', figureId);
@@ -3920,6 +3929,7 @@ async function analyzeSingleFigureWithLLM(figureId, { forceRefresh = false } = {
         if (figureDepthAnalysisId === figureId) return figureDepthAnalysisPromise;
         throwBusyFigureAnalysis(figureId);
     }
+    getFigureWorkspaceInventory();
     const operation = beginFigureOperation('single', figureId);
     const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const state = ensureFigureWalkthroughState(figureId);
@@ -4074,6 +4084,7 @@ async function analyzeSingleFigurePanelWithLLM(
 ) {
     const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     const normalizedPanelId = normalizeRequestedPanelId(panelId);
+    getFigureWorkspaceInventory();
     const state = ensureFigureWalkthroughState(figureId);
     if (!state?.figure || !normalizedPanelId ||
         !state.figure.panelHints.includes(normalizedPanelId)) {
@@ -4177,6 +4188,7 @@ async function analyzeSingleFigurePanelWithLLM(
 
 async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuestion = '') {
     const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
+    getFigureWorkspaceInventory();
     const state = ensureFigureWalkthroughState(figureId);
     const result = getActiveFigureAnalysisForDomino(state);
     const requestedPanel = normalizeRequestedPanelId(panelId);

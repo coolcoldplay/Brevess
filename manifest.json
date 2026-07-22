@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SCI论文阅读助手",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "支持论文导航、逻辑高亮、Figure/Panel 解读与全文问答的 SCI 论文阅读助手",
   "permissions": [
     "activeTab",

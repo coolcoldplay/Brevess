@@ -5,6 +5,7 @@ const {
   FIGURE_SELECTOR,
   parseFigureLabel,
   extractPanelHints,
+  figureInventoryNeedsRefresh,
   extractArticleFigures
 } = require('../core/figure-extractor.js');
 
@@ -181,6 +182,26 @@ test('recognizes lowercase Nature legend markers and ranges without an LLM', () 
     extractPanelHints('Fig. 1 | Study overview. a, cohort design. b–d, UMAP and quantification. e: validation.'),
     ['A', 'B', 'C', 'D', 'E']
   );
+});
+
+test('recognizes the compact no-space Nature caption used by the glioblastoma article', () => {
+  assert.deepEqual(extractPanelHints(
+    'a,Schematic overview of the 10x chromium setup. Mice were analyzed (n = 3).' +
+    'b–d,Top: Harmony-corrected UMAP plots for human tumors (b), recurrent tumors (c)' +
+    ' and mouse tumors (d).e,f,Heatmaps representing subset-specific genes.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F']);
+});
+
+test('invalidates an early Figure inventory after a dynamic caption finishes rendering', () => {
+  const candidate = figure({
+    caption: 'Figure 1. Loading figure…',
+    images: [image('https://journal.example/f1.jpg')]
+  });
+  const inventory = extractArticleFigures(documentWith([candidate]), []);
+  assert.equal(figureInventoryNeedsRefresh(inventory), false);
+  candidate.captionElement.textContent =
+    'Figure 1. scRNA-seq overview. a, setup. b–d, UMAP plots. e,f, heatmaps.';
+  assert.equal(figureInventoryNeedsRefresh(inventory), true);
 });
 
 test('keeps caption-only Figures so protected or canvas images can use text evidence fallback', () => {

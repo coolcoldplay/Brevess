@@ -2,6 +2,8 @@
 
 build39 基于 build38 冻结点 `389ab42`，重点降低全文高亮和 Figure/Panel 解读中的重复 Token、输出截断与无效重算，同时保持旧模型接口可降级使用。
 
+2.4.2 Panel 修复版会检测网页异步补全或替换的 Figure caption，并自动废弃过早建立的目录缓存；本地解析同时覆盖 Nature 常见的 `a`、`b–d`、`e,f` 紧凑标记，即使 DOM 内联标签导致标点附近没有空格也能恢复 A–F 目录。
+
 ## 全文高亮
 
 - 新增紧凑的 Claim Census 协议。模型只判断类别代码、原文显示片段、支持片段、证据角色、槽位和证据来源，不再生成 ID、relation ID、occurrence、confidence 或 reason。

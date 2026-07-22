@@ -105,13 +105,20 @@
       addRange(match[1]);
     }
     // Nature and several other publishers commonly write legend markers as
-    // lowercase `a, ... b, ...` or `a–d, ...`, sometimes after a vertical bar.
+    // lowercase `a, ... b–d, ... e,f, ...`. Inline markup can make textContent
+    // concatenate the marker and prose without a space, so whitespace after a
+    // sentence boundary cannot be required here.
     for (const match of text.matchAll(
-      /(?:^|[.;|]\s+)\(?([A-Z])(?:\s*[-\u2013\u2014]\s*([A-Z]))?\)?\s*(?=[:,])/gi
+      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*)\)?\s*(?=[:,])/gi
     )) {
-      addRange(match[1].toUpperCase(), (match[2] || match[1]).toUpperCase());
+      const group = match[1].toUpperCase();
+      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2013\u2014]\s*([A-Z])\b/g)) {
+        addRange(range[1], range[2]);
+      }
+      for (const label of group.matchAll(/\b([A-Z])\b/g)) addRange(label[1]);
     }
-    return [...panels];
+    return [...panels].sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }));
   }
 
   function extractElementPanelHints(element, caption) {
@@ -134,6 +141,28 @@
       }
     }
     return [...panels].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  }
+
+  function figureInventoryNeedsRefresh(figures) {
+    if (!Array.isArray(figures) || !figures.length) return true;
+    return figures.some(figure => {
+      if (figure?.element?.isConnected === false ||
+          figure?.captionElement?.isConnected === false) return true;
+      const liveCaption = normalizeText(
+        figure?.captionElement?.textContent ||
+        figure?.element?.getAttribute?.('aria-label') ||
+        figure?.element?.textContent
+      );
+      if (liveCaption && liveCaption !== normalizeText(figure?.caption)) return true;
+      const liveHints = extractElementPanelHints(
+        figure?.element, liveCaption || figure?.caption || ''
+      );
+      const cachedHints = (Array.isArray(figure?.panelHints) ? figure.panelHints : [])
+        .map(value => normalizeText(value).toUpperCase()).filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+      return liveHints.length !== cachedHints.length ||
+        liveHints.some((value, index) => value !== cachedHints[index]);
+    });
   }
 
   function imageSource(image) {
@@ -254,6 +283,7 @@
     parseFigureLabel,
     extractPanelHints,
     extractElementPanelHints,
+    figureInventoryNeedsRefresh,
     isUsefulFigureImage,
     extractArticleFigures
   };

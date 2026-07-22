@@ -325,6 +325,42 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       migrationScriptsLoaded: typeof SciLLM.validateArticleArchive === 'function'
     };
   });
+  await fixture.evaluate(() => {
+    const figure = document.createElement('figure');
+    figure.id = 'dynamic-nature-panel-qa';
+    const caption = document.createElement('figcaption');
+    caption.innerHTML = '<span class="figure-label">Figure 9.</span> Loading figure metadata…';
+    figure.appendChild(caption);
+    document.querySelector('article')?.appendChild(figure);
+  });
+  const dynamicNaturePanelInitial = await sidePanel.evaluate(async () => {
+    const snapshot = await refreshArticleWorkspace();
+    const figure = snapshot?.figures?.figures?.find(item => item.figureId === 'figure-9');
+    return { found: Boolean(figure), panelHints: figure?.panelHints || [] };
+  });
+  await fixture.evaluate(() => {
+    const caption = document.querySelector('#dynamic-nature-panel-qa figcaption');
+    if (caption) caption.innerHTML =
+      '<span class="figure-label">Figure 9.</span> scRNA-seq overview.' +
+      '<b>a,</b>Schematic setup. Mice were analyzed (n = 3).' +
+      '<b>b–d,</b>Top: UMAP plots for human tumors (b), recurrent tumors (c), and mouse tumors (d).' +
+      '<b>e,f,</b>Heatmaps representing subset-specific genes.';
+  });
+  const dynamicNaturePanelUpdated = await sidePanel.evaluate(async () => {
+    const snapshot = await refreshArticleWorkspace();
+    const figure = snapshot?.figures?.figures?.find(item => item.figureId === 'figure-9');
+    return { found: Boolean(figure), panelHints: figure?.panelHints || [] };
+  });
+  await fixture.evaluate(() => document.getElementById('dynamic-nature-panel-qa')?.remove());
+  const dynamicNaturePanelCleanup = await sidePanel.evaluate(async () => {
+    const snapshot = await refreshArticleWorkspace();
+    return !snapshot?.figures?.figures?.some(item => item.figureId === 'figure-9');
+  });
+  const dynamicNaturePanelQa = {
+    initial: dynamicNaturePanelInitial,
+    updated: dynamicNaturePanelUpdated,
+    cleanup: dynamicNaturePanelCleanup
+  };
   await sidePanel.locator('#toggleFloatingSidePanel').click();
   await sidePanel.waitForFunction(() => {
     const pipWindow = documentPictureInPicture?.window;
@@ -796,7 +832,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
+      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -867,7 +903,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
+      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -932,7 +968,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.1-build39-token-ir-r1', null, { timeout: 5000 }
+      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -953,7 +989,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.1-build39-token-ir-r1'),
+        '2.4.2-build39-panel-r2'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -5003,6 +5039,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     beforeActivationRevision,
     afterActivationRevision,
     activated,
+    dynamicNaturePanelQa,
     floatingPanelQa,
     globalToolbarFeedbackQa,
     multiTab,
@@ -5120,7 +5157,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.1-build39-token-ir-r1' &&
+    afterActivationRevision === '2.4.2-build39-panel-r2' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5130,6 +5167,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     activated.removedAnalysisActions &&
     activated.feedbackRemoved &&
     activated.migrationScriptsLoaded &&
+    results.dynamicNaturePanelQa.initial.found &&
+    results.dynamicNaturePanelQa.initial.panelHints.length === 0 &&
+    results.dynamicNaturePanelQa.updated.found &&
+    JSON.stringify(results.dynamicNaturePanelQa.updated.panelHints) ===
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F']) &&
+    results.dynamicNaturePanelQa.cleanup &&
     floatingPanelQa.supported &&
     floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
     floatingPanelQa.defaultWidth === '780' &&
@@ -5158,7 +5201,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.1-build39-token-ir-r1' &&
+    multiTab.secondActivatedRevision === '2.4.2-build39-panel-r2' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.

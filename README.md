@@ -185,4 +185,4 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 
 ## 版本
 
-当前版本：`2.4.1`（运行修订 `2.4.1-build39-token-ir-r1`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。
+当前版本：`2.4.2`（运行修订 `2.4.2-build39-panel-r2`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.2 同时修复动态加载图注及 Nature `a`、`b–d`、`e,f` 格式的 Panel 目录识别。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。
