@@ -143,6 +143,20 @@ test('dynamic article structure refresh observes prose containers used outside p
   assert.match(script, /if \(!articleStructureObserver\) startArticleStructureObserver\(\)/);
 });
 
+test('Figure inventory uses mutation-driven invalidation and throttled freshness checks', () => {
+  const script = read('content.js');
+  const inventoryStart = script.indexOf('function getFigureWorkspaceInventory(');
+  const inventoryEnd = script.indexOf('function getActiveFigureAnalysisForDomino', inventoryStart);
+  const inventory = script.slice(inventoryStart, inventoryEnd);
+  assert.match(script, /let figureWorkspaceInventoryDirty = true/);
+  assert.match(script, /FIGURE_WORKSPACE_FRESHNESS_TTL_MS = 2000/);
+  assert.match(script, /function isFigureInventoryMutation\(/);
+  assert.match(script, /markFigureWorkspaceInventoryDirty\(\{ notify: true \}\)/);
+  assert.match(inventory, /freshnessCheckDue/);
+  assert.match(inventory, /if \(!inventoryChanged\) \{\s*return figureWorkspaceInventory;/);
+  assert.match(inventory, /figureWorkspaceInventoryDirty = false/);
+});
+
 test('workspace paragraph resolution retries one forced structure refresh for stale navigation', () => {
   const script = read('content.js');
   assert.match(script, /function resolveWorkspaceParagraph\(/);
@@ -213,7 +227,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /2\.4\.2-build39-panel-r2/);
+  assert.match(script, /2\.4\.3-build39-panel-perf-r3/);
   assert.match(script, /dataset\.sciLlmBackgroundRevision/);
   assert.match(script, /errorMessage:\s*error\.message/);
   assert.match(script, /dataset\.sciLlmErrorCode/);

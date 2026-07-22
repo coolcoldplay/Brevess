@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.2-build39-panel-r2';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.3-build39-panel-perf-r3';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];
@@ -652,6 +652,11 @@ let lastFigureAnalysis = null;
 const figureWalkthroughState = new Map();
 const figureProgressById = new Map();
 let figureWorkspaceInventory = [];
+let figureWorkspaceInventoryInitialized = false;
+let figureWorkspaceInventoryDirty = true;
+let figureWorkspaceLastFreshnessCheckAt = 0;
+let figureWorkspaceChangeNotificationTimer = null;
+const FIGURE_WORKSPACE_FRESHNESS_TTL_MS = 2000;
 let figureAnalysisStatus = createInitialFigureAnalysisStatus();
 let crossFigureLogicPromise = null;
 let crossFigureLogicState = {
@@ -3659,14 +3664,25 @@ function buildFigureInputHash(figure, images) {
 }
 
 function getFigureWorkspaceInventory({ forceRefresh = false } = {}) {
-    const inventoryChanged = typeof SciLLM.figureInventoryNeedsRefresh === 'function' &&
-        SciLLM.figureInventoryNeedsRefresh(figureWorkspaceInventory);
-    if (!forceRefresh && figureWorkspaceInventory.length && !inventoryChanged) {
+    const now = Date.now();
+    let inventoryChanged = forceRefresh || figureWorkspaceInventoryDirty ||
+        !figureWorkspaceInventoryInitialized;
+    const freshnessCheckDue = !inventoryChanged &&
+        now - figureWorkspaceLastFreshnessCheckAt >= FIGURE_WORKSPACE_FRESHNESS_TTL_MS;
+    if (freshnessCheckDue) {
+        figureWorkspaceLastFreshnessCheckAt = now;
+        inventoryChanged = typeof SciLLM.figureInventoryNeedsRefresh === 'function' &&
+            SciLLM.figureInventoryNeedsRefresh(figureWorkspaceInventory);
+    }
+    if (!inventoryChanged) {
         return figureWorkspaceInventory;
     }
     clearFigureWalkthroughs();
     const extractedParagraphs = extractArticleWithTrace('figure_workspace_inventory');
     figureWorkspaceInventory = SciLLM.extractArticleFigures(document, extractedParagraphs);
+    figureWorkspaceInventoryInitialized = true;
+    figureWorkspaceInventoryDirty = false;
+    figureWorkspaceLastFreshnessCheckAt = Date.now();
     figureWorkspaceInventory.forEach(figure => {
         const state = figureWalkthroughState.get(figure.figureId);
         if (state?.figure) state.figure = figure;
@@ -5148,6 +5164,9 @@ async function analyzeFiguresWithLLM(options = {}) {
             const extractedParagraphs = extractArticleWithTrace('analyze_figures');
             figures = SciLLM.extractArticleFigures(document, extractedParagraphs);
             figureWorkspaceInventory = figures;
+            figureWorkspaceInventoryInitialized = true;
+            figureWorkspaceInventoryDirty = false;
+            figureWorkspaceLastFreshnessCheckAt = Date.now();
             if (!figures.length) {
                 const error = new Error('未找到可识别的主文 Figure');
                 error.code = 'NO_FIGURES';
@@ -5603,9 +5622,48 @@ function isArticleStructureMutation(mutation) {
     });
 }
 
+function isFigureInventoryMutation(mutation) {
+    const selector = [SciLLM.FIGURE_SELECTOR, SciLLM.CAPTION_SELECTOR]
+        .filter(Boolean).join(',');
+    if (!selector) return false;
+    const changedNodes = mutation?.type === 'characterData'
+        ? [mutation.target?.parentElement || mutation.target]
+        : [...(mutation?.addedNodes || []), ...(mutation?.removedNodes || []), mutation?.target];
+    return changedNodes.some(node => {
+        const element = node?.nodeType === Node.ELEMENT_NODE
+            ? node : node?.parentElement;
+        if (!element || element.closest?.('[data-sci-plugin-ui]')) return false;
+        try {
+            return Boolean(
+                element.matches?.(selector) ||
+                element.closest?.(selector) ||
+                element.querySelector?.(selector)
+            );
+        } catch (_) {
+            return false;
+        }
+    });
+}
+
+function markFigureWorkspaceInventoryDirty({ notify = false } = {}) {
+    figureWorkspaceInventoryDirty = true;
+    figureWorkspaceLastFreshnessCheckAt = 0;
+    if (!notify) return;
+    if (figureWorkspaceChangeNotificationTimer !== null) {
+        clearTimeout(figureWorkspaceChangeNotificationTimer);
+    }
+    figureWorkspaceChangeNotificationTimer = setTimeout(() => {
+        figureWorkspaceChangeNotificationTimer = null;
+        notifyFigureWorkspaceStateChanged('inventory_changed');
+    }, 120);
+}
+
 function startArticleStructureObserver() {
     stopArticleStructureObserver();
     articleStructureObserver = new MutationObserver(mutations => {
+        if (mutations.some(isFigureInventoryMutation)) {
+            markFigureWorkspaceInventoryDirty({ notify: true });
+        }
         if (!mutations.some(isArticleStructureMutation)) return;
         if (articleStructureRefreshTimer !== null) {
             clearTimeout(articleStructureRefreshTimer);

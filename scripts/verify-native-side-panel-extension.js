@@ -328,9 +328,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.evaluate(() => {
     const figure = document.createElement('figure');
     figure.id = 'dynamic-nature-panel-qa';
-    const caption = document.createElement('figcaption');
-    caption.innerHTML = '<span class="figure-label">Figure 9.</span> Loading figure metadata…';
-    figure.appendChild(caption);
+    figure.innerHTML =
+      '<div class="figure-caption"><span class="figure-label">Figure 9.</span> Dynamic Nature figure.</div>' +
+      '<div class="c-article-section__figure-description">Loading figure metadata…</div>';
     document.querySelector('article')?.appendChild(figure);
   });
   const dynamicNaturePanelInitial = await sidePanel.evaluate(async () => {
@@ -339,21 +339,59 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     return { found: Boolean(figure), panelHints: figure?.panelHints || [] };
   });
   await fixture.evaluate(() => {
-    const caption = document.querySelector('#dynamic-nature-panel-qa figcaption');
-    if (caption) caption.innerHTML =
-      '<span class="figure-label">Figure 9.</span> scRNA-seq overview.' +
-      '<b>a,</b>Schematic setup. Mice were analyzed (n = 3).' +
-      '<b>b–d,</b>Top: UMAP plots for human tumors (b), recurrent tumors (c), and mouse tumors (d).' +
-      '<b>e,f,</b>Heatmaps representing subset-specific genes.';
+    const description = document.querySelector(
+      '#dynamic-nature-panel-qa .c-article-section__figure-description'
+    );
+    if (description) description.innerHTML =
+      '<b>a-c,</b>Monocytes and macrophages were selected and reclustered.' +
+      '<b>d-f.</b>UMAP plots show selected genes in ND, recurrent and mouse tumors.' +
+      '<b>g,h.</b>Volcano plots compare Mg-TAMs and Mo-TAMs.' +
+      '<b>i,j.</b>Scatter plots and TAM percentages are shown.';
   });
-  const dynamicNaturePanelUpdated = await sidePanel.evaluate(async () => {
-    const snapshot = await refreshArticleWorkspace();
+  await sidePanel.waitForFunction(() => {
+    const figure = currentWorkspaceSnapshot?.figures?.figures
+      ?.find(item => item.figureId === 'figure-9');
+    return JSON.stringify(figure?.panelHints || []) ===
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']);
+  }, null, { timeout: 5000 });
+  const dynamicNaturePanelUpdated = await sidePanel.evaluate(() => {
+    const snapshot = currentWorkspaceSnapshot;
     const figure = snapshot?.figures?.figures?.find(item => item.figureId === 'figure-9');
     return { found: Boolean(figure), panelHints: figure?.panelHints || [] };
   });
+  const figureInventoryCacheQa = await worker.evaluate(async tabId => {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: () => {
+        const originalFreshnessCheck = SciLLM.figureInventoryNeedsRefresh;
+        const originalExtraction = SciLLM.extractArticleFigures;
+        let freshnessChecks = 0;
+        let extractions = 0;
+        SciLLM.figureInventoryNeedsRefresh = (...args) => {
+          freshnessChecks += 1;
+          return originalFreshnessCheck(...args);
+        };
+        SciLLM.extractArticleFigures = (...args) => {
+          extractions += 1;
+          return originalExtraction(...args);
+        };
+        const startedAt = performance.now();
+        for (let index = 0; index < 100; index += 1) getFigureWorkspaceInventory();
+        const elapsedMs = performance.now() - startedAt;
+        SciLLM.figureInventoryNeedsRefresh = originalFreshnessCheck;
+        SciLLM.extractArticleFigures = originalExtraction;
+        return { freshnessChecks, extractions, elapsedMs };
+      }
+    });
+    return result;
+  }, fixtureTab.id);
   await fixture.evaluate(() => document.getElementById('dynamic-nature-panel-qa')?.remove());
-  const dynamicNaturePanelCleanup = await sidePanel.evaluate(async () => {
-    const snapshot = await refreshArticleWorkspace();
+  await sidePanel.waitForFunction(() =>
+    !currentWorkspaceSnapshot?.figures?.figures
+      ?.some(item => item.figureId === 'figure-9'), null, { timeout: 5000 });
+  const dynamicNaturePanelCleanup = await sidePanel.evaluate(() => {
+    const snapshot = currentWorkspaceSnapshot;
     return !snapshot?.figures?.figures?.some(item => item.figureId === 'figure-9');
   });
   const dynamicNaturePanelQa = {
@@ -832,7 +870,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
+      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -903,7 +941,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
+      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -968,7 +1006,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.2-build39-panel-r2', null, { timeout: 5000 }
+      '2.4.3-build39-panel-perf-r3', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -989,7 +1027,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.2-build39-panel-r2'),
+        '2.4.3-build39-panel-perf-r3'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -5040,6 +5078,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     afterActivationRevision,
     activated,
     dynamicNaturePanelQa,
+    figureInventoryCacheQa,
     floatingPanelQa,
     globalToolbarFeedbackQa,
     multiTab,
@@ -5157,7 +5196,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.2-build39-panel-r2' &&
+    afterActivationRevision === '2.4.3-build39-panel-perf-r3' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5171,8 +5210,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.dynamicNaturePanelQa.initial.panelHints.length === 0 &&
     results.dynamicNaturePanelQa.updated.found &&
     JSON.stringify(results.dynamicNaturePanelQa.updated.panelHints) ===
-      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F']) &&
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']) &&
     results.dynamicNaturePanelQa.cleanup &&
+    results.figureInventoryCacheQa.freshnessChecks <= 1 &&
+    results.figureInventoryCacheQa.extractions === 0 &&
     floatingPanelQa.supported &&
     floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
     floatingPanelQa.defaultWidth === '780' &&
@@ -5201,7 +5242,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.2-build39-panel-r2' &&
+    multiTab.secondActivatedRevision === '2.4.3-build39-panel-perf-r3' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.

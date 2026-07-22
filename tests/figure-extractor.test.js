@@ -26,7 +26,10 @@ function image(src, width = 900, height = 600) {
   };
 }
 
-function figure({ caption = '', captionLabel = '', images = [], panelNodes = [], ariaLabel = '', excluded = false }) {
+function figure({
+  caption = '', captionLabel = '', captionCandidates = [], elementText = '',
+  images = [], panelNodes = [], ariaLabel = '', excluded = false
+}) {
   const captionElement = caption ? {
     textContent: caption,
     querySelector(selector) {
@@ -35,15 +38,19 @@ function figure({ caption = '', captionLabel = '', images = [], panelNodes = [],
         : null;
     }
   } : null;
+  const allCaptionCandidates = captionCandidates.length
+    ? captionCandidates : captionElement ? [captionElement] : [];
   return {
-    textContent: caption,
+    textContent: elementText || caption,
     className: '',
     querySelector(selector) {
-      return /figcaption|caption/i.test(selector) ? captionElement : null;
+      return /figcaption|caption|description/i.test(selector)
+        ? allCaptionCandidates[0] || null : null;
     },
     querySelectorAll(selector) {
       if (/img/i.test(selector)) return images;
       if (/panel/i.test(selector)) return panelNodes;
+      if (/figcaption|caption|description/i.test(selector)) return allCaptionCandidates;
       return [];
     },
     getAttribute(name) {
@@ -192,6 +199,38 @@ test('recognizes the compact no-space Nature caption used by the glioblastoma ar
   ), ['A', 'B', 'C', 'D', 'E', 'F']);
 });
 
+test('recognizes every Panel in the exact grouped Nature legend style from the live article', () => {
+  assert.deepEqual(extractPanelHints(
+    'Figure 8. CCR2 deficiency changes TAM ontogeny. ' +
+    'a-c,Monocytes and macrophages were selected and reclustered. ' +
+    'd-f.UMAP plots show selected genes in ND, recurrent and mouse tumors. ' +
+    'g,h.Volcano plots compare Mg-TAMs and Mo-TAMs. ' +
+    'i,j.Scatter plots and TAM percentages are shown.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']);
+});
+
+test('prefers a detailed Nature description when the first caption node is title-only', () => {
+  const title = {
+    textContent: 'Figure 8. CCR2 deficiency changes TAM ontogeny.',
+    querySelector() { return { textContent: 'Figure 8' }; }
+  };
+  const description = {
+    textContent: 'a-c,Selection and reclustering. d-f.Expression plots. g,h.Volcano plots. i,j.Validation.',
+    querySelector() { return null; }
+  };
+  const candidate = figure({
+    captionCandidates: [title, description],
+    elementText: `${title.textContent} ${description.textContent}`,
+    images: [image('https://journal.example/f8.jpg')]
+  });
+
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-8');
+  assert.deepEqual(result.panelHints, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']);
+  assert.equal(result.captionElement, candidate);
+});
+
 test('invalidates an early Figure inventory after a dynamic caption finishes rendering', () => {
   const candidate = figure({
     caption: 'Figure 1. Loading figure…',
@@ -202,6 +241,25 @@ test('invalidates an early Figure inventory after a dynamic caption finishes ren
   candidate.captionElement.textContent =
     'Figure 1. scRNA-seq overview. a, setup. b–d, UMAP plots. e,f, heatmaps.';
   assert.equal(figureInventoryNeedsRefresh(inventory), true);
+});
+
+test('cached Figure freshness checks do not rescan Panel descendants', () => {
+  const candidate = figure({
+    caption: 'Figure 3. a-c,Screen. d-f.Validation.',
+    images: [image('https://journal.example/f3.jpg')]
+  });
+  const inventory = extractArticleFigures(documentWith([candidate]), []);
+  let descendantQueries = 0;
+  candidate.querySelectorAll = () => {
+    descendantQueries += 1;
+    return [];
+  };
+
+  for (let index = 0; index < 100; index += 1) {
+    assert.equal(figureInventoryNeedsRefresh(inventory), false);
+  }
+
+  assert.equal(descendantQueries, 0);
 });
 
 test('keeps caption-only Figures so protected or canvas images can use text evidence fallback', () => {

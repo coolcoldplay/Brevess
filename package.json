@@ -1,6 +1,6 @@
 {
   "name": "sci-logic-highlighter",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "AGPL browser extension for evidence-aware reading and full-text Q&A of scientific articles",
   "private": true,
   "license": "AGPL-3.0-or-later",

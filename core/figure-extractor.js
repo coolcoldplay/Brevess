@@ -19,6 +19,9 @@
     '.figure__caption',
     '.figure-caption',
     '.fig-caption',
+    '.c-article-section__figure-description',
+    '[data-test="figure-caption"]',
+    '[data-test="figure-description"]',
     '[class*="figure"][class*="caption"]'
   ].join(',');
   const LABEL_SELECTOR = '.fig-label,.figure-label,[class*="fig-label"]';
@@ -85,8 +88,8 @@
     };
     for (const match of normalizeText(caption).matchAll(/\(([^)]{1,80})\)/g)) {
       const content = match[1].toUpperCase();
-      if (!/^[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*$/i.test(content)) continue;
-      for (const range of content.matchAll(/\b([A-Z])\s*[-\u2013\u2014]\s*([A-Z])\b/g)) {
+      if (!/^[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*$/i.test(content)) continue;
+      for (const range of content.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
       }
       for (const label of content.matchAll(/\b([A-Z])\b/g)) {
@@ -94,9 +97,9 @@
       }
     }
     const text = normalizeText(caption);
-    for (const match of text.matchAll(/\b(?:panels?|subpanels?)\s+([A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*[,;&]\s*|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*)/gi)) {
+    for (const match of text.matchAll(/\b(?:panels?|subpanels?)\s+([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*[,;&]\s*|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)/gi)) {
       const group = match[1].toUpperCase();
-      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2013\u2014]\s*([A-Z])\b/g)) {
+      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
       }
       for (const label of group.matchAll(/\b([A-Z])\b/g)) addRange(label[1]);
@@ -109,10 +112,10 @@
     // concatenate the marker and prose without a space, so whitespace after a
     // sentence boundary cannot be required here.
     for (const match of text.matchAll(
-      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2013\u2014]\s*[A-Z])?)*)\)?\s*(?=[:,])/gi
+      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?=[:,.])/gi
     )) {
       const group = match[1].toUpperCase();
-      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2013\u2014]\s*([A-Z])\b/g)) {
+      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
       }
       for (const label of group.matchAll(/\b([A-Z])\b/g)) addRange(label[1]);
@@ -153,16 +156,33 @@
         figure?.element?.getAttribute?.('aria-label') ||
         figure?.element?.textContent
       );
-      if (liveCaption && liveCaption !== normalizeText(figure?.caption)) return true;
-      const liveHints = extractElementPanelHints(
-        figure?.element, liveCaption || figure?.caption || ''
-      );
-      const cachedHints = (Array.isArray(figure?.panelHints) ? figure.panelHints : [])
-        .map(value => normalizeText(value).toUpperCase()).filter(Boolean)
-        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
-      return liveHints.length !== cachedHints.length ||
-        liveHints.some((value, index) => value !== cachedHints[index]);
+      return Boolean(liveCaption && liveCaption !== normalizeText(figure?.caption));
     });
+  }
+
+  function resolveCaptionSource(element) {
+    const candidates = [];
+    const add = candidate => {
+      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    };
+    add(element?.querySelector?.(CAPTION_SELECTOR));
+    for (const candidate of Array.from(
+      element?.querySelectorAll?.(CAPTION_SELECTOR) || []
+    )) add(candidate);
+    add(element);
+    let best = null;
+    for (const candidate of candidates) {
+      const caption = normalizeText(
+        candidate?.textContent || candidate?.getAttribute?.('aria-label')
+      );
+      if (!caption) continue;
+      const panelCount = extractPanelHints(caption).length;
+      const hasFigureLabel = Boolean(parseFigureLabel(caption));
+      const score = panelCount * 100000 + (hasFigureLabel ? 10000 : 0) +
+        Math.min(caption.length, 8000) - (candidate === element ? 250 : 0);
+      if (!best || score > best.score) best = { element: candidate, caption, score };
+    }
+    return best || { element, caption: '', score: 0 };
   }
 
   function imageSource(image) {
@@ -246,16 +266,14 @@
     const candidates = Array.from(documentLike?.querySelectorAll?.(FIGURE_SELECTOR) || []);
     for (const [documentOrder, element] of candidates.entries()) {
       if (element?.closest?.(EXCLUDED_ANCESTOR_SELECTOR)) continue;
-      const captionElement = element?.querySelector?.(CAPTION_SELECTOR) || null;
-      const caption = normalizeText(
-        captionElement?.textContent ||
-        element?.getAttribute?.('aria-label') ||
-        element?.textContent
-      );
+      const captionSource = resolveCaptionSource(element);
+      const captionElement = captionSource.element || element;
+      const caption = captionSource.caption;
       const labelText = normalizeText(
         captionElement?.querySelector?.(LABEL_SELECTOR)?.textContent || ''
       );
-      const parsed = parseFigureLabel(labelText) || parseFigureLabel(caption);
+      const parsed = parseFigureLabel(labelText) || parseFigureLabel(caption) ||
+        parseFigureLabel(element?.textContent);
       if (!parsed) continue;
       const imageElements = collectImages(element);
       const item = {
