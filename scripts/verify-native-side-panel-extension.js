@@ -325,6 +325,32 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       migrationScriptsLoaded: typeof SciLLM.validateArticleArchive === 'function'
     };
   });
+  const publisherSingleColumnQa = await fixture.evaluate(() => {
+    const originalFamily = document.documentElement.dataset.sciPublisherFamily || '';
+    document.documentElement.dataset.sciPublisherFamily = 'springer-nature';
+    const host = document.createElement('div');
+    host.id = 'publisher-single-column-qa';
+    host.style.cssText = 'width:760px;overflow:hidden';
+    host.innerHTML =
+      '<div class="c-article-main-column" style="float:left;width:500px">Article</div>' +
+      '<aside class="c-article-extras" style="float:right;width:240px">' +
+      '<div class="c-reading-companion">Publisher navigation</div></aside>';
+    document.body.appendChild(host);
+    const main = host.querySelector('.c-article-main-column');
+    const extras = host.querySelector('.c-article-extras');
+    const companion = host.querySelector('.c-reading-companion');
+    const result = {
+      enabled: document.documentElement.dataset.sciReaderSingleColumn === 'true',
+      extrasDisplay: getComputedStyle(extras).display,
+      companionDisplay: getComputedStyle(companion).display,
+      mainFloat: getComputedStyle(main).float,
+      mainWidth: Math.round(main.getBoundingClientRect().width),
+      hostWidth: Math.round(host.getBoundingClientRect().width)
+    };
+    host.remove();
+    document.documentElement.dataset.sciPublisherFamily = originalFamily;
+    return result;
+  });
   await fixture.evaluate(() => {
     const figure = document.createElement('figure');
     figure.id = 'dynamic-nature-panel-qa';
@@ -399,6 +425,37 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     updated: dynamicNaturePanelUpdated,
     cleanup: dynamicNaturePanelCleanup
   };
+  await fixture.evaluate(() => {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'structured-nature-panel-qa';
+    wrapper.innerHTML =
+      '<figure><figcaption><b class="figure-label">Figure 92.</b> Structured legend.</figcaption>' +
+      '<div class="c-article-section__figure-description" data-test="bottom-caption">' +
+      '<p><b>a</b>, Overview. <b>b–d</b>, Measurements. ' +
+      '<b>e</b>,<b>f</b>, Heatmaps. B, B cells; n.c., necrotic core; ' +
+      'M, mean; T, T cells.</p></div></figure>';
+    document.querySelector('article')?.appendChild(wrapper);
+  });
+  await sidePanel.waitForFunction(() => {
+    const figure = currentWorkspaceSnapshot?.figures?.figures
+      ?.find(item => item.figureId === 'figure-92');
+    return JSON.stringify(figure?.panelHints || []) ===
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F']);
+  }, null, { timeout: 5000 });
+  const structuredNaturePanelQa = await sidePanel.evaluate(() => {
+    const figure = currentWorkspaceSnapshot?.figures?.figures
+      ?.find(item => item.figureId === 'figure-92');
+    return {
+      panels: figure?.panelHints || [],
+      excludesGlossaryInitials: !figure?.panelHints?.some(label =>
+        ['M', 'N', 'T'].includes(label))
+    };
+  });
+  await fixture.evaluate(() => document.getElementById('structured-nature-panel-qa')?.remove());
+  await sidePanel.waitForFunction(() =>
+    !currentWorkspaceSnapshot?.figures?.figures
+      ?.some(item => item.figureId === 'figure-92'), null, { timeout: 5000 });
+  structuredNaturePanelQa.cleanup = true;
   await fixture.evaluate(() => {
     const aggregate = document.createElement('div');
     aggregate.id = 'nested-figure-aggregate-qa';
@@ -495,7 +552,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         frame?.contentDocument?.getElementById('toggleFloatingSidePanel')
           ?.getAttribute('aria-pressed') || '',
       sourcePinPressed:
-        document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || ''
+        document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || '',
+      openStatus: document.getElementById('statusMessage')?.textContent || ''
     };
   });
   const floatingAway = await context.newPage();
@@ -930,7 +988,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
+      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -1001,7 +1059,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
+      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -1066,7 +1124,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.4-build39-figure-isolation-r4', null, { timeout: 5000 }
+      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -1087,7 +1145,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.4-build39-figure-isolation-r4'),
+        '2.4.5-build39-structured-panels-r5'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -5118,7 +5176,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     beforeActivationRevision,
     afterActivationRevision,
     activated,
+    publisherSingleColumnQa,
     dynamicNaturePanelQa,
+    structuredNaturePanelQa,
     figureInventoryCacheQa,
     nestedFigureIsolationQa,
     floatingPanelQa,
@@ -5238,7 +5298,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.4-build39-figure-isolation-r4' &&
+    afterActivationRevision === '2.4.5-build39-structured-panels-r5' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5248,12 +5308,23 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     activated.removedAnalysisActions &&
     activated.feedbackRemoved &&
     activated.migrationScriptsLoaded &&
+    results.publisherSingleColumnQa.enabled &&
+    results.publisherSingleColumnQa.extrasDisplay === 'none' &&
+    results.publisherSingleColumnQa.companionDisplay === 'none' &&
+    results.publisherSingleColumnQa.mainFloat === 'none' &&
+    Math.abs(
+      results.publisherSingleColumnQa.mainWidth - results.publisherSingleColumnQa.hostWidth
+    ) <= 1 &&
     results.dynamicNaturePanelQa.initial.found &&
     results.dynamicNaturePanelQa.initial.panelHints.length === 0 &&
     results.dynamicNaturePanelQa.updated.found &&
     JSON.stringify(results.dynamicNaturePanelQa.updated.panelHints) ===
       JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']) &&
     results.dynamicNaturePanelQa.cleanup &&
+    JSON.stringify(results.structuredNaturePanelQa.panels) ===
+      JSON.stringify(['A', 'B', 'C', 'D', 'E', 'F']) &&
+    results.structuredNaturePanelQa.excludesGlossaryInitials &&
+    results.structuredNaturePanelQa.cleanup &&
     results.figureInventoryCacheQa.freshnessChecks <= 1 &&
     results.figureInventoryCacheQa.extractions === 0 &&
     JSON.stringify(results.nestedFigureIsolationQa.figure90Panels) ===
@@ -5275,6 +5346,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     floatingPanelQa.frameTitle === 'SCI论文阅读助手' &&
     floatingPanelQa.framePinPressed === 'true' &&
     floatingPanelQa.sourcePinPressed === 'true' &&
+    /悬浮置顶阅读助手已打开/.test(floatingPanelQa.openStatus) &&
     floatingPanelQa.awayTabEnabledWhilePinned &&
     floatingPanelQa.remainsOpenAfterTabSwitch &&
     floatingPanelQa.targetStableAfterTabSwitch &&
@@ -5293,7 +5365,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.4-build39-figure-isolation-r4' &&
+    multiTab.secondActivatedRevision === '2.4.5-build39-structured-panels-r5' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.

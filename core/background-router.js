@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const RUNTIME_REVISION = '2.4.4-build39-figure-isolation-r4';
+  const RUNTIME_REVISION = '2.4.5-build39-structured-panels-r5';
   const TASK_TIMEOUTS_MS = Object.freeze({
     highlight: 180000,
     summary: 180000,

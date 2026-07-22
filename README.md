@@ -89,6 +89,10 @@ LLM 最低置信度默认是 80%。提高阈值会减少误判，降低阈值会
 
 右侧“图解”页加载时会直接从网页 DOM、图注和可访问性标签识别全部 Figure 与 Panel，不调用 LLM。目录默认折叠；每个 Panel 都有“解读此 Panel”和“提问此 Panel”，只在点击后调用 Figure 路由。批量和单图入口仍可生成整图标准解读，需要对照、因果等级与替代解释审计时再点击深度解读。多 Panel Figure 会分批提取 Panel 证据，随后统一综合整图逻辑。点击“查看高清原图”会在当前网页左侧打开深色查看器，支持缩放、拖动、适配窗口、Esc 和关闭按钮。DeepSeek 官方 API 只使用图注和相关正文，插件会跳过图片下载、压缩与 Base64 编码；具备视觉能力的 Provider 才发送图片。
 
+插件激活后会为已适配的出版社启用单栏正文模式：隐藏出版社自带的文章目录、Figure/References 导航、右侧阅读伴侣等导航区域，并让正文占满剩余网页宽度。当前覆盖 Elsevier、Springer Nature、Wiley、Oxford Academic、Taylor & Francis、PLOS、Frontiers、MDPI、ACS、RSC、AAAS、JAMA、BMJ、NEJM、PMC/JATS 与预印本站点，同时保留基于 `nav`、`aside` 和 `role=navigation` 的保守语义回退。该模式直接调整论文网页布局，不依赖浏览器是否允许扩展控制原生侧栏宽度。
+
+顶部图钉会在浏览器支持 Document Picture-in-Picture 时创建可置于其他软件上方的独立阅读窗口。2.4.5 已将悬浮窗口的加载监听提前到 iframe 挂载之前，并让内容渲染不再等待跨标签页状态同步，避免缓存加载竞态造成空白、长时间转圈或窗口被误关；不支持该能力的浏览器会明确提示，而不会伪装成已置顶。
+
 运行中可随时暂停、继续或取消。暂停会让当前在途请求自然完成，但不会继续发送下一批；取消会中止当前网络请求并保留已经完成的 Figure 或全文分块结果。批量运行不会强制展开所有 Figure，手动展开的 Figure、Panel、三个精读结论块和未提交追问会在进度轮询中保持。“多米诺论证链”“证据组织”“组间逻辑连接”默认分别折叠。图解页右缘悬停短横条时在左侧显示 Figure 名称；继续停留会再展开 Panel 列表，点击可平滑跳转并展开目标。
 
 每个 Panel 保留“分组含义与设置、实验技术原理、横纵坐标含义与读图方法、实验所用样本信息”四个复选项，同时支持输入自定义问题。四个内置选项对应的模型指令可在“模型设置 → Panel 追问提示词”中全局编辑或恢复默认。
@@ -185,4 +189,4 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 
 ## 版本
 
-当前版本：`2.4.4`（运行修订 `2.4.4-build39-figure-isolation-r4`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.4 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，覆盖 Nature `a-c`、`d-f`、`g,h`、`i,j` 等格式；同时排除包含多个 Figure 身份的聚合父容器，使 Figure 编号、图注、图片、Panel 与定位目标保持在同一最小根节点。目录缓存采用事件驱动失效和限频兜底，避免重复扫描拖慢网页。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。
+当前版本：`2.4.5`（运行修订 `2.4.5-build39-structured-panels-r5`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.5 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，排除包含多个 Figure 身份的聚合父容器，并优先读取 Nature `bottom-caption` 内的加粗结构化 Panel 标记，避免把图注缩写和统计术语误识别为 Panel。目录缓存采用事件驱动失效和限频兜底，避免重复扫描拖慢网页；同时为全部已适配出版社启用单栏正文布局，并修复悬浮置顶窗口的 iframe 加载竞态。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。

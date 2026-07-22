@@ -5,6 +5,7 @@ const {
   FIGURE_SELECTOR,
   parseFigureLabel,
   extractPanelHints,
+  extractElementPanelHints,
   figureInventoryNeedsRefresh,
   extractArticleFigures
 } = require('../core/figure-extractor.js');
@@ -197,6 +198,41 @@ test('recognizes the compact no-space Nature caption used by the glioblastoma ar
     'b–d,Top: Harmony-corrected UMAP plots for human tumors (b), recurrent tumors (c)' +
     ' and mouse tumors (d).e,f,Heatmaps representing subset-specific genes.'
   ), ['A', 'B', 'C', 'D', 'E', 'F']);
+});
+
+test('does not turn Nature Figure glossary abbreviations into Panels', () => {
+  assert.deepEqual(extractPanelHints(
+    'a,Schematic overview of the 10x chromium setup. Tumors were resected from seven ND ' +
+    'and four recurrent tumor samples. Mouse data contained GL261 tumors microdissected ' +
+    'from WT C57BL/6J (n = 3) or Ccr2-KO mice (n = 3). b-d,Top: Harmony-corrected UMAP ' +
+    'plots for human ND GBM tumors (b), human recurrent GBM tumors (c) and mouse tumors ' +
+    '(d). Bottom: pie charts for each individual human ND tumor (b), recurrent tumor (c) ' +
+    'and mouse tumor (d). e,f,Heatmaps representing relevant subset-specific genes. ' +
+    'Colors and numbers match that of the clusters shown in b-d. B, B cells; Mast, mast ' +
+    'cells; Mo, monocytes; n.c., necrotic core; PI B, plasma B cells; prol. TAM, ' +
+    'proliferating TAMs; T, T cells; Treg, regulatory T cells.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F']);
+});
+
+test('prefers Nature structured bold markers over prose-like statistical initials', () => {
+  const structuredCaption = {
+    querySelectorAll(selector) {
+      return selector === 'b,strong'
+        ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(text => ({ textContent: text }))
+        : [];
+    }
+  };
+  const element = {
+    querySelectorAll(selector) {
+      if (/bottom-caption|figure-description/.test(selector)) return [structuredCaption];
+      return [];
+    }
+  };
+
+  assert.deepEqual(extractElementPanelHints(
+    element,
+    'a, Experiment. b-h, Results. I, interaction term; M, mean; T, T cells.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
 });
 
 test('recognizes every Panel in the exact grouped Nature legend style from the live article', () => {

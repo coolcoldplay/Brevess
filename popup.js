@@ -957,18 +957,35 @@ async function configureFloatingPanelWindow(pipWindow, targetTabId) {
         event.preventDefault();
         restoreFloatingPanelDefaultWidth(pipWindow);
     });
-    pipDocument.body.append(frame, resetEdge);
-    await Promise.race([
-        new Promise((resolve, reject) => {
-            frame.addEventListener('load', resolve, { once: true });
-            frame.addEventListener('error', () => reject(new Error('悬浮侧栏加载失败')), {
-                once: true
-            });
-        }),
-        new Promise((_, reject) => setTimeout(
-            () => reject(new Error('悬浮侧栏加载超时')), 5000
-        ))
-    ]);
+    await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = error => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            frame.removeEventListener('load', handleLoad);
+            frame.removeEventListener('error', handleError);
+            if (error) reject(error);
+            else resolve();
+        };
+        const handleLoad = () => finish();
+        const handleError = () => finish(new Error('悬浮侧栏加载失败'));
+        frame.addEventListener('load', handleLoad);
+        frame.addEventListener('error', handleError);
+        const timeoutId = setTimeout(
+            () => finish(new Error('悬浮侧栏加载超时')), 5000
+        );
+        // Register readiness listeners before attachment. A cached extension
+        // iframe can otherwise finish synchronously and leave a blank PiP
+        // window until the timeout closes it.
+        pipDocument.body.append(frame, resetEdge);
+        try {
+            if (frame.contentDocument?.readyState === 'complete') handleLoad();
+        } catch {
+            // The load listener remains authoritative if a browser isolates
+            // the extension iframe from its Picture-in-Picture opener.
+        }
+    });
 }
 
 async function openFloatingSidePanel() {
@@ -997,20 +1014,28 @@ async function openFloatingSidePanel() {
         );
         const pipWindow = await documentPictureInPicture.requestWindow({
             width: FLOATING_PANEL_DEFAULT_WIDTH,
-            height: requestedHeight,
-            preferInitialWindowPlacement: true
+            height: requestedHeight
         });
         floatingPanelWindow = pipWindow;
         const targetTab = activePanelTabContext.tabId !== null
             ? { id: activePanelTabContext.tabId } : await queryPanelTargetTab();
-        await notifyFloatingPanelPinState(true, targetTab?.id);
-        await configureFloatingPanelWindow(pipWindow, targetTab?.id);
-        updateFloatingPanelButton(true);
         pipWindow.addEventListener('pagehide', () => {
             floatingPanelWindow = null;
             updateFloatingPanelButton(false);
             void notifyFloatingPanelPinState(false, targetTab?.id);
         }, { once: true });
+        // Render the window immediately. Synchronizing background pin state
+        // can be slower when the user has many tabs and must not leave the
+        // newly opened window blank.
+        const pinStatePromise = notifyFloatingPanelPinState(true, targetTab?.id);
+        await configureFloatingPanelWindow(pipWindow, targetTab?.id);
+        updateFloatingPanelButton(true);
+        void pinStatePromise.then(response => {
+            if (response?.success === false) {
+                showStatus(`悬浮窗已打开，但跨标签页保持失败：${response.error || '未知错误'}`, 'warning');
+            }
+        });
+        showStatus('悬浮置顶阅读助手已打开。', 'success');
     } catch (error) {
         if (floatingPanelWindow && !floatingPanelWindow.closed) floatingPanelWindow.close();
         floatingPanelWindow = null;

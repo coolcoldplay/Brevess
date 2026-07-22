@@ -1,5 +1,8 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.4-build39-figure-isolation-r4';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.5-build39-structured-panels-r5';
+document.documentElement.dataset.sciReaderSingleColumn = 'true';
+document.documentElement.dataset.sciPublisherFamily =
+    globalThis.SciLLM?.selectPublisherAdapter?.(location)?.family || 'generic';
 class SciPaperHighlighter {
     constructor() {
         this.highlightedElements = [];

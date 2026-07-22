@@ -41,6 +41,85 @@
     --sci-manual-line: #d9d6ce;
     --sci-manual-danger: #923b34;
 }
+
+/* Edge does not expose an API for extensions to set the native side-panel
+   width. Activated papers therefore use a publisher-aware focus layout:
+   remove duplicate journal navigation and let the article span its layout. */
+html[data-sci-reader-single-column="true"] :is(
+    nav[aria-label*="article" i],
+    nav[aria-label*="content" i],
+    aside[aria-label*="article" i],
+    aside[aria-label*="content" i],
+    [role="navigation"][aria-label*="article" i],
+    [role="navigation"][aria-label*="content" i]
+),
+html[data-sci-publisher-family="elsevier"] :is(
+    [data-aa-name*="outline" i], .outline-panel, .article-outline
+),
+html[data-sci-publisher-family="springer-nature"] :is(
+    .c-article-extras, .c-reading-companion,
+    .c-article-table-of-contents, .article-toc
+),
+html[data-sci-publisher-family="wiley"] :is(
+    .article-table-of-contents, .toc__section
+),
+html[data-sci-publisher-family="oup"] :is(
+    .article-pager, .table-of-contents
+),
+html[data-sci-publisher-family="taylor-francis"] :is(
+    .tocList, .article-nav
+),
+html[data-sci-publisher-family="plos"] :is(
+    #artText .nav, .article-toc
+),
+html[data-sci-publisher-family="frontiers"] :is(
+    .JournalFullText__toc, .article-toc
+),
+html[data-sci-publisher-family="mdpi"] :is(
+    .art-toc, .html-toc
+),
+html[data-sci-publisher-family="acs"] :is(
+    .articleTableOfContents, .toc
+),
+html[data-sci-publisher-family="rsc"] :is(
+    .article__toc, #pnlArticleContentNav
+),
+html[data-sci-publisher-family="aaas"] :is(
+    .article__toc, .core-navigation
+),
+html[data-sci-publisher-family="jama"] :is(
+    .article-navigation, .article-toc
+),
+html[data-sci-publisher-family="bmj"] .article-toc,
+html[data-sci-publisher-family="nejm"] :is(
+    .m-article-nav, .article-toc
+),
+html[data-sci-publisher-family="pmc-jats"] :is(
+    .jig-ncbiinpagenav .nav, .usa-in-page-nav, .on-this-page
+),
+html[data-sci-publisher-family="preprint"] :is(
+    .pane-highwire-article-navigation, .article-toc
+) {
+    display: none !important;
+}
+
+html[data-sci-reader-single-column="true"] :is(
+    #body, .Body, [data-aa-name="article-body"], .article__sections,
+    .c-article-main-column, #article-body, .c-article-body,
+    [data-test="article-body"], .article__body, .article-section,
+    .widget-ArticleFulltext, .article-body, .hlFld-Fulltext,
+    #artText, .article-text, main.ArticleDetailsV4__main,
+    .JournalFullText, .article-container, article.bright, #html-body,
+    .article-content, main.content.article, .articleBody, .article_content,
+    #pnlArticleContent, main.content, .bodySection, .article-full-text,
+    .o-article-body, #mc, .article, .highwire-markup
+) {
+    box-sizing: border-box !important;
+    float: none !important;
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
 .sci-highlight {
     display: inline;
     padding: 2px 4px;

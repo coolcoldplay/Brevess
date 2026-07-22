@@ -2,7 +2,11 @@
 
 build39 基于 build38 冻结点 `389ab42`，重点降低全文高亮和 Figure/Panel 解读中的重复 Token、输出截断与无效重算，同时保持旧模型接口可降级使用。
 
-2.4.4 Panel 修复版会在 Nature 等分层 Figure DOM 中选择 Panel 信息最完整的 caption 来源，覆盖 `a-c`、`d-f`、`g,h`、`i,j` 等逗号、句点与区间组合；检测到包含多个不同 Figure 身份的聚合容器时会将其排除，并拒绝使用身份不一致的 caption，防止编号、图片、Panel 和定位目标跨图串位。目录缓存采用 MutationObserver 精确置脏、普通读取直接复用，并保留 2 秒低成本兜底检查，避免侧栏快照反复遍历所有 Figure 造成页面卡顿。
+2.4.5 Panel 修复版会在 Nature 等分层 Figure DOM 中选择 Panel 信息最完整的 caption 来源，覆盖 `a-c`、`d-f`、`g,h`、`i,j` 等逗号、句点与区间组合；检测到包含多个不同 Figure 身份的聚合容器时会将其排除，并拒绝使用身份不一致的 caption，防止编号、图片、Panel 和定位目标跨图串位。对 Nature `bottom-caption` 优先读取加粗的结构化 Panel 标记，避免把 `n.c.`、`T cells`、`Mann–Whitney` 等图注缩写误识别为 Panel。目录缓存采用 MutationObserver 精确置脏、普通读取直接复用，并保留 2 秒低成本兜底检查，避免侧栏快照反复遍历所有 Figure 造成页面卡顿。
+
+2.4.5 同时启用出版社单栏正文模式。内容脚本先记录当前适配器家族，再由限定在 `data-sci-reader-single-column=true` 下的 CSS 隐藏 16 类已适配出版社的文章目录、右侧导航和阅读伴侣，并将正文容器恢复为无浮动、单一网格列和全可用宽度。通用回退只处理带 article/content 语义标签的 `nav`、`aside` 或 `role=navigation`，避免误伤正文。由于 Edge 未向扩展开放修改原生侧栏宽度的接口，此方案直接让出版社网页切换为单栏，达到正文不再保留站内导航栏的目标。
+
+悬浮置顶窗口修复了 iframe 加载竞态：先注册 `load/error` 监听再挂载 iframe，并在呈现窗口内容的同时异步同步跨标签页图钉状态。这样即使 iframe 命中缓存，也不会因错过 `load` 事件等待 5 秒后关闭；后台同步较慢时，悬浮窗口也能先显示内容。
 
 侧栏标题栏的齿轮改为直接打开 `options.html#categoryWorkspace`，即“类别规则/识别规则与模型设置”工作区；适配诊断包入口移至当前论文全局工具栏的虫形图标。
 

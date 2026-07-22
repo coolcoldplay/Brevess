@@ -41,6 +41,10 @@
     '.subfigure-label',
     '[class*="panel"][class*="label"]'
   ].join(',');
+  const STRUCTURED_PANEL_CAPTION_SELECTOR = [
+    '[data-test="bottom-caption"]',
+    '.c-article-section__figure-description'
+  ].join(',');
   const EXCLUDED_ANCESTOR_SELECTOR = [
     'aside',
     'nav',
@@ -119,9 +123,11 @@
     // Nature and several other publishers commonly write legend markers as
     // lowercase `a, ... b–d, ... e,f, ...`. Inline markup can make textContent
     // concatenate the marker and prose without a space, so whitespace after a
-    // sentence boundary cannot be required here.
+    // sentence boundary cannot be required here. Exclude glossary entries such
+    // as `n.c., necrotic core` and `T, T cells`, which otherwise look like
+    // single-letter Panel markers after a period or semicolon.
     for (const match of text.matchAll(
-      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?=[:,.])/gi
+      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?!\.\s*[A-Z]\.)(?!,\s*\1\b)(?=[:,.])/gi
     )) {
       const group = match[1].toUpperCase();
       for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
@@ -154,8 +160,36 @@
     return identities;
   }
 
+  function extractStructuredPanelHints(element) {
+    const panels = new Set();
+    const addGroup = value => {
+      const group = normalizeText(value).toUpperCase();
+      if (!/^[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*|\s+(?:AND|OR|TO)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*$/.test(group)) return;
+      for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
+        const start = range[1].charCodeAt(0);
+        const end = range[2].charCodeAt(0);
+        if (end < start || end - start > 25) continue;
+        for (let code = start; code <= end; code += 1) {
+          panels.add(String.fromCharCode(code));
+        }
+      }
+      for (const label of group.matchAll(/\b([A-Z])\b/g)) panels.add(label[1]);
+    };
+    for (const container of Array.from(
+      element?.querySelectorAll?.(STRUCTURED_PANEL_CAPTION_SELECTOR) || []
+    )) {
+      for (const marker of Array.from(container?.querySelectorAll?.('b,strong') || [])) {
+        addGroup(marker?.textContent);
+      }
+    }
+    return [...panels].sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }));
+  }
+
   function extractElementPanelHints(element, caption) {
-    const panels = new Set(extractPanelHints(caption));
+    const structuredPanels = extractStructuredPanelHints(element);
+    const panels = new Set(structuredPanels.length
+      ? structuredPanels : extractPanelHints(caption));
     const add = value => {
       const text = normalizeText(value).toUpperCase();
       const direct = text.match(/^(?:PANEL\s*)?([A-Z])$/i);
@@ -336,6 +370,7 @@
     CAPTION_SELECTOR,
     parseFigureLabel,
     extractPanelHints,
+    extractStructuredPanelHints,
     extractElementPanelHints,
     figureInventoryNeedsRefresh,
     isUsefulFigureImage,

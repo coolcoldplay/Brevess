@@ -896,9 +896,35 @@ test('reading assistant exposes a global local-workspace toolbar and a real floa
   assert.match(script, /documentPictureInPicture\.requestWindow/);
   assert.match(script, /FLOATING_PANEL_DEFAULT_WIDTH\s*=\s*780/);
   assert.match(script, /pipWindow\.resizeTo\(FLOATING_PANEL_DEFAULT_WIDTH/);
+  const floatingConfiguration = script.match(
+    /async function configureFloatingPanelWindow[\s\S]*?\n}/
+  )?.[0] || '';
+  assert.ok(
+    floatingConfiguration.indexOf("frame.addEventListener('load'") <
+      floatingConfiguration.indexOf('pipDocument.body.append(frame, resetEdge)'),
+    'floating iframe readiness must be observed before it is attached'
+  );
+  assert.match(script, /const pinStatePromise = notifyFloatingPanelPinState/);
+  assert.match(script, /await configureFloatingPanelWindow\(pipWindow, targetTab\?\.id\)/);
+  assert.doesNotMatch(script, /preferInitialWindowPlacement/);
   assert.match(script, /floatingPanelTargetTabId/);
   assert.match(background, /FLOATING_SIDE_PANEL_PIN_STATE/);
   assert.match(background, /floatingPanelPinnedTabId !== null/);
+});
+
+test('activated publisher pages use a family-aware single-column article layout', () => {
+  const css = read('content.css');
+  for (const family of [
+    'elsevier', 'springer-nature', 'wiley', 'oup', 'taylor-francis',
+    'plos', 'frontiers', 'mdpi', 'acs', 'rsc', 'aaas', 'jama', 'bmj',
+    'nejm', 'pmc-jats', 'preprint'
+  ]) assert.match(css, new RegExp(`data-sci-publisher-family="${family}"`));
+  assert.match(css, /nav\[aria-label\*="article" i\]/);
+  assert.match(css, /\.c-article-extras/);
+  assert.match(css, /\.outline-panel/);
+  assert.match(css, /\.pane-highwire-article-navigation/);
+  assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?float:\s*none\s*!important/);
+  assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?width:\s*100%\s*!important/);
 });
 
 test('popup is a full-height native side-panel workspace with five internal views', () => {
