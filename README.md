@@ -91,7 +91,7 @@ LLM 最低置信度默认是 80%。提高阈值会减少误判，降低阈值会
 
 插件激活后会为已适配的出版社启用单栏正文模式：隐藏出版社自带的文章目录、Figure/References 导航、右侧阅读伴侣等导航区域，并让正文占满剩余网页宽度。当前覆盖 Elsevier、Springer Nature、Wiley、Oxford Academic、Taylor & Francis、PLOS、Frontiers、MDPI、ACS、RSC、AAAS、JAMA、BMJ、NEJM、PMC/JATS 与预印本站点，同时保留基于 `nav`、`aside` 和 `role=navigation` 的保守语义回退。该模式直接调整论文网页布局，不依赖浏览器是否允许扩展控制原生侧栏宽度。
 
-顶部图钉会在浏览器支持 Document Picture-in-Picture 时创建可置于其他软件上方的独立阅读窗口。2.4.5 已将悬浮窗口的加载监听提前到 iframe 挂载之前，并让内容渲染不再等待跨标签页状态同步，避免缓存加载竞态造成空白、长时间转圈或窗口被误关；不支持该能力的浏览器会明确提示，而不会伪装成已置顶。
+顶部图钉会在浏览器支持 Document Picture-in-Picture 时创建可置于其他软件上方的独立阅读窗口。2.4.6 除了修复 iframe 加载竞态，还为“API 存在但窗口创建挂起”的浏览器加入 4.5 秒超时，并在系统置顶能力不可用时自动打开独立兼容窗口。兼容窗口会明确说明它不能跨软件置顶，不再静默禁用图钉或伪装成已置顶。
 
 运行中可随时暂停、继续或取消。暂停会让当前在途请求自然完成，但不会继续发送下一批；取消会中止当前网络请求并保留已经完成的 Figure 或全文分块结果。批量运行不会强制展开所有 Figure，手动展开的 Figure、Panel、三个精读结论块和未提交追问会在进度轮询中保持。“多米诺论证链”“证据组织”“组间逻辑连接”默认分别折叠。图解页右缘悬停短横条时在左侧显示 Figure 名称；继续停留会再展开 Panel 列表，点击可平滑跳转并展开目标。
 
@@ -189,4 +189,4 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 
 ## 版本
 
-当前版本：`2.4.5`（运行修订 `2.4.5-build39-structured-panels-r5`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.5 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，排除包含多个 Figure 身份的聚合父容器，并优先读取 Nature `bottom-caption` 内的加粗结构化 Panel 标记，避免把图注缩写和统计术语误识别为 Panel。目录缓存采用事件驱动失效和限频兜底，避免重复扫描拖慢网页；同时为全部已适配出版社启用单栏正文布局，并修复悬浮置顶窗口的 iframe 加载竞态。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。
+当前版本：`2.4.6`（运行修订 `2.4.6-build39-publisher-focus-r6`）。build39 在 build38 的本地工作区与流式问答底座上，新增紧凑全文 Claim Census、逐段 NDJSON checkpoint 与截断续传；高亮 ID、出现次数、置信度及解释改由本地确定性规则生成。Figure 批处理改用 FigureContext 与 Panel 图注切片，方法学使用开放词表并由本地归一化；Panel 追问使用最近 5 条对话和按问题检索的相关旧记录。2.4.5 会从分层 caption DOM 中选择包含完整 Panel 信息的图注，排除包含多个 Figure 身份的聚合父容器，并优先读取 Nature `bottom-caption` 内的加粗结构化 Panel 标记，避免把图注缩写和统计术语误识别为 Panel。2.4.6 根据真实出版社页面补充 Cell、ScienceDirect、Springer Link、Frontiers、PLOS、ACS、JAMA 与 bioRxiv 等精确侧栏选择器和父级布局展开规则，并让悬浮图钉在系统置顶不可用时自动降级为带明确说明的独立窗口。详见 [build39 优化说明](BUILD39_OPTIMIZATION.md)。

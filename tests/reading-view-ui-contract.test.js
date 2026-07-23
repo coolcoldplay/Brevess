@@ -894,6 +894,16 @@ test('reading assistant exposes a global local-workspace toolbar and a real floa
   assert.doesNotMatch(html.slice(highlightsStart, highlightsEnd), /article-archive-toolbar/);
   assert.match(css, /\.side-panel-global-tools\s*\{/);
   assert.match(script, /documentPictureInPicture\.requestWindow/);
+  assert.match(script, /async function openFloatingCompatibilityWindow/);
+  assert.match(script, /function requestSystemFloatingPanelWindow/);
+  assert.match(script, /浏览器未能及时创建系统置顶窗口/);
+  assert.match(script, /chrome\.windows\.create\(createData\)/);
+  assert.match(script, /frameUrl\.searchParams\.set\('displayMode', 'window'\)/);
+  assert.match(script, /当前浏览器缺少跨软件置顶能力/);
+  assert.doesNotMatch(
+    script,
+    /if \(!floatingPanelEmbedded && !globalThis\.documentPictureInPicture\?\.requestWindow\)[\s\S]{0,180}button\.disabled = true/
+  );
   assert.match(script, /FLOATING_PANEL_DEFAULT_WIDTH\s*=\s*780/);
   assert.match(script, /pipWindow\.resizeTo\(FLOATING_PANEL_DEFAULT_WIDTH/);
   const floatingConfiguration = script.match(
@@ -923,6 +933,20 @@ test('activated publisher pages use a family-aware single-column article layout'
   assert.match(css, /\.c-article-extras/);
   assert.match(css, /\.outline-panel/);
   assert.match(css, /\.pane-highwire-article-navigation/);
+  for (const realPublisherSelector of [
+    '.sticky-table-of-contents',
+    '.core-sections-menu-outer',
+    '.core-collateral-aside',
+    '.RelatedContent',
+    '#sidebar',
+    '.ArticleDetailsV4__asideLeft',
+    '#article_content-right',
+    '[class*="Article_RightRail" i]',
+    '.sidebar-right-wrapper'
+  ]) assert.match(css, new RegExp(realPublisherSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(css, /\.article-wrapper\.grid\.row[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\[data-core-wrapper="content"\]/);
+  assert.match(css, /\.main-content-wrapper/);
   assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?float:\s*none\s*!important/);
   assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?width:\s*100%\s*!important/);
 });

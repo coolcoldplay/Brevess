@@ -1,5 +1,5 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.5-build39-structured-panels-r5';
+document.documentElement.dataset.sciLlmContentRevision = '2.4.6-build39-publisher-focus-r6';
 document.documentElement.dataset.sciReaderSingleColumn = 'true';
 document.documentElement.dataset.sciPublisherFamily =
     globalThis.SciLLM?.selectPublisherAdapter?.(location)?.family || 'generic';

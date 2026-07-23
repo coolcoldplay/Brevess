@@ -48,59 +48,146 @@
 html[data-sci-reader-single-column="true"] :is(
     nav[aria-label*="article" i],
     nav[aria-label*="content" i],
+    nav[aria-label*="contents" i],
+    nav[aria-label*="table of contents" i],
     aside[aria-label*="article" i],
     aside[aria-label*="content" i],
+    aside[aria-label*="reading companion" i],
     [role="navigation"][aria-label*="article" i],
-    [role="navigation"][aria-label*="content" i]
+    [role="navigation"][aria-label*="content" i],
+    [role="navigation"][aria-label*="contents" i],
+    [role="navigation"][aria-label*="table of contents" i],
+    main > [role="complementary"],
+    main > [class*="sidebar" i],
+    main > [class*="side-rail" i],
+    main > [class*="right-rail" i]
 ),
 html[data-sci-publisher-family="elsevier"] :is(
-    [data-aa-name*="outline" i], .outline-panel, .article-outline
+    [data-aa-name*="outline" i], .outline-panel, .article-outline,
+    .sticky-table-of-contents, .RelatedContent,
+    .core-header-aside, .core-collateral-aside, .core-sections-menu-outer,
+    .article-right-rail, .article-sidebar, .right-rail,
+    .article-wrapper.grid.row > .u-display-block-from-lg,
+    .article-wrapper.grid.row > .u-display-block-from-md,
+    article > aside
 ),
 html[data-sci-publisher-family="springer-nature"] :is(
     .c-article-extras, .c-reading-companion,
-    .c-article-table-of-contents, .article-toc
+    .c-article-table-of-contents, .article-toc,
+    #sidebar, .c-article-sidebar, .eds-l-with-sidebar__sidebar,
+    aside[aria-label*="reading companion" i]
 ),
 html[data-sci-publisher-family="wiley"] :is(
-    .article-table-of-contents, .toc__section
+    .article-table-of-contents, .toc__section,
+    .article__aside, .article__sidebar, .advert-rail,
+    aside:has(.advert-rail)
 ),
 html[data-sci-publisher-family="oup"] :is(
-    .article-pager, .table-of-contents
+    .article-pager, .table-of-contents,
+    .article-sidebar, .widget-ArticleInfo, .right-rail
 ),
 html[data-sci-publisher-family="taylor-francis"] :is(
-    .tocList, .article-nav
+    .tocList, .article-nav, .sections-nav,
+    .articleMetricsContainer, .related-research,
+    [class*="related-research" i], [class*="right-rail" i]
 ),
 html[data-sci-publisher-family="plos"] :is(
-    #artText .nav, .article-toc
+    #artText .nav, .article-toc, #nav-article, .article-aside
 ),
 html[data-sci-publisher-family="frontiers"] :is(
-    .JournalFullText__toc, .article-toc
+    .JournalFullText__toc, .article-toc,
+    .ArticleDetailsV4__asideLeft, .ArticleDetailsV4__asideRight,
+    .OutlineWrapper, .FiguresOutlineWrapper
 ),
 html[data-sci-publisher-family="mdpi"] :is(
-    .art-toc, .html-toc
+    .art-toc, .html-toc, #left-column, #right-column,
+    .left-column, .right-column, .html-left-sidebar, .html-right-sidebar
 ),
 html[data-sci-publisher-family="acs"] :is(
-    .articleTableOfContents, .toc
+    .articleTableOfContents, .toc, #article_content-right,
+    .article_content-right, .tab-nav-shortcut__wrapper
 ),
 html[data-sci-publisher-family="rsc"] :is(
-    .article__toc, #pnlArticleContentNav
+    .article__toc, #pnlArticleContentNav,
+    .article__sidebar, .sidebar, .right-rail
 ),
 html[data-sci-publisher-family="aaas"] :is(
-    .article__toc, .core-navigation
+    .article__toc, .core-navigation, .core-collateral,
+    .article__sidebar, .right-rail
 ),
 html[data-sci-publisher-family="jama"] :is(
-    .article-navigation, .article-toc
+    .article-navigation, .article-toc, .sidebar,
+    [class*="Article_RightRail" i]
 ),
-html[data-sci-publisher-family="bmj"] .article-toc,
+html[data-sci-publisher-family="bmj"] :is(
+    .article-toc, .region-sidebar-first, .region-sidebar-second,
+    .sidebar, .right-rail
+),
 html[data-sci-publisher-family="nejm"] :is(
-    .m-article-nav, .article-toc
+    .m-article-nav, .article-toc, .o-article-sidebar,
+    .o-article-related, .article-sidebar, .right-rail
 ),
 html[data-sci-publisher-family="pmc-jats"] :is(
-    .jig-ncbiinpagenav .nav, .usa-in-page-nav, .on-this-page
+    .jig-ncbiinpagenav .nav, .usa-in-page-nav, .on-this-page,
+    .pmc-sidebar, #right-sidebar, .right-sidebar
 ),
 html[data-sci-publisher-family="preprint"] :is(
-    .pane-highwire-article-navigation, .article-toc
+    .pane-highwire-article-navigation, .article-toc,
+    .sidebar-right-wrapper, .panel-region-sidebar-right, .csh_panelc
 ) {
     display: none !important;
+}
+
+html[data-sci-publisher-family="elsevier"] .article-wrapper.grid.row,
+html[data-sci-publisher-family="elsevier"] [data-core-wrapper="content"],
+html[data-sci-publisher-family="frontiers"] :is(
+    .ArticleDetailsV4__content, .ArticleDetailsV4__container
+),
+html[data-sci-publisher-family="acs"] .article-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+}
+
+html[data-sci-publisher-family="elsevier"] .article-wrapper.grid.row > article,
+html[data-sci-publisher-family="elsevier"] [data-core-wrapper="content"] >
+    :not(.core-sections-menu-outer):not(.core-collateral-aside),
+html[data-sci-publisher-family="frontiers"] main.ArticleDetailsV4__main,
+html[data-sci-publisher-family="acs"] #article__left-side {
+    grid-column: 1 / -1 !important;
+    flex: 0 0 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+html[data-sci-publisher-family="springer-nature"] #main-content.eds-l-with-sidebar {
+    display: block !important;
+}
+
+html[data-sci-publisher-family="springer-nature"] #main-content.eds-l-with-sidebar >
+    :not(#sidebar):not(.eds-l-with-sidebar__sidebar),
+html[data-sci-publisher-family="taylor-francis"] :is(
+    .publication-tabs, .tabs-widget, .tab-content, #mainTabPanel,
+    article.article, .hlFld-Fulltext
+),
+html[data-sci-publisher-family="plos"] :is(
+    .set-grid, .article-body, .article-container, .article-content, #artText
+),
+html[data-sci-publisher-family="mdpi"] :is(
+    #middle-column, .middle-column__main, .html-content__container,
+    article.bright, .html-article-content
+),
+html[data-sci-publisher-family="jama"] :is(
+    .content:has(> #articleContent), #articleContent, .article-body
+),
+html[data-sci-publisher-family="preprint"] :is(
+    .main-content, .main-content-wrapper, .panel-2col, .panel-col,
+    .pane-highwire-markup,
+    .pane-highwire-markup > .pane-content, .highwire-markup
+) {
+    box-sizing: border-box !important;
+    float: none !important;
+    margin-inline: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
 }
 
 html[data-sci-reader-single-column="true"] :is(

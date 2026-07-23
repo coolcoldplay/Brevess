@@ -85,6 +85,13 @@ body {
     cursor: pointer;
 }
 .side-panel-icon-button:hover { border-color: var(--color-border); background: var(--color-surface-subtle); }
+.side-panel-icon-button:disabled {
+    cursor: wait;
+    opacity: .58;
+}
+.side-panel-icon-button[aria-busy="true"] .ph {
+    animation: side-panel-pin-pulse .7s ease-in-out infinite alternate;
+}
 .side-panel-icon-button[aria-pressed="true"] {
     border-color: #8db7d7;
     color: #fff;
@@ -92,6 +99,10 @@ body {
     box-shadow: 0 5px 14px rgba(11,71,120,.18);
 }
 .side-panel-icon-button[aria-pressed="true"] .ph-push-pin { transform: rotate(-18deg); }
+@keyframes side-panel-pin-pulse {
+    from { transform: scale(.86); opacity: .62; }
+    to { transform: scale(1.08); opacity: 1; }
+}
 .side-panel-document-status {
     flex: 0 0 auto;
     display: flex;

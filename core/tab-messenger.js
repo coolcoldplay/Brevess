@@ -25,7 +25,7 @@
     'content.js'
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
-  const CONTENT_SCRIPT_REVISION = '2.4.5-build39-structured-panels-r5';
+  const CONTENT_SCRIPT_REVISION = '2.4.6-build39-publisher-focus-r6';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';

@@ -343,6 +343,8 @@ const {
 
 const floatingPanelParams = new URLSearchParams(window.location.search);
 const floatingPanelEmbedded = floatingPanelParams.get('displayMode') === 'pip';
+const floatingPanelCompatibility = floatingPanelParams.get('displayMode') === 'window';
+const floatingPanelDetached = floatingPanelEmbedded || floatingPanelCompatibility;
 const floatingPanelTargetTabId = (() => {
     const rawValue = floatingPanelParams.get('targetTabId');
     if (rawValue === null || rawValue.trim() === '') return null;
@@ -352,6 +354,7 @@ const floatingPanelTargetTabId = (() => {
 const FLOATING_PANEL_DEFAULT_WIDTH = 780;
 const FLOATING_PANEL_MIN_HEIGHT = 560;
 let floatingPanelWindow = null;
+let floatingCompatibilityWindowId = null;
 
 let selectedCategories = new Set();
 let regexSelectionStored = false;
@@ -707,7 +710,7 @@ function scheduleActiveTabContextSync(options = {}) {
 }
 
 function setupActiveTabSynchronization() {
-    if (!floatingPanelEmbedded) {
+    if (!floatingPanelDetached) {
         chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
     }
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -729,7 +732,7 @@ function setupActiveTabSynchronization() {
         });
     });
     chrome.runtime.onMessage.addListener((message, sender) => {
-        if (message?.type === 'PANEL_TAB_ACTIVATED' && !floatingPanelEmbedded) {
+        if (message?.type === 'PANEL_TAB_ACTIVATED' && !floatingPanelDetached) {
             scheduleActiveTabContextSync();
         }
         if (message?.type === 'ARTICLE_STRUCTURE_CHANGED' &&
@@ -880,13 +883,19 @@ function setupSidePanelSettingsShortcut() {
 function updateFloatingPanelButton(active = false) {
     const button = document.getElementById('toggleFloatingSidePanel');
     if (!button) return;
-    const pinned = floatingPanelEmbedded || active;
+    const pinned = floatingPanelDetached || active;
+    const supportsAlwaysOnTop =
+        typeof globalThis.documentPictureInPicture?.requestWindow === 'function';
     button.setAttribute('aria-pressed', String(pinned));
     button.setAttribute('aria-label', pinned
         ? '关闭悬浮置顶阅读助手' : '悬浮置顶阅读助手');
-    button.title = pinned
-        ? '关闭悬浮置顶阅读助手'
-        : '悬浮在所有软件上方（默认宽度 780px，双击悬浮窗左缘恢复）';
+    if (pinned) {
+        button.title = '关闭悬浮阅读助手';
+    } else if (supportsAlwaysOnTop) {
+        button.title = '悬浮在所有软件上方（默认宽度 780px，双击悬浮窗左缘恢复）';
+    } else {
+        button.title = '打开独立阅读窗口；当前浏览器不支持跨软件置顶';
+    }
 }
 
 function notifyFloatingPanelPinState(pinned, tabId = null) {
@@ -988,11 +997,104 @@ async function configureFloatingPanelWindow(pipWindow, targetTabId) {
     });
 }
 
+async function closeFloatingCompatibilityWindow() {
+    if (floatingCompatibilityWindowId === null) return false;
+    const windowId = Number(floatingCompatibilityWindowId);
+    floatingCompatibilityWindowId = null;
+    if (!Number.isInteger(windowId) || !chrome.windows?.remove) return false;
+    await chrome.windows.remove(windowId).catch(() => {});
+    return true;
+}
+
+async function openFloatingCompatibilityWindow(targetTabId, sourceError = null) {
+    if (!chrome.windows?.create) {
+        throw sourceError || new Error('当前浏览器既不支持置顶画中画，也无法创建独立阅读窗口');
+    }
+    const requestedHeight = Math.max(
+        FLOATING_PANEL_MIN_HEIGHT,
+        Math.min(960, Math.round((screen.availHeight || 960) - 56))
+    );
+    const frameUrl = new URL(chrome.runtime.getURL('popup.html'));
+    frameUrl.searchParams.set('displayMode', 'window');
+    if (Number.isInteger(Number(targetTabId))) {
+        frameUrl.searchParams.set('targetTabId', String(Number(targetTabId)));
+    }
+    const currentWindow = await chrome.windows.getCurrent().catch(() => null);
+    const left = Number.isFinite(currentWindow?.left) && Number.isFinite(currentWindow?.width)
+        ? Math.max(0, Math.round(currentWindow.left + currentWindow.width -
+            FLOATING_PANEL_DEFAULT_WIDTH - 24))
+        : undefined;
+    const top = Number.isFinite(currentWindow?.top)
+        ? Math.max(0, Math.round(currentWindow.top + 24))
+        : undefined;
+    const createData = {
+        url: frameUrl.href,
+        type: 'popup',
+        focused: true,
+        width: FLOATING_PANEL_DEFAULT_WIDTH,
+        height: requestedHeight
+    };
+    if (Number.isInteger(left)) createData.left = left;
+    if (Number.isInteger(top)) createData.top = top;
+    let compatibilityWindow;
+    try {
+        compatibilityWindow = await chrome.windows.create(createData);
+    } catch (error) {
+        if (!/bounds|screen space/i.test(String(error?.message || error)) ||
+            (!('left' in createData) && !('top' in createData))) {
+            throw error;
+        }
+        delete createData.left;
+        delete createData.top;
+        compatibilityWindow = await chrome.windows.create(createData);
+    }
+    const createdWindowId = Number(compatibilityWindow?.id);
+    floatingCompatibilityWindowId =
+        Number.isInteger(createdWindowId) && createdWindowId >= 0 ? createdWindowId : null;
+    await notifyFloatingPanelPinState(true, targetTabId);
+    updateFloatingPanelButton(true);
+    showStatus(
+        '已打开独立阅读窗口。当前浏览器缺少跨软件置顶能力；升级到支持 Document Picture-in-Picture 的新版 Chrome/Edge 后可真正置顶。',
+        'warning'
+    );
+    return compatibilityWindow;
+}
+
+function requestSystemFloatingPanelWindow(options, timeoutMs = 4500) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error, pipWindow = null) => {
+            if (settled) {
+                if (pipWindow && !pipWindow.closed) pipWindow.close();
+                return;
+            }
+            settled = true;
+            clearTimeout(timeoutId);
+            if (error) reject(error);
+            else resolve(pipWindow);
+        };
+        const timeoutId = setTimeout(() => {
+            finish(new Error('浏览器未能及时创建系统置顶窗口'));
+        }, Math.max(1000, Number(timeoutMs) || 4500));
+        Promise.resolve()
+            .then(() => documentPictureInPicture.requestWindow(options))
+            .then(pipWindow => finish(null, pipWindow))
+            .catch(error => finish(error));
+    });
+}
+
 async function openFloatingSidePanel() {
     const button = document.getElementById('toggleFloatingSidePanel');
-    if (floatingPanelEmbedded) {
+    if (floatingPanelDetached) {
         await notifyFloatingPanelPinState(false, floatingPanelTargetTabId);
         window.top.close();
+        return;
+    }
+    if (floatingCompatibilityWindowId !== null &&
+        Number.isInteger(Number(floatingCompatibilityWindowId))) {
+        await closeFloatingCompatibilityWindow();
+        updateFloatingPanelButton(false);
+        await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
         return;
     }
     const existing = globalThis.documentPictureInPicture?.window || floatingPanelWindow;
@@ -1000,25 +1102,26 @@ async function openFloatingSidePanel() {
         existing.close();
         return;
     }
-    if (!globalThis.documentPictureInPicture?.requestWindow) {
-        throw new Error('当前浏览器版本不支持悬浮置顶侧栏');
-    }
     if (button) {
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
     }
+    const targetTab = activePanelTabContext.tabId !== null
+        ? { id: activePanelTabContext.tabId } : await queryPanelTargetTab();
     try {
+        if (!globalThis.documentPictureInPicture?.requestWindow) {
+            await openFloatingCompatibilityWindow(targetTab?.id);
+            return;
+        }
         const requestedHeight = Math.max(
             FLOATING_PANEL_MIN_HEIGHT,
             Math.min(960, Math.round((screen.availHeight || 960) - 56))
         );
-        const pipWindow = await documentPictureInPicture.requestWindow({
+        const pipWindow = await requestSystemFloatingPanelWindow({
             width: FLOATING_PANEL_DEFAULT_WIDTH,
             height: requestedHeight
         });
         floatingPanelWindow = pipWindow;
-        const targetTab = activePanelTabContext.tabId !== null
-            ? { id: activePanelTabContext.tabId } : await queryPanelTargetTab();
         pipWindow.addEventListener('pagehide', () => {
             floatingPanelWindow = null;
             updateFloatingPanelButton(false);
@@ -1040,8 +1143,12 @@ async function openFloatingSidePanel() {
         if (floatingPanelWindow && !floatingPanelWindow.closed) floatingPanelWindow.close();
         floatingPanelWindow = null;
         updateFloatingPanelButton(false);
-        await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
-        throw error;
+        try {
+            await openFloatingCompatibilityWindow(targetTab?.id, error);
+        } catch (fallbackError) {
+            await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
+            throw fallbackError;
+        }
     } finally {
         if (button) {
             button.disabled = false;
@@ -1053,12 +1160,16 @@ async function openFloatingSidePanel() {
 function setupFloatingSidePanelControls() {
     const button = document.getElementById('toggleFloatingSidePanel');
     if (!button) return;
-    document.body.dataset.displayMode = floatingPanelEmbedded ? 'pip' : 'side-panel';
+    document.body.dataset.displayMode = floatingPanelEmbedded
+        ? 'pip' : floatingPanelCompatibility ? 'window' : 'side-panel';
     updateFloatingPanelButton(false);
-    if (!floatingPanelEmbedded && !globalThis.documentPictureInPicture?.requestWindow) {
-        button.disabled = true;
-        button.title = '当前浏览器版本不支持悬浮置顶侧栏';
-        return;
+    if (!floatingPanelDetached && chrome.windows?.onRemoved) {
+        chrome.windows.onRemoved.addListener(windowId => {
+            if (Number(windowId) !== Number(floatingCompatibilityWindowId)) return;
+            floatingCompatibilityWindowId = null;
+            updateFloatingPanelButton(false);
+            void notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
+        });
     }
     button.addEventListener('click', () => {
         void openFloatingSidePanel().catch(error => {

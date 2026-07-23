@@ -516,46 +516,122 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     ...nestedFigureJumpQa,
     cleanup: true
   };
+  const systemFloatingSupported = await sidePanel.evaluate(() =>
+    typeof documentPictureInPicture?.requestWindow === 'function');
+  const automaticCompatibilityPagePromise = context.waitForEvent(
+    'page', { timeout: 12000 }
+  ).catch(() => null);
+  let compatibilityPage = null;
+  let compatibilityCreation = null;
+  let floatingCompatibilityQa = null;
+  let floatingPanelQa;
+  let systemFloatingOpened = false;
   await sidePanel.locator('#toggleFloatingSidePanel').click();
-  await sidePanel.waitForFunction(() => {
-    const pipWindow = documentPictureInPicture?.window;
-    const frame = pipWindow?.document.querySelector('iframe');
-    return Boolean(frame?.contentDocument?.getElementById('sidePanelApp'));
-  });
-  await sidePanel.waitForFunction(() => {
-    const pipWindow = documentPictureInPicture?.window;
-    const framePin = pipWindow?.document.querySelector('iframe')?.contentDocument
-      ?.getElementById('toggleFloatingSidePanel');
-    const sourcePin = document.getElementById('toggleFloatingSidePanel');
-    return framePin?.getAttribute('aria-pressed') === 'true' &&
-      sourcePin?.getAttribute('aria-pressed') === 'true';
-  });
-  await sidePanel.waitForFunction(() =>
-    documentPictureInPicture?.window?.document.querySelector('iframe')?.contentDocument
-      ?.getElementById('sidePanelPaperTitle')?.textContent === 'OA mechanism review test');
-  const floatingPanelQa = await sidePanel.evaluate(() => {
-    const pipWindow = documentPictureInPicture.window;
-    const frame = pipWindow.document.querySelector('iframe');
-    const resetEdge = pipWindow.document.querySelector('.floating-panel-width-reset-edge');
-    resetEdge?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    const frameUrl = new URL(frame?.src || location.href);
-    return {
-      supported: typeof documentPictureInPicture?.requestWindow === 'function',
-      title: pipWindow.document.title,
-      defaultWidth: pipWindow.document.body.dataset.defaultWidth || '',
-      resetRequested: Boolean(pipWindow.document.body.dataset.widthResetRequested),
-      requestedWidth: pipWindow.document.body.dataset.requestedWidth || '',
-      embeddedMode: frameUrl.searchParams.get('displayMode'),
-      targetTabId: frameUrl.searchParams.get('targetTabId'),
-      frameTitle: frame?.contentDocument?.title || '',
-      framePinPressed:
-        frame?.contentDocument?.getElementById('toggleFloatingSidePanel')
-          ?.getAttribute('aria-pressed') || '',
+  if (systemFloatingSupported) {
+    systemFloatingOpened = await sidePanel.waitForFunction(() => {
+      const pipWindow = documentPictureInPicture?.window;
+      const frame = pipWindow?.document.querySelector('iframe');
+      return Boolean(frame?.contentDocument?.getElementById('sidePanelApp'));
+    }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+  }
+  if (systemFloatingOpened) {
+    await sidePanel.waitForFunction(() => {
+      const pipWindow = documentPictureInPicture?.window;
+      const framePin = pipWindow?.document.querySelector('iframe')?.contentDocument
+        ?.getElementById('toggleFloatingSidePanel');
+      const sourcePin = document.getElementById('toggleFloatingSidePanel');
+      return framePin?.getAttribute('aria-pressed') === 'true' &&
+        sourcePin?.getAttribute('aria-pressed') === 'true';
+    });
+    await sidePanel.waitForFunction(() =>
+      documentPictureInPicture?.window?.document.querySelector('iframe')?.contentDocument
+        ?.getElementById('sidePanelPaperTitle')?.textContent === 'OA mechanism review test');
+    floatingPanelQa = await sidePanel.evaluate(() => {
+      const pipWindow = documentPictureInPicture.window;
+      const frame = pipWindow.document.querySelector('iframe');
+      const resetEdge = pipWindow.document.querySelector('.floating-panel-width-reset-edge');
+      resetEdge?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      const frameUrl = new URL(frame?.src || location.href);
+      return {
+        supported: true,
+        title: pipWindow.document.title,
+        defaultWidth: pipWindow.document.body.dataset.defaultWidth || '',
+        resetRequested: Boolean(pipWindow.document.body.dataset.widthResetRequested),
+        requestedWidth: pipWindow.document.body.dataset.requestedWidth || '',
+        embeddedMode: frameUrl.searchParams.get('displayMode'),
+        targetTabId: frameUrl.searchParams.get('targetTabId'),
+        frameTitle: frame?.contentDocument?.title || '',
+        framePinPressed:
+          frame?.contentDocument?.getElementById('toggleFloatingSidePanel')
+            ?.getAttribute('aria-pressed') || '',
+        sourcePinPressed:
+          document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || '',
+        openStatus: document.getElementById('statusMessage')?.textContent || ''
+      };
+    });
+  } else {
+    compatibilityPage = await automaticCompatibilityPagePromise;
+    if (!compatibilityPage) {
+      const sourceDebug = await sidePanel.evaluate(() => ({
+        status: document.getElementById('statusMessage')?.textContent || '',
+        pressed:
+          document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || '',
+        busy:
+          document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-busy') || '',
+        disabled: document.getElementById('toggleFloatingSidePanel')?.disabled === true,
+        pipWindow: Boolean(documentPictureInPicture?.window),
+        compatibilityWindowId:
+          floatingCompatibilityWindowId !== null &&
+          Number.isInteger(Number(floatingCompatibilityWindowId))
+            ? Number(floatingCompatibilityWindowId) : null
+      }));
+      const windowDebug = await worker.evaluate(async () =>
+        (await chrome.windows.getAll({ populate: true })).map(item => ({
+          id: item.id,
+          type: item.type,
+          tabs: (item.tabs || []).map(tab => tab.url)
+        }))
+      );
+      throw new Error(`Floating window missing: ${JSON.stringify({
+        sourceDebug,
+        windowDebug,
+        pageUrls: context.pages().map(item => item.url())
+      })}`);
+    }
+    await compatibilityPage.waitForLoadState('domcontentloaded');
+    await compatibilityPage.waitForFunction(() =>
+      document.getElementById('sidePanelApp') &&
+      document.body.dataset.displayMode === 'window' &&
+      document.getElementById('sidePanelPaperTitle')?.textContent === 'OA mechanism review test'
+    );
+    compatibilityCreation = await compatibilityPage.evaluate(async () => {
+      const current = await chrome.windows.getCurrent();
+      return { id: current?.id ?? null, type: current?.type || '' };
+    });
+    floatingCompatibilityQa = await compatibilityPage.evaluate(() => ({
+      displayMode: document.body.dataset.displayMode || '',
+      targetTabId: new URL(location.href).searchParams.get('targetTabId'),
+      title: document.title,
+      pinPressed:
+        document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || ''
+    }));
+    floatingPanelQa = await sidePanel.evaluate(() => ({
+      supported: false,
+      apiSupported:
+        typeof documentPictureInPicture?.requestWindow === 'function',
+      title: '',
+      defaultWidth: '',
+      resetRequested: false,
+      requestedWidth: '',
+      embeddedMode: '',
+      targetTabId: '',
+      frameTitle: '',
+      framePinPressed: '',
       sourcePinPressed:
         document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || '',
       openStatus: document.getElementById('statusMessage')?.textContent || ''
-    };
-  });
+    }));
+  }
   const floatingAway = await context.newPage();
   await floatingAway.route('https://example.org/pinned-away', route => route.fulfill({
     status: 200,
@@ -578,15 +654,24 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       return options;
     }, floatingAwayTab.id)
     : null;
-  const floatingSwitchQa = await sidePanel.evaluate(() => {
-    const pipWindow = documentPictureInPicture?.window;
-    const frame = pipWindow?.document.querySelector('iframe');
-    return {
-      remainsOpen: Boolean(pipWindow && !pipWindow.closed),
-      targetTabId: new URL(frame?.src || location.href).searchParams.get('targetTabId'),
-      paperTitle: frame?.contentDocument?.getElementById('sidePanelPaperTitle')?.textContent || ''
+  const floatingSwitchQa = systemFloatingOpened
+    ? await sidePanel.evaluate(() => {
+      const pipWindow = documentPictureInPicture?.window;
+      const frame = pipWindow?.document.querySelector('iframe');
+      return {
+        remainsOpen: Boolean(pipWindow && !pipWindow.closed),
+        targetTabId: new URL(frame?.src || location.href).searchParams.get('targetTabId'),
+        paperTitle:
+          frame?.contentDocument?.getElementById('sidePanelPaperTitle')?.textContent || ''
+      };
+    })
+    : {
+      remainsOpen: Boolean(compatibilityPage && !compatibilityPage.isClosed()),
+      targetTabId: await compatibilityPage.evaluate(() =>
+        new URL(location.href).searchParams.get('targetTabId')),
+      paperTitle: await compatibilityPage.evaluate(() =>
+        document.getElementById('sidePanelPaperTitle')?.textContent || '')
     };
-  });
   Object.assign(floatingPanelQa, {
     awayTabEnabledWhilePinned: floatingAwayOptions?.enabled === true,
     remainsOpenAfterTabSwitch: floatingSwitchQa.remainsOpen,
@@ -595,9 +680,46 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   });
   await fixture.bringToFront();
   await floatingAway.close();
-  await sidePanel.evaluate(() => documentPictureInPicture.window?.close());
+  if (systemFloatingOpened) {
+    await sidePanel.evaluate(() => documentPictureInPicture.window?.close());
+    await sidePanel.waitForFunction(() =>
+      document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') === 'false');
+    const compatibilityPagePromise = context.waitForEvent('page');
+    const compatibilityCreationPromise = sidePanel.evaluate(async tabId => {
+      const created = await openFloatingCompatibilityWindow(tabId);
+      return {
+        id: created?.id ?? null,
+        type: created?.type || ''
+      };
+    }, fixtureTab.id);
+    compatibilityPage = await compatibilityPagePromise;
+    compatibilityCreation = await compatibilityCreationPromise;
+    await compatibilityPage.waitForLoadState('domcontentloaded');
+    await compatibilityPage.waitForFunction(() =>
+      document.getElementById('sidePanelApp') &&
+      document.body.dataset.displayMode === 'window' &&
+      document.getElementById('sidePanelPaperTitle')?.textContent === 'OA mechanism review test'
+    );
+    floatingCompatibilityQa = await compatibilityPage.evaluate(() => ({
+      displayMode: document.body.dataset.displayMode || '',
+      targetTabId: new URL(location.href).searchParams.get('targetTabId'),
+      title: document.title,
+      pinPressed:
+        document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') || ''
+    }));
+  }
+  await compatibilityPage.locator('#toggleFloatingSidePanel').click();
+  await compatibilityPage.waitForEvent('close');
   await sidePanel.waitForFunction(() =>
     document.getElementById('toggleFloatingSidePanel')?.getAttribute('aria-pressed') === 'false');
+  Object.assign(floatingPanelQa, {
+    compatibilityCreated: Number.isInteger(compatibilityCreation?.id),
+    compatibilityType: compatibilityCreation?.type || '',
+    compatibilityMode: floatingCompatibilityQa.displayMode,
+    compatibilityTargetTabId: floatingCompatibilityQa.targetTabId,
+    compatibilityTitle: floatingCompatibilityQa.title,
+    compatibilityPinPressed: floatingCompatibilityQa.pinPressed
+  });
   await sidePanel.locator('[data-workspace-target="figures"]').click();
   await sidePanel.waitForFunction(() =>
     document.querySelector('[data-workspace-view="figures"]')?.hidden === false
@@ -988,7 +1110,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
+      '2.4.6-build39-publisher-focus-r6', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -1059,7 +1181,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
+      '2.4.6-build39-publisher-focus-r6', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -1124,7 +1246,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.5-build39-structured-panels-r5', null, { timeout: 5000 }
+      '2.4.6-build39-publisher-focus-r6', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -1145,7 +1267,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '2.4.5-build39-structured-panels-r5'),
+        '2.4.6-build39-publisher-focus-r6'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -5296,9 +5418,29 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     consoleErrors,
     pageErrors
   };
+  const systemFloatingPassed = !floatingPanelQa.supported || (
+    floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
+    floatingPanelQa.defaultWidth === '780' &&
+    floatingPanelQa.resetRequested &&
+    floatingPanelQa.requestedWidth === '780' &&
+    floatingPanelQa.embeddedMode === 'pip' &&
+    floatingPanelQa.targetTabId === String(fixtureTab.id) &&
+    floatingPanelQa.frameTitle === 'SCI论文阅读助手' &&
+    floatingPanelQa.framePinPressed === 'true' &&
+    /悬浮置顶阅读助手已打开/.test(floatingPanelQa.openStatus)
+  );
+  const compatibilityFloatingPassed =
+    floatingPanelQa.compatibilityCreated &&
+    floatingPanelQa.compatibilityType === 'popup' &&
+    floatingPanelQa.compatibilityMode === 'window' &&
+    floatingPanelQa.compatibilityTargetTabId === String(fixtureTab.id) &&
+    floatingPanelQa.compatibilityTitle === 'SCI论文阅读助手' &&
+    floatingPanelQa.compatibilityPinPressed === 'true' &&
+    (floatingPanelQa.supported ||
+      /已打开独立阅读窗口/.test(floatingPanelQa.openStatus));
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '2.4.5-build39-structured-panels-r5' &&
+    afterActivationRevision === '2.4.6-build39-publisher-focus-r6' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === false &&
     activated.viewCount === 5 &&
@@ -5336,21 +5478,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.nestedFigureIsolationQa.figure90Focused &&
     !results.nestedFigureIsolationQa.figure91Focused &&
     results.nestedFigureIsolationQa.cleanup &&
-    floatingPanelQa.supported &&
-    floatingPanelQa.title === 'SCI论文阅读助手 · 悬浮置顶' &&
-    floatingPanelQa.defaultWidth === '780' &&
-    floatingPanelQa.resetRequested &&
-    floatingPanelQa.requestedWidth === '780' &&
-    floatingPanelQa.embeddedMode === 'pip' &&
-    floatingPanelQa.targetTabId === String(fixtureTab.id) &&
-    floatingPanelQa.frameTitle === 'SCI论文阅读助手' &&
-    floatingPanelQa.framePinPressed === 'true' &&
+    systemFloatingPassed &&
     floatingPanelQa.sourcePinPressed === 'true' &&
-    /悬浮置顶阅读助手已打开/.test(floatingPanelQa.openStatus) &&
     floatingPanelQa.awayTabEnabledWhilePinned &&
     floatingPanelQa.remainsOpenAfterTabSwitch &&
     floatingPanelQa.targetStableAfterTabSwitch &&
     floatingPanelQa.paperStableAfterTabSwitch &&
+    compatibilityFloatingPassed &&
     results.globalToolbarFeedbackQa.saveFailure.figureViewActive &&
     results.globalToolbarFeedbackQa.saveFailure.visible &&
     /\u5c1a\u672a\u8bbe\u7f6e\u672c\u5730\u4fdd\u5b58\u6587\u4ef6\u5939/.test(
@@ -5365,7 +5499,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === false &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '2.4.5-build39-structured-panels-r5' &&
+    multiTab.secondActivatedRevision === '2.4.6-build39-publisher-focus-r6' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.

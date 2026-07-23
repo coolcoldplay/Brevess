@@ -1381,7 +1381,7 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.5-build39-structured-panels-r5');
+  assert.equal(response.error.runtimeRevision, '2.4.6-build39-publisher-focus-r6');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);

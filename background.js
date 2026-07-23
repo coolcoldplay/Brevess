@@ -478,7 +478,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({
       success: true,
       data: {
-        version: '2.4.5',
+        version: '2.4.6',
         categoryIds: Object.keys(SciLLM.createAdaptiveCategoryCatalog()),
         providerReady: true,
         adaptiveReadingReady: true
