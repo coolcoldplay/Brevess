@@ -7,6 +7,8 @@ output/
 qa-artifacts/
 发布/
 *.zip
+native-host/bin/*.blob
+native-host/bin/*.exe
 *.crx
 *.sha256.txt
 
@@ -15,6 +17,7 @@ qa-artifacts/
 .superpowers/
 playwright-report/
 test-results/
+tmp/
 
 # Coverage and logs
 coverage/

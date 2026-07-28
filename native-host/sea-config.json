@@ -1,0 +1,7 @@
+{
+  "main": "native-host/host.js",
+  "output": "native-host/bin/sci-reader-codex-host.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": true
+}

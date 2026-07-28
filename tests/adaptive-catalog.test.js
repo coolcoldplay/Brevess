@@ -26,7 +26,8 @@ test('defines a review synthesis view with grounded synthesis categories', () =>
   assert.deepEqual(READING_VIEWS.review_synthesis.categoryIds, [
     'review_scope_thesis', 'evidence_consensus', 'conflicting_evidence',
     'heterogeneity_source', 'evidence_quality_certainty', 'integrative_framework',
-    'author_synthesis', 'knowledge_gap', 'limitation', 'future'
+    'author_synthesis', 'knowledge_gap', 'evidence', 'conclusion',
+    'limitation', 'future'
   ]);
   const catalog = createAdaptiveCategoryCatalog();
   for (const id of READING_VIEWS.review_synthesis.categoryIds) assert.ok(catalog[id]);
@@ -86,6 +87,24 @@ test('composes primary plus at most four secondary overlays and manual changes',
   assert.ok(result.sources.filter(item => item.source === 'secondary_type').length <= 4);
 });
 
+test('permanently deleted built-ins stay out of default, overlay, and manual composition', () => {
+  const result = composeReadingView({
+    viewId: 'mechanism_chain',
+    studyProfile: {
+      primaryType: 'basic_mechanistic',
+      secondaryType: 'preclinical_translational',
+      confidence: 0.92
+    },
+    override: { add: ['limitation', 'causality'], remove: [] },
+    deletedBuiltInCategoryIds: ['limitation', 'causality']
+  });
+  assert.equal(result.categoryIds.includes('limitation'), false);
+  assert.equal(result.categoryIds.includes('causality'), false);
+  assert.equal(result.categories.some(category =>
+    ['limitation', 'causality'].includes(category.categoryId)
+  ), false);
+});
+
 test('low-confidence generic profile does not load type overlays', () => {
   const result = composeReadingView({
     viewId: 'quick_story',
@@ -111,6 +130,9 @@ test('keeps quick story compact instead of importing unrelated type categories',
     override: { add: [], remove: [] }
   });
   assert.deepEqual(result.categoryIds, READING_VIEWS.quick_story.categoryIds);
+  assert.ok(result.categoryIds.includes('method'));
+  assert.ok(result.categoryIds.includes('result'));
+  assert.ok(result.categoryIds.includes('interpretation'));
 });
 
 test('treats prospective hypotheses as a hard negative for novelty', () => {

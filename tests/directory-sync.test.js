@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 require('../core/user-data-database.js');
 const {
   createWorkspaceManifest,
+  createWorkspaceIndex,
   validateWorkspaceIndex
 } = require('../core/article-workspace.js');
 const {
@@ -24,6 +25,7 @@ function createFakeHandleStore(initialPermission = 'granted') {
   let requestedPermission = 'granted';
   let permissionRequests = 0;
   let failWrites = 0;
+  let failWriteName = '';
   let pausePath = '';
   let releasePausedWrite;
   let pausedWriteEntered;
@@ -51,7 +53,9 @@ function createFakeHandleStore(initialPermission = 'granted') {
           async close() {
             if (failWrites > 0) {
               failWrites -= 1;
-              throw new Error(`simulated write failure ${'x'.repeat(400)}`);
+              const error = new Error(`simulated write failure ${'x'.repeat(400)}`);
+              if (failWriteName) error.name = failWriteName;
+              throw error;
             }
             if (path === pausePath) {
               pausedWriteEntered();
@@ -119,6 +123,10 @@ function createFakeHandleStore(initialPermission = 'granted') {
     setRequestedPermission(value) { requestedPermission = value; },
     get permissionRequests() { return permissionRequests; },
     failNextWrites(count = 1) { failWrites = count; },
+    failNextWritesAs(name, count = 1) {
+      failWriteName = String(name || '');
+      failWrites = count;
+    },
     pauseNextWrite(path) { pausePath = path; },
     async waitForPausedWrite() { await pausedEntered; },
     releasePausedWrite() { releasePausedWrite?.(); },
@@ -182,6 +190,119 @@ function workspaceFixture(overrides = {}) {
 function json(revision, extra = {}) {
   return { schemaVersion: 1, revision, ...extra };
 }
+
+test('serializes concurrent workspace assets so the manifest retains every chat file', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  await Promise.all([
+    sync.enqueueWorkspaceAsset(workspace, 'chat/index.json', { turns: [] }, {
+      revision: 1, workspaceGeneration: 1
+    }),
+    sync.enqueueWorkspaceAsset(workspace, 'chat/turns/turn-1.json', {
+      turnId: 'turn-1', question: 'First'
+    }, { revision: 1, workspaceGeneration: 1 }),
+    sync.enqueueWorkspaceAsset(workspace, 'chat/turns/turn-2.json', {
+      turnId: 'turn-2', question: 'Second'
+    }, { revision: 1, workspaceGeneration: 1 })
+  ]);
+  await sync.flush();
+  const manifest = JSON.parse(handles.readText(
+    `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`
+  ));
+  assert.deepEqual(manifest.assets.map(asset => asset.path).sort(), [
+    'chat/index.json',
+    'chat/turns/turn-1.json',
+    'chat/turns/turn-2.json'
+  ]);
+});
+
+test('discovers valid chat turn files omitted by an older workspace manifest', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  await sync.enqueueWorkspaceAsset(workspace, 'chat/index.json', { turns: [] }, {
+    revision: 1, workspaceGeneration: 1
+  });
+  await sync.flush();
+  const manifest = JSON.parse(handles.readText(
+    `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`
+  ));
+  const relativePath = 'chat/turns/turn-orphan.json';
+  handles.writeText(
+    `SCI-Highlighter/workspaces/${workspace.directoryName}/${relativePath}`,
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'sci-logic-highlighter-workspace-asset',
+      revision: 3,
+      updatedAt: '2026-07-23T00:00:00.000Z',
+      contentHash: 'orphan-hash',
+      sourceId: 'extension',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath,
+      data: { turnId: 'turn-orphan', question: 'Recovered question', sequence: 1 }
+    })
+  );
+
+  const discovered = await sync.listWorkspaceChatAssets(manifest);
+  assert.equal(discovered.invalidAssets, 0);
+  assert.deepEqual(discovered.assets.map(asset => asset.relativePath), [
+    'chat/index.json', relativePath
+  ]);
+  assert.equal(discovered.assets[1].content.turnId, 'turn-orphan');
+});
+
+test('recovers only post-manifest chat writes from an older workspace generation', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture({ workspaceGeneration: 2 });
+  const manifest = createWorkspaceManifest({
+    ...workspace,
+    createdAt: '2026-07-24T00:00:00.000Z',
+    updatedAt: '2026-07-24T01:00:00.000Z'
+  }, []);
+  const root = `SCI-Highlighter/workspaces/${workspace.directoryName}`;
+  const writeTurn = (turnId, updatedAt) => {
+    const relativePath = `chat/turns/${turnId}.json`;
+    handles.writeText(`${root}/${relativePath}`, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'sci-logic-highlighter-workspace-asset',
+      revision: 7,
+      updatedAt,
+      contentHash: `${turnId}-hash`,
+      sourceId: 'extension',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath,
+      data: {
+        turnId,
+        question: `${turnId} question`,
+        sequence: turnId === 'turn-live' ? 2 : 1,
+        updatedAt
+      }
+    }));
+  };
+  writeTurn('turn-stale', '2026-07-24T00:30:00.000Z');
+  writeTurn('turn-live', '2026-07-24T02:00:00.000Z');
+
+  const discovered = await sync.listWorkspaceChatAssets(manifest);
+
+  assert.equal(discovered.invalidAssets, 1);
+  assert.equal(discovered.recoveredGenerationMismatches, 1);
+  assert.deepEqual(discovered.assets.map(asset => asset.content.turnId), ['turn-live']);
+  assert.equal(discovered.assets[0].sourceWorkspaceGeneration, 1);
+  assert.equal(discovered.assets[0].recoveredGenerationMismatch, true);
+});
 
 test('reads exactly one requested JSON asset without enumerating or loading the index', async () => {
   const handles = createFakeHandleStore();
@@ -347,6 +468,78 @@ test('serializes concurrent flushes and recovers after a failed write', async ()
   const recovered = await sync.flush();
   assert.equal(recovered.written, 1);
   assert.equal((await sync.status()).pendingCount, 0);
+});
+
+test('retries transient OneDrive-style write locks before reporting a failure', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  await sync.enqueueJson('categories.json', json(1));
+  handles.failNextWritesAs('OperationError', 2);
+
+  const result = await sync.flush();
+
+  assert.equal(result.failed, 0);
+  assert.equal(result.written, 1);
+  assert.equal((await sync.status()).pendingCount, 0);
+});
+
+test('reports permission failures as reauthorization without dropping queued writes', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  await sync.enqueueJson('categories.json', json(1));
+  handles.failNextWritesAs('NotAllowedError', 1);
+
+  const result = await sync.flush();
+  const status = await sync.status();
+
+  assert.equal(result.failed, 1);
+  assert.equal(result.requiresReauthorization, true);
+  assert.equal(result.errorName, 'NotAllowedError');
+  assert.equal(result.pendingCount, 1);
+  assert.equal(status.requiresReauthorization, true);
+  assert.equal(status.lastErrorName, 'NotAllowedError');
+});
+
+test('a post-restore workspace save advances beyond a newer disk envelope revision', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const workspace = workspaceFixture({ workspaceGeneration: 2 });
+  const relativePath = 'chat/index.json';
+  const root = `SCI-Highlighter/workspaces/${workspace.directoryName}`;
+  handles.writeText(`${root}/${relativePath}`, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace-asset',
+    revision: 5000,
+    updatedAt: '2026-07-24T02:00:00.000Z',
+    contentHash: 'old-hash',
+    sourceId: 'extension',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 2,
+    relativePath,
+    data: { turns: [{ turnId: 'old-turn' }], totalTurns: 1 }
+  }));
+
+  const queued = await sync.enqueueWorkspaceAsset(
+    workspace,
+    relativePath,
+    { turns: [{ turnId: 'old-turn' }, { turnId: 'new-turn' }], totalTurns: 2 },
+    { revision: 2, workspaceGeneration: 2, advanceFromDirectory: true }
+  );
+  const result = await sync.flush();
+  const saved = JSON.parse(handles.readText(`${root}/${relativePath}`));
+
+  assert.equal(queued.revision, 5001);
+  assert.equal(result.failed, 0);
+  assert.equal(result.pendingCount, 0);
+  assert.equal(saved.revision, 5001);
+  assert.equal(saved.data.totalTurns, 2);
 });
 
 test('does not overwrite a malformed existing index during flush', async () => {
@@ -618,16 +811,16 @@ test('IndexedDB handle and coalescing queue adapters survive service-worker recr
   assert.equal(pending.length, 1);
   assert.equal(pending[0].revision, 2);
   assert.equal(USER_DATA_DATABASE_NAME, 'sci-logic-highlighter-user-data');
-  assert.equal(USER_DATA_DATABASE_VERSION, 3);
+  assert.equal(USER_DATA_DATABASE_VERSION, 4);
   assert.equal(DIRECTORY_HANDLE_STORE_NAME, 'directoryHandles');
   assert.equal(SYNC_QUEUE_STORE_NAME, 'syncQueue');
-  assert.ok(fake.openCalls.every(call => call.version === 3));
+  assert.ok(fake.openCalls.every(call => call.version === 4));
   ['documents', 'meta', 'directoryHandles', 'syncQueue', 'workspaces',
-    'workspaceAssets', 'workspaceTurns', 'workspaceTombstones']
+    'workspaceAssets', 'workspaceTurns', 'workspaceTombstones', 'figureImages']
     .forEach(name => assert.equal(fake.stores.has(name), true));
 });
 
-test('v1 document data survives the v3 upgrade in both adapter opening orders', async () => {
+test('v1 document data survives the v4 upgrade in both adapter opening orders', async () => {
   const legacyRecord = {
     schemaVersion: 1,
     documentId: 'sha256:legacy',
@@ -662,9 +855,9 @@ test('v1 document data survives the v3 upgrade in both adapter opening orders', 
 
     assert.equal(fake.stores.get('documents').get('sha256:legacy').title, 'Legacy document');
     assert.equal(fake.stores.get('meta').get('legacy-meta').value, 'preserve-me');
-    assert.ok(fake.openCalls.every(call => call.version === 3));
+    assert.ok(fake.openCalls.every(call => call.version === 4));
     ['documents', 'meta', 'directoryHandles', 'syncQueue', 'workspaces',
-      'workspaceAssets', 'workspaceTurns', 'workspaceTombstones']
+      'workspaceAssets', 'workspaceTurns', 'workspaceTombstones', 'figureImages']
       .forEach(name => assert.equal(fake.stores.has(name), true));
   }
 });
@@ -696,6 +889,56 @@ test('queues nested workspace assets before manifest and central index while per
   const loaded = await sync.readWorkspaceAsset(workspace, 'figures/figure-1/panel-questions/q-1.json');
   assert.equal(loaded.found, true);
   assert.equal(loaded.value.data.answer, 'Signal increased.');
+});
+
+test('merges a newer on-disk workspace index with a stale queued index without losing either workspace', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = workspaceFixture();
+  const second = workspaceFixture({
+    workspaceId: `workspace:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/second',
+    aliases: [{ type: 'doi', value: '10.1000/second' }],
+    title: 'Second paper',
+    directoryName: `Second paper--${'b'.repeat(16)}`,
+    revision: '2'.repeat(64),
+    contentHash: '2'.repeat(64)
+  });
+
+  await sync.enqueueWorkspaceAsset(first, 'chat/index.json', { turns: [] }, {
+    revision: 1, workspaceGeneration: 1
+  });
+  await sync.flush();
+  await sync.enqueueWorkspaceAsset(first, 'chat/turns/turn-2.json', {
+    turnId: 'turn-2', question: 'Queued after the first flush'
+  }, { revision: 2, workspaceGeneration: 1 });
+
+  const secondManifest = createWorkspaceManifest(second);
+  handles.writeText(
+    `SCI-Highlighter/workspaces/${second.directoryName}/manifest.json`,
+    `${JSON.stringify(secondManifest)}\n`
+  );
+  const diskIndex = createWorkspaceIndex([
+    createWorkspaceManifest(first),
+    secondManifest
+  ], { revision: 50, updatedAt: '2026-07-28T12:00:00.000Z' });
+  handles.writeText(
+    'SCI-Highlighter/workspace-index.json',
+    `${JSON.stringify(diskIndex)}\n`
+  );
+
+  const flushed = await sync.flush();
+  assert.equal(flushed.failed, 0);
+  assert.equal(flushed.pendingCount, 0);
+  const merged = validateWorkspaceIndex(JSON.parse(
+    handles.readText('SCI-Highlighter/workspace-index.json')
+  ));
+  assert.equal(merged.revision, 51);
+  assert.deepEqual(merged.workspaces.map(item => item.workspaceId), [
+    first.workspaceId,
+    second.workspaceId
+  ]);
 });
 
 test('rebuilds a workspace index from manifests, quarantines malformed data, and matches exact identity only', async () => {

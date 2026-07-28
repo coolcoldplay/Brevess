@@ -15,7 +15,8 @@
     ['causality', '因果关系', '明确声明因素导致、介导、促进、抑制或解释另一结果', '#FFD700'],
     ['emphasis', '强调重要性', '作者明确标记某项发现为重要、显著、意外或核心', '#FF8C00'],
     ['evidence', '提供证据', '明确以数据、图表、分析或既有研究支持当前论点', '#20B2AA'],
-    ['interpretation', '结果解释', '解释研究结果的意义、机制、影响或可能原因', '#9370DB']
+    ['interpretation', '结果解释', '解释研究结果的意义、机制、影响或可能原因', '#9370DB'],
+    ['semantic_match', '智能检索匹配', '与用户自然语言检索意图直接相关的原文证据', '#2F80ED']
   ];
 
   const MAX_REGEX_RULES = 64;
@@ -25,47 +26,71 @@
 
   const BUILT_IN_REGEX = Object.freeze({
     hypothesis: Object.freeze({
-      phrases: Object.freeze([
-        'we hypothesize', 'we hypothesized', 'it is hypothesized', 'we propose',
-        'we postulate', 'we assume', 'we predict', 'our hypothesis', 'the hypothesis',
-        'it can be hypothesized', 'we speculate', 'presumably', 'supposedly',
-        'it is conceivable that', 'it is plausible that'
-      ]),
-      expressions: Object.freeze([])
+      phrases: Object.freeze([]),
+      expressions: Object.freeze([
+        '\\bwe hypothesi[sz](?:e|ed) that\\b',
+        '\\b(?:we|the authors?) (?:propose|postulate|predict|speculate) that\\b',
+        '\\bit (?:is|was|can be) hypothesi[sz]ed that\\b',
+        '\\b(?:our|the) hypothesis (?:is|was) that\\b',
+        '\\b(?:test|tested|evaluate|evaluated) the hypothesis that\\b',
+        '\\bit is (?:conceivable|plausible) that\\b'
+      ])
     }),
     objective: Object.freeze({
       phrases: Object.freeze([
-        'the aim', 'the objective', 'the purpose', 'the goal', 'this study aims',
-        'we aim to', 'aimed at', 'in order to', 'to investigate', 'to explore',
-        'to examine', 'to determine', 'to assess', 'to evaluate', 'to analyze',
-        'to identify', 'to clarify', 'to elucidate', 'the present study', 'this work'
+        'this study aims', 'this study aimed', 'we aim to', 'we aimed to',
+        'we sought to'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '^(?:we )?(?:aim|seek|sought) to\\b',
+        '^(?:here,?\\s+)?to (?:investigate|explore|examine|determine|assess|evaluate|analy[sz]e|identify|clarify|elucidate)\\b',
+        '^to (?:address|test|quantify|characterize|characterise)\\b',
+        '\\bwe (?:next|then|therefore|thus) (?:aimed|sought) to\\b',
+        '\\b(?:in this (?:study|work)|here),?\\s+we (?:investigate|explore|examine|determine|assess|evaluate|analy[sz]e|identify|clarify|elucidate|test)\\b',
+        '\\b(?:the|our) (?:primary |main )?(?:aim|objective|purpose|goal) of (?:this|the present|our) (?:study|work|analysis|investigation) (?:is|was) to\\b',
+        '^(?:objective|aim|purpose):'
+      ])
     }),
     method: Object.freeze({
       phrases: Object.freeze([
         'we performed', 'we conducted', 'we used', 'we employed', 'we applied',
-        'was performed', 'was conducted', 'was carried out', 'by means of',
-        'the method', 'the procedure', 'the protocol'
+        'we analyzed', 'we analysed', 'we measured', 'we assessed',
+        'we evaluated', 'we collected', 'we recruited'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '\\b(?:analysis|assay|assessment|experiment|measurement|procedure|protocol|sequencing|staining|test(?:ing)?) (?:was|were) (?:performed|conducted|carried out)\\b',
+        '\\b(?:samples?|participants?|patients?|mice|cells?|data) (?:was|were) (?:collected|obtained|analy[sz]ed|measured|assessed|evaluated|randomi[sz]ed)\\b',
+        '\\b(?:using|applying|employing|leveraging) [^.;,\\r\\n]{1,80},\\s+(?:we|the authors?) (?:find|found|show|showed|identify|identified|detect|detected|observe|observed|measure|measured|estimate|estimated)\\b',
+        '^(?:methods?|design|design, setting, and participants|design and participants|setting|participants|interventions?|exposures?|main outcomes and measures):'
+      ])
     }),
     result: Object.freeze({
       phrases: Object.freeze([
         'we found', 'we observed', 'the results show', 'the results indicate',
         'the results suggest', 'the results demonstrate', 'our findings', 'this result',
-        'these results', 'it was found', 'revealed that',
-        'demonstrated that'
+        'these results', 'our results', 'we revealed', 'we demonstrated',
+        'we show that', 'we showed that', 'we report that',
+        'we find', 'we identify', 'we identified', 'we detect', 'we detected',
+        'we discovered', 'we report'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '\\b(?:our|the present|this) (?:study|analysis|data|results?|findings?) (?:show(?:s|ed)?|indicate(?:s|d)?|suggest(?:s|ed)?|demonstrate(?:s|d)?|reveal(?:s|ed)?) that\\b',
+        '\\bour (?:data|results?|findings?) (?:show(?:s|ed)?|demonstrate(?:s|d)?|reveal(?:s|ed)?)\\b',
+        '^(?:results?|findings?):'
+      ])
     }),
     conclusion: Object.freeze({
       phrases: Object.freeze([
         'in conclusion', 'in summary', 'to summarize', 'to conclude', 'taken together',
-        'collectively', 'overall', 'in general', 'we conclude', 'we demonstrate',
-        'these findings suggest', 'these results indicate', 'this study demonstrates'
+        'we conclude', 'we concluded'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '^(?:collectively|overall),?\\s+(?:our|these|the present|this study)\\b',
+        '^together,?\\s+(?:our|these|the present|this study)\\b',
+        '\\b(?:taken together|based on (?:these|our) (?:results|findings)),?\\s+(?:we|these|our|this)\\b',
+        '^(?:our|these) findings (?:support|underscore|highlight)\\b',
+        '^(?:conclusions?|conclusions and relevance):'
+      ])
     }),
     comparison: Object.freeze({
       phrases: Object.freeze([
@@ -77,19 +102,39 @@
     }),
     limitation: Object.freeze({
       phrases: Object.freeze([
-        'limitation', 'limited by', 'caveat', 'shortcoming', 'weakness', 'disadvantage',
-        'drawback', 'constraint', 'it should be noted', 'one limitation', 'a limitation',
-        'however, it is important to note'
+        'our study has several limitations', 'our study had several limitations',
+        'this study has several limitations', 'this study had several limitations',
+        'there are several limitations in our current study',
+        'there are several limitations in our study',
+        'there are several limitations to this study',
+        'there are still some limitations in our study',
+        'there are certain limitations on this study',
+        'there are several important limitations to this study'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '\\b(?:a|one|another) (?:main |major |primary |key |important )?limitation of (?:this|the present|our) (?:study|work|analysis|approach)\\b',
+        '\\bthe (?:main |major |primary |key |important )?limitation of (?:this|the present|our) (?:study|work|analysis|approach)\\b',
+        '\\b(?:this|our|the present|the current) study (?:still )?(?:has|had) (?:some |several |certain |important |three |four )?limitations?\\b',
+        '\\bseveral limitations were noted in (?:this|our|the present|the current) study\\b',
+        '\\bthis is (?:a|one) limitation of (?:this|our|the present) study\\b',
+        '\\b(?:this|the present|our) (?:study|work|analysis|approach) (?:is|was|may be) limited by\\b',
+        '\\bwe (?:acknowledge|recognize|recognise) (?:one |two |three |four |several |some |the following )?limitations?\\b',
+        '^(?:limitations?):'
+      ])
     }),
     future: Object.freeze({
       phrases: Object.freeze([
-        'future studies', 'future research',
-        'future work', 'further investigation', 'further research', 'remains to be',
-        'warrant', 'additional studies', 'follow-up', 'going forward', 'in the future'
+        'remains to be determined', 'remains to be investigated',
+        'remains to be established', 'remains to be clarified'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '\\b(?:future|further|additional) (?:studies|research|work|investigations?) (?:is|are|will be|would be|may be|should be|must be) (?:needed|required|necessary|warranted)\\b',
+        '\\b(?:future|further) (?:studies|research|work) (?:should|must|will need to|could|may)\\b',
+        '\\b(?:these|our|the present) (?:findings|results|study) warrant(?:s|ed)? (?:further|additional|future) (?:study|studies|research|investigation)\\b',
+        '\\b(?:warrant(?:s|ed)?|require(?:s|d)?) further (?:study|studies|research|investigation|exploration|validation)\\b',
+        '\\b(?:needs?|needed|requires?|required) to be further (?:investigated|studied|validated|explored|examined|clarified)\\b',
+        '\\bin the future,?\\s+(?:we|future studies?) (?:will|should|plan to)\\b'
+      ])
     }),
     causality: Object.freeze({
       phrases: Object.freeze([
@@ -102,7 +147,7 @@
     emphasis: Object.freeze({
       phrases: Object.freeze([
         'importantly', 'notably', 'remarkably', 'strikingly',
-        'particularly', 'especially', 'crucially', 'critically', 'it is important',
+        'crucially', 'it is important',
         'it is noteworthy', 'of note', 'of particular interest', 'most importantly',
         'more importantly'
       ]),
@@ -112,9 +157,14 @@
       phrases: Object.freeze([
         'evidence suggests', 'evidence indicates', 'studies have shown',
         'research has shown', 'it has been reported', 'previous studies', 'prior research',
-        'literature suggests', 'corroborating'
+        'literature suggests', 'we present evidence', 'provide evidence',
+        'provides evidence', 'provided evidence', 'strong evidence',
+        'direct evidence'
       ]),
-      expressions: Object.freeze([])
+      expressions: Object.freeze([
+        '\\bevidence (?:of|for|that)\\b',
+        '\\bcorroborat(?:e|es|ed|ing) (?:the |our |these |earlier |previous )?(?:evidence|data|findings|results)\\b'
+      ])
     }),
     interpretation: Object.freeze({
       phrases: Object.freeze([
@@ -123,6 +173,10 @@
         'can be explained by', 'is consistent with', 'is in line with',
         'supports the notion', 'supports the view'
       ]),
+      expressions: Object.freeze([])
+    }),
+    semantic_match: Object.freeze({
+      phrases: Object.freeze([]),
       expressions: Object.freeze([])
     })
   });
@@ -199,6 +253,12 @@
       excludeWhen: ['只报告直接结果、研究目的或无解释的结论复述'],
       positiveExamples: ['This suggests that neuronal activity selectively enhances C1q deposition.'],
       negativeExamples: ['C1q deposition increased in the ipsilateral hemisphere.']
+    },
+    semantic_match: {
+      includeWhen: ['原文直接回答或明确支持用户当前输入的自然语言检索意图'],
+      excludeWhen: ['仅有词面相似但语义无关，或者只能依靠外部知识推断'],
+      positiveExamples: ['The exact original sentence that directly matches the user request.'],
+      negativeExamples: ['A sentence sharing one keyword but addressing a different scientific question.']
     }
   };
 
@@ -223,6 +283,7 @@
         minimumConfidence: 0.8,
         claimMode: 'explicit',
         relationRequired: categoryId === 'causality',
+        enabledEngines: categoryId === 'semantic_match' ? ['llm'] : ['llm', 'regex'],
         color,
         version: 3,
         persistence: 'saved',
@@ -340,9 +401,11 @@
       ? category.patterns.map(String) : null;
     const builtInRegex = BUILT_IN_REGEX[category.categoryId];
     let defaultPhrases = [];
+    let defaultExcludePhrases = [];
     let defaultExpressions = [];
     if (hasExplicitRegex) {
       defaultPhrases = copyArray(sourceRegex.phrases);
+      defaultExcludePhrases = copyArray(sourceRegex.excludePhrases);
       defaultExpressions = copyArray(sourceRegex.expressions);
     } else if (legacyPatterns) {
       if (category.isRegex === true) defaultExpressions = legacyPatterns;
@@ -383,6 +446,7 @@
     const regex = {
       ...sourceRegex,
       phrases: defaultPhrases,
+      excludePhrases: defaultExcludePhrases,
       expressions: defaultExpressions,
       caseSensitive: typeof sourceRegex.caseSensitive === 'boolean'
         ? sourceRegex.caseSensitive : false,
@@ -456,6 +520,9 @@
       ? source.regex : {};
     const regex = { ...regexSource };
     if (own(regexSource, 'phrases')) regex.phrases = copyArray(regexSource.phrases);
+    if (own(regexSource, 'excludePhrases')) {
+      regex.excludePhrases = copyArray(regexSource.excludePhrases);
+    }
     if (own(regexSource, 'expressions')) {
       regex.expressions = copyArray(regexSource.expressions);
     }
@@ -914,6 +981,21 @@
           }
         });
       });
+      if (regex.excludePhrases !== undefined) {
+        if (!Array.isArray(regex.excludePhrases)) {
+          errors.push('regex.excludePhrases');
+        } else {
+          if (regex.excludePhrases.length > MAX_REGEX_RULES) {
+            errors.push('regex.excludePhrases');
+          }
+          regex.excludePhrases.forEach((value, index) => {
+            const path = `regex.excludePhrases.${index}`;
+            if (typeof value !== 'string' || value.length > MAX_REGEX_LENGTH) {
+              errors.push(path);
+            }
+          });
+        }
+      }
       if (typeof regex.caseSensitive !== 'boolean') errors.push('regex.caseSensitive');
       if (typeof regex.wholeWord !== 'boolean') errors.push('regex.wholeWord');
     }

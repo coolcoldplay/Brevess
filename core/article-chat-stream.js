@@ -217,6 +217,9 @@
     const evidence = (Array.isArray(value?.evidence) ? value.evidence : [])
       .slice(0, 24).map(item => normalizeAnswerEvidence(item, snapshot));
     const evidenceMarkers = new Set(evidence.map(item => item.marker));
+    if (evidenceMarkers.size !== evidence.length) {
+      throw invalidStreamResponse('Article chat evidence markers must be unique inside a block');
+    }
     const markdownMarkers = new Set(
       [...markdown.matchAll(/\[\[(\d{1,3})\]\]/g)].map(match => match[1])
     );

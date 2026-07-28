@@ -141,21 +141,25 @@
       elapsedMs: boundedUsageNumber(value.elapsedMs),
       finishReason: String(value.finishReason || '').slice(0, 80),
       inputTokens: boundedUsageNumber(
-        usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount
+        usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount ??
+        usage.inputTokens
       ),
       outputTokens: boundedUsageNumber(
-        usage.output_tokens ?? usage.completion_tokens ?? usage.candidatesTokenCount
+        usage.output_tokens ?? usage.completion_tokens ?? usage.candidatesTokenCount ??
+        usage.outputTokens
       ),
       reasoningTokens: boundedUsageNumber(
         usage.output_tokens_details?.reasoning_tokens ??
         usage.completion_tokens_details?.reasoning_tokens ??
-        usage.thoughtsTokenCount
+        usage.thoughtsTokenCount ?? usage.reasoningTokens ?? usage.reasoningOutputTokens
       ),
       cacheHitTokens: boundedUsageNumber(
-        usage.prompt_cache_hit_tokens ?? usage.cache_read_input_tokens
+        usage.prompt_cache_hit_tokens ?? usage.cache_read_input_tokens ??
+        usage.cacheHitTokens ?? usage.cachedInputTokens
       ),
       cacheMissTokens: boundedUsageNumber(usage.prompt_cache_miss_tokens)
     };
+    event.estimated = value.estimated === true;
     try { request.onProviderTelemetry(event); } catch {
       // Telemetry must never affect provider handling.
     }

@@ -3,24 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>识别规则与模型设置 - SCI论文逻辑助手</title>
+  <title>Brevess 设置</title>
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="#categoryWorkspace" aria-label="SCI论文逻辑助手设置首页">
-        <span class="brand-mark" aria-hidden="true">SL</span>
-        <span><strong>SCI 逻辑助手</strong><small>识别规则与模型设置</small></span>
+      <a class="brand" href="#categoryWorkspace" aria-label="Brevess 设置首页">
+        <img class="brand-mark" src="icons/icon128.png" alt="">
+        <span><strong>Brevess</strong><small>Brevity · Evidence · Essence</small></span>
       </a>
       <nav class="page-nav" aria-label="设置页面导航">
-        <a href="#categoryWorkspace">类别规则</a>
-        <a href="#providerSettings">模型设置</a>
-        <a href="#localData">本地数据</a>
-        <a href="#openSource">开源</a>
-        <a href="#support">反馈</a>
+        <button type="button" data-settings-nav="categories" aria-selected="true">类别规则</button>
+        <button type="button" data-settings-nav="modes" aria-selected="false">分析模式</button>
+        <button type="button" data-settings-nav="models" aria-selected="false">模型与分析</button>
+        <button type="button" data-settings-nav="shortcuts" aria-selected="false">快捷键</button>
+        <button type="button" data-settings-nav="data" aria-selected="false">本地数据</button>
+        <button type="button" data-settings-nav="about" aria-selected="false">关于与反馈</button>
       </nav>
+      <label class="language-switcher" for="globalLanguage">
+        <span class="sr-only">设置界面语言</span>
+        <select id="globalLanguage" aria-label="设置界面语言">
+          <option value="zh-CN">中文</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <a class="sr-only" href="#keyboardShortcuts">快捷键设置兼容入口</a>
       <button id="reopenOnboarding" class="button quiet compact-button onboarding-reopen" type="button">新手引导</button>
       <span id="effectiveMode" class="mode-badge">当前：正则模式</span>
     </div>
@@ -29,9 +38,9 @@
   <main class="settings-shell">
     <header class="page-header">
       <div>
-        <p class="eyebrow">Evidence Lens · 规则工作区</p>
-        <h1>让每一种证据都有清楚的判定边界</h1>
-        <p class="subtitle">逐个查看和编辑给 AI 的提示词与离线正则规则。修改只保存在本机，内置类别可随时恢复。</p>
+        <p id="settingsPageEyebrow" class="eyebrow">Evidence Lens · 规则工作区</p>
+        <h1 id="settingsPageTitle">让每一种证据都有清楚的判定边界</h1>
+        <p id="settingsPageSubtitle" class="subtitle">逐个查看和编辑给 AI 的提示词与离线正则规则。修改只保存在本机，内置类别可随时恢复。</p>
       </div>
     </header>
 
@@ -54,14 +63,19 @@
       </div>
     </section>
 
-    <section id="categoryWorkspace" class="category-workspace" aria-label="类别规则工作区">
+    <section id="categoryWorkspace" class="category-workspace" data-settings-page="categories"
+      aria-label="类别规则工作区">
       <aside class="category-rail" aria-label="识别类别">
         <div class="rail-heading">
           <div>
             <p class="section-kicker">全部类别</p>
             <h2>识别目录</h2>
           </div>
-          <span id="categoryCount" class="rail-count">0</span>
+          <div class="rail-heading-actions">
+            <span id="categoryCount" class="rail-count">0</span>
+            <button id="addCustomCategory" class="rail-add-button" type="button"
+              aria-label="新增类别规则" title="新增类别规则">＋</button>
+          </div>
         </div>
         <label class="search-field">
           <span class="sr-only">搜索类别名称或 ID</span>
@@ -78,11 +92,23 @@
               <div class="inspector-title-line">
                 <h2 id="categoryInspectorTitle" tabindex="-1">选择一个类别</h2>
                 <span id="categoryOverrideBadge" class="override-badge">内置规则</span>
+                <button id="deleteSelectedCategory" class="category-title-delete" type="button"
+                  disabled><i class="ph ph-trash" aria-hidden="true"></i>永久删除</button>
               </div>
               <p id="categoryInspectorId" class="category-id">—</p>
             </div>
           </div>
-          <p class="inspector-note">自动识别显示为粗下划线；用户手动标注使用荧光笔高亮。</p>
+          <div class="inspector-note-actions">
+            <p class="inspector-note">自动识别显示为粗下划线；用户手动标注使用荧光笔高亮。</p>
+            <div class="section-heading-actions">
+              <button id="exportCategoryModule" class="button quiet compact-button"
+                type="button" disabled>导出本类别</button>
+              <label class="button secondary compact-button">
+                导入到本类别
+                <input id="importCategoryModule" type="file" accept="application/json,.json" hidden>
+              </label>
+            </div>
+          </div>
         </header>
 
         <div class="identity-grid">
@@ -163,12 +189,16 @@
         <section id="categoryRegexPanel" class="editor-panel" role="tabpanel" aria-labelledby="categoryRegexTab" hidden>
           <div class="form-grid two-columns">
             <label class="field">
-              <span>固定短语（每行一条）</span>
+              <span>白名单固定短语（匹配即高亮，每行一条）</span>
               <textarea id="categoryRegexPhrases" data-category-field rows="9" spellcheck="false"></textarea>
             </label>
             <label class="field">
               <span>正则表达式（每行一条）</span>
               <textarea id="categoryRegexExpressions" data-category-field rows="9" spellcheck="false"></textarea>
+            </label>
+            <label class="field full-width">
+              <span>黑名单固定短语（匹配即排除，每行一条）</span>
+              <textarea id="categoryRegexExcludePhrases" data-category-field rows="5" spellcheck="false"></textarea>
             </label>
           </div>
           <div class="regex-options">
@@ -198,7 +228,51 @@
       </section>
     </section>
 
-    <section id="providerSettings" class="settings-panel" aria-labelledby="providerHeading">
+    <section id="analysisModeSettings" class="settings-panel analysis-mode-settings"
+      data-settings-page="modes" aria-labelledby="analysisModeSettingsHeading" hidden>
+      <div class="settings-panel-heading">
+        <div>
+          <p class="section-kicker">Analysis Modes · 分析组合</p>
+          <h2 id="analysisModeSettingsHeading">自定义每一种论文分析模式</h2>
+          <p>每个模式直接从全局类别目录勾选规则；侧栏不再要求选择论文类型。</p>
+        </div>
+        <div class="section-heading-actions">
+          <button id="addAnalysisMode" class="button secondary" type="button">新增模式</button>
+          <button id="resetAnalysisModes" class="button quiet" type="button">恢复内置模式</button>
+        </div>
+      </div>
+      <div class="analysis-mode-layout">
+        <aside class="analysis-mode-rail" aria-label="分析模式列表">
+          <div id="analysisModeList" class="analysis-mode-list" role="listbox"></div>
+        </aside>
+        <section class="analysis-mode-editor" aria-label="编辑分析模式">
+          <div class="form-grid two-columns">
+            <label class="field"><span>模式名称</span>
+              <input id="analysisModeName" type="text" maxlength="80">
+            </label>
+            <label class="field"><span>模式 ID</span>
+              <input id="analysisModeId" type="text" readonly>
+            </label>
+            <label class="field span-two"><span>说明</span>
+              <input id="analysisModeDescription" type="text" maxlength="240">
+            </label>
+          </div>
+          <div class="analysis-mode-category-heading">
+            <div><h3>参与分析的类别规则</h3><p>勾选项同时用于 LLM 分析；启用正则引擎的类别也可用于正则模式。</p></div>
+            <span id="analysisModeCategoryCount" class="rail-count">0</span>
+          </div>
+          <div id="analysisModeCategoryList" class="analysis-mode-category-list"></div>
+          <div class="settings-actions">
+            <button id="deleteAnalysisMode" class="button danger quiet" type="button">删除当前模式</button>
+            <button id="saveAnalysisModes" class="button primary" type="button">保存分析模式</button>
+          </div>
+          <div id="analysisModeStatus" class="status" role="status" aria-live="polite"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="providerSettings" class="settings-panel" data-settings-page="models"
+      aria-labelledby="providerHeading" hidden>
       <div class="settings-panel-heading">
         <div><p class="section-kicker">分析配置</p><h2 id="providerHeading">模型服务与分析方式</h2></div>
         <span id="credentialState" class="credential-state">尚未配置</span>
@@ -207,11 +281,12 @@
         <h3>分析方式</h3>
         <div class="form-grid two-columns">
           <label class="field">
-            <span>首选模式</span>
+            <span>正文高亮引擎</span>
             <select id="analysisMode">
               <option value="regex">正则模式（离线）</option>
               <option value="llm">LLM 精确模式</option>
             </select>
+            <small>这里只控制“亮文”的自动高亮方式；段落概述、解图和全文问答仍可独立使用已配置的模型。</small>
           </label>
           <label class="check-field">
             <input id="autoAnalyze" type="checkbox">
@@ -228,7 +303,7 @@
           </aside>
           <div class="api-profile-editor">
             <div class="profile-editor-heading">
-              <label class="field"><span>配置名称</span><input id="profileName" type="text" autocomplete="off" placeholder="例如：主力模型"></label>
+              <label class="field"><span>配置名称</span><input id="profileName" type="text" autocomplete="off" placeholder="例如：主力模型"><small>输入后按 Enter 或移开焦点即可单独保存名称。</small></label>
               <div class="profile-editor-actions"><button id="duplicateApiProfile" class="button quiet compact-button" type="button">复制</button><button id="deleteApiProfile" class="button quiet compact-button" type="button">删除</button></div>
             </div>
             <fieldset class="token-policy-fieldset">
@@ -243,12 +318,24 @@
             </fieldset>
             <div class="profile-connection-fields">
               <div class="form-grid two-columns">
-                <label class="field"><span>Provider</span><select id="providerId"></select></label>
-                <label class="field"><span>模型名称</span><input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID"><datalist id="modelSuggestions"></datalist><small>可从候选项选择，也可直接输入服务商支持的任意模型 ID。</small></label>
-                <label class="field"><span>API Key</span><input id="apiKey" type="password" autocomplete="new-password" placeholder="粘贴 API Key"><small>Key 仅保存在本机扩展存储中；保存后不会再次回显。</small></label>
+                <label class="field"><span>Provider</span><select id="providerId"></select><small>国内服务商已独立列出；“自定义兼容接口”用于其他 OpenAI 兼容服务。</small></label>
+                <div class="field model-discovery-field">
+                  <span>模型名称</span>
+                  <div class="model-discovery-row">
+                    <input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID">
+                    <select id="modelSuggestionsSelect" aria-label="选择联网获取的模型"
+                      title="选择联网获取的模型">
+                      <option value="">在线模型</option>
+                    </select>
+                    <button id="refreshModels" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>联网获取</button>
+                  </div>
+                  <datalist id="modelSuggestions"></datalist>
+                  <small id="modelDiscoveryStatus" role="status" aria-live="polite">选择 Provider 后会自动获取当前账号可用模型；仍可手动输入。</small>
+                </div>
+                <label id="apiKeyField" class="field"><span>API Key</span><input id="apiKey" type="password" autocomplete="new-password" placeholder="粘贴 API Key"><small>Key 仅保存在本机扩展存储中；保存后不会再次回显。</small></label>
               </div>
               <div id="compatibleFields" class="compatible-fields" hidden>
-                <label class="field"><span>国内模型预设</span><select id="compatiblePreset"></select><small id="compatiblePresetHint">选择后自动填入官方接口与默认模型；API Key 不会被修改。</small></label>
+                <label id="compatiblePresetField" class="field"><span>接口预设</span><select id="compatiblePreset"></select><small id="compatiblePresetHint">选择后自动填入服务地址与默认模型；API Key 不会被修改。</small></label>
                 <label class="field"><span>Base URL</span><input id="baseUrl" type="url" placeholder="https://gateway.example/v1"><small>仅允许 HTTPS；本机服务可使用 http://localhost 或 http://127.0.0.1。</small></label>
                 <div class="form-grid two-columns">
                   <label class="field"><span>鉴权请求头</span><input id="authHeader" type="text" value="Authorization"></label>
@@ -256,6 +343,37 @@
                 </div>
                 <label class="check-field compact"><input id="jsonMode" type="checkbox" checked><span>接口支持 <code>response_format: json_object</code></span></label>
                 <label class="check-field compact"><input id="supportsVision" type="checkbox"><span>该兼容模型支持图片输入（仅在服务商明确支持时开启）</span></label>
+              </div>
+              <div id="codexLocalFields" class="compatible-fields" hidden>
+                <p class="support-message"><strong>本机 Codex</strong> 使用插件专用的 Codex 登录空间，不读取桌面 Codex、CLI 或其他程序的令牌，也不会在插件中保存 API Key。请在这里单独登录一次，避免多个 Codex 进程争用刷新令牌。</p>
+                <div class="open-source-links codex-bridge-links">
+                  <a class="support-email" href="https://github.com/coolcoldplay/sci-logic-highlighter/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip" target="_blank" rel="noreferrer">下载 Windows 本机 Codex 桥（可选）</a>
+                  <a class="support-email" href="https://github.com/coolcoldplay/sci-logic-highlighter/blob/main/CODEX_LOCAL_SETUP.md" target="_blank" rel="noreferrer">查看安装说明</a>
+                </div>
+                <div class="codex-auth-card">
+                  <div>
+                    <strong>插件专用 Codex 会话</strong>
+                    <p id="codexAuthStatus" role="status" aria-live="polite">尚未检查登录状态</p>
+                  </div>
+                  <div class="codex-auth-actions">
+                    <button id="codexLogin" class="button secondary compact-button" type="button">登录 / 重新登录</button>
+                    <button id="codexRefreshStatus" class="button quiet compact-button" type="button">刷新状态</button>
+                    <button id="codexLogout" class="button quiet compact-button" type="button">退出插件会话</button>
+                  </div>
+                </div>
+                <p id="codexReverseChannelStatus" class="support-message">
+                  反向通道尚未检查。连接后，解图进度与结果会实时写入本机事件账本，供 Codex 按需读取。
+                </p>
+                <label class="field"><span>推理强度</span>
+                  <select id="codexReasoningEffort">
+                    <option value="auto">自动（沿用 Codex 设置）</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                    <option value="xhigh">极高</option>
+                  </select>
+                  <small>全文问答通常建议“自动”或“中”；更高强度可能增加等待时间。</small>
+                </label>
               </div>
             </div>
           </div>
@@ -267,24 +385,51 @@
           <label class="field"><span>全局默认 Profile</span><select id="globalProfileId"></select></label>
         </div>
         <div class="task-route-grid">
-          <label class="field"><span>正文高亮</span><select id="routeHighlight"></select></label>
-          <label class="field"><span>摘要总结</span><select id="routeSummary"></select></label>
-          <label class="field"><span>图注解读</span><select id="routeFigure"></select></label>
-          <label class="field"><span>跨图比较</span><select id="routeCrossFigure"></select></label>
+          <label class="field"><span>文段高亮（高亮匹配）</span><select id="routeHighlight"></select></label>
+          <label class="field"><span>段落概述</span><select id="routeSummary"></select></label>
+          <label class="field"><span>逐图解读</span><select id="routeFigure"></select></label>
+          <label class="field"><span>跨图串解</span><select id="routeCrossFigure"></select></label>
         </div>
         <p id="routeFigureWarning" class="support-message" role="status" hidden>图注任务最好选择支持视觉输入的模型。</p>
       </div>
+      <div class="settings-section chat-quick-prompt-settings">
+        <div class="section-heading">
+          <div>
+            <h3>全文问答快捷提示词</h3>
+            <p>在问答输入框键入“/”即可按名称插入；名称和提示词内容均可新增、修改或删除。</p>
+          </div>
+          <div class="section-heading-actions">
+            <button id="addArticleChatQuickPrompt" class="button secondary compact-button"
+              type="button">新增提示词</button>
+            <button id="resetArticleChatQuickPrompts" class="button quiet compact-button"
+              type="button">恢复默认</button>
+          </div>
+        </div>
+        <div id="articleChatQuickPromptList" class="named-prompt-list"></div>
+      </div>
       <div class="settings-section panel-followup-settings">
         <div class="section-heading">
-          <div><h3>Panel 追问提示词</h3><p>编辑四个内置追问选项发送给模型的指令；复选项名称保持不变。</p></div>
-          <button id="resetPanelFollowupPrompts" class="button quiet compact-button" type="button">恢复默认</button>
+          <div><h3>Panel 追问提示词</h3><p>追问选项的名称和提示词都可以新增、修改或删除；历史回答会按轮次折叠保留。</p></div>
+          <div class="section-heading-actions">
+            <button id="addPanelFollowupPreset" class="button secondary compact-button"
+              type="button">新增追问</button>
+            <button id="resetPanelFollowupPrompts" class="button quiet compact-button"
+              type="button">恢复默认</button>
+          </div>
         </div>
-        <div class="followup-prompt-grid">
-          <label class="field"><span>分组含义与设置</span><textarea id="panelPromptGrouping" rows="3" maxlength="1000"></textarea></label>
-          <label class="field"><span>实验技术原理</span><textarea id="panelPromptTechnique" rows="3" maxlength="1000"></textarea></label>
-          <label class="field"><span>横纵坐标含义与读图方法</span><textarea id="panelPromptAxes" rows="3" maxlength="1000"></textarea></label>
-          <label class="field"><span>实验所用样本信息</span><textarea id="panelPromptSamples" rows="3" maxlength="1000"></textarea></label>
+        <div id="panelFollowupPresetList" class="named-prompt-list"></div>
+      </div>
+      <div class="settings-section figure-original-settings">
+        <div class="section-heading">
+          <div>
+            <h3>Figure 高清原图</h3>
+            <p>原图打开后可持久缓存在浏览器本地，并按最近使用自动清理旧缓存。</p>
+          </div>
         </div>
+        <label class="check-field">
+          <input id="autoCacheFigureImages" type="checkbox" checked>
+          <span>自动缓存每张已加载的 Figure 高清原图（推荐，可显著加快再次打开和导出）</span>
+        </label>
       </div>
       <div class="settings-section privacy-section">
         <h3>正文发送许可</h3>
@@ -298,7 +443,29 @@
       <div id="status" class="status" role="status" aria-live="polite"></div>
     </section>
 
-    <section class="settings-panel custom-category-card" aria-labelledby="customCategoryHeading">
+    <section id="keyboardShortcuts" class="settings-panel keyboard-shortcuts-panel"
+      data-settings-page="shortcuts" aria-labelledby="keyboardShortcutsHeading" hidden>
+      <div class="settings-panel-heading">
+        <div>
+          <p class="section-kicker">键盘操作</p>
+          <h2 id="keyboardShortcutsHeading">快捷键自定义</h2>
+          <p>点击输入框后直接按一个字母或数字；Backspace/Delete 可停用。输入文字、编辑表单或打开高清原图时不会误触。</p>
+        </div>
+        <button id="resetKeyboardShortcuts" class="button quiet compact-button"
+          type="button">恢复默认</button>
+      </div>
+      <div id="keyboardShortcutGrid" class="keyboard-shortcut-grid"></div>
+      <div class="keyboard-shortcut-footer">
+        <p>快捷键不能重复；数字 1–9 保留用于跳转对应 Figure。</p>
+        <button id="saveKeyboardShortcuts" class="button primary" type="button">
+          <i class="ph ph-floppy-disk" aria-hidden="true"></i>保存快捷键
+        </button>
+      </div>
+      <div id="keyboardShortcutStatus" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section id="customCategoryCard" class="settings-panel custom-category-card"
+      data-settings-page="categories" aria-labelledby="customCategoryHeading">
       <div class="settings-panel-heading"><div><p class="section-kicker">扩展类别</p><h2 id="customCategoryHeading">新建自定义 LLM 类别</h2><p>先创建类别，再在上方工作区继续编辑完整提示词与正则规则。</p></div></div>
       <div class="form-grid two-columns">
         <label class="field"><span>类别名称</span><input id="customCategoryName" type="text" maxlength="80" placeholder="例如：临床转化意义"></label>
@@ -315,9 +482,19 @@
       </div>
       <div class="category-form-actions"><button id="saveCustomCategory" class="button secondary" type="button">添加识别类别</button></div>
       <div id="customCategoriesList" class="custom-categories-list" aria-live="polite"></div>
+      <section id="deletedBuiltInCategorySection" class="deleted-built-in-section"
+        aria-labelledby="deletedBuiltInCategoryHeading" hidden>
+        <div>
+          <h3 id="deletedBuiltInCategoryHeading">已永久删除的内置类别</h3>
+          <p>这些类别不会参与任何识别或标注。只有在这里主动恢复后才会重新出现。</p>
+        </div>
+        <div id="deletedBuiltInCategoriesList" class="deleted-built-in-list"
+          aria-live="polite"></div>
+      </section>
     </section>
 
-    <section id="localData" class="settings-panel local-data-panel" aria-labelledby="localDataHeading">
+    <section id="localData" class="settings-panel local-data-panel" data-settings-page="data"
+      aria-labelledby="localDataHeading" hidden>
       <div class="settings-panel-heading">
         <div>
           <p class="section-kicker">仅保存在本机</p>
@@ -396,7 +573,7 @@
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="migrationHeading">整机迁移</h3>
-              <p>导出模型配置、API Key、自定义请求头、阅读视图、分类提示词/正则、手动标注与反馈语料；在新浏览器导入后即可继续使用。</p>
+              <p>导出模型配置、API Key、自定义请求头、分析模式、分类提示词/正则、手动标注与反馈语料；在新浏览器导入后即可继续使用。</p>
             </div>
             <span class="credential-state">完整配置</span>
           </div>
@@ -420,7 +597,19 @@
           <div class="corpus-actions"><button id="exportCorpusJsonl" class="button secondary" type="button">导出 JSONL</button><button id="exportCorpusCsv" class="button secondary" type="button">导出 CSV</button><button id="distillRules" class="button secondary" type="button">生成离线规则</button></div>
         </section>
 
-        <section id="support" class="settings-section local-data-section support-contact" aria-labelledby="supportHeading">
+      </div>
+    </section>
+
+    <section id="aboutSettings" class="settings-panel about-settings-panel"
+      data-settings-page="about" aria-labelledby="aboutSettingsHeading" hidden>
+      <div class="settings-panel-heading">
+        <div>
+          <p class="section-kicker">项目信息</p>
+          <h2 id="aboutSettingsHeading">关于、开源与反馈</h2>
+          <p>许可证、源代码和问题反馈统一放在这里。</p>
+        </div>
+      </div>
+        <section id="support" class="settings-section support-contact" aria-labelledby="supportHeading">
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="supportHeading">问题反馈</h3>
@@ -430,7 +619,7 @@
           <a class="support-email" href="mailto:brevess0729@163.com">brevess0729@163.com</a>
         </section>
 
-        <section id="openSource" class="settings-section local-data-section open-source-notice" aria-labelledby="openSourceHeading">
+        <section id="openSource" class="settings-section open-source-notice" aria-labelledby="openSourceHeading">
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="openSourceHeading">自由软件与源代码</h3>
@@ -444,7 +633,6 @@
             <a class="support-email" href="THIRD_PARTY_NOTICES.md" target="_blank">第三方许可证与来源</a>
           </div>
         </section>
-      </div>
     </section>
   </main>
 
@@ -488,6 +676,8 @@
     </form>
   </dialog>
   <script src="core/migration-bundle.js"></script>
+  <script src="core/keyboard-shortcuts.js"></script>
+  <script src="core/i18n.js"></script>
   <script src="core/user-data-database.js"></script>
   <script src="core/directory-sync.js"></script>
   <script src="options.js"></script>

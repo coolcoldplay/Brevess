@@ -20,6 +20,69 @@ test('side panel exposes a fifth full-text chat workspace with per-turn model se
   assert.match(popup, /articleChatProfile.*addEventListener\('change'/s);
 });
 
+test('full-text chat can turn a natural-language intent into editable source highlights', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  const content = read('content.js');
+  const categories = read('core/category-store.js');
+  assert.match(html, /id="articleChatHighlightCategory"/);
+  assert.match(html, /id="highlightArticleChatMatches"/);
+  assert.match(popup, /function submitArticleSemanticHighlight/);
+  assert.match(popup, /action: 'highlightArticleMatchesWithLLM'/);
+  assert.match(content, /function createSemanticAnnotationsFromTurn/);
+  assert.match(content, /sourceType: 'semantic'/);
+  assert.match(content, /ensureAutomaticHighlightAnnotation/);
+  assert.match(categories, /semantic_match/);
+});
+
+test('chat supports color selection, outline-scoped @ context, and slash quick prompts', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  const content = read('content.js');
+  assert.match(html, /id="articleChatHighlightColor"[^>]*type="color"/);
+  assert.match(html, /id="articleChatContextScopes"/);
+  assert.match(html, /id="articleChatCommandMenu"[^>]*role="listbox"/);
+  assert.match(popup, /function articleChatOutlineScopes/);
+  assert.match(popup, /function articleChatQuickPrompts/);
+  assert.match(popup, /function articleChatInputTrigger/);
+  assert.match(popup, /trigger\.symbol === '@'/);
+  assert.match(popup, /trigger\.symbol === '@'[\s\S]*articleChatOutlineScopes/);
+  assert.match(popup, /articleChatContextScopePayload\(\)/);
+  assert.match(popup, /highlightColor/);
+  assert.match(content, /normalizeArticleChatContextScope/);
+  assert.match(content, /selectedSectionIds\.has\(String\(item\?\.sectionId/);
+  assert.match(content, /highlightCategoryName/);
+  assert.match(content, /categoryColor:\s*turn\.highlightColor/);
+});
+
+test('chat composer stacks send above the model and dismisses command menus', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  const css = read('popup.css');
+  assert.match(html, /class="article-chat-input-row"/);
+  assert.match(html, /class="article-chat-submit-controls"[\s\S]*id="sendArticleChat"[\s\S]*id="articleChatProfile"/);
+  assert.doesNotMatch(html, /Shift\+Enter|限定大纲章节|插入全局快捷提示词/);
+  assert.doesNotMatch(html, /<label[^>]*for="articleChatHighlightCategory"[^>]*>匹配类别<\/label>/);
+  assert.match(
+    css,
+    /\.article-chat-submit-controls\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/
+  );
+  assert.match(css, /\.article-chat-submit-controls \.btn\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /\.article-chat-highlight-row \.btn\s*\{[^}]*justify-content:\s*center/);
+  assert.match(popup, /event\.key === 'Escape'[\s\S]*closeArticleChatCommandMenu\(\)/);
+  assert.match(popup, /document\.addEventListener\('pointerdown'[\s\S]*closeArticleChatCommandMenu\(\)/);
+});
+
+test('outline-scoped chat commands include sections whose paragraphs live in descendants', () => {
+  const popup = read('popup.js');
+  const start = popup.indexOf('function articleChatOutlineScopes');
+  const end = popup.indexOf('function articleChatQuickPrompts', start);
+  const helper = popup.slice(start, end);
+  assert.match(helper, /node\?\.analysisSectionIds/);
+  assert.match(helper, /sectionIds\.includes\(String\(paragraph\?\.sectionId/);
+  assert.doesNotMatch(helper, /node\?\.paragraphCount\s*>\s*0/);
+});
+
 test('content sends canonical workspace paragraphs and persists only public chat state', () => {
   const content = read('content.js');
   const popup = read('popup.js');
@@ -72,6 +135,9 @@ test('full-text chat renders a scrollable multi-turn Markdown stream with paragr
   assert.match(popup, /article-chat-inline-citation/);
   assert.match(popup, /focusArticleChatCitation/);
   assert.match(popup, /inlineCitationCount/);
+  assert.match(popup, /citationNumberOffset/);
+  assert.match(popup, /dataset\.citationNumber/);
+  assert.match(popup, /\\d\{1,3\}/);
   assert.match(css, /\.article-chat-inline-citation/);
   assert.match(popup, /!event\.shiftKey && !event\.isComposing/);
   assert.match(css, /\.workspace-chat-view\s*\{[^}]*overflow:\s*hidden/);
@@ -87,6 +153,7 @@ test('article chat citations are verified, inline, and expose visible jump failu
   const citationEnd = popup.indexOf('function appendArticleChatInlineMarkdown', citationStart);
   const citationWorkflow = popup.slice(citationStart, citationEnd);
   assert.match(citationWorkflow, /SciLLM\.verifyArticleChatEvidence/);
+  assert.match(citationWorkflow, /dataset\.citationNumber/);
   assert.doesNotMatch(citationWorkflow, /paragraphs\.find[\s\S]*candidateTitle === sectionTitle/);
   assert.match(citationWorkflow, /documentRevision/);
   assert.match(citationWorkflow, /citationResult/);
@@ -148,6 +215,8 @@ test('side panel can explicitly save all current workspace artifacts to the loca
   assert.match(popup, /async function saveCurrentArticleWorkspace\(/);
   assert.match(popup, /action:\s*'saveArticleWorkspaceNow'/);
   assert.match(popup, /type:\s*'USER_DATA_SYNC_NOW'/);
+  assert.match(popup, /drain:\s*true/);
+  assert.match(popup, /directorySyncFailureMessage\(syncResult\)/);
   assert.match(content, /request\.action === 'saveArticleWorkspaceNow'/);
   assert.match(content, /persistArticleWorkspaceArtifacts\(\{ force: true \}\)/);
   assert.match(content, /persistWorkspaceTurnCheckpoint\(turn, \{[\s\S]{0,100}append: false,[\s\S]{0,100}force: true/);
@@ -176,7 +245,9 @@ test('workspace autosave checkpoints complete chat blocks and keeps interrupted 
   assert.match(content, /type:\s*'ARTICLE_WORKSPACE_ENSURE'/);
   assert.match(content, /function persistWorkspaceAssetCheckpoint/);
   assert.match(content, /chat\/turns\//);
-  assert.match(content, /phase === 'chat_answer_block'[\s\S]{0,900}persistWorkspaceTurnCheckpoint/);
+  assert.match(content, /phase === 'chat_answer_block'[\s\S]{0,900}persistArticleChatCheckpoint/);
+  assert.match(content,
+    /async function persistArticleChatCheckpoint[\s\S]{0,700}chat\/index\.json/);
   assert.match(content, /status:\s*turn\.status === 'generating'\s*\?\s*'interrupted'/);
   const restoreStart = content.indexOf('async function applyArticleWorkspaceAssets');
   assert.ok(restoreStart >= 0);
@@ -233,7 +304,8 @@ test('side panel pages large chat histories without limiting persisted history',
   assert.match(content, /articleChatState\.turns\.slice\(windowStart\)/);
   assert.match(content, /function buildArticleWorkspaceSnapshot\(\{ forceRefresh = false, chatLimit = 0 \} = \{\}\)/);
   assert.match(content, /chat:\s*getPublicArticleChatState\(\{ limit: chatLimit \}\)/);
-  assert.match(content, /persistWorkspaceAssetCheckpoint\('chat\/index\.json', getPublicArticleChatState\(\)\)/);
+  assert.match(content,
+    /async function persistArticleChatCheckpoint[\s\S]{0,700}getPublicArticleChatState\(\)/);
   assert.match(popup, /chatLimit:\s*Math\.max\(articleChatHistoryPageSize, articleChatVisibleTurnCount\)/);
   assert.match(popup, /async function loadEarlierArticleChatHistory\(\)/);
   assert.match(popup, /const snapshot = await refreshArticleWorkspace\(\)/);

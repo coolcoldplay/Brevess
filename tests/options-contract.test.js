@@ -19,6 +19,16 @@ test('registers an LLM settings page with private credential controls', () => {
   assert.match(html, /id="testProvider"/);
 });
 
+test('settings header uses the Brevess logo and brand line', () => {
+  const html = read('options.html');
+  const styles = read('options.css');
+  assert.match(html, /class="brand-mark" src="icons\/icon128\.png"/);
+  assert.match(html, /<strong>Brevess<\/strong>/);
+  assert.match(html, /Brevity · Evidence · Essence/);
+  assert.match(styles, /\.brand-mark\s*\{[^}]*object-fit:\s*contain/s);
+  assert.doesNotMatch(html, /class="brand-mark"[^>]*>SL</);
+});
+
 test('exposes named API profiles, token policy, and task routing controls', () => {
   const html = read('options.html');
   const script = read('options.js');
@@ -53,16 +63,59 @@ test('settings load the unified IndexedDB schema before directory persistence', 
   assert.ok(directory < application, 'directory sync must load before settings behavior');
 });
 
-test('settings expose four editable Panel follow-up prompts and restore defaults', () => {
+test('settings expose full CRUD for named Panel follow-up presets', () => {
   const html = read('options.html');
   const script = read('options.js');
   [
-    'panelPromptGrouping', 'panelPromptTechnique', 'panelPromptAxes',
-    'panelPromptSamples', 'resetPanelFollowupPrompts'
+    'panelFollowupPresetList', 'addPanelFollowupPreset', 'resetPanelFollowupPrompts'
   ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
-  assert.match(script, /function collectPanelFollowupPrompts\(/);
-  assert.match(script, /function renderPanelFollowupPrompts\(/);
+  assert.match(script, /function collectPanelFollowupPresets\(/);
+  assert.match(script, /function renderPanelFollowupPresets\(/);
+  assert.match(script, /dataDeletePanelPreset|deletePanelPreset|deletePanelPreset/i);
+  assert.match(script, /figurePanelFollowupPresets/);
   assert.match(script, /figurePanelFollowupPrompts/);
+});
+
+test('settings manage custom analysis modes, chat prompts, module transfer, and language', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  [
+    'analysisModeSettings', 'analysisModeList', 'analysisModeCategoryList',
+    'addAnalysisMode', 'deleteAnalysisMode', 'saveAnalysisModes',
+    'articleChatQuickPromptList', 'addArticleChatQuickPrompt',
+    'exportCategoryModule', 'importCategoryModule', 'globalLanguage'
+  ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
+  assert.match(html, /data-settings-nav="modes"/);
+  assert.match(html, /core\/i18n\.js/);
+  assert.match(script, /function saveAnalysisModes\(/);
+  assert.match(script, /function collectArticleChatQuickPrompts\(/);
+  assert.match(script, /function exportCategoryModule\(/);
+  assert.match(script, /function importCategoryModule\(/);
+  assert.match(script, /schema:\s*'sci-category-module'/);
+  assert.match(script, /preferences:\s*\{\s*language\s*\}/);
+});
+
+test('Panel follow-up history is rendered in reachable expanded prior rounds', () => {
+  const popup = read('popup.js');
+  const css = read('popup.css');
+  const helperStart = popup.indexOf('function appendPanelFollowupHistory(');
+  const controlStart = popup.indexOf('function createPanelFollowupControl(', helperStart);
+  const editableStart = popup.indexOf('function isEditableKeyboardTarget(', controlStart);
+  const helper = popup.slice(helperStart, controlStart);
+  const control = popup.slice(controlStart, editableStart);
+  const editableEnd = popup.indexOf('\nfunction ', editableStart + 1);
+  const editable = popup.slice(editableStart, editableEnd);
+  assert.ok(helperStart >= 0 && controlStart > helperStart);
+  assert.match(helper, /panelFollowupHistories/);
+  assert.match(helper, /document\.createElement\('details'\)/);
+  assert.match(helper, /details\.open = true/);
+  assert.match(helper, /历史追问/);
+  assert.match(helper, /priorHistory/);
+  assert.match(helper, /workspace-panel-followup-history-round/);
+  assert.match(control, /appendPanelFollowupHistory\(root, figure, panelId, answer\)/);
+  assert.doesNotMatch(editable, /panelFollowupHistories|priorHistory/);
+  assert.match(css, /\.workspace-panel-followup-history/);
+  assert.match(css, /\.workspace-panel-followup-history-round/);
 });
 
 test('route renderer trusts normalized state routes and does not restore stale UI selections', () => {
@@ -107,6 +160,58 @@ test('profile save snapshots auto-analysis before async state re-rendering', () 
   assert.equal((persist.match(/document\.getElementById\('autoAnalyze'\)\.checked/g) || []).length, 1);
 });
 
+test('settings expose and persist default-on Figure original caching', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  assert.match(html, /id="autoCacheFigureImages"[^>]*checked/);
+  assert.match(
+    script,
+    /autoCacheFigureImages:\s*document\.getElementById\('autoCacheFigureImages'\)\.checked/
+  );
+  assert.match(
+    script,
+    /state\.settings\?\.autoCacheFigureImages !== false/
+  );
+});
+
+test('settings expose a validated customizable keyboard shortcut workspace', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  assert.match(html, /href="#keyboardShortcuts"/);
+  assert.match(html, /id="keyboardShortcuts"/);
+  assert.match(html, /id="keyboardShortcutGrid"/);
+  assert.match(html, /id="saveKeyboardShortcuts"/);
+  assert.match(html, /id="resetKeyboardShortcuts"/);
+  assert.match(html, /core\/keyboard-shortcuts\.js/);
+  assert.match(script, /function renderKeyboardShortcutSettings/);
+  assert.match(script, /function collectKeyboardShortcutSettings/);
+  assert.match(script, /findKeyboardShortcutConflicts/);
+  assert.match(script, /preferences:\s*\{\s*keyboardShortcuts\s*\}/);
+  assert.match(css, /\.keyboard-shortcut-grid/);
+  assert.match(css, /\.keyboard-shortcut-row/);
+});
+
+test('settings are split into top-level pages and expose full custom-category CRUD', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  for (const page of ['categories', 'models', 'shortcuts', 'data', 'about']) {
+    assert.match(html, new RegExp(`data-settings-nav="${page}"`));
+    assert.match(html, new RegExp(`data-settings-page="${page}"`));
+  }
+  assert.match(script, /function activateSettingsPage/);
+  assert.match(html, /id="addCustomCategory"/);
+  assert.match(html, /id="deleteSelectedCategory"/);
+  assert.match(script, /function deleteCategory/);
+  assert.match(script, /CATEGORY_DELETE/);
+  assert.match(script, /CATEGORY_RESTORE_BUILT_IN/);
+  assert.match(html, /id="deletedBuiltInCategoriesList"/);
+  assert.match(script, /function renderDeletedBuiltInCategories/);
+  assert.match(css, /\.category-title-delete/);
+  assert.match(css, /\.page-nav button\[aria-selected="true"\]/);
+});
+
 test('settings UI uses background messages and never sync storage', () => {
   const script = read('options.js');
   assert.match(script, /LLM_GET_SETTINGS/);
@@ -133,7 +238,7 @@ test('feedback email lives in settings instead of the analysis workspace', () =>
   const options = read('options.html');
   const popup = read('popup.html');
   assert.match(options, /id="support"/);
-  assert.match(options, /mailto:1356496415@qq\.com/);
+  assert.match(options, /mailto:brevess0729@163\.com/);
   assert.doesNotMatch(popup, /mailto:|contact-email/);
 });
 
@@ -199,7 +304,8 @@ test('category inspector exposes accessible prompt and regex tabs and every edit
     'categoryExcludeWhen', 'categoryPositiveExamples', 'categoryNegativeExamples',
     'categoryRequiredSlots', 'categoryAllowedQuoteRoles', 'categorySpanPolicy',
     'categoryMinimumConfidence', 'categoryPromptPreview', 'categoryRegexPhrases',
-    'categoryRegexExpressions', 'categoryRegexCaseSensitive', 'categoryRegexWholeWord',
+    'categoryRegexExcludePhrases', 'categoryRegexExpressions',
+    'categoryRegexCaseSensitive', 'categoryRegexWholeWord',
     'categoryRegexTestText', 'testCategoryRegex', 'categoryRegexResults',
     'saveCategoryOverride', 'resetCategoryOverride', 'categoryEditorStatus']
     .forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
@@ -222,6 +328,7 @@ test('category editor helpers precede the collector and map every unified catego
   assert.match(script, /enabledEngines:\s*checkedEngineValues\(/);
   assert.match(script, /prompt:\s*\{/);
   assert.match(script, /regex:\s*\{/);
+  assert.match(script, /excludePhrases:\s*linesFrom\('categoryRegexExcludePhrases'\)/);
   assert.match(script, /minimumConfidence:\s*Number\(/);
 });
 
@@ -474,6 +581,22 @@ test('workspace restore and clear results remain visible after overview refreshe
     /if \(refreshAfterAction\) await refreshArticleWorkspaceOverview\(\);\s*else renderArticleWorkspaceOverview\(\);\s*if \(finalStatus\) articleWorkspaceStatus\(\.\.\.finalStatus\)/s
   );
   assert.equal((clearSource.match(/coordinateOpenTabs:\s*true/g) || []).length, 2);
+  assert.match(clearSource, /result\.pendingDiskCleanup/);
+  assert.match(clearSource, /不会被扫描恢复/);
+});
+
+test('workspace overview exposes per-article token usage by feature and model', () => {
+  const script = read('options.js');
+  const css = read('options.css');
+  assert.match(script, /function createWorkspaceTokenBreakdown\(tokenUsage\)/);
+  assert.match(script, /tokenUsage\?\.features/);
+  assert.match(script, /feature\.inputTokens/);
+  assert.match(script, /feature\.outputTokens/);
+  assert.match(script, /feature\.models/);
+  assert.match(script, /estimatedRequests/);
+  assert.match(script, /workspaceMetric\(\s*['"]Token['"]/);
+  assert.match(css, /\.article-workspace-token-usage\s*\{/);
+  assert.match(css, /\.article-workspace-token-feature\s*\{/);
 });
 
 test('settings reuse directory and API controls in a skippable two-step onboarding view', () => {
@@ -498,10 +621,62 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(script, /chooseUserDataDirectory/);
   assert.match(script, /addEventListener\(['"]click['"],\s*continueOnboarding\)/);
   assert.match(script, /persistForm/);
+  assert.match(script, /function syncSettingsPageVisibility/);
+  assert.match(script, /section\.id === onboardingSectionId/);
+  assert.match(script, /onboardingUi\.step === ['"]api['"][\s\S]*providerSettings[\s\S]*localData/);
+  assert.match(script, /enterOnboardingLayout\(\)[\s\S]*syncSettingsPageVisibility\(\)/);
+  assert.match(script, /leaveOnboardingLayout\(\)[\s\S]*syncSettingsPageVisibility\(\)/);
   assert.match(css, /body\.is-onboarding/);
   assert.match(css, /data-onboarding-step/);
+  assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
   assert.match(css, /\.button:disabled\s*\{[^}]*cursor:\s*not-allowed/);
   assert.match(css, /\.button\[aria-busy=["']true["']\]:disabled\s*\{[^}]*cursor:\s*wait/);
+});
+
+test('onboarding reveals the real storage and API forms instead of only the guide card', () => {
+  const script = read('options.js');
+  const start = script.indexOf('function syncSettingsPageVisibility(');
+  const end = script.indexOf('\nfunction activateSettingsPage(', start);
+  const source = script.slice(start, end);
+  const sections = [
+    { id: 'categoryWorkspace', dataset: { settingsPage: 'categories' } },
+    { id: 'customCategoryCard', dataset: { settingsPage: 'categories' } },
+    { id: 'providerSettings', dataset: { settingsPage: 'models' } },
+    { id: 'localData', dataset: { settingsPage: 'data' } }
+  ].map(section => ({
+    ...section,
+    hidden: false,
+    classList: { toggle() {} }
+  }));
+  const context = {
+    onboardingUi: { active: true, step: 'storage' },
+    activeSettingsPage: 'categories',
+    document: {
+      querySelectorAll(selector) {
+        assert.equal(selector, '[data-settings-page]');
+        return sections;
+      }
+    }
+  };
+  vm.runInNewContext(
+    `${source}\nglobalThis.syncVisibility = syncSettingsPageVisibility;`,
+    context
+  );
+
+  context.syncVisibility();
+  assert.equal(sections.find(section => section.id === 'localData').hidden, false);
+  assert.equal(sections.find(section => section.id === 'providerSettings').hidden, true);
+
+  context.onboardingUi.step = 'api';
+  context.syncVisibility();
+  assert.equal(sections.find(section => section.id === 'localData').hidden, true);
+  assert.equal(sections.find(section => section.id === 'providerSettings').hidden, false);
+
+  context.onboardingUi.active = false;
+  context.syncVisibility();
+  assert.equal(sections.find(section => section.id === 'categoryWorkspace').hidden, false);
+  assert.equal(sections.find(section => section.id === 'customCategoryCard').hidden, false);
+  assert.equal(sections.find(section => section.id === 'providerSettings').hidden, true);
 });
 
 test('continuing to API implicitly skips an unfinished storage step and never stays busy', async () => {

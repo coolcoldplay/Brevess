@@ -4,10 +4,19 @@ const OFFICIAL_ENDPOINTS = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta/models',
   deepseek: 'https://api.deepseek.com/chat/completions'
 };
+const COMPATIBLE_PROVIDER_VALUE_PREFIX = 'compatible:';
+const MODEL_DISCOVERY_CACHE_MS = 5 * 60 * 1000;
 
 let state = null;
 let selectedProfileId = '';
 let profileEditorDirty = false;
+const profileDirtyFields = new Set();
+const discoveredModels = new Map();
+let modelDiscoveryTimer = null;
+let keyboardShortcutEditorDirty = false;
+let analysisModeEditorDirty = false;
+let analysisModeEditorModes = [];
+let selectedAnalysisModeId = '';
 const profileActionInFlight = Object.create(null);
 let profileMutationInFlight = false;
 const categoryEditor = {
@@ -52,7 +61,46 @@ const onboardingUi = {
   finishPrepared: false,
   state: null
 };
+const codexAuthUi = {
+  pending: false,
+  pollTimer: null,
+  pollDeadline: 0
+};
 let pendingMigrationBundle = null;
+const SETTINGS_PAGE_ORDER = ['categories', 'modes', 'models', 'shortcuts', 'data', 'about'];
+const SETTINGS_PAGE_COPY = Object.freeze({
+  categories: {
+    eyebrow: 'Evidence Lens · 规则工作区',
+    title: '让每一种证据都有清楚的判定边界',
+    subtitle: '新增、修改或删除类别，并分别维护 AI 提示词和离线正则规则。'
+  },
+  modes: {
+    eyebrow: 'Analysis Modes · 分析组合',
+    title: '按阅读任务组织全局类别规则',
+    subtitle: '新增、重命名或删除分析模式，并直接勾选每个模式参与分析的类别。'
+  },
+  models: {
+    eyebrow: 'Model Routing · 模型与分析',
+    title: '集中管理模型、隐私许可与任务路由',
+    subtitle: '把 API Profile、模型能力、全文分析方式和 Figure 任务配置放在同一页。'
+  },
+  shortcuts: {
+    eyebrow: 'Keyboard · 快捷操作',
+    title: '用顺手的按键控制论文阅读流程',
+    subtitle: '统一设置导航、亮文、摘句、解图和问答等高频动作。'
+  },
+  data: {
+    eyebrow: 'Local First · 本地数据',
+    title: '管理论文工作区、备份与迁移',
+    subtitle: '查看本地论文数据，配置目录同步，并导入或导出完整配置。'
+  },
+  about: {
+    eyebrow: 'Project · 关于与反馈',
+    title: '开源许可与问题反馈',
+    subtitle: '查看源代码、第三方许可，并向维护者反馈问题或建议。'
+  }
+});
+let activeSettingsPage = 'categories';
 const USER_DATA_ACTION_IDS = [
   'chooseUserDataDirectory', 'reauthorizeUserDataDirectory',
   'syncUserDataNow', 'rebuildUserDataIndex', 'exportUserDataBundle',
@@ -62,6 +110,7 @@ const USER_DATA_ACTION_IDS = [
 document.addEventListener('DOMContentLoaded', async () => {
   if (location.hash === '#onboarding') enterOnboardingLayout();
   bindEvents();
+  activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
   await refreshSettings();
   await loadCategoryFromHash();
   await refreshCorpusStatus();
@@ -73,7 +122,45 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindEvents() {
+  document.querySelectorAll('[data-settings-nav]').forEach(button => {
+    button.addEventListener('click', () => {
+      activateSettingsPage(button.dataset.settingsNav);
+    });
+  });
+  document.getElementById('globalLanguage').addEventListener('change', async event => {
+    const language = event.currentTarget.value;
+    SciLLM.setInterfaceLanguage(language);
+    try {
+      const updated = await callBackground({
+        type: 'LLM_UPDATE_PREFERENCES',
+        preferences: { language }
+      });
+      applyState(updated);
+    } catch (error) {
+      showStatus(`语言设置保存失败：${friendlyError(error)}`, 'error');
+    }
+  });
   document.getElementById('providerId').addEventListener('change', handleProviderChange);
+  document.getElementById('refreshModels')
+    .addEventListener('click', () => refreshProviderModels({ auto: false }));
+  document.getElementById('modelSuggestionsSelect')
+    .addEventListener('change', event => {
+      const modelId = String(event.currentTarget.value || '').trim();
+      if (!modelId) return;
+      const input = document.getElementById('model');
+      input.value = modelId;
+      markProfileEditorDirty({ target: { id: 'model' } });
+      updateProfileListPreview();
+    });
+  document.getElementById('profileName').addEventListener('input', updateProfileListPreview);
+  document.getElementById('profileName').addEventListener('blur', persistProfileName);
+  document.getElementById('profileName').addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    event.currentTarget.blur();
+  });
+  document.getElementById('model').addEventListener('input', updateProfileListPreview);
+  document.getElementById('apiKey').addEventListener('blur', scheduleProviderModelDiscovery);
   document.getElementById('apiProfileList').addEventListener('click', event => {
     const button = event.target.closest('[data-profile-id]');
     if (!button) return;
@@ -90,11 +177,14 @@ function bindEvents() {
   });
   ['profileName', 'providerId', 'model', 'apiKey', 'baseUrl', 'authHeader', 'authPrefix',
     'jsonMode', 'supportsVision', 'tokenModeAuto', 'tokenModeManual', 'autoTokenCap',
-    'manualMaxTokens', 'contextWindowTokens'].forEach(id => {
+    'manualMaxTokens', 'contextWindowTokens', 'codexReasoningEffort'].forEach(id => {
       document.getElementById(id).addEventListener('input', markProfileEditorDirty);
       document.getElementById(id).addEventListener('change', markProfileEditorDirty);
     });
-  document.getElementById('compatiblePreset').addEventListener('change', applyCompatiblePreset);
+  document.getElementById('compatiblePreset').addEventListener('change', () => {
+    applyCompatiblePreset();
+    scheduleProviderModelDiscovery();
+  });
   document.getElementById('compatiblePreset').addEventListener('change', markProfileEditorDirty);
   ['baseUrl', 'authHeader', 'authPrefix'].forEach(id => {
     document.getElementById(id).addEventListener('input', markCompatiblePresetCustom);
@@ -103,23 +193,91 @@ function bindEvents() {
     document.getElementById(id).addEventListener('change', markCompatiblePresetCustom);
   });
   document.getElementById('saveSettings').addEventListener('click', () => persistForm(false));
+  document.getElementById('analysisModeList').addEventListener('click', event => {
+    const button = event.target.closest('[data-analysis-mode-id]');
+    if (!button) return;
+    syncAnalysisModeDraftFromEditor();
+    selectedAnalysisModeId = button.dataset.analysisModeId;
+    renderAnalysisModeEditor();
+  });
+  ['analysisModeName', 'analysisModeDescription'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      syncAnalysisModeDraftFromEditor();
+      analysisModeEditorDirty = true;
+      renderAnalysisModeList();
+    });
+  });
+  document.getElementById('analysisModeCategoryList').addEventListener('change', () => {
+    syncAnalysisModeDraftFromEditor();
+    analysisModeEditorDirty = true;
+    updateAnalysisModeCategoryCount();
+  });
+  document.getElementById('addAnalysisMode').addEventListener('click', addAnalysisMode);
+  document.getElementById('deleteAnalysisMode').addEventListener('click', deleteAnalysisMode);
+  document.getElementById('resetAnalysisModes').addEventListener('click', resetAnalysisModes);
+  document.getElementById('saveAnalysisModes').addEventListener('click', saveAnalysisModes);
+  document.getElementById('keyboardShortcutGrid')
+    .addEventListener('keydown', handleKeyboardShortcutInputKeydown);
+  document.getElementById('keyboardShortcutGrid')
+    .addEventListener('input', handleKeyboardShortcutInput);
+  document.getElementById('saveKeyboardShortcuts')
+    .addEventListener('click', saveKeyboardShortcuts);
+  document.getElementById('resetKeyboardShortcuts')
+    .addEventListener('click', resetKeyboardShortcuts);
   document.getElementById('resetPanelFollowupPrompts').addEventListener('click', () => {
-    renderPanelFollowupPrompts(state?.panelFollowupDefaults || {});
+    renderPanelFollowupPresets(state?.panelFollowupPresetDefaults || []);
+    markProfileEditorDirty();
+  });
+  document.getElementById('addPanelFollowupPreset')
+    .addEventListener('click', addPanelFollowupPreset);
+  document.getElementById('panelFollowupPresetList').addEventListener('input', () => {
+    markProfileEditorDirty();
+  });
+  document.getElementById('panelFollowupPresetList').addEventListener('click', event => {
+    const button = event.target.closest('[data-delete-panel-preset]');
+    if (!button) return;
+    button.closest('.named-prompt-row')?.remove();
+    renderPanelFollowupPresetEmptyState();
+    markProfileEditorDirty();
+  });
+  document.getElementById('addArticleChatQuickPrompt')
+    .addEventListener('click', addArticleChatQuickPrompt);
+  document.getElementById('resetArticleChatQuickPrompts').addEventListener('click', () => {
+    renderArticleChatQuickPrompts(state?.articleChatQuickPromptDefaults || []);
+    markProfileEditorDirty();
+  });
+  document.getElementById('articleChatQuickPromptList').addEventListener('input', () => {
+    markProfileEditorDirty();
+  });
+  document.getElementById('articleChatQuickPromptList').addEventListener('click', event => {
+    const button = event.target.closest('[data-delete-quick-prompt]');
+    if (!button) return;
+    button.closest('.named-prompt-row')?.remove();
+    renderArticleChatQuickPromptEmptyState();
     markProfileEditorDirty();
   });
   document.getElementById('testProvider').addEventListener('click', testProvider);
+  document.getElementById('codexLogin').addEventListener('click', startCodexLogin);
+  document.getElementById('codexRefreshStatus')
+    .addEventListener('click', () => refreshCodexAuthStatus());
+  document.getElementById('codexLogout').addEventListener('click', logoutCodex);
   ['globalProfileId', 'routeHighlight', 'routeSummary', 'routeFigure', 'routeCrossFigure']
     .forEach(id => document.getElementById(id).addEventListener('change', renderFigureRouteWarning));
-  ['analysisMode', 'autoAnalyze', 'consentGranted', 'globalProfileId', 'routeHighlight',
+  ['analysisMode', 'autoAnalyze', 'autoCacheFigureImages', 'consentGranted',
+    'globalProfileId', 'routeHighlight',
     'routeSummary', 'routeFigure', 'routeCrossFigure'].forEach(id => {
       document.getElementById(id).addEventListener('change', markProfileEditorDirty);
     });
-  ['panelPromptGrouping', 'panelPromptTechnique', 'panelPromptAxes', 'panelPromptSamples']
-    .forEach(id => document.getElementById(id).addEventListener('input', markProfileEditorDirty));
   document.getElementById('exportCorpusJsonl').addEventListener('click', () => exportCorpus('jsonl'));
   document.getElementById('exportCorpusCsv').addEventListener('click', () => exportCorpus('csv'));
   document.getElementById('distillRules').addEventListener('click', distillRules);
   document.getElementById('saveCustomCategory').addEventListener('click', saveCustomCategory);
+  document.getElementById('addCustomCategory').addEventListener('click', () => {
+    activateSettingsPage('categories');
+    const card = document.getElementById('customCategoryCard');
+    card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => document.getElementById('customCategoryName')?.focus(), 220);
+  });
   document.getElementById('chooseUserDataDirectory').addEventListener('click', chooseUserDataDirectory);
   document.getElementById('reauthorizeUserDataDirectory').addEventListener('click', reauthorizeUserDataDirectory);
   document.getElementById('syncUserDataNow').addEventListener('click', syncUserDataNow);
@@ -202,6 +360,14 @@ function bindEvents() {
     field.addEventListener('change', markCategoryUnsaved);
   });
   document.getElementById('saveCategoryOverride').addEventListener('click', saveCategoryOverride);
+  document.getElementById('exportCategoryModule')
+    .addEventListener('click', exportCategoryModule);
+  document.getElementById('importCategoryModule')
+    .addEventListener('change', importCategoryModule);
+  document.getElementById('deleteSelectedCategory')
+    .addEventListener('click', () => deleteCategory(categoryEditor.categoryId, {
+      requireConfirmation: true
+    }));
   document.getElementById('testCategoryRegex').addEventListener('click', testCategoryRegex);
   document.getElementById('resetCategoryOverride').addEventListener('click', openResetDialog);
   document.getElementById('confirmResetCategory').addEventListener('click', event => {
@@ -222,6 +388,72 @@ function bindEvents() {
     cancelCategoryNavigation();
   });
   window.addEventListener('hashchange', loadCategoryFromHash);
+  window.addEventListener('beforeunload', stopCodexAuthPolling);
+}
+
+function settingsPageFromHash() {
+  if (location.hash === '#onboarding') return activeSettingsPage;
+  const parameters = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const requested = parameters.get('page');
+  if (SETTINGS_PAGE_ORDER.includes(requested)) return requested;
+  const legacy = location.hash.replace(/^#/, '');
+  const legacyPages = {
+    categoryWorkspace: 'categories',
+    analysisModeSettings: 'modes',
+    providerSettings: 'models',
+    keyboardShortcuts: 'shortcuts',
+    localData: 'data',
+    openSource: 'about',
+    support: 'about'
+  };
+  return legacyPages[legacy] || 'categories';
+}
+
+function settingsPageHash(page) {
+  if (page === 'categories' && categoryEditor.categoryId) {
+    return categoryHash(categoryEditor.categoryId);
+  }
+  return `#page=${encodeURIComponent(page)}`;
+}
+
+function syncSettingsPageVisibility({ animate = false } = {}) {
+  const onboardingSectionId = onboardingUi.step === 'api'
+    ? 'providerSettings'
+    : 'localData';
+  document.querySelectorAll('[data-settings-page]').forEach(section => {
+    const active = onboardingUi.active
+      ? section.id === onboardingSectionId
+      : section.dataset.settingsPage === activeSettingsPage;
+    section.hidden = !active;
+    section.classList.toggle(
+      'is-active-page',
+      active && !onboardingUi.active && animate
+    );
+  });
+}
+
+function activateSettingsPage(page, { updateHash = true, animate = true } = {}) {
+  const nextPage = SETTINGS_PAGE_ORDER.includes(page) ? page : 'categories';
+  const previousIndex = SETTINGS_PAGE_ORDER.indexOf(activeSettingsPage);
+  const nextIndex = SETTINGS_PAGE_ORDER.indexOf(nextPage);
+  document.body.dataset.settingsDirection =
+    nextIndex < previousIndex ? 'backward' : 'forward';
+  activeSettingsPage = nextPage;
+  syncSettingsPageVisibility({ animate });
+  document.querySelectorAll('[data-settings-nav]').forEach(button => {
+    const active = button.dataset.settingsNav === nextPage;
+    button.setAttribute('aria-selected', String(active));
+  });
+  const copy = SETTINGS_PAGE_COPY[nextPage];
+  if (copy) {
+    document.getElementById('settingsPageEyebrow').textContent = copy.eyebrow;
+    document.getElementById('settingsPageTitle').textContent = copy.title;
+    document.getElementById('settingsPageSubtitle').textContent = copy.subtitle;
+  }
+  if (updateHash && location.hash !== settingsPageHash(nextPage)) {
+    replaceHash(settingsPageHash(nextPage));
+  }
+  globalThis.scrollTo?.({ top: 0, behavior: animate ? 'smooth' : 'auto' });
 }
 
 async function callBackground(message) {
@@ -230,9 +462,137 @@ async function callBackground(message) {
     const error = new Error(response?.error?.message || '操作失败');
     error.code = response?.error?.code;
     error.fields = response?.error?.fields || [];
+    error.retryable = response?.error?.retryable === true;
+    if (Number.isFinite(response?.error?.status)) error.status = response.error.status;
     throw error;
   }
   return response.data;
+}
+
+function renderCodexAuthStatus(message, stateName = '') {
+  const status = document.getElementById('codexAuthStatus');
+  const card = status?.closest('.codex-auth-card');
+  if (status) status.textContent = message;
+  if (card) {
+    if (stateName) card.dataset.state = stateName;
+    else delete card.dataset.state;
+  }
+}
+
+function renderCodexReverseChannelStatus(status = null) {
+  const target = document.getElementById('codexReverseChannelStatus');
+  if (!target) return;
+  const latestPath = String(status?.latestEventPath || '');
+  const logPath = String(status?.eventLogPath || '');
+  target.textContent = latestPath
+    ? `反向通道已连接。最新状态：${latestPath}；完整事件流：${logPath}`
+    : '反向通道尚未连接。连接后，解图进度与结果会实时写入本机事件账本。';
+}
+
+function setCodexAuthPending(pending) {
+  codexAuthUi.pending = pending === true;
+  ['codexLogin', 'codexRefreshStatus', 'codexLogout'].forEach(id => {
+    const button = document.getElementById(id);
+    if (button) button.disabled = codexAuthUi.pending;
+  });
+}
+
+function stopCodexAuthPolling() {
+  if (codexAuthUi.pollTimer) clearTimeout(codexAuthUi.pollTimer);
+  codexAuthUi.pollTimer = null;
+  codexAuthUi.pollDeadline = 0;
+}
+
+function scheduleCodexAuthPoll() {
+  if (!codexAuthUi.pollDeadline || Date.now() >= codexAuthUi.pollDeadline) {
+    stopCodexAuthPolling();
+    renderCodexAuthStatus(
+      '尚未检测到授权完成。若网页已经显示成功，请点击“刷新状态”；否则重新登录。',
+      'error'
+    );
+    return;
+  }
+  if (codexAuthUi.pollTimer) clearTimeout(codexAuthUi.pollTimer);
+  codexAuthUi.pollTimer = setTimeout(async () => {
+    codexAuthUi.pollTimer = null;
+    const connected = await refreshCodexAuthStatus({ silent: true, polling: true });
+    if (!connected) scheduleCodexAuthPoll();
+  }, 1800);
+}
+
+async function refreshCodexAuthStatus({ silent = false, polling = false } = {}) {
+  if (codexAuthUi.pending) return false;
+  if (!silent) {
+    setCodexAuthPending(true);
+    renderCodexAuthStatus('正在检查插件专用 Codex 会话…', 'pending');
+  }
+  try {
+    const status = await callBackground({ type: 'CODEX_LOCAL_STATUS' });
+    stopCodexAuthPolling();
+    const account = [status.accountType, status.planType].filter(Boolean).join(' / ');
+    renderCodexAuthStatus(
+      `已登录${account ? ` · ${account}` : ''}；本机桥 ${status.hostVersion || '已连接'}`,
+      'connected'
+    );
+    renderCodexReverseChannelStatus(status);
+    return true;
+  } catch (error) {
+    if (polling && error.code === 'CODEX_NOT_AUTHENTICATED') {
+      renderCodexAuthStatus('已打开登录页，正在等待网页授权完成…', 'pending');
+      return false;
+    }
+    renderCodexAuthStatus(`状态检查失败：${friendlyError(error)}`, 'error');
+    renderCodexReverseChannelStatus(null);
+    return false;
+  } finally {
+    if (!silent) setCodexAuthPending(false);
+  }
+}
+
+async function startCodexLogin() {
+  if (codexAuthUi.pending) return;
+  stopCodexAuthPolling();
+  setCodexAuthPending(true);
+  renderCodexAuthStatus('正在创建插件专用登录会话…', 'pending');
+  try {
+    const login = await callBackground({
+      type: 'CODEX_LOCAL_LOGIN_START',
+      force: true
+    });
+    const authUrl = new URL(String(login.authUrl || ''));
+    if (authUrl.protocol !== 'https:' ||
+        !['auth.openai.com', 'chatgpt.com'].includes(authUrl.hostname.toLowerCase())) {
+      const error = new Error('Codex 返回了无效的登录地址');
+      error.code = 'CODEX_PROVIDER_REJECTED';
+      throw error;
+    }
+    await chrome.tabs.create({ url: authUrl.href });
+    renderCodexAuthStatus(
+      '登录页已打开。请在网页完成授权，本页会自动检测结果。',
+      'pending'
+    );
+    codexAuthUi.pollDeadline = Date.now() + 3 * 60 * 1000;
+    scheduleCodexAuthPoll();
+  } catch (error) {
+    renderCodexAuthStatus(`无法开始登录：${friendlyError(error)}`, 'error');
+  } finally {
+    setCodexAuthPending(false);
+  }
+}
+
+async function logoutCodex() {
+  if (codexAuthUi.pending) return;
+  stopCodexAuthPolling();
+  setCodexAuthPending(true);
+  renderCodexAuthStatus('正在退出插件专用 Codex 会话…', 'pending');
+  try {
+    await callBackground({ type: 'CODEX_LOCAL_LOGOUT' });
+    renderCodexAuthStatus('已退出。桌面 Codex 和命令行登录不受影响。');
+  } catch (error) {
+    renderCodexAuthStatus(`退出失败：${friendlyError(error)}`, 'error');
+  } finally {
+    setCodexAuthPending(false);
+  }
 }
 
 function enterOnboardingLayout() {
@@ -241,6 +601,7 @@ function enterOnboardingLayout() {
   document.body.dataset.onboardingStep = onboardingUi.step;
   const guide = document.getElementById('onboardingGuide');
   if (guide) guide.hidden = false;
+  syncSettingsPageVisibility();
 }
 
 function leaveOnboardingLayout() {
@@ -248,12 +609,14 @@ function leaveOnboardingLayout() {
   document.body.classList.remove('is-onboarding');
   delete document.body.dataset.onboardingStep;
   document.getElementById('onboardingGuide').hidden = true;
+  syncSettingsPageVisibility();
 }
 
 function hasUsableApiConfiguration() {
   if (state?.settings?.consentGranted !== true) return false;
   return profileEntries().some(([, profile]) =>
-    profile?.config?.hasApiKey === true && String(profile?.config?.model || '').trim()
+    String(profile?.config?.model || '').trim() &&
+      (profile?.providerId === 'codex-local' || profile?.config?.hasApiKey === true)
   );
 }
 
@@ -788,6 +1151,58 @@ function workspaceMetric(label, value) {
   return metric;
 }
 
+function formatTokenCount(value) {
+  const count = Math.max(0, Number(value) || 0);
+  return new Intl.NumberFormat('zh-CN', {
+    notation: count >= 10000 ? 'compact' : 'standard',
+    maximumFractionDigits: 1
+  }).format(count);
+}
+
+function createWorkspaceTokenBreakdown(tokenUsage) {
+  const disclosure = document.createElement('details');
+  disclosure.className = 'article-workspace-token-usage';
+  const summary = document.createElement('summary');
+  summary.textContent = '查看各功能与模型 Token';
+  disclosure.appendChild(summary);
+  const features = Object.values(tokenUsage?.features || {})
+    .sort((left, right) => String(left.label).localeCompare(String(right.label), 'zh-CN'));
+  if (!features.length) {
+    const empty = document.createElement('p');
+    empty.textContent = '这篇论文还没有已记录的 LLM Token 消耗。';
+    disclosure.appendChild(empty);
+    return disclosure;
+  }
+  features.forEach(feature => {
+    const row = document.createElement('div');
+    row.className = 'article-workspace-token-feature';
+    const heading = document.createElement('strong');
+    heading.textContent = feature.label || feature.featureId;
+    const numbers = document.createElement('span');
+    numbers.textContent =
+      `输入 ${formatTokenCount(feature.inputTokens)} · ` +
+      `输出 ${formatTokenCount(feature.outputTokens)} · ` +
+      `${formatTokenCount(feature.requests)} 次`;
+    row.append(heading, numbers);
+    const models = Object.values(feature.models || {});
+    if (models.length) {
+      const modelLine = document.createElement('small');
+      modelLine.textContent = models.map(model =>
+        `${model.providerId} · ${model.model}（${formatTokenCount(model.inputTokens)} / ` +
+        `${formatTokenCount(model.outputTokens)}）`
+      ).join('；');
+      row.appendChild(modelLine);
+    }
+    if (Number(feature.estimatedRequests) > 0) {
+      const note = document.createElement('em');
+      note.textContent = `含 ${feature.estimatedRequests} 次估算`;
+      row.appendChild(note);
+    }
+    disclosure.appendChild(row);
+  });
+  return disclosure;
+}
+
 function createArticleWorkspaceCard(item) {
   const detail = workspaceCountDetail(item);
   const card = document.createElement('article');
@@ -824,7 +1239,12 @@ function createArticleWorkspaceCard(item) {
     workspaceMetric('问答', detail.chatTurnCount),
     workspaceMetric('Figure', detail.figureCount),
     workspaceMetric('Panel', detail.panelCount),
-    workspaceMetric('高亮', detail.highlightCount)
+    workspaceMetric('高亮', detail.highlightCount),
+    workspaceMetric(
+      'Token',
+      (Number(detail.tokenUsage?.totals?.inputTokens) || 0) +
+        (Number(detail.tokenUsage?.totals?.outputTokens) || 0)
+    )
   );
   const size = document.createElement('span');
   size.textContent = `占用 ${formatWorkspaceBytes(detail.estimatedBytes)}`;
@@ -855,7 +1275,14 @@ function createArticleWorkspaceCard(item) {
     actions.appendChild(button);
   });
 
-  body.append(titleRow, identity, metrics, times, actions);
+  body.append(
+    titleRow,
+    identity,
+    metrics,
+    createWorkspaceTokenBreakdown(detail.tokenUsage),
+    times,
+    actions
+  );
   card.append(checkbox, body);
   return card;
 }
@@ -900,6 +1327,9 @@ function renderArticleWorkspaceOverview() {
     `${Math.max(0, Number(totals.workspaceCount) || 0)} 篇论文 · ` +
     `${Math.max(0, Number(totals.chatTurnCount) || 0)} 轮问答 · ` +
     `${Math.max(0, Number(totals.figureCount) || 0)} 个 Figure · ` +
+    `Token ${formatTokenCount(
+      (Number(totals.inputTokens) || 0) + (Number(totals.outputTokens) || 0)
+    )}（${Math.max(0, Number(totals.tokenRequests) || 0)} 次） · ` +
     `${formatWorkspaceBytes(totals.estimatedBytes)} · ` +
     `待同步 ${Math.max(0, Number(sync.pendingCount) || 0)} · ` +
     `冲突 ${Math.max(0, Number(sync.conflictCount) || 0)} · ` +
@@ -990,6 +1420,7 @@ async function clearArticleWorkspaces(workspaceIds) {
     if (!confirm(workspaceDeleteConfirmation(items))) return;
     let deleted = 0;
     let pending = 0;
+    let pendingDiskCleanup = 0;
     for (const item of items) {
       const started = await callBackground({
         type: 'ARTICLE_WORKSPACE_BEGIN_DELETE',
@@ -1002,15 +1433,21 @@ async function clearArticleWorkspaces(workspaceIds) {
         tombstoneId: started.tombstoneId,
         coordinateOpenTabs: true
       });
-      if (result.deleted) deleted += 1;
-      else pending += 1;
+      if (result.deleted) {
+        deleted += 1;
+        if (result.pendingDiskCleanup) pendingDiskCleanup += 1;
+      } else {
+        pending += 1;
+      }
     }
     items.forEach(item => articleWorkspaceOverviewUi.selected.delete(item.workspaceId));
     finalStatus = [
       pending
         ? `已清除 ${deleted} 篇；${pending} 篇等待目录重新授权后完成。`
-        : `已清除 ${deleted} 篇论文工作区。`,
-      pending ? 'info' : 'success'
+        : pendingDiskCleanup
+          ? `已清除 ${deleted} 篇本机工作区；${pendingDiskCleanup} 篇目录副本因未授权暂未删除，但已永久屏蔽，不会被扫描恢复。`
+          : `已清除 ${deleted} 篇论文工作区。`,
+      pending || pendingDiskCleanup ? 'info' : 'success'
     ];
   } catch (error) {
     finalStatus = [`清除失败：${friendlyError(error)}`, 'error'];
@@ -1242,6 +1679,7 @@ function categoryIdFromHash() {
 
 async function loadCategoryFromHash() {
   if (location.hash === '#onboarding') return;
+  activateSettingsPage(settingsPageFromHash(), { updateHash: false });
   const categoryId = categoryIdFromHash();
   if (categoryId) {
     if (categoryId === categoryEditor.categoryId) {
@@ -1259,7 +1697,7 @@ async function loadCategoryFromHash() {
 }
 
 function categoryHash(categoryId) {
-  return `#category=${encodeURIComponent(categoryId)}`;
+  return `#page=categories&category=${encodeURIComponent(categoryId)}`;
 }
 
 function replaceHash(hash) {
@@ -1269,7 +1707,8 @@ function replaceHash(hash) {
 
 function commitCategoryHash(categoryId) {
   categoryEditor.acceptedHash = categoryHash(categoryId);
-  if (location.hash !== categoryEditor.acceptedHash) {
+  if (activeSettingsPage === 'categories' &&
+      location.hash !== categoryEditor.acceptedHash) {
     replaceHash(categoryEditor.acceptedHash);
   }
 }
@@ -1392,6 +1831,14 @@ function populateCategoryEditor(detail) {
     : '自定义类别';
   badge.classList.toggle('is-overridden', metadata.overridden || !metadata.builtIn);
   document.getElementById('resetCategoryOverride').hidden = !metadata.builtIn;
+  const deleteButton = document.getElementById('deleteSelectedCategory');
+  deleteButton.disabled = false;
+  document.getElementById('exportCategoryModule').disabled = false;
+  deleteButton.title = metadata.builtIn
+    ? '永久删除这个内置类别'
+    : '永久删除这个自定义类别';
+  document.querySelectorAll('[data-category-field]')
+    .forEach(field => { field.disabled = false; });
   document.getElementById('categoryName').value = category.name;
   document.getElementById('categoryColor').value = category.color;
   document.getElementById('categoryEngineLlm').checked = category.enabledEngines.includes('llm');
@@ -1408,6 +1855,8 @@ function populateCategoryEditor(detail) {
   document.getElementById('categoryMinimumConfidence').value = category.prompt.minimumConfidence;
   document.getElementById('categoryPromptPreview').value = promptPreview;
   document.getElementById('categoryRegexPhrases').value = category.regex.phrases.join('\n');
+  document.getElementById('categoryRegexExcludePhrases').value =
+    (category.regex.excludePhrases || []).join('\n');
   document.getElementById('categoryRegexExpressions').value = category.regex.expressions.join('\n');
   document.getElementById('categoryRegexCaseSensitive').checked = category.regex.caseSensitive;
   document.getElementById('categoryRegexWholeWord').checked = category.regex.wholeWord;
@@ -1484,6 +1933,7 @@ function collectCategoryOverride() {
     },
     regex: {
       phrases: linesFrom('categoryRegexPhrases'),
+      excludePhrases: linesFrom('categoryRegexExcludePhrases'),
       expressions: linesFrom('categoryRegexExpressions'),
       caseSensitive: checked('categoryRegexCaseSensitive'),
       wholeWord: checked('categoryRegexWholeWord')
@@ -1491,15 +1941,77 @@ function collectCategoryOverride() {
   };
 }
 
+function exportCategoryModule() {
+  if (!categoryEditor.categoryId || !categoryEditor.detail) return;
+  const bundle = {
+    schema: 'sci-category-module',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    sourceCategoryId: categoryEditor.categoryId,
+    module: collectCategoryOverride()
+  };
+  const safeId = categoryEditor.categoryId.replace(/[^a-z0-9_-]+/gi, '_');
+  downloadTextFile(
+    JSON.stringify(bundle, null, 2),
+    'application/json',
+    `SCI-category-${safeId}.json`
+  );
+  setCategoryStatus('saved', '已导出本类别的 AI 提示词与正则模块');
+}
+
+async function importCategoryModule(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || !categoryEditor.categoryId || !categoryEditor.detail) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (parsed?.schema !== 'sci-category-module' || parsed?.version !== 1 ||
+        !parsed.module || typeof parsed.module !== 'object') {
+      throw new Error('不是有效的类别模块文件');
+    }
+    const current = categoryEditor.detail.category;
+    const module = parsed.module;
+    const imported = {
+      ...current,
+      name: String(module.name || current.name),
+      color: /^#[0-9a-f]{6}$/i.test(String(module.color || ''))
+        ? module.color : current.color,
+      enabledEngines: Array.isArray(module.enabledEngines)
+        ? module.enabledEngines.filter(engine => ['llm', 'regex'].includes(engine))
+        : current.enabledEngines,
+      prompt: {
+        ...current.prompt,
+        ...(module.prompt && typeof module.prompt === 'object' ? module.prompt : {})
+      },
+      regex: {
+        ...current.regex,
+        ...(module.regex && typeof module.regex === 'object' ? module.regex : {})
+      }
+    };
+    populateCategoryEditor({
+      ...categoryEditor.detail,
+      category: imported,
+      promptPreview: '已导入草稿；保存类别规则后会重新生成提示词预览。'
+    });
+    categoryEditor.dirty = true;
+    setCategoryStatus('unsaved', '已导入模块草稿，请检查后点击“保存类别规则”');
+  } catch (error) {
+    setCategoryStatus('failed', `导入失败：${friendlyError(error)}`);
+  }
+}
+
 function setCategoryPending(pending) {
   categoryEditor.pending = pending;
   document.querySelectorAll('.category-list-item')
     .forEach(button => { button.disabled = pending; });
-  ['saveCategoryOverride', 'resetCategoryOverride', 'testCategoryRegex']
+  ['saveCategoryOverride', 'resetCategoryOverride', 'deleteSelectedCategory',
+    'testCategoryRegex', 'exportCategoryModule']
     .forEach(id => {
       const button = document.getElementById(id);
       button.disabled = pending || (id === 'resetCategoryOverride' &&
-        categoryEditor.detail?.metadata?.builtIn === false);
+        categoryEditor.detail?.metadata?.builtIn === false) ||
+        (id === 'deleteSelectedCategory' && !categoryEditor.categoryId);
     });
 }
 
@@ -1700,29 +2212,59 @@ function compatiblePresetFor(id) {
   return compatiblePresets().find(preset => preset.id === id) || null;
 }
 
+function providerSelectionDescriptor(value = document.getElementById('providerId')?.value) {
+  const selection = String(value || '');
+  if (selection.startsWith(COMPATIBLE_PROVIDER_VALUE_PREFIX)) {
+    return {
+      providerId: 'openai-compatible',
+      presetId: selection.slice(COMPATIBLE_PROVIDER_VALUE_PREFIX.length) || 'custom',
+      selection
+    };
+  }
+  return {
+    providerId: selection,
+    presetId: selection === 'openai-compatible'
+      ? (document.getElementById('compatiblePreset')?.value || 'custom')
+      : '',
+    selection
+  };
+}
+
+function providerSelectionValue(profile = profileById(selectedProfileId)) {
+  if (profile?.providerId !== 'openai-compatible') return profile?.providerId || '';
+  const presetId = String(profile?.config?.presetId || 'custom');
+  return presetId !== 'custom' && compatiblePresetFor(presetId)
+    ? `${COMPATIBLE_PROVIDER_VALUE_PREFIX}${presetId}`
+    : 'openai-compatible';
+}
+
 function renderCompatiblePresetHint(preset) {
   const hint = document.getElementById('compatiblePresetHint');
   hint.textContent = preset?.description ||
-    '选择后自动填入官方接口与默认模型；API Key 不会被修改。';
+    '选择后自动填入服务地址与默认模型；API Key 不会被修改。';
 }
 
-function applyCompatiblePreset() {
-  const preset = compatiblePresetFor(document.getElementById('compatiblePreset').value);
+function applyCompatiblePreset(presetId = document.getElementById('compatiblePreset').value) {
+  const preset = compatiblePresetFor(presetId);
   if (!preset) return;
+  document.getElementById('compatiblePreset').value = preset.id;
   document.getElementById('model').value = preset.defaultModel || '';
   document.getElementById('baseUrl').value = preset.baseUrl || '';
   document.getElementById('authHeader').value = preset.authHeader || 'Authorization';
   document.getElementById('authPrefix').value = preset.authPrefix ?? 'Bearer';
   document.getElementById('jsonMode').checked = preset.jsonMode !== false;
   document.getElementById('supportsVision').checked = preset.supportsVision === true;
-  markProfileEditorDirty();
+  markProfileEditorDirty({ target: { id: 'compatiblePreset' } });
   renderCompatiblePresetHint(preset);
   renderModelSuggestions('openai-compatible');
+  updateProfileListPreview();
   renderFigureRouteWarning();
 }
 
 function markCompatiblePresetCustom() {
-  if (document.getElementById('providerId').value !== 'openai-compatible') return;
+  const descriptor = providerSelectionDescriptor();
+  if (descriptor.providerId !== 'openai-compatible' ||
+      descriptor.selection !== 'openai-compatible') return;
   const select = document.getElementById('compatiblePreset');
   if (compatiblePresetFor('custom')) select.value = 'custom';
   renderCompatiblePresetHint(compatiblePresetFor('custom'));
@@ -1757,8 +2299,50 @@ function renderCustomCategories() {
     remove.type = 'button';
     remove.className = 'category-delete';
     remove.textContent = '删除';
-    remove.addEventListener('click', () => deleteCustomCategory(category.categoryId));
-    row.append(swatch, text, remove);
+    remove.addEventListener('click', () => deleteCategory(category.categoryId, {
+      requireConfirmation: true
+    }));
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'category-edit';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => {
+      document.getElementById('categoryWorkspace')?.scrollIntoView({
+        behavior: 'smooth', block: 'start'
+      });
+      selectCategory(category.categoryId, edit);
+    });
+    row.append(swatch, text, edit, remove);
+    container.appendChild(row);
+  });
+}
+
+function renderDeletedBuiltInCategories() {
+  const section = document.getElementById('deletedBuiltInCategorySection');
+  const container = document.getElementById('deletedBuiltInCategoriesList');
+  const categories = Array.isArray(state?.deletedBuiltInCategories)
+    ? state.deletedBuiltInCategories
+    : [];
+  section.hidden = categories.length === 0;
+  container.replaceChildren();
+  categories.forEach(category => {
+    const row = document.createElement('div');
+    row.className = 'deleted-built-in-row';
+    const copy = document.createElement('span');
+    copy.className = 'deleted-built-in-copy';
+    const name = document.createElement('strong');
+    name.textContent = category.name || category.categoryId;
+    const id = document.createElement('span');
+    id.textContent = category.categoryId;
+    copy.append(name, id);
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'category-restore';
+    restore.textContent = '恢复';
+    restore.addEventListener('click', () =>
+      restoreBuiltInCategory(category.categoryId)
+    );
+    row.append(copy, restore);
     container.appendChild(row);
   });
 }
@@ -1790,12 +2374,74 @@ async function saveCustomCategory() {
   }
 }
 
-async function deleteCustomCategory(categoryId) {
+async function deleteCategory(categoryId, { requireConfirmation = false } = {}) {
+  if (!categoryId || categoryEditor.pending) return;
+  const category = unifiedCategoryEntries()
+    .find(item => item.categoryId === categoryId);
+  if (!category) return;
+  const builtIn = category.builtIn !== false;
+  if (requireConfirmation &&
+      !confirm(
+        `确认永久删除${builtIn ? '内置' : '自定义'}类别“` +
+        `${category.name || categoryId}”吗？\n\n` +
+        '删除后将不再参与正则、LLM 或手动标注；已有标注会保留类别快照。'
+      )) {
+    return;
+  }
+  setCategoryPending(true);
+  setCategoryStatus('working', '正在永久删除类别…');
   try {
-    applyState(await callBackground({ type: 'LLM_DELETE_CUSTOM_CATEGORY', categoryId }));
-    showStatus('自定义识别类别已删除。', 'success');
+    applyState(await callBackground({
+      type: builtIn ? 'CATEGORY_DELETE' : 'LLM_DELETE_CUSTOM_CATEGORY',
+      categoryId
+    }));
+    if (categoryEditor.categoryId === categoryId) {
+      categoryEditor.categoryId = '';
+      categoryEditor.detail = null;
+      categoryEditor.dirty = false;
+      const next = unifiedCategoryEntries()[0];
+      setCategoryPending(false);
+      if (next) await loadCategory(next.categoryId);
+      else clearCategoryEditor();
+    }
+    showStatus(`${builtIn ? '内置' : '自定义'}识别类别已永久删除。`, 'success');
   } catch (error) {
     showStatus(`删除类别失败：${friendlyError(error)}`, 'error');
+    setCategoryStatus('failed', `删除失败：${friendlyError(error)}`);
+  } finally {
+    setCategoryPending(false);
+  }
+}
+
+function clearCategoryEditor() {
+  categoryEditor.categoryId = '';
+  categoryEditor.detail = null;
+  categoryEditor.dirty = false;
+  document.getElementById('categoryInspectorTitle').textContent = '尚无可用类别';
+  document.getElementById('categoryInspectorId').textContent = '—';
+  document.getElementById('categoryOverrideBadge').textContent = '可新建或恢复';
+  document.getElementById('categoryInspectorSwatch').style.backgroundColor = '#DDE1E5';
+  document.getElementById('resetCategoryOverride').hidden = true;
+  document.getElementById('deleteSelectedCategory').disabled = true;
+  document.querySelectorAll('[data-category-field]')
+    .forEach(field => { field.disabled = true; });
+  setCategoryStatus('saved', '请新建类别，或在页面下方恢复已删除的内置类别');
+}
+
+async function restoreBuiltInCategory(categoryId) {
+  if (!categoryId || categoryEditor.pending) return;
+  setCategoryPending(true);
+  try {
+    applyState(await callBackground({
+      type: 'CATEGORY_RESTORE_BUILT_IN', categoryId
+    }));
+    setCategoryPending(false);
+    await loadCategory(categoryId);
+    showStatus('内置识别类别已恢复。', 'success');
+  } catch (error) {
+    showStatus(`恢复类别失败：${friendlyError(error)}`, 'error');
+  } finally {
+    setCategoryPending(false);
   }
 }
 
@@ -1804,6 +2450,7 @@ function endpointFor(providerId, config) {
 }
 
 async function requestEndpointPermission(providerId, config) {
+  if (providerId === 'codex-local') return;
   const endpoint = endpointFor(providerId, config);
   if (!endpoint) throw new Error('请填写 Base URL');
   let url;
@@ -1826,44 +2473,518 @@ function applyState(nextState) {
     selectedProfileId = state.settings?.globalProfileId || entries[0]?.[0] || '';
   }
   document.getElementById('analysisMode').value = state.settings?.mode || 'regex';
+  const language = state.settings?.language || 'zh-CN';
+  document.getElementById('globalLanguage').value = language;
+  SciLLM.setInterfaceLanguage(language);
   document.getElementById('autoAnalyze').checked = state.settings?.autoAnalyze === true;
+  document.getElementById('autoCacheFigureImages').checked =
+    state.settings?.autoCacheFigureImages !== false;
   document.getElementById('consentGranted').checked = state.settings?.consentGranted === true;
-  renderPanelFollowupPrompts(state.settings?.figurePanelFollowupPrompts || {});
-  document.getElementById('effectiveMode').textContent =
-    state.effectiveMode === 'llm' ? '当前：LLM 模式' : '当前：正则模式';
+  renderPanelFollowupPresets(state.settings?.figurePanelFollowupPresets || []);
+  renderArticleChatQuickPrompts(state.settings?.articleChatQuickPrompts || []);
+  if (!analysisModeEditorDirty) {
+    analysisModeEditorModes = structuredClone(state.settings?.analysisModes || []);
+    selectedAnalysisModeId = analysisModeEditorModes.some(
+      mode => mode.id === selectedAnalysisModeId
+    ) ? selectedAnalysisModeId : (
+      state.settings?.readingViewId || analysisModeEditorModes[0]?.id || ''
+    );
+  }
+  renderAnalysisModeEditor();
+  if (!keyboardShortcutEditorDirty) {
+    renderKeyboardShortcutSettings(state.settings?.keyboardShortcuts);
+  }
+  const highlightModeLabel = state.effectiveMode === 'llm'
+    ? '高亮：LLM' : '高亮：正则';
+  document.getElementById('effectiveMode').textContent = state.llmReady === true
+    ? `${highlightModeLabel} · LLM 功能可用`
+    : `${highlightModeLabel} · LLM 功能未就绪`;
   renderProfileEditor();
   renderRouteOptions();
   renderCustomCategories();
+  renderDeletedBuiltInCategories();
   renderCategoryList();
 }
 
-function renderPanelFollowupPrompts(prompts) {
-  const defaults = state?.panelFollowupDefaults || {};
-  const entries = [
-    ['panelPromptGrouping', 'grouping'],
-    ['panelPromptTechnique', 'technique_principle'],
-    ['panelPromptAxes', 'axes_reading'],
-    ['panelPromptSamples', 'sample_information']
-  ];
-  entries.forEach(([elementId, topic]) => {
-    const element = document.getElementById(elementId);
-    if (element) element.value = prompts?.[topic] || defaults[topic] || '';
+function renderKeyboardShortcutSettings(shortcuts) {
+  const container = document.getElementById('keyboardShortcutGrid');
+  if (!container || !globalThis.SciLLM?.KEYBOARD_SHORTCUT_DEFINITIONS) return;
+  const normalized = SciLLM.normalizeKeyboardShortcuts(shortcuts);
+  container.replaceChildren();
+  let currentGroup = '';
+  SciLLM.KEYBOARD_SHORTCUT_DEFINITIONS.forEach(definition => {
+    if (definition.group !== currentGroup) {
+      currentGroup = definition.group;
+      const heading = document.createElement('h3');
+      heading.className = 'keyboard-shortcut-group-heading';
+      heading.textContent = currentGroup;
+      container.appendChild(heading);
+    }
+    const row = document.createElement('label');
+    row.className = 'keyboard-shortcut-row';
+    const copy = document.createElement('span');
+    copy.className = 'keyboard-shortcut-label';
+    copy.textContent = definition.label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'none';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.maxLength = 1;
+    input.dataset.shortcutAction = definition.actionId;
+    input.setAttribute('aria-label', `${definition.label}快捷键`);
+    input.value = normalized[definition.actionId] || '';
+    input.placeholder = '停用';
+    row.append(copy, input);
+    container.appendChild(row);
   });
 }
 
-function collectPanelFollowupPrompts() {
-  return {
-    grouping: document.getElementById('panelPromptGrouping').value.trim(),
-    technique_principle: document.getElementById('panelPromptTechnique').value.trim(),
-    axes_reading: document.getElementById('panelPromptAxes').value.trim(),
-    sample_information: document.getElementById('panelPromptSamples').value.trim()
-  };
+function keyboardShortcutStatus(message, type = 'info') {
+  const status = document.getElementById('keyboardShortcutStatus');
+  if (!status) return;
+  status.textContent = message;
+  status.className = `status show ${type}`;
+}
+
+function handleKeyboardShortcutInputKeydown(event) {
+  const input = event.target.closest?.('[data-shortcut-action]');
+  if (!input) return;
+  if (event.key === 'Tab') return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    input.blur();
+    return;
+  }
+  event.preventDefault();
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    input.value = '';
+  } else {
+    const key = SciLLM.normalizeKeyboardShortcutKey(event.key, '');
+    if (!key) {
+      keyboardShortcutStatus('只支持单个英文字母或数字。', 'error');
+      return;
+    }
+    input.value = key;
+  }
+  keyboardShortcutEditorDirty = true;
+  keyboardShortcutStatus('快捷键已修改，尚未保存。', 'info');
+}
+
+function handleKeyboardShortcutInput(event) {
+  const input = event.target.closest?.('[data-shortcut-action]');
+  if (!input) return;
+  input.value = SciLLM.normalizeKeyboardShortcutKey(input.value, '');
+  keyboardShortcutEditorDirty = true;
+  keyboardShortcutStatus('快捷键已修改，尚未保存。', 'info');
+}
+
+function collectKeyboardShortcutSettings() {
+  const shortcuts = {};
+  document.querySelectorAll('[data-shortcut-action]').forEach(input => {
+    shortcuts[input.dataset.shortcutAction] =
+      SciLLM.normalizeKeyboardShortcutKey(input.value, '');
+  });
+  const conflicts = SciLLM.findKeyboardShortcutConflicts(shortcuts);
+  if (conflicts.length) {
+    const labels = Object.fromEntries(
+      SciLLM.KEYBOARD_SHORTCUT_DEFINITIONS.map(item => [item.actionId, item.label])
+    );
+    const conflict = conflicts[0];
+    throw new Error(
+      `快捷键 ${conflict.key} 同时分配给：` +
+      conflict.actionIds.map(actionId => labels[actionId] || actionId).join('、')
+    );
+  }
+  return shortcuts;
+}
+
+async function saveKeyboardShortcuts() {
+  const button = document.getElementById('saveKeyboardShortcuts');
+  try {
+    const keyboardShortcuts = collectKeyboardShortcutSettings();
+    button.disabled = true;
+    const updated = await callBackground({
+      type: 'LLM_UPDATE_PREFERENCES',
+      preferences: { keyboardShortcuts }
+    });
+    keyboardShortcutEditorDirty = false;
+    applyState(updated);
+    keyboardShortcutStatus('快捷键已保存，侧栏立即按新设置响应。', 'success');
+  } catch (error) {
+    keyboardShortcutStatus(`保存失败：${friendlyError(error)}`, 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function resetKeyboardShortcuts() {
+  renderKeyboardShortcutSettings(SciLLM.DEFAULT_KEYBOARD_SHORTCUTS);
+  keyboardShortcutEditorDirty = true;
+  keyboardShortcutStatus('已填入默认快捷键，点击“保存快捷键”后生效。', 'info');
+}
+
+function createPanelFollowupPresetRow(preset = {}) {
+  const row = document.createElement('div');
+  row.className = 'named-prompt-row';
+  row.dataset.panelPresetId = String(preset.id || `panel_prompt_${Date.now().toString(36)}`);
+  row.dataset.panelPresetTopic = String(preset.topic || '');
+
+  const nameField = document.createElement('label');
+  nameField.className = 'field';
+  const nameLabel = document.createElement('span');
+  nameLabel.textContent = '名称';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.maxLength = 80;
+  nameInput.dataset.panelPresetName = '';
+  nameInput.placeholder = '例如：统计方法';
+  nameInput.value = String(preset.name || '');
+  nameField.append(nameLabel, nameInput);
+
+  const promptField = document.createElement('label');
+  promptField.className = 'field';
+  const promptLabel = document.createElement('span');
+  promptLabel.textContent = '提示词';
+  const textarea = document.createElement('textarea');
+  textarea.rows = 3;
+  textarea.maxLength = 4000;
+  textarea.dataset.panelPresetPrompt = '';
+  textarea.placeholder = '说明模型需要围绕这个 Panel 回答什么';
+  textarea.value = String(preset.prompt || '');
+  promptField.append(promptLabel, textarea);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'button danger quiet compact-button named-prompt-delete';
+  remove.dataset.deletePanelPreset = '';
+  remove.textContent = '删除';
+  row.append(nameField, promptField, remove);
+  return row;
+}
+
+function renderPanelFollowupPresetEmptyState() {
+  const list = document.getElementById('panelFollowupPresetList');
+  if (!list || list.querySelector('.named-prompt-row')) return;
+  const empty = document.createElement('p');
+  empty.className = 'named-prompt-empty';
+  empty.textContent = '尚未设置 Panel 追问；可新增任意名称和提示词。';
+  list.replaceChildren(empty);
+}
+
+function renderPanelFollowupPresets(presets) {
+  const list = document.getElementById('panelFollowupPresetList');
+  if (!list) return;
+  list.replaceChildren();
+  (Array.isArray(presets) ? presets : []).forEach(preset => {
+    list.appendChild(createPanelFollowupPresetRow(preset));
+  });
+  renderPanelFollowupPresetEmptyState();
+}
+
+function addPanelFollowupPreset() {
+  const list = document.getElementById('panelFollowupPresetList');
+  if (!list) return;
+  list.querySelector('.named-prompt-empty')?.remove();
+  const row = createPanelFollowupPresetRow({
+    id: `panel_prompt_${Date.now().toString(36)}`,
+    name: '',
+    prompt: ''
+  });
+  list.appendChild(row);
+  row.querySelector('[data-panel-preset-name]')?.focus();
+  markProfileEditorDirty();
+}
+
+function collectPanelFollowupPresets() {
+  return [...document.querySelectorAll('#panelFollowupPresetList .named-prompt-row')]
+    .map((row, index) => ({
+      id: String(row.dataset.panelPresetId || `panel_prompt_${index + 1}`),
+      topic: String(row.dataset.panelPresetTopic || ''),
+      name: row.querySelector('[data-panel-preset-name]')?.value.trim() || '',
+      prompt: row.querySelector('[data-panel-preset-prompt]')?.value.trim() || ''
+    }))
+    .filter(item => item.name && item.prompt);
+}
+
+function panelFollowupPromptMap(presets) {
+  const prompts = { ...(state?.panelFollowupDefaults || {}) };
+  presets.forEach(preset => {
+    if (preset.topic && Object.prototype.hasOwnProperty.call(prompts, preset.topic)) {
+      prompts[preset.topic] = preset.prompt;
+    }
+  });
+  return prompts;
+}
+
+function createArticleChatQuickPromptRow(prompt = {}) {
+  const row = document.createElement('div');
+  row.className = 'named-prompt-row';
+  row.dataset.quickPromptId = String(prompt.id || `prompt_${Date.now().toString(36)}`);
+
+  const nameField = document.createElement('label');
+  nameField.className = 'field';
+  const nameLabel = document.createElement('span');
+  nameLabel.textContent = '名称';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.maxLength = 80;
+  nameInput.dataset.quickPromptName = '';
+  nameInput.placeholder = '例如：核心结论';
+  nameInput.value = String(prompt.name || '');
+  nameField.append(nameLabel, nameInput);
+
+  const promptField = document.createElement('label');
+  promptField.className = 'field';
+  const promptLabel = document.createElement('span');
+  promptLabel.textContent = '提示词';
+  const textarea = document.createElement('textarea');
+  textarea.rows = 3;
+  textarea.maxLength = 4000;
+  textarea.dataset.quickPromptText = '';
+  textarea.placeholder = '插入输入框后仍可继续编辑';
+  textarea.value = String(prompt.prompt || '');
+  promptField.append(promptLabel, textarea);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'button danger quiet compact-button named-prompt-delete';
+  remove.dataset.deleteQuickPrompt = '';
+  remove.textContent = '删除';
+  remove.setAttribute('aria-label', `删除快捷提示词${prompt.name ? `：${prompt.name}` : ''}`);
+
+  row.append(nameField, promptField, remove);
+  return row;
+}
+
+function renderArticleChatQuickPromptEmptyState() {
+  const list = document.getElementById('articleChatQuickPromptList');
+  if (!list || list.querySelector('.named-prompt-row')) return;
+  const empty = document.createElement('p');
+  empty.className = 'named-prompt-empty';
+  empty.textContent = '尚未设置快捷提示词；可点击“新增提示词”创建。';
+  list.replaceChildren(empty);
+}
+
+function renderArticleChatQuickPrompts(prompts) {
+  const list = document.getElementById('articleChatQuickPromptList');
+  if (!list) return;
+  list.replaceChildren();
+  (Array.isArray(prompts) ? prompts : []).forEach(prompt => {
+    list.appendChild(createArticleChatQuickPromptRow(prompt));
+  });
+  renderArticleChatQuickPromptEmptyState();
+}
+
+function addArticleChatQuickPrompt() {
+  const list = document.getElementById('articleChatQuickPromptList');
+  if (!list) return;
+  list.querySelector('.named-prompt-empty')?.remove();
+  const row = createArticleChatQuickPromptRow({
+    id: `prompt_${Date.now().toString(36)}`,
+    name: '',
+    prompt: ''
+  });
+  list.appendChild(row);
+  row.querySelector('[data-quick-prompt-name]')?.focus();
+  markProfileEditorDirty();
+}
+
+function collectArticleChatQuickPrompts() {
+  return [...document.querySelectorAll('#articleChatQuickPromptList .named-prompt-row')]
+    .map((row, index) => ({
+      id: String(row.dataset.quickPromptId || `prompt_${index + 1}`),
+      name: row.querySelector('[data-quick-prompt-name]')?.value.trim() || '',
+      prompt: row.querySelector('[data-quick-prompt-text]')?.value.trim() || ''
+    }))
+    .filter(item => item.name && item.prompt);
+}
+
+function currentAnalysisModeDraft() {
+  return analysisModeEditorModes.find(mode => mode.id === selectedAnalysisModeId) || null;
+}
+
+function showAnalysisModeStatus(message, type = 'info') {
+  const target = document.getElementById('analysisModeStatus');
+  if (!target) return;
+  target.textContent = message;
+  target.className = `status ${type}`;
+}
+
+function syncAnalysisModeDraftFromEditor() {
+  const mode = currentAnalysisModeDraft();
+  if (!mode) return;
+  mode.name = document.getElementById('analysisModeName')?.value.trim() || mode.name;
+  mode.description =
+    document.getElementById('analysisModeDescription')?.value.trim() || '';
+  mode.categoryIds = [...document.querySelectorAll(
+    '#analysisModeCategoryList input[type="checkbox"]:checked'
+  )].map(input => input.value);
+}
+
+function renderAnalysisModeList() {
+  const list = document.getElementById('analysisModeList');
+  if (!list) return;
+  list.replaceChildren();
+  analysisModeEditorModes.forEach(mode => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'analysis-mode-list-item';
+    button.dataset.analysisModeId = mode.id;
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(mode.id === selectedAnalysisModeId));
+    const name = document.createElement('strong');
+    name.textContent = mode.name || '未命名模式';
+    const count = document.createElement('small');
+    count.textContent = `${mode.categoryIds?.length || 0} 个类别 · ${mode.id}`;
+    button.append(name, count);
+    list.appendChild(button);
+  });
+}
+
+function updateAnalysisModeCategoryCount() {
+  const target = document.getElementById('analysisModeCategoryCount');
+  if (!target) return;
+  target.textContent = String(document.querySelectorAll(
+    '#analysisModeCategoryList input[type="checkbox"]:checked'
+  ).length);
+}
+
+function renderAnalysisModeCategoryList(mode) {
+  const list = document.getElementById('analysisModeCategoryList');
+  if (!list) return;
+  const selected = new Set(Array.isArray(mode?.categoryIds) ? mode.categoryIds : []);
+  list.replaceChildren();
+  (state?.availableCategories || [])
+    .filter(category => category?.categoryId && category.retired !== true)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'))
+    .forEach(category => {
+      const label = document.createElement('label');
+      label.className = 'analysis-mode-category-option';
+      label.title = `${category.name || category.categoryId} · ${category.categoryId}`;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = category.categoryId;
+      checkbox.checked = selected.has(category.categoryId);
+      const marker = document.createElement('span');
+      marker.className = 'category-marker';
+      marker.style.setProperty('--category-color', category.color || '#0B4778');
+      const name = document.createElement('span');
+      name.textContent = category.name || category.categoryId;
+      label.append(checkbox, marker, name);
+      list.appendChild(label);
+    });
+  updateAnalysisModeCategoryCount();
+}
+
+function renderAnalysisModeEditor() {
+  renderAnalysisModeList();
+  const mode = currentAnalysisModeDraft();
+  const name = document.getElementById('analysisModeName');
+  const id = document.getElementById('analysisModeId');
+  const description = document.getElementById('analysisModeDescription');
+  if (!name || !id || !description) return;
+  name.value = mode?.name || '';
+  id.value = mode?.id || '';
+  description.value = mode?.description || '';
+  [name, description].forEach(input => { input.disabled = !mode; });
+  document.getElementById('deleteAnalysisMode').disabled =
+    !mode || analysisModeEditorModes.length <= 1;
+  document.getElementById('saveAnalysisModes').disabled = !mode;
+  renderAnalysisModeCategoryList(mode);
+}
+
+function addAnalysisMode() {
+  syncAnalysisModeDraftFromEditor();
+  let id = `mode_${Date.now().toString(36)}`;
+  let suffix = 2;
+  const base = id;
+  while (analysisModeEditorModes.some(mode => mode.id === id)) id = `${base}_${suffix++}`;
+  analysisModeEditorModes.push({
+    id,
+    name: '新分析模式',
+    description: '',
+    categoryIds: []
+  });
+  selectedAnalysisModeId = id;
+  analysisModeEditorDirty = true;
+  renderAnalysisModeEditor();
+  document.getElementById('analysisModeName')?.select();
+  showAnalysisModeStatus('已新增模式草稿，保存后生效。');
+}
+
+function deleteAnalysisMode() {
+  if (analysisModeEditorModes.length <= 1) {
+    showAnalysisModeStatus('至少保留一个分析模式。', 'error');
+    return;
+  }
+  const mode = currentAnalysisModeDraft();
+  if (!mode || !confirm(`永久删除分析模式“${mode.name}”？类别规则本身不会被删除。`)) return;
+  analysisModeEditorModes = analysisModeEditorModes.filter(item => item.id !== mode.id);
+  selectedAnalysisModeId = analysisModeEditorModes[0]?.id || '';
+  analysisModeEditorDirty = true;
+  renderAnalysisModeEditor();
+  showAnalysisModeStatus('模式已从草稿中删除，点击保存后生效。');
+}
+
+function resetAnalysisModes() {
+  if (!confirm('恢复全部内置分析模式？当前自定义模式和勾选组合将被替换。')) return;
+  analysisModeEditorModes = structuredClone(state?.analysisModeDefaults || []);
+  selectedAnalysisModeId = analysisModeEditorModes[0]?.id || '';
+  analysisModeEditorDirty = true;
+  renderAnalysisModeEditor();
+  showAnalysisModeStatus('已填入内置模式，点击保存后生效。');
+}
+
+async function saveAnalysisModes() {
+  syncAnalysisModeDraftFromEditor();
+  const modes = analysisModeEditorModes
+    .map(mode => ({
+      id: mode.id,
+      name: String(mode.name || '').trim(),
+      description: String(mode.description || '').trim(),
+      categoryIds: [...new Set(mode.categoryIds || [])]
+    }))
+    .filter(mode => mode.name);
+  if (!modes.length) {
+    showAnalysisModeStatus('至少需要一个已命名的分析模式。', 'error');
+    return;
+  }
+  if (modes.some(mode => mode.categoryIds.length === 0)) {
+    showAnalysisModeStatus('每个分析模式至少勾选一个类别规则。', 'error');
+    return;
+  }
+  const button = document.getElementById('saveAnalysisModes');
+  button.disabled = true;
+  try {
+    const currentId = state.settings?.readingViewId;
+    const readingViewId = modes.some(mode => mode.id === currentId)
+      ? currentId : modes[0].id;
+    const updated = await callBackground({
+      type: 'LLM_UPDATE_PREFERENCES',
+      preferences: {
+        analysisModes: modes,
+        readingViewId,
+        viewCategoryOverrides: Object.fromEntries(
+          modes.map(mode => [mode.id, { add: [], remove: [] }])
+        )
+      }
+    });
+    analysisModeEditorDirty = false;
+    applyState(updated);
+    showAnalysisModeStatus('分析模式已保存。', 'success');
+  } catch (error) {
+    showAnalysisModeStatus(`保存失败：${friendlyError(error)}`, 'error');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderCompatiblePresetOptions() {
   const select = document.getElementById('compatiblePreset');
   if (!select) return;
   const config = profileById(selectedProfileId)?.config || {};
+  const descriptor = providerSelectionDescriptor();
   const presets = compatiblePresets();
   select.replaceChildren();
   presets.forEach(preset => {
@@ -1872,45 +2993,93 @@ function renderCompatiblePresetOptions() {
     option.textContent = preset.label;
     select.appendChild(option);
   });
-  const selectedId = compatiblePresetFor(config.presetId) ? config.presetId : 'custom';
+  const requestedPresetId = descriptor.providerId === 'openai-compatible'
+    ? descriptor.presetId : config.presetId;
+  const selectedId = compatiblePresetFor(requestedPresetId)
+    ? requestedPresetId : 'custom';
   select.value = selectedId;
   if (!select.value && select.options.length) select.selectedIndex = 0;
 }
 
 function renderModelSuggestions(providerId = document.getElementById('providerId')?.value) {
   const list = document.getElementById('modelSuggestions');
+  const select = document.getElementById('modelSuggestionsSelect');
   const input = document.getElementById('model');
   if (!list) return;
-  const definition = state?.providers?.[providerId];
+  const descriptor = providerSelectionDescriptor(providerId);
+  const definition = state?.providers?.[descriptor.providerId];
   const candidates = Array.isArray(definition?.models) ? [...definition.models] : [];
-  if (providerId === 'openai-compatible') {
-    const preset = compatiblePresetFor(document.getElementById('compatiblePreset')?.value);
+  if (descriptor.providerId === 'openai-compatible') {
+    const preset = compatiblePresetFor(descriptor.presetId);
     if (preset?.defaultModel) candidates.push(preset.defaultModel);
   }
+  const cache = discoveredModels.get(modelDiscoveryCacheKey(descriptor));
+  (cache?.models || []).forEach(model => candidates.push(model.id));
   if (input?.value) candidates.push(input.value);
+  const models = [...new Set(
+    candidates.map(value => String(value || '').trim()).filter(Boolean)
+  )];
   list.replaceChildren();
-  [...new Set(candidates.map(value => String(value || '').trim()).filter(Boolean))]
-    .forEach(model => {
+  models.forEach(model => {
       const option = document.createElement('option');
       option.value = model;
+      const detail = cache?.models?.find(item => item.id === model);
+      if (detail?.displayName && detail.displayName !== model) {
+        option.label = detail.displayName;
+      }
       list.appendChild(option);
     });
+  if (select) {
+    select.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = models.length
+      ? `在线模型（${models.length}）`
+      : '在线模型';
+    select.appendChild(placeholder);
+    models.forEach(model => {
+      const option = document.createElement('option');
+      const detail = cache?.models?.find(item => item.id === model);
+      option.value = model;
+      option.textContent = detail?.displayName && detail.displayName !== model
+        ? `${detail.displayName} · ${model}` : model;
+      select.appendChild(option);
+    });
+    select.value = models.includes(String(input?.value || '').trim())
+      ? String(input.value).trim() : '';
+    select.disabled = models.length === 0;
+  }
 }
 
 function handleProviderChange() {
-  const providerId = document.getElementById('providerId').value;
+  const descriptor = providerSelectionDescriptor();
   const model = document.getElementById('model');
-  if (model.dataset.providerId && model.dataset.providerId !== providerId) {
-    model.value = state?.providers?.[providerId]?.defaultModel || '';
+  if (model.dataset.providerId && model.dataset.providerId !== descriptor.selection) {
+    const preset = descriptor.providerId === 'openai-compatible'
+      ? compatiblePresetFor(descriptor.presetId) : null;
+    model.value = preset?.defaultModel ||
+      state?.providers?.[descriptor.providerId]?.defaultModel || '';
   }
-  model.dataset.providerId = providerId;
+  model.dataset.providerId = descriptor.selection;
+  if (descriptor.providerId === 'openai-compatible' &&
+      descriptor.presetId !== 'custom') {
+    applyCompatiblePreset(descriptor.presetId);
+  }
   renderProvider();
+  updateProfileListPreview();
+  scheduleProviderModelDiscovery();
 }
 
 function renderProvider() {
-  const providerId = document.getElementById('providerId').value;
+  const descriptor = providerSelectionDescriptor();
+  const providerId = descriptor.providerId;
   const compatible = providerId === 'openai-compatible';
+  const localCodex = providerId === 'codex-local';
   document.getElementById('compatibleFields').hidden = !compatible;
+  document.getElementById('codexLocalFields').hidden = !localCodex;
+  document.getElementById('apiKeyField').hidden = localCodex;
+  document.getElementById('compatiblePresetField').hidden =
+    compatible && descriptor.selection !== 'openai-compatible';
   if (compatible) {
     const profile = profileById(selectedProfileId);
     const config = { ...(profile?.config || {}) };
@@ -1919,8 +3088,181 @@ function renderProvider() {
     renderCompatiblePresetOptions();
     renderCompatiblePresetHint(compatiblePresetFor(document.getElementById('compatiblePreset').value));
   }
-  renderModelSuggestions(providerId);
+  renderModelSuggestions(descriptor.selection);
   renderFigureRouteWarning();
+  if (localCodex) void refreshCodexAuthStatus({ silent: true });
+  else stopCodexAuthPolling();
+}
+
+function modelDiscoveryCacheKey(descriptor = providerSelectionDescriptor()) {
+  const baseUrl = descriptor.providerId === 'openai-compatible'
+    ? String(document.getElementById('baseUrl')?.value || '').trim()
+    : '';
+  return `${selectedProfileId}|${descriptor.selection}|${baseUrl}`;
+}
+
+function setModelDiscoveryStatus(message, stateName = '') {
+  const status = document.getElementById('modelDiscoveryStatus');
+  if (!status) return;
+  status.textContent = message;
+  if (stateName) status.dataset.state = stateName;
+  else delete status.dataset.state;
+}
+
+function modelDiscoveryConfig(descriptor = providerSelectionDescriptor()) {
+  const saved = profileById(selectedProfileId)?.config || {};
+  const config = { ...saved };
+  const enteredKey = document.getElementById('apiKey')?.value.trim();
+  if (enteredKey) config.apiKey = enteredKey;
+  config.model = document.getElementById('model')?.value.trim() || config.model || '';
+  if (descriptor.providerId === 'openai-compatible') {
+    config.presetId = descriptor.presetId || 'custom';
+    config.baseUrl = document.getElementById('baseUrl')?.value.trim() || '';
+    config.authHeader = document.getElementById('authHeader')?.value.trim() ||
+      'Authorization';
+    config.authPrefix = document.getElementById('authPrefix')?.value.trim();
+  }
+  return config;
+}
+
+function scheduleProviderModelDiscovery() {
+  if (modelDiscoveryTimer) clearTimeout(modelDiscoveryTimer);
+  modelDiscoveryTimer = setTimeout(() => {
+    modelDiscoveryTimer = null;
+    void refreshProviderModels({ auto: true });
+  }, 180);
+}
+
+async function refreshProviderModels({ auto = false } = {}) {
+  if (!selectedProfileId || !profileById(selectedProfileId)) return;
+  const descriptor = providerSelectionDescriptor();
+  const profile = profileById(selectedProfileId);
+  const hasCredential = descriptor.providerId === 'codex-local' ||
+    Boolean(document.getElementById('apiKey')?.value.trim()) ||
+    profile?.config?.hasApiKey === true;
+  if (!hasCredential) {
+    setModelDiscoveryStatus(
+      '填写 API Key 后可联网获取当前账号可用模型；模型 ID 仍可手动输入。',
+      auto ? '' : 'error'
+    );
+    return;
+  }
+
+  const cacheKey = modelDiscoveryCacheKey(descriptor);
+  const cached = discoveredModels.get(cacheKey);
+  if (auto && cached && Date.now() - cached.cachedAt < MODEL_DISCOVERY_CACHE_MS) {
+    renderModelSuggestions(descriptor.selection);
+    setModelDiscoveryStatus(`已载入 ${cached.models.length} 个在线模型。`, 'success');
+    return;
+  }
+
+  const button = document.getElementById('refreshModels');
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  setModelDiscoveryStatus('正在连接服务商并获取可用模型…', 'loading');
+  try {
+    const result = await callBackground({
+      type: 'LLM_LIST_MODELS',
+      profileId: selectedProfileId,
+      providerId: descriptor.providerId,
+      config: modelDiscoveryConfig(descriptor)
+    });
+    const models = (Array.isArray(result.models) ? result.models : [])
+      .filter(item => item && typeof item.id === 'string')
+      .slice(0, 500);
+    if (!models.length) throw new Error('服务商没有返回可用模型');
+    discoveredModels.set(cacheKey, {
+      cachedAt: Date.now(),
+      fetchedAt: result.fetchedAt,
+      models
+    });
+    const input = document.getElementById('model');
+    if (input && !input.value.trim()) {
+      input.value = models[0].id;
+      markProfileEditorDirty({ target: { id: 'model' } });
+      updateProfileListPreview();
+    }
+    renderModelSuggestions(descriptor.selection);
+    setModelDiscoveryStatus(
+      `已从服务商获取 ${models.length} 个当前可用模型，可在输入框候选中选择。`,
+      'success'
+    );
+  } catch (error) {
+    const prefix = auto ? '自动获取失败' : '获取模型失败';
+    setModelDiscoveryStatus(
+      `${prefix}：${friendlyError(error)}。仍可手动输入模型 ID。`,
+      'error'
+    );
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
+}
+
+function updateProfileListPreview() {
+  if (!selectedProfileId) return;
+  const profile = profileById(selectedProfileId);
+  const item = document.querySelector(
+    `[data-profile-id="${CSS.escape(selectedProfileId)}"]`
+  );
+  if (!profile || !item) return;
+  const descriptor = providerSelectionDescriptor();
+  const config = {
+    ...(profile.config || {}),
+    model: document.getElementById('model')?.value.trim() || ''
+  };
+  if (descriptor.providerId === 'openai-compatible') {
+    config.supportsVision = document.getElementById('supportsVision')?.checked === true;
+  }
+  item.textContent = profileOptionLabel({
+    ...profile,
+    name: document.getElementById('profileName')?.value.trim() || '未命名',
+    providerId: descriptor.providerId,
+    config
+  });
+}
+
+async function persistProfileName() {
+  const input = document.getElementById('profileName');
+  const profile = profileById(selectedProfileId);
+  if (!input || !profile) return;
+  const name = input.value.trim();
+  if (!name) {
+    input.value = profile.name || '';
+    profileDirtyFields.delete('profileName');
+    profileEditorDirty = profileDirtyFields.size > 0;
+    showStatus('配置名称不能为空。', 'error');
+    return;
+  }
+  if (name === profile.name) {
+    profileDirtyFields.delete('profileName');
+    profileEditorDirty = profileDirtyFields.size > 0;
+    return;
+  }
+  if (!beginProfileAction('rename')) return;
+  try {
+    const result = await callBackground({
+      type: 'LLM_SAVE_PROFILE',
+      profile: { id: selectedProfileId, name }
+    });
+    if (state?.settings?.profiles?.[selectedProfileId]) {
+      state.settings.profiles[selectedProfileId].name =
+        result.profile?.name || name;
+    }
+    profileDirtyFields.delete('profileName');
+    profileEditorDirty = profileDirtyFields.size > 0;
+    renderProfileList();
+    showStatus('配置名称已保存。', 'success');
+  } catch (error) {
+    showStatus(`保存配置名称失败：${friendlyError(error)}`, 'error');
+  } finally {
+    endProfileAction('rename');
+  }
 }
 
 function friendlyError(error) {
@@ -1928,8 +3270,17 @@ function friendlyError(error) {
     AUTH_INVALID: 'API Key 无效或无权限',
     RATE_LIMITED: '请求过于频繁，请稍后重试',
     QUOTA_EXHAUSTED: 'API 额度不足',
+    PROVIDER_REJECTED: '服务商拒绝了模型列表请求',
+    REQUEST_TIMEOUT: '连接测试等待超时，请稍后重试',
+    CANCELLED: '请求已取消',
     NETWORK_ERROR: '无法访问服务商，请检查域名权限和网络',
     INVALID_RESPONSE: '服务商返回了无法识别的格式',
+    CODEX_NOT_INSTALLED: '未找到本机 Codex，请先安装 Codex',
+    CODEX_NOT_AUTHENTICATED: '插件专用 Codex 会话未登录或已过期，请点击本页“登录 / 重新登录”',
+    CODEX_BRIDGE_UNAVAILABLE: '本机 Codex 桥未安装、未注册或已断开',
+    CODEX_PROVIDER_REJECTED: '本机 Codex 拒绝了这次请求；请查看登录状态后重新测试',
+    PROVIDER_UNAVAILABLE: 'Codex 服务暂时不可用，请稍后重试',
+    CONTEXT_BUDGET_EXCEEDED: '当前 Codex 上下文不足以容纳这次请求',
     INVALID_SETTINGS: `内容不完整或规则不安全：${(error.fields || []).join('、')}`,
     USER_DATA_DATABASE_UNAVAILABLE: '本地数据库模块不可用，请重新加载扩展后重试',
     INDEXEDDB_UNAVAILABLE: '浏览器本地数据库不可用，请检查隐私设置后重试',
@@ -1956,8 +3307,15 @@ function providerVisionCapability(providerId, config = {}) {
 
 // Compatible editor render contract: document.getElementById('supportsVision').checked = config.supportsVision === true
 
-function markProfileEditorDirty() {
+function markProfileEditorDirty(event) {
+  const fieldId = String(event?.target?.id || '*');
+  profileDirtyFields.add(fieldId);
   profileEditorDirty = true;
+}
+
+function clearProfileEditorDirty() {
+  profileDirtyFields.clear();
+  profileEditorDirty = false;
 }
 
 function canLeaveProfileEditor(action = 'switch') {
@@ -1965,7 +3323,7 @@ function canLeaveProfileEditor(action = 'switch') {
   const message = '当前 Profile 有未保存修改，是否放弃并继续？';
   const canConfirm = typeof window !== 'undefined' && typeof window.confirm === 'function';
   if (canConfirm && window.confirm(message)) {
-    profileEditorDirty = false;
+    clearProfileEditorDirty();
     return true;
   }
   showStatus(`${message}（请先保存或取消${action}）`, 'info');
@@ -2012,7 +3370,12 @@ function profileEntries() {
 function profileOptionLabel(profile) {
   const model = profile?.config?.model || profile?.model;
   const vision = providerVisionCapability(profile?.providerId, profile?.config || {});
-  return `${profile?.name || '未命名'} · ${model || '未填写模型'} · ${vision ? '视觉' : '仅文本'}`;
+  const providerLabel = profile?.providerId === 'openai-compatible'
+    ? (compatiblePresetFor(profile?.config?.presetId)?.label ||
+      state?.providers?.[profile?.providerId]?.label)
+    : state?.providers?.[profile?.providerId]?.label;
+  return `${profile?.name || '未命名'} · ${providerLabel || profile?.providerId || '未选服务商'} · ` +
+    `${model || '未填写模型'} · ${vision ? '视觉' : '仅文本'}`;
 }
 
 function renderProfileList() {
@@ -2046,13 +3409,40 @@ function renderProviderOptions() {
   if (!select || !state?.providers) return;
   const current = select.value;
   select.replaceChildren();
-  Object.entries(state.providers).forEach(([providerId, definition]) => {
+  const directGroup = document.createElement('optgroup');
+  directGroup.label = '常用服务商';
+  Object.entries(state.providers)
+    .filter(([providerId]) => providerId !== 'openai-compatible')
+    .forEach(([providerId, definition]) => {
+      const option = document.createElement('option');
+      option.value = providerId;
+      option.textContent = definition.label;
+      directGroup.appendChild(option);
+    });
+  select.appendChild(directGroup);
+
+  const domesticGroup = document.createElement('optgroup');
+  domesticGroup.label = '国内模型服务商';
+  compatiblePresets().filter(preset => preset.id !== 'custom').forEach(preset => {
     const option = document.createElement('option');
-    option.value = providerId;
-    option.textContent = definition.label;
-    select.appendChild(option);
+    option.value = `${COMPATIBLE_PROVIDER_VALUE_PREFIX}${preset.id}`;
+    option.textContent = preset.label;
+    domesticGroup.appendChild(option);
   });
-  if (current && state.providers[current]) select.value = current;
+  select.appendChild(domesticGroup);
+
+  const customGroup = document.createElement('optgroup');
+  customGroup.label = '其他接口';
+  const custom = document.createElement('option');
+  custom.value = 'openai-compatible';
+  custom.textContent = state.providers['openai-compatible']?.label ||
+    '自定义 OpenAI 兼容接口';
+  customGroup.appendChild(custom);
+  select.appendChild(customGroup);
+
+  if (current && [...select.options].some(option => option.value === current)) {
+    select.value = current;
+  }
 }
 
 function renderProfileEditor() {
@@ -2070,11 +3460,13 @@ function renderProfileEditor() {
   const config = profile?.config || {};
   renderProviderOptions();
   document.getElementById('profileName').value = profile?.name || '';
-  document.getElementById('providerId').value = profile?.providerId || entries[0][1]?.providerId || '';
+  const selectionValue = providerSelectionValue(profile) ||
+    providerSelectionValue(entries[0][1]);
+  document.getElementById('providerId').value = selectionValue;
   const model = document.getElementById('model');
   model.value = config.model ||
     state.providers?.[profile?.providerId]?.defaultModel || '';
-  model.dataset.providerId = document.getElementById('providerId').value;
+  model.dataset.providerId = selectionValue;
   const apiKey = document.getElementById('apiKey');
   apiKey.value = '';
   apiKey.placeholder = config.hasApiKey
@@ -2082,7 +3474,15 @@ function renderProfileEditor() {
   document.getElementById('credentialState').textContent = config.hasApiKey
     ? 'Key 已保存' : '尚未配置';
   const compatible = profile?.providerId === 'openai-compatible';
+  const localCodex = profile?.providerId === 'codex-local';
   document.getElementById('compatibleFields').hidden = !compatible;
+  document.getElementById('codexLocalFields').hidden = !localCodex;
+  document.getElementById('apiKeyField').hidden = localCodex;
+  if (localCodex) {
+    document.getElementById('credentialState').textContent = '使用本机 Codex 登录';
+    document.getElementById('codexReasoningEffort').value =
+      config.reasoningEffort || 'auto';
+  }
   if (compatible) {
     document.getElementById('baseUrl').value = config.baseUrl || '';
     document.getElementById('authHeader').value = config.authHeader || 'Authorization';
@@ -2093,7 +3493,9 @@ function renderProfileEditor() {
     renderCompatiblePresetOptions();
     renderCompatiblePresetHint(compatiblePresetFor(config.presetId) || compatiblePresetFor('custom'));
   }
-  renderModelSuggestions(profile?.providerId);
+  document.getElementById('compatiblePresetField').hidden =
+    compatible && selectionValue !== 'openai-compatible';
+  renderModelSuggestions(selectionValue);
   const tokenPolicy = profile?.tokenPolicy || {};
   document.getElementById('tokenModeAuto').checked = tokenPolicy.mode !== 'manual';
   document.getElementById('tokenModeManual').checked = tokenPolicy.mode === 'manual';
@@ -2104,6 +3506,9 @@ function renderProfileEditor() {
   renderTokenPolicyFields();
   renderProfileList();
   renderFigureRouteWarning();
+  scheduleProviderModelDiscovery();
+  if (localCodex) void refreshCodexAuthStatus({ silent: true });
+  else stopCodexAuthPolling();
 }
 
 function renderTokenPolicyFields() {
@@ -2151,7 +3556,9 @@ function renderFigureRouteWarning() {
   const profile = profileById(targetId);
   let vision = providerVisionCapability(profile?.providerId, profile?.config || {});
   if (targetId && targetId === selectedProfileId) {
-    const providerId = document.getElementById('providerId')?.value || profile?.providerId;
+    const providerId = providerSelectionDescriptor(
+      document.getElementById('providerId')?.value || profile?.providerId
+    ).providerId;
     const editorConfig = { ...(profile?.config || {}) };
     if (providerId === 'openai-compatible') {
       editorConfig.supportsVision = document.getElementById('supportsVision')?.checked === true;
@@ -2164,7 +3571,8 @@ function renderFigureRouteWarning() {
 
 function collectProfile() {
   const current = profileById(selectedProfileId) || {};
-  const providerId = document.getElementById('providerId').value;
+  const descriptor = providerSelectionDescriptor();
+  const providerId = descriptor.providerId;
   const config = { ...(current.config || {}) };
   delete config.apiKey;
   delete config.hasApiKey;
@@ -2174,13 +3582,21 @@ function collectProfile() {
   const enteredKey = document.getElementById('apiKey').value.trim();
   if (enteredKey) config.apiKey = enteredKey;
   if (providerId === 'openai-compatible') {
-    config.presetId = document.getElementById('compatiblePreset').value || 'custom';
+    config.presetId = descriptor.presetId ||
+      document.getElementById('compatiblePreset').value || 'custom';
     config.baseUrl = document.getElementById('baseUrl').value.trim();
     config.authHeader = document.getElementById('authHeader').value.trim() || 'Authorization';
     config.authPrefix = document.getElementById('authPrefix').value.trim();
     config.jsonMode = document.getElementById('jsonMode').checked;
     config.supportsVision = document.getElementById('supportsVision').checked;
+  } else if (providerId === 'codex-local') {
+    config.reasoningEffort =
+      document.getElementById('codexReasoningEffort').value || 'auto';
+    delete config.apiKey;
+    delete config.baseUrl;
+    delete config.supportsVision;
   } else {
+    delete config.reasoningEffort;
     delete config.supportsVision;
   }
   const manual = document.getElementById('tokenModeManual').checked;
@@ -2230,7 +3646,7 @@ async function addApiProfile() {
     });
     selectedProfileId = result.profile?.id || baseId;
     applyState(result);
-    profileEditorDirty = false;
+    clearProfileEditorDirty();
     showStatus('API Profile 已新增。', 'success');
   } catch (error) {
     showStatus(`新增 Profile 失败：${friendlyError(error)}`, 'error');
@@ -2249,7 +3665,7 @@ async function duplicateApiProfile() {
     const result = await callBackground({ type: 'LLM_DUPLICATE_PROFILE', profileId: selectedProfileId });
     selectedProfileId = result.profile?.id || selectedProfileId;
     applyState(result);
-    profileEditorDirty = false;
+    clearProfileEditorDirty();
     showStatus('API Profile 已复制。', 'success');
   } catch (error) {
     showStatus(`复制 Profile 失败：${friendlyError(error)}`, 'error');
@@ -2268,7 +3684,7 @@ async function deleteApiProfile() {
     const result = await callBackground({ type: 'LLM_DELETE_PROFILE', profileId: selectedProfileId });
     selectedProfileId = result.settings?.globalProfileId || '';
     applyState(result);
-    profileEditorDirty = false;
+    clearProfileEditorDirty();
     showStatus('API Profile 已删除。', 'success');
   } catch (error) {
     showStatus(`删除 Profile 失败：${friendlyError(error)}`, 'error');
@@ -2288,21 +3704,29 @@ async function persistForm(silent) {
   try {
     const profile = collectProfile();
     const previous = profileById(profile.id);
-    const firstConfiguration = !previous?.config?.hasApiKey && Boolean(profile.config.apiKey);
+    const firstConfiguration = profile.providerId === 'codex-local'
+      ? previous?.providerId !== 'codex-local'
+      : !previous?.config?.hasApiKey && Boolean(profile.config.apiKey);
     const consentGranted = document.getElementById('consentGranted').checked;
     const preferredMode = firstConfiguration && consentGranted
       ? 'llm' : document.getElementById('analysisMode').value;
     const globalProfileId = document.getElementById('globalProfileId').value;
     const taskRoutes = collectTaskRoutes();
-    const figurePanelFollowupPrompts = collectPanelFollowupPrompts();
+    const figurePanelFollowupPresets = collectPanelFollowupPresets();
+    const figurePanelFollowupPrompts =
+      panelFollowupPromptMap(figurePanelFollowupPresets);
+    const articleChatQuickPrompts = collectArticleChatQuickPrompts();
     // Freeze every user-edited value before the first asynchronous save.
     // applyState() re-renders the form after saving the Profile and must not
     // replace a preference changed in the same click with its previous value.
     const preferences = {
       mode: preferredMode,
       autoAnalyze: document.getElementById('autoAnalyze').checked,
+      autoCacheFigureImages: document.getElementById('autoCacheFigureImages').checked,
       consentGranted,
-      figurePanelFollowupPrompts
+      figurePanelFollowupPrompts,
+      figurePanelFollowupPresets,
+      articleChatQuickPrompts
     };
     await requestEndpointPermission(profile.providerId, profile.config);
     const saved = await callBackground({ type: 'LLM_SAVE_PROFILE', profile });
@@ -2319,7 +3743,7 @@ async function persistForm(silent) {
       preferences
     });
     applyState(updated);
-    profileEditorDirty = false;
+    clearProfileEditorDirty();
     if (onboardingUi.active && hasUsableApiConfiguration()) {
       await setOnboardingStepState('api', 'completed');
     }
@@ -2358,7 +3782,9 @@ async function testProvider() {
     if (!saved) return;
     const { profileId } = saved;
     const result = await callBackground({ type: 'LLM_TEST_PROFILE', profileId });
-    showStatus(`连接成功：${result.providerId} / ${result.model}`, 'success');
+    const account = result.accountType
+      ? ` · ${result.accountType}${result.planType ? `/${result.planType}` : ''}` : '';
+    showStatus(`连接成功：${result.providerId} / ${result.model}${account}`, 'success');
   } catch (error) {
     showStatus(`连接失败：${friendlyError(error)}`, 'error');
   } finally {

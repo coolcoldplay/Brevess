@@ -62,6 +62,91 @@ test('reinjects the content script and retries when a tab has no message receive
   );
 });
 
+test('optional tab messages never inject a content script into inactive pages', async () => {
+  let attempts = 0;
+  const chromeApi = {
+    tabs: {
+      async sendMessage() {
+        attempts += 1;
+        throw new Error('Could not establish connection. Receiving end does not exist.');
+      }
+    }
+  };
+  const response = await messenger.sendTabMessageIfPresent(
+    chromeApi,
+    12,
+    { action: 'setSidePanelShortcutScope', enabled: false }
+  );
+  assert.equal(response, null);
+  assert.equal(attempts, 1);
+});
+
+test('Figure refresh hot-loads the latest extractor into an existing content world', async () => {
+  const calls = [];
+  const chromeApi = {
+    scripting: {
+      async executeScript(details) {
+        calls.push(details);
+        if (details.func) {
+          return [{
+            result: {
+              revision: messenger.FIGURE_EXTRACTOR_REVISION,
+              available: true,
+              probeFigureId: 'figure-1',
+              figures: [
+                { figureId: 'figure-1', figureLabel: 'Figure 1' },
+                { figureId: 'figure-2', figureLabel: 'Figure 2' }
+              ]
+            }
+          }];
+        }
+        return [];
+      }
+    }
+  };
+
+  const result = await messenger.refreshFigureExtractorInTab(chromeApi, 42);
+
+  assert.deepEqual(calls[0], {
+    target: { tabId: 42 },
+    files: ['core/figure-extractor.js']
+  });
+  assert.equal(typeof calls[1].func, 'function');
+  assert.deepEqual(calls[1].args, [messenger.FIGURE_EXTRACTOR_REVISION]);
+  assert.deepEqual(
+    result.figures.map(figure => figure.figureId),
+    ['figure-1', 'figure-2']
+  );
+  await assert.rejects(
+    messenger.refreshFigureExtractorInTab(chromeApi, 'not-a-tab'),
+    /INVALID_TAB_ID/
+  );
+});
+
+test('Figure refresh fails loudly when the hot-loaded parser is not active', async () => {
+  const chromeApi = {
+    scripting: {
+      async executeScript(details) {
+        if (details.func) {
+          return [{
+            result: {
+              available: true,
+              probeFigureId: 'figure-360',
+              figures: []
+            }
+          }];
+        }
+        return [];
+      }
+    }
+  };
+
+  await assert.rejects(
+    messenger.refreshFigureExtractorInTab(chromeApi, 42),
+    /FIGURE_EXTRACTOR_HOTLOAD_FAILED/
+  );
+});
+
 test('stale DOM revision markers never suppress reinjection after a receiver failure', async () => {
   const dataset = {
     sciLlmContentRevision: '2.4.0-article-workspaces-r2',

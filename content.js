@@ -1,5 +1,6 @@
 // 内容脚本 - 在网页上执行高亮
-document.documentElement.dataset.sciLlmContentRevision = '2.4.6-build39-publisher-focus-r6';
+document.documentElement.dataset.sciLlmContentRevision =
+    '1.0.0-build1-store-release';
 document.documentElement.dataset.sciReaderSingleColumn = 'true';
 document.documentElement.dataset.sciPublisherFamily =
     globalThis.SciLLM?.selectPublisherAdapter?.(location)?.family || 'generic';
@@ -8,12 +9,20 @@ class SciPaperHighlighter {
         this.highlightedElements = [];
         this.originalContents = new Map();
         this.matchCounts = {}; // 存储每个类别的匹配次数
+        this.activeAnalysisModeId = '';
     }
 
     // 应用高亮
-    applyHighlight(categories, mode) {
-        // 先清除之前的高亮
-        this.clearHighlight();
+    applyHighlight(categories, mode, options = {}) {
+        const analysisModeId = String(options.analysisModeId || 'regex-default');
+        this.activeAnalysisModeId = analysisModeId;
+        this.allowedParagraphIds = options.allowedParagraphIds instanceof Set
+            ? options.allowedParagraphIds
+            : Array.isArray(options.allowedParagraphIds)
+                ? new Set(options.allowedParagraphIds.map(String)) : null;
+        // 仅替换当前分析模式的正则高亮，保留其他模式已生成的结果。
+        this.clearHighlight(analysisModeId);
+        this.activeAnalysisModeId = analysisModeId;
         
         // 重置匹配计数
         this.matchCounts = {};
@@ -40,6 +49,7 @@ class SciPaperHighlighter {
         console.log(`SCI高亮助手: 已高亮 ${this.highlightedElements.length} 个元素`);
         console.log('匹配计数:', this.matchCounts);
         
+        this.activeAnalysisModeId = '';
         return this.matchCounts;
     }
 
@@ -48,6 +58,12 @@ class SciPaperHighlighter {
         const regexes = [];
         
         Object.entries(categories).forEach(([key, category]) => {
+            const excludeRegexes = (Array.isArray(category.excludePatterns)
+                ? category.excludePatterns : [])
+                .map(pattern => {
+                    try { return new RegExp(pattern, 'gi'); } catch (_) { return null; }
+                })
+                .filter(Boolean);
             if (category.isRegex) {
                 // 正则表达式模式
                 const regex = new RegExp(category.patterns[0], 'gi');
@@ -57,7 +73,8 @@ class SciPaperHighlighter {
                     color: category.color,
                     name: category.name,
                     originalPattern: category.patterns[0],
-                    isRegex: true
+                    isRegex: true,
+                    excludeRegexes
                 });
             } else {
                 // 简单列表模式
@@ -75,7 +92,8 @@ class SciPaperHighlighter {
                         color: category.color,
                         name: category.name,
                         originalPattern: pattern,
-                        isRegex: false
+                        isRegex: false,
+                        excludeRegexes
                     });
                 });
             }
@@ -88,7 +106,26 @@ class SciPaperHighlighter {
     findMatches(text, regexes, mode) {
         const matches = [];
         
-        regexes.forEach(({ regex, category, color, name, originalPattern }) => {
+        regexes.forEach(({
+            regex, category, color, name, originalPattern, excludeRegexes = []
+        }) => {
+            const excludedRanges = [];
+            excludeRegexes.forEach(excludeRegex => {
+                excludeRegex.lastIndex = 0;
+                let excluded;
+                while ((excluded = excludeRegex.exec(text)) !== null) {
+                    if (!excluded[0]) {
+                        excludeRegex.lastIndex = Math.max(
+                            excludeRegex.lastIndex + 1, excluded.index + 1
+                        );
+                        continue;
+                    }
+                    excludedRanges.push({
+                        start: excluded.index,
+                        end: excluded.index + excluded[0].length
+                    });
+                }
+            });
             regex.lastIndex = 0; // 重置正则状态
             let match;
             
@@ -105,6 +142,11 @@ class SciPaperHighlighter {
                     const bounds = SciLLM.findScientificSentenceBounds(text, startIndex, endIndex);
                     highlightStart = bounds.start;
                     highlightEnd = bounds.end;
+                }
+                if (excludedRanges.some(range =>
+                    range.start < highlightEnd && range.end > highlightStart
+                )) {
+                    continue;
                 }
                 
                 matches.push({
@@ -203,6 +245,7 @@ class SciPaperHighlighter {
         const span = document.createElement('span');
         span.className = 'sci-highlight';
         span.dataset.highlightMode = mode;
+        span.dataset.analysisModeId = this.activeAnalysisModeId || 'regex-default';
         span.dataset.source = 'regex';
         span.dataset.categoryId = match.category;
         span.dataset.categoryName = match.name;
@@ -216,6 +259,12 @@ class SciPaperHighlighter {
         span.style.cursor = 'help';
         span.style.transition = 'all 0.2s';
         span.style.position = 'relative';
+        span.tabIndex = 0;
+        span.setAttribute('role', 'button');
+        span.setAttribute(
+            'aria-label',
+            `${match.name}：${match.matchedText || match.matchedKeyword || ''}。按回车可修改类别或备注`
+        );
         const tooltipText = mode === 'sentence'
             ? `${match.name}\n匹配词：${match.matchedKeyword}`
             : match.name;
@@ -231,6 +280,19 @@ class SciPaperHighlighter {
             event.target.style.boxShadow = 'none';
             event.target.style.zIndex = 'auto';
             this.hideTooltip();
+        });
+        const openEditor = async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const manualMark = await ensureAutomaticHighlightAnnotation(
+                span, { sourceType: 'regex', match }
+            );
+            if (manualMark) showHighlightContextPopover(manualMark);
+        };
+        span.addEventListener('click', event => { void openEditor(event); });
+        span.addEventListener('keydown', event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            void openEditor(event);
         });
         return span;
     }
@@ -329,7 +391,7 @@ class SciPaperHighlighter {
                 匹配词：<strong>${match.matchedKeyword}</strong>
             </div>
         `;
-        tooltip.innerHTML = content;
+        tooltip.replaceChildren(...this.createTooltipContent(element, match));
         
         document.body.appendChild(tooltip);
         
@@ -363,6 +425,40 @@ class SciPaperHighlighter {
     }
 
     // 隐藏tooltip
+    createTooltipContent(element, match = {}) {
+        const manualMark = element?.matches?.('.sci-manual-highlight')
+            ? element : element?.closest?.('.sci-manual-highlight');
+        const annotation = manualMark
+            ? manualAnnotationById(manualMark.dataset.annotationId) : null;
+        const categoryName = annotation?.categorySnapshot?.name ||
+            match.name || element?.dataset?.categoryName || '未分类';
+        const categoryColor = annotation?.categorySnapshot?.color ||
+            match.color || element?.dataset?.categoryColor || '#F2D978';
+        const heading = document.createElement('div');
+        heading.style.cssText =
+            `font-weight:600;margin-bottom:4px;color:${categoryColor};`;
+        heading.textContent = categoryName;
+        const children = [heading];
+        const matchedKeyword = String(
+            match.matchedKeyword || annotation?.sourceQuery || ''
+        ).trim();
+        if (matchedKeyword) {
+            const detail = document.createElement('div');
+            detail.style.cssText = 'font-size:11px;opacity:.9;';
+            detail.textContent = annotation?.sourceType === 'semantic'
+                ? `检索意图：${matchedKeyword}` : `匹配词：${matchedKeyword}`;
+            children.push(detail);
+        }
+        if (String(annotation?.note || '').trim()) {
+            const note = document.createElement('div');
+            note.style.cssText =
+                'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.24);font-size:11px;';
+            note.textContent = `备注：${annotation.note}`;
+            children.push(note);
+        }
+        return children;
+    }
+
     hideTooltip() {
         const tooltip = document.getElementById('sci-highlight-tooltip');
         if (tooltip) {
@@ -372,6 +468,8 @@ class SciPaperHighlighter {
 
     // 获取匹配计数（不应用高亮，只统计）
     getMatchCounts(rules) {
+        const previousAnalysisModeId = this.activeAnalysisModeId;
+        this.activeAnalysisModeId = '__count__';
         const counts = {};
         Object.keys(rules).forEach(key => {
             counts[key] = 0;
@@ -385,25 +483,56 @@ class SciPaperHighlighter {
             
             const text = node.textContent;
             
-            categoryRegexes.forEach(({ regex, category }) => {
+            categoryRegexes.forEach(({ regex, category, excludeRegexes = [] }) => {
+                const excludedRanges = [];
+                excludeRegexes.forEach(excludeRegex => {
+                    excludeRegex.lastIndex = 0;
+                    let excluded;
+                    while ((excluded = excludeRegex.exec(text)) !== null) {
+                        if (!excluded[0]) {
+                            excludeRegex.lastIndex = Math.max(
+                                excludeRegex.lastIndex + 1, excluded.index + 1
+                            );
+                            continue;
+                        }
+                        excludedRanges.push({
+                            start: excluded.index,
+                            end: excluded.index + excluded[0].length
+                        });
+                    }
+                });
                 regex.lastIndex = 0;
                 let match;
                 while ((match = regex.exec(text)) !== null) {
+                    if (excludedRanges.some(range =>
+                        range.start < match.index + match[0].length &&
+                        range.end > match.index
+                    )) continue;
                     counts[category]++;
                 }
             });
         });
-        
+        this.activeAnalysisModeId = previousAnalysisModeId;
         return counts;
     }
 
     // 清除高亮
-    clearHighlight() {
+    clearHighlight(analysisModeId = '') {
         // 隐藏tooltip
         this.hideTooltip();
 
-        // 正则高亮独立清除，只解包本实例创建的 sci-highlight 节点。
-        this.highlightedElements.forEach(element => {
+        // 正则高亮独立清除，只解包插件创建的 sci-highlight 节点。
+        // 手动编辑正则高亮会重建外层注释 DOM，不能只依赖旧的内存节点引用。
+        const targetId = String(analysisModeId || '');
+        const matchesTargetMode = element =>
+            !targetId ||
+            String(element?.dataset?.analysisModeId || 'regex-default') === targetId;
+        const trackedTargets = this.highlightedElements.filter(matchesTargetMode);
+        const connectedTargets = [...document.querySelectorAll(
+            '.sci-highlight[data-source="regex"]'
+        )].filter(matchesTargetMode);
+        const targets = [...new Set([...connectedTargets, ...trackedTargets])];
+        [...targets].reverse().forEach(element => {
             const parent = element?.parentNode;
             if (!parent) return;
             while (element.firstChild) parent.insertBefore(element.firstChild, element);
@@ -411,11 +540,17 @@ class SciPaperHighlighter {
             parent.normalize();
         });
         
-        this.highlightedElements = [];
-        this.originalContents.clear();
+        this.highlightedElements = targetId
+            ? this.highlightedElements.filter(
+                element => !targets.includes(element) && element?.isConnected
+            )
+            : [];
+        if (!targetId) this.originalContents.clear();
         this.matchCounts = {};
         
-        console.log('SCI高亮助手: 已清除所有高亮');
+        console.log(targetId
+            ? `SCI高亮助手: 已替换分析模式 ${targetId} 的高亮`
+            : 'SCI高亮助手: 已清除所有高亮');
     }
 
     // 获取所有文本节点
@@ -452,6 +587,13 @@ class SciPaperHighlighter {
         if (!node || !node.parentNode) return true;
         
         const parent = node.parentNode;
+        if (this.allowedParagraphIds instanceof Set) {
+            const element = parent.nodeType === Node.ELEMENT_NODE
+                ? parent : parent.parentElement;
+            const paragraph = element?.closest?.('[data-sci-llm-paragraph-id]');
+            const paragraphId = String(paragraph?.dataset?.sciLlmParagraphId || '');
+            if (!paragraphId || !this.allowedParagraphIds.has(paragraphId)) return true;
+        }
         const tagName = parent.tagName ? parent.tagName.toLowerCase() : '';
         
         // 跳过的标签
@@ -459,7 +601,14 @@ class SciPaperHighlighter {
         if (skipTags.includes(tagName)) return true;
         
         // 跳过已经高亮的元素
-        if (parent.classList && parent.classList.contains('sci-highlight')) return true;
+        if (parent.classList && parent.classList.contains('sci-highlight')) {
+            const parentModeId = String(
+                parent.dataset?.analysisModeId || 'regex-default'
+            );
+            if (!this.activeAnalysisModeId || parentModeId === this.activeAnalysisModeId) {
+                return true;
+            }
+        }
         
         // 跳过输入框等
         if (parent.isContentEditable) return true;
@@ -700,8 +849,77 @@ const articleNavigatorState = {
     activeTab: 'outline',
     depth: 'major',
     summariesVisible: false,
-    expandedSectionIds: new Set()
+    expandedSectionIds: new Set(),
+    analysisSectionSelection: new Map()
 };
+const DEFAULT_ANALYSIS_SECTION_KINDS = new Set([
+    'abstract', 'main', 'introduction', 'results', 'discussion', 'conclusion'
+]);
+
+function defaultArticleAnalysisSectionSelection(sectionKind) {
+    return DEFAULT_ANALYSIS_SECTION_KINDS.has(String(sectionKind || '').toLowerCase());
+}
+
+function articleAnalysisSectionSelected(sectionId, sectionKind) {
+    const key = String(sectionId || '');
+    if (articleNavigatorState.analysisSectionSelection.has(key)) {
+        return articleNavigatorState.analysisSectionSelection.get(key) === true;
+    }
+    return defaultArticleAnalysisSectionSelection(sectionKind);
+}
+
+function selectedArticleAnalysisParagraphIds(snapshot = getCanonicalArticleSnapshot()) {
+    return new Set((Array.isArray(snapshot?.paragraphs) ? snapshot.paragraphs : [])
+        .filter(paragraph => articleAnalysisSectionSelected(
+            paragraph.sectionId,
+            paragraph.sectionKind
+        ))
+        .flatMap(paragraph => [
+            String(paragraph.paragraphId || ''),
+            String(paragraph.sourceKey || '')
+        ])
+        .filter(Boolean));
+}
+
+function filterParagraphsForArticleAnalysis(paragraphs = []) {
+    return (Array.isArray(paragraphs) ? paragraphs : []).filter(paragraph =>
+        articleAnalysisSectionSelected(paragraph.sectionId, paragraph.sectionKind)
+    );
+}
+
+function setArticleAnalysisSectionSelection(sectionIds, selected) {
+    const ids = (Array.isArray(sectionIds) ? sectionIds : [sectionIds])
+        .map(String).filter(Boolean);
+    ids.forEach(sectionId => {
+        articleNavigatorState.analysisSectionSelection.set(sectionId, selected === true);
+    });
+    const allowedParagraphIds = selectedArticleAnalysisParagraphIds();
+    if (lastRegexHighlightRequest?.categories) {
+        highlighter.applyHighlight(
+            lastRegexHighlightRequest.categories,
+            lastRegexHighlightRequest.mode || 'word',
+            {
+                allowedParagraphIds,
+                analysisModeId: lastRegexHighlightRequest.analysisModeId
+            }
+        );
+    }
+    if (lastLlmAnalysis?.rawAnalysis && Array.isArray(lastLlmAnalysis.paragraphs)) {
+        renderLlmAnalysis(
+            lastLlmAnalysis.rawAnalysis,
+            lastLlmAnalysis.paragraphs,
+            lastLlmAnalysis.threshold || 0.8,
+            lastLlmAnalysis.extractionDiagnostics
+        );
+    }
+    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
+    scheduleCurrentArticleArchiveSave();
+    return {
+        success: true,
+        snapshot: buildArticleWorkspaceSnapshot(),
+        selectedParagraphCount: allowedParagraphIds.size
+    };
+}
 const REVIEW_ROLE_LABELS = Object.freeze({
     article_meta: '文章信息',
     introduction: '引言',
@@ -966,6 +1184,36 @@ async function waitForLocalOperation(operation) {
     if (operation.cancelled) throw cancelledOperationError();
 }
 
+async function sendLlmOperationControlWithDeadline(operationId, command, timeoutMs = 1800) {
+    let timer = null;
+    try {
+        const response = await Promise.race([
+            chrome.runtime.sendMessage({
+                type: 'LLM_CONTROL_OPERATION',
+                operationId,
+                command
+            }),
+            new Promise(resolve => {
+                timer = setTimeout(() => resolve({
+                    success: true,
+                    pending: true,
+                    reason: 'CONTROL_CONFIRMATION_TIMEOUT'
+                }), timeoutMs);
+            })
+        ]);
+        return response || { success: true, pending: true };
+    } catch (error) {
+        return {
+            success: true,
+            pending: true,
+            reason: 'CONTROL_CONFIRMATION_FAILED',
+            error: error?.message || String(error)
+        };
+    } finally {
+        if (timer !== null) clearTimeout(timer);
+    }
+}
+
 async function controlLlmOperation(scope, command) {
     const operation = scope === 'figure'
         ? figureOperationState.active : llmOperationState.active;
@@ -981,6 +1229,12 @@ async function controlLlmOperation(scope, command) {
         operation.waiters.splice(0).forEach(resolve => resolve());
     }
     if (scope === 'figure') {
+        if (command === 'cancel') {
+            cancelPendingFigureProgress(figureWorkspaceInventory, {
+                completedFigures: figureAnalysisStatus.completedFigures,
+                errorCode: 'CANCELLED'
+            });
+        }
         updateFigureAnalysisStatus({
             paused: operation.paused,
             running: !operation.cancelled,
@@ -993,18 +1247,19 @@ async function controlLlmOperation(scope, command) {
                     : '已继续 Figure 解读。'
         });
     }
-    const response = await chrome.runtime.sendMessage({
-        type: 'LLM_CONTROL_OPERATION',
-        operationId: operation.operationId,
+    const response = await sendLlmOperationControlWithDeadline(
+        operation.operationId,
         command
-    });
+    );
     if (!response?.success) {
         const error = new Error(response?.error?.message || '无法控制分析任务');
         error.code = response?.error?.code;
         throw error;
     }
     return { success: true, scope, command, operationId: operation.operationId,
-        paused: operation.paused, cancelled: operation.cancelled, active: true };
+        paused: operation.paused, cancelled: operation.cancelled, active: true,
+        backendAcknowledged: response.pending !== true,
+        backendPendingReason: response.pending === true ? response.reason : '' };
 }
 
 function throwStaleFigureOperation(operation) {
@@ -1341,9 +1596,13 @@ function closeArticleNavigationPanels() {
     document.getElementById('sci-review-outline-panel')?.remove();
 }
 
-function clearLlmHighlights() {
+function clearLlmHighlights(analysisModeId = '') {
     closeLlmFeedbackPopover();
-    document.querySelectorAll('.sci-llm-highlight').forEach(mark => {
+    const targetId = String(analysisModeId || '');
+    [...document.querySelectorAll('.sci-llm-highlight')]
+        .filter(mark => !targetId ||
+            String(mark.dataset.analysisModeId || 'llm-default') === targetId)
+        .reverse().forEach(mark => {
         const parent = mark.parentNode;
         if (!parent) return;
         while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
@@ -1476,7 +1735,7 @@ function renderReadingPanel(analysis) {
     };
     const panel = document.createElement('aside');
     panel.id = 'sci-reading-panel';
-    panel.setAttribute('aria-label', '论文阅读视图');
+    panel.setAttribute('aria-label', '论文分析模式');
 
     const header = document.createElement('div');
     header.className = 'sci-reading-header';
@@ -1568,7 +1827,10 @@ function renderReadingPanel(analysis) {
 }
 
 function applyLlmHighlights(annotations, analysisMeta = {}) {
-    clearLlmHighlights();
+    const analysisModeId = String(
+        analysisMeta.readingViewId || 'llm-default'
+    );
+    clearLlmHighlights(analysisModeId);
     const categoryMap = SciLLM.createBuiltInCategories();
     (Array.isArray(analysisMeta.categories) ? analysisMeta.categories : []).forEach(category => {
         categoryMap[category.categoryId] = category;
@@ -1631,6 +1893,7 @@ function applyLlmHighlights(annotations, analysisMeta = {}) {
             mark.tabIndex = 0;
             mark.setAttribute('role', 'button');
             mark.dataset.source = 'llm';
+            mark.dataset.analysisModeId = analysisModeId;
             mark.dataset.categoryId = categories[0]?.categoryId || '';
             mark.dataset.categories = categories.map(item => item.categoryId).join(',');
             mark.dataset.annotationIds = categories.map(item => item.annotationId).filter(Boolean).join(',');
@@ -1694,7 +1957,10 @@ function renderLlmAnalysis(rawAnalysis, paragraphs, threshold, extractionDiagnos
         rawAnalysis.annotations,
         threshold
     );
-    const applied = applyLlmHighlights(filtered.annotations, {
+    const allowedParagraphIds = selectedArticleAnalysisParagraphIds();
+    const applied = applyLlmHighlights(filtered.annotations.filter(annotation =>
+        allowedParagraphIds.has(String(annotation?.paragraphId || ''))
+    ), {
         ...rawAnalysis,
         paragraphs
     });
@@ -1821,6 +2087,9 @@ let currentManualDocument = null;
 let currentManualBlocks = [];
 let currentManualCategories = [];
 let currentManualActiveCategories = [];
+let currentManualAnalysisModes = [];
+let currentManualAnalysisModeId = '';
+let currentManualPreparedAnalysisModeId = '';
 let currentManualUnresolved = [];
 let currentManualSelection = null;
 let currentManualRebindId = '';
@@ -1876,12 +2145,64 @@ function announceSidePanelDocumentReady() {
         type: 'SIDE_PANEL_DOCUMENT_READY',
         url: location.href
     }).then(response => {
-        if (response?.success && response.activated) armSidePanelRestore();
+        if (response?.success && response.shouldArmRestore) armSidePanelRestore();
+        else if (response?.success) disarmSidePanelRestore();
     }).catch(() => {});
 }
 
 window.addEventListener('pageshow', announceSidePanelDocumentReady, true);
 setTimeout(announceSidePanelDocumentReady, 0);
+
+let sidePanelShortcutScope = {
+    enabled: false,
+    shortcuts: {}
+};
+
+function setSidePanelShortcutScope(scope = {}) {
+    const source = scope?.shortcuts && typeof scope.shortcuts === 'object'
+        ? scope.shortcuts : {};
+    sidePanelShortcutScope = {
+        enabled: scope?.enabled === true,
+        shortcuts: Object.fromEntries(
+            Object.entries(source)
+                .map(([actionId, key]) => [
+                    String(actionId || ''),
+                    String(key || '').normalize('NFKC').trim().toUpperCase()
+                ])
+                .filter(([actionId, key]) =>
+                    Boolean(actionId) && /^[A-Z0-9]$/.test(key))
+        )
+    };
+    return sidePanelShortcutScope.enabled;
+}
+
+function isPageShortcutEditableTarget(target) {
+    return target instanceof Element && Boolean(target.closest(
+        'input, textarea, select, option, [contenteditable]:not([contenteditable="false"]), ' +
+        '[role="textbox"], dialog'
+    ));
+}
+
+function handleSidePanelGlobalShortcut(event) {
+    if (!sidePanelShortcutScope.enabled || event.defaultPrevented ||
+        event.isComposing || event.repeat || event.ctrlKey || event.metaKey ||
+        event.altKey || isPageShortcutEditableTarget(event.target) ||
+        getFigureImageViewerState().open) return;
+    const key = String(event.key || '').normalize('NFKC').trim().toUpperCase();
+    if (!key || !Object.values(sidePanelShortcutScope.shortcuts).includes(key)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+        chrome.runtime.sendMessage({
+            type: 'SIDE_PANEL_GLOBAL_SHORTCUT',
+            key
+        }).catch(() => undefined);
+    } catch (_) {
+        // Reloading an unpacked extension invalidates old content contexts.
+    }
+}
+
+document.addEventListener('keydown', handleSidePanelGlobalShortcut, true);
 
 function manualElementForNode(node) {
     if (!node) return null;
@@ -2018,6 +2339,57 @@ function uniqueManualCategories(categories) {
         });
 }
 
+function applyManualAnalysisSettings(publicState = {}, { prepared = false } = {}) {
+    const readingViews = publicState?.readingViews &&
+        typeof publicState.readingViews === 'object'
+        ? publicState.readingViews : {};
+    currentManualAnalysisModes = Object.entries(readingViews).map(([id, mode]) => ({
+        id: String(id || ''),
+        name: String(mode?.name || id || '未命名模式'),
+        categoryIds: [...new Set((Array.isArray(mode?.categoryIds)
+            ? mode.categoryIds : []).map(String).filter(Boolean))]
+    })).filter(mode => mode.id);
+    const configuredModeId = String(publicState?.settings?.readingViewId || '');
+    currentManualAnalysisModeId = currentManualAnalysisModes.some(mode =>
+        mode.id === configuredModeId)
+        ? configuredModeId
+        : (currentManualAnalysisModes[0]?.id || '');
+    if (prepared) currentManualPreparedAnalysisModeId = currentManualAnalysisModeId;
+}
+
+function manualCategoriesForAnalysisMode(modeId = currentManualAnalysisModeId) {
+    const selectedModeId = String(modeId || '');
+    if (selectedModeId && selectedModeId === currentManualPreparedAnalysisModeId &&
+        currentManualActiveCategories.length) {
+        return currentManualActiveCategories;
+    }
+    const mode = currentManualAnalysisModes.find(item => item.id === selectedModeId);
+    if (!mode) {
+        return currentManualActiveCategories.length
+            ? currentManualActiveCategories : currentManualCategories;
+    }
+    const categoriesById = new Map(currentManualCategories.map(category => [
+        category.categoryId, category
+    ]));
+    return mode.categoryIds.map(categoryId => categoriesById.get(categoryId))
+        .filter(Boolean);
+}
+
+async function refreshManualAnalysisSettings() {
+    try {
+        const publicState = await sendManualMessage({ type: 'LLM_GET_SETTINGS' });
+        applyManualAnalysisSettings(publicState);
+        if (currentManualSelection?.anchor) {
+            showManualSelectionToolbar({
+                ...currentManualSelection,
+                manualAnalysisModeId: currentManualAnalysisModeId
+            });
+        }
+    } catch (_) {
+        // Keep the last valid mode and categories while settings are being rewritten.
+    }
+}
+
 function showManualStatus(message, type = 'info', persistent = false) {
     clearTimeout(manualStatusTimer);
     manualStatusTimer = null;
@@ -2091,6 +2463,9 @@ function freezeManualDocumentInteraction() {
     currentManualBlocks = [];
     currentManualCategories = [];
     currentManualActiveCategories = [];
+    currentManualAnalysisModes = [];
+    currentManualAnalysisModeId = '';
+    currentManualPreparedAnalysisModeId = '';
     currentManualUnresolved = [];
     currentManualRebindId = '';
     manualUiLifecycle.retain({ blocks: [], unresolved: [], selection: null });
@@ -2169,11 +2544,21 @@ function renderManualAnnotation(annotation, location) {
     range.setEnd(end.node, end.offset);
     const mark = document.createElement('mark');
     mark.className = 'sci-manual-highlight';
+    if (annotation.sourceType === 'regex') mark.classList.add('sci-automatic-annotation');
+    if (annotation.sourceType === 'semantic') mark.classList.add(
+        'sci-automatic-annotation', 'sci-semantic-annotation'
+    );
     mark.dataset.annotationId = annotation.annotationId;
     mark.dataset.categoryId = annotation.categoryId;
     mark.dataset.categoryName = annotation.categorySnapshot?.name || annotation.categoryId;
     mark.dataset.categoryColor = annotation.categorySnapshot?.color || '';
+    mark.dataset.source = annotation.sourceType || 'manual';
+    mark.dataset.sourceQuery = String(annotation.sourceQuery || '');
     mark.style.setProperty('--sci-manual-color', pastelManualColor(annotation.categorySnapshot?.color));
+    mark.style.setProperty(
+        '--sci-annotation-color',
+        annotation.categorySnapshot?.color || '#2F80ED'
+    );
     mark.tabIndex = 0;
     mark.setAttribute('role', 'button');
     mark.setAttribute('aria-label',
@@ -2190,6 +2575,14 @@ function renderManualAnnotation(annotation, location) {
         event.stopPropagation();
         showHighlightContextPopover(mark);
     });
+    mark.addEventListener('mouseenter', () => {
+        highlighter.showTooltip(mark, {
+            name: annotation.categorySnapshot?.name || annotation.categoryId,
+            color: annotation.categorySnapshot?.color || '#F2D978',
+            matchedKeyword: annotation.sourceQuery || ''
+        });
+    });
+    mark.addEventListener('mouseleave', () => highlighter.hideTooltip());
     mark.appendChild(range.extractContents());
     range.insertNode(mark);
     rehydrateLlmFeedbackInsideManualMark(mark, llmSamplesByAnnotationIds);
@@ -2296,6 +2689,7 @@ async function prepareManualDocumentFresh(href) {
             ...currentManualActiveCategories,
             ...(publicState.availableCategories || [])
         ]);
+        applyManualAnalysisSettings(publicState, { prepared: true });
         manualPreparedHref = href;
         manualUiLifecycle.beginDocument(prepared.documentId);
         restoreManualAnnotations(prepared.record?.annotations || []);
@@ -2456,6 +2850,106 @@ async function saveManualAnnotation(annotation, { openNote = false } = {}) {
     return response.annotation;
 }
 
+function automaticAnnotationId(sourceType = 'automatic') {
+    return globalThis.crypto?.randomUUID?.() ||
+        `${sourceType}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildAutomaticAnnotation(block, startOffset, endOffset, options = {}) {
+    const blockText = manualReadableText(block?.element);
+    const quote = blockText.slice(startOffset, endOffset);
+    const category = manualCategoryById(options.categoryId) || normalizeManualUiCategory({
+        categoryId: options.categoryId || 'semantic_match',
+        name: options.categoryName || '智能检索匹配',
+        color: options.categoryColor || '#2F80ED'
+    });
+    const timestamp = new Date().toISOString();
+    return {
+        annotationId: automaticAnnotationId(options.sourceType),
+        categoryId: category.categoryId,
+        categorySnapshot: { name: category.name, color: category.color },
+        quote,
+        prefix: blockText.slice(Math.max(0, startOffset - 180), startOffset),
+        suffix: blockText.slice(endOffset, endOffset + 180),
+        sectionTitle: block.sectionTitle || '',
+        blockFingerprint: block.blockFingerprint,
+        startOffset,
+        endOffset,
+        note: '',
+        status: 'located',
+        sourceType: options.sourceType || 'automatic',
+        sourceQuery: String(options.sourceQuery || '').slice(0, 4000),
+        createdAt: timestamp,
+        updatedAt: timestamp
+    };
+}
+
+async function saveAutomaticAnnotation(block, startOffset, endOffset, options = {}) {
+    if (!block?.element || endOffset <= startOffset) return null;
+    const candidate = buildAutomaticAnnotation(block, startOffset, endOffset, options);
+    if (!candidate.quote.trim()) return null;
+    const duplicate = currentManualDocument?.record?.annotations?.find(annotation =>
+        annotation.blockFingerprint === candidate.blockFingerprint &&
+        annotation.startOffset === candidate.startOffset &&
+        annotation.endOffset === candidate.endOffset &&
+        annotation.sourceType === candidate.sourceType
+    );
+    if (duplicate) {
+        if (duplicate.categoryId !== candidate.categoryId ||
+            duplicate.sourceQuery !== candidate.sourceQuery) {
+            await saveManualAnnotation({
+                ...duplicate,
+                categoryId: candidate.categoryId,
+                categorySnapshot: candidate.categorySnapshot,
+                sourceQuery: candidate.sourceQuery,
+                updatedAt: candidate.updatedAt
+            });
+        }
+        return document.querySelector(
+            `.sci-manual-highlight[data-annotation-id="${manualCssEscape(duplicate.annotationId)}"]`
+        );
+    }
+    await saveManualAnnotation(candidate);
+    return document.querySelector(
+        `.sci-manual-highlight[data-annotation-id="${manualCssEscape(candidate.annotationId)}"]`
+    );
+}
+
+async function ensureAutomaticHighlightAnnotation(mark, options = {}) {
+    const existing = mark?.matches?.('.sci-manual-highlight')
+        ? mark : mark?.closest?.('.sci-manual-highlight');
+    if (existing) return existing;
+    try {
+        await (manualPreparePromise || prepareManualDocument());
+        if (!mark?.isConnected) return null;
+        const block = findManualBlock(mark);
+        if (!block) throw new Error('AUTOMATIC_HIGHLIGHT_BLOCK_NOT_FOUND');
+        const range = document.createRange();
+        range.selectNodeContents(mark);
+        const startOffset = manualBoundaryOffset(
+            block.element, range.startContainer, range.startOffset
+        );
+        const endOffset = manualBoundaryOffset(
+            block.element, range.endContainer, range.endOffset
+        );
+        return await saveAutomaticAnnotation(block, startOffset, endOffset, {
+            sourceType: options.sourceType || 'regex',
+            sourceQuery: options.match?.matchedKeyword || '',
+            categoryId: options.match?.category || mark.dataset.categoryId,
+            categoryName: options.match?.name || mark.dataset.categoryName,
+            categoryColor: options.match?.color || mark.style.borderBottomColor
+        });
+    } catch (error) {
+        showManualStatus(
+            error?.message === 'AUTOMATIC_HIGHLIGHT_BLOCK_NOT_FOUND'
+                ? '无法把该规则高亮定位到正文段落。请刷新导航后重试。'
+                : `无法打开高亮编辑：${error.message}`,
+            'error'
+        );
+        return null;
+    }
+}
+
 async function createManualAnnotation(category, openNote = false) {
     let descriptor = currentManualSelection;
     if (!currentManualDocument?.documentId) {
@@ -2569,16 +3063,130 @@ function appendUnresolvedManualList(toolbar) {
     return panel;
 }
 
+function replaceManualCategoryFromDetail(detail) {
+    const category = normalizeManualUiCategory(detail?.category || detail);
+    if (!category.categoryId) return;
+    const replace = list => {
+        const next = list.filter(item => item.categoryId !== category.categoryId);
+        next.push(category);
+        return uniqueManualCategories(next);
+    };
+    currentManualCategories = replace(currentManualCategories);
+    if (currentManualActiveCategories.some(item =>
+        item.categoryId === category.categoryId
+    )) {
+        currentManualActiveCategories = replace(currentManualActiveCategories);
+    }
+}
+
+function escapeManualFixedPhrase(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function refreshRegexHighlightsAfterPhraseAppend(detail, listType, phrase) {
+    const category = detail?.category;
+    const categoryId = String(category?.categoryId || '');
+    const request = lastRegexHighlightRequest;
+    const legacy = request?.categories?.[categoryId];
+    if (!categoryId || !legacy || !Array.isArray(legacy.patterns) ||
+        !legacy.patterns[0]) return false;
+    const escaped = escapeManualFixedPhrase(phrase);
+    const expression = category.regex?.wholeWord
+        ? `\\b(?:${escaped})\\b` : `(?:${escaped})`;
+    if (listType === 'exclude') {
+        legacy.excludePatterns = [...new Set([
+            ...(Array.isArray(legacy.excludePatterns) ? legacy.excludePatterns : []),
+            expression
+        ])];
+    } else {
+        legacy.patterns = [`(?:${legacy.patterns[0]}|${expression})`];
+    }
+    highlighter.applyHighlight(request.categories, request.mode, {
+        allowedParagraphIds: selectedArticleAnalysisParagraphIds(),
+        analysisModeId: request.analysisModeId
+    });
+    scheduleCurrentArticleArchiveSave();
+    return true;
+}
+
+async function appendManualFixedPhrase(categoryId, listType, descriptor, controls = []) {
+    const phrase = String(descriptor?.text || descriptor?.anchor?.quote || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (!phrase) return;
+    controls.forEach(control => { control.disabled = true; });
+    try {
+        const detail = await sendManualMessage({
+            type: 'CATEGORY_APPEND_FIXED_PHRASE',
+            categoryId,
+            analysisModeId: descriptor?.manualAnalysisModeId || '',
+            listType,
+            phrase
+        });
+        replaceManualCategoryFromDetail(detail);
+        const reapplied = refreshRegexHighlightsAfterPhraseAppend(
+            detail, listType, phrase
+        );
+        releaseSelectionAfterManualAction();
+        const target = listType === 'exclude' ? '黑名单' : '白名单';
+        showManualStatus(
+            detail.appended
+                ? `已加入“${detail.category?.name || categoryId}”${target}` +
+                    (reapplied ? '，当前正则高亮已更新' : '')
+                : `该短语已存在于“${detail.category?.name || categoryId}”${target}`,
+            'success'
+        );
+    } catch (error) {
+        controls.forEach(control => { control.disabled = false; });
+        showManualStatus(`规则短语保存失败：${error.message}`, 'error');
+    }
+}
+
 function showManualSelectionToolbar(descriptor) {
     closeManualSelectionToolbar();
-    currentManualSelection = descriptor;
-    manualUiLifecycle.retain({ selection: descriptor });
+    const selectedModeId = String(
+        descriptor?.manualAnalysisModeId || currentManualAnalysisModeId || ''
+    );
+    const toolbarDescriptor = { ...descriptor, manualAnalysisModeId: selectedModeId };
+    const toolbarCategories = manualCategoriesForAnalysisMode(selectedModeId);
+    currentManualSelection = toolbarDescriptor;
+    manualUiLifecycle.retain({ selection: toolbarDescriptor });
     const toolbar = document.createElement('div');
     toolbar.id = 'sci-manual-toolbar';
     toolbar.dataset.sciPluginUi = 'true';
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-label', '手动荧光笔高亮');
-    toolbar.addEventListener('mousedown', event => event.preventDefault());
+    toolbar.dataset.openNote = String(descriptor?.openNote === true);
+    toolbar.addEventListener('mousedown', event => {
+        // Keep the article selection while category/action buttons are clicked,
+        // but allow native controls such as the analysis-mode <select> to open.
+        if (event.target.closest('button')) event.preventDefault();
+    });
+
+    if (currentManualAnalysisModes.length) {
+        const modeRow = document.createElement('label');
+        modeRow.className = 'sci-manual-mode-row';
+        const modeLabel = document.createElement('span');
+        modeLabel.textContent = '分析模式';
+        const modeSelect = document.createElement('select');
+        modeSelect.setAttribute('aria-label', '切换手动高亮规则的分析模式');
+        currentManualAnalysisModes.forEach(mode => {
+            const option = document.createElement('option');
+            option.value = mode.id;
+            option.textContent = mode.name;
+            option.selected = mode.id === selectedModeId;
+            modeSelect.appendChild(option);
+        });
+        modeSelect.addEventListener('change', () => {
+            toolbarDescriptor.manualAnalysisModeId = modeSelect.value;
+            showManualSelectionToolbar({
+                ...toolbarDescriptor,
+                manualAnalysisModeId: modeSelect.value,
+                openNote: toolbar.dataset.openNote === 'true'
+            });
+        });
+        modeRow.append(modeLabel, modeSelect);
+        toolbar.appendChild(modeRow);
+    }
 
     const primaryRow = document.createElement('div');
     primaryRow.className = 'sci-manual-primary-row';
@@ -2591,7 +3199,7 @@ function showManualSelectionToolbar(descriptor) {
         rebind.addEventListener('click', () => reanchorManualAnnotation(annotation.annotationId));
         primaryRow.appendChild(rebind);
     } else {
-        currentManualActiveCategories.slice(0, 8).forEach(category => {
+        toolbarCategories.slice(0, 8).forEach(category => {
             const button = makeManualButton(category.name, 'sci-manual-category');
             button.style.setProperty('--sci-category-color', pastelManualColor(category.color));
             button.addEventListener('click', () =>
@@ -2601,6 +3209,39 @@ function showManualSelectionToolbar(descriptor) {
         });
     }
     toolbar.appendChild(primaryRow);
+
+    if (!currentManualRebindId && toolbarCategories.length) {
+        const ruleRow = document.createElement('div');
+        ruleRow.className = 'sci-manual-rule-row';
+        const ruleLabel = document.createElement('span');
+        ruleLabel.textContent = '所选文字加入规则';
+        const ruleCategory = document.createElement('select');
+        ruleCategory.setAttribute('aria-label', '选择要填入固定短语的高亮规则');
+        toolbarCategories.forEach(category => {
+            const option = document.createElement('option');
+            option.value = category.categoryId;
+            option.textContent = category.name;
+            ruleCategory.appendChild(option);
+        });
+        const include = makeManualButton('加入白名单', 'sci-manual-rule-include');
+        include.title = '正则匹配到这段固定短语时高亮';
+        const exclude = makeManualButton('加入黑名单', 'sci-manual-rule-exclude');
+        exclude.title = '正则匹配到这段固定短语时排除';
+        include.addEventListener('click', () => {
+            void appendManualFixedPhrase(
+                ruleCategory.value, 'include', toolbarDescriptor,
+                [ruleCategory, include, exclude]
+            );
+        });
+        exclude.addEventListener('click', () => {
+            void appendManualFixedPhrase(
+                ruleCategory.value, 'exclude', toolbarDescriptor,
+                [ruleCategory, include, exclude]
+            );
+        });
+        ruleRow.append(ruleLabel, ruleCategory, include, exclude);
+        toolbar.appendChild(ruleRow);
+    }
 
     const secondaryRow = document.createElement('div');
     secondaryRow.className = 'sci-manual-secondary-row';
@@ -2615,9 +3256,9 @@ function showManualSelectionToolbar(descriptor) {
     });
     secondaryRow.appendChild(note);
 
-    const primaryIds = new Set(currentManualActiveCategories.slice(0, 8)
+    const primaryIds = new Set(toolbarCategories.slice(0, 8)
         .map(category => category.categoryId));
-    const remaining = currentManualCategories.filter(category => !primaryIds.has(category.categoryId));
+    const remaining = toolbarCategories.filter(category => !primaryIds.has(category.categoryId));
     if (remaining.length) {
         const more = makeManualButton('更多', 'sci-manual-text-action');
         more.setAttribute('aria-expanded', 'false');
@@ -2648,7 +3289,7 @@ function showManualSelectionToolbar(descriptor) {
         more.addEventListener('click', () => {
             morePanel.hidden = !morePanel.hidden;
             more.setAttribute('aria-expanded', String(!morePanel.hidden));
-            positionManualFloating(toolbar, descriptor.rect);
+            positionManualFloating(toolbar, toolbarDescriptor.rect);
         });
         secondaryRow.appendChild(more);
         toolbar.appendChild(morePanel);
@@ -2664,12 +3305,12 @@ function showManualSelectionToolbar(descriptor) {
         unresolved.addEventListener('click', () => {
             panel.hidden = !panel.hidden;
             unresolved.setAttribute('aria-expanded', String(!panel.hidden));
-            positionManualFloating(toolbar, descriptor.rect);
+            positionManualFloating(toolbar, toolbarDescriptor.rect);
         });
     }
-    toolbar.insertBefore(secondaryRow, toolbar.children[1] || null);
+    toolbar.insertBefore(secondaryRow, primaryRow.nextSibling);
     document.documentElement.appendChild(toolbar);
-    positionManualFloating(toolbar, descriptor.rect);
+    positionManualFloating(toolbar, toolbarDescriptor.rect);
     toolbar.querySelector('button')?.focus({ preventScroll: true });
 }
 
@@ -2928,7 +3569,7 @@ function handleManualKeyDown(event) {
 
 function handleManualOutsideClick(event) {
     if (manualClosest(event.target, MANUAL_UI_SELECTOR) ||
-        manualClosest(event.target, '.sci-manual-highlight,.sci-llm-highlight')) return;
+        manualClosest(event.target, '.sci-manual-highlight,.sci-llm-highlight,.sci-highlight')) return;
     closeManualTransientUi();
 }
 
@@ -2953,6 +3594,9 @@ function disableManualAnnotationUi() {
     currentManualBlocks = [];
     currentManualCategories = [];
     currentManualActiveCategories = [];
+    currentManualAnalysisModes = [];
+    currentManualAnalysisModeId = '';
+    currentManualPreparedAnalysisModeId = '';
     currentManualUnresolved = [];
     currentManualRebindId = '';
     manualPointerSelecting = false;
@@ -2974,6 +3618,11 @@ function initializeManualAnnotationUi() {
     ]);
     return initialized;
 }
+
+chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes?.sciLlmSettingsV2) return;
+    void refreshManualAnalysisSettings();
+});
 // Manual annotation UI: end
 
 function isLikelyAcademicArticle(paragraphs) {
@@ -2989,18 +3638,17 @@ function isLikelyAcademicArticle(paragraphs) {
 }
 
 function showLlmPageStatus(message, type = 'info') {
-    let status = document.getElementById('sci-llm-status');
+    document.getElementById('sci-llm-status')?.remove();
     if (!message) {
-        status?.remove();
         return;
     }
-    if (!status) {
-        status = document.createElement('div');
-        status.id = 'sci-llm-status';
-        document.documentElement.appendChild(status);
-    }
-    status.className = type;
-    status.textContent = message;
+    chrome.runtime.sendMessage({
+        type: 'ARTICLE_NOTIFICATION',
+        message: String(message).normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 600),
+        level: type === 'error' ? 'error' : type === 'success' ? 'success' : 'info',
+        timestamp: Date.now(),
+        pageUrl: location.href
+    }).catch(() => undefined);
 }
 
 function formatEffectiveRoute(status, route) {
@@ -3070,7 +3718,14 @@ async function applyStoredRegexFallback() {
     });
     if (!Object.keys(categories).length) return null;
     return {
-        counts: highlighter.applyHighlight(categories, stored.highlightMode || 'word')
+        counts: highlighter.applyHighlight(
+            categories,
+            stored.highlightMode || 'word',
+            {
+                allowedParagraphIds: selectedArticleAnalysisParagraphIds(),
+                analysisModeId: 'regex-fallback'
+            }
+        )
     };
 }
 
@@ -3082,7 +3737,9 @@ async function prepareArticleProfileWithLLM(options = {}) {
         showLlmPageStatus(null);
         return { success: false, skipped: true, reason: 'PAGE_NOT_CONFIDENTLY_ACADEMIC' };
     }
-    const paragraphs = extracted.map(({ sourceIndex, ...paragraph }) => paragraph);
+    const paragraphs = filterParagraphsForArticleAnalysis(
+        extracted.map(({ sourceIndex, ...paragraph }) => paragraph)
+    );
     if (!paragraphs.length) throw new Error('未找到可分析的论文正文');
     const response = await chrome.runtime.sendMessage({
         type: 'LLM_PREPARE_DOCUMENT',
@@ -3117,7 +3774,6 @@ async function analyzeArticleWithLLM(options = {}) {
     const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     llmAnalysisPromise = (async () => {
         setLlmErrorDiagnostics(null);
-        highlighter.clearHighlight();
         showLlmPageStatus('正在提取论文正文…');
         const extractionDiagnostics = diagnoseArticleWithTrace('analyze_article');
         const extracted = extractArticleWithTrace('analyze_article');
@@ -3126,12 +3782,16 @@ async function analyzeArticleWithLLM(options = {}) {
             showLlmPageStatus(null);
             return { success: false, skipped: true, reason: 'PAGE_NOT_CONFIDENTLY_ACADEMIC' };
         }
-        const paragraphs = extracted.map(({ sourceIndex, ...paragraph }) => paragraph);
+        const paragraphs = filterParagraphsForArticleAnalysis(
+            extracted.map(({ sourceIndex, ...paragraph }) => paragraph)
+        );
         if (!paragraphs.length) throw new Error('未找到可分析的论文正文');
         llmProgressiveAnalysis = {
             rawAnalysis: {
                 annotations: [],
                 rejected: [],
+                readingViewId: lastPreparedStudy?.readingViewId ||
+                    options.readingViewId || 'llm-default',
                 categories: Array.isArray(lastPreparedStudy?.activeCategories)
                     ? lastPreparedStudy.activeCategories : []
             },
@@ -3242,6 +3902,12 @@ async function analyzeArticleWithLLM(options = {}) {
             llmAnalysisPromise = null;
         }
         finishLlmHighlightOperation(operation);
+        // Success/error checkpoints are captured before the active operation is
+        // released. Save once more afterwards so a reopened workspace never
+        // mistakes a completed analysis for a still-running task.
+        if (workspaceLifecycle === articleWorkspaceLifecycleGeneration) {
+            scheduleArticleWorkspaceArtifactsSave({ immediate: true });
+        }
     }
 }
 
@@ -3376,9 +4042,10 @@ async function loadPreparedFigureSource(imageElement, deadline =
         imageElement?.getAttribute?.('data-src') ||
         imageElement?.getAttribute?.('data-original') ||
         imageElement?.getAttribute?.('data-lazy-src') || '';
-    const candidates = typeof SciLLM.collectFigureImageCandidates === 'function'
-        ? SciLLM.collectFigureImageCandidates(imageElement, document.baseURI)
-        : [fallbackSource].filter(Boolean);
+    const candidates = await resolveFigureImageSources({
+        imageElements: [imageElement]
+    });
+    if (!candidates.length && fallbackSource) candidates.push(fallbackSource);
     if (!candidates.length) throw new Error('Figure image source is missing');
     let lastError = null;
     for (const source of candidates) {
@@ -3509,16 +4176,210 @@ async function prepareFigurePanelImageVariants(figure, panelId) {
 
 const FIGURE_IMAGE_VIEWER_ID = 'sci-figure-image-viewer';
 let figureImageViewerKeyHandler = null;
+let figureImageViewerObjectUrl = '';
+let figureImageViewerGeneration = 0;
+let figureImageCachePreference = null;
 
-function closeFigureImageViewer() {
+async function figureImageCacheMode() {
+    if (figureImageCachePreference &&
+        Date.now() - figureImageCachePreference.capturedAt < 30000) {
+        return figureImageCachePreference.enabled ? 'read-write' : 'none';
+    }
+    let enabled = true;
+    try {
+        const response = await chrome.runtime.sendMessage({ type: 'LLM_GET_SETTINGS' });
+        enabled = response?.data?.settings?.autoCacheFigureImages !== false;
+    } catch (_) {
+        // Default-on keeps repeat Figure views fast during transient failures.
+    }
+    figureImageCachePreference = { enabled, capturedAt: Date.now() };
+    return enabled ? 'read-write' : 'none';
+}
+
+async function resolveFigureImageSources(figure) {
+    const localSources = typeof SciLLM.collectFigureImageSources === 'function'
+        ? SciLLM.collectFigureImageSources(figure, document.baseURI)
+        : [SciLLM.selectFigureImageSource(figure, document.baseURI)].filter(Boolean);
+    const displayedSources = new Set();
+    const explicitOriginalSources = new Set();
+    Array.from(figure?.imageElements || []).forEach(imageElement => {
+        [
+            imageElement?.currentSrc,
+            imageElement?.src || imageElement?.getAttribute?.('src'),
+            imageElement?.getAttribute?.('data-src'),
+            imageElement?.getAttribute?.('data-lazy-src')
+        ].forEach(value => {
+            const safe = typeof SciLLM.safeFigureSource === 'function'
+                ? SciLLM.safeFigureSource(value, document.baseURI) : String(value || '');
+            if (safe) displayedSources.add(safe);
+        });
+        [
+            'data-original', 'data-original-src', 'data-full', 'data-full-src',
+            'data-full-image', 'data-hires', 'data-high-res-src', 'data-large',
+            'data-large-src', 'data-zoom-src'
+        ].forEach(name => {
+            const safe = typeof SciLLM.safeFigureSource === 'function'
+                ? SciLLM.safeFigureSource(
+                    imageElement?.getAttribute?.(name),
+                    document.baseURI
+                ) : '';
+            if (safe) explicitOriginalSources.add(safe);
+        });
+    });
+    const hasPromotedDirectSource = localSources.slice(0, 3).some(source =>
+        (/^data:image\//i.test(source) ||
+            /\.(?:avif|bmp|gif|jpe?g|png|svg|tiff?|webp)(?:$|[?#])/i.test(source)) &&
+        (!displayedSources.has(source) || explicitOriginalSources.has(source))
+    );
+    const viewerLinks = [];
+    const linkSet = new Set();
+    if (typeof SciLLM.collectFigureViewerLinks === 'function') {
+        Array.from(figure?.imageElements || []).forEach(imageElement => {
+            SciLLM.collectFigureViewerLinks(imageElement, document.baseURI)
+                .forEach(link => {
+                    if (linkSet.has(link)) return;
+                    linkSet.add(link);
+                    viewerLinks.push(link);
+                });
+        });
+    }
+    const resolved = [];
+    const resolvedSet = new Set();
+    const addResolved = value => {
+        const safe = typeof SciLLM.safeFigureSource === 'function'
+            ? SciLLM.safeFigureSource(value, document.baseURI) : String(value || '');
+        if (!safe || resolvedSet.has(safe)) return;
+        resolvedSet.add(safe);
+        resolved.push(safe);
+    };
+    await Promise.all((hasPromotedDirectSource ? [] : viewerLinks.slice(0, 6))
+        .map(async link => {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'FIGURE_RESOLVE_IMAGE_CANDIDATES',
+                url: link,
+                documentUrl: location.href
+            });
+            if (response?.success) {
+                (response.data?.candidates || []).slice(0, 30).forEach(addResolved);
+            }
+        } catch (_) {
+            // Viewer-page resolution is additive; direct candidates remain.
+        }
+        }));
+    localSources.forEach(addResolved);
+    return resolved;
+}
+
+async function selectBestFigureImageResource(sources, cacheMode) {
+    let best = null;
+    const candidates = Array.from(new Set(sources || [])).slice(0, 14);
+    for (const [candidateIndex, source] of candidates.entries()) {
+        try {
+            const measured = await measureExportImageResource(
+                await fetchExportImageSource(source, { cacheMode })
+            );
+            const candidate = { ...measured, requestedSourceUrl: source, candidateIndex };
+            if (!best || compareExportImageQuality(best, candidate) > 0) best = candidate;
+            const area = Math.max(0, Number(candidate.pixelWidth) || 0) *
+                Math.max(0, Number(candidate.pixelHeight) || 0);
+            if (area >= 1600000) break;
+        } catch (_) {
+            // HTML wrappers, expired signatures, and anti-hotlink responses are
+            // normal fallbacks in a cross-publisher candidate list.
+        }
+    }
+    return best;
+}
+
+function adjacentFigureViewerId(figureId, direction) {
+    const figures = getFigureWorkspaceInventory();
+    if (!figures.length) return '';
+    const foundIndex = figures.findIndex(item => item.figureId === figureId);
+    const currentIndex = foundIndex >= 0 ? foundIndex : 0;
+    if (direction === 'first') return figures[0].figureId;
+    if (direction === 'last') return figures.at(-1).figureId;
+    const offset = direction === 'previous' ? -1 : 1;
+    return figures[(currentIndex + offset + figures.length) % figures.length].figureId;
+}
+
+function publishFigureImageViewerState(state) {
+    chrome.runtime.sendMessage({
+        type: 'FIGURE_ORIGINAL_VIEWER_STATE_CHANGED',
+        open: state?.open === true,
+        figureId: String(state?.figureId || ''),
+        loading: state?.loading === true,
+        captionVisible: state?.captionVisible === true
+    }).catch(() => undefined);
+}
+
+function closeFigureImageViewer({ notify = true } = {}) {
+    const previous = getFigureImageViewerState();
+    figureImageViewerGeneration += 1;
     document.getElementById(FIGURE_IMAGE_VIEWER_ID)?.remove();
+    if (figureImageViewerObjectUrl) {
+        URL.revokeObjectURL(figureImageViewerObjectUrl);
+        figureImageViewerObjectUrl = '';
+    }
     if (figureImageViewerKeyHandler) {
         document.removeEventListener('keydown', figureImageViewerKeyHandler, true);
         figureImageViewerKeyHandler = null;
     }
+    if (notify && previous.open) {
+        publishFigureImageViewerState({
+            open: false,
+            figureId: previous.figureId,
+            loading: false
+        });
+    }
+    return { success: true, open: false, figureId: '' };
 }
 
-function showFigureImageViewer(figureId) {
+function getFigureImageViewerState() {
+    const viewer = document.getElementById(FIGURE_IMAGE_VIEWER_ID);
+    return {
+        success: true,
+        open: Boolean(viewer),
+        figureId: String(viewer?.dataset?.figureId || ''),
+        loading: viewer?.dataset?.loading === 'true',
+        captionVisible: viewer?.dataset?.captionVisible === 'true'
+    };
+}
+
+async function navigateFigureImageViewer(direction, figureNumber = 0) {
+    const allowedDirections = new Set(['previous', 'next', 'first', 'last']);
+    const viewerState = getFigureImageViewerState();
+    if (!viewerState.open) {
+        return { ...viewerState, success: false, code: 'VIEWER_NOT_OPEN' };
+    }
+    const requestedFigureNumber = Number(figureNumber);
+    let targetId = '';
+    if (Number.isInteger(requestedFigureNumber) && requestedFigureNumber > 0) {
+        const requestedFigure = getFigureWorkspaceInventory().find(item =>
+            item.isSupplemental !== true &&
+            Number(item.figureNumber) === requestedFigureNumber
+        );
+        if (!requestedFigure) {
+            return {
+                ...viewerState,
+                success: false,
+                code: 'FIGURE_NOT_FOUND',
+                requestedFigureNumber
+            };
+        }
+        targetId = requestedFigure.figureId;
+    } else if (!allowedDirections.has(direction)) {
+        return { ...viewerState, success: false, code: 'INVALID_DIRECTION' };
+    } else {
+        targetId = adjacentFigureViewerId(viewerState.figureId, direction);
+    }
+    if (!targetId || targetId === viewerState.figureId) return viewerState;
+    return showFigureImageViewer(targetId, {
+        captionVisible: viewerState.captionVisible === true
+    });
+}
+
+function legacyFigureImageViewer(figureId) {
     const figure = getFigureWorkspaceInventory()
         .find(item => item.figureId === figureId);
     if (!figure) return { success: false, code: 'FIGURE_NOT_FOUND' };
@@ -3642,6 +4503,251 @@ function showFigureImageViewer(figureId) {
     applyScale(1);
     close.focus();
     return { success: true, figureId };
+}
+
+async function showFigureImageViewer(figureId, {
+    captionVisible = false
+} = {}) {
+    const figure = getFigureWorkspaceInventory().find(item => item.figureId === figureId);
+    if (!figure) return { success: false, code: 'FIGURE_NOT_FOUND' };
+    closeFigureImageViewer({ notify: false });
+    const generation = figureImageViewerGeneration;
+
+    const viewer = document.createElement('section');
+    viewer.id = FIGURE_IMAGE_VIEWER_ID;
+    viewer.dataset.figureId = figure.figureId || figureId;
+    viewer.dataset.loading = 'true';
+    viewer.dataset.captionVisible = String(captionVisible === true);
+    viewer.setAttribute('role', 'dialog');
+    viewer.setAttribute('aria-modal', 'true');
+    viewer.setAttribute('aria-label', `${figure.figureLabel || figureId} 高清原图`);
+
+    const header = document.createElement('header');
+    const title = document.createElement('strong');
+    title.textContent = `${figure.figureLabel || figureId} · 高清原图`;
+    const shortcutHint = document.createElement('span');
+    shortcutHint.className = 'sci-figure-viewer-shortcuts';
+    shortcutHint.textContent =
+        '←/→ 相邻 Figure　↑ 第一张　↓ 最后一张　1–9/0 直达 Figure';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'sci-figure-viewer-close';
+    close.textContent = '×';
+    close.setAttribute('aria-label', '关闭高清原图');
+    header.append(title, shortcutHint, close);
+
+    const canvas = document.createElement('div');
+    canvas.className = 'sci-figure-viewer-canvas';
+    canvas.tabIndex = 0;
+    const stage = document.createElement('div');
+    stage.className = 'sci-figure-viewer-stage';
+    const loading = document.createElement('p');
+    loading.className = 'sci-figure-viewer-loading';
+    loading.setAttribute('role', 'status');
+    loading.setAttribute('aria-live', 'polite');
+    loading.textContent = `正在加载 ${figure.figureLabel || figureId} 高清原图…`;
+    stage.appendChild(loading);
+    canvas.appendChild(stage);
+
+    const image = document.createElement('img');
+    image.alt = figure.figureLabel || figureId;
+    image.draggable = false;
+    const controls = document.createElement('div');
+    controls.className = 'sci-figure-viewer-controls';
+    controls.hidden = true;
+    let scale = 1;
+    const label = document.createElement('span');
+    label.setAttribute('aria-live', 'polite');
+    const qualityLabel = document.createElement('span');
+    qualityLabel.className = 'sci-figure-viewer-quality';
+    const revealLoadedImage = () => {
+        if (generation !== figureImageViewerGeneration) return;
+        viewer.dataset.loading = 'false';
+        stage.replaceChildren(image);
+        controls.hidden = false;
+        applyScale(1);
+    };
+    image.addEventListener('load', revealLoadedImage);
+    const applyScale = next => {
+        scale = Math.min(4, Math.max(.25, next));
+        const overflowScale = Math.max(1, scale);
+        stage.style.width = `${overflowScale * 100}%`;
+        stage.style.height = `${overflowScale * 100}%`;
+        image.style.maxWidth = `${100 / overflowScale}%`;
+        image.style.maxHeight = `${100 / overflowScale}%`;
+        image.style.transform = `scale(${scale})`;
+        label.textContent = `${Math.round(scale * 100)}%`;
+    };
+    const makeControl = (text, ariaLabel, handler) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = text;
+        button.setAttribute('aria-label', ariaLabel);
+        button.addEventListener('click', handler);
+        return button;
+    };
+    const fitControl = makeControl('适配窗口', '使原图适配窗口', () => {
+        applyScale(1);
+        canvas.scrollTo({ left: 0, top: 0 });
+    });
+    const captionControl = makeControl(
+        captionVisible ? '隐藏图注' : '查看图注',
+        captionVisible ? '隐藏当前 Figure 图注' : '查看当前 Figure 图注',
+        () => {
+            const visible = viewer.dataset.captionVisible !== 'true';
+            viewer.dataset.captionVisible = String(visible);
+            captionControl.textContent = visible ? '隐藏图注' : '查看图注';
+            captionControl.setAttribute(
+                'aria-label',
+                visible ? '隐藏当前 Figure 图注' : '查看当前 Figure 图注'
+            );
+            captionControl.setAttribute('aria-pressed', String(visible));
+            publishFigureImageViewerState(getFigureImageViewerState());
+        }
+    );
+    captionControl.classList.add('sci-figure-viewer-caption-toggle');
+    captionControl.setAttribute('aria-pressed', String(captionVisible === true));
+    controls.append(
+        makeControl('−', '缩小原图', () => applyScale(scale - .25)),
+        label,
+        makeControl('+', '放大原图', () => applyScale(scale + .25)),
+        fitControl,
+        captionControl,
+        qualityLabel
+    );
+
+    let dragState = null;
+    canvas.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        dragState = {
+            x: event.clientX,
+            y: event.clientY,
+            left: canvas.scrollLeft,
+            top: canvas.scrollTop
+        };
+        canvas.classList.add('is-dragging');
+        canvas.setPointerCapture?.(event.pointerId);
+    });
+    canvas.addEventListener('pointermove', event => {
+        if (!dragState) return;
+        canvas.scrollLeft = dragState.left - (event.clientX - dragState.x);
+        canvas.scrollTop = dragState.top - (event.clientY - dragState.y);
+    });
+    const stopDragging = event => {
+        dragState = null;
+        canvas.classList.remove('is-dragging');
+        if (event?.pointerId !== undefined && canvas.hasPointerCapture?.(event.pointerId)) {
+            canvas.releasePointerCapture(event.pointerId);
+        }
+    };
+    canvas.addEventListener('pointerup', stopDragging);
+    canvas.addEventListener('pointercancel', stopDragging);
+
+    figureImageViewerKeyHandler = event => {
+        const direction = {
+            ArrowLeft: 'previous',
+            ArrowRight: 'next',
+            ArrowUp: 'first',
+            ArrowDown: 'last'
+        }[event.key];
+        const figureNumber = /^[0-9]$/.test(event.key)
+            ? (event.key === '0' ? 10 : Number(event.key)) : 0;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeFigureImageViewer();
+            return;
+        }
+        if (!direction && !figureNumber) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (figureNumber) {
+            void navigateFigureImageViewer('', figureNumber);
+            return;
+        }
+        const targetId = adjacentFigureViewerId(figureId, direction);
+        if (targetId && targetId !== figureId) {
+            void showFigureImageViewer(targetId, {
+                captionVisible: viewer.dataset.captionVisible === 'true'
+            });
+        }
+    };
+    document.addEventListener('keydown', figureImageViewerKeyHandler, true);
+    viewer.addEventListener('click', event => {
+        if (event.target === viewer) closeFigureImageViewer();
+    });
+    close.addEventListener('click', closeFigureImageViewer);
+    viewer.append(header, canvas, controls);
+    document.documentElement.appendChild(viewer);
+    publishFigureImageViewerState({
+        open: true,
+        figureId: figure.figureId || figureId,
+        loading: true,
+        captionVisible: viewer.dataset.captionVisible === 'true'
+    });
+    close.focus();
+
+    const sources = await resolveFigureImageSources(figure);
+    if (generation !== figureImageViewerGeneration) {
+        return { success: false, code: 'VIEWER_SUPERSEDED' };
+    }
+    if (!sources.length) {
+        viewer.dataset.loading = 'false';
+        loading.className = 'sci-figure-viewer-error';
+        loading.textContent = '没有找到可用的 Figure 图片地址。';
+        return { success: false, code: 'IMAGE_NOT_FOUND' };
+    }
+
+    const cacheMode = await figureImageCacheMode();
+    const resource = await selectBestFigureImageResource(sources, cacheMode);
+    if (generation !== figureImageViewerGeneration) {
+        return { success: false, code: 'VIEWER_SUPERSEDED' };
+    }
+    if (resource?.bytes?.length) {
+        const blob = new Blob([resource.bytes], {
+            type: resource.contentType || 'application/octet-stream'
+        });
+        figureImageViewerObjectUrl = URL.createObjectURL(blob);
+        image.src = figureImageViewerObjectUrl;
+        qualityLabel.textContent = [
+            resource.pixelWidth && resource.pixelHeight
+                ? `${resource.pixelWidth} × ${resource.pixelHeight}` : '',
+            resource.cacheHit ? '本地缓存' :
+                (cacheMode === 'read-write' ? '已自动缓存' : '')
+        ].filter(Boolean).join(' · ');
+        return {
+            success: true,
+            open: true,
+            figureId,
+            sourceUrl: resource.sourceUrl,
+            pixelWidth: resource.pixelWidth,
+            pixelHeight: resource.pixelHeight,
+            cacheHit: resource.cacheHit === true,
+            captionVisible: viewer.dataset.captionVisible === 'true'
+        };
+    }
+
+    let sourceIndex = 0;
+    image.addEventListener('error', () => {
+        sourceIndex += 1;
+        if (sourceIndex < sources.length) {
+            image.src = sources[sourceIndex];
+            return;
+        }
+        const failure = document.createElement('p');
+        failure.className = 'sci-figure-viewer-error';
+        failure.textContent = '高清原图加载失败；出版社可能要求在正文会话中直接读取。';
+        viewer.dataset.loading = 'false';
+        stage.replaceChildren(failure);
+        controls.hidden = true;
+    });
+    image.src = sources[sourceIndex];
+    return {
+        success: true,
+        open: true,
+        figureId,
+        fallback: true,
+        captionVisible: viewer.dataset.captionVisible === 'true'
+    };
 }
 
 function clearFigureWalkthroughs() {
@@ -4205,7 +5311,13 @@ async function analyzeSingleFigurePanelWithLLM(
     return figureDepthAnalysisPromise;
 }
 
-async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuestion = '') {
+async function askFigurePanelWithLLM(
+    figureId,
+    panelId,
+    topics = [],
+    customQuestion = '',
+    historyLabel = ''
+) {
     const workspaceLifecycle = articleWorkspaceLifecycleGeneration;
     getFigureWorkspaceInventory();
     const state = ensureFigureWalkthroughState(figureId);
@@ -4219,6 +5331,8 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
         ? SciLLM.normalizePanelFollowupTopics(topics) : [];
     const normalizedQuestion = typeof SciLLM.normalizePanelCustomQuestion === 'function'
         ? SciLLM.normalizePanelCustomQuestion(customQuestion) : String(customQuestion || '').trim();
+    const normalizedHistoryLabel = String(historyLabel || '').normalize('NFKC')
+        .replace(/\s+/g, ' ').trim().slice(0, 1200);
     if (!state?.figure || !panel || (!selectedTopics.length && !normalizedQuestion)) {
         const error = new Error('FIGURE_PANEL_FOLLOWUP_INVALID');
         error.code = 'FIGURE_PANEL_FOLLOWUP_INVALID';
@@ -4273,7 +5387,7 @@ async function askFigurePanelWithLLM(figureId, panelId, topics = [], customQuest
             {
                 historyId: `panel-question-${Date.now()}`,
                 role: 'user',
-                content: normalizedQuestion || selectedTopics.join(', ')
+                content: normalizedHistoryLabel || normalizedQuestion || selectedTopics.join(', ')
             },
             {
                 historyId: `panel-answer-${Date.now()}`,
@@ -4363,6 +5477,17 @@ function publicArticleChatPlan(plan = null) {
     };
 }
 
+function normalizeArticleChatContextScope(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const unique = values => [...new Set((Array.isArray(values) ? values : [])
+        .map(item => String(item || '').normalize('NFKC').trim().slice(0, 240))
+        .filter(Boolean))];
+    return {
+        sectionIds: unique(source.sectionIds).slice(0, 160),
+        sectionTitles: unique(source.sectionTitles).slice(0, 40)
+    };
+}
+
 function publicArticleChatTurn(turn = {}) {
     const allowedStatuses = new Set([
         'queued', 'generating', 'interrupted', 'completed', 'truncated', 'incomplete', 'cancelled', 'error',
@@ -4373,6 +5498,14 @@ function publicArticleChatTurn(turn = {}) {
     return {
         turnId: String(turn.turnId || '').slice(0, 160),
         question: String(turn.question || '').slice(0, 4000),
+        intent: turn.intent === 'highlight' ? 'highlight' : 'answer',
+        highlightCategoryId: String(turn.highlightCategoryId || '').slice(0, 160),
+        highlightCategoryName: String(turn.highlightCategoryName || '').slice(0, 160),
+        highlightColor: /^#[0-9a-f]{6}$/i.test(String(turn.highlightColor || ''))
+            ? String(turn.highlightColor).toUpperCase() : '#2F80ED',
+        contextScope: normalizeArticleChatContextScope(turn.contextScope),
+        matchCount: Math.max(0, Number(turn.matchCount) || 0),
+        highlightError: String(turn.highlightError || '').slice(0, 1000),
         answerBlocks: (Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [])
             .map(publicArticleChatBlock).filter(block => block.blockId && block.markdown),
         summary: String(turn.summary || '').slice(0, 2000),
@@ -4565,7 +5698,9 @@ async function legacyAskArticleWithLLM(question, profileId = '') {
     articleChatState.activeProfileId = normalizedProfileId;
     try {
         const snapshot = getCanonicalArticleSnapshot();
-        const paragraphs = (Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : [])
+        const paragraphs = filterParagraphsForArticleAnalysis(
+            Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : []
+        )
             .map(item => ({
             paragraphId: String(item?.paragraphId || ''),
             sourceKey: String(item?.sourceKey || ''),
@@ -4729,9 +5864,7 @@ function applyArticleChatProgress(progress = {}) {
     turn.updatedAt = Date.now();
     notifyArticleChatStateChanged('turn_updated', turn, { phase });
     if (phase === 'chat_answer_block') {
-        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
-        void persistWorkspaceAssetCheckpoint('chat/index.json', getPublicArticleChatState())
-            .catch(() => undefined);
+        void persistArticleChatCheckpoint(turn).catch(() => undefined);
     }
     if (phase === 'chat_answer_block' || phase === 'chat_cancelled' ||
         phase === 'chat_completed' || phase === 'chat_error') {
@@ -4760,6 +5893,15 @@ function createArticleChatTurn(question, selectedProfileId, options = {}) {
         turnId: String(options.turnId ||
             `turn-${createdAt.toString(36)}-${articleChatTurnSequence.toString(36)}`),
         question: normalizedQuestion,
+        intent: options.intent === 'highlight' ? 'highlight' : 'answer',
+        highlightCategoryId: String(options.categoryId || '').slice(0, 160),
+        highlightCategoryName: String(options.categoryName || '').normalize('NFKC')
+            .replace(/\s+/g, ' ').trim().slice(0, 160),
+        highlightColor: /^#[0-9a-f]{6}$/i.test(String(options.highlightColor || ''))
+            ? String(options.highlightColor).toUpperCase() : '#2F80ED',
+        contextScope: normalizeArticleChatContextScope(options.contextScope),
+        matchCount: 0,
+        highlightError: '',
         answerBlocks: [],
         summary: '',
         status: 'queued',
@@ -4810,9 +5952,65 @@ function articleChatFailureMessage(error) {
     const messages = {
         OUTPUT_TRUNCATED: '模型连续达到输出上限。插件已自动提高额度并续写，但仍未形成完整回答；请把问题拆成两个更具体的问题，或检查当前 Profile 的“自动上限”是否过低。',
         INVALID_RESPONSE: '模型连续两次没有返回可解析的回答格式。请重试；若仍失败，请检查当前 Profile 的 Provider 是否与 API 接口协议一致。',
-        CONTEXT_BUDGET_EXCEEDED: '当前模型上下文不足以同时容纳问题、证据和回答，请提高该 Profile 的上下文窗口设置或缩小问题范围。'
+        CONTEXT_BUDGET_EXCEEDED: '当前模型上下文不足以同时容纳问题、证据和回答，请提高该 Profile 的上下文窗口设置或缩小问题范围。',
+        CODEX_NOT_AUTHENTICATED: '插件专用 Codex 会话未登录或已过期。请打开设置 → 模型设置，在“本机 Codex”中点击“登录 / 重新登录”。',
+        CODEX_NOT_INSTALLED: '未找到本机 Codex。请先安装 Codex，并重新安装本机桥。',
+        CODEX_BRIDGE_UNAVAILABLE: '本机 Codex 桥未安装、未注册或已断开。请重新安装本机桥并重载扩展。',
+        CODEX_PROVIDER_REJECTED: '本机 Codex 拒绝了这次请求。请到设置页检查登录状态并运行连接测试。',
+        PROVIDER_UNAVAILABLE: 'Codex 服务暂时不可用，请稍后重试；这不是论文内容或上下文容量错误。',
+        QUOTA_EXHAUSTED: '当前 Codex 账户已达到使用限额，请等待额度恢复或切换其他模型。'
     };
     return messages[error?.code] || String(error?.message || '全文问答失败').slice(0, 1000);
+}
+
+function articleChatRequestQuestion(turn) {
+    if (turn?.intent !== 'highlight') return turn?.question || '';
+    return [
+        '你正在执行“全文语义检索并高亮”，不是普通问答。',
+        `用户的自然语言检索意图是：${turn.question}`,
+        '请找出正文中所有直接匹配该意图的重要原文句子。',
+        '回答要简短；每个匹配必须附带可逐字回定位的原文证据 citation。',
+        '不要用推测补足证据，不要返回只在标题、作者、导航、参考文献或附加界面中出现的内容。'
+    ].join('\n');
+}
+
+async function createSemanticAnnotationsFromTurn(turn) {
+    if (turn?.intent !== 'highlight') return 0;
+    await (manualPreparePromise || prepareManualDocument());
+    const evidenceItems = (Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [])
+        .flatMap(block => Array.isArray(block?.evidence) ? block.evidence : [])
+        .filter(item => item?.verificationStatus === 'verified' && item.quote)
+        .slice(0, 80);
+    const seen = new Set();
+    let matched = 0;
+    for (const evidence of evidenceItems) {
+        const element = findManualBlockElement(evidence.paragraphId) ||
+            findManualBlockElement(evidence.sourceKey);
+        const block = findManualBlock(element);
+        if (!block) continue;
+        const sourceText = manualReadableText(block.element);
+        const span = SciLLM.findCanonicalQuoteSourceSpan?.(sourceText, evidence.quote);
+        if (!span || span.sourceEnd <= span.sourceStart) continue;
+        const key = `${block.blockId}:${span.sourceStart}:${span.sourceEnd}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const mark = await saveAutomaticAnnotation(
+            block,
+            span.sourceStart,
+            span.sourceEnd,
+            {
+                sourceType: 'semantic',
+                sourceQuery: turn.question,
+                categoryId: turn.highlightCategoryId || 'semantic_match',
+                categoryName: turn.highlightCategoryName || '智能检索匹配',
+                categoryColor: turn.highlightColor || '#2F80ED'
+            }
+        );
+        if (mark) matched += 1;
+    }
+    turn.matchCount = matched;
+    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
+    return matched;
 }
 
 async function runArticleChatTurn(turn) {
@@ -4829,7 +6027,14 @@ async function runArticleChatTurn(turn) {
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_started' });
     try {
         const snapshot = getCanonicalArticleSnapshot();
-        const paragraphs = (Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : [])
+        const selectedSectionIds = new Set(
+            normalizeArticleChatContextScope(turn.contextScope).sectionIds
+        );
+        const paragraphs = filterParagraphsForArticleAnalysis(
+            Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : []
+        )
+            .filter(item => !selectedSectionIds.size ||
+                selectedSectionIds.has(String(item?.sectionId || '')))
             .map(item => ({
                 paragraphId: String(item?.paragraphId || ''),
                 sourceKey: String(item?.sourceKey || ''),
@@ -4841,7 +6046,13 @@ async function runArticleChatTurn(turn) {
                 sectionPath: Array.isArray(item?.sectionPath) ? item.sectionPath : [],
                 text: String(item?.text || '')
             }));
-        const history = articleChatHistoryForTurn(turn.turnId);
+        if (selectedSectionIds.size && !paragraphs.length) {
+            const error = new Error('ARTICLE_CHAT_SCOPE_EMPTY');
+            error.code = 'INVALID_SETTINGS';
+            throw error;
+        }
+        const history = turn.intent === 'highlight' || selectedSectionIds.size
+            ? [] : articleChatHistoryForTurn(turn.turnId);
         articleChatState.memoryNeedsRebuild = false;
         const response = await chrome.runtime.sendMessage({
             type: 'LLM_ASK_ARTICLE',
@@ -4849,7 +6060,7 @@ async function runArticleChatTurn(turn) {
             operationId,
             turnId: turn.turnId,
             profileId: turn.selectedProfileId,
-            question: turn.question,
+            question: articleChatRequestQuestion(turn),
             history,
             document: {
                 title: document.title,
@@ -4881,9 +6092,19 @@ async function runArticleChatTurn(turn) {
         turn.plan = publicArticleChatPlan(response.data.plan);
         turn.coverage = response.data.coverage || turn.coverage;
         articleChatState.coverage = turn.coverage;
+        if (turn.intent === 'highlight') {
+            try {
+                await createSemanticAnnotationsFromTurn(turn);
+                turn.highlightError = '';
+            } catch (error) {
+                turn.highlightError = String(
+                    error?.message || 'SEMANTIC_HIGHLIGHT_RENDER_FAILED'
+                ).slice(0, 1000);
+            }
+        }
         turn.error = '';
         turn.updatedAt = Date.now();
-        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+        void persistArticleChatCheckpoint(turn).catch(() => undefined);
         scheduleCurrentArticleArchiveSave();
         notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_completed' });
     } catch (error) {
@@ -4895,7 +6116,7 @@ async function runArticleChatTurn(turn) {
             : articleChatFailureMessage(error);
         turn.updatedAt = Date.now();
         articleChatState.error = turn.error;
-        void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+        void persistArticleChatCheckpoint(turn).catch(() => undefined);
         scheduleCurrentArticleArchiveSave();
         notifyArticleChatStateChanged('turn_updated', turn, {
             phase: cancelled ? 'chat_cancelled' : 'chat_error'
@@ -4938,11 +6159,11 @@ function pumpArticleChatQueue() {
     return articleChatPumpPromise;
 }
 
-async function askArticleWithLLM(question, profileId = '') {
-    const turn = createArticleChatTurn(question, profileId);
+async function askArticleWithLLM(question, profileId = '', options = {}) {
+    const turn = createArticleChatTurn(question, profileId, options);
     articleChatState.turns.push(turn);
     notifyArticleChatStateChanged('turn_added', turn);
-    void persistWorkspaceTurnCheckpoint(turn, { append: true }).catch(() => undefined);
+    void persistArticleChatCheckpoint(turn, { append: true }).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     void pumpArticleChatQueue();
     return { success: true, queued: true, turn: publicArticleChatTurn(turn) };
@@ -4967,7 +6188,7 @@ async function cancelArticleChatWithLLM() {
     turn.status = 'cancelled';
     turn.error = '本次提问已取消，已完成的回答内容已保留。';
     turn.updatedAt = Date.now();
-    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+    void persistArticleChatCheckpoint(turn).catch(() => undefined);
     scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'chat_cancelled' });
     return { success: true, active: false, cancelled: true };
@@ -4987,7 +6208,7 @@ function removeArticleChatTurn(turnId, { queuedOnly = false } = {}) {
     }
     articleChatState.turns.splice(index, 1);
     articleChatState.memoryNeedsRebuild = true;
-    void deleteWorkspaceTurnCheckpoint(normalizedTurnId, { workspaceLifecycle })
+    void deleteArticleChatCheckpoint(normalizedTurnId, { workspaceLifecycle })
         .catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_removed', null, { turnId: normalizedTurnId });
@@ -5010,7 +6231,7 @@ function deleteArticleChatAnswer(turnId) {
     turn.status = 'unanswered';
     turn.updatedAt = Date.now();
     articleChatState.memoryNeedsRebuild = true;
-    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+    void persistArticleChatCheckpoint(turn).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'answer_deleted' });
     return { success: true, deleted: true, turn: publicArticleChatTurn(turn) };
@@ -5037,11 +6258,13 @@ function regenerateArticleChatTurn(turnId, profileId = '') {
     turn.profileName = '';
     turn.model = '';
     turn.error = '';
+    turn.matchCount = 0;
+    turn.highlightError = '';
     turn.status = 'queued';
     turn.selectedProfileId = String(profileId || turn.selectedProfileId).trim().slice(0, 100);
     turn.updatedAt = Date.now();
     articleChatState.memoryNeedsRebuild = true;
-    void persistWorkspaceTurnCheckpoint(turn).catch(() => undefined);
+    void persistArticleChatCheckpoint(turn).catch(() => undefined);
     scheduleCurrentArticleArchiveSave();
     notifyArticleChatStateChanged('turn_updated', turn, { phase: 'regenerated' });
     void pumpArticleChatQueue();
@@ -5266,6 +6489,7 @@ async function analyzeFiguresWithLLM(options = {}) {
                             images
                         }]
                     });
+                    await waitForLocalOperation(operation);
                     if (!response?.success) {
                         const error = new Error(response?.error?.message || 'Figure 解读失败');
                         error.code = response?.error?.code || 'FIGURE_FAILED';
@@ -5285,6 +6509,19 @@ async function analyzeFiguresWithLLM(options = {}) {
                         state.standardError = '';
                     }
                     results.push(operationResult);
+                    updateFigureProgress(figure.figureId, {
+                        phase: 'figure',
+                        running: false,
+                        completed: true,
+                        failed: false,
+                        cancelled: false,
+                        completedFigures: results.length,
+                        totalFigures: figures.length,
+                        figureLabel: figure.figureLabel,
+                        cacheHit: Number(response.data.cacheHits) > 0,
+                        visionFallback: Number(response.data.visionFallbacks) > 0,
+                        route: response.data.route || null
+                    });
                     cacheHits += Number(response.data.cacheHits) || 0;
                     visionFallbacks += Number(response.data.visionFallbacks) || 0;
                     lastFigureAnalysis = {
@@ -5388,6 +6625,19 @@ async function analyzeFiguresWithLLM(options = {}) {
             const finalMessage = partial
                 ? '逐图解读完成 ' + results.length + '/' + figures.length + ' 张，' + failures.length + ' 张失败'
                 : '逐图解读完成：' + results.length + ' 张 Figure';
+            results.forEach(result => {
+                const figure = figures.find(item => item.figureId === result.figureId);
+                updateFigureProgress(result.figureId, {
+                    phase: 'figure',
+                    running: false,
+                    completed: true,
+                    failed: false,
+                    cancelled: false,
+                    completedFigures: results.length,
+                    totalFigures: figures.length,
+                    figureLabel: figure?.figureLabel || result.figureLabel || result.figureId
+                });
+            });
             updateFigureAnalysisStatus({
                 running: false,
                 phase: partial ? 'partial' : 'completed',
@@ -5755,9 +7005,107 @@ function resolveArticleAnchor(anchor = {}) {
     }) || null;
 }
 
+const ARTICLE_CHAT_CITATION_HIGHLIGHT_NAME = 'sci-article-citation-focus';
+let articleChatCitationHighlightTimer = null;
+let articleChatCitationHighlightSource = null;
+
+function collectArticleSourceTextNodes(source) {
+    const nodes = [];
+    const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT, {
+        acceptNode: node => {
+            const parent = node.parentElement;
+            if (!node.textContent || parent?.closest?.(
+                'script, style, noscript, [hidden], [aria-hidden="true"], #sci-reading-panel'
+            )) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        }
+    });
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    return nodes;
+}
+
+function locateArticleSourceTextOffset(nodes, requestedOffset, preferNextNode = false) {
+    const offset = Math.max(0, Number(requestedOffset) || 0);
+    let cursor = 0;
+    for (let index = 0; index < nodes.length; index += 1) {
+        const node = nodes[index];
+        const next = cursor + node.textContent.length;
+        if (offset < next || (
+            offset === next && (!preferNextNode || index === nodes.length - 1)
+        )) {
+            return { node, offset: Math.max(0, Math.min(node.textContent.length, offset - cursor)) };
+        }
+        cursor = next;
+    }
+    const last = nodes.at(-1);
+    return last ? { node: last, offset: last.textContent.length } : null;
+}
+
+function clearArticleChatCitationHighlight() {
+    clearTimeout(articleChatCitationHighlightTimer);
+    articleChatCitationHighlightTimer = null;
+    try {
+        globalThis.CSS?.highlights?.delete(ARTICLE_CHAT_CITATION_HIGHLIGHT_NAME);
+    } catch (_) {
+        // A browser without the Custom Highlight API still gets paragraph focus below.
+    }
+    articleChatCitationHighlightSource?.classList?.remove('sci-article-source-focus');
+    articleChatCitationHighlightSource = null;
+}
+
+function focusArticleSourceQuote(anchor, quote) {
+    const source = resolveArticleAnchor(anchor);
+    const requestedQuote = String(quote || '').trim();
+    if (!source || !requestedQuote || typeof SciLLM.findCanonicalQuoteSourceSpan !== 'function') {
+        return false;
+    }
+    const nodes = collectArticleSourceTextNodes(source);
+    const sourceText = nodes.map(node => node.textContent).join('');
+    const quoteSpan = SciLLM.findCanonicalQuoteSourceSpan(sourceText, requestedQuote);
+    if (!quoteSpan) return false;
+    const start = locateArticleSourceTextOffset(nodes, quoteSpan.sourceStart, true);
+    const end = locateArticleSourceTextOffset(nodes, quoteSpan.sourceEnd, false);
+    if (!start || !end) return false;
+
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    if (range.collapsed) return false;
+
+    clearArticleChatCitationHighlight();
+    articleChatCitationHighlightSource = source;
+    source.classList.add('sci-article-source-focus');
+    if (globalThis.CSS?.highlights && typeof globalThis.Highlight === 'function') {
+        try {
+            CSS.highlights.set(ARTICLE_CHAT_CITATION_HIGHLIGHT_NAME, new Highlight(range));
+        } catch (_) {
+            // The element outline remains as the fallback focus indication.
+        }
+    }
+
+    const rect = range.getBoundingClientRect();
+    if (rect && Number.isFinite(rect.top) && (rect.width > 0 || rect.height > 0)) {
+        globalThis.scrollTo({
+            top: Math.max(0, globalThis.scrollY + rect.top -
+                (globalThis.innerHeight / 2) + (rect.height / 2)),
+            behavior: 'smooth'
+        });
+    } else {
+        source.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    articleChatCitationHighlightTimer = setTimeout(
+        clearArticleChatCitationHighlight, 3200
+    );
+    return true;
+}
+
 function focusArticleSource(anchor) {
     const source = resolveArticleAnchor(anchor);
     if (!source) return false;
+    clearArticleChatCitationHighlight();
     source.scrollIntoView({ behavior: 'smooth', block: 'center' });
     source.classList.add('sci-article-source-focus');
     setTimeout(() => source.classList.remove('sci-article-source-focus'), 1800);
@@ -5815,15 +7163,30 @@ function collectPageHighlightOccurrences(structure) {
         '.sci-highlight,.sci-llm-highlight,.sci-manual-highlight'
     )];
     marks.forEach((mark, markIndex) => {
+        const enclosingManualMark = mark.closest?.('.sci-manual-highlight');
+        if (enclosingManualMark && enclosingManualMark !== mark) return;
         const highlightId = mark.dataset.sciDistributionId ||
             `sci-distribution-${markIndex + 1}`;
         mark.dataset.sciDistributionId = highlightId;
-        const paragraphSourceId = mark.closest?.('[data-sci-llm-paragraph-id]')
-            ?.dataset?.sciLlmParagraphId || '';
+        const paragraphElement = mark.closest?.('[data-sci-llm-paragraph-id]') || null;
+        const paragraphSourceId = paragraphElement?.dataset?.sciLlmParagraphId || '';
         const paragraph = paragraphsBySource.get(paragraphSourceId);
+        let sourceStart = null;
+        if (paragraphElement && typeof document.createRange === 'function') {
+            try {
+                const prefixRange = document.createRange();
+                prefixRange.selectNodeContents(paragraphElement);
+                prefixRange.setEndBefore(mark);
+                sourceStart = prefixRange.toString().length;
+            } catch (_) {
+                sourceStart = null;
+            }
+        }
         const source = mark.dataset.source ||
             (mark.classList.contains('sci-manual-highlight') ? 'manual' :
                 mark.classList.contains('sci-llm-highlight') ? 'llm' : 'regex');
+        const manualAnnotation = mark.classList.contains('sci-manual-highlight')
+            ? manualAnnotationById(mark.dataset.annotationId) : null;
         const categoryIds = source === 'llm'
             ? String(mark.dataset.categories || mark.dataset.categoryId || '')
                 .split(',').filter(Boolean)
@@ -5839,23 +7202,44 @@ function collectPageHighlightOccurrences(structure) {
                 color: mark.dataset.categoryColor || category.color ||
                     mark.style.borderBottomColor || '#D9D6CE',
                 source,
-                quote: normalizeArticleNavigatorText(mark.textContent).slice(0, 240)
+                quote: normalizeArticleNavigatorText(mark.textContent).slice(0, 240),
+                sourceStart,
+                sourceEnd: Number.isInteger(sourceStart)
+                    ? sourceStart + String(mark.textContent || '').length : null,
+                note: String(manualAnnotation?.note || '').slice(0, 1000),
+                sourceQuery: String(manualAnnotation?.sourceQuery || '').slice(0, 1000)
             });
         });
     });
     return occurrences;
 }
 
-function serializeArticleWorkspaceNode(node, paragraphCounts) {
+function serializeArticleWorkspaceNode(node, paragraphCounts, sectionKinds) {
+    const children = (Array.isArray(node?.children) ? node.children : [])
+        .map(child => serializeArticleWorkspaceNode(child, paragraphCounts, sectionKinds));
+    const sectionId = String(node?.sectionId || '');
+    const ownKind = String(sectionKinds.get(sectionId) || node?.sectionKind || '');
+    const analysisSectionIds = [
+        ...(paragraphCounts.get(sectionId) ? [sectionId] : []),
+        ...children.flatMap(child => child.analysisSectionIds || [])
+    ].filter((value, index, values) => value && values.indexOf(value) === index);
+    const analysisStates = analysisSectionIds.map(id =>
+        articleAnalysisSectionSelected(id, sectionKinds.get(id))
+    );
     return {
-        sectionId: String(node?.sectionId || ''),
+        sectionId,
         sourceKey: String(node?.sourceKey || ''),
         title: normalizeArticleNavigatorText(node?.title) || '未命名章节',
+        displayTitle: String(node?.displayTitle || node?.title || '未命名章节')
+            .replace(/\s+/g, ' ').trim().slice(0, 1000),
         level: Math.max(1, Number(node?.level) || 1),
         order: Number(node?.order) || 0,
-        paragraphCount: paragraphCounts.get(String(node?.sectionId || '')) || 0,
-        children: (Array.isArray(node?.children) ? node.children : [])
-            .map(child => serializeArticleWorkspaceNode(child, paragraphCounts))
+        paragraphCount: paragraphCounts.get(sectionId) || 0,
+        sectionKind: ownKind,
+        analysisSectionIds,
+        analysisSelected: analysisStates.length > 0 && analysisStates.every(Boolean),
+        analysisIndeterminate: analysisStates.some(Boolean) && !analysisStates.every(Boolean),
+        children
     };
 }
 
@@ -5870,11 +7254,24 @@ function buildFigureWorkspaceSnapshot({ forceRefresh = false } = {}) {
         const state = figureWalkthroughState.get(figure.figureId);
         const restored = restoredById.get(String(figure.figureId || '')) || null;
         const source = state || restored || {};
+        const caption = normalizeArticleNavigatorText(figure?.caption).slice(0, 12000);
+        const captionBlocks = typeof SciLLM.splitFigureCaptionByPanelGroups === 'function'
+            ? SciLLM.splitFigureCaptionByPanelGroups(caption)
+                .slice(0, 60)
+                .map(block => ({
+                    kind: block?.kind === 'panels' ? 'panels' : 'overview',
+                    panels: Array.isArray(block?.panels)
+                        ? block.panels.map(String).slice(0, 26) : [],
+                    text: normalizeArticleNavigatorText(block?.text).slice(0, 6000)
+                }))
+                .filter(block => block.text)
+            : [];
         return {
             figureId: String(figure?.figureId || ''),
             figureLabel: String(figure?.figureLabel || ''),
             hasImage: Boolean(SciLLM.selectFigureImageSource(figure, document.baseURI)),
-            caption: normalizeArticleNavigatorText(figure?.caption).slice(0, 2400),
+            caption,
+            captionBlocks,
             isSupplemental: figure?.isSupplemental === true,
             panelHints: Array.isArray(figure?.panelHints) ? figure.panelHints.slice(0, 30) : [],
             figureInputHash: String(source.figureInputHash || ''),
@@ -5918,9 +7315,11 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } =
     const canonicalSnapshot = getCanonicalArticleSnapshot({ forceRefresh });
     const structure = canonicalSnapshot.structure;
     const paragraphCounts = new Map();
+    const sectionKinds = new Map();
     canonicalSnapshot.paragraphs.forEach(paragraph => {
         const sectionId = String(paragraph.sectionId || '');
         paragraphCounts.set(sectionId, (paragraphCounts.get(sectionId) || 0) + 1);
+        if (paragraph.sectionKind) sectionKinds.set(sectionId, paragraph.sectionKind);
     });
     const highlightDistribution = SciLLM.buildHighlightDistribution(
         structure,
@@ -5943,17 +7342,23 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } =
             warnings: [...(structure.diagnostics?.warnings || [])]
         },
         nodes: (structure.nodes || []).map(node =>
-            serializeArticleWorkspaceNode(node, paragraphCounts)),
+            serializeArticleWorkspaceNode(node, paragraphCounts, sectionKinds)),
         paragraphs: canonicalSnapshot.paragraphs.map(paragraph => ({
             paragraphId: String(paragraph.paragraphId || ''),
             sourceKey: String(paragraph.sourceKey || ''),
             textHash: String(paragraph.textHash || ''),
             navigationRevision: Number(structure.revision) || 0,
             sectionId: String(paragraph.sectionId || ''),
+            sectionKind: String(paragraph.sectionKind || ''),
             sectionTitle: normalizeArticleNavigatorText(paragraph.sectionTitle),
+            displaySectionTitle: String(
+                paragraph.displaySectionTitle || paragraph.sectionTitle || ''
+            ).replace(/\s+/g, ' ').trim().slice(0, 1000),
             sectionPath: (Array.isArray(paragraph.headingPath) ? paragraph.headingPath : [])
                 .map(item => normalizeArticleNavigatorText(item?.title)).filter(Boolean),
-            text: normalizeArticleNavigatorText(paragraph.text).slice(0, 4000)
+            text: normalizeArticleNavigatorText(paragraph.text).slice(0, 4000),
+            displayText: String(paragraph.displayText || paragraph.text || '')
+                .replace(/\s+/g, ' ').trim().slice(0, 4000)
         })),
         highlightDistribution,
         ledger: lastLlmAnalysis?.rawAnalysis?.ledger || null,
@@ -6149,6 +7554,26 @@ function deleteWorkspaceTurnCheckpoint(turnId, options = {}) {
     return mutation;
 }
 
+async function persistArticleChatCheckpoint(turn, options = {}) {
+    const turnResult = await persistWorkspaceTurnCheckpoint(turn, options);
+    const indexResult = await persistWorkspaceAssetCheckpoint(
+        'chat/index.json',
+        getPublicArticleChatState(),
+        { force: options.force === true }
+    );
+    return { turn: turnResult, index: indexResult };
+}
+
+async function deleteArticleChatCheckpoint(turnId, options = {}) {
+    const turnResult = await deleteWorkspaceTurnCheckpoint(turnId, options);
+    const indexResult = await persistWorkspaceAssetCheckpoint(
+        'chat/index.json',
+        getPublicArticleChatState(),
+        { force: true }
+    );
+    return { turn: turnResult, index: indexResult };
+}
+
 function buildArticleWorkspaceAssets() {
     const snapshot = buildArticleWorkspaceSnapshot();
     const activeEngine = document.querySelector('.sci-llm-highlight')
@@ -6194,12 +7619,33 @@ function buildArticleWorkspaceAssets() {
                 activeTab: articleNavigatorState.activeTab,
                 depth: articleNavigatorState.depth,
                 summariesVisible: articleNavigatorState.summariesVisible,
-                expandedSectionIds: [...articleNavigatorState.expandedSectionIds]
+                expandedSectionIds: [...articleNavigatorState.expandedSectionIds],
+                analysisSectionSelection: Object.fromEntries(
+                    articleNavigatorState.analysisSectionSelection
+                )
             },
             sidePanel: articleWorkspaceSidePanelUiState
         }]
     ]);
     return assets;
+}
+
+function buildArticleWorkspaceBaselineAssets() {
+    const snapshot = buildArticleWorkspaceSnapshot();
+    return new Map([
+        ['article/structure.json', {
+            title: snapshot.title,
+            url: snapshot.url,
+            publisherFamily: snapshot.publisherFamily,
+            revision: snapshot.revision,
+            diagnostics: snapshot.diagnostics,
+            nodes: snapshot.nodes
+        }],
+        ['article/paragraphs.json', {
+            revision: snapshot.revision,
+            paragraphs: snapshot.paragraphs
+        }]
+    ]);
 }
 
 function captureArticleWorkspaceAssets() {
@@ -6227,8 +7673,13 @@ async function persistArticleWorkspaceArtifacts({ force = false, assets = null }
     return { saved: true, results };
 }
 
+async function persistArticleWorkspaceBaseline() {
+    return persistArticleWorkspaceArtifacts({
+        assets: buildArticleWorkspaceBaselineAssets()
+    });
+}
+
 async function saveCurrentArticleWorkspaceNow() {
-    const artifacts = await persistArticleWorkspaceArtifacts({ force: true });
     const turnResults = [];
     for (const turn of articleChatState.turns) {
         turnResults.push(await persistWorkspaceTurnCheckpoint(turn, {
@@ -6236,6 +7687,7 @@ async function saveCurrentArticleWorkspaceNow() {
             force: true
         }));
     }
+    const artifacts = await persistArticleWorkspaceArtifacts({ force: true });
     return {
         success: true,
         workspace: currentArticleWorkspace,
@@ -6395,7 +7847,11 @@ async function applyArticleArchiveSnapshot(input, { forceContentChanged = false 
     if (lastRegexHighlightRequest?.categories && workspace.activeEngine !== 'llm') {
         const counts = highlighter.applyHighlight(
             lastRegexHighlightRequest.categories,
-            lastRegexHighlightRequest.mode || 'word'
+            lastRegexHighlightRequest.mode || 'word',
+            {
+                allowedParagraphIds: selectedArticleAnalysisParagraphIds(),
+                analysisModeId: lastRegexHighlightRequest.analysisModeId
+            }
         );
         regexHighlights = Object.values(counts || {})
             .reduce((sum, value) => sum + (Number(value) || 0), 0);
@@ -6626,9 +8082,23 @@ async function applyArticleWorkspaceAssets(input = {}) {
 
     const savedChat = byPath.get('chat/index.json') ||
         (archiveResult ? getPublicArticleChatState() : null);
-    if (savedChat && Array.isArray(savedChat.turns)) {
+    const restoredTurnsById = new Map();
+    (Array.isArray(savedChat?.turns) ? savedChat.turns : []).forEach(turn => {
+        const turnId = String(turn?.turnId || '');
+        if (turnId) restoredTurnsById.set(turnId, turn);
+    });
+    (Array.isArray(input.turns) ? input.turns : []).forEach(turn => {
+        const turnId = String(turn?.turnId || '');
+        if (turnId) restoredTurnsById.set(turnId, turn);
+    });
+    const restoredTurns = [...restoredTurnsById.values()].sort((left, right) =>
+        Number(left.sequence || 0) - Number(right.sequence || 0) ||
+        Number(left.createdAt || 0) - Number(right.createdAt || 0) ||
+        String(left.turnId || '').localeCompare(String(right.turnId || ''))
+    );
+    if (savedChat || restoredTurns.length) {
         articleChatState = {
-            turns: savedChat.turns.map(publicArticleChatTurn).map(turn => ({
+            turns: restoredTurns.map(publicArticleChatTurn).map(turn => ({
                 ...turn,
                 status: turn.status === 'generating' ? 'interrupted'
                     : turn.status === 'queued' ? 'interrupted' : turn.status,
@@ -6641,8 +8111,8 @@ async function applyArticleWorkspaceAssets(input = {}) {
             error: '',
             operationId: '',
             activeTurnId: '',
-            coverage: savedChat.coverage || null,
-            memoryNeedsRebuild: savedChat.memoryNeedsRebuild === true
+            coverage: savedChat?.coverage || null,
+            memoryNeedsRebuild: savedChat?.memoryNeedsRebuild === true
         };
     }
 
@@ -6655,6 +8125,13 @@ async function applyArticleWorkspaceAssets(input = {}) {
         articleNavigatorState.expandedSectionIds = new Set(
             Array.isArray(savedUi.navigator.expandedSectionIds)
                 ? savedUi.navigator.expandedSectionIds.map(String) : []
+        );
+        articleNavigatorState.analysisSectionSelection = new Map(
+            Object.entries(
+                savedUi.navigator.analysisSectionSelection &&
+                typeof savedUi.navigator.analysisSectionSelection === 'object'
+                    ? savedUi.navigator.analysisSectionSelection : {}
+            ).map(([sectionId, selected]) => [String(sectionId), selected === true])
         );
     }
     articleWorkspaceSidePanelUiState = savedUi?.sidePanel || null;
@@ -6670,11 +8147,20 @@ async function applyArticleWorkspaceAssets(input = {}) {
                 path, articleWorkspaceAssetFingerprint(content)
             );
         });
-        if (input.manifest?.workspaceId) currentArticleWorkspace = { ...input.manifest };
+        if (input.manifest?.workspaceId) {
+            currentArticleWorkspace = { ...input.manifest };
+            articleWorkspaceGenerationOverride = Math.max(
+                articleWorkspaceGenerationOverride,
+                Number(input.manifest.workspaceGeneration) || 1
+            );
+        }
     }
     articleChatState.loading = false;
     articleChatState.operationId = '';
     articleChatState.activeTurnId = '';
+    // Rewrite the aggregate index only after turn-file recovery has completed.
+    // This makes the self-healed history durable for the next browser start.
+    scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyArticleChatStateChanged('workspace_restored');
     return {
         success: true,
@@ -6700,6 +8186,7 @@ async function resetArticleWorkspaceState({ workspaceGeneration = 1 } = {}) {
     llmProgressiveAnalysis = null;
     lastLlmDiagnostics = null;
     lastReviewOutline = null;
+    articleNavigatorState.analysisSectionSelection.clear();
     standaloneReviewParagraphSummaries.clear();
     articleSectionOutlines.clear();
     reviewOutlineStatus = createInitialReviewOutlineStatus();
@@ -6791,7 +8278,14 @@ function verifyAndFocusArticleChatCitation(target = {}) {
         return { ...verification, focused: false, revisionChanged };
     }
     const paragraph = resolveWorkspaceParagraph(verification.target);
-    if (!paragraph || !focusArticleSource(paragraph.anchor)) {
+    const quote = String(
+        evidence.quote || evidence.support || verification.target?.quoteSpan?.text || ''
+    ).trim();
+    const focusedGranularity = paragraph && quote &&
+        focusArticleSourceQuote(paragraph.anchor, quote)
+        ? 'sentence'
+        : paragraph && focusArticleSource(paragraph.anchor) ? 'paragraph' : '';
+    if (!paragraph || !focusedGranularity) {
         return {
             ...verification,
             status: 'missing',
@@ -6801,7 +8295,12 @@ function verifyAndFocusArticleChatCitation(target = {}) {
             revisionChanged
         };
     }
-    return { ...verification, focused: true, revisionChanged };
+    return {
+        ...verification,
+        focused: true,
+        focusedGranularity,
+        revisionChanged
+    };
 }
 
 function focusArticleWorkspaceSource(target = {}) {
@@ -7452,10 +8951,11 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
             const scopeSectionIds = new Set(
                 Array.isArray(options.scopeSectionIds) ? options.scopeSectionIds : []
             );
+            const scopeSelectionProvided = options.scopeSelectionProvided === true;
             const paragraphs = requestedParagraphIds.size
                 ? allParagraphs.filter(paragraph =>
                     requestedParagraphIds.has(String(paragraph.paragraphId || '')))
-                : scopeSectionIds.size
+                : scopeSelectionProvided
                     ? allParagraphs.filter(paragraph =>
                         scopeSectionIds.has(paragraph.sectionId) ||
                         (paragraph.headingPath || []).some(heading =>
@@ -7566,6 +9066,1343 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
     }
 }
 
+function decodeExportDataUrl(dataUrl) {
+    const match = String(dataUrl || '').match(
+        /^data:([^;,]+)?((?:;[^,]*)*?),(.*)$/s
+    );
+    if (!match) throw new Error('INVALID_EXPORT_DATA_URL');
+    const contentType = String(match[1] || 'application/octet-stream').toLowerCase();
+    const metadata = String(match[2] || '');
+    const payload = String(match[3] || '');
+    if (/;base64/i.test(metadata)) {
+        const binary = atob(payload.replace(/\s+/g, ''));
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+        return { bytes, contentType };
+    }
+    return {
+        bytes: new TextEncoder().encode(decodeURIComponent(payload)),
+        contentType
+    };
+}
+
+function exportImageExtension(contentType, sourceUrl = '') {
+    const normalized = String(contentType || '').toLowerCase().split(';', 1)[0];
+    const byType = {
+        'image/avif': 'avif',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'image/tiff': 'tiff',
+        'image/bmp': 'bmp',
+        'image/svg+xml': 'svg'
+    };
+    if (byType[normalized]) return byType[normalized];
+    try {
+        const extension = new URL(sourceUrl, document.baseURI).pathname
+            .match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toLowerCase();
+        if (['avif', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff', 'bmp', 'svg']
+            .includes(extension)) {
+            return extension === 'jpeg' ? 'jpg' : extension === 'tif' ? 'tiff' : extension;
+        }
+    } catch (_) {}
+    return 'img';
+}
+
+function publicExportSourceUrl(value) {
+    const source = String(value || '').trim();
+    if (!source || /^data:/i.test(source)) return source ? 'embedded-data-url' : '';
+    if (/^blob:/i.test(source)) return 'temporary-blob-url';
+    try {
+        const url = new URL(source, document.baseURI);
+        url.username = '';
+        url.password = '';
+        url.search = '';
+        url.hash = '';
+        return url.href;
+    } catch (_) {
+        return '';
+    }
+}
+
+async function fetchExportImageDirect(sourceUrl) {
+    const response = await fetch(sourceUrl, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        redirect: 'follow'
+    });
+    if (!response.ok) throw new Error(`HTTP_${response.status}`);
+    const contentType = String(response.headers.get('content-type') || '')
+        .split(';', 1)[0].trim().toLowerCase();
+    if (!/^image\//.test(contentType)) throw new Error('EXPORT_IMAGE_NOT_IMAGE');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 40 * 1024 * 1024) {
+        throw new Error('EXPORT_IMAGE_EMPTY_OR_TOO_LARGE');
+    }
+    return {
+        bytes,
+        contentType,
+        sourceUrl: response.url || sourceUrl
+    };
+}
+
+async function fetchExportImageSource(sourceUrl, options = {}) {
+    const source = String(sourceUrl || '').trim();
+    if (!source) throw new Error('EXPORT_IMAGE_SOURCE_MISSING');
+    const cacheMode = options.cacheMode ||
+        (options.useFigureCache === false ? 'none' : await figureImageCacheMode());
+    if (/^data:image\//i.test(source)) {
+        const decoded = decodeExportDataUrl(source);
+        return {
+            ...decoded,
+            sourceUrl: 'embedded-data-url',
+            cacheHit: false
+        };
+    }
+    if (/^blob:/i.test(source)) return fetchExportImageDirect(source);
+
+    let parsed;
+    try {
+        parsed = new URL(source, document.baseURI);
+    } catch (_) {
+        throw new Error('EXPORT_INVALID_IMAGE_URL');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error('EXPORT_INVALID_IMAGE_URL');
+    }
+
+    let backgroundError = null;
+    try {
+        const response = await chrome.runtime.sendMessage({
+            type: 'EXPORT_FETCH_IMAGE_RESOURCE',
+            url: parsed.href,
+            documentUrl: location.href,
+            cacheMode
+        });
+        if (response?.success && response.data?.dataUrl) {
+            const decoded = decodeExportDataUrl(response.data.dataUrl);
+            return {
+                ...decoded,
+                contentType: response.data.contentType || decoded.contentType,
+                sourceUrl: response.data.sourceUrl || parsed.href,
+                cacheHit: response.data.cacheHit === true
+            };
+        }
+        backgroundError = new Error(
+            response?.error?.message || response?.error?.code || 'EXPORT_IMAGE_FETCH_FAILED'
+        );
+    } catch (error) {
+        backgroundError = error;
+    }
+
+    try {
+        return await fetchExportImageDirect(parsed.href);
+    } catch (directError) {
+        const error = new Error(
+            `无法下载高清图：${backgroundError?.message || directError.message}`
+        );
+        error.code = 'EXPORT_IMAGE_FETCH_FAILED';
+        error.cause = directError;
+        throw error;
+    }
+}
+
+async function measureExportImageResource(resource) {
+    const bytes = resource?.bytes instanceof Uint8Array
+        ? resource.bytes : new Uint8Array(resource?.bytes || []);
+    if (!bytes.length) return { ...resource, pixelWidth: 0, pixelHeight: 0 };
+    const blob = new Blob([bytes], {
+        type: String(resource?.contentType || 'application/octet-stream')
+    });
+    let width = 0;
+    let height = 0;
+    if (typeof createImageBitmap === 'function') {
+        let bitmap = null;
+        try {
+            bitmap = await createImageBitmap(blob);
+            width = Math.max(0, Math.round(Number(bitmap?.width) || 0));
+            height = Math.max(0, Math.round(Number(bitmap?.height) || 0));
+        } catch (_) {
+            // Some browsers cannot decode SVG or older image formats with
+            // createImageBitmap. The object-URL path below covers those cases.
+        } finally {
+            bitmap?.close?.();
+        }
+    }
+    if (!width || !height) {
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            const image = await loadFigureImage(objectUrl, 10000);
+            width = Math.max(0, Math.round(Number(
+                image?.naturalWidth || image?.width
+            ) || 0));
+            height = Math.max(0, Math.round(Number(
+                image?.naturalHeight || image?.height
+            ) || 0));
+        } catch (_) {
+            // Retain the resource. If no candidate exposes decodable dimensions,
+            // selection falls back to byte size and publisher candidate order.
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
+    }
+    return {
+        ...resource,
+        pixelWidth: width,
+        pixelHeight: height
+    };
+}
+
+function compareExportImageQuality(left, right) {
+    const leftArea = Math.max(0, Number(left?.pixelWidth) || 0) *
+        Math.max(0, Number(left?.pixelHeight) || 0);
+    const rightArea = Math.max(0, Number(right?.pixelWidth) || 0) *
+        Math.max(0, Number(right?.pixelHeight) || 0);
+    if (rightArea !== leftArea) return rightArea - leftArea;
+    const byteDifference = (Number(right?.bytes?.length) || 0) -
+        (Number(left?.bytes?.length) || 0);
+    if (byteDifference) return byteDifference;
+    return (Number(left?.candidateIndex) || 0) -
+        (Number(right?.candidateIndex) || 0);
+}
+
+async function collectExportFigureImages(figure, figureIndex) {
+    const imageElements = Array.from(figure?.imageElements || []).slice(0, 40);
+    const resources = [];
+    const claimedSources = new Set();
+    const fetchedCandidates = new Map();
+    for (const [imageIndex, imageElement] of imageElements.entries()) {
+        const candidates = await resolveFigureImageSources({
+            ...figure,
+            imageElements: [imageElement]
+        });
+        const measuredCandidates = [];
+        for (const [candidateIndex, candidate] of candidates.slice(0, 12).entries()) {
+            if (!candidate || claimedSources.has(candidate)) continue;
+            try {
+                if (!fetchedCandidates.has(candidate)) {
+                    fetchedCandidates.set(candidate, (async () =>
+                        measureExportImageResource(
+                            await fetchExportImageSource(candidate)
+                        ))());
+                }
+                const measured = await fetchedCandidates.get(candidate);
+                measuredCandidates.push({
+                    ...measured,
+                    requestedSourceUrl: candidate,
+                    candidateIndex
+                });
+            } catch (_) {
+                // Full-size links can point to an HTML viewer. Continue to the
+                // next candidate until an actual image is returned.
+            }
+        }
+        measuredCandidates.sort(compareExportImageQuality);
+        const resource = measuredCandidates.find(candidate =>
+            !claimedSources.has(candidate.requestedSourceUrl) &&
+            !claimedSources.has(candidate.sourceUrl)
+        ) || null;
+        if (!resource) continue;
+        claimedSources.add(resource.requestedSourceUrl);
+        claimedSources.add(resource.sourceUrl);
+        const extension = exportImageExtension(resource.contentType, resource.sourceUrl);
+        const folder = `figures/Figure_${String(figureIndex + 1).padStart(2, '0')}`;
+        const path = `${folder}/image_${String(resources.length + 1).padStart(2, '0')}.${extension}`;
+        resources.push({
+            path,
+            data: resource.bytes,
+            contentType: resource.contentType,
+            byteLength: resource.bytes.length,
+            sourceUrl: resource.sourceUrl,
+            requestedSourceUrl: resource.requestedSourceUrl,
+            pixelWidth: resource.pixelWidth,
+            pixelHeight: resource.pixelHeight,
+            candidateCount: measuredCandidates.length,
+            qualitySelection: 'largest-pixel-area',
+            displayedWidth: Number(imageElement?.naturalWidth || imageElement?.width) || 0,
+            displayedHeight: Number(imageElement?.naturalHeight || imageElement?.height) || 0,
+            imageElementIndex: imageIndex
+        });
+    }
+    return resources;
+}
+
+function exportFigureRecord(figure, snapshotFigure = {}) {
+    return {
+        figureId: String(figure?.figureId || snapshotFigure?.figureId || ''),
+        figureLabel: String(figure?.figureLabel || snapshotFigure?.figureLabel || ''),
+        caption: String(figure?.caption || snapshotFigure?.caption || ''),
+        isSupplemental: figure?.isSupplemental === true ||
+            snapshotFigure?.isSupplemental === true,
+        panelHints: Array.isArray(figure?.panelHints)
+            ? [...figure.panelHints]
+            : [...(snapshotFigure?.panelHints || [])],
+        contextParagraphs: (Array.isArray(figure?.contextParagraphs)
+            ? figure.contextParagraphs : []).map(item => ({ ...item })),
+        activeDepth: snapshotFigure?.activeDepth || 'deep',
+        standard: snapshotFigure?.standard || null,
+        standardError: String(snapshotFigure?.standardError || ''),
+        deep: snapshotFigure?.deep || null,
+        deepError: String(snapshotFigure?.deepError || ''),
+        panelAnalyses: snapshotFigure?.panelAnalyses || {},
+        panelAnalysisErrors: snapshotFigure?.panelAnalysisErrors || {},
+        panelFollowups: snapshotFigure?.panelFollowups || {},
+        panelFollowupHistories: snapshotFigure?.panelFollowupHistories || {},
+        panelFollowupErrors: snapshotFigure?.panelFollowupErrors || {},
+        imageFiles: [],
+        images: []
+    };
+}
+
+function collectCompleteExportFigures() {
+    const inventory = getFigureWorkspaceInventory({ forceRefresh: true });
+    const workspace = buildFigureWorkspaceSnapshot();
+    const snapshotById = new Map(
+        (workspace.figures || []).map(figure => [String(figure.figureId || ''), figure])
+    );
+    const records = inventory.map(figure =>
+        exportFigureRecord(figure, snapshotById.get(String(figure.figureId || '')) || {})
+    );
+    const existingIds = new Set(records.map(figure => figure.figureId));
+    (workspace.figures || []).forEach(figure => {
+        if (!existingIds.has(String(figure.figureId || ''))) {
+            records.push(exportFigureRecord(null, figure));
+        }
+    });
+    return {
+        records,
+        inventoryById: new Map(inventory.map(figure => [String(figure.figureId || ''), figure])),
+        crossFigureLogic: workspace.crossFigureLogic?.result || null,
+        figureStatus: workspace.status || null
+    };
+}
+
+function buildExportChatMarkdown(chat = {}) {
+    const lines = ['# 文献全文问答', ''];
+    (Array.isArray(chat.turns) ? chat.turns : []).forEach((turn, index) => {
+        lines.push(`## 问答 ${index + 1}`, '', `**问题：** ${turn.question || ''}`, '');
+        const blocks = Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [];
+        if (blocks.length) {
+            blocks.forEach(block => lines.push(String(block.markdown || ''), ''));
+        } else {
+            lines.push(String(turn.summary || '无回答'), '');
+        }
+    });
+    if (!(chat.turns || []).length) lines.push('暂无全文问答。', '');
+    return lines.join('\n');
+}
+
+function buildPptBundleReadme(bundle) {
+    return [
+        '# Brevess：PPT 制作材料包',
+        '',
+        `论文：${bundle.title || ''}`,
+        `原文：${bundle.url || ''}`,
+        `导出时间：${bundle.exportedAt}`,
+        '',
+        '## 内容',
+        '',
+        '- `figures/`：逐 Figure 保存的最高质量原图；每个图片文件都在 manifest 中记录来源。',
+        '- `analysis/figures/`：每张 Figure 的整图、Panel、Panel 追问及相关正文证据。',
+        '- `analysis/cross-figure-logic.*`：主图多米诺跨图逻辑。',
+        '- `analysis/fulltext-question-answer.*`：完整全文问答历史。',
+        '- `analysis/manual-annotations.json`：手动高亮与注释。',
+        '- `PROMPT_FOR_CODEX_OR_AGENT.md`：交给本地 Codex 或其他 Agent 的制图任务。',
+        '',
+        '请先核对 `manifest.json` 中的 `missingImageFigureIds`。缺图时不要凭空重建，',
+        '应回到论文页面下载原图后再制作 PPT。',
+        ''
+    ].join('\n');
+}
+
+async function exportPptMaterialBundle() {
+    if (typeof SciLLM.createZipBlob !== 'function' ||
+        typeof SciLLM.buildPptAgentPrompt !== 'function') {
+        throw new Error('EXPORT_BUNDLE_MODULE_UNAVAILABLE');
+    }
+    const article = buildArticleWorkspaceSnapshot({ forceRefresh: true, chatLimit: 0 });
+    const collected = collectCompleteExportFigures();
+    const entries = [];
+    const missingImageFigureIds = [];
+    let imageCount = 0;
+
+    for (const [index, record] of collected.records.entries()) {
+        const sourceFigure = collected.inventoryById.get(record.figureId);
+        const images = sourceFigure
+            ? await collectExportFigureImages(sourceFigure, index) : [];
+        if (!images.length) missingImageFigureIds.push(record.figureId || record.figureLabel);
+        images.forEach(image => {
+            entries.push({ path: image.path, data: image.data });
+            record.imageFiles.push(image.path);
+            record.images.push({
+                path: image.path,
+                contentType: image.contentType,
+                byteLength: image.byteLength,
+                sourceUrl: publicExportSourceUrl(image.sourceUrl),
+                requestedSourceUrl: publicExportSourceUrl(image.requestedSourceUrl),
+                pixelWidth: image.pixelWidth,
+                pixelHeight: image.pixelHeight,
+                candidateCount: image.candidateCount,
+                qualitySelection: image.qualitySelection,
+                displayedWidth: image.displayedWidth,
+                displayedHeight: image.displayedHeight
+            });
+            imageCount += 1;
+        });
+        const figureStem = `Figure_${String(index + 1).padStart(2, '0')}`;
+        entries.push({
+            path: `analysis/figures/${figureStem}.json`,
+            data: SciLLM.exportJson(record)
+        });
+        entries.push({
+            path: `analysis/figures/${figureStem}.md`,
+            data: SciLLM.buildFigureMarkdown(record)
+        });
+    }
+
+    const exportedAt = new Date().toISOString();
+    const annotations = currentManualDocument?.record?.annotations || [];
+    const bundle = {
+        schemaVersion: 1,
+        exportKind: 'sci-reader-ppt-materials',
+        extensionVersion: chrome.runtime.getManifest?.().version || '',
+        exportedAt,
+        title: article.title,
+        url: article.url,
+        publisherFamily: article.publisherFamily,
+        figures: collected.records,
+        crossFigureLogic: collected.crossFigureLogic,
+        chat: article.chat,
+        manualAnnotations: annotations,
+        missingImageFigureIds
+    };
+    entries.push(
+        { path: 'manifest.json', data: SciLLM.exportJson(bundle) },
+        {
+            path: 'analysis/cross-figure-logic.json',
+            data: SciLLM.exportJson(collected.crossFigureLogic || {})
+        },
+        {
+            path: 'analysis/cross-figure-logic.md',
+            data: `# 主图多米诺跨图逻辑\n\n\`\`\`json\n${
+                JSON.stringify(SciLLM.cloneExportValue(collected.crossFigureLogic || {}), null, 2)
+            }\n\`\`\`\n`
+        },
+        {
+            path: 'analysis/fulltext-question-answer.json',
+            data: SciLLM.exportJson(article.chat)
+        },
+        {
+            path: 'analysis/fulltext-question-answer.md',
+            data: buildExportChatMarkdown(article.chat)
+        },
+        {
+            path: 'analysis/manual-annotations.json',
+            data: SciLLM.exportJson(annotations)
+        },
+        {
+            path: 'analysis/article-context.json',
+            data: SciLLM.exportJson({
+                title: article.title,
+                url: article.url,
+                publisherFamily: article.publisherFamily,
+                paragraphs: article.paragraphs,
+                reviewOutline: article.reviewOutline,
+                paragraphSummaries: article.paragraphSummaries,
+                ledger: article.ledger,
+                studyProfile: article.studyProfile
+            })
+        },
+        { path: 'PROMPT_FOR_CODEX_OR_AGENT.md', data: SciLLM.buildPptAgentPrompt(bundle) },
+        { path: 'README.md', data: buildPptBundleReadme(bundle) }
+    );
+    const blob = await SciLLM.createZipBlob(entries);
+    const filename = `${SciLLM.sanitizeExportFilename(
+        article.title, 'SCI-article'
+    )}-PPT-materials.zip`;
+    downloadContentExportBlob(blob, filename);
+    return {
+        success: true,
+        filename,
+        figureCount: collected.records.length,
+        imageCount,
+        missingImageFigureIds,
+        byteLength: blob.size
+    };
+}
+
+function downloadContentExportBlob(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    link.hidden = true;
+    (document.body || document.documentElement).appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+}
+
+function absoluteSnapshotUrl(value) {
+    const source = String(value || '').trim();
+    if (!source || /^(?:data:|blob:|mailto:|tel:|#)/i.test(source)) return source;
+    try {
+        const url = new URL(source, document.baseURI);
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function encodeSnapshotImageDataUrl(bytes, contentType) {
+    const value = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    const chunks = [];
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < value.length; offset += chunkSize) {
+        chunks.push(String.fromCharCode(...value.subarray(offset, offset + chunkSize)));
+    }
+    return `data:${String(contentType || 'application/octet-stream')};base64,${
+        btoa(chunks.join(''))
+    }`;
+}
+
+function snapshotArticleRootScore(element) {
+    if (!element?.querySelectorAll) return -1;
+    const textLength = String(element.innerText || element.textContent || '')
+        .replace(/\s+/g, ' ').trim().length;
+    const paragraphCount = element.querySelectorAll(
+        'p,[role="paragraph"],.Paragraph,.paragraph'
+    ).length;
+    const headingCount = element.querySelectorAll('h2,h3,h4,[role="heading"]').length;
+    const figureCount = element.querySelectorAll(
+        'figure,[role="figure"],.figure,.fig'
+    ).length;
+    const navigationCount = element.querySelectorAll(
+        'nav,aside,[class*="sidebar" i],[class*="recommend" i],[class*="advert" i]'
+    ).length;
+    return Math.min(textLength, 400000) +
+        Math.min(paragraphCount, 2000) * 300 +
+        Math.min(headingCount, 300) * 180 +
+        Math.min(figureCount, 200) * 700 -
+        Math.min(navigationCount, 100) * 1000;
+}
+
+function resolveZoteroSnapshotArticleRoot() {
+    const adapter = typeof SciLLM.selectPublisherAdapter === 'function'
+        ? SciLLM.selectPublisherAdapter(globalThis.location)
+        : null;
+    const selectBest = selectors => {
+        const candidates = [];
+        const seen = new Set();
+        (selectors || []).slice(0, 50).forEach(selector => {
+            try {
+                document.querySelectorAll(selector).forEach(element => {
+                    if (!seen.has(element)) {
+                        seen.add(element);
+                        candidates.push(element);
+                    }
+                });
+            } catch (_) {}
+        });
+        return candidates.reduce((best, candidate) =>
+            !best || snapshotArticleRootScore(candidate) > snapshotArticleRootScore(best)
+                ? candidate : best, null);
+    };
+    const specific = selectBest(adapter?.specificArticleRootSelectors || []);
+    if (specific && snapshotArticleRootScore(specific) >= 1200) return specific;
+    const general = selectBest([
+        ...(adapter?.articleRootSelectors || []),
+        'article', 'main article', 'main', '[role="main"]',
+        '#article-body', '.article-body', '.article__body'
+    ]);
+    return general || document.querySelector('article,main,[role="main"]') || document.body;
+}
+
+function appendSnapshotAnnotationAppendix(targetBody, annotations) {
+    if (!annotations.length) return;
+    const outputDocument = targetBody.ownerDocument;
+    const section = outputDocument.createElement('section');
+    section.id = 'sci-reader-snapshot-annotations';
+    const heading = outputDocument.createElement('h2');
+    heading.textContent = `SCI 阅读助手：手动高亮与注释（${annotations.length}）`;
+    section.appendChild(heading);
+    const list = outputDocument.createElement('ol');
+    annotations.forEach(annotation => {
+        const item = outputDocument.createElement('li');
+        const category = outputDocument.createElement('strong');
+        category.textContent = annotation.categorySnapshot?.name ||
+            annotation.categoryId || '手动标注';
+        item.appendChild(category);
+        const quote = outputDocument.createElement('blockquote');
+        quote.textContent = String(annotation.quote || '');
+        item.appendChild(quote);
+        if (String(annotation.note || '').trim()) {
+            const note = outputDocument.createElement('p');
+            note.textContent = `注释：${annotation.note}`;
+            item.appendChild(note);
+        }
+        list.appendChild(item);
+    });
+    section.appendChild(list);
+    targetBody.appendChild(section);
+}
+
+function cleanZoteroSnapshotArticleRoot(
+    liveRoot,
+    clonedRoot,
+    embeddedImageByElement,
+    annotationById
+) {
+    const outputDocument = clonedRoot.ownerDocument;
+    const liveImages = Array.from(liveRoot?.querySelectorAll?.('img') || []);
+    const clonedImages = Array.from(clonedRoot.querySelectorAll('img'));
+    const embeddedImageByUrl = new Map();
+    embeddedImageByElement.forEach((resource, liveImage) => {
+        [
+            resource?.sourceUrl,
+            resource?.requestedSourceUrl,
+            liveImage?.currentSrc,
+            liveImage?.src,
+            liveImage?.getAttribute?.('src')
+        ].forEach(candidate => {
+            const absolute = absoluteSnapshotUrl(candidate);
+            if (absolute && resource?.dataUrl && !embeddedImageByUrl.has(absolute)) {
+                embeddedImageByUrl.set(absolute, resource);
+            }
+        });
+    });
+    clonedImages.forEach((image, index) => {
+        const live = liveImages[index];
+        const liveCandidates = typeof SciLLM.collectFigureImageCandidates === 'function'
+            ? SciLLM.collectFigureImageCandidates(live, document.baseURI)
+            : [live?.currentSrc, live?.src].filter(Boolean);
+        const resource = embeddedImageByElement.get(live) ||
+            liveCandidates.map(absoluteSnapshotUrl)
+                .map(candidate => embeddedImageByUrl.get(candidate))
+                .find(Boolean);
+        if (resource?.dataUrl) {
+            image.setAttribute('src', resource.dataUrl);
+            image.setAttribute('data-sci-embedded-original', 'true');
+            if (resource.pixelWidth) {
+                image.setAttribute('data-sci-original-width', String(resource.pixelWidth));
+            }
+            if (resource.pixelHeight) {
+                image.setAttribute('data-sci-original-height', String(resource.pixelHeight));
+            }
+            if (resource.anchorId) image.id = resource.anchorId;
+            image.removeAttribute('srcset');
+            image.removeAttribute('sizes');
+            image.removeAttribute('loading');
+            image.removeAttribute('decoding');
+            image.closest('picture')?.querySelectorAll('source').forEach(source => {
+                // A data URL contains a comma, which responsive-image srcset
+                // parsing treats as a candidate separator. Keep the publisher
+                // <source> elements but disable their URL attributes so the
+                // valid high-resolution data URL on <img src> is selected.
+                source.removeAttribute('srcset');
+                source.removeAttribute('src');
+                source.removeAttribute('sizes');
+            });
+        } else {
+            const source = absoluteSnapshotUrl(
+                live?.currentSrc || image.getAttribute('src') || liveCandidates[0]
+            );
+            if (source) image.setAttribute('src', source);
+            const srcset = String(image.getAttribute('srcset') || '').trim();
+            if (srcset) {
+                const absoluteSrcset = srcset.split(',').map(candidate => {
+                    const parts = candidate.trim().split(/\s+/);
+                    const url = absoluteSnapshotUrl(parts.shift());
+                    return url ? [url, ...parts].join(' ') : '';
+                }).filter(Boolean).join(', ');
+                if (absoluteSrcset) image.setAttribute('srcset', absoluteSrcset);
+            }
+        }
+    });
+
+    const highlightSelector = '.sci-highlight,.sci-llm-highlight,.sci-manual-highlight';
+    Array.from(clonedRoot.querySelectorAll(highlightSelector))
+        .filter(mark => !mark.parentElement?.closest?.(highlightSelector))
+        .forEach((mark, highlightIndex) => {
+            const annotationId = String(mark.getAttribute('data-annotation-id') || '');
+            const annotation = annotationById.get(annotationId);
+            const messages = [];
+            const category = annotation?.categorySnapshot?.name ||
+                mark.getAttribute('data-category-name') ||
+                mark.getAttribute('data-category') ||
+                mark.getAttribute('data-category-id') ||
+                '高亮说明';
+            if (String(mark.getAttribute('title') || '').trim()) {
+                messages.push(String(mark.getAttribute('title')).trim());
+            }
+            mark.querySelectorAll('.sci-llm-highlight[title],.sci-highlight[title]')
+                .forEach(child => {
+                    const message = String(child.getAttribute('title') || '').trim();
+                    if (message && !messages.includes(message)) messages.push(message);
+                });
+            if (String(annotation?.note || '').trim()) {
+                messages.push(`备注：${String(annotation.note).trim()}`);
+            }
+            if (!messages.length) messages.push(category);
+
+            const control = outputDocument.createElement('span');
+            control.className = 'sci-snapshot-highlight-control';
+            control.setAttribute('data-sci-highlight-source',
+                mark.getAttribute('data-source') || (annotation ? 'manual' : ''));
+            const toggle = outputDocument.createElement('input');
+            toggle.type = 'checkbox';
+            toggle.className = 'sci-snapshot-highlight-toggle';
+            toggle.id = `sci-snapshot-highlight-toggle-${highlightIndex + 1}`;
+            toggle.setAttribute('aria-label', `查看${category}说明`);
+            const label = outputDocument.createElement('label');
+            label.className = 'sci-snapshot-highlight-label';
+            label.setAttribute('for', toggle.id);
+            label.setAttribute('title', `点击查看${category}说明`);
+            const popover = outputDocument.createElement('span');
+            popover.className = 'sci-snapshot-highlight-popover';
+            popover.setAttribute('role', 'note');
+            const heading = outputDocument.createElement('strong');
+            heading.textContent = category;
+            const body = outputDocument.createElement('span');
+            body.textContent = messages.join('\n');
+            popover.append(heading, body);
+
+            mark.removeAttribute('role');
+            mark.removeAttribute('tabindex');
+            mark.parentNode.insertBefore(control, mark);
+            label.appendChild(mark);
+            control.append(toggle, label, popover);
+        });
+
+    clonedRoot.querySelectorAll([
+        '[data-sci-plugin-ui]',
+        '#sci-reading-panel',
+        '#sci-article-navigator-panel',
+        '#sci-figure-image-viewer',
+        '#sci-llm-feedback',
+        '#sci-manual-toolbar',
+        '#sci-highlight-context-popover',
+        '#sci-manual-status',
+        '#sci-side-panel-restore',
+        '#sci-highlight-tooltip',
+        '#esSidebar',
+        '#esSideButton',
+        '#epmt',
+        '#immersive-translate-browser-popup',
+        '#codex-agent-overlay-root',
+        'script'
+    ].join(',')).forEach(element => element.remove());
+
+    clonedRoot.querySelectorAll('*').forEach(element => {
+        Array.from(element.attributes || []).forEach(attribute => {
+            if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
+        });
+    });
+    clonedRoot.querySelectorAll('a[href],link[href],area[href]').forEach(element => {
+        const original = String(element.getAttribute('href') || '');
+        if (original.startsWith('#')) return;
+        const href = absoluteSnapshotUrl(original);
+        if (href && !/^javascript:/i.test(href)) {
+            element.setAttribute('href', href);
+            if (element.matches('a,area')) {
+                element.setAttribute('rel', 'noopener noreferrer');
+            }
+        } else {
+            element.removeAttribute('href');
+        }
+    });
+    clonedRoot.querySelectorAll('[src]:not(img)').forEach(element => {
+        const src = absoluteSnapshotUrl(element.getAttribute('src'));
+        if (src) element.setAttribute('src', src);
+    });
+    clonedRoot.querySelectorAll('source[srcset]').forEach(source => {
+        const srcset = String(source.getAttribute('srcset') || '');
+        const absoluteSrcset = srcset.split(',').map(candidate => {
+            const parts = candidate.trim().split(/\s+/);
+            const url = absoluteSnapshotUrl(parts.shift());
+            return url ? [url, ...parts].join(' ') : '';
+        }).filter(Boolean).join(', ');
+        if (absoluteSrcset) source.setAttribute('srcset', absoluteSrcset);
+    });
+    clonedRoot.querySelectorAll('[poster],[action]').forEach(element => {
+        ['poster', 'action'].forEach(attribute => {
+            if (!element.hasAttribute(attribute)) return;
+            const absolute = absoluteSnapshotUrl(element.getAttribute(attribute));
+            if (absolute) element.setAttribute(attribute, absolute);
+        });
+    });
+}
+
+function appendZoteroSnapshotFigureGallery(
+    outputDocument,
+    shell,
+    liveRoot,
+    galleryFigures
+) {
+    const figures = (Array.isArray(galleryFigures) ? galleryFigures : [])
+        .map(figure => ({
+            ...figure,
+            images: (Array.isArray(figure.images) ? figure.images : [])
+                .filter(image => !image.liveImage || !liveRoot?.contains?.(image.liveImage))
+        }))
+        .filter(figure => figure.images.length);
+    if (!figures.length) return;
+    const gallery = outputDocument.createElement('section');
+    gallery.id = 'sci-reader-snapshot-figure-gallery';
+    const heading = outputDocument.createElement('h2');
+    heading.textContent = '正文外 Figure 高清图集';
+    const explanation = outputDocument.createElement('p');
+    explanation.textContent =
+        '以下 Figure 位于出版社的弹层或扩展数据区域之外，已单独收录并内嵌最高质量原图。';
+    gallery.append(heading, explanation);
+    figures.forEach((figure, figureIndex) => {
+        const card = outputDocument.createElement('figure');
+        const title = outputDocument.createElement('h3');
+        title.textContent = String(
+            figure.figureLabel || figure.figureId || `Figure ${figureIndex + 1}`
+        );
+        card.appendChild(title);
+        figure.images.forEach((image, imageIndex) => {
+            const embedded = outputDocument.createElement('img');
+            embedded.src = image.dataUrl;
+            embedded.id = image.anchorId;
+            embedded.alt = String(
+                figure.figureLabel || figure.figureId || `Figure ${figureIndex + 1}`
+            );
+            embedded.setAttribute('data-sci-embedded-original', 'true');
+            if (image.pixelWidth) {
+                embedded.setAttribute('data-sci-original-width', String(image.pixelWidth));
+            }
+            if (image.pixelHeight) {
+                embedded.setAttribute('data-sci-original-height', String(image.pixelHeight));
+            }
+            if (imageIndex > 0) {
+                const subheading = outputDocument.createElement('h4');
+                subheading.textContent = `原图 ${imageIndex + 1}`;
+                card.appendChild(subheading);
+            }
+            card.appendChild(embedded);
+        });
+        if (String(figure.caption || '').trim()) {
+            const caption = outputDocument.createElement('figcaption');
+            caption.textContent = String(figure.caption);
+            card.appendChild(caption);
+        }
+        gallery.appendChild(card);
+    });
+    shell.appendChild(gallery);
+}
+
+function appendZoteroSnapshotNavigation(outputDocument, articleContainer) {
+    const headings = Array.from(articleContainer.querySelectorAll('h2,h3'))
+        .filter(heading => String(heading.textContent || '').trim())
+        .slice(0, 80);
+    if (!headings.length) return;
+    const nav = outputDocument.createElement('nav');
+    nav.id = 'sci-reader-snapshot-navigation';
+    const title = outputDocument.createElement('h2');
+    title.textContent = '正文导航';
+    const list = outputDocument.createElement('ol');
+    headings.forEach((heading, index) => {
+        if (!heading.id) heading.id = `sci-snapshot-section-${index + 1}`;
+        const item = outputDocument.createElement('li');
+        if (heading.tagName === 'H3') item.className = 'is-subsection';
+        const link = outputDocument.createElement('a');
+        link.href = `#${heading.id}`;
+        link.textContent = String(heading.textContent || '').replace(/\s+/g, ' ').trim();
+        item.appendChild(link);
+        list.appendChild(item);
+    });
+    nav.append(title, list);
+    articleContainer.before(nav);
+}
+
+function zoteroSnapshotStyle() {
+    return `
+      :root{color-scheme:light;font-family:Georgia,"Noto Serif SC","Songti SC",serif;
+        font-size:18px;line-height:1.78;background:#eef2f5;color:#17212b}
+      *{box-sizing:border-box}
+      html{scroll-behavior:smooth}
+      body{margin:0;background:#eef2f5;color:#17212b}
+      a{color:#075985;text-decoration-thickness:1px;text-underline-offset:.15em}
+      .sci-snapshot-shell{width:min(100% - 32px,980px);margin:28px auto 60px}
+      .sci-snapshot-header{margin-bottom:18px;padding:28px 34px;border:1px solid #c7d3dc;
+        border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(28,50,65,.08)}
+      .sci-snapshot-kicker{margin:0 0 10px;color:#0b628c;font:700 13px/1.4
+        -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.08em;
+        text-transform:uppercase}
+      .sci-snapshot-header h1{margin:0 0 14px;font-size:clamp(1.65rem,4vw,2.45rem);
+        line-height:1.25;letter-spacing:-.02em}
+      .sci-snapshot-meta{margin:0;color:#526575;font:14px/1.6
+        -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      #sci-reader-snapshot-navigation,#sci-reader-snapshot-annotations,
+      #sci-reader-snapshot-figure-gallery,#sci-reader-snapshot-results,
+      .sci-snapshot-article{
+        margin:18px 0;padding:26px 34px;border:1px solid #cbd6de;border-radius:14px;
+        background:#fff;box-shadow:0 5px 18px rgba(28,50,65,.06)}
+      #sci-reader-snapshot-navigation{font:15px/1.55
+        -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      #sci-reader-snapshot-navigation h2{margin-top:0}
+      #sci-reader-snapshot-navigation ol{columns:1;margin-bottom:0;padding-left:1.4em}
+      #sci-reader-snapshot-navigation li{margin:.32em 0}
+      #sci-reader-snapshot-navigation li.is-subsection{margin-left:1em;font-size:.93em}
+      .sci-snapshot-article{overflow:hidden}
+      .sci-snapshot-article,.sci-snapshot-article article,.sci-snapshot-article main,
+      .sci-snapshot-article section,.sci-snapshot-article [class*="main-column" i],
+      .sci-snapshot-article [class*="article-main" i],
+      .sci-snapshot-article [class*="article-body" i]{
+        float:none!important;clear:both!important;width:100%!important;max-width:100%!important;
+        margin-left:0!important;margin-right:0!important}
+      .sci-snapshot-article h1,.sci-snapshot-article h2,.sci-snapshot-article h3,
+      #sci-reader-snapshot-results h1,#sci-reader-snapshot-results h2,
+      #sci-reader-snapshot-results h3{scroll-margin-top:24px;line-height:1.3}
+      .sci-snapshot-article h2,#sci-reader-snapshot-results h2{
+        margin-top:2.2em;padding-bottom:.35em;border-bottom:2px solid #d9e2e8}
+      .sci-snapshot-article h3,#sci-reader-snapshot-results h3{margin-top:1.7em}
+      .sci-snapshot-article p{margin:0 0 1.15em;text-align:left;overflow-wrap:anywhere}
+      .sci-snapshot-article figure,.sci-snapshot-article [role="figure"]{
+        display:block!important;float:none!important;width:100%!important;max-width:100%!important;
+        margin:2em 0!important;padding:18px!important;border:1px solid #ccd8e0;
+        border-radius:12px;background:#f8fafb}
+      #sci-reader-snapshot-figure-gallery figure{
+        display:block;margin:2em 0;padding:18px;border:1px solid #ccd8e0;
+        border-radius:12px;background:#f8fafb}
+      .sci-snapshot-article img,.sci-snapshot-article svg,
+      .sci-snapshot-article canvas,#sci-reader-snapshot-figure-gallery img{
+        display:block;max-width:100%!important;width:auto!important;
+        height:auto!important;margin:10px auto}
+      .sci-snapshot-article img[data-sci-embedded-original="true"]{
+        cursor:zoom-in;background:#fff;image-rendering:auto}
+      .sci-snapshot-article img[data-sci-remote-fallback="true"]{
+        outline:2px dashed #c77b30;outline-offset:3px}
+      .sci-snapshot-article figcaption{margin-top:14px;color:#394d5c;font-size:.92em;
+        line-height:1.65}
+      .sci-snapshot-article table{display:block;width:100%!important;max-width:100%;
+        overflow-x:auto;border-collapse:collapse;font-size:.88em}
+      .sci-snapshot-article th,.sci-snapshot-article td{
+        padding:.5em .65em;border:1px solid #cbd5dc;vertical-align:top}
+      .sci-snapshot-article pre,#sci-reader-snapshot-results pre{
+        overflow:auto;padding:14px;border-radius:8px;background:#f2f5f7;font-size:.78em}
+      .sci-highlight,.sci-llm-highlight{display:inline;padding:1px 2px;border:0;
+        border-bottom:3px solid;border-radius:2px;background:transparent!important;
+        color:inherit;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+      .sci-llm-inferred-warning{border-bottom-style:dashed!important}
+      .sci-manual-highlight{display:inline;padding:0 .08em;border:0;border-radius:2px;
+        background:var(--sci-manual-color,#f4e89a)!important;color:inherit;
+        box-decoration-break:clone;-webkit-box-decoration-break:clone}
+      .sci-snapshot-note-marker{margin-left:.15em;color:#0b4778;font-weight:700}
+      #sci-reader-snapshot-annotations blockquote,#sci-reader-snapshot-results blockquote{
+        margin:.7em 0;padding:.7em 1em;border-left:4px solid #4d8cac;background:#f4f8fb}
+      #sci-reader-snapshot-results{font:16px/1.7
+        -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif}
+      #sci-reader-snapshot-results dl{margin:.6em 0 1.2em}
+      #sci-reader-snapshot-results dt{margin-top:.7em;color:#234a62}
+      #sci-reader-snapshot-results dd{margin:.2em 0 .7em 1.2em}
+      #sci-reader-snapshot-results h5{margin:1.2em 0 .4em;padding:.4em .65em;
+        border-radius:6px;background:#e9f2f7;font-size:1em}
+      #sci-reader-snapshot-results p{margin:.5em 0 1em}
+      @media(max-width:700px){
+        :root{font-size:16px}
+        .sci-snapshot-shell{width:min(100% - 16px,980px);margin-top:8px}
+        .sci-snapshot-header,#sci-reader-snapshot-navigation,
+        #sci-reader-snapshot-annotations,#sci-reader-snapshot-figure-gallery,
+        #sci-reader-snapshot-results,
+        .sci-snapshot-article{padding:19px 18px;border-radius:9px}
+      }
+      @media print{
+        :root,body{background:#fff}
+        .sci-snapshot-shell{width:100%;margin:0}
+        .sci-snapshot-header,#sci-reader-snapshot-navigation,
+        #sci-reader-snapshot-annotations,#sci-reader-snapshot-figure-gallery,
+        #sci-reader-snapshot-results,
+        .sci-snapshot-article{box-shadow:none;break-inside:auto}
+        figure,img{break-inside:avoid}
+      }
+    `;
+}
+
+function zoteroFaithfulSnapshotStyle() {
+    return `
+      html[data-sci-reader-snapshot="faithful-v1"] :is(
+        #js-enable-context-bar,.c-context-bar--sticky
+      ){display:none!important}
+      html[data-sci-reader-snapshot="faithful-v1"] body{
+        overflow-x:hidden!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"] #content{
+        box-sizing:border-box!important;width:min(calc(100% - 32px),1160px)!important;
+        max-width:1160px!important;margin:28px auto 56px!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"] #content :is(
+        main.c-article-main-column,article,.c-article-body,#article-body,
+        .article-body,.article__body,[data-test="article-body"],
+        [data-aa-name="article-body"]
+      ){
+        float:none!important;clear:both!important;width:100%!important;
+        max-width:100%!important;margin-left:0!important;margin-right:0!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"] #content :is(
+        .c-article-body,#article-body,.article-body,.article__body,
+        [data-test="article-body"],[data-aa-name="article-body"]
+      ){line-height:1.72!important}
+      html[data-sci-reader-snapshot="faithful-v1"] #content :is(figure,[role="figure"]){
+        float:none!important;max-width:100%!important;margin-left:auto!important;
+        margin-right:auto!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"] .sci-snapshot-highlight-control{
+        display:inline!important;position:relative!important;margin:0!important;
+        padding:0!important;border:0!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-toggle{
+        position:absolute!important;width:1px!important;height:1px!important;
+        margin:0!important;padding:0!important;opacity:0!important;
+        clip-path:inset(50%)!important;overflow:hidden!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-label{
+        display:inline!important;margin:0!important;
+        padding:0!important;cursor:pointer!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-toggle:focus-visible+.sci-snapshot-highlight-label{
+        outline:2px solid #2874a6!important;outline-offset:2px!important
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-popover{
+        display:none;position:absolute;left:0;top:calc(100% + 8px);z-index:2147483646;
+        box-sizing:border-box;width:min(430px,82vw);max-height:320px;overflow:auto;
+        padding:12px 14px;border:1px solid #c8c5bd;border-radius:8px;
+        background:#fff;color:#202832;box-shadow:0 8px 28px rgba(28,37,44,.22);
+        font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif;
+        text-align:left;white-space:normal
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-toggle:checked~
+        .sci-snapshot-highlight-popover{
+        display:block
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-popover>strong{
+        display:block;margin:0 0 5px;color:#0b4778;font-size:14px
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        .sci-snapshot-highlight-popover>span{
+        display:block;white-space:pre-wrap;overflow-wrap:anywhere
+      }
+      html[data-sci-reader-snapshot="faithful-v1"]
+        img[data-sci-embedded-original="true"]{
+        display:block!important;max-width:100%!important;width:auto!important;
+        height:auto!important;margin-left:auto!important;margin-right:auto!important;
+        image-rendering:auto
+      }
+      @media(max-width:700px){
+        html[data-sci-reader-snapshot="faithful-v1"] #content{
+          width:calc(100% - 16px)!important;margin:12px auto 32px!important
+        }
+      }
+      @media print{
+        .sci-snapshot-highlight-popover{display:none!important}
+      }
+    `;
+}
+
+async function loadZoteroSnapshotPluginCss() {
+    try {
+        const cssResponse = await fetch(chrome.runtime.getURL('content.css'), {
+            cache: 'no-store'
+        });
+        if (!cssResponse.ok) throw new Error(`CONTENT_CSS_HTTP_${cssResponse.status}`);
+        let css = await cssResponse.text();
+        try {
+            const fontResponse = await fetch(
+                chrome.runtime.getURL('vendor/phosphor/Phosphor.woff2'),
+                { cache: 'no-store' }
+            );
+            if (fontResponse.ok) {
+                const fontDataUrl = encodeSnapshotImageDataUrl(
+                    new Uint8Array(await fontResponse.arrayBuffer()),
+                    fontResponse.headers.get('content-type') || 'font/woff2'
+                );
+                css = css.replace(
+                    /url\((['"]?)vendor\/phosphor\/Phosphor\.woff2\1\)/g,
+                    `url("${fontDataUrl}")`
+                );
+            }
+        } catch (_) {}
+        return css;
+    } catch (error) {
+        console.warn('SCI 阅读助手：未能读取快照样式，使用最小兼容样式', error);
+        return `
+          html[data-sci-reader-single-column="true"] :is(
+            .c-article-main-column,.c-article-body,#article-body,.article-body,
+            .article__body,[data-test="article-body"],[data-aa-name="article-body"]
+          ){float:none!important;width:100%!important;max-width:100%!important}
+          .sci-highlight,.sci-llm-highlight{border-bottom:3px solid}
+        `;
+    }
+}
+
+function serializeZoteroSnapshotDoctype() {
+    const doctype = document.doctype;
+    if (!doctype?.name) return '<!doctype html>';
+    let serialized = `<!DOCTYPE ${doctype.name}`;
+    if (doctype.publicId) {
+        serialized += ` PUBLIC "${doctype.publicId.replace(/"/g, '&quot;')}"`;
+    }
+    if (doctype.systemId) {
+        serialized += `${doctype.publicId ? '' : ' SYSTEM'} "${
+            doctype.systemId.replace(/"/g, '&quot;')
+        }"`;
+    }
+    return `${serialized}>`;
+}
+
+function buildEnhancedArticleSnapshotHtml(options = {}) {
+    const article = options.article || {};
+    const annotations = options.annotations ||
+        currentManualDocument?.record?.annotations || [];
+    const embeddedImageByElement = options.embeddedImageByElement || new Map();
+    const annotationById = new Map(
+        annotations.map(annotation => [String(annotation.annotationId || ''), annotation])
+    );
+    const liveRoot = document.documentElement;
+    const clonedRoot = liveRoot.cloneNode(true);
+    clonedRoot.setAttribute('data-sci-reader-single-column', 'true');
+    clonedRoot.setAttribute(
+        'data-sci-publisher-family',
+        String(
+            liveRoot.dataset.sciPublisherFamily ||
+            article.publisherFamily ||
+            'generic'
+        )
+    );
+    clonedRoot.setAttribute('data-sci-reader-snapshot', 'faithful-v1');
+    cleanZoteroSnapshotArticleRoot(
+        liveRoot,
+        clonedRoot,
+        embeddedImageByElement,
+        annotationById
+    );
+
+    const head = clonedRoot.querySelector('head');
+    if (head) {
+        let charset = head.querySelector('meta[charset]');
+        if (!charset) charset = head.ownerDocument.createElement('meta');
+        charset.setAttribute('charset', 'utf-8');
+        head.prepend(charset);
+        let base = head.querySelector('base');
+        if (!base) {
+            base = head.ownerDocument.createElement('base');
+        }
+        base.href = String(article.url || location.href);
+        charset.after(base);
+        head.querySelector('#sci-reader-snapshot-style')?.remove();
+        const style = head.ownerDocument.createElement('style');
+        style.id = 'sci-reader-snapshot-style';
+        style.setAttribute('data-sci-reader-generated', 'true');
+        style.textContent = [
+            String(options.pluginCss || ''),
+            zoteroFaithfulSnapshotStyle()
+        ].join('\n');
+        head.appendChild(style);
+        const generator = head.ownerDocument.createElement('meta');
+        generator.name = 'generator';
+        generator.content = `SCI Reader faithful Zotero snapshot; ${
+            options.exportedAt || new Date().toISOString()
+        }`;
+        head.appendChild(generator);
+    }
+    return `${serializeZoteroSnapshotDoctype()}\n${clonedRoot.outerHTML}`;
+}
+
+async function collectZoteroSnapshotFigureResources(collected) {
+    const embeddedImageByElement = new Map();
+    const galleryFigures = [];
+    const missingImageFigureIds = [];
+    let embeddedImageCount = 0;
+    let embeddedImageBytes = 0;
+    for (const [figureIndex, record] of collected.records.entries()) {
+        const sourceFigure = collected.inventoryById.get(record.figureId);
+        const images = sourceFigure
+            ? await collectExportFigureImages(sourceFigure, figureIndex) : [];
+        if (!images.length) {
+            missingImageFigureIds.push(record.figureId || record.figureLabel);
+            continue;
+        }
+        const galleryFigure = {
+            figureId: record.figureId,
+            figureLabel: record.figureLabel,
+            caption: record.caption,
+            images: []
+        };
+        images.forEach((image, imageIndex) => {
+            const anchorId = `sci-snapshot-figure-${figureIndex + 1}-image-${imageIndex + 1}`;
+            const dataUrl = encodeSnapshotImageDataUrl(image.data, image.contentType);
+            const liveImage = sourceFigure.imageElements?.[image.imageElementIndex];
+            if (liveImage && !embeddedImageByElement.has(liveImage)) {
+                embeddedImageByElement.set(liveImage, {
+                    ...image,
+                    anchorId,
+                    dataUrl
+                });
+            }
+            galleryFigure.images.push({
+                ...image,
+                liveImage,
+                anchorId,
+                dataUrl
+            });
+            record.imageFiles.push(`snapshot.html#${anchorId}`);
+            record.images.push({
+                path: `snapshot.html#${anchorId}`,
+                contentType: image.contentType,
+                byteLength: image.byteLength,
+                sourceUrl: publicExportSourceUrl(image.sourceUrl),
+                requestedSourceUrl: publicExportSourceUrl(image.requestedSourceUrl),
+                pixelWidth: image.pixelWidth,
+                pixelHeight: image.pixelHeight,
+                candidateCount: image.candidateCount,
+                qualitySelection: image.qualitySelection,
+                displayedWidth: image.displayedWidth,
+                displayedHeight: image.displayedHeight
+            });
+            embeddedImageCount += 1;
+            embeddedImageBytes += Number(image.byteLength) || 0;
+        });
+        galleryFigures.push(galleryFigure);
+    }
+    return {
+        embeddedImageByElement,
+        galleryFigures,
+        missingImageFigureIds,
+        embeddedImageCount,
+        embeddedImageBytes
+    };
+}
+
+async function exportEnhancedSnapshotToZotero() {
+    if (typeof SciLLM.buildZoteroFigureNoteHtml !== 'function' ||
+        typeof SciLLM.buildZoteroChatNoteHtml !== 'function' ||
+        typeof SciLLM.createZipBlob !== 'function') {
+        throw new Error('ZOTERO_EXPORT_MODULE_UNAVAILABLE');
+    }
+    const article = buildArticleWorkspaceSnapshot({ forceRefresh: true, chatLimit: 0 });
+    const collected = collectCompleteExportFigures();
+    const annotations = currentManualDocument?.record?.annotations || [];
+    const exportedAt = new Date().toISOString();
+    const imageBundle = await collectZoteroSnapshotFigureResources(collected);
+    const sharedNoteInput = {
+        title: article.title,
+        url: article.url,
+        exportedAt,
+        figures: collected.records,
+        crossFigureLogic: collected.crossFigureLogic,
+        chat: article.chat,
+        embeddedImageCount: imageBundle.embeddedImageCount
+    };
+    const figureNoteHtml = SciLLM.buildZoteroFigureNoteHtml(sharedNoteInput);
+    const chatNoteHtml = SciLLM.buildZoteroChatNoteHtml(sharedNoteInput);
+    const pluginCss = await loadZoteroSnapshotPluginCss();
+    const snapshotContent = buildEnhancedArticleSnapshotHtml({
+        article,
+        annotations,
+        exportedAt,
+        pluginCss,
+        embeddedImageByElement: imageBundle.embeddedImageByElement
+    });
+    const payload = {
+        title: article.title,
+        url: article.url,
+        snapshotContent,
+        figureNoteHtml,
+        chatNoteHtml
+    };
+    let response = null;
+    let directError = null;
+    try {
+        response = await chrome.runtime.sendMessage({
+            type: 'ZOTERO_IMPORT_ENHANCED_SNAPSHOT',
+            payload
+        });
+        if (response?.success && response.data?.imported) {
+            return {
+                success: true,
+                imported: true,
+                embeddedImageCount: imageBundle.embeddedImageCount,
+                embeddedImageBytes: imageBundle.embeddedImageBytes,
+                missingImageFigureIds: imageBundle.missingImageFigureIds,
+                ...response.data
+            };
+        }
+        directError = {
+            code: response?.error?.code || 'ZOTERO_IMPORT_FAILED',
+            message: response?.error?.message || 'Zotero 未接受增强快照'
+        };
+    } catch (error) {
+        directError = {
+            code: error?.code || 'ZOTERO_UNAVAILABLE',
+            message: error?.message || 'Zotero 不可用'
+        };
+    }
+
+    const fallbackMetadata = {
+        schemaVersion: 1,
+        exportKind: 'sci-reader-zotero-enhanced-snapshot',
+        extensionVersion: chrome.runtime.getManifest?.().version || '',
+        exportedAt,
+        title: article.title,
+        url: article.url,
+        publisherFamily: article.publisherFamily,
+        directImportError: directError,
+        figureCount: collected.records.length,
+        embeddedImageCount: imageBundle.embeddedImageCount,
+        embeddedImageBytes: imageBundle.embeddedImageBytes,
+        missingImageFigureIds: imageBundle.missingImageFigureIds,
+        chatTurnCount: Number(article.chat?.totalTurns) || 0,
+        manualAnnotationCount: annotations.length,
+        zoteroChildNoteCount: 2
+    };
+    const fallbackZip = await SciLLM.createZipBlob([
+        { path: 'snapshot.html', data: snapshotContent },
+        {
+            path: 'notes/SCI-Reader-Figure-Interpretation.html',
+            data: figureNoteHtml
+        },
+        {
+            path: 'notes/SCI-Reader-Fulltext-QA.html',
+            data: chatNoteHtml
+        },
+        { path: 'metadata.json', data: SciLLM.exportJson(fallbackMetadata) },
+        {
+            path: 'README.md',
+            data: SciLLM.buildZoteroFallbackReadme({
+                title: article.title,
+                url: article.url
+            })
+        }
+    ]);
+    const filename = `${SciLLM.sanitizeExportFilename(
+        article.title, 'SCI-article'
+    )}-Zotero-enhanced-snapshot.zip`;
+    downloadContentExportBlob(fallbackZip, filename);
+    return {
+        success: true,
+        imported: false,
+        fallbackDownloaded: true,
+        filename,
+        embeddedImageCount: imageBundle.embeddedImageCount,
+        embeddedImageBytes: imageBundle.embeddedImageBytes,
+        missingImageFigureIds: imageBundle.missingImageFigureIds,
+        directError
+    };
+}
+
 async function maybeAutoAnalyzeWithLLM() {
     try {
         const response = await chrome.runtime.sendMessage({ type: 'LLM_GET_SETTINGS' });
@@ -7582,8 +10419,22 @@ const highlighter = new SciPaperHighlighter();
 
 // 监听来自popup的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'llmAnalysisProgress') {
+    if (request.action === 'setSidePanelShortcutScope') {
+        sendResponse({
+            success: true,
+            enabled: setSidePanelShortcutScope(request)
+        });
+    } else if (request.action === 'llmAnalysisProgress') {
         const progress = request.progress || {};
+        const completedChunkCount = Number.isFinite(Number(progress.completedChunks))
+            ? Math.max(0, Math.floor(Number(progress.completedChunks)))
+            : 0;
+        const totalChunkCount = Number.isFinite(Number(progress.totalChunks))
+            ? Math.max(0, Math.floor(Number(progress.totalChunks)))
+            : 0;
+        const chunkProgressLabel = totalChunkCount > 0
+            ? `${Math.min(completedChunkCount + 1, totalChunkCount)}/${totalChunkCount}`
+            : '';
         if (Number.isInteger(progress.workspaceLifecycle) &&
             progress.workspaceLifecycle !== articleWorkspaceLifecycleGeneration) {
             sendResponse({ success: true, ignored: true, reason: 'STALE_WORKSPACE_LIFECYCLE' });
@@ -7703,7 +10554,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     ? '模型服务暂时过载'
                     : '模型连接暂时不稳定';
             showLlmPageStatus(
-                `${reason}，${waitSeconds} 秒后自动重试第 ${progress.attempt} 次（${progress.completedChunks + 1}/${progress.totalChunks}）…`
+                `${reason}，${waitSeconds} 秒后自动重试第 ${progress.attempt} 次` +
+                (chunkProgressLabel ? `（${chunkProgressLabel}）…` : '…')
             );
         } else if (progress.phase === 'split') {
             const reason = progress.errorCode === 'REQUEST_TIMEOUT'
@@ -7714,7 +10566,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         ? '当前分块输出过长'
                         : '当前分块需要降载';
             showLlmPageStatus(
-                `${reason}，已自动拆分为更小分块并继续分析（已完成 ${progress.completedChunks}/${progress.totalChunks}）…`
+                `${reason}，已自动拆分为更小分块并继续分析` +
+                (totalChunkCount > 0
+                    ? `（已完成 ${completedChunkCount}/${totalChunkCount}）…`
+                    : '…')
             );
         } else if (progress.phase === 'paragraph_checkpoint') {
             renderProgressiveLlmChunk(progress);
@@ -7727,9 +10582,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 `当前小块结果已渲染（${progress.checkpointedAnnotations || 0} 条候选），正在继续下一块…`
             );
         } else if (progress.phase === 'complete') {
-            showLlmPageStatus(`LLM 已完成 ${progress.completedChunks}/${progress.totalChunks} 个分块…`);
+            showLlmPageStatus(totalChunkCount > 0
+                ? `LLM 已完成 ${completedChunkCount}/${totalChunkCount} 个分块…`
+                : 'LLM 分析已完成。');
         } else {
-            showLlmPageStatus(`LLM 正在分析 ${progress.completedChunks + 1}/${progress.totalChunks} 个分块…`);
+            showLlmPageStatus(chunkProgressLabel
+                ? `LLM 正在分析 ${chunkProgressLabel} 个分块…`
+                : 'LLM 正在分析正文分块…');
         }
         sendResponse({ success: true });
     } else if (request.action === 'getReviewOutlineStatus') {
@@ -7759,7 +10618,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 forceRefresh: request.forceRefresh === true
             });
             if (!articleStructureObserver) startArticleStructureObserver();
-            scheduleArticleWorkspaceArtifactsSave();
+            // This request is read-only. Scheduling a full checkpoint here
+            // used to overwrite a valid on-disk chat/index.json with an empty
+            // in-memory index before local restoration had a chance to run.
+            // Every real mutation already schedules its own checkpoint.
             return {
                 success: true,
                 snapshot: { ...snapshot, localWorkspace }
@@ -7770,6 +10632,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === 'ensureArticleWorkspace') {
         ensureCurrentArticleWorkspace({ forceRefresh: request.forceRefresh === true })
             .then(workspace => sendResponse({ success: true, workspace }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+    } else if (request.action === 'saveArticleWorkspaceBaseline') {
+        persistArticleWorkspaceBaseline()
+            .then(result => sendResponse({ success: true, ...result }))
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'saveArticleWorkspaceNow') {
         saveCurrentArticleWorkspaceNow()
@@ -7783,7 +10649,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 activeTab: articleNavigatorState.activeTab,
                 depth: articleNavigatorState.depth,
                 summariesVisible: articleNavigatorState.summariesVisible,
-                expandedSectionIds: [...articleNavigatorState.expandedSectionIds]
+                expandedSectionIds: [...articleNavigatorState.expandedSectionIds],
+                analysisSectionSelection: Object.fromEntries(
+                    articleNavigatorState.analysisSectionSelection
+                )
             },
             sidePanel: articleWorkspaceSidePanelUiState
         }).then(() => sendResponse({ success: true }))
@@ -7818,6 +10687,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } catch (error) {
             sendResponse({ success: false, error: error.message });
         }
+    } else if (request.action === 'exportPptMaterials') {
+        exportPptMaterialBundle()
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message,
+                code: error.code || 'PPT_MATERIAL_EXPORT_FAILED'
+            }));
+    } else if (request.action === 'exportEnhancedSnapshotToZotero') {
+        exportEnhancedSnapshotToZotero()
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message,
+                code: error.code || 'ZOTERO_ENHANCED_SNAPSHOT_EXPORT_FAILED'
+            }));
     } else if (request.action === 'applyArticleArchiveSnapshot') {
         applyArticleArchiveSnapshot(request.archive)
             .then(result => sendResponse(result))
@@ -7845,6 +10730,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === 'showArticleNavigator') {
         try {
             sendResponse(showArticleNavigator({ tab: request.tab }));
+        } catch (error) {
+            sendResponse({ success: false, error: error.message });
+        }
+    } else if (request.action === 'setArticleAnalysisSectionSelection') {
+        try {
+            sendResponse(setArticleAnalysisSectionSelection(
+                request.sectionIds,
+                request.selected
+            ));
         } catch (error) {
             sendResponse({ success: false, error: error.message });
         }
@@ -7897,10 +10791,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'applyHighlight') {
         try {
-            const counts = highlighter.applyHighlight(request.categories, request.mode);
+            const counts = highlighter.applyHighlight(
+                request.categories,
+                request.mode,
+                {
+                    allowedParagraphIds: selectedArticleAnalysisParagraphIds(),
+                    analysisModeId: request.analysisModeId
+                }
+            );
             lastRegexHighlightRequest = {
                 categories: request.categories,
-                mode: request.mode === 'sentence' ? 'sentence' : 'word'
+                mode: request.mode === 'sentence' ? 'sentence' : 'word',
+                analysisModeId: String(request.analysisModeId || 'regex-default')
             };
             scheduleCurrentArticleArchiveSave();
             sendResponse({ success: true, counts: counts });
@@ -7918,6 +10820,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
     } else if (request.action === 'getMatchCounts') {
         try {
+            highlighter.allowedParagraphIds = selectedArticleAnalysisParagraphIds();
             const counts = highlighter.getMatchCounts(request.rules);
             sendResponse({ success: true, counts: counts });
         } catch (error) {
@@ -8017,7 +10920,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         analyzeArticleWithLLM({
             auto: false,
             documentId: request.documentId,
-            documentHash: request.documentHash
+            documentHash: request.documentHash,
+            readingViewId: request.readingViewId
         })
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
@@ -8051,14 +10955,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             String(request.figureId || ''),
             String(request.panelId || ''),
             Array.isArray(request.topics) ? request.topics : [],
-            String(request.customQuestion || '')
+            String(request.customQuestion || ''),
+            String(request.historyLabel || '')
+        )
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
+    } else if (request.action === 'highlightArticleMatchesWithLLM') {
+        askArticleWithLLM(
+            String(request.question || ''),
+            String(request.profileId || ''),
+            {
+                intent: 'highlight',
+                categoryId: String(request.categoryId || 'semantic_match'),
+                categoryName: String(request.categoryName || ''),
+                highlightColor: String(request.highlightColor || ''),
+                contextScope: request.contextScope
+            }
         )
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
     } else if (request.action === 'askArticleWithLLM') {
         askArticleWithLLM(
             String(request.question || ''),
-            String(request.profileId || '')
+            String(request.profileId || ''),
+            { contextScope: request.contextScope }
         )
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
@@ -8101,7 +11021,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, error: error.message, code: error.code });
         }
     } else if (request.action === 'showFigureOriginalImage') {
-        sendResponse(showFigureImageViewer(String(request.figureId || '')));
+        showFigureImageViewer(String(request.figureId || ''))
+            .then(sendResponse)
+            .catch(error => sendResponse({
+                success: false,
+                code: String(error?.code || 'FIGURE_VIEWER_FAILED'),
+                message: String(error?.message || 'Figure 高清原图打开失败')
+            }));
+    } else if (request.action === 'getFigureOriginalImageState') {
+        sendResponse(getFigureImageViewerState());
+    } else if (request.action === 'navigateFigureOriginalImage') {
+        navigateFigureImageViewer(
+            String(request.direction || ''),
+            Number(request.figureNumber) || 0
+        )
+            .then(sendResponse)
+            .catch(error => sendResponse({
+                success: false,
+                code: String(error?.code || 'FIGURE_VIEWER_NAVIGATION_FAILED'),
+                message: String(error?.message || 'Figure 高清原图切换失败')
+            }));
+    } else if (request.action === 'closeFigureOriginalImage') {
+        sendResponse(closeFigureImageViewer());
     } else if (request.action === 'analyzeCrossFigureLogicWithLLM') {
         analyzeCrossFigureLogicWithLLM({ forceRefresh: request.forceRefresh === true })
             .then(result => sendResponse(result))
@@ -8127,7 +11068,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         analyzeReviewOutlineWithLLM({
             forceRefresh: request.forceRefresh === true,
             documentId: request.documentId,
-            documentHash: request.documentHash
+            documentHash: request.documentHash,
+            scopeSectionIds: Array.isArray(request.scopeSectionIds)
+                ? request.scopeSectionIds : [],
+            scopeSelectionProvided: request.scopeSelectionProvided === true
         })
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
@@ -8136,4 +11080,4 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // 保持消息通道开放
 });
 
-console.log('SCI论文阅读助手已加载');
+console.log('Brevess 已加载');

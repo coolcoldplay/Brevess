@@ -4,7 +4,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const USER_DATA_DATABASE_NAME = 'sci-logic-highlighter-user-data';
-  const USER_DATA_DATABASE_VERSION = 3;
+  const USER_DATA_DATABASE_VERSION = 4;
   const USER_DATA_STORE_NAMES = Object.freeze([
     'documents',
     'meta',
@@ -13,7 +13,8 @@
     'workspaces',
     'workspaceAssets',
     'workspaceTurns',
-    'workspaceTombstones'
+    'workspaceTombstones',
+    'figureImages'
   ]);
   const STORE_DEFINITIONS = Object.freeze({
     documents: { keyPath: 'documentId', indexes: [['updatedAt', 'updatedAt']] },
@@ -39,6 +40,14 @@
     workspaceTombstones: {
       keyPath: 'tombstoneKey',
       indexes: [['workspaceId', 'workspaceId'], ['deletedAt', 'deletedAt']]
+    },
+    figureImages: {
+      keyPath: 'cacheKey',
+      indexes: [
+        ['sourceUrl', 'sourceUrl'],
+        ['lastAccessedAt', 'lastAccessedAt'],
+        ['byteLength', 'byteLength']
+      ]
     }
   });
   const connections = new WeakMap();

@@ -106,6 +106,10 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
   assert.match(first.systemPrompt, /Use as many answer_block records as the question needs/i);
   assert.match(first.systemPrompt, /Never emit a heading or numbered label as a block by itself/i);
   assert.match(first.systemPrompt, /Ground every paper-specific factual sentence or list item/i);
+  assert.match(first.systemPrompt, /shortest complete source sentence or clause/i);
+  assert.match(first.systemPrompt, /condition, parameter, group, time point, dose, sample size/i);
+  assert.match(first.systemPrompt, /synthesizes evidence from several source paragraphs/i);
+  assert.match(first.systemPrompt, /include one evidence object per paragraph/i);
   assert.doesNotMatch(first.systemPrompt, /at most 600 Chinese characters|Keep each answer_block compact/i);
   assert.match(first.systemPrompt, /turn_summary/);
   assert.match(first.systemPrompt, /append \[\[marker\]\] immediately/);

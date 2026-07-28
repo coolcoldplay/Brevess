@@ -6,8 +6,10 @@ const {
   isExcludedSectionHeading,
   buildParagraphRecords,
   normalizeTextWithOffsets,
+  scientificInlineText,
   collectContentElements,
   isReviewUtilitySectionTitle,
+  isReviewUtilityParagraphText,
   selectContentRoot,
   diagnoseArticleExtraction,
   extractArticle,
@@ -15,6 +17,46 @@ const {
   prepareReviewOutlineParagraphs,
   summarizeArticleRecords
 } = require('../core/article-extractor.js');
+
+test('preserves scientific superscript and subscript semantics in display text', () => {
+  const textNode = value => ({ nodeType: 3, nodeValue: value });
+  const elementNode = (tagName, ...childNodes) => ({ nodeType: 1, tagName, childNodes });
+  const root = elementNode(
+    'P',
+    textNode('Ca'),
+    elementNode('SUP', textNode('2+')),
+    textNode(' and H'),
+    elementNode('SUB', textNode('2')),
+    textNode('O')
+  );
+
+  assert.equal(scientificInlineText(root), 'Ca<sup>2+</sup> and H<sub>2</sub>O');
+});
+
+test('keeps Nature Main as a navigable body boundary while dropping access notices', () => {
+  assert.equal(isReviewUtilitySectionTitle('Main'), false);
+  assert.equal(
+    isReviewUtilityParagraphText(
+      'This content is only available via your institutional subscription.'
+    ),
+    true
+  );
+  const records = buildParagraphRecords([
+    { kind: 'heading', text: 'Abstract' },
+    { kind: 'paragraph', text: 'This content is only available via your institutional subscription.' },
+    { kind: 'heading', text: 'Main' },
+    { kind: 'paragraph', text: 'The main article begins with a scientific background paragraph.' },
+    { kind: 'heading', text: 'Results' },
+    { kind: 'paragraph', text: 'Treatment significantly reduced tumor volume in both cohorts.' }
+  ]);
+  assert.deepEqual(records.map(record => record.text), [
+    'The main article begins with a scientific background paragraph.',
+    'Treatment significantly reduced tumor volume in both cohorts.'
+  ]);
+  assert.equal(records[0].sectionTitle, 'Main');
+  assert.equal(records[0].sectionKind, 'main');
+  assert.equal(records[1].sectionKind, 'results');
+});
 
 test('deduplicates repeated DOM copies without merging legitimate short text across sections', () => {
   const repeated = 'This sufficiently long scientific paragraph is duplicated by responsive desktop and mobile article markup, but represents one logical paragraph in the paper.'.repeat(1);
@@ -69,7 +111,7 @@ test('generated paragraph anchors never turn a repeated extraction into duplicat
   assert.equal(records[0].dataSelector, '[data-sci-llm-paragraph-id="sec-results-p-001"]');
 });
 
-test('classifies captions and references without mixing them into the body count', () => {
+test('keeps navigable reference prose available while captions remain typed records', () => {
   const records = buildParagraphRecords([
     { kind: 'heading', text: 'Results' },
     { kind: 'paragraph', text: 'Treatment increased survival.' },
@@ -80,15 +122,16 @@ test('classifies captions and references without mixing them into the body count
   ]);
 
   assert.deepEqual(records.map(item => item.recordType), [
-    'body', 'figure-caption', 'table-caption', 'reference'
+    'body', 'figure-caption', 'table-caption', 'body'
   ]);
   assert.deepEqual(summarizeArticleRecords(records), {
     recordCount: 4,
-    bodyParagraphCount: 1,
+    bodyParagraphCount: 2,
     figureCaptionCount: 1,
     tableCaptionCount: 1,
-    referenceCount: 1,
-    bodyCharacterCount: 'Treatment increased survival.'.length,
+    referenceCount: 0,
+    bodyCharacterCount: 'Treatment increased survival.'.length +
+      'Smith et al. 2020. Example Journal.'.length,
     characterCount: records.reduce((sum, item) => sum + item.text.length, 0)
   });
 });
@@ -176,16 +219,21 @@ test('consolidates repeated publisher section roots into one complete article ro
   assert.equal(selectContentRoot(documentRef, adapter), complete);
 });
 
-test('excludes references and other non-body sections', () => {
+test('keeps real article end matter navigable while excluding publisher-only notices', () => {
   [
-    'References', 'Bibliography', 'Acknowledgements', 'Author Contributions', 'Funding',
-    'Conflicts of Interest', 'CRediT authorship contribution statement',
-    'Generative AI statement', 'Declaration of competing interest',
-    'Appendix A. Supplementary data', 'Data and code availability', 'Keywords',
+    'Generative AI statement',
     'Publisher’s note', 'Disclosure statement'
   ]
     .forEach(title => assert.equal(isExcludedSectionHeading(title), true, title));
-  ['Introduction', 'Methods', 'Results', 'Discussion', 'Conclusions']
+  [
+    'Introduction', 'Methods', 'Results', 'Discussion', 'Conclusions',
+    'Highlights', 'Summary', 'References', 'Extended data',
+    'Supplementary information', 'Acknowledgements', 'Author Information',
+    'Author Contributions', 'Funding', 'Conflicts of Interest',
+    'Declaration of competing interest',
+    'CRediT authorship contribution statement', 'Appendix A. Supplementary data',
+    'Data and code availability', 'Keywords'
+  ]
     .forEach(title => assert.equal(isExcludedSectionHeading(title), false, title));
 });
 
@@ -194,15 +242,130 @@ test('treats numbered figure and table labels as outline chrome', () => {
     'Figure 1.', 'Figure 12. Study workflow', 'Fig 1', 'Figs 2 and 3',
     'Table 1', 'Table 3. Baseline characteristics',
     'Skip to main content', 'REVIEW article', 'Related Info Links',
-    'Author Information', 'Information & Authors', 'Metrics & Citations', 'Cite',
+    'Metrics & Citations', 'Cite',
     'View Options', 'Publication History', 'License Summary', 'Subjects',
-    'Authors’ contributions', 'Declaration of AI use', 'Footnotes', 'View in article'
+    'Declaration of AI use', 'View in article'
   ].forEach(title => assert.equal(
     isReviewUtilitySectionTitle(title), true, title
   ));
+  [
+    'Author Information', 'Information & Authors', 'Authors’ contributions', 'Footnotes'
+  ].forEach(title => assert.equal(
+    isReviewUtilitySectionTitle(title), false, title
+  ));
 });
 
-test('assigns stable ids and separates the terminal reference section', () => {
+test('suppresses recommendation-card headings nested below a Nature utility section', () => {
+  const records = buildParagraphRecords([
+    { kind: 'heading', level: 2, text: 'Abstract' },
+    { kind: 'paragraph', text: 'The abstract reports the central scientific finding.' },
+    { kind: 'heading', level: 2, text: 'Similar content being viewed by others' },
+    {
+      kind: 'heading',
+      level: 3,
+      text: 'Single-cell spatial immune landscapes of primary and metastatic brain tumours'
+    },
+    { kind: 'paragraph', text: 'Article 01 February 2023 Open access.' },
+    { kind: 'heading', level: 2, text: 'Results' },
+    { kind: 'paragraph', text: 'The experiment identified conserved myeloid states.' }
+  ]);
+
+  assert.deepEqual(records.map(record => record.sectionTitle), ['Abstract', 'Results']);
+  assert.deepEqual(records.map(record => record.text), [
+    'The abstract reports the central scientific finding.',
+    'The experiment identified conserved myeloid states.'
+  ]);
+});
+
+test('keeps every Cell Results subsection after interleaved video-control h2 headings', () => {
+  const subsectionTitles = [
+    'Features of the olfactory dural lymphatic plexus',
+    'Contrasting features of lymphatics in the olfactory mucosa',
+    'CSF outflow through the olfactory dural lymphatic network and nasal lymphatics',
+    'Morphological features of arachnoid near olfactory bulbs',
+    'Identification of arachnoid fenestrations for CSF exit by SEM',
+    'Greater CSF drainage through arachnoid fenestrations near the cribriform plate than through “ACE” sites in the dorsal meninges',
+    'Olfactory dural lymphatic contribution to CSF drainage to cervical lymph nodes',
+    'Atrophy of the olfactory dural lymphatic network during aging',
+    'Atrophy or expansion of olfactory dural lymphatics and CSF outflow by manipulating VEGFR3 signaling',
+    'Restoration of dural lymphatics and CSF outflow in aged mice by nasal AAV-VEGF-C'
+  ];
+  const blocks = [{ kind: 'heading', level: 2, text: 'Results' }];
+  subsectionTitles.forEach((title, index) => {
+    if (index > 0) {
+      blocks.push(
+        { kind: 'heading', level: 2, text: 'Info' },
+        { kind: 'heading', level: 2, text: 'Accessibility & Keyboard Shortcuts' },
+        { kind: 'heading', level: 2, text: 'Download Options' },
+        { kind: 'heading', level: 2, text: 'Transcript' }
+      );
+    }
+    blocks.push(
+      { kind: 'heading', level: 3, text: title },
+      { kind: 'paragraph', text: `Scientific Results paragraph ${index + 1}.` }
+    );
+  });
+
+  const records = buildParagraphRecords(blocks);
+
+  assert.deepEqual(records.map(record => record.sectionTitle), subsectionTitles);
+  assert.ok(records.every(record => record.sectionKind === 'results'));
+});
+
+test('excludes Cell video modals and transcript panels by DOM ancestry', () => {
+  const adapter = selectPublisherAdapter({ hostname: 'www.cell.com' }, {});
+  const element = (tagName, textContent, excludedSelector = '') => ({
+    tagName,
+    textContent,
+    dataset: {},
+    closest: selector => selector === excludedSelector ? { className: excludedSelector } : null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getAttribute: () => null
+  });
+  const results = element('H2', 'Results');
+  const realSubsection = element(
+    'H3',
+    'Contrasting features of lymphatics in the olfactory mucosa'
+  );
+  const realParagraph = element(
+    'P',
+    'Mucosal lymphatics showed a distinct scientific branching pattern.'
+  );
+  const modalHeading = element('H2', 'Info', '.video-player-modal');
+  const modalParagraph = element(
+    'P',
+    'Publisher video information that is not article prose.',
+    '.video-player-modal'
+  );
+  const transcriptHeading = element('H2', 'Transcript', '.transcript-panel');
+  const transcriptParagraph = element(
+    'P',
+    'Interactive video transcript controls that are not article prose.',
+    '.transcript-panel'
+  );
+  const playerSettings = element('H3', 'Settings', '.video-player');
+  const elements = [
+    results,
+    playerSettings,
+    modalHeading,
+    modalParagraph,
+    transcriptHeading,
+    transcriptParagraph,
+    realSubsection,
+    realParagraph
+  ];
+  const root = {
+    querySelectorAll: selector => selector === '*' ? elements : []
+  };
+
+  assert.deepEqual(
+    collectContentElements(root, adapter),
+    [results, realSubsection, realParagraph]
+  );
+});
+
+test('assigns stable ids and preserves navigable end matter after references', () => {
   const records = buildParagraphRecords([
     { kind: 'heading', text: 'Results' },
     { kind: 'paragraph', text: 'Treatment increased survival.' },
@@ -212,11 +375,12 @@ test('assigns stable ids and separates the terminal reference section', () => {
     { kind: 'paragraph', text: 'Material after the reference list.' }
   ]);
   assert.deepEqual(records.map(item => item.paragraphId), [
-    'sec-results-p-001', 'sec-references-ref-001', 'sec-references-ref-002'
+    'sec-results-p-001', 'sec-references-p-001', 'sec-appendix-p-001'
   ]);
   assert.equal(records[0].sectionTitle, 'Results');
   assert.equal(records[0].sectionKind, 'results');
-  assert.deepEqual(records.map(item => item.recordType), ['body', 'reference', 'reference']);
+  assert.deepEqual(records.map(item => item.recordType), ['body', 'body', 'body']);
+  assert.deepEqual(records.map(item => item.sectionKind), ['results', 'reference', 'appendix']);
 });
 
 test('inherits the major Results kind across descriptive subsection headings', () => {
@@ -340,7 +504,7 @@ test('reports privacy-safe extraction diagnostics for the selected content root'
 
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.equal(diagnostics.version, '2.1.0-extractor-r13');
+  assert.equal(diagnostics.version, '2.1.0-extractor-r16');
   assert.equal(diagnostics.candidateCount, 2);
   assert.equal(diagnostics.selectedRoot, 'MAIN#paper.article-main.content');
   assert.deepEqual(diagnostics.selected, {
@@ -386,7 +550,7 @@ test('diagnostics summarize long unrecognized text containers without exposing t
   assert.equal(JSON.stringify(diagnostics).includes(hiddenBodyText), false);
 });
 
-test('extracts Science classless DIV paragraphs while excluding citations and references', () => {
+test('extracts Science classless DIV paragraphs, excludes citation chrome, and keeps references navigable', () => {
   const heading = {
     tagName: 'H2', textContent: 'Results', dataset: {}, closest: () => null
   };
@@ -428,11 +592,13 @@ test('extracts Science classless DIV paragraphs while excluding citations and re
 
   const records = extractArticle(documentRef);
 
-  assert.deepEqual(records.map(record => record.text), [bodyText]);
+  assert.deepEqual(records.map(record => record.text), [
+    bodyText, referenceBody.textContent.trim()
+  ]);
   assert.equal(records[0].kind, 'paragraph');
   assert.equal(bodyDiv.dataset.sciLlmParagraphId, 'sec-results-p-001');
   assert.equal(citationDiv.dataset.sciLlmParagraphId, undefined);
-  assert.equal(referenceBody.dataset.sciLlmParagraphId, undefined);
+  assert.equal(referenceBody.dataset.sciLlmParagraphId, 'sec-references-p-001');
 });
 
 test('excludes figure captions from LLM extraction and DOM paragraph markers', () => {
@@ -737,7 +903,7 @@ test('prepares a review outline from scientific sections while removing ScienceD
   });
 
   assert.deepEqual(prepared.map(item => item.sectionTitle), [
-    'Abstract', 'Radiotherapy resistance'
+    'Abstract', 'Radiotherapy resistance', 'References'
   ]);
   assert.deepEqual(prepared[1].headingPath.map(item => item.title), [
     'Mechanisms of lactylation-mediated therapeutic resistance',
@@ -817,13 +983,20 @@ test('uses ScienceDirect outline anchors to recover every linked body section an
   const records = extractArticle(documentRef);
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.deepEqual([...new Set(records.map(item => item.sectionTitle))], sectionTitles);
+  assert.deepEqual(
+    [...new Set(records.map(item => item.sectionTitle))],
+    [...sectionTitles, ...utilityTitles]
+  );
   assert.equal(records.some(item => unrelatedTitles.includes(item.sectionTitle)), false);
-  assert.equal(records.some(item => utilityTitles.includes(item.sectionTitle)), false);
-  assert.equal(records.length, sectionTitles.length);
+  assert.deepEqual(
+    [...new Set(records.filter(item => utilityTitles.includes(item.sectionTitle))
+      .map(item => item.sectionTitle))],
+    utilityTitles
+  );
+  assert.equal(records.length, sectionTitles.length + utilityTitles.length);
   assert.equal(diagnostics.strategy, 'outline-anchors');
   assert.equal(diagnostics.selectedRoot, 'OUTLINE_ANCHORS');
-  assert.equal(diagnostics.selected.recordCount, sectionTitles.length);
+  assert.equal(diagnostics.selected.recordCount, sectionTitles.length + utilityTitles.length);
 });
 
 test('accepts ScienceDirect outline targets that point directly to headings', () => {
@@ -1680,7 +1853,7 @@ test('drops generic preamble paragraphs when explicit body sections exist', () =
   assert.equal(diagnostics.selected.recordCount, structure.paragraphs.length);
 });
 
-test('ignores Cell author and footnote anchors when global hash links are inspected', () => {
+test('recovers Cell Highlights and Summary when the publisher outline omits them', () => {
   const makeTarget = (tagName, id, textContent, parentElement = null) => ({
     tagName, id, className: '', textContent, parentElement, dataset: {},
     closest: () => null,
@@ -1688,15 +1861,19 @@ test('ignores Cell author and footnote anchors when global hash links are inspec
     querySelectorAll: () => [],
     getAttribute: name => name === 'id' ? id : null
   });
-  const articleRoot = makeTarget('ARTICLE', 'main-content', 'Summary Introduction Results');
+  const articleRoot = makeTarget(
+    'ARTICLE', 'main-content', 'Highlights Summary Introduction Results'
+  );
   const sectionSpecs = [
-    ['sec-summary', 'Summary', 'This summary states the central biological question and describes how peripheral heat sensing can influence systemic metabolic physiology in the reported experiments.'],
-    ['sec-introduction', 'Introduction', 'The introduction explains the heat-stress context, the unresolved neuroendocrine mechanism, and why the authors investigated communication between skin and hypothalamus.'],
-    ['sec-results', 'Results', 'The results establish the skin-hypothalamus signaling axis and report the perturbation, rescue, and metabolic measurements that support the principal conclusion.']
+    ['sec-highlights', 'Highlights', 'Heat stress triggers long-term metabolic dysfunction through a skin-hypothalamus signaling axis.', false],
+    ['sec-summary', 'Summary', 'This summary states the central biological question and describes how peripheral heat sensing can influence systemic metabolic physiology in the reported experiments.', false],
+    ['sec-introduction', 'Introduction', 'The introduction explains the heat-stress context, the unresolved neuroendocrine mechanism, and why the authors investigated communication between skin and hypothalamus.', true],
+    ['sec-results', 'Results', 'The results establish the skin-hypothalamus signaling axis and report the perturbation, rescue, and metabolic measurements that support the principal conclusion.', true]
   ];
   const targets = new Map();
   const links = [];
-  sectionSpecs.forEach(([id, title, paragraph]) => {
+  const articleElements = [];
+  sectionSpecs.forEach(([id, title, paragraph, includeInOutline]) => {
     const section = makeTarget('SECTION', id, `${title} ${paragraph}`, articleRoot);
     const heading = makeTarget('H2', `${id}-heading`, title, section);
     const body = makeTarget('P', '', paragraph, section);
@@ -1704,11 +1881,17 @@ test('ignores Cell author and footnote anchors when global hash links are inspec
     section.querySelector = () => heading;
     section.querySelectorAll = () => [heading, body];
     targets.set(id, section);
-    links.push({
-      tagName: 'A', textContent: title,
-      getAttribute: name => name === 'href' ? `#${id}` : null
-    });
+    articleElements.push(heading, body);
+    if (includeInOutline) {
+      links.push({
+        tagName: 'A', textContent: title,
+        getAttribute: name => name === 'href' ? `#${id}` : null
+      });
+    }
   });
+  articleRoot.querySelectorAll = () => articleElements;
+  articleRoot.contains = other => other === articleRoot ||
+    articleElements.includes(other) || other?.parentElement === articleRoot;
   const authorCard = makeTarget('DIV', 'author-group', 'Hai-Yan Zhou Author affiliations and publication metadata.', articleRoot);
   const authorTarget = makeTarget('A', 'au1', 'Hai-Yan Zhou', authorCard);
   authorCard.querySelectorAll = selector => selector === '*' ? [
@@ -1736,6 +1919,8 @@ test('ignores Cell author and footnote anchors when global hash links are inspec
 
   const structure = extractArticleStructure(documentRef, { locationLike: documentRef.location });
 
-  assert.deepEqual(structure.nodes.map(node => node.title), ['Summary', 'Introduction', 'Results'], JSON.stringify(structure));
+  assert.deepEqual(structure.nodes.map(node => node.title), [
+    'Highlights', 'Summary', 'Introduction', 'Results'
+  ], JSON.stringify(structure));
   assert.equal(structure.paragraphs.some(item => /Author affiliations/.test(item.text)), false);
 });

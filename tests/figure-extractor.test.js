@@ -5,6 +5,7 @@ const {
   FIGURE_SELECTOR,
   parseFigureLabel,
   extractPanelHints,
+  splitFigureCaptionByPanelGroups,
   extractElementPanelHints,
   figureInventoryNeedsRefresh,
   extractArticleFigures
@@ -442,4 +443,136 @@ test('uses a publisher Figure label element when accessibility text is concatena
 
   assert.equal(result.figureId, 'figure-6');
   assert.match(result.caption, /Open in a separate windowFigure 6/);
+});
+
+test('detects ScienceDirect plural captions beside concatenated download controls', () => {
+  const captionElement = {
+    textContent: 'Figure 1. Overview of lactate metabolism and L-lactylation.',
+    querySelector() { return null; },
+    getAttribute() { return ''; }
+  };
+  const figureImage = image(
+    'https://ars.els-cdn.com/content/image/1-s2.0-S2352304225004246-gr1.jpg',
+    713,
+    480
+  );
+  const candidate = {
+    textContent:
+      'Download: Download high-res imageDownload: Download full-size imageFigure 1. ' +
+      'Overview of lactate metabolism and L-lactylation.',
+    querySelector(selector) {
+      return selector.split(',').some(part => part.trim() === '.captions')
+        ? captionElement : null;
+    },
+    querySelectorAll(selector) {
+      if (/img/i.test(selector)) return [figureImage];
+      if (selector.split(',').some(part => part.trim() === '.captions')) {
+        return [captionElement];
+      }
+      return [];
+    },
+    getAttribute() { return ''; },
+    closest() { return null; }
+  };
+
+  const [result] = extractArticleFigures(documentWith([candidate]), []);
+
+  assert.equal(result.figureId, 'figure-1');
+  assert.equal(result.captionElement, captionElement);
+  assert.match(result.caption, /^Figure 1\./);
+  assert.equal(result.imageElements[0], figureImage);
+});
+
+test('repairs a lost DOM text boundary before a Figure label', () => {
+  assert.equal(
+    parseFigureLabel('Download full-size imageFigure 3. Therapeutic opportunities.')?.figureId,
+    'figure-3'
+  );
+});
+
+test('ignores Cell Figure360 branding and keeps Figures 1–3 in the inventory', () => {
+  assert.equal(
+    parseFigureLabel(
+      'For a Figure360 author presentation of Figure 1, see https://doi.org/example'
+    )?.figureId,
+    'figure-1'
+  );
+
+  const candidates = [1, 2, 3].map(number => {
+    const mainCaption = {
+      textContent: `Figure ${number}. Main experimental result.`,
+      querySelector() { return null; }
+    };
+    const figure360Caption = {
+      textContent:
+        `For a Figure360 author presentation of Figure ${number}, ` +
+        'see https://doi.org/example',
+      querySelector() { return null; }
+    };
+    return figure({
+      captionCandidates: [mainCaption, figure360Caption],
+      elementText: `${mainCaption.textContent} ${figure360Caption.textContent}`,
+      images: [image(`https://journal.example/figure-${number}.jpg`)]
+    });
+  });
+
+  assert.deepEqual(
+    extractArticleFigures(documentWith(candidates), []).map(item => item.figureId),
+    ['figure-1', 'figure-2', 'figure-3']
+  );
+});
+
+test('splits Nature-style captions while preserving merged Panel groups', () => {
+  assert.deepEqual(
+    splitFigureCaptionByPanelGroups(
+      'Figure 2. Tumour response. a–c, Imaging and quantification. ' +
+      'd, Rescue assay. e,f, Orthogonal validation.'
+    ),
+    [
+      {
+        kind: 'overview',
+        panels: [],
+        text: 'Figure 2. Tumour response.'
+      },
+      {
+        kind: 'panels',
+        panels: ['A', 'B', 'C'],
+        text: 'a–c, Imaging and quantification.'
+      },
+      {
+        kind: 'panels',
+        panels: ['D'],
+        text: 'd, Rescue assay.'
+      },
+      {
+        kind: 'panels',
+        panels: ['E', 'F'],
+        text: 'e,f, Orthogonal validation.'
+      }
+    ]
+  );
+});
+
+test('keeps parenthesized combined Panels in one caption block', () => {
+  const blocks = splitFigureCaptionByPanelGroups(
+    'Figure 4. Study design. (A and B) Discovery cohorts. ' +
+    '(C–E) Validation cohorts.'
+  );
+  assert.deepEqual(blocks[1].panels, ['A', 'B']);
+  assert.match(blocks[1].text, /^\(A and B\)/);
+  assert.deepEqual(blocks[2].panels, ['C', 'D', 'E']);
+  assert.equal(blocks.length, 3);
+});
+
+test('keeps an inseparable caption as one honest whole-Figure block', () => {
+  assert.deepEqual(
+    splitFigureCaptionByPanelGroups(
+      'Figure 6. Integrated model without explicit Panel legend markers.'
+    ),
+    [{
+      kind: 'overview',
+      panels: [],
+      text: 'Figure 6. Integrated model without explicit Panel legend markers.'
+    }]
+  );
 });

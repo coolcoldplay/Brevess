@@ -178,3 +178,30 @@ test('NDJSON parser accepts a citation after an unpunctuated numbered item', () 
 
   assert.equal(parser.snapshot().blocks.length, 1);
 });
+
+test('NDJSON parser accepts several paragraph citations but rejects reused marker identities', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  parser.push(`${JSON.stringify({
+    type: 'answer_block',
+    block_id: 'multi-paragraph-evidence',
+    markdown: 'The result and interpretation are supported separately. [[1]][[2]]',
+    evidence: [
+      { marker: '1', paragraph_id: 'p1' },
+      { marker: '2', paragraph_id: 'p1', quote: 'Treatment significantly improved survival' }
+    ]
+  })}\n`);
+  assert.equal(parser.snapshot().blocks[0].evidence.length, 2);
+
+  const duplicate = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  assert.throws(() => duplicate.push(`${JSON.stringify({
+    type: 'answer_block',
+    block_id: 'duplicate-markers',
+    markdown: 'Two destinations must not share one marker. [[1]]',
+    evidence: [
+      { marker: '1', paragraph_id: 'p1' },
+      { marker: '1', paragraph_id: 'p1', quote: 'Treatment significantly improved survival' }
+    ]
+  })}\n`), error =>
+    error.code === 'INVALID_RESPONSE' && /markers must be unique/i.test(error.message)
+  );
+});

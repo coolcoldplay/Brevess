@@ -170,7 +170,14 @@ test('workspace refresh and cached-tab restore resume the shared Figure progress
 
   assert.match(script, /function resumeFigureProgressFromWorkspaceSnapshot/);
   assert.match(restore, /resumeFigureProgressFromWorkspaceSnapshot\(currentWorkspaceSnapshot/);
-  assert.match(refresh, /resumeFigureProgressFromWorkspaceSnapshot\(response\.snapshot/);
+  assert.match(
+    refresh,
+    /refreshFigureExtractorInTab\([\s\S]{0,120}chrome,[\s\S]{0,80}panelContext\.tabId/
+  );
+  assert.match(script, /function mergeRefreshedFigureCatalog/);
+  assert.match(refresh, /mergeRefreshedFigureCatalog\(/);
+  assert.match(script, /extractorProbeFigureId/);
+  assert.match(refresh, /resumeFigureProgressFromWorkspaceSnapshot\(snapshot/);
   assert.match(script, /hasRunningFigureProgress\(status\)/);
   assert.match(script, /startFigureProgressPolling\(tabId\)/);
   assert.match(script, /elapsedSeconds/);
@@ -181,8 +188,19 @@ test('side panel scans, restores, and clears the current page workspace explicit
   const script = read('popup.js');
   assert.match(html, /id="scanArticleWorkspace"/);
   assert.match(html, /id="clearArticleWorkspace"/);
+  assert.ok(
+    html.indexOf('core/user-data-database.js') < html.indexOf('popup.js')
+  );
+  assert.ok(
+    html.indexOf('core/directory-sync.js') < html.indexOf('popup.js')
+  );
   assert.match(script, /ARTICLE_WORKSPACE_SCAN_RESTORE/);
-  assert.match(script, /requestPermission:\s*true/);
+  assert.match(script, /function beginArticleWorkspaceDirectoryPermissionRequest\(/);
+  assert.match(
+    script,
+    /handle\.requestPermission\(\{\s*mode:\s*'readwrite'\s*\}\)/
+  );
+  assert.match(script, /requestPermission:\s*false/);
   assert.match(script, /action:\s*'applyArticleWorkspaceAssets'/);
   assert.match(script, /ARTICLE_WORKSPACE_BEGIN_DELETE/);
   assert.match(script, /ARTICLE_WORKSPACE_FINALIZE_DELETE/);
@@ -207,12 +225,9 @@ test('side panel follows the active tab without activating untouched papers', ()
   assert.doesNotMatch(boot, /await initializeCurrentArticle\(\)/);
 });
 
-test('popup carries the prepared document identity into study selection and analysis actions', () => {
+test('popup carries the prepared document identity into analysis actions without paper-type selection', () => {
   const script = read('popup.js');
-  assert.match(
-    script,
-    /type:\s*'LLM_SET_STUDY_TYPE'[\s\S]{0,240}documentId:\s*preparedDocumentState\.documentId/
-  );
+  assert.doesNotMatch(script, /type:\s*'LLM_SET_STUDY_TYPE'/);
   assert.match(
     script,
     /action:\s*'analyzeArticleWithLLM'[\s\S]{0,240}documentId:\s*preparedDocumentState\.documentId/
@@ -237,15 +252,17 @@ test('popup exposes a persistent LLM confidence slider', () => {
   assert.match(css, /\.confidence-control/);
 });
 
-test('popup exposes a one-click LLM-only Figure walkthrough without regex fallback', () => {
+test('popup exposes Figure LLM tools independently from the selected highlight engine', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   const css = read('popup.css');
   assert.match(html, /id="analyzeFigures"/);
   assert.match(html, /逐图解读/);
   assert.match(script, /function updateFigureButton/);
-  assert.match(script, /figureButton\.hidden\s*=\s*!isLlm/);
-  assert.match(script, /figureButton\.disabled\s*=\s*!ready/);
+  assert.match(script, /function hasUsableLlm/);
+  assert.match(script, /figureButton\.hidden\s*=\s*false/);
+  assert.match(script, /figureButton\.disabled\s*=\s*running/);
+  assert.doesNotMatch(script, /figureButton\.hidden\s*=\s*!isLlm/);
   assert.match(script, /action:\s*'analyzeFiguresWithLLM'/);
   assert.match(script, /逐图解读完成/);
   const handlerStart = script.indexOf('async function runFigureAnalysis');

@@ -22,10 +22,14 @@
     'core/review-outline.js',
     'core/article-workspace.js',
     'core/article-archive.js',
+    'core/export-bundle.js',
     'content.js'
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
-  const CONTENT_SCRIPT_REVISION = '2.4.6-build39-publisher-focus-r6';
+  const CONTENT_SCRIPT_REVISION =
+    '1.0.0-build1-store-release';
+  const FIGURE_EXTRACTOR_REVISION =
+    '1.0.0-build1-store-release';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';
@@ -149,14 +153,96 @@
     }
   }
 
+  async function sendTabMessageIfPresent(chromeApi, tabId, message) {
+    try {
+      return await chromeApi.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      if (isMissingReceiverError(error)) return null;
+      throw error;
+    }
+  }
+
+  async function refreshFigureExtractorInTab(chromeApi, tabId) {
+    const numericTabId = Number(tabId);
+    if (!Number.isInteger(numericTabId) || numericTabId < 0) {
+      throw new Error('INVALID_TAB_ID');
+    }
+    await chromeApi.scripting.executeScript({
+      target: { tabId: numericTabId },
+      files: ['core/figure-extractor.js']
+    });
+    const results = await chromeApi.scripting.executeScript({
+      target: { tabId: numericTabId },
+      func: expectedRevision => {
+        const root = document.documentElement;
+        if (root) root.dataset.sciLlmFigureExtractorRevision = expectedRevision;
+        const api = globalThis.SciLLM || {};
+        if (typeof api.extractArticleFigures !== 'function') {
+          return {
+            revision: expectedRevision,
+            available: false,
+            probeFigureId: '',
+            figures: []
+          };
+        }
+        const figures = api.extractArticleFigures(document, []).map(figure => {
+          const caption = String(figure?.caption || '').normalize('NFKC')
+            .replace(/\s+/g, ' ').trim().slice(0, 12000);
+          const captionBlocks =
+            typeof api.splitFigureCaptionByPanelGroups === 'function'
+              ? api.splitFigureCaptionByPanelGroups(caption).slice(0, 60)
+                .map(block => ({
+                  kind: block?.kind === 'panels' ? 'panels' : 'overview',
+                  panels: Array.isArray(block?.panels)
+                    ? block.panels.map(String).slice(0, 26) : [],
+                  text: String(block?.text || '').normalize('NFKC')
+                    .replace(/\s+/g, ' ').trim().slice(0, 6000)
+                }))
+                .filter(block => block.text)
+              : [];
+          return {
+            figureId: String(figure?.figureId || ''),
+            figureLabel: String(figure?.figureLabel || ''),
+            hasImage: typeof api.selectFigureImageSource === 'function'
+              ? Boolean(api.selectFigureImageSource(figure, document.baseURI))
+              : Boolean(figure?.imageElements?.length),
+            caption,
+            captionBlocks,
+            isSupplemental: figure?.isSupplemental === true,
+            panelHints: Array.isArray(figure?.panelHints)
+              ? figure.panelHints.map(String).slice(0, 30) : []
+          };
+        }).filter(figure => figure.figureId);
+        return {
+          revision: expectedRevision,
+          available: true,
+          probeFigureId: String(api.parseFigureLabel?.(
+            'For a Figure360 author presentation of Figure 1'
+          )?.figureId || ''),
+          figures
+        };
+      },
+      args: [FIGURE_EXTRACTOR_REVISION]
+    });
+    const diagnostic = results?.[0]?.result || null;
+    if (!diagnostic?.available ||
+        diagnostic.probeFigureId !== 'figure-1') {
+      throw new Error('FIGURE_EXTRACTOR_HOTLOAD_FAILED');
+    }
+    return diagnostic;
+  }
+
   return {
     CONTENT_SCRIPT_FILES,
     CONTENT_STYLE_FILES,
     CONTENT_SCRIPT_REVISION,
+    FIGURE_EXTRACTOR_REVISION,
     CONTENT_INJECTION_CLAIM,
     CONTENT_INJECTION_READY,
     isMissingReceiverError,
     ensureContentScript,
-    sendTabMessageWithRecovery
+    sendTabMessageIfPresent,
+    sendTabMessageWithRecovery,
+    refreshFigureExtractorInTab
   };
 });

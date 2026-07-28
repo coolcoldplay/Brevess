@@ -159,7 +159,7 @@ function workspace(overrides = {}) {
   };
 }
 
-test('v1 and v2 data upgrade to one v3 database in either adapter opening order', async () => {
+test('v1 and v2 data upgrade to one v4 database in either adapter opening order', async () => {
   for (const first of ['workspace', 'document']) {
     const legacy = { documentId: 'sha256:legacy', title: 'Legacy', annotations: [], revision: 1 };
     const fake = createFakeIndexedDb({
@@ -185,7 +185,7 @@ test('v1 and v2 data upgrade to one v3 database in either adapter opening order'
     assert.deepEqual([...fake.stores.keys()].sort(), [...USER_DATA_STORE_NAMES].sort());
     assert.ok(fake.openCalls.every(call => call.name === USER_DATA_DATABASE_NAME));
     assert.ok(fake.openCalls.every(call => call.version === USER_DATA_DATABASE_VERSION));
-    assert.equal(USER_DATA_DATABASE_VERSION, 3);
+    assert.equal(USER_DATA_DATABASE_VERSION, 4);
   }
 });
 
@@ -196,7 +196,7 @@ test('blocked database upgrade is recoverable on the next open', async () => {
   resetUserDataDatabaseConnection(fake.indexedDb);
   await assert.rejects(() => openUserDataDatabase(fake.indexedDb), /INDEXEDDB_UPGRADE_BLOCKED/);
   const database = await openUserDataDatabase(fake.indexedDb);
-  assert.equal(database.version, 3);
+  assert.equal(database.version, 4);
   assert.equal(fake.openCalls.length, 2);
 });
 

@@ -259,8 +259,10 @@
         'Use at most one introductory overview and one concluding synthesis. Emit the conclusion only after every promised numbered step or section is complete.',
         'Use as many answer_block records as the question needs. Split a long answer at natural Markdown boundaries so completed portions can be shown progressively; do not shorten the substance merely to reduce the number of blocks.',
         'answer_block schema: {"type":"answer_block","block_id":"block-1","markdown":"...","evidence":[{"marker":"1","paragraph_id":"...","source_key":"...","text_hash":"...","quote":"...","section_path":["..."]}]}',
-        'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly.',
-        'Ground every paper-specific factual sentence or list item with an evidence marker. If the supplied context does not contain a requested detail, say so explicitly instead of replacing it with a vague generalization.',
+        'Every evidence marker must refer to one supplied source paragraph. Copy IDs, hashes, quotes, and section paths exactly. Use a different marker for every distinct source location inside one answer_block.',
+        'Set quote to the shortest complete source sentence or clause that directly proves the cited claim, including the exact condition, parameter, group, time point, dose, sample size, or result when the user asks for it.',
+        'Ground every paper-specific factual sentence or list item with an evidence marker. When one answer sentence synthesizes evidence from several source paragraphs, append every supporting marker to that sentence and include one evidence object per paragraph; never use one paragraph as a proxy for evidence distributed across the paper.',
+        'If the supplied context does not contain a requested detail, say so explicitly instead of replacing it with a vague generalization.',
         'In markdown, append [[marker]] immediately after the supported sentence or list item. Never collect markers in a references paragraph.',
         'Use readable Markdown. Put every bullet or numbered item on its own line, preserve blank lines, and close every code fence and table inside its block.',
         'Before declaring completion, verify that every promised explanation, step, list, comparison, and line of evidence has actually been emitted. Never end on a lead-in such as "the following steps:" or its equivalent.',
@@ -488,6 +490,8 @@
         const request = {
           ...prompt,
           selectedProfileId: String(options.selectedProfileId || input.profileId || ''),
+          conversationKey: input.document.documentHash,
+          conversationLabel: input.document.title,
           maxOutputTokens: currentOutputTokens,
           timeoutMs: Number(options.timeoutMs) || 240000,
           signal: options.signal

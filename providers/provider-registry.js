@@ -17,19 +17,26 @@
       contextWindowTokens: 200000, maxOutputTokens: 65536
     },
     gemini: {
-      label: 'Google Gemini', defaultModel: 'gemini-3.5-flash',
-      models: ['gemini-3.5-flash', 'gemini-3.5-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+      label: 'Google Gemini', defaultModel: 'gemini-3.6-flash',
+      models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.5-flash'],
       supportsVision: true, visionInputFormat: 'gemini',
       contextWindowTokens: 128000, maxOutputTokens: 65536
     },
     deepseek: {
       label: 'DeepSeek', defaultModel: 'deepseek-v4-flash',
-      models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
+      models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
       supportsVision: false, visionInputFormat: 'none',
       contextWindowTokens: 128000, maxOutputTokens: 65536
     },
+    'codex-local': {
+      label: '本机 Codex', defaultModel: 'auto',
+      models: ['auto'],
+      supportsVision: true, visionInputFormat: 'codex-local',
+      contextWindowTokens: 400000, maxOutputTokens: 65536,
+      localOnly: true
+    },
     'openai-compatible': {
-      label: '国内模型与兼容接口', defaultModel: '', requiresBaseUrl: true,
+      label: '自定义 OpenAI 兼容接口', defaultModel: '', requiresBaseUrl: true,
       models: [], supportsVision: false, visionInputFormat: 'openai',
       contextWindowTokens: 32768, maxOutputTokens: 65536
     }
@@ -45,7 +52,7 @@
     {
       id: 'kimi', label: 'Kimi（月之暗面）',
       description: 'Kimi 官方 OpenAI Chat Completions 接口。',
-      baseUrl: 'https://api.moonshot.cn/v1', defaultModel: 'kimi-k2.6',
+      baseUrl: 'https://api.moonshot.cn/v1', defaultModel: 'kimi-k3',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: true
     },
     {
@@ -98,6 +105,7 @@
     anthropic: shared.createAnthropicAdapter,
     gemini: shared.createGeminiAdapter,
     deepseek: shared.createDeepSeekAdapter,
+    'codex-local': shared.createCodexLocalAdapter,
     'openai-compatible': shared.createOpenAICompatibleAdapter
   };
 
@@ -184,6 +192,14 @@
   function validateProviderConfig(providerId, config) {
     const errors = [];
     if (!DEFINITIONS[providerId]) return ['providerId'];
+    if (providerId === 'codex-local') {
+      if (!String(config?.model || '').trim()) errors.push('model');
+      const effort = String(config?.reasoningEffort || 'auto');
+      if (!['auto', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
+        errors.push('reasoningEffort');
+      }
+      return errors;
+    }
     if (!String(config?.apiKey || '').trim()) errors.push('apiKey');
     if (!String(config?.model || '').trim()) errors.push('model');
     const baseUrl = String(config?.baseUrl || '').trim();
@@ -193,11 +209,13 @@
     return errors;
   }
 
-  function createProviderAdapter({ providerId, config, fetchImpl }) {
+  function createProviderAdapter({ providerId, config, fetchImpl, nativeClient }) {
     const errors = validateProviderConfig(providerId, config);
     if (errors.length) throw new Error(`Invalid provider config: ${errors.join(',')}`);
     const factory = FACTORIES[providerId];
-    const adapter = factory(config, fetchImpl || fetch);
+    const adapter = providerId === 'codex-local'
+      ? factory(config, nativeClient)
+      : factory(config, fetchImpl || fetch);
     adapter.maxOutputTokens = getProviderMaxOutputTokens(providerId, config);
     adapter.contextWindowTokens = getProviderContextWindowTokens(providerId, config);
     return adapter;

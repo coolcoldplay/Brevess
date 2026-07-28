@@ -4,7 +4,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const USER_DATA_DATABASE_NAME = shared.USER_DATA_DATABASE_NAME || 'sci-logic-highlighter-user-data';
-  const USER_DATA_DATABASE_VERSION = shared.USER_DATA_DATABASE_VERSION || 3;
+  const USER_DATA_DATABASE_VERSION = shared.USER_DATA_DATABASE_VERSION || 4;
   const DOCUMENT_STORE_NAME = 'documents';
   const META_STORE_NAME = 'meta';
   const DIRECTORY_HANDLE_STORE_NAME = 'directoryHandles';
@@ -126,6 +126,11 @@
       conflicts: [],
       lastConflict: null,
       lastError: '',
+      lastErrorCode: '',
+      lastErrorName: '',
+      lastErrorPath: '',
+      requiresReauthorization: false,
+      requiresReselection: false,
       lastSyncAt: ''
     };
   }
@@ -366,6 +371,15 @@
     return directory.getFileHandle(filename, { create });
   }
 
+  async function getDirectoryAtPath(root, relativePath) {
+    const parts = normalizeRelativePath(relativePath, { internal: true }).split('/');
+    let directory = root;
+    for (const part of parts) {
+      directory = await directory.getDirectoryHandle(part, { create: false });
+    }
+    return directory;
+  }
+
   async function readText(root, relativePath) {
     try {
       const handle = await getFileHandle(root, relativePath, false);
@@ -377,15 +391,29 @@
   }
 
   async function writeText(root, relativePath, content) {
-    const handle = await getFileHandle(root, relativePath, true);
-    const writable = await handle.createWritable();
-    try {
-      await writable.write(String(content));
-      await writable.close();
-    } catch (error) {
-      await writable.abort?.().catch?.(() => undefined);
-      throw error;
+    const retryableNames = new Set([
+      'AbortError', 'InvalidStateError', 'NoModificationAllowedError',
+      'OperationError', 'UnknownError'
+    ]);
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let writable = null;
+      try {
+        const handle = await getFileHandle(root, relativePath, true);
+        writable = await handle.createWritable();
+        await writable.write(String(content));
+        await writable.close();
+        return;
+      } catch (error) {
+        lastError = error;
+        await writable?.abort?.().catch?.(() => undefined);
+        if (!retryableNames.has(String(error?.name || '')) || attempt >= 2) {
+          throw error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 40 * (attempt + 1)));
+      }
     }
+    throw lastError || new Error('DIRECTORY_WRITE_FAILED');
   }
 
   function workspaceManifest(input, assets) {
@@ -433,6 +461,37 @@
     });
   }
 
+  function compareWorkspaceIndexEntries(left, right) {
+    const fields = ['workspaceGeneration', 'revision'];
+    for (const field of fields) {
+      const difference = (Number(left?.[field]) || 0) - (Number(right?.[field]) || 0);
+      if (difference) return difference;
+    }
+    const updatedDifference = String(left?.updatedAt || '')
+      .localeCompare(String(right?.updatedAt || ''));
+    if (updatedDifference) return updatedDifference;
+    return String(left?.contentHash || '').localeCompare(String(right?.contentHash || ''));
+  }
+
+  function mergeWorkspaceIndexes(existingInput, incomingInput) {
+    const existing = shared.validateWorkspaceIndex(existingInput);
+    const incoming = shared.validateWorkspaceIndex(incomingInput);
+    const entries = new Map();
+    for (const entry of [...existing.workspaces, ...incoming.workspaces]) {
+      const current = entries.get(entry.workspaceId);
+      if (!current || compareWorkspaceIndexEntries(entry, current) >= 0) {
+        entries.set(entry.workspaceId, entry);
+      }
+    }
+    return shared.validateWorkspaceIndex({
+      schemaVersion: 1,
+      kind: shared.WORKSPACE_INDEX_KIND,
+      revision: Math.max(existing.revision, incoming.revision) + 1,
+      updatedAt: new Date().toISOString(),
+      workspaces: [...entries.values()]
+    });
+  }
+
   function validIndex(value) {
     if (!isPlainObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.assets)) {
       fail('INVALID_INDEX');
@@ -475,6 +534,13 @@
     let activeFlush = null;
     let rerunRequested = false;
     let rerunImporter = null;
+    let workspaceMutationTail = Promise.resolve();
+
+    function serializeWorkspaceMutation(operation) {
+      const result = workspaceMutationTail.then(operation, operation);
+      workspaceMutationTail = result.catch(() => undefined);
+      return result;
+    }
 
     async function permissionState(handle) {
       if (!handle) return 'unconfigured';
@@ -576,7 +642,7 @@
       try { return JSON.parse(content); } catch (_) { fail('INVALID_JSON_ASSET'); }
     }
 
-    async function enqueueWorkspaceAsset(workspaceInput, relativePath, input, metadata = {}) {
+    async function enqueueWorkspaceAssetNow(workspaceInput, relativePath, input, metadata = {}) {
       const location = workspaceAssetPath(workspaceInput, relativePath);
       const baseManifest = location.manifest;
       if (baseManifest.workspaceGeneration !== (metadata.workspaceGeneration ??
@@ -585,17 +651,45 @@
         fail('WORKSPACE_SCHEMA_UNAVAILABLE');
       }
       shared.assertWorkspaceSafeValue(input);
-      const revision = validateRevision(metadata.revision ?? Date.now());
-      const timestamp = String(metadata.updatedAt || new Date().toISOString());
       const data = cloneJsonLike(input);
-      const dataHash = String(metadata.contentHash || contentHash(stableStringify(data)));
+      const requestedRevision = validateRevision(metadata.revision ?? Date.now());
+      const existingAsset = await readQueuedOrDiskJson(location.fullPath);
+      const existingAssetMatches = existingAsset &&
+        existingAsset.kind === 'sci-logic-highlighter-workspace-asset' &&
+        existingAsset.workspaceId === baseManifest.workspaceId &&
+        existingAsset.relativePath === location.assetPath;
+      const existingGenerationMatches = existingAssetMatches &&
+        Number(existingAsset.workspaceGeneration) ===
+          Number(baseManifest.workspaceGeneration);
+      const existingDataMatches = existingAssetMatches &&
+        stableStringify(existingAsset.data) === stableStringify(data);
+      const reuseExistingEnvelope = existingGenerationMatches && existingDataMatches;
+      const advanceFromDirectory = metadata.advanceFromDirectory === true;
+      // A directory restore may import content without preserving the envelope
+      // revision in IndexedDB. Any subsequent real local mutation must advance
+      // beyond the newest queued/disk envelope; otherwise flush sees a newer
+      // primary and leaves the save permanently stuck as
+      // DIRECTORY_VERSION_NEWER.
+      const revision = reuseExistingEnvelope
+        ? validateRevision(existingAsset.revision)
+        : existingAssetMatches && advanceFromDirectory
+        ? Math.max(requestedRevision, validateRevision(existingAsset.revision) + 1)
+        : requestedRevision;
+      const timestamp = String(reuseExistingEnvelope
+        ? existingAsset.updatedAt
+        : metadata.updatedAt || new Date().toISOString());
+      const dataHash = String(reuseExistingEnvelope
+        ? existingAsset.contentHash
+        : metadata.contentHash || contentHash(stableStringify(data)));
       const envelope = {
         schemaVersion: 1,
         kind: 'sci-logic-highlighter-workspace-asset',
         revision,
         updatedAt: timestamp,
         contentHash: dataHash,
-        sourceId: String(metadata.sourceId || sourceId),
+        sourceId: String(reuseExistingEnvelope
+          ? existingAsset.sourceId
+          : metadata.sourceId || sourceId),
         workspaceId: baseManifest.workspaceId,
         workspaceGeneration: baseManifest.workspaceGeneration,
         relativePath: location.assetPath,
@@ -647,6 +741,11 @@
       };
     }
 
+    function enqueueWorkspaceAsset(workspaceInput, relativePath, input, metadata = {}) {
+      return serializeWorkspaceMutation(() =>
+        enqueueWorkspaceAssetNow(workspaceInput, relativePath, input, metadata));
+    }
+
     async function readWorkspaceAsset(workspaceInput, relativePath) {
       const location = workspaceAssetPath(workspaceInput, relativePath);
       const result = await readJson(location.fullPath);
@@ -659,6 +758,106 @@
         fail('WORKSPACE_ASSET_IDENTITY_MISMATCH');
       }
       return result;
+    }
+
+    async function listWorkspaceChatAssets(workspaceInput) {
+      const location = workspaceDirectory(workspaceInput);
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, assets: [], invalidAssets: 0 };
+      }
+      let root;
+      try {
+        root = await getRootDirectory(handle, false);
+      } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          return { permission, assets: [], invalidAssets: 0 };
+        }
+        throw error;
+      }
+      const assets = [];
+      let invalidAssets = 0;
+      let recoveredGenerationMismatches = 0;
+      const manifestGeneration = Number(location.manifest.workspaceGeneration) || 1;
+      const timestamp = value => {
+        if (Number.isFinite(Number(value)) && Number(value) > 1_000_000_000_000) {
+          return Number(value);
+        }
+        const parsed = Date.parse(String(value || ''));
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const manifestUpdatedAt = timestamp(location.manifest.updatedAt);
+      const acceptEnvelope = (envelope, relativePath) => {
+        const envelopeGeneration = Number(envelope?.workspaceGeneration) || 1;
+        const envelopeUpdatedAt = Math.max(
+          timestamp(envelope?.updatedAt),
+          timestamp(envelope?.data?.updatedAt)
+        );
+        const generationMatches = envelopeGeneration === manifestGeneration;
+        // Older builds could keep writing a live chat with generation N after
+        // the manifest had already advanced to N+1. Recover only records that
+        // are demonstrably newer than that manifest; genuinely stale,
+        // pre-clear records remain rejected.
+        const recoverableGenerationLag = envelopeGeneration < manifestGeneration &&
+          envelopeUpdatedAt > manifestUpdatedAt;
+        if (!isPlainObject(envelope) ||
+            envelope.kind !== 'sci-logic-highlighter-workspace-asset' ||
+            envelope.workspaceId !== location.manifest.workspaceId ||
+            (!generationMatches && !recoverableGenerationLag) ||
+            envelope.relativePath !== relativePath ||
+            envelope.data === undefined) {
+          fail('WORKSPACE_ASSET_IDENTITY_MISMATCH');
+        }
+        shared.assertWorkspaceSafeValue?.(envelope.data);
+        if (recoverableGenerationLag) recoveredGenerationMismatches += 1;
+        assets.push({
+          relativePath,
+          content: cloneJsonLike(envelope.data),
+          revision: Number(envelope.revision) || 0,
+          contentHash: String(envelope.contentHash || ''),
+          updatedAt: String(envelope.updatedAt || ''),
+          sourceWorkspaceGeneration: envelopeGeneration,
+          recoveredGenerationMismatch: recoverableGenerationLag
+        });
+      };
+      try {
+        const relativePath = 'chat/index.json';
+        const content = await readText(root, `${location.rootPath}/${relativePath}`);
+        if (content !== null) acceptEnvelope(JSON.parse(content || ''), relativePath);
+      } catch (_) {
+        invalidAssets += 1;
+      }
+      for (const prefix of ['chat/turns', 'chat/tombstones']) {
+        let directory;
+        try {
+          directory = await getDirectoryAtPath(root, `${location.rootPath}/${prefix}`);
+        } catch (error) {
+          if (error?.name === 'NotFoundError') continue;
+          throw error;
+        }
+        if (typeof directory?.entries !== 'function') continue;
+        for await (const [filename, entry] of directory.entries()) {
+          if (assets.length >= 10_000) break;
+          if (entry?.kind && entry.kind !== 'file') continue;
+          if (!/^[^/\\]{1,180}\.json$/iu.test(String(filename || ''))) {
+            invalidAssets += 1;
+            continue;
+          }
+          const relativePath = `${prefix}/${filename}`;
+          try {
+            const content = await readText(
+              root, `${location.rootPath}/${relativePath}`
+            );
+            const envelope = JSON.parse(content || '');
+            acceptEnvelope(envelope, relativePath);
+          } catch (_) {
+            invalidAssets += 1;
+          }
+        }
+      }
+      assets.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+      return { permission, assets, invalidAssets, recoveredGenerationMismatches };
     }
 
     async function loadWorkspaceIndexForRead(root) {
@@ -712,6 +911,11 @@
         conflictCount: Number(meta.conflictCount) || 0,
         lastConflict: meta.lastConflict || null,
         lastError: String(meta.lastError || '').slice(0, MAX_ERROR_LENGTH),
+        lastErrorCode: String(meta.lastErrorCode || '').slice(0, 80),
+        lastErrorName: String(meta.lastErrorName || '').slice(0, 80),
+        lastErrorPath: String(meta.lastErrorPath || '').slice(0, 240),
+        requiresReauthorization: meta.requiresReauthorization === true,
+        requiresReselection: meta.requiresReselection === true,
         lastSyncAt: String(meta.lastSyncAt || '')
       };
     }
@@ -770,11 +974,29 @@
       };
     }
 
-    async function recordFailure(error) {
+    async function recordFailure(error, relativePath = '') {
       const message = String(error?.message || error || 'Directory sync failed')
         .replace(/[\r\n]+/g, ' ').slice(0, MAX_ERROR_LENGTH);
-      await queueStore.setMeta({ lastError: message });
-      return message;
+      const name = String(error?.name || 'Error')
+        .replace(/[^A-Za-z0-9_$-]/gu, '').slice(0, 80) || 'Error';
+      const code = String(error?.code || name)
+        .replace(/[^A-Za-z0-9_$-]/gu, '').slice(0, 80) || 'DIRECTORY_SYNC_FAILED';
+      const requiresReauthorization = [
+        'NotAllowedError', 'SecurityError', 'PermissionDeniedError'
+      ].includes(name);
+      const requiresReselection = ['NotFoundError', 'InvalidStateError'].includes(name);
+      const failedPath = String(relativePath || '').slice(0, 240);
+      await queueStore.setMeta({
+        lastError: message,
+        lastErrorCode: code,
+        lastErrorName: name,
+        lastErrorPath: failedPath,
+        requiresReauthorization,
+        requiresReselection
+      });
+      return {
+        message, code, name, failedPath, requiresReauthorization, requiresReselection
+      };
     }
 
     async function recordConflict(item, conflictPath) {
@@ -797,7 +1019,10 @@
     async function runFlush(importer) {
       const result = {
         permission: 'unconfigured', written: 0, imported: 0,
-        conflicts: 0, failed: 0, pendingCount: 0
+        conflicts: 0, failed: 0, pendingCount: 0,
+        errorCode: '', errorName: '',
+        failedPath: '',
+        requiresReauthorization: false, requiresReselection: false
       };
       const handle = await handleStore.load();
       result.permission = await permissionState(handle);
@@ -810,7 +1035,9 @@
         root = await getRootDirectory(handle, true);
       } catch (error) {
         result.failed = 1;
-        await recordFailure(error);
+        Object.assign(result, await recordFailure(error));
+        result.errorCode = result.code;
+        result.errorName = result.name;
         result.pendingCount = (await queueStore.getAll()).length;
         return result;
       }
@@ -819,7 +1046,9 @@
         index = await loadIndex(root);
       } catch (error) {
         result.failed = 1;
-        await recordFailure(error);
+        Object.assign(result, await recordFailure(error));
+        result.errorCode = result.code;
+        result.errorName = result.name;
         result.pendingCount = (await queueStore.getAll()).length;
         return result;
       }
@@ -834,6 +1063,22 @@
             if (!existing) fail('INVALID_PRIMARY_JSON');
             const incoming = parseValidJson(item.content);
             if (!incoming) fail('INVALID_QUEUED_JSON');
+            if (item.relativePath === WORKSPACE_INDEX_PATH &&
+                stableStringify(existing) !== stableStringify(incoming)) {
+              const merged = mergeWorkspaceIndexes(existing, incoming);
+              const mergedContent = `${JSON.stringify(merged, null, 2)}\n`;
+              await writeText(root, item.relativePath, mergedContent);
+              result.written += 1;
+              result.imported += existing.revision > incoming.revision ? 1 : 0;
+              index = indexWithAsset(index, {
+                ...item,
+                revision: merged.revision,
+                contentHash: contentHash(stableStringify(merged))
+              });
+              await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+              await queueStore.remove(item.relativePath, item.queueRevision);
+              continue;
+            }
             if (existing.revision > incoming.revision) {
               const imported = await importer(item.relativePath, cloneJsonLike(existing));
               if (!imported?.imported) fail('DIRECTORY_VERSION_NEWER');
@@ -919,13 +1164,23 @@
           await queueStore.remove(item.relativePath, item.queueRevision);
         } catch (error) {
           result.failed += 1;
-          await recordFailure(error);
+          Object.assign(result, await recordFailure(error, item.relativePath));
+          result.errorCode = result.code;
+          result.errorName = result.name;
           break;
         }
       }
       result.pendingCount = (await queueStore.getAll()).length;
       if (!result.failed) {
-        await queueStore.setMeta({ lastError: '', lastSyncAt: new Date().toISOString() });
+        await queueStore.setMeta({
+          lastError: '',
+          lastErrorCode: '',
+          lastErrorName: '',
+          lastErrorPath: '',
+          requiresReauthorization: false,
+          requiresReselection: false,
+          lastSyncAt: new Date().toISOString()
+        });
       }
       return result;
     }
@@ -1187,6 +1442,7 @@
       readJson,
       enqueueWorkspaceAsset,
       readWorkspaceAsset,
+      listWorkspaceChatAssets,
       listWorkspaceManifests,
       rebuildIndex,
       rebuildWorkspaceIndex,

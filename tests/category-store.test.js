@@ -20,11 +20,12 @@ const {
 } = require('../core/category-store.js');
 const { createUnifiedCategoryCatalog } = require('../core/adaptive-catalog.js');
 
-test('provides all twelve stable built-in category ids', () => {
+test('provides all thirteen stable built-in category ids', () => {
   const ids = Object.keys(createBuiltInCategories());
   assert.deepEqual(ids, [
     'hypothesis', 'objective', 'method', 'result', 'conclusion', 'comparison',
-    'limitation', 'future', 'causality', 'emphasis', 'evidence', 'interpretation'
+    'limitation', 'future', 'causality', 'emphasis', 'evidence', 'interpretation',
+    'semantic_match'
   ]);
 });
 
@@ -53,7 +54,12 @@ test('built-in regex defaults avoid bare discourse cues that create false positi
   assert.ok(!BUILT_IN_REGEX.emphasis.phrases.includes('significantly'));
   assert.ok(!BUILT_IN_REGEX.evidence.phrases.includes('supporting'));
   assert.ok(BUILT_IN_REGEX.causality.phrases.includes('resulted in'));
-  assert.ok(BUILT_IN_REGEX.limitation.phrases.includes('limited by'));
+  assert.ok(!BUILT_IN_REGEX.limitation.phrases.includes('limited by'));
+  assert.ok(!BUILT_IN_REGEX.objective.phrases.includes('in order to'));
+  assert.ok(!BUILT_IN_REGEX.objective.phrases.includes('this work'));
+  assert.ok(!BUILT_IN_REGEX.conclusion.phrases.includes('overall'));
+  assert.ok(!BUILT_IN_REGEX.future.phrases.includes('follow-up'));
+  assert.ok(!BUILT_IN_REGEX.emphasis.phrases.includes('particularly'));
 });
 
 test('normalizes a user-defined AI category', () => {
@@ -171,6 +177,26 @@ test('prefers an explicit regex object over legacy patterns', () => {
   });
   assert.deepEqual(category.regex.phrases, ['explicit phrase']);
   assert.deepEqual(category.regex.expressions, ['explicit.+expression']);
+});
+
+test('normalizes and validates fixed-phrase regex exclusions', () => {
+  const category = toUnifiedCategory({
+    ...createBuiltInCategories().result,
+    regex: {
+      phrases: ['response increased'],
+      excludePhrases: ['baseline response increased'],
+      expressions: [],
+      caseSensitive: false,
+      wholeWord: false
+    }
+  });
+  assert.deepEqual(category.regex.excludePhrases, ['baseline response increased']);
+  assert.deepEqual(validateUnifiedCategory(category), []);
+  const invalid = {
+    ...category,
+    regex: { ...category.regex, excludePhrases: [42] }
+  };
+  assert.ok(validateUnifiedCategory(invalid).includes('regex.excludePhrases.0'));
 });
 
 test('validates a strict unified category without legacy prompt fields', () => {
@@ -453,11 +479,12 @@ test('keeps non-overlapping lazy, grouped, and lookaround bounded controls safe'
   });
 });
 
-test('keeps all twelve legacy pattern migrations in the shared category store', () => {
+test('keeps every built-in regex configuration in the shared category store', () => {
   const catalog = createUnifiedCategoryCatalog();
   assert.deepEqual(Object.keys(BUILT_IN_REGEX), [
     'hypothesis', 'objective', 'method', 'result', 'conclusion', 'comparison',
-    'limitation', 'future', 'causality', 'emphasis', 'evidence', 'interpretation'
+    'limitation', 'future', 'causality', 'emphasis', 'evidence', 'interpretation',
+    'semantic_match'
   ]);
   for (const [categoryId, regex] of Object.entries(BUILT_IN_REGEX)) {
     assert.deepEqual([...catalog[categoryId].regex.phrases], [...regex.phrases], categoryId);

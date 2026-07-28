@@ -9,6 +9,106 @@
     axes_reading: '解释输入中有证据支持的坐标轴、标签和实用读图顺序；不可见时明确说明。',
     sample_information: '只解释输入明确支持的样本、物种、组织、细胞、队列和重复信息，不补猜缺失细节。'
   });
+  const DEFAULT_PANEL_FOLLOWUP_PRESETS = Object.freeze([
+    Object.freeze({
+      id: 'grouping',
+      topic: 'grouping',
+      name: '分组含义与设置',
+      prompt: FALLBACK_PANEL_FOLLOWUP_PROMPTS.grouping
+    }),
+    Object.freeze({
+      id: 'technique_principle',
+      topic: 'technique_principle',
+      name: '实验技术原理',
+      prompt: FALLBACK_PANEL_FOLLOWUP_PROMPTS.technique_principle
+    }),
+    Object.freeze({
+      id: 'axes_reading',
+      topic: 'axes_reading',
+      name: '横纵坐标含义与读图方法',
+      prompt: FALLBACK_PANEL_FOLLOWUP_PROMPTS.axes_reading
+    }),
+    Object.freeze({
+      id: 'sample_information',
+      topic: 'sample_information',
+      name: '实验所用样本信息',
+      prompt: FALLBACK_PANEL_FOLLOWUP_PROMPTS.sample_information
+    })
+  ]);
+
+  function normalizePanelFollowupPresets(value, legacyPrompts = {}) {
+    const source = Array.isArray(value) ? value : DEFAULT_PANEL_FOLLOWUP_PRESETS.map(preset => ({
+      ...preset,
+      prompt: legacyPrompts?.[preset.topic] || preset.prompt
+    }));
+    const validTopics = new Set(Object.keys(FALLBACK_PANEL_FOLLOWUP_PROMPTS));
+    const seen = new Set();
+    return source.slice(0, 30).map((item, index) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      const fallback = DEFAULT_PANEL_FOLLOWUP_PRESETS[index] || {};
+      let id = String(raw.id || fallback.id || `panel_prompt_${index + 1}`)
+        .normalize('NFKC').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '').slice(0, 80) || `panel_prompt_${index + 1}`;
+      let suffix = 2;
+      const baseId = id;
+      while (seen.has(id)) id = `${baseId}_${suffix++}`.slice(0, 80);
+      seen.add(id);
+      const requestedTopic = raw.topic !== undefined
+        ? String(raw.topic || '')
+        : String(raw.id && raw.id !== fallback.id ? '' : (fallback.topic || ''));
+      return {
+        id,
+        topic: validTopics.has(requestedTopic) ? requestedTopic : '',
+        name: String(raw.name || fallback.name || `追问 ${index + 1}`)
+          .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80),
+        prompt: String(raw.prompt || fallback.prompt || '')
+          .normalize('NFKC').trim().slice(0, 4000)
+      };
+    }).filter(item => item.name && item.prompt);
+  }
+  const DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS = Object.freeze([
+    Object.freeze({
+      id: 'core_claim',
+      name: '核心结论',
+      prompt: '请概括本文最核心的结论，并逐条说明对应的关键原文证据。'
+    }),
+    Object.freeze({
+      id: 'evidence_chain',
+      name: '证据链',
+      prompt: '请梳理作者支持核心机制的完整证据链，并指出其中最薄弱的一环。'
+    }),
+    Object.freeze({
+      id: 'limitations',
+      name: '局限性',
+      prompt: '请结合正文证据总结本文的主要局限、尚未解决的问题和可能影响结论外推的条件。'
+    }),
+    Object.freeze({
+      id: 'section_compare',
+      name: '跨章节比较',
+      prompt: '请比较所选章节中的观点、证据和结论，指出一致之处、差异及潜在矛盾。'
+    })
+  ]);
+
+  function normalizeArticleChatQuickPrompts(value) {
+    const source = Array.isArray(value) ? value : DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS;
+    const seen = new Set();
+    return source.slice(0, 30).map((item, index) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      const fallback = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS[index] || {};
+      let id = String(raw.id || fallback.id || `prompt_${index + 1}`)
+        .normalize('NFKC').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '').slice(0, 80) || `prompt_${index + 1}`;
+      let suffix = 2;
+      const baseId = id;
+      while (seen.has(id)) id = `${baseId}_${suffix++}`.slice(0, 80);
+      seen.add(id);
+      const name = String(raw.name || fallback.name || `快捷提示 ${index + 1}`)
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const prompt = String(raw.prompt || fallback.prompt || '')
+        .normalize('NFKC').trim().slice(0, 4000);
+      return { id, name: name || `快捷提示 ${index + 1}`, prompt };
+    }).filter(item => item.prompt);
+  }
 
   function normalizeStoredPanelFollowupPrompts(value) {
     if (shared.normalizePanelFollowupPrompts) {
@@ -22,6 +122,87 @@
         return [topic, prompt || fallback.normalize('NFKC')];
       }));
   }
+  const FALLBACK_KEYBOARD_SHORTCUTS = Object.freeze({
+    figures: 'F',
+    navigation: 'G',
+    analysis: 'A',
+    highlights: 'H',
+    chat: 'Q',
+    zotero: 'Z',
+    ppt: 'P',
+    scanLocal: 'R',
+    saveLocal: 'S',
+    deleteLocal: 'D',
+    exportJson: 'E',
+    importJson: 'I',
+    settings: 'T',
+    collapseFigurePanels: '0'
+  });
+
+  function normalizeStoredKeyboardShortcuts(value) {
+    if (shared.normalizeKeyboardShortcuts) {
+      return shared.normalizeKeyboardShortcuts(value);
+    }
+    const source = value && typeof value === 'object' && !Array.isArray(value)
+      ? value : {};
+    return Object.fromEntries(Object.entries(FALLBACK_KEYBOARD_SHORTCUTS)
+      .map(([actionId, defaultKey]) => {
+        if (!Object.prototype.hasOwnProperty.call(source, actionId)) {
+          return [actionId, defaultKey];
+        }
+        const normalized = String(source[actionId] ?? '')
+          .normalize('NFKC').trim().toUpperCase();
+        return [actionId, !normalized
+          ? '' : /^[A-Z0-9]$/.test(normalized) ? normalized : defaultKey];
+      }));
+  }
+  function createDefaultAnalysisModes() {
+    const source = shared.READING_VIEWS && typeof shared.READING_VIEWS === 'object'
+      ? shared.READING_VIEWS : {};
+    return Object.entries(source).map(([id, definition]) => ({
+      id,
+      name: String(definition?.name || id),
+      description: String(definition?.description || ''),
+      categoryIds: Array.isArray(definition?.categoryIds)
+        ? [...definition.categoryIds] : []
+    }));
+  }
+
+  function normalizeAnalysisModes(value, legacyOverrides = {}) {
+    const defaults = createDefaultAnalysisModes();
+    const source = Array.isArray(value) && value.length ? value : defaults;
+    const seen = new Set();
+    const normalized = source.slice(0, 30).map((item, index) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      const fallback = defaults[index] || {};
+      let id = String(raw.id || fallback.id || `mode_${index + 1}`)
+        .normalize('NFKC').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '').slice(0, 80) || `mode_${index + 1}`;
+      let suffix = 2;
+      const baseId = id;
+      while (seen.has(id)) id = `${baseId}_${suffix++}`.slice(0, 80);
+      seen.add(id);
+      const baseIds = Array.isArray(raw.categoryIds)
+        ? raw.categoryIds : Array.isArray(fallback.categoryIds)
+          ? fallback.categoryIds : [];
+      const override = legacyOverrides?.[id] || {};
+      const removed = new Set(Array.isArray(override.remove)
+        ? override.remove.map(String) : []);
+      const categoryIds = [...new Set([
+        ...baseIds.map(String),
+        ...(Array.isArray(override.add) ? override.add.map(String) : [])
+      ])].filter(categoryId => categoryId && !removed.has(categoryId)).slice(0, 240);
+      return {
+        id,
+        name: String(raw.name || fallback.name || `分析模式 ${index + 1}`)
+          .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80),
+        description: String(raw.description || fallback.description || '')
+          .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 240),
+        categoryIds
+      };
+    }).filter(item => item.name);
+    return normalized.length ? normalized : defaults;
+  }
   const STORAGE_KEY = 'sciLlmSettingsV2';
   const SESSION_CATEGORY_KEY = 'sciLlmSessionCategoriesV2';
   const CATEGORY_IDS = [
@@ -32,7 +213,7 @@
   const PROFILE_ID_PATTERN = /^profile_[a-z0-9_]{3,80}$/;
   const PUBLIC_CONFIG_MAX_DEPTH = 32;
   const PROVIDER_IDS = [
-    'openai', 'anthropic', 'gemini', 'deepseek', 'openai-compatible'
+    'openai', 'anthropic', 'gemini', 'deepseek', 'codex-local', 'openai-compatible'
   ];
   const PROVIDER_ID_SET = new Set(PROVIDER_IDS);
   const PROVIDER_NAMES = {
@@ -40,6 +221,7 @@
     anthropic: 'Anthropic',
     gemini: 'Gemini',
     deepseek: 'DeepSeek',
+    'codex-local': '本机 Codex',
     'openai-compatible': 'OpenAI-compatible'
   };
   const PROVIDER_VISION_DEFAULTS = {
@@ -47,6 +229,7 @@
     anthropic: true,
     gemini: true,
     deepseek: false,
+    'codex-local': true,
     'openai-compatible': false
   };
   const LEGACY_PROVIDER_DEFAULTS = {
@@ -56,10 +239,13 @@
     deepseek: {
       apiKey: '', model: 'deepseek-v4-flash', maxOutputTokens: 4096, thinking: false
     },
+    'codex-local': {
+      model: 'auto', reasoningEffort: 'auto', maxOutputTokens: 4096
+    },
     'openai-compatible': {
       apiKey: '', model: '', presetId: 'custom', baseUrl: '',
       authHeader: 'Authorization', authPrefix: 'Bearer', maxOutputTokens: 4096,
-      jsonMode: true, supportsVision: false, customHeaders: {}
+      jsonMode: true, supportsVision: true, customHeaders: {}
     }
   };
 
@@ -102,6 +288,14 @@
     return [...new Set((Array.isArray(value) ? value : [])
       .map(String)
       .filter(item => /^[a-z][a-z0-9_]*$/.test(item)))];
+  }
+
+  function normalizeDeletedBuiltInCategoryIds(value) {
+    const knownBuiltInIds = typeof shared.createUnifiedCategoryCatalog === 'function'
+      ? new Set(Object.keys(shared.createUnifiedCategoryCatalog()))
+      : null;
+    return normalizeIdList(value)
+      .filter(categoryId => !knownBuiltInIds || knownBuiltInIds.has(categoryId));
   }
 
   function normalizeViewOverrides(value) {
@@ -262,11 +456,17 @@
       PROVIDER_NAMES[providerId];
     const hasExplicitVision = isPlainObject(value.capabilities) &&
       value.capabilities.vision !== undefined;
-    const vision = hasExplicitVision
-      ? Boolean(value.capabilities.vision)
-      : (providerId === 'openai-compatible'
-        ? config.supportsVision === true
-        : PROVIDER_VISION_DEFAULTS[providerId]);
+    // Builds through 2.4.14 persisted local Codex as text-only. 2.4.15 adds
+    // native App Server image input, so an old explicit false must migrate to
+    // the now-guaranteed provider capability instead of permanently disabling
+    // Figure pixels for upgraded profiles.
+    const vision = providerId === 'codex-local'
+      ? true
+      : (hasExplicitVision
+        ? Boolean(value.capabilities.vision)
+        : (providerId === 'openai-compatible'
+          ? config.supportsVision === true
+          : PROVIDER_VISION_DEFAULTS[providerId]));
     const capabilities = isPlainObject(normalized.capabilities)
       ? normalized.capabilities : {};
     capabilities.vision = vision;
@@ -301,7 +501,7 @@
     const savedProviders = isPlainObject(saved.providers) ? saved.providers : {};
     const profiles = {};
     const profileOrder = [];
-    PROVIDER_IDS.forEach(providerId => {
+    PROVIDER_IDS.filter(providerId => providerId !== 'codex-local').forEach(providerId => {
       const legacyConfig = Object.assign(
         {},
         cloneJsonLike(LEGACY_PROVIDER_DEFAULTS[providerId]),
@@ -361,12 +561,16 @@
     return {
       version: 5,
       mode: 'regex',
+      language: 'zh-CN',
       consentGranted: false,
       autoAnalyze: false,
+      autoCacheFigureImages: true,
       confidenceThreshold: shared.DEFAULT_CONFIDENCE_THRESHOLD || 0.8,
       readingViewId: 'quick_story',
+      analysisModes: normalizeAnalysisModes(),
       viewCategoryOverrides: createDefaultViewOverrides(),
       categoryOverrides: {},
+      deletedBuiltInCategoryIds: [],
       studyTypeOverrides: {},
       selectedCategoryIds: [...CATEGORY_IDS],
       customCategories: [],
@@ -374,7 +578,10 @@
       globalProfileId: 'profile_default_openai',
       profileOrder: ['profile_default_openai'],
       taskRoutes: createDefaultTaskRoutes(),
-      figurePanelFollowupPrompts: normalizeStoredPanelFollowupPrompts({})
+      figurePanelFollowupPrompts: normalizeStoredPanelFollowupPrompts({}),
+      figurePanelFollowupPresets: normalizePanelFollowupPresets(),
+      articleChatQuickPrompts: normalizeArticleChatQuickPrompts(),
+      keyboardShortcuts: normalizeStoredKeyboardShortcuts({})
     };
   }
 
@@ -425,9 +632,14 @@
     merged.confidenceThreshold = shared.normalizeConfidenceThreshold
       ? shared.normalizeConfidenceThreshold(saved.confidenceThreshold)
       : 0.8;
-    merged.readingViewId = shared.isReadingView?.(saved.readingViewId)
-      ? saved.readingViewId : 'quick_story';
     merged.viewCategoryOverrides = normalizeViewOverrides(saved.viewCategoryOverrides);
+    merged.analysisModes = normalizeAnalysisModes(
+      saved.analysisModes,
+      saved.analysisModes ? {} : merged.viewCategoryOverrides
+    );
+    const availableModeIds = new Set(merged.analysisModes.map(mode => mode.id));
+    merged.readingViewId = availableModeIds.has(String(saved.readingViewId || ''))
+      ? String(saved.readingViewId) : (merged.analysisModes[0]?.id || 'quick_story');
     if (Number(saved.version) < 3 && Array.isArray(saved.selectedCategoryIds)) {
       merged.viewCategoryOverrides.quick_story = deriveViewOverride(
         'quick_story', saved.selectedCategoryIds
@@ -438,9 +650,34 @@
       saved.categoryOverrides,
       legacyAllRules
     );
+    merged.deletedBuiltInCategoryIds = normalizeDeletedBuiltInCategoryIds(
+      saved.deletedBuiltInCategoryIds
+    );
     merged.studyTypeOverrides = normalizeStudyTypeOverrides(saved.studyTypeOverrides);
+    merged.autoCacheFigureImages = saved.autoCacheFigureImages !== false;
+    merged.language = String(saved.language || '').toLowerCase().startsWith('en')
+      ? 'en' : 'zh-CN';
     merged.figurePanelFollowupPrompts = normalizeStoredPanelFollowupPrompts(
       saved.figurePanelFollowupPrompts
+    );
+    merged.figurePanelFollowupPresets = normalizePanelFollowupPresets(
+      saved.figurePanelFollowupPresets,
+      merged.figurePanelFollowupPrompts
+    );
+    if (isPlainObject(saved.figurePanelFollowupPrompts)) {
+      merged.figurePanelFollowupPresets = merged.figurePanelFollowupPresets
+        .map(preset => preset.topic
+          ? { ...preset, prompt: merged.figurePanelFollowupPrompts[preset.topic] }
+          : preset);
+    }
+    merged.figurePanelFollowupPresets.forEach(preset => {
+      if (preset.topic) merged.figurePanelFollowupPrompts[preset.topic] = preset.prompt;
+    });
+    merged.articleChatQuickPrompts = normalizeArticleChatQuickPrompts(
+      saved.articleChatQuickPrompts
+    );
+    merged.keyboardShortcuts = normalizeStoredKeyboardShortcuts(
+      saved.keyboardShortcuts
     );
     return merged;
   }
@@ -554,25 +791,38 @@
   function isConfiguredProfile(profile) {
     if (!isPlainObject(profile) || !PROVIDER_ID_SET.has(profile.providerId) ||
         !isPlainObject(profile.config)) return false;
-    const configured = isNonBlankString(profile.config.apiKey) &&
-      isNonBlankString(profile.config.model);
+    const configured = profile.providerId === 'codex-local'
+      ? isNonBlankString(profile.config.model)
+      : isNonBlankString(profile.config.apiKey) &&
+        isNonBlankString(profile.config.model);
     return configured && (profile.providerId !== 'openai-compatible' ||
       isNonBlankString(profile.config.baseUrl));
   }
 
-  function getEffectiveMode(settings) {
+  function isLlmReady(settings) {
     const normalized = mergeSettings(settings);
     const configured = isPlainObject(normalized.profiles) &&
       Object.values(normalized.profiles).some(isConfiguredProfile);
-    return normalized.mode === 'llm' && normalized.consentGranted === true && configured
+    return normalized.consentGranted === true && configured;
+  }
+
+  function getEffectiveMode(settings) {
+    const normalized = mergeSettings(settings);
+    return normalized.mode === 'llm' && isLlmReady(normalized)
       ? 'llm' : 'regex';
   }
 
   return {
     TASK_ROUTE_KEYS,
     PROFILE_ID_PATTERN,
+    DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS,
+    normalizeArticleChatQuickPrompts,
+    DEFAULT_PANEL_FOLLOWUP_PRESETS,
+    normalizePanelFollowupPresets,
     createDefaultSettings,
     createDefaultViewOverrides,
+    createDefaultAnalysisModes,
+    normalizeAnalysisModes,
     createTokenPolicy,
     normalizeContextWindowTokens,
     normalizeTaskRoutes,
@@ -586,6 +836,7 @@
     saveSessionCategories,
     toPublicSettings,
     isConfiguredProfile,
+    isLlmReady,
     getEffectiveMode
   };
 });

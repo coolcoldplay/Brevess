@@ -24,13 +24,13 @@
       '.section-title', '.section__title', '.article-section-title'
     ],
     paragraphSelectors: [
-      'p', 'li', '[role="paragraph"]', '.article-section__content > div'
+      'p', 'li', '[role="paragraph"]'
     ],
     excludedSelectors: [
       'nav', 'aside', 'footer', 'form', 'figure', '[hidden]', '[aria-hidden="true"]',
-      '.references', '.bibliography', '.citation', '.contributors', '.advertisement',
+      '.citation', '.citation-content', '.advertisement',
       '.related-articles', '.recommended', '.comments', '.social-share',
-      '.article-tools', '.article-header-actions', '.supplementary-materials'
+      '.article-tools', '.article-header-actions'
     ],
     stabilitySelectors: ['article', '#article-body', '#body', '.article-body']
   });
@@ -97,6 +97,17 @@
       paragraphSelectors: [
         '.section-paragraph', '.article-section p', '.Body p'
       ],
+      excludedSelectors: [
+        '.video-player',
+        '.video-playback',
+        '.video-player-modal',
+        '.keyboard-shortcuts-modal',
+        '.download-options-modal',
+        '.transcript-panel',
+        '[data-aa-name*="accessibility" i]',
+        '[data-aa-name*="download-options" i]',
+        '[data-aa-name*="transcript" i]'
+      ],
       stabilitySelectors: ['#body', '.Body', '.article__sections']
     }),
     createAdapter({
@@ -112,6 +123,13 @@
       outlineRootSelectors: ['.c-article-table-of-contents', '.article-toc'],
       headingSelectors: ['.c-article-section__title', '.c-article__title'],
       paragraphSelectors: ['.c-article-section__content p'],
+      excludedSelectors: [
+        '.c-article-header', '.c-article-author-list', '.c-article-metrics',
+        '.c-article-access', '.c-article-related', '[data-test*="access" i]',
+        '[data-test*="related" i]', '[data-test*="recommend" i]',
+        '[data-track-component*="related" i]',
+        '[data-component*="related" i]'
+      ],
       stabilitySelectors: ['#article-body', '.c-article-body']
     }),
     createAdapter({

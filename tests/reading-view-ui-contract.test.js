@@ -39,24 +39,18 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-test('popup exposes four reading views and one manual study type chooser', () => {
+test('popup renders saved analysis modes and removes the paper-type chooser', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   assert.match(html, /id="readingViewControl"/);
-  assert.match(html, /value="quick_story"/);
-  assert.match(html, /value="mechanism_chain"/);
-  assert.match(html, /value="critical_review"/);
-  assert.match(html, /name="readingView"\s+value="review_synthesis"/);
-  assert.match(html, /综述脉络/);
-  assert.match(html, /id="studyTypeChooser"/);
-  assert.match(script, /radio\.name\s*=\s*'studyType'/);
-  assert.match(script, /Object\.entries\(types\)/);
-  assert.match(script, /LLM_SET_STUDY_TYPE/);
-  assert.doesNotMatch(html, /secondaryStudyType|primaryStudyType|studyTypeReason|studyTypeWarning/);
-  assert.doesNotMatch(script, /LLM_SAVE_STUDY_TYPE_OVERRIDE/);
+  assert.match(html, /id="readingViewOptions"/);
+  assert.match(html, /<legend[^>]*>分析模式<\/legend>/);
+  assert.match(script, /Object\.entries\(views\)/);
+  assert.match(script, /radio\.name\s*=\s*'readingView'/);
+  assert.doesNotMatch(html, /studyTypeChooser|studyTypeOptions|name="studyType"/);
   assert.match(html, /id="restoreViewPreset"/);
   assert.match(script, /LLM_PREPARE_DOCUMENT/);
-  assert.match(script, /viewCategoryOverrides/);
+  assert.match(script, /analysisModes/);
 });
 
 test('current-view helpers resolve active entries and group searchable non-active categories', () => {
@@ -284,7 +278,7 @@ test('archive export disables while guarded and gear opens the category workspac
   assert.match(archive, /finally[\s\S]*button\.disabled\s*=\s*false/);
 
   const shortcutStart = script.indexOf('function setupSidePanelSettingsShortcut');
-  const shortcutEnd = script.indexOf('function updateFloatingPanelButton', shortcutStart);
+  const shortcutEnd = script.indexOf('function createWorkspaceElement', shortcutStart);
   const shortcut = script.slice(shortcutStart, shortcutEnd);
   assert.match(shortcut, /chrome\.runtime\.getURL\('options\.html#categoryWorkspace'\)/);
   assert.match(shortcut, /chrome\.tabs\.create/);
@@ -431,7 +425,7 @@ test('prepared responses apply only to the current intent document and view', ()
   }), false);
 });
 
-test('popup routes view category and study-type mutations through one guarded queue', () => {
+test('popup routes analysis-mode category mutations through one guarded queue', () => {
   const script = read('popup.js');
   assert.match(script, /const preferenceMutationCoordinator\s*=\s*createAsyncIntentQueue\(\)/);
   assert.match(script, /function queueReadingViewMutation/);
@@ -461,11 +455,11 @@ test('LLM category UI focuses the current view and discloses grouped more catego
   assert.match(script, /chrome\.tabs\.create/);
 });
 
-test('popup reading view and status controls expose keyboard and live-region semantics', () => {
+test('popup analysis mode and status controls expose keyboard and live-region semantics', () => {
   const html = read('popup.html');
   const css = read('popup.css');
   assert.match(html, /<fieldset[^>]*id="readingViewControl"/);
-  assert.match(html, /<legend[^>]*>阅读视图<\/legend>/);
+  assert.match(html, /<legend[^>]*>分析模式<\/legend>/);
   assert.doesNotMatch(css, /\.reading-view-control input\s*\{\s*display:\s*none/);
   assert.match(css, /\.reading-view-control input[\s\S]*position:\s*absolute/);
   assert.match(html, /id="statusMessage"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
@@ -616,14 +610,12 @@ test('a partial category fetch failure aborts the atomic regex snapshot', async 
   assert.equal(refreshCalls, 0);
 });
 
-test('LLM analysis waits for a prepared document and one selected study type', () => {
+test('LLM analysis waits for a prepared document but not a paper-type selection', () => {
   const script = read('popup.js');
   assert.match(script, /preparedDocumentState\?\.documentHash/);
-  assert.match(script, /studyTypeSelectionInFlight/);
   assert.match(script, /documentHash:\s*(?:preparedDocumentState\.documentHash|expectedDocumentHash)/);
-  assert.match(script, /studyType:\s*event\.target\.value|studyType:\s*selectedType/);
   assert.match(script, /applyButton\.disabled/);
-  assert.match(script, /请先选择文献类型/);
+  assert.doesNotMatch(script, /请先选择文献类型/);
   assert.match(script, /正在分析全文/);
   assert.match(script, /重新分析全文/);
   assert.doesNotMatch(script, /正在识别论文类型|已识别为/);
@@ -720,12 +712,12 @@ test('article retry is hidden by default and lives only inside document status',
   assert.match(script.slice(readyStart, readyEnd), /retry\.hidden\s*=\s*true/);
 });
 
-test('disabled study types use a normal disabled cursor', () => {
+test('removed paper-type controls cannot appear in popup markup', () => {
+  const html = read('popup.html');
   const css = read('popup.css');
+  assert.doesNotMatch(html, /study-type-option|studyTypeChooser|studyTypeOptions/);
   assert.doesNotMatch(css,
     /\.study-type-option:has\(input:disabled\)[^{]*\{[^}]*cursor:\s*wait/s);
-  assert.match(css,
-    /\.study-type-option:has\(input:disabled\)[^{]*\{[^}]*cursor:\s*not-allowed/s);
 });
 
 test('article preparation has a deadline and exposes actionable failure state', () => {
@@ -757,8 +749,8 @@ test('analysis workspace keeps the full-text action at the top and owns a visibl
   );
   assert.ok(analysis.indexOf('id="applyHighlight"') < analysis.indexOf('analysis-engine-section'));
   assert.match(analysis, /id="applyHighlight"[\s\S]*ph-file-magnifying-glass/);
-  assert.match(html, /data-workspace-target="analysis"[\s\S]*ph-file-magnifying-glass/);
-  assert.match(icons, /ph\.ph-file-magnifying-glass::before/);
+  assert.match(html, /data-workspace-target="analysis"[\s\S]*ph-list-magnifying-glass/);
+  assert.match(icons, /ph\.ph-list-magnifying-glass::before/);
 });
 
 test('new chat and migration controls use bundled visible icons', () => {
@@ -766,11 +758,11 @@ test('new chat and migration controls use bundled visible icons', () => {
   const options = read('options.html');
   const icons = read('vendor/phosphor/icons.css');
 
-  assert.match(popup, /data-workspace-target="chat"[\s\S]*ph-chats-circle/);
+  assert.match(popup, /data-workspace-target="chat"[\s\S]*ph-chat-circle-text/);
   assert.match(popup, /id="sendArticleChat"[\s\S]*ph-paper-plane-tilt/);
   assert.match(options, /id="exportMigrationBundle"[\s\S]*ph-export/);
   assert.match(options, /ph-upload[\s\S]*id="importMigrationBundle"/);
-  for (const icon of ['chats-circle', 'paper-plane-tilt', 'upload', 'export']) {
+  for (const icon of ['chat-circle-text', 'paper-plane-tilt', 'upload', 'export']) {
     assert.match(icons, new RegExp(`ph\\.ph-${icon}::before`));
   }
 });
@@ -859,22 +851,26 @@ test('automatic LLM startup prepares a profile instead of bypassing type confirm
 
 test('content script registers capabilities without scanning at module boot', () => {
   const script = read('content.js');
-  const listenerEnd = script.lastIndexOf("console.log('SCI论文阅读助手已加载')");
+  const listenerEnd = script.lastIndexOf("console.log('Brevess 已加载')");
   const bootTail = script.slice(listenerEnd);
   assert.doesNotMatch(bootTail, /initializeManualAnnotationUi\(\)/);
   assert.doesNotMatch(bootTail, /maybeAutoAnalyzeWithLLM/);
   assert.match(script, /request\.action === 'prepareManualAnnotations'/);
 });
 
-test('reading assistant exposes a global local-workspace toolbar and a real floating pin mode', () => {
+test('reading assistant exposes a global local-workspace toolbar without the removed floating pin', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   const css = read('popup.css');
   const background = read('background.js');
   const manifest = JSON.parse(read('manifest.json'));
-  assert.equal(manifest.name, 'SCI论文阅读助手');
-  assert.match(html, /<title>SCI论文阅读助手<\/title>/);
-  assert.match(html, /id="toggleFloatingSidePanel"[\s\S]*ph-push-pin/);
+  assert.equal(manifest.name, '__MSG_extensionName__');
+  assert.equal(manifest.default_locale, 'zh_CN');
+  assert.match(
+    html,
+    /<title>Brevess<\/title>/
+  );
+  assert.doesNotMatch(html, /toggleFloatingSidePanel|ph-push-pin|悬浮置顶/);
   const statusStart = html.indexOf('id="sidePanelDocumentStatus"');
   const statusEnd = html.indexOf('<section id="articleArchivePrompt"', statusStart);
   const statusMarkup = html.slice(statusStart, statusEnd);
@@ -893,33 +889,14 @@ test('reading assistant exposes a global local-workspace toolbar and a real floa
   const highlightsEnd = html.indexOf('data-workspace-view="figures"', highlightsStart);
   assert.doesNotMatch(html.slice(highlightsStart, highlightsEnd), /article-archive-toolbar/);
   assert.match(css, /\.side-panel-global-tools\s*\{/);
-  assert.match(script, /documentPictureInPicture\.requestWindow/);
-  assert.match(script, /async function openFloatingCompatibilityWindow/);
-  assert.match(script, /function requestSystemFloatingPanelWindow/);
-  assert.match(script, /浏览器未能及时创建系统置顶窗口/);
-  assert.match(script, /chrome\.windows\.create\(createData\)/);
-  assert.match(script, /frameUrl\.searchParams\.set\('displayMode', 'window'\)/);
-  assert.match(script, /当前浏览器缺少跨软件置顶能力/);
   assert.doesNotMatch(
     script,
-    /if \(!floatingPanelEmbedded && !globalThis\.documentPictureInPicture\?\.requestWindow\)[\s\S]{0,180}button\.disabled = true/
+    /documentPictureInPicture|openFloating|floatingPanel|FLOATING_PANEL|displayMode.*pip/
   );
-  assert.match(script, /FLOATING_PANEL_DEFAULT_WIDTH\s*=\s*780/);
-  assert.match(script, /pipWindow\.resizeTo\(FLOATING_PANEL_DEFAULT_WIDTH/);
-  const floatingConfiguration = script.match(
-    /async function configureFloatingPanelWindow[\s\S]*?\n}/
-  )?.[0] || '';
-  assert.ok(
-    floatingConfiguration.indexOf("frame.addEventListener('load'") <
-      floatingConfiguration.indexOf('pipDocument.body.append(frame, resetEdge)'),
-    'floating iframe readiness must be observed before it is attached'
+  assert.doesNotMatch(
+    background,
+    /FLOATING_SIDE_PANEL|floatingPanel|sciFloatingPanelPin/
   );
-  assert.match(script, /const pinStatePromise = notifyFloatingPanelPinState/);
-  assert.match(script, /await configureFloatingPanelWindow\(pipWindow, targetTab\?\.id\)/);
-  assert.doesNotMatch(script, /preferInitialWindowPlacement/);
-  assert.match(script, /floatingPanelTargetTabId/);
-  assert.match(background, /FLOATING_SIDE_PANEL_PIN_STATE/);
-  assert.match(background, /floatingPanelPinnedTabId !== null/);
 });
 
 test('activated publisher pages use a family-aware single-column article layout', () => {
@@ -941,11 +918,14 @@ test('activated publisher pages use a family-aware single-column article layout'
     '#sidebar',
     '.ArticleDetailsV4__asideLeft',
     '#article_content-right',
+    'article[data-has="right-rail"] > aside',
+    '[data-core-aside="right-rail"]',
     '[class*="Article_RightRail" i]',
     '.sidebar-right-wrapper'
   ]) assert.match(css, new RegExp(realPublisherSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(css, /\.article-wrapper\.grid\.row[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(css, /\[data-core-wrapper="content"\]/);
+  assert.match(css, /data-sci-publisher-family="aaas"[\s\S]*article\[data-has="right-rail"\][\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(css, /\.main-content-wrapper/);
   assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?float:\s*none\s*!important/);
   assert.match(css, /data-sci-reader-single-column="true"[\s\S]*?width:\s*100%\s*!important/);
@@ -961,6 +941,17 @@ test('popup is a full-height native side-panel workspace with five internal view
     assert.match(html, new RegExp(`data-workspace-view="${viewId}"`));
     assert.match(html, new RegExp(`data-workspace-target="${viewId}"`));
   }
+  const bottomNav = html.match(/<nav class="workspace-bottom-nav"[\s\S]*?<\/nav>/)?.[0] || '';
+  const navItems = [...bottomNav.matchAll(
+    /data-workspace-target="([^"]+)"[^>]*><i class="ph ([^"]+)"[^>]*><\/i><span>([^<]+)<\/span>/g
+  )].map(match => ({ target: match[1], icon: match[2], label: match[3] }));
+  assert.deepEqual(navItems, [
+    { target: 'navigation', icon: 'ph-compass', label: '导航' },
+    { target: 'analysis', icon: 'ph-list-magnifying-glass', label: '亮文' },
+    { target: 'highlights', icon: 'ph-quotes', label: '摘句' },
+    { target: 'figures', icon: 'ph-image', label: '解图' },
+    { target: 'chat', icon: 'ph-chat-circle-text', label: '问答' }
+  ]);
   assert.match(script, /function switchWorkspaceView\(/);
   assert.match(script, /aria-selected/);
   assert.match(script, /setupWorkspaceNavigation/);
@@ -969,6 +960,30 @@ test('popup is a full-height native side-panel workspace with five internal view
   assert.match(css, /\.workspace-view\s*\{[^}]*overflow-y:\s*auto/s);
   assert.match(css, /min-width:\s*360px/);
   assert.doesNotMatch(css, /body\s*\{[^}]*width:\s*380px/s);
+});
+
+test('side panel title row shows the latest timestamped notification and expandable history', () => {
+  const html = read('popup.html');
+  const css = read('popup.css');
+  const script = read('popup.js');
+  for (const id of [
+    'sidePanelNotificationCenter',
+    'sidePanelNotificationSummary',
+    'sidePanelNotificationTime',
+    'sidePanelNotificationLatest',
+    'sidePanelNotificationHistory'
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /<time id="sidePanelNotificationTime"/);
+  assert.match(html, /通知历史/);
+  assert.match(script, /function recordSidePanelNotification/);
+  assert.match(script, /SIDE_PANEL_NOTIFICATION_HISTORY_LIMIT\s*=\s*40/);
+  assert.match(script, /function renderSidePanelNotificationHistory/);
+  assert.match(script, /message\?\.type === 'ARTICLE_NOTIFICATION'/);
+  assert.match(script, /chrome\.storage\.session\.set/);
+  assert.match(script, /formatSidePanelNotificationTime/);
+  assert.match(css, /\.side-panel-notification-popover\s*\{/);
+  assert.match(css, /max-height:[^;]+;/);
+  assert.match(css, /\.side-panel-notification-history\s*\{[^}]*overflow-y:\s*auto/s);
 });
 
 test('side panel renders navigation, evidence, highlight distribution, and figure snapshots', () => {
@@ -993,6 +1008,95 @@ test('side panel ignores stale workspace refreshes after the active tab changes'
   assert.match(script, /const requestId\s*=\s*\+\+workspaceRefreshSequence/);
   assert.match(script, /requestId\s*!==\s*workspaceRefreshSequence/);
   assert.match(script, /currentTab\?\.id\s*!==\s*tab\.id/);
+});
+
+test('side panel auto-restores a readable local workspace before showing a legacy prompt', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+  assert.match(
+    script,
+    /async function tryAutoRestoreCurrentArticleWorkspace\([\s\S]*?requestPermission:\s*false/
+  );
+  const initializeStart = script.indexOf('async function initializeCurrentArticle');
+  const initializeEnd = script.indexOf("\ndocument.addEventListener('DOMContentLoaded'", initializeStart);
+  const initialize = script.slice(initializeStart, initializeEnd);
+  assert.match(initialize, /await tryAutoRestoreCurrentArticleWorkspace/);
+  assert.ok(
+    initialize.indexOf('await tryAutoRestoreCurrentArticleWorkspace') <
+      initialize.indexOf('probeCurrentArticleArchive'),
+    'directory auto-restore must run before the optional legacy archive prompt'
+  );
+  const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const snapshotStart = content.indexOf(
+    "} else if (request.action === 'getArticleWorkspaceSnapshot')"
+  );
+  const snapshotEnd = content.indexOf(
+    "} else if (request.action === 'ensureArticleWorkspace')",
+    snapshotStart
+  );
+  assert.doesNotMatch(
+    content.slice(snapshotStart, snapshotEnd),
+    /scheduleArticleWorkspaceArtifactsSave/,
+    'a read-only snapshot must not overwrite the on-disk chat index before restore'
+  );
+});
+
+test('completed full-text analysis persists an idle task after releasing the operation', () => {
+  const source = read('content.js');
+  const analyzeStart = source.indexOf(
+    'async function analyzeArticleWithLLM(options = {})'
+  );
+  const analyzeEnd = source.indexOf('\nfunction figureDataUrlBytes', analyzeStart);
+  assert.ok(analyzeStart >= 0 && analyzeEnd > analyzeStart);
+  const analyzeSource = source.slice(analyzeStart, analyzeEnd);
+  const finishIndex = analyzeSource.lastIndexOf('finishLlmHighlightOperation(operation);');
+  const finalCheckpointIndex = analyzeSource.lastIndexOf(
+    'scheduleArticleWorkspaceArtifactsSave({ immediate: true });'
+  );
+  assert.ok(finishIndex >= 0);
+  assert.ok(
+    finalCheckpointIndex > finishIndex,
+    'the final workspace snapshot must be captured after the LLM operation is released'
+  );
+});
+
+test('activation creates only a non-destructive article baseline after local restore', () => {
+  const popupSource = read('popup.js');
+  const initializeStart = popupSource.indexOf('async function initializeCurrentArticle');
+  const initializeEnd = popupSource.indexOf(
+    "\ndocument.addEventListener('DOMContentLoaded'",
+    initializeStart
+  );
+  const initializeSource = popupSource.slice(initializeStart, initializeEnd);
+  const restoreIndex = initializeSource.indexOf(
+    'await tryAutoRestoreCurrentArticleWorkspace'
+  );
+  const baselineIndex = initializeSource.indexOf(
+    "action: 'saveArticleWorkspaceBaseline'"
+  );
+  assert.ok(restoreIndex >= 0 && baselineIndex > restoreIndex);
+
+  const contentSource = read('content.js');
+  const baselineStart = contentSource.indexOf(
+    'function buildArticleWorkspaceBaselineAssets()'
+  );
+  const baselineEnd = contentSource.indexOf(
+    '\nfunction captureArticleWorkspaceAssets',
+    baselineStart
+  );
+  const baselineSource = contentSource.slice(baselineStart, baselineEnd);
+  assert.match(baselineSource, /article\/structure\.json/);
+  assert.match(baselineSource, /article\/paragraphs\.json/);
+  assert.doesNotMatch(baselineSource, /chat\/index\.json|figures\/|analysis\/|annotations\//);
+  assert.match(contentSource, /request\.action === 'saveArticleWorkspaceBaseline'/);
+  const restoreStart = contentSource.indexOf('async function applyArticleWorkspaceAssets');
+  const restoreEnd = contentSource.indexOf(
+    '\nasync function resetArticleWorkspaceState',
+    restoreStart
+  );
+  assert.match(
+    contentSource.slice(restoreStart, restoreEnd),
+    /articleWorkspaceGenerationOverride\s*=\s*Math\.max\([\s\S]*?input\.manifest\.workspaceGeneration/
+  );
 });
 
 test('persistent analysis result overlays are not mounted into publisher pages', () => {
@@ -1028,4 +1132,53 @@ test('global outline expansion leaves leaf paragraph drawers closed', () => {
   assert.match(helper, /workspace-tree-node:not\(\[data-leaf="true"\]\)/);
   assert.match(helper, /if \(!expanded\)/);
   assert.match(helper, /details\.open = false/);
+});
+
+test('navigation exposes a local high-precision abbreviation table', () => {
+  const html = read('popup.html');
+  const script = read('popup.js');
+  const styles = read('popup.css');
+  const abbreviationButtonIndex = html.indexOf('id="showArticleAbbreviations"');
+  const scanButtonIndex = html.indexOf('id="scanArticleWorkspace"');
+  assert.ok(abbreviationButtonIndex >= 0 && abbreviationButtonIndex < scanButtonIndex);
+  assert.match(
+    html.slice(abbreviationButtonIndex, scanButtonIndex),
+    /side-panel-tool-letter[\s\S]*>A<\/span>/
+  );
+  assert.match(html, /id="articleAbbreviationDialog"/);
+  assert.match(html, /<th scope="col">缩写<\/th><th scope="col">全称<\/th>/);
+  assert.match(html, /core\/abbreviation-extractor\.js/);
+  assert.match(script, /function showArticleAbbreviationTable/);
+  assert.match(script, /SciLLM\.extractArticleAbbreviations/);
+  assert.match(script, /未调用 LLM/);
+  assert.match(script, /function jumpToArticleAbbreviationSource/);
+  assert.match(script, /kind: 'paragraph'/);
+  assert.match(script, /paragraphId: String\(entry\?\.paragraphId/);
+  assert.match(script, /navigationRevision: Math\.max\(0, Number\(entry\?\.navigationRevision/);
+  assert.match(script, /正文中的首次出现位置/);
+  assert.match(styles, /\.abbreviation-table-jump/);
+});
+
+test('analysis modes remain selectable in regex mode and preserve mode-specific highlights', () => {
+  const popup = read('popup.js');
+  const content = read('content.js');
+  const updateStart = popup.indexOf('function updateAnalysisModeUi');
+  const updateEnd = popup.indexOf('async function refreshLlmDiagnostics', updateStart);
+  assert.match(popup.slice(updateStart, updateEnd), /llmAdaptiveControls'\)\.hidden = false/);
+  assert.match(popup, /function reconcileRegexSelection/);
+  assert.match(content, /dataset\.analysisModeId/);
+  assert.match(content, /clearHighlight\(analysisModeId = ''\)/);
+  assert.match(content, /clearLlmHighlights\(analysisModeId = ''\)/);
+  assert.match(content, /options\.readingViewId \|\| 'llm-default'/);
+  assert.match(content, /readingViewId:\s*request\.readingViewId/);
+});
+
+test('side-panel language is a direct CH and EN toggle', () => {
+  const html = read('popup.html');
+  const script = read('popup.js');
+  assert.match(html, /<button id="sidePanelLanguage"[^>]*>CH<\/button>/);
+  assert.doesNotMatch(html, /<select id="sidePanelLanguage"/);
+  assert.match(script, /function updateSidePanelLanguageButton/);
+  assert.match(script, /normalized === 'en' \? 'EN' : 'CH'/);
+  assert.match(script, /current === 'en' \? 'zh-CN' : 'en'/);
 });

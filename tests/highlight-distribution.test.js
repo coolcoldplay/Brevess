@@ -64,7 +64,7 @@ test('highlight distribution groups automatic and manual marks by leaf section a
   ]);
 
   assert.equal(result.totalHighlights, 3);
-  assert.equal(HIGHLIGHT_DISTRIBUTION_VERSION, '2');
+  assert.equal(HIGHLIGHT_DISTRIBUTION_VERSION, '3');
   assert.deepEqual(result.sourceCounts, {
     manual: 1, llm: 1, regex: 1, other: 0
   });
@@ -99,4 +99,39 @@ test('highlight distribution keeps unresolved marks visible without inventing a 
   assert.equal(result.unresolved.length, 1);
   assert.equal(result.totalHighlights, 1);
   assert.equal(result.rows.some(row => row.sectionId === ''), false);
+});
+
+test('highlight distribution deduplicates the same automatic mark preserved across analysis modes', () => {
+  const duplicate = {
+    paragraphId: 'p-results',
+    sectionId: 'sec-results',
+    categoryId: 'result',
+    categoryName: '结果陈述',
+    color: '#BCE6C2',
+    source: 'regex',
+    quote: 'Treatment increased survival.',
+    sourceStart: 14,
+    sourceEnd: 43
+  };
+  const result = buildHighlightDistribution(structure, [
+    { ...duplicate, highlightId: 'quick-story-result' },
+    { ...duplicate, highlightId: 'mechanism-result' },
+    {
+      ...duplicate,
+      highlightId: 'second-real-occurrence',
+      sourceStart: 72,
+      sourceEnd: 101
+    },
+    {
+      ...duplicate,
+      highlightId: 'manual-copy',
+      source: 'manual'
+    }
+  ]);
+
+  assert.equal(result.totalHighlights, 3);
+  assert.equal(result.deduplicatedHighlights, 1);
+  assert.equal(result.sourceCounts.regex, 2);
+  assert.equal(result.sourceCounts.manual, 1);
+  assert.equal(result.rows[0].cells.result.count, 3);
 });

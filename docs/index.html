@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brevess</title>
+  <style>
+    :root { color-scheme: light; --navy:#104f7d; --gold:#f7b51b; --ink:#172735; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; padding:28px;
+      color:var(--ink); background:#f3f7f9; font:16px/1.65 system-ui,sans-serif; }
+    main { width:min(760px,100%); padding:clamp(28px,6vw,64px); border:1px solid #d6e1e8;
+      border-radius:20px; background:#fff; box-shadow:0 20px 60px rgba(16,79,125,.1); }
+    h1 { margin:0; color:var(--navy); font-size:clamp(30px,6vw,52px); line-height:1.12; }
+    .tagline { margin:8px 0 28px; color:#557083; letter-spacing:.05em; }
+    nav { display:flex; flex-wrap:wrap; gap:12px; margin:28px 0; }
+    a { color:var(--navy); }
+    nav a { padding:10px 16px; border:1px solid #bdd0dd; border-radius:999px;
+      font-weight:700; text-decoration:none; }
+    nav a:first-child { border-color:var(--gold); background:#fff8df; }
+    small { color:#687b88; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Brevess</h1>
+    <p class="tagline">Brevity · Evidence · Essence</p>
+    <p>在 Microsoft Edge 侧栏中导航科研论文、定位证据、解读 Figure/Panel，并围绕当前全文进行可追溯问答。</p>
+    <nav aria-label="项目页面">
+      <a href="privacy-policy.html">隐私政策 / Privacy Policy</a>
+      <a href="reviewer-demo.html">审核演示论文</a>
+      <a href="https://github.com/coolcoldplay/sci-logic-highlighter">源代码</a>
+    </nav>
+    <small>反馈邮箱：<a href="mailto:brevess0729@163.com">brevess0729@163.com</a></small>
+  </main>
+</body>
+</html>

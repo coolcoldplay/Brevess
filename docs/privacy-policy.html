@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Brevess Microsoft Edge extension privacy policy">
+  <title>Brevess Privacy Policy / 隐私政策</title>
+  <style>
+    :root { color-scheme: light; --navy:#0f4d78; --gold:#f7b51b; --ink:#1e2933; --muted:#5d6c79; --line:#d9e2e8; --paper:#fff; --canvas:#f4f7f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--canvas); font:16px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Arial,sans-serif; }
+    main { width:min(920px,calc(100% - 32px)); margin:32px auto; padding:clamp(24px,5vw,56px); border:1px solid var(--line); border-radius:18px; background:var(--paper); box-shadow:0 12px 36px rgba(25,55,76,.08); }
+    header { display:flex; align-items:center; gap:18px; margin-bottom:30px; padding-bottom:24px; border-bottom:4px solid var(--gold); }
+    .mark { display:grid; width:72px; height:72px; grid-template-columns:18px 1fr; grid-template-rows:repeat(3,10px); align-content:center; gap:7px 8px; padding:14px; border-radius:16px; background:var(--navy); }
+    .mark span { border-radius:99px; background:#fff; }
+    .mark span:nth-child(3) { grid-column:1 / -1; background:var(--gold); }
+    h1 { margin:0; color:var(--navy); font-size:clamp(26px,5vw,42px); line-height:1.16; }
+    h2 { margin:34px 0 10px; color:var(--navy); font-size:21px; }
+    p,li { max-width:78ch; }
+    .meta { color:var(--muted); }
+    a { color:var(--navy); }
+    code { padding:.08em .34em; border-radius:4px; background:#edf3f7; }
+    footer { margin-top:40px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark" aria-label="Brevess"><span></span><span></span><span></span><span></span><span></span></div>
+    <div>
+      <h1>Brevess Privacy Policy / 隐私政策</h1>
+      <div class="meta">Effective / 生效：2026-07-28 · Microsoft Edge extension</div>
+    </div>
+  </header>
+
+  <p>Brevess helps users read and analyze scientific article pages in Microsoft Edge. It provides local article navigation, abbreviation extraction, rule-based and manual highlighting, Figure/Panel organization, optional model-assisted analysis, full-text Q&amp;A, and local article workspaces.</p>
+  <p>Brevess 用于在 Microsoft Edge 中阅读和分析科研论文网页，提供本地论文导航、缩写提取、正则与手动高亮、Figure/Panel 整理、可选的模型辅助分析、全文问答及本地论文工作区。</p>
+
+  <h2>1. Data handled / 处理的数据</h2>
+  <ul>
+    <li><strong>Current article page / 当前论文网页：</strong>URL, title, DOI when available, headings, text, captions, Figure images or image URLs, and page structure. Extraction starts only after the user activates Brevess for the current tab; Brevess does not continuously monitor browsing. 包括网址、标题、DOI、标题层级、正文、图注、Figure 图片或地址及页面结构；仅在用户激活当前标签页后提取。</li>
+    <li><strong>User-created content / 用户内容：</strong>analysis modes, category rules, highlights, notes, questions, chat history, Panel follow-ups, feedback examples, and export preferences. 包括分析模式、规则、高亮、备注、问题、问答历史、Panel 追问和导出偏好。</li>
+    <li><strong>Configuration and authentication / 配置与鉴权：</strong>provider settings and API keys entered by the user. Keys remain in local extension storage and are sent only to the endpoint selected by the user for authentication. Brevess has no developer server that receives these keys. API Key 保存在扩展本地存储，只发往用户选择的服务地址。</li>
+    <li><strong>Local usage records / 本地使用记录：</strong>per-article model, feature and token totals, task state, cache metadata and diagnostic errors. They stay on the user's device unless exported. 按论文、功能和模型统计的 Token、任务状态、缓存和诊断信息默认留在本机。</li>
+    <li><strong>Optional local integrations / 可选本地集成：</strong>a user-selected folder, loopback Zotero Connector, and separately installed Windows Local Codex bridge.</li>
+  </ul>
+
+  <h2>2. Storage and retention / 存储与保留</h2>
+  <p>Settings and article workspaces are stored locally using Microsoft Edge extension storage, IndexedDB, and—only when selected by the user—the local folder chosen through the File System Access API. Brevess does not upload a copy to a developer-operated cloud service.</p>
+  <p>设置和论文工作区保存在 Edge 扩展本地存储、IndexedDB 和用户主动选择的本地文件夹中，不会上传至开发者运营的云端。数据保留到用户删除工作区、清除扩展数据、删除目录文件或卸载扩展为止。明确导出的文件可能在卸载后继续存在；可选桥接数据位于 <code>%LOCALAPPDATA%\SCIReaderCodexBridge</code>，会保留到用户自行删除。</p>
+
+  <h2>3. Data transmission and third parties / 数据传输与第三方</h2>
+  <p>Model-assisted features remain disabled until the user configures a provider and grants the in-extension permission to send article content. Depending on the task, Brevess may send necessary article excerpts, captions, compressed Figure images, questions and limited conversation context directly to the provider or compatible endpoint selected by the user. Provider availability, retention, billing and processing are governed by that provider's terms and privacy policy.</p>
+  <p>只有在用户配置模型并勾选“正文发送许可”后，Brevess 才会把任务所需的论文片段、图注、压缩 Figure、问题和有限对话上下文直接发送给用户选择的服务。可选路由包括 OpenAI、Anthropic、Google Gemini、DeepSeek、用户配置的 OpenAI-compatible 服务或本机 Codex 桥。远程自定义地址必须使用 HTTPS；HTTP 仅允许用户明确配置的 <code>localhost</code> 或 <code>127.0.0.1</code>。</p>
+  <p>The Local Codex bridge is an optional Windows companion. It exchanges messages only with approved extension IDs on the same device and uses the user's extension-specific Codex sign-in. Codex processing is subject to the terms applicable to the user's account.</p>
+
+  <h2>4. User controls / 用户控制</h2>
+  <ul>
+    <li>Local navigation, abbreviations, regex highlighting, manual annotations and workspaces can be used without enabling an external model. 本地功能无需启用外部模型。</li>
+    <li>Users can revoke model sharing by clearing <strong>Permission to send article text / 正文发送许可</strong> and saving settings.</li>
+    <li>Users can edit or remove provider profiles; delete workspaces, highlights or chats; export data; clear extension storage; and avoid optional integrations.</li>
+  </ul>
+
+  <h2>5. No sale, advertising, or developer analytics / 不出售、无广告、无开发者遥测</h2>
+  <p>Brevess does not sell, license, broker, or use user data for advertising, creditworthiness, or unrelated profiling. It contains no advertising SDK and does not send product analytics or browsing telemetry to the developer.</p>
+
+  <h2>6. Security / 安全</h2>
+  <p>Remote model requests use HTTPS except explicit loopback services on the user's device. API keys are stored locally, masked after saving, and excluded from normal article exports and token reports. Users should protect their Edge profile, credentials, exported files and selected folders.</p>
+
+  <h2>7. Sensitive information and intended use / 敏感信息与用途</h2>
+  <p>Brevess is a research reading aid, not a medical device and not a substitute for clinical, legal or professional advice. Users should not submit private, identifiable patient data or confidential information to third-party models unless authorized and the provider is appropriate for that use.</p>
+  <p>Brevess 是科研阅读辅助工具，不是医疗器械，不能替代临床、法律或其他专业判断。未经授权，不应向第三方模型提交可识别患者身份的数据或其他机密信息。</p>
+
+  <h2>8. Children / 儿童</h2>
+  <p>Brevess is intended for researchers, students and professional readers. It is not directed to children under 13 and does not knowingly collect children's personal information.</p>
+
+  <h2>9. Changes / 政策变更</h2>
+  <p>Material changes will be published at this URL with a new effective date and, when appropriate, noted in release notes. 重大变更会在本页面更新生效日期，并在适当情况下写入版本说明。</p>
+
+  <h2>10. Contact / 联系方式</h2>
+  <ul>
+    <li>Email: <a href="mailto:brevess0729@163.com">brevess0729@163.com</a></li>
+    <li>Issues: <a href="https://github.com/coolcoldplay/sci-logic-highlighter/issues">GitHub Issues</a></li>
+    <li>Source: <a href="https://github.com/coolcoldplay/sci-logic-highlighter">GitHub repository</a></li>
+  </ul>
+  <footer>Brevess · Brevity · Evidence · Essence</footer>
+</main>
+</body>
+</html>

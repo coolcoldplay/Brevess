@@ -11,7 +11,7 @@ const script = readFileSync(join(root, 'options.js'), 'utf8');
 test('renders a compatible provider preset selector that persists the selected preset', () => {
   assert.match(html, /id="compatiblePreset"/);
   assert.match(script, /function renderCompatiblePresetOptions\(\)/);
-  assert.match(script, /function applyCompatiblePreset\(\)/);
+  assert.match(script, /function applyCompatiblePreset\(/);
   assert.match(script, /state\.compatibleProviderPresets/);
   assert.match(script, /config\.presetId/);
 });
@@ -19,10 +19,53 @@ test('renders a compatible provider preset selector that persists the selected p
 test('provider selection offers model suggestions while preserving free text input', () => {
   assert.match(html, /<input[^>]*id="model"[^>]*list="modelSuggestions"/);
   assert.match(html, /<datalist[^>]*id="modelSuggestions"/);
+  assert.match(html, /<select[^>]*id="modelSuggestionsSelect"/);
   assert.match(script, /function renderModelSuggestions\(/);
   assert.match(script, /definition\?\.models/);
+  assert.match(script, /cache\?\.models/);
+  assert.match(script, /select\.appendChild\(option\)/);
+  assert.match(script, /modelSuggestionsSelect'\)\s*\.addEventListener\('change'/);
   assert.match(script, /function handleProviderChange\(/);
   assert.match(script, /defaultModel/);
+  assert.match(html, /id="refreshModels"/);
+  assert.match(html, /id="modelDiscoveryStatus"/);
+  assert.match(script, /LLM_LIST_MODELS/);
+  assert.match(script, /function refreshProviderModels\(/);
+});
+
+test('domestic compatible providers are expanded into named top-level choices', () => {
+  assert.match(script, /COMPATIBLE_PROVIDER_VALUE_PREFIX/);
+  assert.match(script, /国内模型服务商/);
+  assert.match(script, /compatiblePresets\(\)\.filter\(preset => preset\.id !== 'custom'\)/);
+  assert.match(script, /providerSelectionDescriptor/);
+  assert.match(script, /providerSelectionValue/);
+  assert.match(html, /国内服务商已独立列出/);
+});
+
+test('profile names save independently on blur or Enter and update the list preview', () => {
+  assert.match(html, /按 Enter 或移开焦点即可单独保存名称/);
+  assert.match(script, /profileName'\)\.addEventListener\('blur', persistProfileName\)/);
+  assert.match(script, /event\.key !== 'Enter'/);
+  assert.match(script, /function persistProfileName\(/);
+  assert.match(script, /type: 'LLM_SAVE_PROFILE'/);
+  assert.match(script, /function updateProfileListPreview\(/);
+});
+
+test('local Codex settings own login, status, and logout controls', () => {
+  for (const id of [
+    'codexLocalFields', 'codexAuthStatus', 'codexReverseChannelStatus', 'codexLogin',
+    'codexRefreshStatus', 'codexLogout'
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(script, /function startCodexLogin\(/);
+  assert.match(script, /function refreshCodexAuthStatus\(/);
+  assert.match(script, /function renderCodexReverseChannelStatus\(/);
+  assert.match(script, /function logoutCodex\(/);
+  assert.match(script, /CODEX_LOCAL_LOGIN_START/);
+  assert.match(script, /CODEX_LOCAL_STATUS/);
+  assert.match(script, /CODEX_LOCAL_LOGOUT/);
+  assert.match(script, /chrome\.tabs\.create/);
 });
 
 test('compatible preset editing is scoped to the selected profile and preserves masked keys', () => {
@@ -72,6 +115,8 @@ test('Figure route warning follows the unsaved current-profile vision toggle', (
   const helperEnd = script.indexOf('\n}', helperStart) + 2;
   const profileStart = script.indexOf('function profileById(');
   const profileEnd = script.indexOf('\n}', profileStart) + 2;
+  const descriptorStart = script.indexOf('function providerSelectionDescriptor(');
+  const descriptorEnd = script.indexOf('\n}', descriptorStart) + 2;
   const warningStart = script.indexOf('function renderFigureRouteWarning(');
   const warningEnd = script.indexOf('\n}', warningStart) + 2;
   const elements = {
@@ -88,7 +133,14 @@ test('Figure route warning follows the unsaved current-profile vision toggle', (
     selectedProfileId: 'profile_gateway',
     document: { getElementById(id) { return elements[id]; } }
   };
-  vm.runInNewContext(`${script.slice(helperStart, helperEnd)}\n${script.slice(profileStart, profileEnd)}\n${script.slice(warningStart, warningEnd)}\nrenderFigureRouteWarning();`, context);
+  vm.runInNewContext(
+    `const COMPATIBLE_PROVIDER_VALUE_PREFIX = 'compatible:';\n` +
+    `${script.slice(helperStart, helperEnd)}\n` +
+    `${script.slice(profileStart, profileEnd)}\n` +
+    `${script.slice(descriptorStart, descriptorEnd)}\n` +
+    `${script.slice(warningStart, warningEnd)}\nrenderFigureRouteWarning();`,
+    context
+  );
   assert.equal(elements.routeFigureWarning.hidden, false);
   elements.supportsVision.checked = true;
   vm.runInNewContext('renderFigureRouteWarning();', context);
@@ -149,5 +201,5 @@ test('compatible preset changes participate in profile dirty tracking', () => {
   const presetSource = script.slice(presetStart, presetEnd);
   assert.match(bindSource, /compatiblePreset/);
   assert.match(bindSource, /markProfileEditorDirty/);
-  assert.match(presetSource, /markProfileEditorDirty\(\)/);
+  assert.match(presetSource, /markProfileEditorDirty\(/);
 });

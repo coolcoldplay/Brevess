@@ -184,12 +184,19 @@ const PopupUiHelpers = (() => {
                 .map(value => String(value || '').trim())
                 .filter(Boolean)
                 .map(expression => `(?:${expression})`);
+            const excludePatterns = (Array.isArray(regex.excludePhrases)
+                ? regex.excludePhrases : [])
+                .map(escapeRegexPhrase)
+                .filter(Boolean)
+                .map(expression => regex.wholeWord
+                    ? `\\b(?:${expression})\\b` : `(?:${expression})`);
             const parts = [...phrases, ...expressions];
             if (!parts.length) return;
             translated[categoryId] = {
                 name: String(category.name || categoryId),
                 color: String(category.color || '#0B4778'),
                 patterns: [`(?:${parts.join('|')})`],
+                excludePatterns,
                 isRegex: true,
                 isBuiltIn: category.builtIn !== false
             };
@@ -341,21 +348,6 @@ const {
     shouldApplyPreparedResult
 } = PopupUiHelpers;
 
-const floatingPanelParams = new URLSearchParams(window.location.search);
-const floatingPanelEmbedded = floatingPanelParams.get('displayMode') === 'pip';
-const floatingPanelCompatibility = floatingPanelParams.get('displayMode') === 'window';
-const floatingPanelDetached = floatingPanelEmbedded || floatingPanelCompatibility;
-const floatingPanelTargetTabId = (() => {
-    const rawValue = floatingPanelParams.get('targetTabId');
-    if (rawValue === null || rawValue.trim() === '') return null;
-    const value = Number(rawValue);
-    return Number.isInteger(value) && value >= 0 ? value : null;
-})();
-const FLOATING_PANEL_DEFAULT_WIDTH = 780;
-const FLOATING_PANEL_MIN_HEIGHT = 560;
-let floatingPanelWindow = null;
-let floatingCompatibilityWindowId = null;
-
 let selectedCategories = new Set();
 let regexSelectionStored = false;
 let llmSelectedCategories = new Set();
@@ -365,6 +357,28 @@ let persistedAnalysisMode = 'regex';
 let llmSettingsState = null;
 const articleArchiveExportGuard = createInFlightActionGuard();
 const articleWorkspaceSaveGuard = createInFlightActionGuard();
+const pptMaterialExportGuard = createInFlightActionGuard();
+const zoteroSnapshotExportGuard = createInFlightActionGuard();
+let articleWorkspaceDirectoryHandle = null;
+let articleWorkspaceDirectoryHandleLoaded = false;
+let articleWorkspaceDirectoryHandleReady = Promise.resolve(null);
+function refreshArticleWorkspaceDirectoryHandle() {
+    articleWorkspaceDirectoryHandleReady = (
+        typeof SciLLM.loadDirectoryHandle === 'function'
+            ? SciLLM.loadDirectoryHandle(indexedDB)
+            : Promise.resolve(null)
+    ).then(handle => {
+        articleWorkspaceDirectoryHandle = handle || null;
+        articleWorkspaceDirectoryHandleLoaded = true;
+        return articleWorkspaceDirectoryHandle;
+    }).catch(() => {
+        articleWorkspaceDirectoryHandle = null;
+        articleWorkspaceDirectoryHandleLoaded = true;
+        return null;
+    });
+    return articleWorkspaceDirectoryHandleReady;
+}
+refreshArticleWorkspaceDirectoryHandle();
 let confidenceThreshold = 0.8;
 let persistedConfidenceThreshold = 0.8;
 let readingViewId = 'quick_story';
@@ -372,8 +386,6 @@ let persistedReadingViewId = 'quick_story';
 let preparedDocumentState = null;
 let currentArticleDocument = null;
 let prepareState = 'idle';
-let studyTypeSelectionInFlight = false;
-let selectedStudyTypeOverride = '';
 let regexApplySequence = 0;
 let regexApplyPending = false;
 let highlightTaskState = { running: false, paused: false, cancelled: false };
@@ -416,6 +428,24 @@ let panelFollowupRevealKey = '';
 let figureQuickNavActiveId = '';
 let figureQuickNavHoverTimer = null;
 let figureQuickNavExpandedFigureId = '';
+let figureKeyboardShortcutArmed = false;
+let lastFigureModuleShortcutPress = {
+    key: '',
+    pressedAt: 0
+};
+let figureOriginalViewerState = {
+    open: false,
+    tabId: null,
+    figureId: '',
+    captionVisible: false,
+    requestSequence: 0
+};
+let figureCaptionSidebarState = {
+    visible: false,
+    figureId: ''
+};
+const SIDE_PANEL_NOTIFICATION_HISTORY_LIMIT = 40;
+let sidePanelNotificationHistory = [];
 const METHOD_CATEGORY_LABELS = Object.freeze({
     wet_lab: '\u6e7f\u5b9e\u9a8c',
     imaging: '\u6210\u50cf',
@@ -460,6 +490,10 @@ let articleChatVisibleTurnCount = articleChatHistoryPageSize;
 let articleChatFollowLatest = true;
 let articleChatRenderedDocumentKey = '';
 let articleChatScrollToLatestActive = false;
+const articleChatContextScopes = new Map();
+let articleChatCommandItems = [];
+let articleChatCommandActiveIndex = -1;
+let articleChatCommandTrigger = null;
 const workspaceParagraphSummaryState = new Map();
 let reviewOutlineTaskGeneration = 0;
 let paragraphSummaryTaskGeneration = 0;
@@ -468,6 +502,7 @@ let currentArticleArchiveProbe = null;
 let articlePreparationSequence = 0;
 let lastArticlePreparationError = null;
 const PANEL_TAB_STATE_CACHE_LIMIT = 6;
+const ARTICLE_ARCHIVE_PROMPT_DECISION_PREFIX = 'sciArticleArchivePromptDecision:';
 const panelTabStateCache = new Map();
 let activePanelTabContext = {
     tabId: null,
@@ -482,11 +517,29 @@ let tabContextRequestSequence = 0;
 let tabContextSyncTimer = null;
 
 async function queryPanelTargetTab() {
-    if (floatingPanelTargetTabId !== null) {
-        return chrome.tabs.get(floatingPanelTargetTabId).catch(() => null);
-    }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     return tab || null;
+}
+
+async function publishSidePanelShortcutScope(
+    tabId = activePanelTabContext.tabId,
+    enabled = activePanelTabContext.activated
+) {
+    const numericTabId = Number(tabId);
+    if (!Number.isInteger(numericTabId)) return false;
+    const message = {
+        action: 'setSidePanelShortcutScope',
+        enabled: enabled === true,
+        shortcuts: enabled === true ? currentKeyboardShortcuts() : {}
+    };
+    try {
+        const response = enabled === true
+            ? await sendTabMessage(numericTabId, message)
+            : await SciLLM.sendTabMessageIfPresent(chrome, numericTabId, message);
+        return response?.success === true;
+    } catch (_) {
+        return false;
+    }
 }
 
 function capturePanelContext(taskToken = 0) {
@@ -513,6 +566,138 @@ function panelTabDocumentKey(tab = {}) {
     return Number.isInteger(tabId) && url ? `${tabId}|${url}` : '';
 }
 
+function notificationSessionStorageKey(panelKey = activePanelTabContext.key) {
+    const source = String(panelKey || '');
+    if (!source) return '';
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    const tabId = Number(source.split('|', 1)[0]) || 0;
+    return `sci-side-panel-notifications-v1-${tabId}-${(hash >>> 0).toString(16)}`;
+}
+
+function formatSidePanelNotificationTime(timestamp, includeDate = false) {
+    const date = new Date(Number(timestamp) || Date.now());
+    const options = {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    };
+    if (includeDate) {
+        options.month = '2-digit';
+        options.day = '2-digit';
+    }
+    return new Intl.DateTimeFormat('zh-CN', options).format(date);
+}
+
+function renderSidePanelNotificationHistory() {
+    const center = document.getElementById('sidePanelNotificationCenter');
+    const latest = document.getElementById('sidePanelNotificationLatest');
+    const time = document.getElementById('sidePanelNotificationTime');
+    const history = document.getElementById('sidePanelNotificationHistory');
+    if (!center || !latest || !time || !history) return;
+    const newest = sidePanelNotificationHistory[0] || null;
+    latest.textContent = newest?.message || '暂无通知';
+    latest.title = newest?.message || '暂无通知';
+    time.textContent = newest
+        ? formatSidePanelNotificationTime(newest.timestamp) : '--:--';
+    time.dateTime = newest ? new Date(newest.timestamp).toISOString() : '';
+    center.classList.toggle('has-error', newest?.type === 'error');
+    history.replaceChildren();
+    if (!sidePanelNotificationHistory.length) {
+        history.appendChild(createWorkspaceElement(
+            'li', 'side-panel-notification-empty', '还没有通知'
+        ));
+        return;
+    }
+    const today = new Date().toDateString();
+    sidePanelNotificationHistory.forEach(item => {
+        const row = createWorkspaceElement(
+            'li',
+            `side-panel-notification-item${item.type === 'error' ? ' is-error' : ''}`
+        );
+        const rowTime = document.createElement('time');
+        const includeDate = new Date(item.timestamp).toDateString() !== today;
+        rowTime.dateTime = new Date(item.timestamp).toISOString();
+        rowTime.textContent = formatSidePanelNotificationTime(item.timestamp, includeDate);
+        row.append(rowTime, createWorkspaceElement('span', '', item.message));
+        history.appendChild(row);
+    });
+}
+
+function persistSidePanelNotificationHistory() {
+    const storageKey = notificationSessionStorageKey();
+    if (!storageKey || !chrome.storage?.session) return;
+    void chrome.storage.session.set({
+        [storageKey]: sidePanelNotificationHistory.map(item => ({ ...item }))
+    }).catch(() => undefined);
+}
+
+async function loadSidePanelNotificationHistory(panelKey = activePanelTabContext.key) {
+    const storageKey = notificationSessionStorageKey(panelKey);
+    if (!storageKey || !chrome.storage?.session) return [];
+    try {
+        const stored = await chrome.storage.session.get(storageKey);
+        if (panelKey !== activePanelTabContext.key) return [];
+        sidePanelNotificationHistory = (Array.isArray(stored?.[storageKey])
+            ? stored[storageKey] : []).slice(0, SIDE_PANEL_NOTIFICATION_HISTORY_LIMIT)
+            .map(item => ({
+                message: String(item?.message || '').trim().slice(0, 600),
+                type: item?.type === 'error' ? 'error'
+                    : item?.type === 'success' ? 'success' : 'info',
+                timestamp: Math.max(0, Number(item?.timestamp) || 0) || Date.now()
+            }))
+            .filter(item => item.message);
+        renderSidePanelNotificationHistory();
+        return sidePanelNotificationHistory;
+    } catch (_) {
+        return [];
+    }
+}
+
+function recordSidePanelNotification(message, type = 'info', timestamp = Date.now()) {
+    const normalizedMessage = String(message || '').normalize('NFKC')
+        .replace(/\s+/g, ' ').trim().slice(0, 600);
+    if (!normalizedMessage) return null;
+    const normalizedType = type === 'error' ? 'error'
+        : type === 'success' ? 'success' : 'info';
+    const normalizedTimestamp = Math.max(0, Number(timestamp) || 0) || Date.now();
+    const newest = sidePanelNotificationHistory[0];
+    if (newest?.message === normalizedMessage &&
+        normalizedTimestamp - newest.timestamp < 1500) {
+        newest.timestamp = normalizedTimestamp;
+        newest.type = normalizedType;
+    } else {
+        sidePanelNotificationHistory.unshift({
+            message: normalizedMessage,
+            type: normalizedType,
+            timestamp: normalizedTimestamp
+        });
+        sidePanelNotificationHistory =
+            sidePanelNotificationHistory.slice(0, SIDE_PANEL_NOTIFICATION_HISTORY_LIMIT);
+    }
+    const center = document.getElementById('sidePanelNotificationCenter');
+    if (center && !center.open) center.classList.add('has-unread');
+    renderSidePanelNotificationHistory();
+    persistSidePanelNotificationHistory();
+    return sidePanelNotificationHistory[0];
+}
+
+function setupSidePanelNotificationCenter() {
+    const center = document.getElementById('sidePanelNotificationCenter');
+    if (!center) return;
+    center.addEventListener('toggle', () => {
+        if (center.open) center.classList.remove('has-unread');
+    });
+    document.addEventListener('pointerdown', event => {
+        if (center.open && !center.contains(event.target)) center.open = false;
+    });
+    renderSidePanelNotificationHistory();
+}
+
 function cacheCurrentPanelTabState() {
     const key = activePanelTabContext.key;
     if (!key || !activePanelTabContext.activated || !currentWorkspaceSnapshot ||
@@ -522,7 +707,6 @@ function cacheCurrentPanelTabState() {
         preparedDocumentState,
         currentArticleDocument,
         prepareState,
-        selectedStudyTypeOverride,
         manualAnnotationState: { ...manualAnnotationState },
         matchCounts: { ...matchCounts },
         activeWorkspaceView,
@@ -530,6 +714,7 @@ function cacheCurrentPanelTabState() {
         currentWorkspaceSnapshot,
         articleChatVisibleTurnCount,
         currentArticleArchiveProbe,
+        sidePanelNotificationHistory: sidePanelNotificationHistory.map(item => ({ ...item })),
         figureAnalysisState: { ...figureAnalysisState },
         reviewOutlineState: { ...reviewOutlineState }
     });
@@ -553,6 +738,22 @@ function resetPanelArticleState() {
     panelFollowupDraftState.clear();
     figureQuickNavActiveId = '';
     figureQuickNavExpandedFigureId = '';
+    figureKeyboardShortcutArmed = false;
+    lastFigureModuleShortcutPress = {
+        key: '',
+        pressedAt: 0
+    };
+    figureOriginalViewerState = {
+        open: false,
+        tabId: null,
+        figureId: '',
+        captionVisible: false,
+        requestSequence: figureOriginalViewerState.requestSequence + 1
+    };
+    figureCaptionSidebarState = {
+        visible: false,
+        figureId: ''
+    };
     clearTimeout(figureQuickNavHoverTimer);
     figureQuickNavHoverTimer = null;
     articleChatTurnElements.clear();
@@ -578,7 +779,6 @@ function resetPanelArticleState() {
     preparedDocumentState = null;
     currentArticleDocument = null;
     prepareState = 'idle';
-    selectedStudyTypeOverride = '';
     manualAnnotationState = {
         tabId: null,
         documentId: '',
@@ -595,6 +795,8 @@ function resetPanelArticleState() {
     workspaceUiSaveTimer = null;
     currentWorkspaceSnapshot = null;
     currentArticleArchiveProbe = null;
+    sidePanelNotificationHistory = [];
+    renderSidePanelNotificationHistory();
     lastArticlePreparationError = null;
     setArticleArchivePrompt(null);
     renderArticleNavigationTree(null);
@@ -603,7 +805,6 @@ function resetPanelArticleState() {
     renderFigureWorkspaceSnapshot(null);
     renderArticleChatSnapshot(null);
     renderManualAnnotationSummary();
-    renderStudyTypeChooser();
     renderCategories();
     updateApplyButton();
     switchWorkspaceView('analysis', { persist: false });
@@ -633,7 +834,6 @@ function restorePanelTabState(cached) {
     preparedDocumentState = cached.preparedDocumentState || null;
     currentArticleDocument = cached.currentArticleDocument || null;
     prepareState = cached.prepareState || 'idle';
-    selectedStudyTypeOverride = cached.selectedStudyTypeOverride || '';
     manualAnnotationState = { ...cached.manualAnnotationState };
     matchCounts = { ...cached.matchCounts };
     activeWorkspaceView = cached.activeWorkspaceView || 'analysis';
@@ -645,6 +845,9 @@ function restorePanelTabState(cached) {
             Number(currentWorkspaceSnapshot?.chat?.turns?.length) || 0
     );
     currentArticleArchiveProbe = cached.currentArticleArchiveProbe || null;
+    sidePanelNotificationHistory = (Array.isArray(cached.sidePanelNotificationHistory)
+        ? cached.sidePanelNotificationHistory : []).map(item => ({ ...item }));
+    renderSidePanelNotificationHistory();
     reviewOutlineState = { ...reviewOutlineState, ...cached.reviewOutlineState };
     document.getElementById('sidePanelApp')?.classList.remove('is-tab-inactive');
     renderArticleWorkspaceSnapshot(currentWorkspaceSnapshot);
@@ -652,7 +855,6 @@ function restorePanelTabState(cached) {
     setArticleArchivePrompt(currentArticleArchiveProbe);
     renderManualAnnotationSummary();
     syncPreparedSelection();
-    renderStudyTypeChooser();
     renderCategories();
     updateApplyButton();
     switchWorkspaceView(activeWorkspaceView, { persist: false });
@@ -668,8 +870,13 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         await SciLLM.isTabActivated(chrome.storage.session, tab));
     if (requestId !== tabContextRequestSequence) return null;
     if (!force && activePanelTabContext.key === key &&
-        activePanelTabContext.activated === activated) return activePanelTabContext;
+        activePanelTabContext.activated === activated) {
+        void publishSidePanelShortcutScope(tab?.id, activated);
+        return activePanelTabContext;
+    }
 
+    const previousTabId = activePanelTabContext.tabId;
+    const previousActivated = activePanelTabContext.activated;
     cacheCurrentPanelTabState();
     tabContextSequence += 1;
     activePanelTabContext = {
@@ -679,6 +886,10 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         activated,
         tabContextSequence
     };
+    if (previousActivated && Number(previousTabId) !== Number(tab?.id)) {
+        void publishSidePanelShortcutScope(previousTabId, false);
+    }
+    void publishSidePanelShortcutScope(tab?.id, activated);
     resetPanelArticleState();
 
     if (!activated) {
@@ -696,6 +907,8 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         return activePanelTabContext;
     }
 
+    await loadSidePanelNotificationHistory(key);
+    if (requestId !== tabContextRequestSequence) return null;
     const snapshot = await initializeCurrentArticle();
     if (requestId === tabContextRequestSequence && snapshot) cacheCurrentPanelTabState();
     return activePanelTabContext;
@@ -710,11 +923,8 @@ function scheduleActiveTabContextSync(options = {}) {
 }
 
 function setupActiveTabSynchronization() {
-    if (!floatingPanelDetached) {
-        chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
-    }
+    chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-        if (floatingPanelTargetTabId !== null && tabId !== floatingPanelTargetTabId) return;
         if (changeInfo.url) {
             scheduleActiveTabContextSync();
         } else if (changeInfo.status === 'complete' &&
@@ -723,17 +933,19 @@ function setupActiveTabSynchronization() {
         }
     });
     chrome.tabs.onRemoved.addListener(tabId => {
-        if (floatingPanelTargetTabId !== null && tabId === floatingPanelTargetTabId) {
-            renderInactiveTabState({ title: '原论文标签页已关闭' });
-        }
         const prefix = `${Number(tabId)}|`;
         [...panelTabStateCache.keys()].forEach(key => {
             if (key.startsWith(prefix)) panelTabStateCache.delete(key);
         });
     });
     chrome.runtime.onMessage.addListener((message, sender) => {
-        if (message?.type === 'PANEL_TAB_ACTIVATED' && !floatingPanelDetached) {
+        if (message?.type === 'PANEL_TAB_ACTIVATED') {
             scheduleActiveTabContextSync();
+        }
+        if (message?.type === 'SIDE_PANEL_GLOBAL_SHORTCUT' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            runGlobalKeyboardShortcutKey(String(message.key || ''));
         }
         if (message?.type === 'ARTICLE_STRUCTURE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
@@ -750,11 +962,40 @@ function setupActiveTabSynchronization() {
             activePanelTabContext.activated) {
             void refreshArticleWorkspace();
         }
+        if (message?.type === 'FIGURE_ORIGINAL_VIEWER_STATE_CHANGED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+            figureOriginalViewerState = {
+                open: message.open === true,
+                tabId: sender.tab.id,
+                figureId: String(message.figureId || ''),
+                captionVisible: message.captionVisible === true,
+                requestSequence: figureOriginalViewerState.requestSequence + 1
+            };
+            if (message.open === true && message.captionVisible === true &&
+                message.figureId) {
+                showFigureCaptionSidebar(String(message.figureId));
+            } else if (previousCaptionVisible) {
+                hideFigureCaptionSidebar(String(message.figureId || ''));
+            } else if (message.open === true && message.figureId) {
+                followFigureOriginalViewerInSidebar(String(message.figureId));
+            }
+        }
         if (message?.type === 'MANUAL_ANNOTATION_STATE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             applyManualAnnotationStateEvent(message.event, sender.tab.id);
             void refreshArticleWorkspace();
+        }
+        if (message?.type === 'ARTICLE_NOTIFICATION' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            recordSidePanelNotification(
+                message.message,
+                message.level,
+                message.timestamp
+            );
         }
     });
 }
@@ -825,17 +1066,115 @@ function setAllFigureLevelsExpanded(expanded) {
     }
 }
 
+function collapseAllFigurePanels() {
+    for (const key of figurePanelExpansionState.keys()) {
+        figurePanelExpansionState.set(key, false);
+    }
+    document.querySelectorAll(
+        '#figureWorkspace details.workspace-figure-panel-card'
+    ).forEach(details => {
+        details.open = false;
+        figurePanelExpansionState.set(
+            panelWorkspaceKey(details.dataset.figureId, details.dataset.panelId),
+            false
+        );
+    });
+    scheduleActiveWorkspaceUiStateSave();
+}
+
+function openWorkspaceView(viewId) {
+    switchWorkspaceView(viewId);
+    if (viewId !== 'analysis') void refreshArticleWorkspace();
+    if (viewId === 'analysis') void refreshManualAnnotationSummary();
+}
+
+async function jumpToArticleAbbreviationSource(entry, dialog) {
+    const status = document.getElementById('articleAbbreviationStatus');
+    const abbreviation = String(entry?.abbreviation || '').trim();
+    const target = {
+        kind: 'paragraph',
+        paragraphId: String(entry?.paragraphId || ''),
+        sourceKey: String(entry?.sourceKey || ''),
+        navigationRevision: Math.max(0, Number(entry?.navigationRevision) || 0)
+    };
+    if (!target.paragraphId && !target.sourceKey) {
+        if (status) status.textContent = `无法定位 ${abbreviation || '该缩写'} 的原文位置。`;
+        return false;
+    }
+    const focused = await focusWorkspaceSource(target);
+    if (!focused) {
+        if (status) status.textContent = `未找到 ${abbreviation || '该缩写'} 在当前正文中的首次出现位置。`;
+        return false;
+    }
+    if (dialog?.open) dialog.close();
+    showStatus(`已定位 ${abbreviation} 在正文中的首次出现位置。`, 'success');
+    return true;
+}
+
+async function showArticleAbbreviationTable() {
+    const dialog = document.getElementById('articleAbbreviationDialog');
+    const body = document.getElementById('articleAbbreviationTableBody');
+    const status = document.getElementById('articleAbbreviationStatus');
+    const empty = document.getElementById('articleAbbreviationEmpty');
+    if (!dialog || !body || !status || !empty) return;
+    let snapshot = currentWorkspaceSnapshot;
+    if (!Array.isArray(snapshot?.paragraphs) || !snapshot.paragraphs.length) {
+        snapshot = await refreshArticleWorkspace();
+    }
+    const abbreviationParagraphs = (Array.isArray(snapshot?.paragraphs)
+        ? snapshot.paragraphs : []).filter(paragraph =>
+        String(paragraph?.sectionKind || '').toLowerCase() !== 'reference');
+    const entries = SciLLM.extractArticleAbbreviations?.(abbreviationParagraphs) || [];
+    body.replaceChildren();
+    entries.forEach(entry => {
+        const row = document.createElement('tr');
+        row.className = 'abbreviation-table-row';
+        row.title = `跳转到 ${entry.abbreviation} 在正文中首次出现的位置`;
+        const createJumpCell = (text, label) => {
+            const cell = document.createElement('td');
+            const button = createWorkspaceElement(
+                'button', 'abbreviation-table-jump', text
+            );
+            button.type = 'button';
+            button.setAttribute(
+                'aria-label',
+                `${label}；跳转到正文首次出现位置`
+            );
+            button.addEventListener('click', () => {
+                void jumpToArticleAbbreviationSource(entry, dialog);
+            });
+            cell.appendChild(button);
+            return cell;
+        };
+        const abbreviation = createJumpCell(
+            entry.abbreviation,
+            `缩写 ${entry.abbreviation}`
+        );
+        const fullName = createJumpCell(
+            entry.fullName,
+            `${entry.abbreviation} 的全称 ${entry.fullName}`
+        );
+        row.append(abbreviation, fullName);
+        body.appendChild(row);
+    });
+    empty.hidden = entries.length > 0;
+    status.textContent = entries.length
+        ? `本地提取 ${entries.length} 项 · 未调用 LLM · 已按缩写字母顺序排列`
+        : '未调用 LLM；仅保留正文中有明确全称对应关系的缩写。';
+    if (!dialog.open) dialog.showModal();
+}
+
 function setupWorkspaceNavigation() {
     document.querySelectorAll('[data-workspace-target]').forEach(button => {
         button.addEventListener('click', () => {
-            const target = button.dataset.workspaceTarget;
-            switchWorkspaceView(target);
-            if (target !== 'analysis') void refreshArticleWorkspace();
-            if (target === 'analysis') void refreshManualAnnotationSummary();
+            openWorkspaceView(button.dataset.workspaceTarget);
         });
     });
     document.getElementById('refreshArticleNavigation')?.addEventListener('click', () => {
         void refreshArticleWorkspace({ announce: true });
+    });
+    document.getElementById('showArticleAbbreviations')?.addEventListener('click', () => {
+        void showArticleAbbreviationTable();
     });
     document.getElementById('expandAllOutlineLevels')?.addEventListener('click', () => {
         setAllOutlineLevelsExpanded(true);
@@ -857,6 +1196,8 @@ function setupWorkspaceNavigation() {
             forceRefresh: Boolean(currentWorkspaceSnapshot?.reviewOutline)
         });
     });
+    setupFigureKeyboardNavigation();
+    setupGlobalKeyboardShortcuts();
     switchWorkspaceView(activeWorkspaceView);
 }
 
@@ -880,308 +1221,31 @@ function setupSidePanelSettingsShortcut() {
     });
 }
 
-function updateFloatingPanelButton(active = false) {
-    const button = document.getElementById('toggleFloatingSidePanel');
-    if (!button) return;
-    const pinned = floatingPanelDetached || active;
-    const supportsAlwaysOnTop =
-        typeof globalThis.documentPictureInPicture?.requestWindow === 'function';
-    button.setAttribute('aria-pressed', String(pinned));
-    button.setAttribute('aria-label', pinned
-        ? '关闭悬浮置顶阅读助手' : '悬浮置顶阅读助手');
-    if (pinned) {
-        button.title = '关闭悬浮阅读助手';
-    } else if (supportsAlwaysOnTop) {
-        button.title = '悬浮在所有软件上方（默认宽度 780px，双击悬浮窗左缘恢复）';
-    } else {
-        button.title = '打开独立阅读窗口；当前浏览器不支持跨软件置顶';
-    }
-}
-
-function notifyFloatingPanelPinState(pinned, tabId = null) {
-    return chrome.runtime.sendMessage({
-        type: 'FLOATING_SIDE_PANEL_PIN_STATE',
-        pinned: pinned === true,
-        tabId: Number.isInteger(Number(tabId)) ? Number(tabId) : null
-    }).catch(() => null);
-}
-
-function restoreFloatingPanelDefaultWidth(pipWindow) {
-    if (!pipWindow || pipWindow.closed) return false;
-    const currentHeight = Math.max(
-        FLOATING_PANEL_MIN_HEIGHT,
-        Math.round(pipWindow.outerHeight || pipWindow.innerHeight || FLOATING_PANEL_MIN_HEIGHT)
-    );
-    pipWindow.document.body.dataset.widthResetRequested = String(Date.now());
-    pipWindow.document.body.dataset.requestedWidth = String(FLOATING_PANEL_DEFAULT_WIDTH);
-    try {
-        pipWindow.resizeTo(FLOATING_PANEL_DEFAULT_WIDTH, currentHeight);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-async function configureFloatingPanelWindow(pipWindow, targetTabId) {
-    const pipDocument = pipWindow.document;
-    pipDocument.title = 'SCI论文阅读助手 · 悬浮置顶';
-    pipDocument.documentElement.lang = 'zh-CN';
-    pipDocument.documentElement.style.height = '100%';
-    pipDocument.body.replaceChildren();
-    pipDocument.body.style.cssText = 'margin:0;height:100%;overflow:hidden;background:#eef3f7';
-    pipDocument.body.dataset.defaultWidth = String(FLOATING_PANEL_DEFAULT_WIDTH);
-
-    const frame = pipDocument.createElement('iframe');
-    const frameUrl = new URL(chrome.runtime.getURL('popup.html'));
-    frameUrl.searchParams.set('displayMode', 'pip');
-    if (Number.isInteger(Number(targetTabId))) {
-        frameUrl.searchParams.set('targetTabId', String(Number(targetTabId)));
-    }
-    frame.src = frameUrl.href;
-    frame.title = 'SCI论文阅读助手悬浮侧栏';
-    frame.style.cssText = 'display:block;width:100%;height:100%;border:0;background:#eef3f7';
-
-    const resetEdge = pipDocument.createElement('button');
-    resetEdge.type = 'button';
-    resetEdge.className = 'floating-panel-width-reset-edge';
-    resetEdge.setAttribute('aria-label', '双击恢复悬浮侧栏默认宽度');
-    resetEdge.title = '双击恢复默认宽度 780px';
-    resetEdge.style.cssText = [
-        'position:fixed', 'z-index:2147483647', 'inset:0 auto 0 0', 'width:8px',
-        'padding:0', 'border:0', 'border-radius:0', 'background:transparent',
-        'cursor:col-resize', 'transition:background .1s ease'
-    ].join(';');
-    resetEdge.addEventListener('pointerenter', () => {
-        resetEdge.style.background = 'rgba(11,71,120,.18)';
-    });
-    resetEdge.addEventListener('pointerleave', () => {
-        resetEdge.style.background = 'transparent';
-    });
-    resetEdge.addEventListener('dblclick', event => {
-        event.preventDefault();
-        restoreFloatingPanelDefaultWidth(pipWindow);
-    });
-    resetEdge.addEventListener('keydown', event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        restoreFloatingPanelDefaultWidth(pipWindow);
-    });
-    await new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = error => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeoutId);
-            frame.removeEventListener('load', handleLoad);
-            frame.removeEventListener('error', handleError);
-            if (error) reject(error);
-            else resolve();
-        };
-        const handleLoad = () => finish();
-        const handleError = () => finish(new Error('悬浮侧栏加载失败'));
-        frame.addEventListener('load', handleLoad);
-        frame.addEventListener('error', handleError);
-        const timeoutId = setTimeout(
-            () => finish(new Error('悬浮侧栏加载超时')), 5000
-        );
-        // Register readiness listeners before attachment. A cached extension
-        // iframe can otherwise finish synchronously and leave a blank PiP
-        // window until the timeout closes it.
-        pipDocument.body.append(frame, resetEdge);
-        try {
-            if (frame.contentDocument?.readyState === 'complete') handleLoad();
-        } catch {
-            // The load listener remains authoritative if a browser isolates
-            // the extension iframe from its Picture-in-Picture opener.
+function appendScientificInlineText(parent, value) {
+    const text = String(value ?? '');
+    const tokenPattern = /<(sup|sub)>([^<\n]*)<\/\1>/gi;
+    let cursor = 0;
+    for (const match of text.matchAll(tokenPattern)) {
+        if (match.index > cursor) {
+            parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
         }
-    });
-}
-
-async function closeFloatingCompatibilityWindow() {
-    if (floatingCompatibilityWindowId === null) return false;
-    const windowId = Number(floatingCompatibilityWindowId);
-    floatingCompatibilityWindowId = null;
-    if (!Number.isInteger(windowId) || !chrome.windows?.remove) return false;
-    await chrome.windows.remove(windowId).catch(() => {});
-    return true;
-}
-
-async function openFloatingCompatibilityWindow(targetTabId, sourceError = null) {
-    if (!chrome.windows?.create) {
-        throw sourceError || new Error('当前浏览器既不支持置顶画中画，也无法创建独立阅读窗口');
+        const script = document.createElement(match[1].toLowerCase());
+        script.textContent = match[2];
+        parent.appendChild(script);
+        cursor = match.index + match[0].length;
     }
-    const requestedHeight = Math.max(
-        FLOATING_PANEL_MIN_HEIGHT,
-        Math.min(960, Math.round((screen.availHeight || 960) - 56))
-    );
-    const frameUrl = new URL(chrome.runtime.getURL('popup.html'));
-    frameUrl.searchParams.set('displayMode', 'window');
-    if (Number.isInteger(Number(targetTabId))) {
-        frameUrl.searchParams.set('targetTabId', String(Number(targetTabId)));
+    if (cursor < text.length) {
+        parent.appendChild(document.createTextNode(text.slice(cursor)));
     }
-    const currentWindow = await chrome.windows.getCurrent().catch(() => null);
-    const left = Number.isFinite(currentWindow?.left) && Number.isFinite(currentWindow?.width)
-        ? Math.max(0, Math.round(currentWindow.left + currentWindow.width -
-            FLOATING_PANEL_DEFAULT_WIDTH - 24))
-        : undefined;
-    const top = Number.isFinite(currentWindow?.top)
-        ? Math.max(0, Math.round(currentWindow.top + 24))
-        : undefined;
-    const createData = {
-        url: frameUrl.href,
-        type: 'popup',
-        focused: true,
-        width: FLOATING_PANEL_DEFAULT_WIDTH,
-        height: requestedHeight
-    };
-    if (Number.isInteger(left)) createData.left = left;
-    if (Number.isInteger(top)) createData.top = top;
-    let compatibilityWindow;
-    try {
-        compatibilityWindow = await chrome.windows.create(createData);
-    } catch (error) {
-        if (!/bounds|screen space/i.test(String(error?.message || error)) ||
-            (!('left' in createData) && !('top' in createData))) {
-            throw error;
-        }
-        delete createData.left;
-        delete createData.top;
-        compatibilityWindow = await chrome.windows.create(createData);
-    }
-    const createdWindowId = Number(compatibilityWindow?.id);
-    floatingCompatibilityWindowId =
-        Number.isInteger(createdWindowId) && createdWindowId >= 0 ? createdWindowId : null;
-    await notifyFloatingPanelPinState(true, targetTabId);
-    updateFloatingPanelButton(true);
-    showStatus(
-        '已打开独立阅读窗口。当前浏览器缺少跨软件置顶能力；升级到支持 Document Picture-in-Picture 的新版 Chrome/Edge 后可真正置顶。',
-        'warning'
-    );
-    return compatibilityWindow;
-}
-
-function requestSystemFloatingPanelWindow(options, timeoutMs = 4500) {
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = (error, pipWindow = null) => {
-            if (settled) {
-                if (pipWindow && !pipWindow.closed) pipWindow.close();
-                return;
-            }
-            settled = true;
-            clearTimeout(timeoutId);
-            if (error) reject(error);
-            else resolve(pipWindow);
-        };
-        const timeoutId = setTimeout(() => {
-            finish(new Error('浏览器未能及时创建系统置顶窗口'));
-        }, Math.max(1000, Number(timeoutMs) || 4500));
-        Promise.resolve()
-            .then(() => documentPictureInPicture.requestWindow(options))
-            .then(pipWindow => finish(null, pipWindow))
-            .catch(error => finish(error));
-    });
-}
-
-async function openFloatingSidePanel() {
-    const button = document.getElementById('toggleFloatingSidePanel');
-    if (floatingPanelDetached) {
-        await notifyFloatingPanelPinState(false, floatingPanelTargetTabId);
-        window.top.close();
-        return;
-    }
-    if (floatingCompatibilityWindowId !== null &&
-        Number.isInteger(Number(floatingCompatibilityWindowId))) {
-        await closeFloatingCompatibilityWindow();
-        updateFloatingPanelButton(false);
-        await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
-        return;
-    }
-    const existing = globalThis.documentPictureInPicture?.window || floatingPanelWindow;
-    if (existing && !existing.closed) {
-        existing.close();
-        return;
-    }
-    if (button) {
-        button.disabled = true;
-        button.setAttribute('aria-busy', 'true');
-    }
-    const targetTab = activePanelTabContext.tabId !== null
-        ? { id: activePanelTabContext.tabId } : await queryPanelTargetTab();
-    try {
-        if (!globalThis.documentPictureInPicture?.requestWindow) {
-            await openFloatingCompatibilityWindow(targetTab?.id);
-            return;
-        }
-        const requestedHeight = Math.max(
-            FLOATING_PANEL_MIN_HEIGHT,
-            Math.min(960, Math.round((screen.availHeight || 960) - 56))
-        );
-        const pipWindow = await requestSystemFloatingPanelWindow({
-            width: FLOATING_PANEL_DEFAULT_WIDTH,
-            height: requestedHeight
-        });
-        floatingPanelWindow = pipWindow;
-        pipWindow.addEventListener('pagehide', () => {
-            floatingPanelWindow = null;
-            updateFloatingPanelButton(false);
-            void notifyFloatingPanelPinState(false, targetTab?.id);
-        }, { once: true });
-        // Render the window immediately. Synchronizing background pin state
-        // can be slower when the user has many tabs and must not leave the
-        // newly opened window blank.
-        const pinStatePromise = notifyFloatingPanelPinState(true, targetTab?.id);
-        await configureFloatingPanelWindow(pipWindow, targetTab?.id);
-        updateFloatingPanelButton(true);
-        void pinStatePromise.then(response => {
-            if (response?.success === false) {
-                showStatus(`悬浮窗已打开，但跨标签页保持失败：${response.error || '未知错误'}`, 'warning');
-            }
-        });
-        showStatus('悬浮置顶阅读助手已打开。', 'success');
-    } catch (error) {
-        if (floatingPanelWindow && !floatingPanelWindow.closed) floatingPanelWindow.close();
-        floatingPanelWindow = null;
-        updateFloatingPanelButton(false);
-        try {
-            await openFloatingCompatibilityWindow(targetTab?.id, error);
-        } catch (fallbackError) {
-            await notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
-            throw fallbackError;
-        }
-    } finally {
-        if (button) {
-            button.disabled = false;
-            button.removeAttribute('aria-busy');
-        }
-    }
-}
-
-function setupFloatingSidePanelControls() {
-    const button = document.getElementById('toggleFloatingSidePanel');
-    if (!button) return;
-    document.body.dataset.displayMode = floatingPanelEmbedded
-        ? 'pip' : floatingPanelCompatibility ? 'window' : 'side-panel';
-    updateFloatingPanelButton(false);
-    if (!floatingPanelDetached && chrome.windows?.onRemoved) {
-        chrome.windows.onRemoved.addListener(windowId => {
-            if (Number(windowId) !== Number(floatingCompatibilityWindowId)) return;
-            floatingCompatibilityWindowId = null;
-            updateFloatingPanelButton(false);
-            void notifyFloatingPanelPinState(false, activePanelTabContext.tabId);
-        });
-    }
-    button.addEventListener('click', () => {
-        void openFloatingSidePanel().catch(error => {
-            showStatus(`无法打开悬浮侧栏：${error.message}`, 'error');
-        });
-    });
+    return parent;
 }
 
 function createWorkspaceElement(tagName, className = '', text = '') {
     const element = document.createElement(tagName);
     if (className) element.className = className;
-    if (text) element.textContent = text;
+    if (text !== '' && text !== null && text !== undefined) {
+        appendScientificInlineText(element, text);
+    }
     return element;
 }
 
@@ -1234,6 +1298,7 @@ async function runSingleParagraphSummary(
     const paragraphId = String(paragraph?.paragraphId || '');
     if (!isCurrentParagraphSummaryTask(panelContext) || !paragraphId ||
         workspaceParagraphSummaryState.get(paragraphId)?.loading) return;
+    if (!requireUsableLlm('段落概述')) return;
     workspaceParagraphSummaryState.set(paragraphId, { loading: true, error: '' });
     renderArticleNavigationTree(currentWorkspaceSnapshot);
     try {
@@ -1305,8 +1370,48 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         details.dataset.nodeKey = nodeKey;
         details.dataset.treeDepth = String(Math.min(3, Math.max(0, depth)));
         details.dataset.leaf = String(leaf);
-        details.open = hadTree ? previouslyOpen.has(nodeKey) : depth === 0;
+        details.open = hadTree
+            ? previouslyOpen.has(nodeKey)
+            : depth === 0 && !leaf;
         const summary = createWorkspaceElement('summary', 'workspace-tree-summary');
+        const analysisToggle = document.createElement('input');
+        analysisToggle.type = 'checkbox';
+        analysisToggle.className = 'workspace-section-analysis-toggle';
+        analysisToggle.checked = node.analysisSelected === true;
+        analysisToggle.indeterminate = node.analysisIndeterminate === true;
+        analysisToggle.disabled = !Array.isArray(node.analysisSectionIds) ||
+            node.analysisSectionIds.length === 0;
+        analysisToggle.setAttribute(
+            'aria-label',
+            `${node.displayTitle || node.title || '当前章节'}参与规则和 LLM 分析`
+        );
+        analysisToggle.addEventListener('click', event => event.stopPropagation());
+        analysisToggle.addEventListener('change', async event => {
+            event.stopPropagation();
+            const panelContext = capturePanelContext();
+            analysisToggle.disabled = true;
+            try {
+                const response = await sendTabMessage(panelContext.tabId, {
+                    action: 'setArticleAnalysisSectionSelection',
+                    sectionIds: node.analysisSectionIds,
+                    selected: analysisToggle.checked
+                });
+                if (!isCurrentPanelContext(panelContext)) return;
+                if (!response?.success || !response.snapshot) {
+                    throw new Error(response?.error || 'SECTION_SELECTION_FAILED');
+                }
+                renderArticleWorkspaceSnapshot(response.snapshot);
+                showStatus(
+                    `已更新分析范围：当前包含 ${response.selectedParagraphCount || 0} 段正文。`,
+                    'success'
+                );
+            } catch (error) {
+                if (!isCurrentPanelContext(panelContext)) return;
+                analysisToggle.checked = !analysisToggle.checked;
+                analysisToggle.disabled = false;
+                showStatus(`无法更新章节分析范围：${error.message}`, 'error');
+            }
+        });
         const toggle = createWorkspaceElement(
             'button', 'workspace-tree-toggle', details.open ? '\u2212' : '+'
         );
@@ -1327,7 +1432,8 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         details.addEventListener('toggle', updateToggle);
         updateToggle();
         const jump = createWorkspaceElement(
-            'button', 'workspace-tree-jump', node.title || '未命名章节'
+            'button', 'workspace-tree-jump',
+            node.displayTitle || node.title || '未命名章节'
         );
         jump.type = 'button';
         jump.addEventListener('click', event => {
@@ -1340,7 +1446,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         const count = createWorkspaceElement(
             'span', 'workspace-tree-count', `${node.paragraphCount || 0} 段`
         );
-        summary.append(toggle, jump, count);
+        summary.append(analysisToggle, toggle, jump, count);
         details.appendChild(summary);
         if (leaf) {
             const nodeParagraphs = workspaceParagraphsForNode(snapshot, node);
@@ -1360,11 +1466,35 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                 } else if (saved?.summary) {
                     label = `第 ${index + 1} 段 · ${saved.summary}`;
                 }
+                label = saved?.summary
+                    ? `第 ${index + 1} 段 · ${saved.summary}`
+                    : `第 ${index + 1} 段 · ${String(
+                        paragraph.displayText || paragraph.text || ''
+                    ).slice(0, 96)}`;
+                className = 'workspace-paragraph-jump' +
+                    (task.loading ? ' is-loading' : '') +
+                    (task.error ? ' is-error' : '');
                 const button = createWorkspaceElement('button', className, label);
                 button.type = 'button';
                 button.dataset.paragraphId = paragraphId;
                 button.disabled = task.loading || reviewOutlineState.running;
                 button.title = task.error || paragraph.text || label;
+                button.addEventListener('click', async event => {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    const panelContext = capturePanelContext(paragraphSummaryTaskGeneration);
+                    const focused = await focusWorkspaceSource({
+                        kind: 'paragraph',
+                        paragraphId,
+                        sourceKey: paragraph.sourceKey,
+                        navigationRevision: Number(paragraph.navigationRevision ||
+                            snapshot?.revision || 0)
+                    }, panelContext);
+                    if (!isCurrentParagraphSummaryTask(panelContext)) return;
+                    if (!focused) {
+                        showStatus('无法定位该段落；请刷新文章导航后重试。', 'error');
+                    }
+                }, { capture: true });
                 button.addEventListener('click', async () => {
                     const panelContext = capturePanelContext(paragraphSummaryTaskGeneration);
                     const target = {
@@ -1381,13 +1511,34 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                         return;
                     }
                     if (saved?.summary) {
-                    } else if (llmSettingsState?.effectiveMode !== 'llm') {
-                        showStatus('请先配置可用的 LLM API', 'error');
+                    } else if (!hasUsableLlm()) {
+                        showStatus(llmUnavailableMessage('段落概述'), 'error');
                     } else {
                         void runSingleParagraphSummary(paragraph, panelContext);
                     }
                 });
-                list.appendChild(button);
+                const summarize = createWorkspaceElement(
+                    'button',
+                    'workspace-paragraph-summary-action',
+                    '概述'
+                );
+                summarize.type = 'button';
+                summarize.disabled = task.loading || reviewOutlineState.running;
+                summarize.title = task.error
+                    ? `概述生成失败：${task.error}` : '生成该段概述';
+                summarize.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!hasUsableLlm()) {
+                        showStatus(llmUnavailableMessage('段落概述'), 'error');
+                        return;
+                    }
+                    const panelContext = capturePanelContext(paragraphSummaryTaskGeneration);
+                    void runSingleParagraphSummary(paragraph, panelContext);
+                });
+                const row = createWorkspaceElement('div', 'workspace-paragraph-row');
+                row.append(button, summarize);
+                list.appendChild(row);
             });
             details.appendChild(list);
         }
@@ -1444,6 +1595,7 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
         return;
     }
     const sourceMeta = {
+        semantic: { label: '智能检索', className: 'is-semantic' },
         manual: { label: '手动标注', className: 'is-manual' },
         llm: { label: 'AI 自动', className: 'is-llm' },
         regex: { label: '规则自动', className: 'is-regex' },
@@ -1489,6 +1641,12 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
                 );
                 button.type = 'button';
                 button.style.setProperty('--workspace-highlight-color', category.color || '#0b4778');
+                button.title = (sourceValue.items || []).slice(0, 8).map(item => {
+                    const lines = [item.quote || ''];
+                    if (item.sourceQuery) lines.push(`检索意图：${item.sourceQuery}`);
+                    if (item.note) lines.push(`备注：${item.note}`);
+                    return lines.filter(Boolean).join('\n');
+                }).filter(Boolean).join('\n\n');
                 button.addEventListener('click', () => void focusWorkspaceSource({
                     kind: 'highlight', highlightId: sourceValue.items?.[0]?.highlightId || ''
                 }));
@@ -1527,12 +1685,39 @@ function formatFigurePanelHeader(panel) {
     return parts.filter(Boolean).join(' \u00b7 ');
 }
 
-const PANEL_FOLLOWUP_OPTIONS = Object.freeze([
-    ['grouping', '分组含义与设置'],
-    ['technique_principle', '实验技术原理'],
-    ['axes_reading', '横纵坐标含义与读图方法'],
-    ['sample_information', '实验所用样本信息']
-]);
+function appendFigurePanelSummary(summary, panel, {
+    panelId = '',
+    loading = false,
+    analyzed = false,
+    formattedHeader = ''
+} = {}) {
+    const normalizedPanelId = String(panel?.panel || panelId || '?').toUpperCase();
+    const label = createWorkspaceElement(
+        'span', 'workspace-panel-id', `Panel ${normalizedPanelId}`
+    );
+    let detail = loading ? '正在解读' : '待解读';
+    if (analyzed) {
+        detail = String(formattedHeader || formatFigurePanelHeader(panel))
+            .replace(new RegExp(`^Panel\\s+${normalizedPanelId}\\s*·\\s*`, 'i'), '');
+    }
+    const description = createWorkspaceElement(
+        'span', 'workspace-panel-description', detail
+    );
+    summary.replaceChildren(label, description);
+    return summary;
+}
+
+function panelFollowupPresetOptions() {
+    return (Array.isArray(llmSettingsState?.settings?.figurePanelFollowupPresets)
+        ? llmSettingsState.settings.figurePanelFollowupPresets : [])
+        .filter(preset => preset?.id && preset?.name && preset?.prompt)
+        .map(preset => ({
+            id: String(preset.id),
+            topic: String(preset.topic || ''),
+            name: String(preset.name),
+            prompt: String(preset.prompt)
+        }));
+}
 
 function panelWorkspaceKey(figureId, panelId) {
     return `${String(figureId || '')}::${String(panelId || '').toUpperCase()}`;
@@ -1559,6 +1744,42 @@ function getPanelFollowupDraft(figureId, panelId) {
     return panelFollowupDraftState.get(key);
 }
 
+function appendPanelFollowupHistory(root, figure, panelId, currentAnswer = null) {
+    const history = Array.isArray(figure?.panelFollowupHistories?.[panelId])
+        ? figure.panelFollowupHistories[panelId] : [];
+    const priorHistory = currentAnswer?.answer && history.length >= 2
+        ? history.slice(0, -2) : history;
+    if (!priorHistory.length) return;
+
+    const details = document.createElement('details');
+    details.className = 'workspace-panel-followup-history';
+    details.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = `历史追问（${Math.ceil(priorHistory.length / 2)} 轮）`;
+    details.appendChild(summary);
+    const turns = createWorkspaceElement('div', 'workspace-panel-followup-history-turns');
+    for (let index = 0; index < priorHistory.length; index += 2) {
+        const round = createWorkspaceElement('section', 'workspace-panel-followup-history-round');
+        round.appendChild(createWorkspaceElement(
+            'strong',
+            'workspace-panel-followup-history-round-title',
+            `第 ${Math.floor(index / 2) + 1} 轮`
+        ));
+        priorHistory.slice(index, index + 2).forEach(item => {
+            const assistant = item?.role === 'assistant';
+            const message = createWorkspaceElement(
+                'p',
+                `workspace-panel-followup-history-message is-${assistant ? 'assistant' : 'user'}`
+            );
+            message.textContent = `${assistant ? '回答' : '问题'}：${String(item?.content || '')}`;
+            round.appendChild(message);
+        });
+        turns.appendChild(round);
+    }
+    details.appendChild(turns);
+    root.appendChild(details);
+}
+
 function createPanelFollowupControl(figure, panel) {
     const panelId = String(panel?.panel || '').toUpperCase();
     const followupKey = panelWorkspaceKey(figure.figureId, panelId);
@@ -1578,17 +1799,19 @@ function createPanelFollowupControl(figure, panel) {
     const chooser = createWorkspaceElement('div', 'workspace-panel-followup-chooser');
     chooser.hidden = !draft.open;
     const choices = createWorkspaceElement('div', 'workspace-panel-followup-options');
-    PANEL_FOLLOWUP_OPTIONS.forEach(([topic, label]) => {
+    const presets = panelFollowupPresetOptions();
+    presets.forEach(preset => {
         const choice = createWorkspaceElement('label', 'workspace-panel-followup-option');
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.value = topic;
-        checkbox.checked = draft.topics.has(topic);
+        checkbox.value = preset.id;
+        checkbox.checked = draft.topics.has(preset.id);
         checkbox.addEventListener('change', () => {
-            if (checkbox.checked) draft.topics.add(topic);
-            else draft.topics.delete(topic);
+            if (checkbox.checked) draft.topics.add(preset.id);
+            else draft.topics.delete(preset.id);
         });
-        choice.append(checkbox, document.createTextNode(label));
+        choice.title = preset.prompt;
+        choice.append(checkbox, document.createTextNode(preset.name));
         choices.appendChild(choice);
     });
     const customLabel = createWorkspaceElement('label', 'workspace-panel-followup-custom');
@@ -1605,10 +1828,22 @@ function createPanelFollowupControl(figure, panel) {
     submit.type = 'button';
     submit.disabled = loading;
     submit.addEventListener('click', () => {
-        const topics = Array.from(chooser.querySelectorAll('input[type="checkbox"]:checked'))
+        const presetIds = Array.from(chooser.querySelectorAll('input[type="checkbox"]:checked'))
             .map(input => input.value);
-        const question = customQuestion.value.trim();
-        if (!topics.length && !question) {
+        const selectedPresets = presets.filter(preset => presetIds.includes(preset.id));
+        const topics = [...new Set(selectedPresets.map(preset => preset.topic).filter(Boolean))];
+        const customPresetQuestions = selectedPresets
+            .filter(preset => !preset.topic)
+            .map(preset => `${preset.name}：${preset.prompt}`);
+        const question = [
+            customQuestion.value.trim(),
+            ...customPresetQuestions
+        ].filter(Boolean).join('\n\n');
+        const historyLabel = [
+            selectedPresets.map(preset => preset.name).join('、'),
+            customQuestion.value.trim()
+        ].filter(Boolean).join('；');
+        if (!presetIds.length && !question) {
             showStatus('请选择追问方向或输入自定义问题', 'error');
             return;
         }
@@ -1619,7 +1854,9 @@ function createPanelFollowupControl(figure, panel) {
             localStatus.classList.add('is-loading');
             localStatus.textContent = `正在生成 Panel ${panelId} 的回答，完成后会自动定位到这里…`;
         }
-        void runFigurePanelFollowup(figure.figureId, panelId, topics, question)
+        void runFigurePanelFollowup(
+            figure.figureId, panelId, topics, question, historyLabel
+        )
             .catch(error => showStatus('Panel 追问失败：' + error.message, 'error'));
     });
     chooser.append(choices, customLabel, submit);
@@ -1636,6 +1873,7 @@ function createPanelFollowupControl(figure, panel) {
             ? `正在生成 Panel ${panelId} 的回答，完成后会自动定位到这里…`
             : (answer?.answer ? '回答已生成并显示在下方。' : '提交后，回答会直接显示在此 Panel 内。')
     ));
+    appendPanelFollowupHistory(root, figure, panelId, answer);
     if (answer?.answer) {
         const result = createWorkspaceElement('section', 'workspace-panel-followup-answer');
         result.tabIndex = -1;
@@ -1710,7 +1948,7 @@ function appendFigurePanelCatalog(parent, figure, result) {
     if (!panelIds.length) {
         parent.appendChild(createWorkspaceElement(
             'p', 'workspace-figure-panel-empty',
-            '图注中没有稳定的 Panel 标签；仍可使用上方“单图精读”。'
+            '图注中没有稳定的 Panel 标签；仍可使用上方“解图”。'
         ));
         return;
     }
@@ -1730,10 +1968,15 @@ function appendFigurePanelCatalog(parent, figure, result) {
         panelDetails.addEventListener('toggle', () => {
             figurePanelExpansionState.set(panelKey, panelDetails.open);
         });
-        panelDetails.appendChild(createWorkspaceElement(
-            'summary', '', analyzed
-                ? formatFigurePanelHeader(panel)
-                : `Panel ${panelId} · ${loading ? '正在解读' : '待解读'}`
+        panelDetails.appendChild(appendFigurePanelSummary(
+            createWorkspaceElement('summary'),
+            panel,
+            {
+                panelId,
+                loading,
+                analyzed,
+                formattedHeader: analyzed ? formatFigurePanelHeader(panel) : ''
+            }
         ));
         const actions = createWorkspaceElement('div', 'workspace-panel-actions');
         const analyze = createWorkspaceElement(
@@ -1741,7 +1984,10 @@ function appendFigurePanelCatalog(parent, figure, result) {
             loading ? '正在解读此 Panel…' : (analyzed ? '重新解读此 Panel' : '解读此 Panel')
         );
         analyze.type = 'button';
-        analyze.disabled = loading || llmSettingsState?.effectiveMode !== 'llm';
+        analyze.disabled = loading;
+        analyze.title = hasUsableLlm()
+            ? '解读此 Panel'
+            : llmUnavailableMessage('Panel 解读');
         analyze.addEventListener('click', () => {
             figureExpansionState.set(figure.figureId, true);
             figurePanelExpansionState.set(panelKey, true);
@@ -1751,7 +1997,10 @@ function appendFigurePanelCatalog(parent, figure, result) {
             'button', 'btn btn-secondary workspace-panel-ask', '提问此 Panel'
         );
         ask.type = 'button';
-        ask.disabled = llmSettingsState?.effectiveMode !== 'llm';
+        ask.disabled = false;
+        ask.title = hasUsableLlm()
+            ? '围绕此 Panel 继续追问'
+            : llmUnavailableMessage('Panel 追问');
         actions.append(analyze, ask);
         panelDetails.appendChild(actions);
         if (analyzed) {
@@ -1930,6 +2179,11 @@ function getFigureProgressEntries(status) {
 }
 
 function hasRunningFigureProgress(status = figureAnalysisState) {
+    const phase = String(status?.phase || '').toLowerCase();
+    if (status?.running === false ||
+        ['idle', 'completed', 'partial', 'failed', 'cancelled'].includes(phase)) {
+        return false;
+    }
     return status?.running === true || getFigureProgressEntries(status)
         .some(progress => progress?.running === true);
 }
@@ -2141,14 +2395,18 @@ function workspaceAnchorToken(value) {
     return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80) || 'item';
 }
 
-function navigateFigureQuickAnchor(figureId, panelId = '') {
+function navigateFigureQuickAnchor(figureId, panelId = '', {
+    collapsePanels = false
+} = {}) {
     figureQuickNavActiveId = figureId;
     const figures = currentWorkspaceSnapshot?.figures?.figures || [];
     figures.forEach(figure => {
         figureExpansionState.set(figure.figureId, figure.figureId === figureId);
     });
     for (const key of figurePanelExpansionState.keys()) {
-        if (!key.startsWith(`${figureId}::`)) figurePanelExpansionState.set(key, false);
+        if (collapsePanels || !key.startsWith(`${figureId}::`)) {
+            figurePanelExpansionState.set(key, false);
+        }
     }
     figureExpansionState.set(figureId, true);
     if (panelId) figurePanelExpansionState.set(panelWorkspaceKey(figureId, panelId), true);
@@ -2160,6 +2418,567 @@ function navigateFigureQuickAnchor(figureId, panelId = '') {
         const target = document.querySelector(selector);
         target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         target?.querySelector('summary')?.focus({ preventScroll: true });
+    });
+}
+
+function followFigureOriginalViewerInSidebar(figureId) {
+    if (!figureId) return;
+    switchWorkspaceView('figures');
+    navigateFigureQuickAnchor(figureId, '', { collapsePanels: true });
+}
+
+function figureCaptionPanelLabel(block, blockCount) {
+    const panels = Array.isArray(block?.panels)
+        ? block.panels.map(value => String(value || '').toUpperCase()).filter(Boolean)
+        : [];
+    if (!panels.length) return blockCount > 1 ? '整图说明' : '整图图注';
+    const contiguous = panels.every((panel, index) =>
+        index === 0 ||
+        panel.charCodeAt(0) === panels[index - 1].charCodeAt(0) + 1
+    );
+    return contiguous && panels.length > 1
+        ? `Panel ${panels[0]}–${panels.at(-1)}`
+        : `Panel ${panels.join('、')}`;
+}
+
+function figureCaptionBlocks(figure) {
+    const stored = Array.isArray(figure?.captionBlocks)
+        ? figure.captionBlocks.filter(block => String(block?.text || '').trim())
+        : [];
+    if (stored.length) return stored;
+    if (typeof SciLLM.splitFigureCaptionByPanelGroups === 'function') {
+        return SciLLM.splitFigureCaptionByPanelGroups(figure?.caption || '');
+    }
+    const caption = String(figure?.caption || '').trim();
+    return caption ? [{ kind: 'overview', panels: [], text: caption }] : [];
+}
+
+function renderFigureCaptionSidebarSnapshot(
+    snapshot = currentWorkspaceSnapshot,
+    figureId = figureCaptionSidebarState.figureId
+) {
+    const container = document.getElementById('figureWorkspace');
+    if (!container) return;
+    container.classList.add('is-caption-mode');
+    container.replaceChildren();
+    const figures = Array.isArray(snapshot?.figures?.figures)
+        ? snapshot.figures.figures : [];
+    const figure = figures.find(item => item.figureId === figureId) || null;
+    const summary = document.getElementById('figureWorkspaceSummary');
+    if (summary) {
+        summary.textContent = figure
+            ? `${figure.figureLabel || figure.figureId} · 图注`
+            : '正在读取当前 Figure 图注…';
+    }
+    renderFigureQuickNav([]);
+    if (!figure) {
+        container.appendChild(createWorkspaceElement(
+            'div',
+            'workspace-empty',
+            '暂未取得当前 Figure 图注，正在刷新论文图片目录…'
+        ));
+        return;
+    }
+    const heading = createWorkspaceElement(
+        'section',
+        'workspace-figure-caption-heading'
+    );
+    heading.append(
+        createWorkspaceElement(
+            'h3',
+            'workspace-figure-caption-title',
+            figure.figureLabel || figure.figureId || 'Figure 图注'
+        ),
+        createWorkspaceElement(
+            'p',
+            'workspace-figure-caption-hint',
+            '以下内容直接来自网页图注；合并描述的 Panel 保持为同一块。'
+        )
+    );
+    container.appendChild(heading);
+    const blocks = figureCaptionBlocks(figure);
+    if (!blocks.length) {
+        container.appendChild(createWorkspaceElement(
+            'div',
+            'workspace-empty',
+            '该 Figure 暂无可读取的网页图注。'
+        ));
+        return;
+    }
+    blocks.forEach(block => {
+        const section = createWorkspaceElement(
+            'section',
+            'workspace-figure-caption-block'
+        );
+        const panels = Array.isArray(block?.panels)
+            ? block.panels.map(String).filter(Boolean) : [];
+        section.dataset.panels = panels.join(',');
+        section.append(
+            createWorkspaceElement(
+                'h4',
+                'workspace-figure-caption-block-title',
+                figureCaptionPanelLabel(block, blocks.length)
+            ),
+            createWorkspaceElement(
+                'p',
+                'workspace-figure-caption-block-text',
+                String(block?.text || '').trim()
+            )
+        );
+        container.appendChild(section);
+    });
+}
+
+function showFigureCaptionSidebar(figureId) {
+    if (!figureId) return;
+    figureCaptionSidebarState = {
+        visible: true,
+        figureId
+    };
+    switchWorkspaceView('figures');
+    renderFigureCaptionSidebarSnapshot(currentWorkspaceSnapshot, figureId);
+    const figures = currentWorkspaceSnapshot?.figures?.figures || [];
+    if (!figures.some(figure => figure.figureId === figureId)) {
+        void refreshArticleWorkspace();
+    }
+}
+
+function hideFigureCaptionSidebar(figureId = '') {
+    const restoreFigureId = String(
+        figureId || figureCaptionSidebarState.figureId || ''
+    );
+    figureCaptionSidebarState = {
+        visible: false,
+        figureId: ''
+    };
+    const container = document.getElementById('figureWorkspace');
+    container?.classList.remove('is-caption-mode');
+    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    if (restoreFigureId) {
+        followFigureOriginalViewerInSidebar(restoreFigureId);
+    }
+}
+
+function isEditableKeyboardTarget(target) {
+    return target instanceof Element && Boolean(target.closest(
+        'input, textarea, select, [contenteditable="true"], [contenteditable=""], dialog'
+    ));
+}
+
+function figureKeyboardNumber(figure) {
+    const direct = Number(figure?.figureNumber);
+    if (Number.isInteger(direct) && direct > 0) return direct;
+    const labelMatch = String(figure?.figureLabel || '')
+        .match(/\b(?:figure|fig\.?)\s*([0-9]{1,3})\b/i);
+    if (labelMatch) return Number(labelMatch[1]);
+    const idMatch = String(figure?.figureId || '').match(/^figure-([0-9]{1,3})$/i);
+    return idMatch ? Number(idMatch[1]) : 0;
+}
+
+function currentFigureKeyboardTarget(figures) {
+    const items = Array.isArray(figures) ? figures : [];
+    return items.find(figure => figure.figureId === figureQuickNavActiveId) ||
+        items.find(figure => figureExpansionState.get(figure.figureId) === true) ||
+        items.find(figure => !figure.isSupplemental) ||
+        items[0] || null;
+}
+
+function navigateFigureKeyboardTarget(figure, panelId = '') {
+    if (!figure?.figureId) return false;
+    const normalizedPanelId = String(panelId || '').trim().toUpperCase();
+    if (normalizedPanelId) {
+        const result = figure.activeDepth === 'standard'
+            ? figure.standard : (figure.deep || figure.standard);
+        const panelIds = figureCatalogPanelIds(figure, result);
+        if (!panelIds.includes(normalizedPanelId)) {
+            showStatus(
+                `${figure.figureLabel || figure.figureId} 没有可跳转的 Panel ${normalizedPanelId}`,
+                'error'
+            );
+            return false;
+        }
+    }
+    switchWorkspaceView('figures');
+    navigateFigureQuickAnchor(figure.figureId, normalizedPanelId);
+    void focusWorkspaceSource({
+        kind: 'figure',
+        figureId: figure.figureId
+    }).catch(() => false);
+    showStatus(
+        normalizedPanelId
+            ? `已跳转到 ${figure.figureLabel || figure.figureId} · Panel ${normalizedPanelId}`
+            : `已跳转到 ${figure.figureLabel || figure.figureId}`,
+        'success'
+    );
+    return true;
+}
+
+function figureKeyboardResult(figure) {
+    return figure?.activeDepth === 'standard'
+        ? figure.standard : (figure?.deep || figure?.standard);
+}
+
+function currentFigurePanelKeyboardTarget(figure, panelIds) {
+    const focusedPanel = document.activeElement instanceof Element
+        ? document.activeElement.closest('.workspace-figure-panel-card[data-panel-id]')
+        : null;
+    if (focusedPanel?.dataset?.figureId === figure?.figureId &&
+        panelIds.includes(String(focusedPanel.dataset.panelId || '').toUpperCase())) {
+        return String(focusedPanel.dataset.panelId || '').toUpperCase();
+    }
+    return panelIds.find(panelId =>
+        figurePanelExpansionState.get(panelWorkspaceKey(figure.figureId, panelId)) === true
+    ) || panelIds[0] || '';
+}
+
+function adjacentFigureKeyboardTarget(figures, currentFigure, offset) {
+    if (!figures.length) return null;
+    const foundIndex = figures.findIndex(figure =>
+        figure.figureId === currentFigure?.figureId
+    );
+    const currentIndex = foundIndex >= 0 ? foundIndex : 0;
+    return figures[(currentIndex + offset + figures.length) % figures.length] || null;
+}
+
+function handleFigureKeyboardShortcut(event) {
+    if (!figureKeyboardShortcutArmed || event.defaultPrevented || event.isComposing ||
+        event.repeat || event.ctrlKey || event.metaKey || event.altKey ||
+        isEditableKeyboardTarget(event.target)) return;
+    const figures = Array.isArray(currentWorkspaceSnapshot?.figures?.figures)
+        ? currentWorkspaceSnapshot.figures.figures : [];
+    if (!figures.length) return;
+    let handled = false;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        const currentFigure = currentFigureKeyboardTarget(figures);
+        const targetFigure = adjacentFigureKeyboardTarget(
+            figures,
+            currentFigure,
+            event.key === 'ArrowLeft' ? -1 : 1
+        );
+        if (targetFigure) {
+            const panelIds = figureCatalogPanelIds(
+                targetFigure,
+                figureKeyboardResult(targetFigure)
+            );
+            handled = navigateFigureKeyboardTarget(
+                targetFigure,
+                panelIds.includes('A') ? 'A' : (panelIds[0] || '')
+            );
+        }
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        const figure = currentFigureKeyboardTarget(figures);
+        if (figure) {
+            const panelIds = figureCatalogPanelIds(figure, figureKeyboardResult(figure));
+            const currentPanelId = currentFigurePanelKeyboardTarget(figure, panelIds);
+            const currentIndex = Math.max(0, panelIds.indexOf(currentPanelId));
+            const targetIndex = Math.max(
+                0,
+                Math.min(
+                    panelIds.length - 1,
+                    currentIndex + (event.key === 'ArrowUp' ? -1 : 1)
+                )
+            );
+            if (panelIds[targetIndex]) {
+                handled = navigateFigureKeyboardTarget(figure, panelIds[targetIndex]);
+            }
+        }
+    } else if (/^[1-9]$/.test(event.key)) {
+        const requestedNumber = Number(event.key);
+        const figure = figures.find(item =>
+            !item.isSupplemental && figureKeyboardNumber(item) === requestedNumber
+        );
+        if (figure) {
+            handled = navigateFigureKeyboardTarget(figure);
+        } else {
+            showStatus(`当前论文没有 Figure ${requestedNumber}`, 'error');
+            handled = true;
+        }
+    }
+    if (handled) event.preventDefault();
+}
+
+function currentKeyboardShortcuts() {
+    return SciLLM.normalizeKeyboardShortcuts(
+        llmSettingsState?.settings?.keyboardShortcuts
+    );
+}
+
+function clickShortcutControl(elementId) {
+    const control = document.getElementById(elementId);
+    if (!control) return false;
+    control.click();
+    return true;
+}
+
+function runGlobalKeyboardShortcut(actionId) {
+    const workspaceTargets = {
+        figures: 'figures',
+        navigation: 'navigation',
+        analysis: 'analysis',
+        highlights: 'highlights',
+        chat: 'chat'
+    };
+    if (workspaceTargets[actionId]) {
+        openWorkspaceView(workspaceTargets[actionId]);
+        return true;
+    }
+    if (actionId === 'collapseFigurePanels') {
+        if (activeWorkspaceView !== 'figures') return false;
+        collapseAllFigurePanels();
+        return true;
+    }
+    const controlIds = {
+        zotero: 'exportEnhancedSnapshotToZotero',
+        ppt: 'exportPptMaterials',
+        scanLocal: 'scanArticleWorkspace',
+        saveLocal: 'saveCurrentArticleWorkspace',
+        deleteLocal: 'clearArticleWorkspace',
+        exportJson: 'exportCurrentArticleArchive',
+        importJson: 'importCurrentArticleArchiveButton',
+        settings: 'openSidePanelSettings'
+    };
+    return clickShortcutControl(controlIds[actionId]);
+}
+
+async function openFigureOneOriginalFromShortcut() {
+    switchWorkspaceView('figures');
+    let snapshot = currentWorkspaceSnapshot;
+    let figures = Array.isArray(snapshot?.figures?.figures)
+        ? snapshot.figures.figures : [];
+    if (!figures.length) {
+        snapshot = await refreshArticleWorkspace();
+        figures = Array.isArray(snapshot?.figures?.figures)
+            ? snapshot.figures.figures : [];
+    }
+    const figure = figures.find(item =>
+        !item.isSupplemental && figureKeyboardNumber(item) === 1
+    );
+    if (!figure?.figureId) {
+        showStatus('当前论文没有可打开的 Figure 1', 'error');
+        return false;
+    }
+    followFigureOriginalViewerInSidebar(figure.figureId);
+    try {
+        await showFigureOriginalImage(figure.figureId);
+        return true;
+    } catch (error) {
+        showStatus(error.message, 'error');
+        return false;
+    }
+}
+
+function runGlobalKeyboardShortcutKey(value) {
+    if (figureOriginalViewerState.open) return false;
+    const key = SciLLM.normalizeKeyboardShortcutKey(value, '');
+    if (!key) return false;
+    const shortcuts = currentKeyboardShortcuts();
+    const definition = SciLLM.KEYBOARD_SHORTCUT_DEFINITIONS.find(item =>
+        shortcuts[item.actionId] === key
+    );
+    if (!definition) return false;
+    if (definition.actionId === 'figures') {
+        const pressedAt = Date.now();
+        const doublePressed = lastFigureModuleShortcutPress.key === key &&
+            pressedAt - lastFigureModuleShortcutPress.pressedAt <= 450;
+        lastFigureModuleShortcutPress = doublePressed
+            ? { key: '', pressedAt: 0 }
+            : { key, pressedAt };
+        if (doublePressed) {
+            void openFigureOneOriginalFromShortcut();
+            return true;
+        }
+    } else {
+        lastFigureModuleShortcutPress = {
+            key: '',
+            pressedAt: 0
+        };
+    }
+    return runGlobalKeyboardShortcut(definition.actionId);
+}
+
+function handleGlobalKeyboardShortcut(event) {
+    if (event.defaultPrevented || event.isComposing ||
+        event.repeat || event.ctrlKey || event.metaKey || event.altKey ||
+        isEditableKeyboardTarget(event.target) ||
+        !runGlobalKeyboardShortcutKey(event.key)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+}
+
+function setupGlobalKeyboardShortcuts() {
+    document.addEventListener('keydown', handleGlobalKeyboardShortcut, true);
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'local' || !changes.sciLlmSettingsV2) return;
+        void sendLlmMessage({ type: 'LLM_GET_SETTINGS' })
+            .then(nextState => {
+                llmSettingsState = nextState;
+                return publishSidePanelShortcutScope();
+            })
+            .catch(() => undefined);
+    });
+}
+
+function figureOriginalViewerDirection(key) {
+    return {
+        ArrowLeft: 'previous',
+        ArrowRight: 'next',
+        ArrowUp: 'first',
+        ArrowDown: 'last'
+    }[key] || '';
+}
+
+async function syncFigureOriginalViewerState() {
+    const tab = await queryPanelTargetTab();
+    if (!tab?.id || !activePanelTabContext.activated ||
+        Number(tab.id) !== Number(activePanelTabContext.tabId)) {
+        const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+        figureOriginalViewerState = {
+            open: false,
+            tabId: tab?.id ?? null,
+            figureId: '',
+            captionVisible: false,
+            requestSequence: figureOriginalViewerState.requestSequence + 1
+        };
+        if (previousCaptionVisible) hideFigureCaptionSidebar();
+        return figureOriginalViewerState;
+    }
+    const requestSequence = ++figureOriginalViewerState.requestSequence;
+    try {
+        const response = await sendTabMessage(tab.id, {
+            action: 'getFigureOriginalImageState'
+        });
+        if (requestSequence !== figureOriginalViewerState.requestSequence) {
+            return figureOriginalViewerState;
+        }
+        const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+        figureOriginalViewerState = {
+            open: response?.success === true && response?.open === true,
+            tabId: tab.id,
+            figureId: String(response?.figureId || ''),
+            captionVisible: response?.captionVisible === true,
+            requestSequence
+        };
+        if (figureOriginalViewerState.open &&
+            figureOriginalViewerState.captionVisible &&
+            figureOriginalViewerState.figureId) {
+            showFigureCaptionSidebar(figureOriginalViewerState.figureId);
+        } else if (previousCaptionVisible) {
+            hideFigureCaptionSidebar(figureOriginalViewerState.figureId);
+        }
+    } catch (_) {
+        if (requestSequence === figureOriginalViewerState.requestSequence) {
+            const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+            figureOriginalViewerState = {
+                open: false,
+                tabId: tab.id,
+                figureId: '',
+                captionVisible: false,
+                requestSequence
+            };
+            if (previousCaptionVisible) hideFigureCaptionSidebar();
+        }
+    }
+    return figureOriginalViewerState;
+}
+
+async function forwardFigureOriginalViewerKey(key) {
+    const tabId = Number(figureOriginalViewerState.tabId);
+    if (!Number.isInteger(tabId)) return;
+    const requestSequence = ++figureOriginalViewerState.requestSequence;
+    const direction = figureOriginalViewerDirection(key);
+    const figureNumber = /^[0-9]$/.test(key)
+        ? (key === '0' ? 10 : Number(key)) : 0;
+    const isNavigation = Boolean(direction || figureNumber);
+    if (key === 'Escape') {
+        const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+        figureOriginalViewerState = {
+            open: false,
+            tabId,
+            figureId: '',
+            captionVisible: false,
+            requestSequence
+        };
+        if (previousCaptionVisible) hideFigureCaptionSidebar();
+    }
+    try {
+        const response = await sendTabMessage(tabId, isNavigation ? {
+            action: 'navigateFigureOriginalImage',
+            direction,
+            figureNumber
+        } : {
+            action: 'closeFigureOriginalImage'
+        });
+        if (requestSequence !== figureOriginalViewerState.requestSequence) return;
+        if (isNavigation && response?.success) {
+            figureOriginalViewerState = {
+                open: response.open !== false,
+                tabId,
+                figureId: String(response.figureId || ''),
+                captionVisible: response.captionVisible === true,
+                requestSequence
+            };
+            if (response.figureId) {
+                if (response.captionVisible === true) {
+                    showFigureCaptionSidebar(String(response.figureId));
+                } else {
+                    followFigureOriginalViewerInSidebar(String(response.figureId));
+                }
+            }
+        } else if (!isNavigation || response?.code === 'VIEWER_NOT_OPEN') {
+            const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+            figureOriginalViewerState = {
+                open: false,
+                tabId,
+                figureId: '',
+                captionVisible: false,
+                requestSequence
+            };
+            if (previousCaptionVisible) hideFigureCaptionSidebar();
+        }
+    } catch (_) {
+        if (requestSequence === figureOriginalViewerState.requestSequence) {
+            const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+            figureOriginalViewerState = {
+                open: false,
+                tabId,
+                figureId: '',
+                captionVisible: false,
+                requestSequence
+            };
+            if (previousCaptionVisible) hideFigureCaptionSidebar();
+        }
+    }
+}
+
+function handleFigureOriginalViewerKeyboard(event) {
+    const direction = figureOriginalViewerDirection(event.key);
+    const figureNumberKey = /^[0-9]$/.test(event.key);
+    if (!figureOriginalViewerState.open ||
+        (!direction && !figureNumberKey && event.key !== 'Escape') ||
+        event.defaultPrevented || event.isComposing || event.repeat ||
+        event.ctrlKey || event.metaKey || event.altKey ||
+        isEditableKeyboardTarget(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void forwardFigureOriginalViewerKey(event.key);
+}
+
+function setupFigureKeyboardNavigation() {
+    const eligibleSelector = '#sidePanelApp';
+    document.addEventListener('keydown', handleFigureOriginalViewerKeyboard, true);
+    document.addEventListener('pointermove', event => {
+        figureKeyboardShortcutArmed = event.target instanceof Element &&
+            Boolean(event.target.closest(eligibleSelector));
+    }, { passive: true });
+    document.addEventListener('pointerleave', () => {
+        figureKeyboardShortcutArmed = false;
+    });
+    document.addEventListener('keydown', handleFigureKeyboardShortcut);
+    document.querySelector(eligibleSelector)?.addEventListener('pointerenter', () => {
+        void syncFigureOriginalViewerState();
+    });
+    window.addEventListener('focus', () => {
+        void syncFigureOriginalViewerState();
     });
 }
 
@@ -2252,6 +3071,27 @@ function renderFigureQuickNav(figures) {
         figureMarkers.appendChild(item);
     });
     nav.appendChild(figureMarkers);
+    const closeAllPanelFlyouts = () => {
+        nav.querySelectorAll('.figure-quick-nav-item.show-panels').forEach(item => {
+            item.classList.remove('show-panels');
+        });
+        figureQuickNavExpandedFigureId = '';
+    };
+    const scheduleCloseAllPanelFlyouts = () => {
+        clearTimeout(figureQuickNavHoverTimer);
+        figureQuickNavHoverTimer = setTimeout(() => {
+            if (!nav.matches(':hover') && !nav.matches(':focus-within')) {
+                closeAllPanelFlyouts();
+            }
+        }, 45);
+    };
+    // Item-level leave handlers cover normal pointer travel. These container
+    // handlers also close a flyout after fast movement, forced pointer events,
+    // or a focus transition that skips the originating item.
+    nav.onmouseleave = scheduleCloseAllPanelFlyouts;
+    nav.onfocusout = event => {
+        if (!nav.contains(event.relatedTarget)) scheduleCloseAllPanelFlyouts();
+    };
     nav.hidden = false;
 }
 
@@ -2277,6 +3117,14 @@ function syncFigureQuickNavFromScroll() {
 function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
     const container = document.getElementById('figureWorkspace');
     if (!container) return;
+    if (figureCaptionSidebarState.visible) {
+        renderFigureCaptionSidebarSnapshot(
+            snapshot,
+            figureCaptionSidebarState.figureId
+        );
+        return;
+    }
+    container.classList.remove('is-caption-mode');
     container.replaceChildren();
     const figures = Array.isArray(snapshot?.figures?.figures) ? snapshot.figures.figures : [];
     const snapshotStatus = snapshot?.figures?.status || null;
@@ -2325,13 +3173,15 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
         );
         details.appendChild(summary);
         const actions = createWorkspaceElement('div', 'workspace-figure-actions');
-        const jump = createWorkspaceElement('button', 'btn btn-secondary workspace-figure-action', '\u5b9a\u4f4d\u7f51\u9875\u56fe\u6ce8');
+        const jump = createWorkspaceElement(
+            'button', 'btn btn-secondary workspace-figure-action', '图注'
+        );
         jump.type = 'button';
         jump.addEventListener('click', () => void focusWorkspaceSource({
             kind: 'figure', figureId: figure.figureId
         }));
         const original = createWorkspaceElement(
-            'button', 'btn btn-secondary workspace-figure-action', '查看高清原图'
+            'button', 'btn btn-secondary workspace-figure-action', '原图'
         );
         original.type = 'button';
         original.disabled = !figure.hasImage;
@@ -2341,11 +3191,14 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
         });
         const analyze = createWorkspaceElement(
             'button', 'btn btn-figure workspace-figure-action',
-            loading ? '正在精读此图…' : (result ? '\u91cd\u65b0\u7cbe\u8bfb\u6b64\u56fe' : '\u5355\u56fe\u7cbe\u8bfb')
+            loading ? '解图中…' : '解图'
         );
         analyze.type = 'button';
         analyze.classList.add('workspace-figure-analyze-action');
-        analyze.disabled = loading || llmSettingsState?.effectiveMode !== 'llm';
+        analyze.disabled = loading;
+        analyze.title = hasUsableLlm()
+            ? '解读此 Figure'
+            : llmUnavailableMessage('Figure 解读');
         analyze.addEventListener('click', () => void runSingleFigureAnalysis(figure.figureId));
         actions.append(jump, original, analyze);
         details.appendChild(actions);
@@ -2504,9 +3357,31 @@ function getArticleChatProfiles() {
     return order.map(profileId => [profileId, profiles[profileId]])
         .filter(([, profile]) => {
             const config = profile?.config || {};
-            return config.hasApiKey === true && Boolean(String(config.model || '').trim()) &&
+            return (profile.providerId === 'codex-local' || config.hasApiKey === true) &&
+                Boolean(String(config.model || '').trim()) &&
                 (profile.providerId !== 'openai-compatible' || Boolean(String(config.baseUrl || '').trim()));
         });
+}
+
+function hasUsableLlm() {
+    if (llmSettingsState?.llmReady === true) return true;
+    if (llmSettingsState?.settings?.consentGranted !== true) return false;
+    return getArticleChatProfiles().length > 0;
+}
+
+function llmUnavailableMessage(featureLabel = '该功能') {
+    const profiles = getArticleChatProfiles();
+    if (profiles.length > 0 &&
+        llmSettingsState?.settings?.consentGranted !== true) {
+        return `${featureLabel}的模型已配置；请在设置的“正文发送许可”中勾选同意并保存。`;
+    }
+    return `请先在设置中保存可供${featureLabel}使用的模型。`;
+}
+
+function requireUsableLlm(featureLabel) {
+    if (hasUsableLlm()) return true;
+    showStatus(llmUnavailableMessage(featureLabel), 'error');
+    return false;
 }
 
 function renderArticleChatProfileOptions() {
@@ -2534,6 +3409,239 @@ function renderArticleChatProfileOptions() {
     select.disabled = profiles.length === 0;
 }
 
+function renderArticleChatHighlightCategoryOptions() {
+    const select = document.getElementById('articleChatHighlightCategory');
+    if (!select) return;
+    const previous = select.value;
+    const previousColor = document.getElementById('articleChatHighlightColor')?.value;
+    const categories = getAvailableCategoryEntries(
+        llmSettingsState?.availableCategories,
+        'llm'
+    );
+    select.replaceChildren();
+    categories.forEach(([categoryId, category]) => {
+        const option = document.createElement('option');
+        option.value = categoryId;
+        option.textContent = category.name || categoryId;
+        option.dataset.categoryName = category.name || categoryId;
+        option.dataset.categoryColor = category.color || '#2F80ED';
+        select.appendChild(option);
+    });
+    const preferred = categories.some(([categoryId]) => categoryId === previous)
+        ? previous
+        : categories.some(([categoryId]) => categoryId === 'semantic_match')
+            ? 'semantic_match' : (categories[0]?.[0] || '');
+    select.value = preferred;
+    select.disabled = categories.length === 0;
+    if (!(previous && preferred === previous && /^#[0-9a-f]{6}$/i.test(previousColor || ''))) {
+        syncArticleChatHighlightColor();
+    }
+}
+
+function syncArticleChatHighlightColor() {
+    const select = document.getElementById('articleChatHighlightCategory');
+    const color = document.getElementById('articleChatHighlightColor');
+    const selected = select?.selectedOptions?.[0];
+    if (color && selected?.dataset.categoryColor) {
+        color.value = selected.dataset.categoryColor;
+    }
+}
+
+function articleChatOutlineScopes(snapshot = currentWorkspaceSnapshot) {
+    const results = [];
+    const seen = new Set();
+    const visit = (nodes, depth = 0) => {
+        (Array.isArray(nodes) ? nodes : []).forEach(node => {
+            const sectionId = String(node?.sectionId || '');
+            const title = String(node?.displayTitle || node?.title || '').trim();
+            const sectionIds = (Array.isArray(node?.analysisSectionIds)
+                ? node.analysisSectionIds : [sectionId])
+                .map(value => String(value || '')).filter(Boolean);
+            const paragraphCount = (Array.isArray(snapshot?.paragraphs)
+                ? snapshot.paragraphs : []).filter(paragraph =>
+                sectionIds.includes(String(paragraph?.sectionId || ''))
+            ).length;
+            if (sectionId && title && sectionIds.length && !seen.has(sectionId) &&
+                paragraphCount > 0) {
+                seen.add(sectionId);
+                results.push({
+                    id: sectionId,
+                    name: title,
+                    detail: `${String(node?.sectionKind || '章节')} · ${paragraphCount} 段`,
+                    sectionIds,
+                    depth: Math.max(0, depth)
+                });
+            }
+            visit(node?.children, depth + 1);
+        });
+    };
+    visit(snapshot?.nodes);
+    return results.slice(0, 120);
+}
+
+function selectedWorkspaceAnalysisSectionIds(snapshot = currentWorkspaceSnapshot) {
+    const selected = new Set();
+    const visit = nodes => {
+        (Array.isArray(nodes) ? nodes : []).forEach(node => {
+            if (node?.analysisSelected === true) {
+                (Array.isArray(node.analysisSectionIds) ? node.analysisSectionIds : [])
+                    .map(String).filter(Boolean).forEach(sectionId => selected.add(sectionId));
+                return;
+            }
+            visit(node?.children);
+        });
+    };
+    visit(snapshot?.nodes);
+    return [...selected];
+}
+
+function articleChatQuickPrompts() {
+    return (Array.isArray(llmSettingsState?.settings?.articleChatQuickPrompts)
+        ? llmSettingsState.settings.articleChatQuickPrompts : [])
+        .filter(item => item?.id && item?.name && item?.prompt)
+        .map(item => ({
+            id: String(item.id),
+            name: String(item.name),
+            detail: String(item.prompt),
+            prompt: String(item.prompt)
+        }));
+}
+
+function renderArticleChatContextScopes() {
+    const container = document.getElementById('articleChatContextScopes');
+    if (!container) return;
+    container.replaceChildren();
+    articleChatContextScopes.forEach(scope => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'article-chat-context-chip';
+        button.dataset.scopeId = scope.id;
+        button.title = `移除章节范围：${scope.name}`;
+        const label = document.createElement('span');
+        appendScientificInlineText(label, `@${scope.name}`);
+        const icon = document.createElement('i');
+        icon.className = 'ph ph-x';
+        icon.setAttribute('aria-hidden', 'true');
+        button.append(label, icon);
+        container.appendChild(button);
+    });
+    container.hidden = articleChatContextScopes.size === 0;
+}
+
+function articleChatContextScopePayload() {
+    const sectionIds = [];
+    const sectionTitles = [];
+    const seen = new Set();
+    articleChatContextScopes.forEach(scope => {
+        sectionTitles.push(scope.name);
+        scope.sectionIds.forEach(sectionId => {
+            if (!seen.has(sectionId)) {
+                seen.add(sectionId);
+                sectionIds.push(sectionId);
+            }
+        });
+    });
+    return { sectionIds, sectionTitles };
+}
+
+function articleChatInputTrigger(input) {
+    const caret = Math.max(0, Number(input?.selectionStart) || 0);
+    const prefix = String(input?.value || '').slice(0, caret);
+    const match = prefix.match(/(^|\s)([@/])([^\s@/]*)$/u);
+    if (!match) return null;
+    return {
+        symbol: match[2],
+        query: match[3].normalize('NFKC').toLowerCase(),
+        start: caret - match[2].length - match[3].length,
+        end: caret
+    };
+}
+
+function closeArticleChatCommandMenu() {
+    const menu = document.getElementById('articleChatCommandMenu');
+    if (menu) {
+        menu.hidden = true;
+        menu.replaceChildren();
+    }
+    articleChatCommandItems = [];
+    articleChatCommandActiveIndex = -1;
+    articleChatCommandTrigger = null;
+}
+
+function setArticleChatCommandActive(index) {
+    if (!articleChatCommandItems.length) return;
+    articleChatCommandActiveIndex =
+        (index + articleChatCommandItems.length) % articleChatCommandItems.length;
+    document.querySelectorAll('.article-chat-command-option').forEach((node, itemIndex) => {
+        const active = itemIndex === articleChatCommandActiveIndex;
+        node.classList.toggle('is-active', active);
+        node.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (active) node.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function updateArticleChatCommandMenu() {
+    const input = document.getElementById('articleChatQuestion');
+    const menu = document.getElementById('articleChatCommandMenu');
+    if (!input || !menu) return;
+    const trigger = articleChatInputTrigger(input);
+    if (!trigger) {
+        closeArticleChatCommandMenu();
+        return;
+    }
+    const source = trigger.symbol === '@'
+        ? articleChatOutlineScopes()
+        : articleChatQuickPrompts();
+    const items = source.filter(item => {
+        if (!trigger.query) return true;
+        return `${item.name} ${item.detail}`.normalize('NFKC').toLowerCase()
+            .includes(trigger.query);
+    }).slice(0, 12);
+    if (!items.length) {
+        closeArticleChatCommandMenu();
+        return;
+    }
+    articleChatCommandTrigger = trigger;
+    articleChatCommandItems = items;
+    articleChatCommandActiveIndex = 0;
+    menu.replaceChildren();
+    items.forEach((item, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'article-chat-command-option';
+        button.dataset.commandIndex = String(index);
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
+        const name = document.createElement('strong');
+        appendScientificInlineText(name, `${trigger.symbol}${item.name}`);
+        const meta = document.createElement('em');
+        meta.textContent = trigger.symbol === '@' ? item.detail : '快捷提示';
+        const detail = document.createElement('small');
+        detail.textContent = item.detail;
+        button.append(name, meta, detail);
+        menu.appendChild(button);
+    });
+    menu.hidden = false;
+}
+
+function selectArticleChatCommand(index = articleChatCommandActiveIndex) {
+    const item = articleChatCommandItems[index];
+    const trigger = articleChatCommandTrigger;
+    const input = document.getElementById('articleChatQuestion');
+    if (!item || !trigger || !input) return false;
+    if (trigger.symbol === '@') {
+        articleChatContextScopes.set(item.id, item);
+        input.setRangeText('', trigger.start, trigger.end, 'end');
+        renderArticleChatContextScopes();
+    } else {
+        const replacement = `${item.prompt} `;
+        input.setRangeText(replacement, trigger.start, trigger.end, 'end');
+    }
+    closeArticleChatCommandMenu();
+    input.focus();
+    return true;
+}
+
 function normalizeArticleChatCitationText(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 }
@@ -2552,16 +3660,16 @@ function articleChatCitationStatusText(status, reason = '') {
     return '待核验：没有找到唯一对应的原文段落';
 }
 
-function applyArticleChatCitationState(button, verification, evidenceIndex = 0, label = '') {
+function applyArticleChatCitationState(button, verification, citationNumber = 1, label = '') {
     const status = verification?.status || 'missing';
     button.classList.remove('is-verified', 'is-ambiguous', 'is-missing', 'is-stale');
     button.classList.add(`is-${status}`);
     button.dataset.verificationStatus = status;
     button.dataset.candidateCount = String(verification?.candidateCount || 0);
     button.disabled = status !== 'verified';
-    button.textContent = status === 'verified' ? String(evidenceIndex + 1) : '待核验';
+    button.textContent = status === 'verified' ? String(citationNumber) : '待核验';
     const statusText = status === 'verified'
-        ? `参考原文 ${evidenceIndex + 1} · ${label || '正文段落'}`
+        ? `参考原文 ${citationNumber} · ${label || '正文段落'}`
         : articleChatCitationStatusText(status, verification?.reason);
     button.title = statusText;
     button.setAttribute('aria-label', statusText);
@@ -2599,7 +3707,7 @@ async function focusArticleChatCitation(item, snapshot, button = null) {
         const focused = Boolean(response?.success && response?.focused);
         if (!focused && isCurrentPanelContext(panelContext)) {
             if (button?.isConnected) applyArticleChatCitationState(
-                button, citationResult, Number(button.dataset.evidenceIndex) || 0,
+                button, citationResult, Number(button.dataset.citationNumber) || 1,
                 item?.sectionTitle || '正文段落'
             );
             showStatus(articleChatCitationStatusText(
@@ -2614,18 +3722,19 @@ async function focusArticleChatCitation(item, snapshot, button = null) {
     }
 }
 
-function createArticleChatInlineCitation(item, evidenceIndex, snapshot) {
+function createArticleChatInlineCitation(item, evidenceIndex, snapshot, citationNumber) {
     const verification = resolveArticleChatEvidenceTarget(item, snapshot);
     const button = createWorkspaceElement(
-        'button', 'article-chat-inline-citation', String(evidenceIndex + 1)
+        'button', 'article-chat-inline-citation', String(citationNumber)
     );
     button.type = 'button';
     button.dataset.evidenceIndex = String(evidenceIndex);
+    button.dataset.citationNumber = String(citationNumber);
     button.dataset.paragraphId = verification.target?.paragraphId || '';
     button.dataset.sourceKey = verification.target?.sourceKey || '';
     const label = item?.sectionTitle || '正文段落';
     const quote = String(item?.quote || item?.support || '').trim();
-    applyArticleChatCitationState(button, verification, evidenceIndex, label);
+    applyArticleChatCitationState(button, verification, citationNumber, label);
     if (verification.status === 'verified' && quote) {
         button.title += `\n${quote}`;
     }
@@ -2637,13 +3746,13 @@ function createArticleChatInlineCitation(item, evidenceIndex, snapshot) {
 
 function appendArticleChatInlineMarkdown(parent, value, context = {}) {
     const text = String(value || '');
-    const tokenPattern = /(\[\[\d{1,2}\]\]|<sup>[^<\n]+<\/sup>|<sub>[^<\n]+<\/sub>|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+    const tokenPattern = /(\[\[\d{1,3}\]\]|<sup>[^<\n]+<\/sup>|<sub>[^<\n]+<\/sub>|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/gi;
     let cursor = 0;
     for (const match of text.matchAll(tokenPattern)) {
         if (match.index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
         const token = match[0];
-        const citationMatch = token.match(/^\[\[(\d{1,2})\]\]$/);
-        const scriptMatch = token.match(/^<(sup|sub)>([^<\n]+)<\/\1>$/);
+        const citationMatch = token.match(/^\[\[(\d{1,3})\]\]$/);
+        const scriptMatch = token.match(/^<(sup|sub)>([^<\n]+)<\/\1>$/i);
         if (citationMatch) {
             const marker = citationMatch[1];
             const evidenceIndex = (Array.isArray(context.evidence) ? context.evidence : [])
@@ -2651,7 +3760,10 @@ function appendArticleChatInlineMarkdown(parent, value, context = {}) {
             const evidenceItem = evidenceIndex >= 0 ? context.evidence[evidenceIndex] : null;
             if (evidenceItem) {
                 parent.appendChild(createArticleChatInlineCitation(
-                    evidenceItem, evidenceIndex, context.snapshot
+                    evidenceItem,
+                    evidenceIndex,
+                    context.snapshot,
+                    Math.max(0, Number(context.citationNumberOffset) || 0) + evidenceIndex + 1
                 ));
                 context.citationIndexes?.add(evidenceIndex);
             } else {
@@ -2659,7 +3771,7 @@ function appendArticleChatInlineMarkdown(parent, value, context = {}) {
             }
         } else if (scriptMatch) {
             parent.appendChild(createWorkspaceElement(
-                scriptMatch[1], '', scriptMatch[2]
+                scriptMatch[1].toLowerCase(), '', scriptMatch[2]
             ));
         } else if (token.startsWith('`')) {
             parent.appendChild(createWorkspaceElement('code', '', token.slice(1, -1)));
@@ -2785,6 +3897,15 @@ function appendArticleChatEvidence(parent, message, snapshot, inlineCitationInde
 }
 
 function articleChatStatusText(turn = {}) {
+    if (turn.intent === 'highlight' && turn.highlightError) {
+        return `检索已完成，但原文高亮定位失败：${turn.highlightError}`;
+    }
+    if (turn.intent === 'highlight' && turn.status === 'completed') {
+        return `智能检索完成，已在原文高亮 ${Number(turn.matchCount) || 0} 处匹配。`;
+    }
+    if (turn.intent === 'highlight' && turn.status === 'generating') {
+        return '正在理解检索意图并核对可回定位的原文证据…';
+    }
     if (turn.status === 'queued') return '已排队，等待上一轮完成';
     if (turn.status === 'generating') return turn.answerBlocks?.length
         ? '正在继续生成…' : '正在检索全文并组织回答…';
@@ -2797,12 +3918,14 @@ function articleChatStatusText(turn = {}) {
     return '';
 }
 
-function renderArticleChatBlock(block, turn, snapshot) {
+function renderArticleChatBlock(block, turn, snapshot, citationNumberOffset = 0) {
     const element = createWorkspaceElement('section', 'article-chat-answer-block');
     element.dataset.blockId = String(block.blockId || '');
+    element.dataset.citationNumberOffset = String(citationNumberOffset);
     const markdown = renderArticleChatMarkdown(block.markdown || '', {
         evidence: block.evidence,
-        snapshot
+        snapshot,
+        citationNumberOffset
     });
     element.appendChild(markdown);
     appendArticleChatEvidence(
@@ -2864,10 +3987,25 @@ function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
     blockContainer?.querySelectorAll('[data-block-id]').forEach(node => {
         if (!expectedBlockIds.has(node.dataset.blockId)) node.remove();
     });
+    let citationNumberOffset = 0;
     blocks.forEach(block => {
         const blockId = String(block.blockId || '');
-        if (!blockId || blockContainer.querySelector(`[data-block-id="${blockId}"]`)) return;
-        blockContainer.appendChild(renderArticleChatBlock(block, turn, snapshot));
+        const blockEvidenceCount = Array.isArray(block?.evidence) ? block.evidence.length : 0;
+        if (!blockId) {
+            citationNumberOffset += blockEvidenceCount;
+            return;
+        }
+        const existing = blockContainer.querySelector(`[data-block-id="${blockId}"]`);
+        if (!existing) {
+            blockContainer.appendChild(renderArticleChatBlock(
+                block, turn, snapshot, citationNumberOffset
+            ));
+        } else if (Number(existing.dataset.citationNumberOffset) !== citationNumberOffset) {
+            existing.replaceWith(renderArticleChatBlock(
+                block, turn, snapshot, citationNumberOffset
+            ));
+        }
+        citationNumberOffset += blockEvidenceCount;
     });
 
     const status = element.querySelector('.article-chat-turn-status');
@@ -2931,6 +4069,7 @@ function scrollArticleChatToLatest({ smooth = false } = {}) {
 
 function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
     renderArticleChatProfileOptions();
+    renderArticleChatHighlightCategoryOptions();
     const container = document.getElementById('articleChatMessages');
     const coverage = document.getElementById('articleChatCoverage');
     if (!container || !coverage) return;
@@ -2940,6 +4079,9 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
         articleChatTurnElements.clear();
         articleChatVisibleTurnCount = articleChatHistoryPageSize;
         articleChatFollowLatest = true;
+        articleChatContextScopes.clear();
+        renderArticleChatContextScopes();
+        closeArticleChatCommandMenu();
     }
     articleChatRenderedDocumentKey = documentKey;
 
@@ -2979,10 +4121,13 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
         : `当前网页已建立正文索引 · ${snapshot?.paragraphs?.length || 0} 段`;
     const loading = chat.loading === true;
     const send = document.getElementById('sendArticleChat');
+    const highlight = document.getElementById('highlightArticleChatMatches');
     const cancel = document.getElementById('cancelArticleChat');
     const clear = document.getElementById('clearArticleChat');
     const loadEarlier = document.getElementById('articleChatLoadEarlier');
     if (send) send.disabled = !articleChatSelectedProfileId;
+    if (highlight) highlight.disabled = !articleChatSelectedProfileId ||
+        !document.getElementById('articleChatHighlightCategory')?.value;
     if (cancel) cancel.hidden = !loading;
     if (clear) clear.disabled = loading || turns.length === 0;
     if (loadEarlier) {
@@ -3055,11 +4200,14 @@ async function submitArticleChat(event) {
     }
     const panelContext = capturePanelContext();
     const queuedBehindActive = currentWorkspaceSnapshot?.chat?.loading === true;
+    const contextScope = articleChatContextScopePayload();
     if (input) input.value = '';
+    closeArticleChatCommandMenu();
     try {
         const response = await sendTabMessage(panelContext.tabId, {
             action: 'askArticleWithLLM', question, profileId,
-            selectedProfileId: profileId
+            selectedProfileId: profileId,
+            contextScope
         });
         if (!isCurrentPanelContext(panelContext)) return;
         if (!response?.success) {
@@ -3083,12 +4231,80 @@ async function submitArticleChat(event) {
                 loading: currentWorkspaceSnapshot?.chat?.loading === true
             });
         }
+        articleChatContextScopes.clear();
+        renderArticleChatContextScopes();
         showStatus(queuedBehindActive
             ? '问题已加入队列，将使用提交时选择的模型。' : '问题已发送。', 'success');
     } catch (error) {
         if (!isCurrentPanelContext(panelContext)) return;
         if (input && !input.value) input.value = question;
         showStatus(`全文问答发送失败：${error.message}`, 'error');
+    }
+}
+
+async function submitArticleSemanticHighlight(event) {
+    event?.preventDefault();
+    const input = document.getElementById('articleChatQuestion');
+    const question = String(input?.value || '').trim();
+    const profileId = document.getElementById('articleChatProfile')?.value || '';
+    const categoryId = document.getElementById('articleChatHighlightCategory')?.value || '';
+    const categoryOption = document.getElementById('articleChatHighlightCategory')
+        ?.selectedOptions?.[0];
+    const categoryName = String(
+        categoryOption?.dataset.categoryName || categoryOption?.textContent || ''
+    );
+    const highlightColor = document.getElementById('articleChatHighlightColor')
+        ?.value || '#2F80ED';
+    if (!question) {
+        input?.focus();
+        return;
+    }
+    if (!profileId || !categoryId ||
+        llmSettingsState?.settings?.consentGranted !== true) {
+        showStatus('请先配置可用模型，并选择智能检索的高亮类别。', 'error');
+        return;
+    }
+    const panelContext = capturePanelContext();
+    const contextScope = articleChatContextScopePayload();
+    if (input) input.value = '';
+    closeArticleChatCommandMenu();
+    try {
+        const response = await sendTabMessage(panelContext.tabId, {
+            action: 'highlightArticleMatchesWithLLM',
+            question,
+            profileId,
+            categoryId,
+            categoryName,
+            highlightColor,
+            contextScope
+        });
+        if (!isCurrentPanelContext(panelContext)) return;
+        if (!response?.success) {
+            const error = new Error(response?.error || 'ARTICLE_SEMANTIC_HIGHLIGHT_FAILED');
+            error.code = response?.code;
+            throw error;
+        }
+        if (response.turn) {
+            const existingTurns = currentWorkspaceSnapshot?.chat?.turns || [];
+            const totalTurns = Math.max(
+                existingTurns.length,
+                Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0
+            );
+            const exists = existingTurns.some(turn => turn.turnId === response.turn.turnId);
+            applyArticleChatStateEvent({
+                kind: 'turn_added',
+                turn: response.turn,
+                totalTurns: totalTurns + (exists ? 0 : 1),
+                loading: currentWorkspaceSnapshot?.chat?.loading === true
+            });
+        }
+        articleChatContextScopes.clear();
+        renderArticleChatContextScopes();
+        showStatus('智能检索已加入队列；匹配完成后会直接在原文中高亮。', 'success');
+    } catch (error) {
+        if (!isCurrentPanelContext(panelContext)) return;
+        if (input && !input.value) input.value = question;
+        showStatus(`智能检索发送失败：${error.message}`, 'error');
     }
 }
 
@@ -3151,10 +4367,18 @@ async function loadEarlierArticleChatHistory() {
             throw new Error('ARTICLE_CHAT_HISTORY_LOAD_FAILED');
         }
         if (anchor?.isConnected) {
-            for (let attempt = 0; attempt < 2; attempt += 1) {
+            // Newly prepended answer cards can settle over the next two frames
+            // (layout containment, fonts, and entry animations). Correcting
+            // immediately left the old first visible turn about one line lower.
+            // A native side panel can be background-throttled while the paper
+            // tab owns focus, so requestAnimationFrame is not a reliable
+            // completion signal here.
+            await new Promise(resolve => setTimeout(resolve, 32));
+            for (let attempt = 0; attempt < 3; attempt += 1) {
                 const offset = anchor.getBoundingClientRect().top - anchorTop;
                 if (Math.abs(offset) < 0.25) break;
                 container.scrollTop += offset;
+                await new Promise(resolve => setTimeout(resolve, 16));
             }
         }
     } finally {
@@ -3224,8 +4448,57 @@ function renderArticleConnectionFailure(error) {
         retry.hidden = false;
         retry.disabled = false;
     }
-    renderStudyTypeChooser();
     updateApplyButton();
+}
+
+function mergeRefreshedFigureCatalog(snapshot, refreshResult) {
+    const liveFigures = Array.isArray(refreshResult?.figures)
+        ? refreshResult.figures.filter(figure => figure?.figureId) : [];
+    if (!snapshot || !liveFigures.length) return snapshot;
+    const workspace = snapshot.figures && typeof snapshot.figures === 'object'
+        ? snapshot.figures : {};
+    const storedFigures = Array.isArray(workspace.figures) ? workspace.figures : [];
+    const storedById = new Map(
+        storedFigures.map(figure => [String(figure?.figureId || ''), figure])
+    );
+    const liveIds = new Set(liveFigures.map(figure => String(figure.figureId)));
+    const mergedFigures = liveFigures.map(liveFigure => {
+        const stored = storedById.get(String(liveFigure.figureId)) || {};
+        return {
+            figureInputHash: '',
+            activeDepth: 'deep',
+            standard: null,
+            standardError: '',
+            deep: null,
+            deepLoading: false,
+            deepError: '',
+            panelFollowups: {},
+            panelFollowupHistories: {},
+            panelFollowupLoading: {},
+            panelFollowupErrors: {},
+            panelAnalyses: {},
+            panelAnalysisLoading: {},
+            panelAnalysisErrors: {},
+            expanded: false,
+            ...stored,
+            ...liveFigure
+        };
+    });
+    storedFigures.forEach(figure => {
+        if (figure?.figureId && !liveIds.has(String(figure.figureId))) {
+            mergedFigures.push(figure);
+        }
+    });
+    return {
+        ...snapshot,
+        figures: {
+            ...workspace,
+            figures: mergedFigures,
+            totalFigures: mergedFigures.length,
+            extractorRevision: String(refreshResult?.revision || ''),
+            extractorProbeFigureId: String(refreshResult?.probeFigureId || '')
+        }
+    };
 }
 
 async function refreshArticleWorkspace({
@@ -3235,6 +4508,14 @@ async function refreshArticleWorkspace({
     const requestId = ++workspaceRefreshSequence;
     if (!isCurrentPanelContext(panelContext)) return null;
     try {
+        let figureRefreshResult = null;
+        if ((announce || !currentWorkspaceSnapshot) &&
+            typeof SciLLM.refreshFigureExtractorInTab === 'function') {
+            figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(
+                chrome,
+                panelContext.tabId
+            );
+        }
         const response = await sendTabMessage(panelContext.tabId, {
             action: 'getArticleWorkspaceSnapshot',
             forceRefresh: announce,
@@ -3246,12 +4527,26 @@ async function refreshArticleWorkspace({
         if (requestId !== workspaceRefreshSequence || !isCurrentPanelContext(panelContext)) {
             return null;
         }
-        renderArticleWorkspaceSnapshot(response.snapshot);
-        resumeFigureProgressFromWorkspaceSnapshot(response.snapshot, {
+        const snapshot = mergeRefreshedFigureCatalog(
+            response.snapshot,
+            figureRefreshResult
+        );
+        renderArticleWorkspaceSnapshot(snapshot);
+        resumeFigureProgressFromWorkspaceSnapshot(snapshot, {
             tabId: panelContext.tabId
         });
-        if (announce) showStatus('论文侧栏已刷新', 'success');
-        return response.snapshot;
+        if (announce) {
+            const figureLabels = (snapshot?.figures?.figures || [])
+                .map(figure => figure.figureLabel || figure.figureId)
+                .filter(Boolean);
+            showStatus(
+                figureLabels.length
+                    ? `Figure 目录已刷新：${figureLabels.join('、')}`
+                    : '论文侧栏已刷新',
+                'success'
+            );
+        }
+        return snapshot;
     } catch (error) {
         if (requestId !== workspaceRefreshSequence || !isCurrentPanelContext(panelContext)) {
             return null;
@@ -3271,6 +4566,52 @@ function currentArticleArchiveIdentity() {
         canonicalUrl: manualAnnotationState.canonicalUrl || currentWorkspaceSnapshot?.url || '',
         title: manualAnnotationState.title || currentWorkspaceSnapshot?.title || ''
     };
+}
+
+function articleArchivePromptDecisionKey(identity = currentArticleArchiveIdentity()) {
+    const documentId = String(identity?.documentId || '').trim();
+    return documentId ? `${ARTICLE_ARCHIVE_PROMPT_DECISION_PREFIX}${documentId}` : '';
+}
+
+async function readArticleArchivePromptDecision(identity = currentArticleArchiveIdentity()) {
+    const key = articleArchivePromptDecisionKey(identity);
+    if (!key || !chrome.storage?.session) return null;
+    const stored = await chrome.storage.session.get(key).catch(() => ({}));
+    return stored?.[key] || null;
+}
+
+function rememberArticleArchivePromptDecision(
+    decision,
+    identity = currentArticleArchiveIdentity()
+) {
+    const key = articleArchivePromptDecisionKey(identity);
+    if (!key || !chrome.storage?.session) return Promise.resolve(false);
+    return chrome.storage.session.set({
+        [key]: {
+            decision: String(decision || 'handled'),
+            documentId: String(identity.documentId || ''),
+            canonicalUrl: String(identity.canonicalUrl || ''),
+            decidedAt: Date.now()
+        }
+    }).then(() => true).catch(() => false);
+}
+
+function workspaceAlreadyHasArticleResults(snapshot = currentWorkspaceSnapshot) {
+    if (!snapshot) return false;
+    if (Number(manualAnnotationState?.annotationCount) > 0) return true;
+    if (Number(snapshot.highlightDistribution?.totalHighlights) > 0) return true;
+    if (Number(snapshot.chat?.totalTurns) > 0) return true;
+    if (snapshot.ledger || snapshot.reviewOutline) return true;
+    if (Array.isArray(snapshot.paragraphSummaries) && snapshot.paragraphSummaries.length) {
+        return true;
+    }
+    if (snapshot.figures?.crossFigureLogic?.result) return true;
+    return (Array.isArray(snapshot.figures?.figures) ? snapshot.figures.figures : [])
+        .some(figure => Boolean(
+            figure?.standard || figure?.deep ||
+            Object.keys(figure?.panelAnalyses || {}).length ||
+            Object.keys(figure?.panelFollowupHistories || {}).length
+        ));
 }
 
 function setArticleArchivePrompt(probe = null) {
@@ -3295,12 +4636,23 @@ async function probeCurrentArticleArchive() {
         setArticleArchivePrompt(null);
         return null;
     }
+    if (workspaceAlreadyHasArticleResults()) {
+        setArticleArchivePrompt(null);
+        void rememberArticleArchivePromptDecision('current-workspace', identity);
+        return null;
+    }
     try {
+        const handled = await readArticleArchivePromptDecision(identity);
+        if (handled || currentArticleArchiveIdentity().documentId !== identity.documentId) {
+            setArticleArchivePrompt(null);
+            return null;
+        }
         const probe = await sendLlmMessage({
             type: 'ARTICLE_ARCHIVE_PROBE',
             documentId: identity.documentId,
             canonicalUrl: identity.canonicalUrl
         });
+        if (currentArticleArchiveIdentity().documentId !== identity.documentId) return null;
         setArticleArchivePrompt(probe);
         return probe;
     } catch (error) {
@@ -3363,6 +4715,10 @@ async function applyLoadedArticleArchive(archive, { imported = false } = {}) {
     await refreshManualAnnotationSummary(tab.id);
     await refreshArticleWorkspace();
     setArticleArchivePrompt(null);
+    void rememberArticleArchivePromptDecision(
+        imported ? 'imported' : 'loaded',
+        identity
+    );
     const message = applied.partial
         ? '页面正文与存档版本不同：备注和分析卡片已恢复，旧 AI 文本范围未强行套用。'
         : '上次的高亮、备注与 AI 分析结果已恢复。';
@@ -3371,9 +4727,28 @@ async function applyLoadedArticleArchive(archive, { imported = false } = {}) {
 }
 
 async function loadCurrentArticleArchive() {
+    const permissionTicket = beginArticleWorkspaceDirectoryPermissionRequest();
     const identity = currentArticleArchiveIdentity();
     if (!identity.documentId) return;
     try {
+        const workspaceRestore = await restoreCurrentArticleWorkspaceFromDirectory({
+            panelContext: capturePanelContext(),
+            announce: false,
+            allowMissing: true,
+            permissionTicket
+        });
+        if (workspaceRestore?.applied?.success) {
+            setArticleArchivePrompt(null);
+            await rememberArticleArchivePromptDecision('workspace-loaded', identity);
+            const turnCount = Number(workspaceRestore.applied.chatTurns) || 0;
+            showStatus(
+                turnCount
+                    ? `已从本地工作区恢复全部结果和 ${turnCount} 轮历史问答`
+                    : '已从本地工作区恢复上次保存的分析结果',
+                'success'
+            );
+            return workspaceRestore.applied;
+        }
         const loaded = await sendLlmMessage({
             type: 'ARTICLE_ARCHIVE_LOAD',
             documentId: identity.documentId,
@@ -3418,6 +4793,95 @@ function exportCurrentArticleArchive() {
     });
 }
 
+function runArticleContentExport({
+    guard,
+    buttonId,
+    action,
+    pendingMessage,
+    onSuccess
+}) {
+    return guard.run(async () => {
+        const button = document.getElementById(buttonId);
+        const panelContext = capturePanelContext();
+        if (!Number.isInteger(Number(panelContext.tabId))) {
+            showStatus('当前论文页面尚未准备完成', 'error');
+            return;
+        }
+        if (button) {
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+        }
+        showStatus(pendingMessage, 'success');
+        try {
+            const response = await sendTabMessage(panelContext.tabId, { action });
+            if (!response?.success) {
+                const error = new Error(response?.error || '导出失败');
+                error.code = response?.code || 'CONTENT_EXPORT_FAILED';
+                throw error;
+            }
+            if (isCurrentPanelContext(panelContext)) onSuccess(response);
+        } catch (error) {
+            if (isCurrentPanelContext(panelContext)) {
+                showStatus(`导出失败：${error.message}`, 'error');
+            }
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.removeAttribute('aria-busy');
+            }
+        }
+    });
+}
+
+function exportPptMaterials() {
+    return runArticleContentExport({
+        guard: pptMaterialExportGuard,
+        buttonId: 'exportPptMaterials',
+        action: 'exportPptMaterials',
+        pendingMessage: '正在下载所有 Figure 的最高质量图片并整理 PPT 制作材料…',
+        onSuccess(response) {
+            const missing = Array.isArray(response.missingImageFigureIds)
+                ? response.missingImageFigureIds.length : 0;
+            showStatus(
+                `PPT 材料包已导出：${response.figureCount || 0} 张 Figure、` +
+                `${response.imageCount || 0} 个高清图文件` +
+                (missing ? `；${missing} 张 Figure 未能下载原图，请查看 manifest` : ''),
+                missing ? 'error' : 'success'
+            );
+        }
+    });
+}
+
+function exportEnhancedSnapshotToZotero() {
+    return runArticleContentExport({
+        guard: zoteroSnapshotExportGuard,
+        buttonId: 'exportEnhancedSnapshotToZotero',
+        action: 'exportEnhancedSnapshotToZotero',
+        pendingMessage: '正在下载 Figure 高清原图、固化原网页单栏快照并连接 Zotero…',
+        onSuccess(response) {
+            const imageCount = Number(response.embeddedImageCount) || 0;
+            const missing = Array.isArray(response.missingImageFigureIds)
+                ? response.missingImageFigureIds.length : 0;
+            if (response.imported) {
+                const target = response.collectionName || response.libraryName || '当前文库';
+                showStatus(
+                    `已保存到 Zotero「${target}」：原网页单栏增强快照内嵌 ${imageCount} 张高清原图，` +
+                    `图解与全文问答已分别保存为两个子笔记` +
+                    (missing ? `；${missing} 张 Figure 未能获取原图` : ''),
+                    missing ? 'error' : 'success'
+                );
+                return;
+            }
+            const reason = response.directError?.message || 'Zotero 当前不可用';
+            showStatus(
+                `未能直接导入 Zotero（${reason}）；已下载内嵌 ${imageCount} 张高清原图的` +
+                `单栏增强快照 ZIP`,
+                'error'
+            );
+        }
+    });
+}
+
 async function importCurrentArticleArchive(event) {
     const input = event.currentTarget;
     const file = input.files?.[0];
@@ -3441,7 +4905,68 @@ function currentLocalArticleWorkspace() {
     return currentWorkspaceSnapshot?.localWorkspace || null;
 }
 
+function beginArticleWorkspaceDirectoryPermissionRequest() {
+    const handle = articleWorkspaceDirectoryHandle;
+    if (!handle || typeof handle.requestPermission !== 'function') {
+        // The settings tab may have selected a directory after this side panel
+        // was opened. Reloading the handle is enough when that new permission
+        // is already granted; if it is "prompt", the next click can invoke
+        // requestPermission synchronously with the refreshed handle.
+        const promise = refreshArticleWorkspaceDirectoryHandle().then(async refreshed => {
+            if (!refreshed) return 'unconfigured';
+            try {
+                return await refreshed.queryPermission({ mode: 'readwrite' });
+            } catch (_) {
+                return 'unknown';
+            }
+        });
+        return { started: false, promise };
+    }
+    try {
+        // This call must happen synchronously inside the click handler. Sending
+        // it through the service worker or awaiting article preparation first
+        // loses the browser user activation and leaves permission at "prompt".
+        const promise = Promise.resolve(
+            handle.requestPermission({ mode: 'readwrite' })
+        ).catch(() => 'unknown');
+        return { started: true, promise };
+    } catch (_) {
+        return { started: true, promise: Promise.resolve('unknown') };
+    }
+}
+
+async function resolveArticleWorkspaceDirectoryPermission(ticket) {
+    const directPermission = await ticket?.promise;
+    if (directPermission === 'granted') return 'granted';
+    await articleWorkspaceDirectoryHandleReady;
+    const handle = articleWorkspaceDirectoryHandle;
+    if (!handle) return 'unconfigured';
+    try {
+        return await handle.queryPermission({ mode: 'readwrite' });
+    } catch (_) {
+        return 'unknown';
+    }
+}
+
+function directorySyncFailureMessage(result = {}) {
+    if (result.requiresReselection === true) {
+        return '原文件夹句柄已失效或目录被移动，请在设置页重新选择同一个基础目录';
+    }
+    if (result.requiresReauthorization === true || result.permission !== 'granted') {
+        return '本地文件夹权限已失效；请再次点击保存，并在浏览器提示中允许访问';
+    }
+    const code = String(result.errorCode || result.lastErrorCode || '').trim();
+    const type = String(result.errorName || result.lastErrorName || '').trim();
+    const path = String(result.failedPath || result.lastErrorPath || '').trim();
+    const detail = String(result.message || result.lastError || '').trim();
+    const suffix = [path, code || type, detail].filter(Boolean).join('：');
+    return suffix
+        ? `目录写入未完成（${suffix}），数据仍保留在待同步队列中`
+        : '目录写入未完成，数据仍保留在待同步队列中，可稍后重试';
+}
+
 async function saveCurrentArticleWorkspace() {
+    const permissionTicket = beginArticleWorkspaceDirectoryPermissionRequest();
     return articleWorkspaceSaveGuard.run(async () => {
         const button = document.getElementById('saveCurrentArticleWorkspace');
         const panelContext = capturePanelContext();
@@ -3451,6 +4976,14 @@ async function saveCurrentArticleWorkspace() {
             button.setAttribute('aria-busy', 'true');
         }
         try {
+            const directPermission = await resolveArticleWorkspaceDirectoryPermission(
+                permissionTicket
+            );
+            if (directPermission !== 'granted') {
+                throw new Error(directPermission === 'unconfigured'
+                    ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+                    : '未获得本地文件夹读写权限；请再次点击保存并允许访问');
+            }
             const ensured = await sendTabMessage(panelContext.tabId, {
                 action: 'ensureArticleWorkspace', forceRefresh: true
             });
@@ -3460,7 +4993,7 @@ async function saveCurrentArticleWorkspace() {
             const permission = await sendLlmMessage({
                 type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
                 identity: ensured.workspace,
-                requestPermission: true,
+                requestPermission: false,
                 permissionOnly: true
             });
             if (permission.permission !== 'granted') {
@@ -3474,7 +5007,14 @@ async function saveCurrentArticleWorkspace() {
             if (!saved?.success) {
                 throw new Error(saved?.error || '当前论文工作区保存失败');
             }
-            await sendLlmMessage({ type: 'USER_DATA_SYNC_NOW' });
+            const syncResult = await sendLlmMessage({
+                type: 'USER_DATA_SYNC_NOW',
+                drain: true
+            });
+            if (syncResult.permission !== 'granted' || Number(syncResult.failed) > 0 ||
+                Number(syncResult.pendingCount) > 0) {
+                throw new Error(directorySyncFailureMessage(syncResult));
+            }
             if (!isCurrentPanelContext(panelContext)) return;
             showStatus(
                 `已保存 ${saved.assetCount || 0} 个工作区文件和 ${saved.turnCount || 0} 轮问答到本地文件夹`,
@@ -3515,12 +5055,126 @@ function applyRestoredSidePanelUiState(uiState = null) {
     }
 }
 
+async function restoreCurrentArticleWorkspaceFromDirectory({
+    panelContext = capturePanelContext(),
+    announce = true,
+    allowMissing = false,
+    requestPermission = true,
+    permissionTicket = null
+} = {}) {
+    if (!isCurrentPanelContext(panelContext)) return null;
+    if (requestPermission === true) {
+        const permission = await resolveArticleWorkspaceDirectoryPermission(permissionTicket);
+        if (permission !== 'granted') {
+            if (allowMissing) return null;
+            throw new Error(permission === 'unconfigured'
+                ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+                : '未获得本地文件夹读取权限；请再次点击并允许访问');
+        }
+    }
+    const ensured = await sendTabMessage(panelContext.tabId, {
+        action: 'ensureArticleWorkspace',
+        forceRefresh: true
+    });
+    if (!ensured?.success || !ensured.workspace) {
+        if (allowMissing) return null;
+        throw new Error(ensured?.error || '无法识别当前论文的本地工作区');
+    }
+    const scanned = await sendLlmMessage({
+        type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+        identity: ensured.workspace,
+        requestPermission: false
+    });
+    if (!isCurrentPanelContext(panelContext)) return null;
+    if (scanned.permission !== 'granted') {
+        if (allowMissing) return null;
+        throw new Error(scanned.permission === 'unconfigured'
+            ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+            : '未获得本地文件夹读取权限，请再次点击并允许访问');
+    }
+    if (!scanned.restore) {
+        if (allowMissing) return null;
+        showStatus('本地文件夹中没有匹配当前网页的工作区', 'error');
+        return null;
+    }
+    const applied = await sendTabMessage(panelContext.tabId, {
+        action: 'applyArticleWorkspaceAssets',
+        restore: scanned.restore
+    });
+    if (!applied?.success) {
+        throw new Error(applied?.error || '本地工作区恢复失败');
+    }
+    applyRestoredSidePanelUiState(applied.uiState);
+    await refreshManualAnnotationSummary(panelContext.tabId);
+    await refreshArticleWorkspace({ panelContext });
+    applyRestoredSidePanelUiState(applied.uiState);
+    if (announce) {
+        const turnCount = Number(applied.chatTurns) || 0;
+        showStatus(
+            applied.partial
+                ? '已安全恢复问答、图解和分析卡片；正文已变化，旧文本范围未强行套用'
+                : turnCount
+                    ? `已恢复当前网页的本地工作区和 ${turnCount} 轮历史问答`
+                    : '已恢复当前网页的本地工作区',
+            applied.partial ? 'error' : 'success'
+        );
+    }
+    return { scanned, applied };
+}
+
+async function tryAutoRestoreCurrentArticleWorkspace(
+    panelContext = capturePanelContext()
+) {
+    if (!isCurrentPanelContext(panelContext) ||
+        workspaceAlreadyHasArticleResults(currentWorkspaceSnapshot)) {
+        return null;
+    }
+    try {
+        const restored = await restoreCurrentArticleWorkspaceFromDirectory({
+            panelContext,
+            announce: false,
+            allowMissing: true,
+            requestPermission: false
+        });
+        if (!restored?.applied?.success || !isCurrentPanelContext(panelContext)) {
+            return null;
+        }
+        setArticleArchivePrompt(null);
+        await rememberArticleArchivePromptDecision(
+            'workspace-auto-restored',
+            currentArticleArchiveIdentity()
+        );
+        const turnCount = Number(restored.applied.chatTurns) || 0;
+        showStatus(
+            turnCount
+                ? `已自动恢复本地工作区和 ${turnCount} 轮历史问答`
+                : '已自动恢复当前网页的本地工作区',
+            'success'
+        );
+        return restored;
+    } catch (_) {
+        // Automatic restoration must never block article reading. If the
+        // browser requires a fresh directory gesture, the existing explicit
+        // load/scan control remains available.
+        return null;
+    }
+}
+
 async function scanCurrentArticleWorkspace() {
+    const permissionTicket = beginArticleWorkspaceDirectoryPermissionRequest();
     const button = document.getElementById('scanArticleWorkspace');
     const panelContext = capturePanelContext();
     if (!isCurrentPanelContext(panelContext)) return;
     if (button) button.disabled = true;
     try {
+        const directPermission = await resolveArticleWorkspaceDirectoryPermission(
+            permissionTicket
+        );
+        if (directPermission !== 'granted') {
+            throw new Error(directPermission === 'unconfigured'
+                ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+                : '未获得本地文件夹读取权限；请再次点击扫描并允许访问');
+        }
         const ensured = await sendTabMessage(panelContext.tabId, {
             action: 'ensureArticleWorkspace', forceRefresh: true
         });
@@ -3531,7 +5185,7 @@ async function scanCurrentArticleWorkspace() {
         const scanned = await sendLlmMessage({
             type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
             identity,
-            requestPermission: true
+            requestPermission: false
         });
         if (!isCurrentPanelContext(panelContext)) return;
         if (scanned.permission !== 'granted') {
@@ -3567,6 +5221,7 @@ async function scanCurrentArticleWorkspace() {
 }
 
 async function clearCurrentArticleWorkspace() {
+    const permissionTicket = beginArticleWorkspaceDirectoryPermissionRequest();
     const button = document.getElementById('clearArticleWorkspace');
     const workspace = currentLocalArticleWorkspace();
     const panelContext = capturePanelContext();
@@ -3584,8 +5239,17 @@ async function clearCurrentArticleWorkspace() {
     if (!accepted) return;
     if (button) button.disabled = true;
     try {
+        const directPermission = await resolveArticleWorkspaceDirectoryPermission(
+            permissionTicket
+        );
+        if (directPermission !== 'granted') {
+            throw new Error(directPermission === 'unconfigured'
+                ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
+                : '未获得本地文件夹读写权限；请再次点击清除并允许访问');
+        }
         await sendLlmMessage({
-            type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: workspace, requestPermission: true
+            type: 'ARTICLE_WORKSPACE_SCAN_RESTORE', identity: workspace,
+            requestPermission: false
         }).catch(() => null);
         const begun = await sendLlmMessage({
             type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: workspace.workspaceId
@@ -3622,12 +5286,17 @@ function setupArticleArchiveControls() {
     document.getElementById('loadArticleArchive')
         ?.addEventListener('click', loadCurrentArticleArchive);
     document.getElementById('reanalyzeArticle')?.addEventListener('click', () => {
+        void rememberArticleArchivePromptDecision('skipped');
         setArticleArchivePrompt(null);
         switchWorkspaceView('analysis');
         showStatus('已跳过旧档案，可按当前设置重新分析', 'success');
     });
     document.getElementById('exportCurrentArticleArchive')
         ?.addEventListener('click', exportCurrentArticleArchive);
+    document.getElementById('exportPptMaterials')
+        ?.addEventListener('click', exportPptMaterials);
+    document.getElementById('exportEnhancedSnapshotToZotero')
+        ?.addEventListener('click', exportEnhancedSnapshotToZotero);
     document.getElementById('saveCurrentArticleWorkspace')
         ?.addEventListener('click', saveCurrentArticleWorkspace);
     document.getElementById('importCurrentArticleArchive')
@@ -3682,6 +5351,19 @@ async function initializeCurrentArticle({ retry = false } = {}) {
         })(), 15000);
         if (requestId !== articlePreparationSequence) return null;
         renderArticleWorkspaceSnapshot(snapshot);
+        const panelContext = capturePanelContext();
+        const restored = await tryAutoRestoreCurrentArticleWorkspace(panelContext);
+        if (requestId !== articlePreparationSequence ||
+            !isCurrentPanelContext(panelContext)) return null;
+        // Create the per-article directory as soon as the page is activated, but
+        // only after restoration has had the first chance to read existing data.
+        // The baseline action writes structure/paragraphs only; it cannot replace
+        // a saved chat index, Figure result, highlight, or analysis with empties.
+        await sendTabMessage(panelContext.tabId, {
+            action: 'saveArticleWorkspaceBaseline'
+        }).catch(() => null);
+        if (requestId !== articlePreparationSequence ||
+            !isCurrentPanelContext(panelContext)) return null;
         if (analysisMode === 'llm') {
             void Promise.allSettled([
                 refreshLlmDiagnostics(),
@@ -3689,8 +5371,8 @@ async function initializeCurrentArticle({ retry = false } = {}) {
                 restoreReviewOutlineProgress()
             ]);
         }
-        void probeCurrentArticleArchive();
-        return snapshot;
+        if (!restored) void probeCurrentArticleArchive();
+        return currentWorkspaceSnapshot || snapshot;
     } catch (error) {
         if (requestId !== articlePreparationSequence) return null;
         renderArticleConnectionFailure(error);
@@ -3708,7 +5390,7 @@ async function initializeCurrentArticle({ retry = false } = {}) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    setupFloatingSidePanelControls();
+    setupSidePanelNotificationCenter();
     setupWorkspaceNavigation();
     setupSidePanelSettingsShortcut();
     setupArticleArchiveControls();
@@ -3737,6 +5419,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderArticleConnectionFailure(error);
         showStatus('侧栏初始化失败：可重新提取或导出适配诊断包', 'error');
     }
+});
+
+window.addEventListener('focus', () => {
+    void refreshArticleWorkspaceDirectoryHandle();
+});
+window.addEventListener('pagehide', () => {
+    void publishSidePanelShortcutScope(activePanelTabContext.tabId, false);
 });
 
 // 加载设置
@@ -3773,9 +5462,13 @@ function getCategoryEntriesForEngine(engine = analysisMode) {
 function reconcileRegexSelection() {
     const availableIds = getCategoryEntriesForEngine('regex').map(([categoryId]) => categoryId);
     const available = new Set(availableIds);
-    selectedCategories = regexSelectionStored
-        ? new Set([...selectedCategories].filter(categoryId => available.has(categoryId)))
-        : new Set(availableIds);
+    const configured = [...getConfiguredViewSelection()]
+        .filter(categoryId => available.has(categoryId));
+    selectedCategories = configured.length
+        ? new Set(configured)
+        : regexSelectionStored
+            ? new Set([...selectedCategories].filter(categoryId => available.has(categoryId)))
+            : new Set(availableIds);
 }
 
 async function sendLlmMessage(message) {
@@ -3783,6 +5476,8 @@ async function sendLlmMessage(message) {
     if (!response?.success) {
         const error = new Error(response?.error?.message || 'LLM 操作失败');
         error.code = response?.error?.code;
+        error.diagnosticType = response?.error?.diagnosticType;
+        error.diagnosticMessage = response?.error?.diagnosticMessage;
         throw error;
     }
     return response.data;
@@ -3798,6 +5493,9 @@ async function loadLlmSettings() {
         llmSelectedCategories = getConfiguredViewSelection();
         confidenceThreshold = Number(llmSettingsState.settings.confidenceThreshold) || 0.8;
         persistedConfidenceThreshold = confidenceThreshold;
+        const language = llmSettingsState.settings.language || 'zh-CN';
+        updateSidePanelLanguageButton(language);
+        SciLLM.setInterfaceLanguage?.(language);
     } catch (error) {
         analysisMode = 'regex';
         persistedAnalysisMode = 'regex';
@@ -3805,16 +5503,26 @@ async function loadLlmSettings() {
     }
 }
 
+function updateSidePanelLanguageButton(language) {
+    const button = document.getElementById('sidePanelLanguage');
+    if (!button) return;
+    const normalized = String(language || '').toLowerCase().startsWith('en')
+        ? 'en' : 'zh-CN';
+    button.dataset.language = normalized;
+    button.textContent = normalized === 'en' ? 'EN' : 'CH';
+    const current = normalized === 'en' ? '英文' : '中文';
+    const target = normalized === 'en' ? '中文' : '英文';
+    button.setAttribute('aria-label', `当前为${current}，点击切换为${target}`);
+    button.title = `点击切换为${target}`;
+}
+
 function getReadingViewDefinition(viewId = readingViewId) {
     return llmSettingsState?.readingViews?.[viewId] || { categoryIds: [] };
 }
 
 function getCurrentViewOverride(viewId = readingViewId) {
-    const stored = llmSettingsState?.settings?.viewCategoryOverrides?.[viewId];
-    return {
-        add: Array.isArray(stored?.add) ? [...stored.add] : [],
-        remove: Array.isArray(stored?.remove) ? [...stored.remove] : []
-    };
+    void viewId;
+    return { add: [], remove: [] };
 }
 
 function getConfiguredViewSelection(viewId = readingViewId) {
@@ -3858,115 +5566,24 @@ function invalidatePreparedComposition() {
 }
 
 function updateReadingViewControl() {
-    const radio = document.querySelector(
-        `input[name="readingView"][value="${readingViewId}"]`
-    );
-    if (radio) radio.checked = true;
-}
-
-function getSelectedStudyType() {
-    const types = llmSettingsState?.studyTypes || {};
-    const selected = selectedStudyTypeOverride ||
-        preparedDocumentState?.studyProfile?.primaryType;
-    return Object.prototype.hasOwnProperty.call(types, selected) ? selected : '';
-}
-
-function renderStudyTypeChooser() {
-    const chooser = document.getElementById('studyTypeChooser');
-    const options = document.getElementById('studyTypeOptions');
-    chooser.hidden = analysisMode !== 'llm';
-    options.innerHTML = '';
-    const types = llmSettingsState?.studyTypes || {};
-    const selectedType = getSelectedStudyType();
-    const disabled = studyTypeSelectionInFlight || prepareState === 'preparing' ||
-        prepareState === 'analyzing' || !preparedDocumentState?.documentHash;
-    Object.entries(types).forEach(([typeId, definition]) => {
-        const radioId = `study-type-${typeId}`;
+    const container = document.getElementById('readingViewOptions');
+    if (!container) return;
+    const views = llmSettingsState?.readingViews || {};
+    container.replaceChildren();
+    Object.entries(views).forEach(([viewId, definition], index) => {
         const label = document.createElement('label');
-        label.className = 'study-type-option';
-        label.htmlFor = radioId;
+        label.title = definition?.description || '';
         const radio = document.createElement('input');
         radio.type = 'radio';
-        radio.name = 'studyType';
-        radio.id = radioId;
-        radio.value = typeId;
-        radio.checked = selectedType === typeId;
-        radio.disabled = disabled;
-        radio.addEventListener('change', handleStudyTypeChange);
+        radio.name = 'readingView';
+        radio.value = viewId;
+        radio.checked = viewId === readingViewId ||
+            (!Object.prototype.hasOwnProperty.call(views, readingViewId) && index === 0);
         const text = document.createElement('span');
-        text.textContent = definition.name;
-        label.appendChild(radio);
-        label.appendChild(text);
-        options.appendChild(label);
+        text.textContent = definition?.name || viewId;
+        label.append(radio, text);
+        container.appendChild(label);
     });
-}
-
-async function handleStudyTypeChange(event) {
-    const selectedType = event.target.value;
-    const types = llmSettingsState?.studyTypes || {};
-    if (studyTypeSelectionInFlight) return;
-    if (!preparedDocumentState?.documentHash ||
-        !Object.prototype.hasOwnProperty.call(types, selectedType)) {
-        renderStudyTypeChooser();
-        showStatus('正文尚未准备好，暂时无法保存文献类型', 'error');
-        return;
-    }
-    const previousSelectedType = getSelectedStudyType();
-    const expectedDocumentHash = preparedDocumentState.documentHash;
-    const expectedViewId = readingViewId;
-    const intent = preferenceMutationCoordinator.beginIntent();
-    selectedStudyTypeOverride = selectedType;
-    studyTypeSelectionInFlight = true;
-    renderStudyTypeChooser();
-    updateApplyButton();
-    try {
-        const result = await runSavedMutation({
-            coordinator: preferenceMutationCoordinator,
-            intent,
-            save: () => sendLlmMessage({
-                type: 'LLM_SET_STUDY_TYPE',
-                documentId: preparedDocumentState.documentId,
-                documentHash: expectedDocumentHash,
-                studyType: selectedType
-            }),
-            refresh: (corrected, { isCurrent }) => {
-                reconcilePersistedLlmControls(llmSettingsState, isCurrent);
-                if (!shouldApplyPreparedResult({
-                    isCurrent: isCurrent(),
-                    expectedDocumentHash,
-                    expectedViewId,
-                    prepared: corrected
-                })) {
-                    if (!isCurrent()) return { applied: false, reason: 'superseded' };
-                    throw new Error('返回的文献类型与当前文献或阅读视图不一致');
-                }
-                applyPreparedComposition(corrected, currentArticleDocument ||
-                    preparedDocumentState.document);
-                return { applied: true };
-            },
-            onSaveFailed: error => {
-                selectedStudyTypeOverride = previousSelectedType;
-                renderStudyTypeChooser();
-                showStatus(`保存文献类型失败，已恢复原选择：${error.message}`, 'error');
-            },
-            onRefreshFailed: error => {
-                invalidatePreparedComposition();
-                renderStudyTypeChooser();
-                renderCategories();
-                showStatus(`文献类型已保存，但正文组合刷新失败：${error.message}`, 'error');
-            }
-        });
-        if (result.status === 'refreshed') {
-            const selectedName = types[selectedType]?.name || selectedType;
-            showStatus(`已选择文献类型：${selectedName}`, 'success');
-        }
-    } catch (error) {
-        showStatus(`保存文献类型失败：${error.message}`, 'error');
-    } finally {
-        studyTypeSelectionInFlight = false;
-        renderStudyTypeChooser();
-        updateApplyButton();
-    }
 }
 
 function updateApplyButton() {
@@ -3989,7 +5606,6 @@ function updateApplyButton() {
         applyButton.disabled = regexApplyPending || selectedCategories.size === 0;
         return;
     }
-    const selectedType = getSelectedStudyType();
     if (llmSettingsState?.effectiveMode !== 'llm') {
         applyButton.textContent = '先配置 API';
         applyButton.disabled = false;
@@ -4000,9 +5616,8 @@ function updateApplyButton() {
     } else if (prepareState === 'analyzing') {
         applyButton.textContent = '正在分析全文';
         applyButton.disabled = true;
-    } else if (!preparedDocumentState?.documentHash || !selectedType ||
-        studyTypeSelectionInFlight) {
-        applyButton.textContent = '请先选择文献类型';
+    } else if (!preparedDocumentState?.documentHash) {
+        applyButton.textContent = '正在读取正文';
         applyButton.disabled = true;
     } else if (llmSelectedCategories.size === 0) {
         applyButton.textContent = '请至少选择一个分类';
@@ -4019,14 +5634,6 @@ function updateApplyButton() {
 async function controlActiveAnalysis(scope, command) {
     const tab = await queryPanelTargetTab();
     if (!tab?.id) throw new Error('无法获取当前论文页面');
-    const response = await sendTabMessage(tab.id, {
-        action: 'controlLlmOperation', scope, command
-    });
-    if (!response?.success) {
-        const error = new Error(response?.error || '无法控制分析任务');
-        error.code = response?.code;
-        throw error;
-    }
     if (scope === 'highlight') {
         highlightTaskState = {
             ...highlightTaskState,
@@ -4037,20 +5644,71 @@ async function controlActiveAnalysis(scope, command) {
         };
         updateHighlightTaskControls();
     } else {
+        if (command === 'cancel') stopFigureProgressPolling();
         figureAnalysisState = {
             ...figureAnalysisState,
             running: command !== 'cancel',
             paused: command === 'pause' ? true : command === 'resume' ? false
                 : figureAnalysisState.paused,
             phase: command === 'cancel' ? 'cancelled'
-                : command === 'pause' ? 'paused' : 'analyzing'
+                : command === 'pause' ? 'paused' : 'analyzing',
+            figureProgress: getFigureProgressEntries(figureAnalysisState).map(progress => ({
+                ...progress,
+                running: command === 'cancel' ? false : progress.running,
+                cancelled: command === 'cancel' && !progress.completed && !progress.failed
+                    ? true : progress.cancelled,
+                phase: command === 'cancel' && !progress.completed && !progress.failed
+                    ? 'cancelled' : progress.phase
+            }))
         };
         updateFigureButton();
         renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
     }
+    let timer = null;
+    let response = null;
+    try {
+        response = await Promise.race([
+            sendTabMessage(tab.id, {
+                action: 'controlLlmOperation', scope, command
+            }),
+            new Promise(resolve => {
+                timer = setTimeout(() => resolve({
+                    success: true,
+                    pending: true,
+                    code: 'CONTROL_CONFIRMATION_TIMEOUT'
+                }), 2200);
+            })
+        ]);
+    } catch (error) {
+        response = {
+            success: true,
+            pending: true,
+            code: error?.code || 'CONTROL_CONFIRMATION_FAILED'
+        };
+    } finally {
+        if (timer !== null) clearTimeout(timer);
+    }
+    if (!response?.success) {
+        const error = new Error(response?.error || '无法控制分析任务');
+        error.code = response?.code;
+        throw error;
+    }
+    if (scope === 'figure' && response.pending && figureAnalysisState.operationId) {
+        void chrome.runtime.sendMessage({
+            type: 'LLM_CONTROL_OPERATION',
+            operationId: figureAnalysisState.operationId,
+            command
+        }).catch(() => undefined);
+    }
+    if (scope === 'figure' && command !== 'cancel') {
+        startFigureProgressPolling(tab.id);
+    }
     const label = command === 'cancel' ? '已取消' : command === 'pause' ? '已暂停' : '已继续';
-    showStatus(`${label}${scope === 'figure' ? ' Figure 解读' : '全文 LLM 高亮'}`,
-        command === 'cancel' ? 'error' : 'success');
+    showStatus(
+        `${label}${scope === 'figure' ? ' Figure 解读' : '全文 LLM 高亮'}` +
+            (response.pending ? '；后台确认稍有延迟，界面已立即释放' : ''),
+        'success'
+    );
     return response;
 }
 
@@ -4071,7 +5729,7 @@ function updateFigureTaskControls() {
     const pause = document.getElementById('pauseFigureAnalysis');
     const cancel = document.getElementById('cancelFigureAnalysis');
     if (!controls || !pause || !cancel) return;
-    const active = figureAnalysisState.running === true;
+    const active = hasRunningFigureProgress(figureAnalysisState);
     controls.hidden = !active;
     pause.textContent = figureAnalysisState.paused ? '继续图解' : '暂停图解';
     pause.disabled = !active;
@@ -4082,19 +5740,24 @@ function updateFigureButton() {
     const figureButton = document.getElementById('analyzeFiguresFromFigures') ||
         document.getElementById('analyzeFigures');
     if (!figureButton) return;
-    const isLlm = analysisMode === 'llm';
-    const ready = isLlm && llmSettingsState?.effectiveMode === 'llm';
-    const running = Boolean(figureAnalysisState.running);
+    const ready = hasUsableLlm();
+    const running = hasRunningFigureProgress(figureAnalysisState);
     const crossFigureButton = document.getElementById('analyzeCrossFigureLogic');
     if (crossFigureButton) {
-        crossFigureButton.hidden = !isLlm;
-        crossFigureButton.disabled = !ready || running || crossFigureLogicRunning;
+        crossFigureButton.hidden = false;
+        crossFigureButton.disabled = running || crossFigureLogicRunning;
+        crossFigureButton.title = ready
+            ? '串联主图证据'
+            : llmUnavailableMessage('主图串解');
         crossFigureButton.textContent = crossFigureLogicRunning
-            ? '正在串联主图逻辑…'
-            : '一键梳理主图多米诺总链';
+            ? '主图串解中…'
+            : '主图串解';
     }
-    figureButton.hidden = !isLlm;
-    figureButton.disabled = !ready || running;
+    figureButton.hidden = false;
+    figureButton.disabled = running;
+    figureButton.title = ready
+        ? '逐图解读'
+        : llmUnavailableMessage('逐图解读');
     if (!running) {
         figureButton.textContent = '逐图解读';
     } else if (figureAnalysisState.totalFigures > 0 && figureAnalysisState.currentFigure > 0) {
@@ -4109,8 +5772,7 @@ function updateFigureButton() {
 
 function updateReviewOutlineButton() {
     const button = document.getElementById('generateReviewOutline');
-    const isLlm = analysisMode === 'llm';
-    const ready = isLlm && llmSettingsState?.effectiveMode === 'llm';
+    const ready = hasUsableLlm();
     let statusText = '';
     if (!reviewOutlineState.running) {
         statusText = reviewOutlineState.hasOutline
@@ -4124,13 +5786,19 @@ function updateReviewOutlineButton() {
         statusText = '正在提取正文层级';
     }
     if (button) {
-        button.hidden = !isLlm;
-        button.disabled = !ready || reviewOutlineState.running;
+        button.hidden = false;
+        button.disabled = reviewOutlineState.running;
+        button.title = ready
+            ? '生成整篇逐段摘要'
+            : llmUnavailableMessage('逐段摘要');
         button.textContent = statusText;
     }
     const navigationButton = document.getElementById('generateOutlineSummaries');
     if (navigationButton) {
-        navigationButton.disabled = !ready || reviewOutlineState.running;
+        navigationButton.disabled = reviewOutlineState.running;
+        navigationButton.title = ready
+            ? '为已勾选章节生成逐段摘要'
+            : llmUnavailableMessage('逐段摘要');
         navigationButton.textContent = reviewOutlineState.running
             ? statusText
             : reviewOutlineState.hasOutline ? '更新逐段摘要' : '生成逐段摘要';
@@ -4328,12 +5996,16 @@ function stopFigureProgressPolling() {
 
 function applyFigureAnalysisProgress(status, announce = true) {
     if (!status || typeof status !== 'object') return null;
-    const figureProgress = getFigureProgressEntries(status).map(item => ({ ...item }));
+    const running = hasRunningFigureProgress(status);
+    const figureProgress = getFigureProgressEntries(status).map(item => ({
+        ...item,
+        running: running ? item.running === true : false
+    }));
     const snapshot = { ...status, figureProgress };
     figureAnalysisState = {
         ...figureAnalysisState,
         ...snapshot,
-        running: hasRunningFigureProgress(snapshot)
+        running
     };
     updateFigureButton();
     updateReviewOutlineButton();
@@ -4443,29 +6115,30 @@ async function updateLlmPreferencesCore(preferences) {
 }
 
 async function updateViewCategorySelection(categoryId, checked, targetViewId) {
-    const override = getCurrentViewOverride(targetViewId);
-    const baselineSource = getPreparedCategorySource(categoryId);
-    const isBaseline = (getReadingViewDefinition(targetViewId).categoryIds || [])
-        .includes(categoryId) ||
-        ['view_default', 'primary_type'].includes(baselineSource);
-    override.add = override.add.filter(item => item !== categoryId);
-    override.remove = override.remove.filter(item => item !== categoryId);
-    if (checked && !isBaseline) override.add.push(categoryId);
-    if (!checked) override.remove.push(categoryId);
-    const allOverrides = {
-        ...(llmSettingsState?.settings?.viewCategoryOverrides || {}),
-        [targetViewId]: override
-    };
-    return updateLlmPreferencesCore({ viewCategoryOverrides: allOverrides });
+    const modes = (llmSettingsState?.settings?.analysisModes || []).map(mode => ({
+        ...mode,
+        categoryIds: Array.isArray(mode.categoryIds) ? [...mode.categoryIds] : []
+    }));
+    const mode = modes.find(item => item.id === targetViewId);
+    if (!mode) throw new Error('分析模式不存在');
+    const selected = new Set(mode.categoryIds);
+    if (checked) selected.add(categoryId);
+    else selected.delete(categoryId);
+    mode.categoryIds = [...selected];
+    return updateLlmPreferencesCore({
+        analysisModes: modes,
+        viewCategoryOverrides: {
+            ...(llmSettingsState?.settings?.viewCategoryOverrides || {}),
+            [targetViewId]: { add: [], remove: [] }
+        }
+    });
 }
 
 function applyPreparedComposition(prepared, document) {
     preparedDocumentState = { ...prepared, document };
     currentArticleDocument = document;
-    selectedStudyTypeOverride = prepared.studyProfile?.primaryType || '';
     prepareState = 'prepared';
     syncPreparedSelection();
-    renderStudyTypeChooser();
     renderCategories();
     updateApplyButton();
 }
@@ -4473,6 +6146,7 @@ function applyPreparedComposition(prepared, document) {
 function queueReadingViewMutation(targetViewId) {
     const intent = preferenceMutationCoordinator.beginIntent();
     readingViewId = targetViewId;
+    reconcileRegexSelection();
     updateReadingViewControl();
     return runSavedMutation({
         coordinator: preferenceMutationCoordinator,
@@ -4481,29 +6155,33 @@ function queueReadingViewMutation(targetViewId) {
         onSaved: (saved, { isCurrent }) => {
             reconcilePersistedLlmControls(saved, isCurrent);
             persistedReadingViewId = saved.settings.readingViewId || targetViewId;
-            invalidatePreparedComposition();
+            if (analysisMode === 'llm') invalidatePreparedComposition();
+            else reconcileRegexSelection();
             if (isCurrent()) {
                 updateReadingViewControl();
                 renderCategories();
                 updateApplyButton();
             }
         },
-        refresh: (_saved, { isCurrent }) => refreshPreparedComposition({
-            isCurrent,
-            expectedViewId: targetViewId
-        }),
+        refresh: (_saved, { isCurrent }) => analysisMode === 'llm'
+            ? refreshPreparedComposition({
+                isCurrent,
+                expectedViewId: targetViewId
+            })
+            : Promise.resolve({ prepared: false }),
         onSaveFailed: () => {
             readingViewId = persistedReadingViewId;
             updateReadingViewControl();
-            syncPreparedSelection();
+            if (analysisMode === 'llm') syncPreparedSelection();
+            else reconcileRegexSelection();
             renderCategories();
             updateApplyButton();
-            showStatus('切换阅读视图失败，已恢复原选择', 'error');
+            showStatus('切换分析模式失败，已恢复原选择', 'error');
         },
         onRefreshFailed: error => {
             renderCategories();
             updateApplyButton();
-            showStatus(`阅读视图已保存，但正文组合刷新失败：${error.message}`, 'error');
+            showStatus(`分析模式已保存，但正文组合刷新失败：${error.message}`, 'error');
         }
     }).then(result => {
         if (result.status === 'refreshed') {
@@ -4516,24 +6194,29 @@ function queueReadingViewMutation(targetViewId) {
 
 function queueCategorySelectionMutation(categoryId, checked, targetViewId) {
     const intent = preferenceMutationCoordinator.beginIntent();
+    const llmSelection = analysisMode === 'llm';
     return runSavedMutation({
         coordinator: preferenceMutationCoordinator,
         intent,
         save: () => updateViewCategorySelection(categoryId, checked, targetViewId),
         onSaved: (saved, { isCurrent }) => {
             reconcilePersistedLlmControls(saved, isCurrent);
-            invalidatePreparedComposition();
+            if (llmSelection) invalidatePreparedComposition();
+            else reconcileRegexSelection();
             if (isCurrent()) {
                 renderCategories();
                 updateApplyButton();
             }
         },
-        refresh: (_saved, { isCurrent }) => refreshPreparedComposition({
-            isCurrent,
-            expectedViewId: targetViewId
-        }),
+        refresh: (_saved, { isCurrent }) => llmSelection
+            ? refreshPreparedComposition({
+                isCurrent,
+                expectedViewId: targetViewId
+            })
+            : Promise.resolve({ prepared: false }),
         onSaveFailed: () => {
-            syncPreparedSelection();
+            if (llmSelection) syncPreparedSelection();
+            else reconcileRegexSelection();
             renderCategories();
             updateApplyButton();
             showStatus('保存分类失败，已恢复原选择', 'error');
@@ -4548,30 +6231,45 @@ function queueCategorySelectionMutation(categoryId, checked, targetViewId) {
 
 function queueRestoreViewPreset(targetViewId) {
     const intent = preferenceMutationCoordinator.beginIntent();
+    const llmSelection = analysisMode === 'llm';
     return runSavedMutation({
         coordinator: preferenceMutationCoordinator,
         intent,
         save: () => {
-            const allOverrides = {
-                ...(llmSettingsState?.settings?.viewCategoryOverrides || {}),
-                [targetViewId]: { add: [], remove: [] }
-            };
-            return updateLlmPreferencesCore({ viewCategoryOverrides: allOverrides });
+            const fallback = (llmSettingsState?.analysisModeDefaults || [])
+                .find(mode => mode.id === targetViewId);
+            if (!fallback) throw new Error('自定义分析模式没有内置预设');
+            const modes = (llmSettingsState?.settings?.analysisModes || []).map(mode =>
+                mode.id === targetViewId
+                    ? { ...mode, categoryIds: [...fallback.categoryIds] }
+                    : { ...mode, categoryIds: [...(mode.categoryIds || [])] }
+            );
+            return updateLlmPreferencesCore({
+                analysisModes: modes,
+                viewCategoryOverrides: {
+                    ...(llmSettingsState?.settings?.viewCategoryOverrides || {}),
+                    [targetViewId]: { add: [], remove: [] }
+                }
+            });
         },
         onSaved: (saved, { isCurrent }) => {
             reconcilePersistedLlmControls(saved, isCurrent);
-            invalidatePreparedComposition();
+            if (llmSelection) invalidatePreparedComposition();
+            else reconcileRegexSelection();
             if (isCurrent()) {
                 renderCategories();
                 updateApplyButton();
             }
         },
-        refresh: (_saved, { isCurrent }) => refreshPreparedComposition({
-            isCurrent,
-            expectedViewId: targetViewId
-        }),
+        refresh: (_saved, { isCurrent }) => llmSelection
+            ? refreshPreparedComposition({
+                isCurrent,
+                expectedViewId: targetViewId
+            })
+            : Promise.resolve({ prepared: false }),
         onSaveFailed: () => {
-            syncPreparedSelection();
+            if (llmSelection) syncPreparedSelection();
+            else reconcileRegexSelection();
             renderCategories();
             updateApplyButton();
             showStatus('恢复预设失败，已保留原分类选择', 'error');
@@ -4607,6 +6305,7 @@ function queueAnalysisModeMutation(targetMode) {
     regexApplySequence += 1;
     const intent = preferenceMutationCoordinator.beginIntent();
     analysisMode = targetMode;
+    if (targetMode === 'regex') reconcileRegexSelection();
     const modeRadio = document.querySelector(
         `input[name="analysisMode"][value="${targetMode}"]`
     );
@@ -4623,6 +6322,8 @@ function queueAnalysisModeMutation(targetMode) {
             reconcilePersistedLlmControls(saved, isCurrent);
             if (isCurrent() && saved.settings.mode === 'llm') {
                 invalidatePreparedComposition();
+            } else if (isCurrent()) {
+                reconcileRegexSelection();
             }
         },
         refresh: async (saved, { isCurrent }) => {
@@ -4651,7 +6352,6 @@ function queueAnalysisModeMutation(targetMode) {
         },
         onRefreshFailed: error => {
             prepareState = 'idle';
-            renderStudyTypeChooser();
             updateApplyButton();
             showStatus(`识别模式已保存，但正文准备失败：${error.message}`, 'error');
         }
@@ -4734,7 +6434,6 @@ async function prepareArticleForAdaptiveAnalysis(tabId, {
     forceRefresh = false
 } = {}) {
     prepareState = 'preparing';
-    renderStudyTypeChooser();
     updateApplyButton();
     const extracted = await sendTabMessage(tabId, {
         action: 'extractArticleForLLM',
@@ -4799,15 +6498,11 @@ async function prepareCurrentArticleForTypeChoice({
                 forceRefresh
             })
         );
-        if (!prepared.stale && prepared.requiresStudyType) {
-            showStatus('正文已准备，请先选择文献类型', 'success');
-        }
         return prepared;
     } catch (error) {
         lastArticlePreparationError = error;
         if (preferenceMutationCoordinator.isCurrent(intent)) {
             prepareState = 'idle';
-            renderStudyTypeChooser();
             updateApplyButton();
             showStatus(`正文准备失败：${error.message}`, 'error');
         }
@@ -4842,7 +6537,7 @@ async function refreshPreparedComposition({
     });
     if (!applies) {
         if (!isCurrent()) return { applied: false, reason: 'superseded' };
-        throw new Error('返回的正文组合与当前文献或阅读视图不一致');
+        throw new Error('返回的正文组合与当前文献或分析模式不一致');
     }
     applyPreparedComposition(prepared, document);
     return { applied: true, prepared };
@@ -4858,12 +6553,13 @@ function renderConfidenceControl() {
 function updateAnalysisModeUi() {
     const isLlm = analysisMode === 'llm';
     document.getElementById('spanModeSection').hidden = isLlm;
-    document.getElementById('llmAdaptiveControls').hidden = !isLlm;
-    document.getElementById('restoreViewPreset').hidden = !isLlm;
+    document.getElementById('llmAdaptiveControls').hidden = false;
+    const hasPreset = (llmSettingsState?.analysisModeDefaults || [])
+        .some(mode => mode.id === readingViewId);
+    document.getElementById('restoreViewPreset').hidden = !hasPreset;
     document.getElementById('llmDiagnostics').hidden = !isLlm;
     document.getElementById('confidenceControl').hidden = !isLlm;
     updateReadingViewControl();
-    renderStudyTypeChooser();
     updateApplyButton();
     updateFigureButton();
     updateReviewOutlineButton();
@@ -4910,7 +6606,7 @@ async function refreshLlmDiagnostics() {
             const primaryName = llmSettingsState?.studyTypes?.[profile.primaryType]?.name ||
                 profile.primaryType;
             parts.push(`类型 ${primaryName}（用户选择）`);
-            parts.push(`视图 ${llmSettingsState?.readingViews?.[diagnostics.readingViewId]?.name || diagnostics.readingViewId}`);
+            parts.push(`模式 ${llmSettingsState?.readingViews?.[diagnostics.readingViewId]?.name || diagnostics.readingViewId}`);
             parts.push('类型已选择');
         }
         if (Number.isInteger(diagnostics.annotationCount)) {
@@ -4955,31 +6651,21 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
         checkbox.checked = Boolean(checked);
         checkbox.setAttribute('aria-label', `${checkbox.checked ? '停用' : '启用'}${rule.name}`);
         checkbox.addEventListener('change', async (e) => {
-            if (analysisMode === 'llm') {
-                const targetViewId = readingViewId;
-                try {
-                    await queueCategorySelectionMutation(
-                        key,
-                        e.target.checked,
-                        targetViewId
-                    );
-                } catch (error) {
-                    syncPreparedSelection();
-                    renderCategories();
-                    showStatus(`保存分类失败，已恢复原选择：${error.message}`, 'error');
-                }
-            } else {
-                const previous = new Set(selectedCategories);
-                if (e.target.checked) selectedCategories.add(key);
-                else selectedCategories.delete(key);
-                try {
+            const targetViewId = readingViewId;
+            try {
+                await queueCategorySelectionMutation(
+                    key,
+                    e.target.checked,
+                    targetViewId
+                );
+                if (analysisMode === 'regex') {
                     await saveSettings();
-                    updateApplyButton();
-                } catch (error) {
-                    selectedCategories = previous;
-                    renderCategories();
-                    showStatus(`保存正则分类失败，已恢复原选择：${error.message}`, 'error');
                 }
+            } catch (error) {
+                if (analysisMode === 'llm') syncPreparedSelection();
+                else reconcileRegexSelection();
+                renderCategories();
+                showStatus(`保存分类失败，已恢复原选择：${error.message}`, 'error');
             }
         });
 
@@ -5193,7 +6879,8 @@ async function applyRegexOnTab(tabId) {
     return sendTabMessage(tabId, {
         action: 'applyHighlight',
         categories,
-        mode: highlightMode
+        mode: highlightMode,
+        analysisModeId: readingViewId
     });
 }
 
@@ -5208,10 +6895,7 @@ async function sendTabMessage(tabId, message) {
 }
 
 async function runFigureAnalysis() {
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        showStatus('请先配置可用的 LLM API 并同意发送 Figure 内容', 'error');
-        return;
-    }
+    if (!requireUsableLlm('逐图解读')) return;
     let tab = null;
     let taskToken = null;
     try {
@@ -5313,26 +6997,72 @@ async function runFigureAnalysis() {
 async function showFigureOriginalImage(figureId) {
     const tab = await queryPanelTargetTab();
     if (!tab?.id) throw new Error('无法获取当前论文页面');
-    const response = await sendTabMessage(tab.id, {
-        action: 'showFigureOriginalImage', figureId
-    });
+    const requestSequence = ++figureOriginalViewerState.requestSequence;
+    figureOriginalViewerState = {
+        open: true,
+        tabId: tab.id,
+        figureId,
+        captionVisible: false,
+        requestSequence
+    };
+    let response;
+    try {
+        response = await sendTabMessage(tab.id, {
+            action: 'showFigureOriginalImage', figureId
+        });
+    } catch (error) {
+        if (requestSequence === figureOriginalViewerState.requestSequence) {
+            figureOriginalViewerState = {
+                open: false,
+                tabId: tab.id,
+                figureId: '',
+                captionVisible: false,
+                requestSequence
+            };
+        }
+        throw error;
+    }
+    if (requestSequence !== figureOriginalViewerState.requestSequence) return;
     if (!response?.success) {
+        figureOriginalViewerState = {
+            open: false,
+            tabId: tab.id,
+            figureId: '',
+            captionVisible: false,
+            requestSequence
+        };
         throw new Error(response?.code === 'IMAGE_NOT_FOUND'
             ? '未找到该 Figure 的高清原图' : '无法打开该 Figure 原图');
     }
+    figureOriginalViewerState = {
+        open: true,
+        tabId: tab.id,
+        figureId: String(response.figureId || figureId),
+        captionVisible: response.captionVisible === true,
+        requestSequence
+    };
 }
 
-async function runFigurePanelFollowup(figureId, panelId, topics, customQuestion = '') {
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        throw new Error('请先配置可用的 LLM API');
-    }
+async function runFigurePanelFollowup(
+    figureId,
+    panelId,
+    topics,
+    customQuestion = '',
+    historyLabel = ''
+) {
+    if (!hasUsableLlm()) throw new Error(llmUnavailableMessage('Panel 追问'));
     const tab = await queryPanelTargetTab();
     if (!tab?.id || !isCurrentFigureTask(figureTaskGeneration, tab.id)) {
         throw new Error('当前论文页面已切换，请返回后重试');
     }
     showStatus(`正在追问 ${figureId} · Panel ${panelId}…`, 'success');
     const response = await sendTabMessage(tab.id, {
-        action: 'askFigurePanelWithLLM', figureId, panelId, topics, customQuestion
+        action: 'askFigurePanelWithLLM',
+        figureId,
+        panelId,
+        topics,
+        customQuestion,
+        historyLabel
     });
     if (!response?.success) {
         const error = new Error(response?.error || 'FIGURE_PANEL_FOLLOWUP_FAILED');
@@ -5364,10 +7094,7 @@ async function runFigurePanelFollowup(figureId, panelId, topics, customQuestion 
 }
 
 async function runSingleFigureAnalysis(figureId) {
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        showStatus('\u8bf7\u5148\u914d\u7f6e\u53ef\u7528\u7684 LLM API', 'error');
-        return;
-    }
+    if (!requireUsableLlm('Figure 解读')) return;
     const taskToken = figureTaskGeneration;
     let tab = null;
     try {
@@ -5389,7 +7116,7 @@ async function runSingleFigureAnalysis(figureId) {
     } catch (error) {
         if (!isCurrentFigureTask(taskToken, tab?.id)) return;
         showStatus(error?.code === 'CANCELLED'
-            ? '单图精读已取消，已有结果会保留。'
+            ? '解图已取消，已有结果会保留。'
             : '\u5355\u56fe\u7cbe\u8bfb\u5931\u8d25\uff1a' + error.message,
         error?.code === 'CANCELLED' ? 'success' : 'error');
     } finally {
@@ -5405,10 +7132,7 @@ async function runSingleFigureAnalysis(figureId) {
 }
 
 async function runSingleFigurePanelAnalysis(figureId, panelId) {
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        showStatus('请先配置可用的 LLM API', 'error');
-        return;
-    }
+    if (!requireUsableLlm('Panel 解读')) return;
     const taskToken = figureTaskGeneration;
     let tab = null;
     try {
@@ -5452,10 +7176,7 @@ async function runSingleFigurePanelAnalysis(figureId, panelId) {
 }
 
 async function runCrossFigureLogic() {
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        showStatus('请先配置可用的 LLM API 并同意发送 Figure 内容', 'error');
-        return;
-    }
+    if (!requireUsableLlm('主图串解')) return;
     let tab = null;
     let taskToken = null;
     try {
@@ -5499,10 +7220,7 @@ async function runCrossFigureLogic() {
 async function runReviewOutlineAnalysis({ forceRefresh = false } = {}) {
     const panelContext = capturePanelContext(reviewOutlineTaskGeneration);
     if (!isCurrentReviewOutlineTask(panelContext)) return;
-    if (llmSettingsState?.effectiveMode !== 'llm') {
-        showStatus('请先配置可用的 LLM API 并同意发送正文', 'error');
-        return;
-    }
+    if (!requireUsableLlm('逐段摘要')) return;
     const tabId = panelContext.tabId;
     try {
         if (!preparedDocumentState) {
@@ -5533,7 +7251,9 @@ async function runReviewOutlineAnalysis({ forceRefresh = false } = {}) {
             action: 'analyzeReviewOutlineWithLLM',
             forceRefresh,
             documentId: preparedDocumentState.documentId,
-            documentHash: preparedDocumentState.documentHash
+            documentHash: preparedDocumentState.documentHash,
+            scopeSectionIds: selectedWorkspaceAnalysisSectionIds(),
+            scopeSelectionProvided: true
         });
         if (!isCurrentReviewOutlineTask(panelContext)) return;
         if (!response?.success) {
@@ -5774,6 +7494,22 @@ function setupEventListeners() {
     document.querySelector('.workspace-view[data-workspace-view="figures"]')
         ?.addEventListener('scroll', syncFigureQuickNavFromScroll, { passive: true });
     document.getElementById('openArticleNavigator')?.addEventListener('click', openArticleNavigator);
+    document.getElementById('sidePanelLanguage')?.addEventListener('click', async event => {
+        const current = event.currentTarget.dataset.language === 'en' ? 'en' : 'zh-CN';
+        const language = current === 'en' ? 'zh-CN' : 'en';
+        updateSidePanelLanguageButton(language);
+        SciLLM.setInterfaceLanguage?.(language);
+        try {
+            llmSettingsState = await sendLlmMessage({
+                type: 'LLM_UPDATE_PREFERENCES',
+                preferences: { language }
+            });
+        } catch (error) {
+            updateSidePanelLanguageButton(current);
+            SciLLM.setInterfaceLanguage?.(current);
+            showStatus(`语言设置保存失败：${error.message}`, 'error');
+        }
+    });
     document.getElementById('analyzeFiguresFromFigures')?.addEventListener('click', runFigureAnalysis);
     document.getElementById('analyzeCrossFigureLogic')?.addEventListener('click', runCrossFigureLogic);
     document.getElementById('articleChatProfile')?.addEventListener('change', event => {
@@ -5783,6 +7519,12 @@ function setupEventListeners() {
     document.getElementById('articleChatForm')?.addEventListener('submit', event => {
         void submitArticleChat(event);
     });
+    document.getElementById('highlightArticleChatMatches')?.addEventListener('click', event => {
+        void submitArticleSemanticHighlight(event);
+    });
+    document.getElementById('articleChatHighlightCategory')?.addEventListener(
+        'change', syncArticleChatHighlightColor
+    );
     document.getElementById('articleChatMessages')?.addEventListener('scroll', event => {
         if (articleChatScrollToLatestActive) return;
         articleChatFollowLatest = isArticleChatNearBottom(event.currentTarget);
@@ -5798,11 +7540,54 @@ function setupEventListeners() {
     document.getElementById('articleChatReturnLatest')?.addEventListener('click', () => {
         scrollArticleChatToLatest({ smooth: true });
     });
+    document.getElementById('articleChatQuestion')?.addEventListener('input', () => {
+        updateArticleChatCommandMenu();
+    });
+    document.getElementById('articleChatQuestion')?.addEventListener('click', () => {
+        updateArticleChatCommandMenu();
+    });
     document.getElementById('articleChatQuestion')?.addEventListener('keydown', event => {
+        if (!document.getElementById('articleChatCommandMenu')?.hidden) {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                setArticleChatCommandActive(articleChatCommandActiveIndex +
+                    (event.key === 'ArrowDown' ? 1 : -1));
+                return;
+            }
+            if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                event.preventDefault();
+                selectArticleChatCommand();
+                return;
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeArticleChatCommandMenu();
+                return;
+            }
+        }
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
             event.preventDefault();
             void submitArticleChat(event);
         }
+    });
+    document.getElementById('articleChatCommandMenu')?.addEventListener('click', event => {
+        const option = event.target.closest('[data-command-index]');
+        if (option) selectArticleChatCommand(Number(option.dataset.commandIndex));
+    });
+    document.addEventListener('pointerdown', event => {
+        const menu = document.getElementById('articleChatCommandMenu');
+        if (!menu || menu.hidden) return;
+        const input = document.getElementById('articleChatQuestion');
+        const scopes = document.getElementById('articleChatContextScopes');
+        if (menu.contains(event.target) || input?.contains(event.target) ||
+            scopes?.contains(event.target)) return;
+        closeArticleChatCommandMenu();
+    });
+    document.getElementById('articleChatContextScopes')?.addEventListener('click', event => {
+        const chip = event.target.closest('[data-scope-id]');
+        if (!chip) return;
+        articleChatContextScopes.delete(chip.dataset.scopeId);
+        renderArticleChatContextScopes();
     });
     document.getElementById('cancelArticleChat')?.addEventListener('click', () => {
         void cancelArticleChat().catch(error =>
@@ -5852,17 +7637,16 @@ function setupEventListeners() {
         });
     });
 
-    document.querySelectorAll('input[name="readingView"]').forEach(radio => {
-        radio.addEventListener('change', async event => {
-            try {
-                await queueReadingViewMutation(event.target.value);
-            } catch (error) {
-                readingViewId = persistedReadingViewId;
-                updateReadingViewControl();
-                renderCategories();
-                showStatus(`切换阅读视图失败，已恢复原选择：${error.message}`, 'error');
-            }
-        });
+    document.getElementById('readingViewControl')?.addEventListener('change', async event => {
+        if (!event.target.matches('input[name="readingView"]')) return;
+        try {
+            await queueReadingViewMutation(event.target.value);
+        } catch (error) {
+            readingViewId = persistedReadingViewId;
+            updateReadingViewControl();
+            renderCategories();
+            showStatus(`切换分析模式失败，已恢复原选择：${error.message}`, 'error');
+        }
     });
 
     document.getElementById('restoreViewPreset').addEventListener('click', async () => {
@@ -5870,7 +7654,7 @@ function setupEventListeners() {
             const targetViewId = readingViewId;
             const result = await queueRestoreViewPreset(targetViewId);
             if (result.status === 'refreshed') {
-                showStatus('已恢复当前阅读视图预设', 'success');
+                showStatus('已恢复当前分析模式预设', 'success');
             }
         } catch (error) {
             showStatus(`恢复预设失败，已保留原分类选择：${error.message}`, 'error');
@@ -5926,10 +7710,6 @@ function setupEventListeners() {
                 await prepareCurrentArticleForTypeChoice();
                 return;
             }
-            if (!getSelectedStudyType()) {
-                showStatus('请先选择文献类型', 'error');
-                return;
-            }
             if (llmSelectedCategories.size === 0) {
                 showStatus('请至少选择一个 LLM 识别类别', 'error');
                 return;
@@ -5942,7 +7722,8 @@ function setupEventListeners() {
                 const response = await sendTabMessage(tab.id, {
                     action: 'analyzeArticleWithLLM',
                     documentId: preparedDocumentState.documentId,
-                    documentHash: preparedDocumentState.documentHash
+                    documentHash: preparedDocumentState.documentHash,
+                    readingViewId
                 });
                 if (response?.cancelled || response?.code === 'CANCELLED') {
                     const error = new Error('分析已取消，已完成分块结果会保留');
@@ -6022,6 +7803,8 @@ let statusMessageTimer = null;
 
 function showStatus(message, type) {
     const statusEl = document.getElementById('statusMessage');
+    recordSidePanelNotification(message, type);
+    if (!statusEl) return;
     statusEl.textContent = message;
     statusEl.className = `status-message side-panel-global-status ${type} show`;
 

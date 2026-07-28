@@ -6,6 +6,17 @@ const vm = require('node:vm');
 
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
+test('manual and rule highlights share hover details and the category-note editor', () => {
+  const script = read('content.js');
+  const css = read('content.css');
+  assert.match(script, /mark\.addEventListener\('mouseenter'/);
+  assert.match(script, /annotation\?\.note/);
+  assert.match(script, /ensureAutomaticHighlightAnnotation/);
+  assert.match(script, /sourceType: 'regex'/);
+  assert.match(script, /showHighlightContextPopover\(manualMark\)/);
+  assert.match(css, /\.sci-manual-highlight\.sci-automatic-annotation/);
+});
+
 function loadManualUiHelpers() {
   const script = read('content.js');
   const startMarker = '// DOM-independent manual annotation UI helpers: start';
@@ -214,6 +225,42 @@ test('toolbar category model prioritizes current-view categories and caps render
   assert.equal(model.hiddenMoreCount, 28);
 });
 
+test('manual selection defaults to the current analysis mode and can switch rule sets locally', () => {
+  const script = read('content.js');
+  const css = read('content.css');
+  const manualSection = script.slice(
+    script.indexOf('// Manual annotation UI: start'),
+    script.indexOf('// Manual annotation UI: end')
+  );
+  assert.match(manualSection, /publicState\?\.settings\?\.readingViewId/);
+  assert.match(manualSection, /function manualCategoriesForAnalysisMode/);
+  assert.match(manualSection, /descriptor\?\.manualAnalysisModeId \|\| currentManualAnalysisModeId/);
+  assert.match(manualSection, /modeRow\.className = 'sci-manual-mode-row'/);
+  assert.match(manualSection, /modeSelect\.addEventListener\('change'/);
+  assert.match(
+    manualSection,
+    /toolbar\.addEventListener\('mousedown',[\s\S]*?event\.target\.closest\('button'\)[\s\S]*?event\.preventDefault\(\)/
+  );
+  assert.doesNotMatch(
+    manualSection,
+    /toolbar\.addEventListener\('mousedown',\s*event\s*=>\s*event\.preventDefault\(\)\)/
+  );
+  assert.match(manualSection, /toolbarCategories\.slice\(0, 8\)/);
+  assert.doesNotMatch(
+    manualSection.match(/modeSelect\.addEventListener\('change'[\s\S]*?\n\s*\}\);/)?.[0] || '',
+    /currentManualAnalysisModeId\s*=\s*modeSelect\.value/
+  );
+  assert.match(manualSection, /changes\?\.sciLlmSettingsV2/);
+  assert.match(manualSection, /CATEGORY_APPEND_FIXED_PHRASE/);
+  assert.match(manualSection, /加入白名单/);
+  assert.match(manualSection, /加入黑名单/);
+  assert.match(manualSection, /listType === 'exclude'/);
+  assert.match(manualSection, /toolbarDescriptor\.manualAnalysisModeId = modeSelect\.value/);
+  assert.match(css, /\.sci-manual-mode-row\s*\{/);
+  assert.match(css, /\.sci-manual-mode-row select\s*\{/);
+  assert.match(css, /\.sci-manual-rule-row\s*\{/);
+});
+
 test('retired categories never enter selection or edit candidates', () => {
   const { splitManualToolbarCategories } = loadManualUiHelpers();
   const active = { categoryId: 'active', name: 'Active', color: '#AABBCC' };
@@ -329,11 +376,17 @@ test('manual, LLM, and regex clear paths are strictly independent', () => {
   const classEnd = script.indexOf('// DOM-independent manual annotation UI helpers: start');
   const highlighterClass = script.slice(classStart, classEnd);
   const regexClear = highlighterClass.match(
-    /clearHighlight\(\)\s*\{([\s\S]*?)\r?\n\s*\}\r?\n\s*\/\/ 获取所有文本节点/
+    /clearHighlight\(analysisModeId = ''\)\s*\{([\s\S]*?)\r?\n\s*\}\r?\n\s*\/\/ 获取所有文本节点/
   )?.[1] || '';
-  const llmClear = script.match(/function clearLlmHighlights\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const llmClear = script.match(
+    /function clearLlmHighlights\(analysisModeId = ''\)\s*\{([\s\S]*?)\n\}/
+  )?.[1] || '';
   const manualClear = script.match(/function clearManualHighlightMarks\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
   assert.match(regexClear, /sci-highlight|highlightedElements/);
+  assert.match(
+    regexClear,
+    /querySelectorAll\(\s*[\s\S]*?sci-highlight\[data-source="regex"\]/
+  );
   assert.doesNotMatch(regexClear, /clearLlmHighlights|sci-llm-highlight|sci-manual-highlight/);
   assert.match(llmClear, /sci-llm-highlight/);
   assert.doesNotMatch(llmClear, /sci-manual-highlight|sci-highlight['"]/);
@@ -358,7 +411,10 @@ test('manual mutations push fresh counts to the active side panel without pollin
   assert.match(popup, /applyManualAnnotationStateEvent\(message\.event, sender\.tab\.id\)/);
   assert.match(popup, /MANUAL_ANNOTATION_STATE_CHANGED[\s\S]{0,300}void refreshArticleWorkspace\(\)/);
   assert.match(popup, /manualSummarySequence \+= 1/);
-  assert.match(popup, /target === 'analysis'[\s\S]{0,80}refreshManualAnnotationSummary/);
+  assert.match(
+    popup,
+    /function openWorkspaceView\(viewId\)[\s\S]{0,180}viewId === 'analysis'[\s\S]{0,80}refreshManualAnnotationSummary/
+  );
 });
 
 test('side-panel highlight distribution separates manual, AI, and rule-generated marks', () => {

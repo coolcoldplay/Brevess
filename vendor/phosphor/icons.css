@@ -42,8 +42,13 @@
 .ph.ph-upload::before { content: "\e4be"; }
 .ph.ph-export::before { content: "\eaf0"; }
 .ph.ph-x::before { content: "\e4f6"; }
-.ph.ph-push-pin::before { content: "\e3e2"; }
 .ph.ph-trash::before { content: "\e4a6"; }
 .ph.ph-magnifying-glass::before { content: "\e30c"; }
 .ph.ph-database::before { content: "\e1de"; }
 .ph.ph-check-circle::before { content: "\e184"; }
+.ph.ph-compass::before { content: "\e1c8"; }
+.ph.ph-list-magnifying-glass::before { content: "\ebe0"; }
+.ph.ph-quotes::before { content: "\e660"; }
+.ph.ph-image::before { content: "\e2ca"; }
+.ph.ph-chat-circle-text::before { content: "\e16e"; }
+.ph.ph-bell::before { content: "\e0ce"; }

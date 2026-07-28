@@ -79,6 +79,17 @@ test('keeps ScienceDirect leaf article-body containers out of trusted full-text 
   assert.equal(adapter.specificArticleRootSelectors.includes('.article-body'), false);
 });
 
+test('declares Cell video controls as precise publisher chrome', () => {
+  const adapter = selectPublisherAdapter({ hostname: 'www.cell.com' }, {});
+  assert.ok(adapter.excludedSelectors.includes('.video-player'));
+  assert.ok(adapter.excludedSelectors.includes('.video-playback'));
+  assert.ok(adapter.excludedSelectors.includes('.video-player-modal'));
+  assert.ok(adapter.excludedSelectors.includes('.keyboard-shortcuts-modal'));
+  assert.ok(adapter.excludedSelectors.includes('.download-options-modal'));
+  assert.ok(adapter.excludedSelectors.includes('.transcript-panel'));
+  assert.equal(adapter.excludedSelectors.includes('[class*="transcript"]'), false);
+});
+
 test('declares AAAS collateral and author panels as publisher chrome', () => {
   const adapter = selectPublisherAdapter({ hostname: 'spj.science.org' }, {});
   assert.ok(adapter.excludedSelectors.includes('.core-authors'));

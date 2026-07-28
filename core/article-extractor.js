@@ -5,6 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const REFERENCE_SECTION = /^(references|bibliography|literature cited)\b/i;
   const EXCLUDED_SECTION = /^(?:references|bibliography|literature cited|keywords?|abbreviations?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|generative ai statement|declaration of ai use|funding|conflicts? of interest|competing interests?|declaration of competing interest|declaration of interests?|data availability|data and code availability|supplementary materials?|supplementary data|appendix\b.*supplementary data|footnotes?|ethics approval|institutional review board statement|informed consent statement|publisher['’]s note|disclosure statement)\b/i;
+  const NAVIGABLE_ARTICLE_SECTION = /^(?:main|highlights?|summary|abstract|graphical abstract|keywords?|introduction|background|materials? and methods?|methods?|methodology|experimental procedures?|star\s*[★*]?\s*methods?|results?|findings?|discussion|conclusions?|concluding remarks?|limitations?|strengths? and limitations?|resource availability|data(?: and code)? availability(?: statement)?|code availability|references|bibliography|literature cited|appendix|extended data(?: figures?|tables?)?|supplement(?:al|ary)(?: information| materials?| data| figures?| tables?)?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|funding|conflicts? of interest(?: declaration)?|competing interests?|declaration of (?:competing )?interests?|ethics approval|institutional review board statement|informed consent statement|footnotes?)\b/i;
   const CONTENT_ROOT_SELECTOR = [
     'article', 'main', '[role="main"]', '#body', '#article-body', '.Body',
     '.article-body', '[data-testid="article-body"]', '[data-article-body]'
@@ -15,16 +16,19 @@
     `${SEMANTIC_HEADING_SELECTOR},${SUPPLEMENTAL_HEADING_SELECTOR},p,li,caption,[role="paragraph"]`;
   const STRUCTURAL_TEXT_SELECTOR = `${CONTENT_BLOCK_SELECTOR},figcaption`;
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
-  const EXTRACTOR_VERSION = '2.1.0-extractor-r13';
+  const EXTRACTOR_VERSION = '2.1.0-extractor-r16';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
   const EXCLUDED_ANCESTOR_SELECTOR =
-    'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],.references,.bibliography,' +
-    '.citation,.citation-content,.contributors,.advertisement,.related-articles,' +
+    'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],' +
+    '.citation,.citation-content,.advertisement,.related-articles,' +
     '.recommended,.comments,.social-share,.article-outline,.outline-panel,.table-of-contents,' +
-    '.article-tools,.article-header-actions,.supplementary-materials';
+    '.article-tools,.article-header-actions,' +
+    '[class*="related-content" i],[class*="recommendation" i]';
 
-  const REVIEW_UTILITY_SECTION = /^(?:article|outline|table of contents|tables?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|fig(?:ure)?s?(?:\s+(?:\(\d+\)|\d+)(?:\b.*)?)?|extras?(?:\s*\(\d+\))?|keywords?|graphical abstract|highlights?|recommended articles?|related info links?|cited by(?:\s*\(\d+\))?|article metrics?|author information|information\s*&\s*authors|information|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|media|share|download(?:s| files?)?|show full outline|skip to\b.*)$/i;
+  const REVIEW_UTILITY_SECTION = /^(?:article|outline|table of contents|tables?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|fig(?:ure)?s?(?:\s+(?:\(\d+\)|\d+)(?:\b.*)?)?|extras?(?:\s*\(\d+\))?|keywords?|graphical abstract|highlights?|recommended articles?|related info links?|related content|similar content(?:\s+being viewed by others)?|you may also like|recommended for you|cited by(?:\s*\(\d+\))?|article metrics?|author information|information\s*&\s*authors|information|info|accessibility(?:\s*&\s*keyboard shortcuts)?|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|media|share|download(?:s| files?|\s+options)?|transcript|show full outline|skip to\b.*)$/i;
+  const SCOPED_UTILITY_SECTION = /^(?:recommended articles?|related content|similar content(?:\s+being viewed by others)?|you may also like|recommended for you)$/i;
   const REVIEW_UTILITY_TEXT = /^(?:show more|view pdf|view in article|download full issue|add to mendeley|share|cite|get rights and content|open access|no articles found\.?)$/i;
+  const REVIEW_UTILITY_PARAGRAPH = /^(?:you (?:do not|don't) have access\b.*|this (?:article|content) is (?:only )?available\b.*|access (?:this|to this) (?:article|content)\b.*|sign in (?:to|through)\b.*(?:access|institution)|log in (?:to|through)\b.*(?:access|institution)|institutional (?:access|subscription)\b.*|(?:该|此)(?:文章|内容|全文).*(?:仅|只|需要).*(?:访问|订阅|登录)|.*(?:通过|经由).*(?:机构|大学).*(?:访问|阅读全文).*)$/i;
   const OUTLINE_LINK_SELECTOR = [
     'nav a[href^="#"]', 'aside a[href^="#"]',
     '[class*="outline" i] a[href*="#"]', '[id*="outline" i] a[href*="#"]',
@@ -42,7 +46,12 @@
   }
 
   function isExcludedSectionHeading(text) {
-    return EXCLUDED_SECTION.test(String(text || '').trim());
+    const title = String(text || '').trim();
+    return EXCLUDED_SECTION.test(title) && !NAVIGABLE_ARTICLE_SECTION.test(title);
+  }
+
+  function isNavigableArticleSectionHeading(text) {
+    return NAVIGABLE_ARTICLE_SECTION.test(String(text || '').trim());
   }
 
   function isLikelyNonArticleChallenge(documentRef) {
@@ -60,15 +69,31 @@
     const text = String(value || '').trim()
       .replace(/^\s*(?:\d+(?:\.\d+)*|[IVXLC]+)[\s.):\-]+/i, '')
       .toLowerCase();
-    if (/^(?:abstract|summary)\b/.test(text)) return 'abstract';
+    if (/^(?:abstract|summary|highlights?|graphical abstract)\b/.test(text)) return 'abstract';
+    if (/^main\b/.test(text)) return 'main';
     if (/^(?:introduction|background)\b/.test(text)) return 'introduction';
-    if (/^(?:materials? and methods?|methods?|methodology|experimental procedures?)\b/.test(text)) {
+    if (/^(?:materials? and methods?|methods?|methodology|experimental procedures?|star\s*[★*]?\s*methods?)\b/.test(text)) {
       return 'methods';
     }
     if (/^(?:results?|findings?)\b/.test(text)) return 'results';
     if (/^(?:discussion)\b/.test(text)) return 'discussion';
     if (/^(?:conclusions?|concluding remarks?)\b/.test(text)) return 'conclusion';
     if (/^(?:limitations?|strengths? and limitations?)\b/.test(text)) return 'discussion';
+    if (REFERENCE_SECTION.test(text)) return 'reference';
+    if (/^appendix\b/.test(text)) return 'appendix';
+    if (/^extended data\b/.test(text)) return 'extended-data';
+    if (/^supplement(?:al|ary)\b/.test(text)) return 'supplementary';
+    if (/^acknowledg(?:e)?ments?\b/.test(text)) return 'acknowledgements';
+    if (/^(?:author information|information\s*&\s*authors|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement)\b/.test(text)) {
+      return 'author-information';
+    }
+    if (/^(?:resource availability|data(?: and code)? availability|code availability)\b/.test(text)) {
+      return 'availability';
+    }
+    if (/^(?:funding|conflicts? of interest|competing interests?|declaration of (?:competing )?interests?|ethics approval|institutional review board statement|informed consent statement|footnotes?)\b/.test(text)) {
+      return 'metadata';
+    }
+    if (/^keywords?\b/.test(text)) return 'front-matter';
     return '';
   }
 
@@ -104,12 +129,21 @@
   function isReviewUtilitySectionTitle(value) {
     const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
     if (!text) return false;
+    if (isNavigableArticleSectionHeading(text)) return false;
     if (/^cite$/i.test(text) || REVIEW_UTILITY_TEXT.test(text)) return true;
     if (REFERENCE_SECTION.test(text) || EXCLUDED_SECTION.test(text)) return true;
     if (REVIEW_UTILITY_SECTION.test(text)) return true;
     return /^(?:review|research|original|clinical)\s*article$/i.test(text) ||
       (/^(?:review|research|original|clinical)\s*article/i.test(text) &&
         text.length > 20);
+  }
+
+  function isReviewUtilityParagraphText(value) {
+    const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    return Boolean(text) && (
+      REVIEW_UTILITY_TEXT.test(text) ||
+      REVIEW_UTILITY_PARAGRAPH.test(text)
+    );
   }
 
   function normalizeTextWithOffsets(value) {
@@ -142,6 +176,23 @@
     return { text: output.join(''), rawStarts, rawEnds };
   }
 
+  function scientificInlineText(element) {
+    if (!element) return '';
+    const visit = node => {
+      if (!node) return '';
+      if (node.nodeType === 3) return String(node.nodeValue || '');
+      const tagName = String(node.tagName || '').toUpperCase();
+      const content = [...(node.childNodes || [])].map(visit).join('');
+      if (tagName === 'SUP' || tagName === 'SUB') {
+        const normalized = content.replace(/\s+/g, ' ').trim();
+        return normalized ? `<${tagName.toLowerCase()}>${normalized}</${tagName.toLowerCase()}>` : '';
+      }
+      if (tagName === 'BR') return ' ';
+      return content;
+    };
+    return visit(element).replace(/\s+/g, ' ').trim();
+  }
+
   function hashNormalizedText(value) {
     const text = normalizeTextWithOffsets(value).text.normalize('NFKC').toLowerCase();
     let first = 2166136261;
@@ -155,8 +206,8 @@
       `${(second >>> 0).toString(16).padStart(8, '0')}`;
   }
 
-  function recordTypeForBlock(kind, referenceListReached) {
-    if (referenceListReached || kind === 'reference') return 'reference';
+  function recordTypeForBlock(kind) {
+    if (kind === 'reference') return 'reference';
     if (kind === 'figure-caption') return 'figure-caption';
     if (kind === 'table-caption') return 'table-caption';
     return 'body';
@@ -193,50 +244,35 @@
     let sectionKind = 'article';
     let index = 0;
     let excluded = false;
-    let referenceListReached = false;
+    let utilityExcludedLevel = null;
     const sectionOccurrences = new Map();
     const headingStack = [];
     const recordIndexes = new Map();
 
     blocks.forEach(block => {
       const text = normalizeTextWithOffsets(block.text).text;
+      const displayText = String(block.displayText || '').trim() || text;
       if (!text) return;
       if (block.kind === 'heading') {
-        if (REFERENCE_SECTION.test(text)) {
-          referenceListReached = true;
-          excluded = false;
-          sectionKind = 'reference';
-          sectionTitle = text;
-          const sectionSlug = slugifyHeading(text);
-          const occurrence = (sectionOccurrences.get(sectionSlug) || 0) + 1;
-          sectionOccurrences.set(sectionSlug, occurrence);
-          sectionId = `sec-${sectionSlug}${occurrence > 1 ? `-${occurrence}` : ''}`;
-          headingStack.length = 0;
-          headingStack.push({
-            level: Number.isInteger(block.level) ? block.level : 2,
-            sectionId,
-            title: sectionTitle,
-            domId: String(block.domId || ''),
-            dataSelector: String(block.dataSelector || ''),
-            blockFingerprint: String(block.blockFingerprint || '')
-          });
-          index = 0;
-          return;
+        const level = Number.isInteger(block.level) && block.level >= 1 && block.level <= 6
+          ? block.level : 2;
+        if (utilityExcludedLevel !== null) {
+          if (level > utilityExcludedLevel) return;
+          utilityExcludedLevel = null;
         }
-        if (referenceListReached) return;
         if (isReviewUtilitySectionTitle(text) && !isExcludedSectionHeading(text)) {
+          if (SCOPED_UTILITY_SECTION.test(text)) utilityExcludedLevel = level;
           return;
         }
         excluded = isExcludedSectionHeading(text);
         if (!excluded) {
-          sectionKind = classifyMajorSectionHeading(text) || sectionKind;
+          const classifiedSectionKind = classifyMajorSectionHeading(text);
+          sectionKind = classifiedSectionKind || sectionKind;
           sectionTitle = text;
           const sectionSlug = slugifyHeading(text);
           const occurrence = (sectionOccurrences.get(sectionSlug) || 0) + 1;
           sectionOccurrences.set(sectionSlug, occurrence);
           sectionId = `sec-${sectionSlug}${occurrence > 1 ? `-${occurrence}` : ''}`;
-          const level = Number.isInteger(block.level) && block.level >= 1 && block.level <= 6
-            ? block.level : 2;
           while (headingStack.length && headingStack[headingStack.length - 1].level >= level) {
             headingStack.pop();
           }
@@ -244,6 +280,7 @@
             level,
             sectionId,
             title: sectionTitle,
+            displayTitle: displayText,
             domId: String(block.domId || ''),
             dataSelector: String(block.dataSelector || ''),
             blockFingerprint: String(block.blockFingerprint || '')
@@ -252,9 +289,10 @@
         }
         return;
       }
-      if (excluded) return;
+      if (excluded || utilityExcludedLevel !== null) return;
+      if (block.kind === 'paragraph' && isReviewUtilityParagraphText(text)) return;
       const textHash = hashNormalizedText(text);
-      const recordType = recordTypeForBlock(block.kind, referenceListReached);
+      const recordType = recordTypeForBlock(block.kind);
       const explicitSourceIdentity = String(
         block.sourceKey || block.blockFingerprint ||
         stableSourceSelector(block.dataSelector) || block.domId || ''
@@ -282,14 +320,23 @@
         recordType,
         sectionId,
         sectionTitle,
+        displaySectionTitle: headingStack.length
+          ? headingStack[headingStack.length - 1].displayTitle || sectionTitle
+          : sectionTitle,
         sectionKind,
         headingLevel: headingStack.length
           ? headingStack[headingStack.length - 1].level : 1,
         headingPath: headingStack.length
           ? headingStack.map(item => ({ ...item }))
-          : [{ level: 1, sectionId: 'sec-article', title: 'Article' }],
+          : [{
+              level: 1,
+              sectionId: 'sec-article',
+              title: 'Article',
+              displayTitle: 'Article'
+            }],
         kind: block.kind || 'paragraph',
         text,
+        displayText,
         domId: String(block.domId || ''),
         dataSelector: String(block.dataSelector || ''),
         blockFingerprint: String(block.blockFingerprint || '')
@@ -333,18 +380,23 @@
       if (isExcludedContentElement(element, adapter)) return false;
       if (element.querySelector?.(STRUCTURAL_TEXT_SELECTOR)) return false;
       const text = normalizeTextWithOffsets(element.textContent).text;
-      if (text.length < 40) return false;
+      if (text.length < 40 || text.length > 1800) return false;
       const wordCount = (text.match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
       const hasSentencePunctuation = /[.!?。！？]/.test(text);
-      return (wordCount >= 6 || /[\u3400-\u9fff]/.test(text)) &&
+      return (wordCount >= (role === 'paragraph' ? 6 : 10) ||
+        /[\u3400-\u9fff]/.test(text)) &&
         (text.length >= 120 || hasSentencePunctuation);
     });
     const supplementalSet = new Set(supplementalCandidates);
-    const supplementalLeaves = supplementalCandidates.filter(element =>
-      ![...(element.querySelectorAll?.('*') || [])]
-        .some(descendant => supplementalSet.has(descendant))
-    );
-    const selected = new Set([...primaryElements, ...supplementalLeaves]);
+    const supplementalRoots = supplementalCandidates.filter(element => {
+      let ancestor = element.parentElement || null;
+      while (ancestor && ancestor !== root) {
+        if (supplementalSet.has(ancestor)) return false;
+        ancestor = ancestor.parentElement || null;
+      }
+      return true;
+    });
+    const selected = new Set([...primaryElements, ...supplementalRoots]);
     return allElements.filter(element => selected.has(element));
   }
 
@@ -474,6 +526,7 @@
       kind: getBlockKind(element),
       level: isHeadingElement(element) ? getHeadingLevel(element) : 0,
       text: element.textContent,
+      displayText: scientificInlineText(element),
       sourceIndex,
       domId: String(element.id || ''),
       dataSelector: element.dataset?.sciLlmParagraphId
@@ -593,7 +646,14 @@
       const root = outlineContentRoot(target);
       if (!root) return;
       seenTargets.add(target);
-      entries.push({ targetId, target, root, link, title });
+      entries.push({
+        targetId,
+        target,
+        root,
+        link,
+        title,
+        displayTitle: scientificInlineText(link) || title
+      });
     });
     return entries;
   }
@@ -661,6 +721,7 @@
         kind: 'heading',
         level,
         text: entry.title,
+        displayText: scientificInlineText(matchingHeading) || entry.displayTitle || entry.title,
         domId: String(matchingHeading?.id || entry.target?.id || entry.targetId || ''),
         dataSelector: headingDataSelector,
         blockFingerprint: String(entry.targetId || matchingHeading?.id || '')
@@ -671,6 +732,7 @@
             kind: 'heading',
             level: getHeadingLevel(element),
             text: element.textContent,
+            displayText: scientificInlineText(element),
             domId: String(element.id || ''),
             blockFingerprint: String(element.id || '')
           });
@@ -684,6 +746,7 @@
           kind,
           level: 0,
           text: element.textContent,
+          displayText: scientificInlineText(element),
           sourceIndex,
           domId: String(element.id || ''),
           sourceKey: String(
@@ -715,10 +778,13 @@
     const sourceRecords = Array.isArray(records) ? records : [];
     const firstRecordBySection = new Map();
     sourceRecords.forEach(record => {
-      const sectionId = String(record?.sectionId || '');
-      if (sectionId && !firstRecordBySection.has(sectionId)) {
-        firstRecordBySection.set(sectionId, record);
-      }
+      const path = Array.isArray(record?.headingPath) ? record.headingPath : [];
+      path.forEach(heading => {
+        const sectionId = String(heading?.sectionId || '');
+        if (sectionId && !firstRecordBySection.has(sectionId)) {
+          firstRecordBySection.set(sectionId, record);
+        }
+      });
     });
     const headings = [];
     const seen = new Set();
@@ -736,6 +802,8 @@
           sourceKey,
           parentSourceKey: index ? String(path[index - 1].sectionId || '') : '',
           title: heading.title,
+          displayTitle: heading.displayTitle || heading.title,
+          sectionKind: firstRecord?.sectionKind || '',
           level: heading.level,
           order: headings.length,
           domId: heading.domId || (syntheticArticle ? firstRecord?.domId : '') || '',
@@ -756,13 +824,16 @@
       sourceIdentity: record.sourceIdentity,
       headingSourceKey: record.sectionId,
       text: record.text,
+      displayText: record.displayText || record.text,
       textHash: record.textHash,
       recordType: record.recordType,
       sectionTitle: record.sectionTitle,
+      displaySectionTitle: record.displaySectionTitle || record.sectionTitle,
       sectionPath: (record.headingPath || []).map(item => ({
         level: item.level,
         sectionId: item.sectionId,
-        title: item.title
+        title: item.title,
+        displayTitle: item.displayTitle || item.title
       })),
       sectionKind: record.sectionKind,
       kind: record.kind,
@@ -806,17 +877,21 @@
     const rootTitles = [...new Set((Array.isArray(rootRecords) ? rootRecords : [])
       .map(record => normalizedHeadingKey(record?.sectionTitle))
       .filter(title => title && title !== 'article'))];
+    const titleCoveredByOutline = rootTitle => titles.some(outlineTitle =>
+      outlineTitle === rootTitle ||
+      outlineTitle.includes(rootTitle) ||
+      rootTitle.includes(outlineTitle)
+    );
+    const missingCoreFrontMatter = rootTitles.filter(rootTitle =>
+      /^(?:highlights?|summary|abstract|graphical abstract)\b/i.test(rootTitle) &&
+      !titleCoveredByOutline(rootTitle)
+    );
+    if (missingCoreFrontMatter.length) return false;
     if (rootTitles.length >= 6) {
-      const coveredRootTitles = rootTitles.filter(rootTitle =>
-        titles.some(outlineTitle =>
-          outlineTitle === rootTitle ||
-          outlineTitle.includes(rootTitle) ||
-          rootTitle.includes(outlineTitle)
-        )
-      );
+      const coveredRootTitles = rootTitles.filter(titleCoveredByOutline);
       const missingRootTitles = rootTitles.length - coveredRootTitles.length;
       const rootCoverage = coveredRootTitles.length / rootTitles.length;
-      if (missingRootTitles >= 3 && rootCoverage < 0.8) return false;
+      if (missingRootTitles >= 2 && rootCoverage < 0.9) return false;
     }
     return true;
   }
@@ -1177,14 +1252,17 @@
 
   return {
     isExcludedSectionHeading,
+    isNavigableArticleSectionHeading,
     classifyMajorSectionHeading,
     isHeadingElement,
     getHeadingLevel,
     isReviewUtilitySectionTitle,
+    isReviewUtilityParagraphText,
     buildParagraphRecords,
     hashNormalizedText,
     summarizeArticleRecords,
     normalizeTextWithOffsets,
+    scientificInlineText,
     collectContentElements,
     scoreContentRoot,
     selectContentRoot,

@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const RUNTIME_REVISION = '2.4.6-build39-publisher-focus-r6';
+  const RUNTIME_REVISION = '1.0.0-build1-store-release';
   const TASK_TIMEOUTS_MS = Object.freeze({
     highlight: 180000,
     summary: 180000,
@@ -19,9 +19,13 @@
     crossFigure: 1
   });
   const PREFERENCE_KEYS = new Set([
-    'mode', 'providerId', 'consentGranted', 'autoAnalyze', 'selectedCategoryIds',
+    'mode', 'language', 'providerId', 'consentGranted', 'autoAnalyze',
+    'autoCacheFigureImages',
+    'selectedCategoryIds',
     'confidenceThreshold', 'readingViewId', 'viewCategoryOverrides',
-    'figurePanelFollowupPrompts'
+    'analysisModes', 'figurePanelFollowupPrompts', 'figurePanelFollowupPresets',
+    'articleChatQuickPrompts',
+    'keyboardShortcuts'
   ]);
 
   function invalidSettings(fields) {
@@ -74,11 +78,14 @@
       'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
       'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
       'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
+      'TURN_NOT_FOUND', 'TURN_ALREADY_EXISTS',
       'INVALID_WORKSPACE', 'INVALID_WORKSPACE_PATH', 'INVALID_WORKSPACE_MANIFEST',
       'INVALID_WORKSPACE_INDEX', 'WORKSPACE_CONTAINS_CREDENTIALS',
       'INVALID_MIGRATION_SCHEMA', 'INVALID_MIGRATION_SETTINGS',
       'INVALID_MIGRATION_DOCUMENTS', 'INVALID_MIGRATION_FEEDBACK',
-      'MIGRATION_BUNDLE_TOO_LARGE'
+      'MIGRATION_BUNDLE_TOO_LARGE',
+      'CODEX_NOT_INSTALLED', 'CODEX_NOT_AUTHENTICATED',
+      'CODEX_BRIDGE_UNAVAILABLE', 'CODEX_PROVIDER_REJECTED'
     ]);
     const code = allowedCodes.has(error?.code) ? error.code : 'INTERNAL_ERROR';
     const messages = {
@@ -95,6 +102,10 @@
       CANCELLED: 'Provider request was cancelled',
       LLM_NOT_READY: 'LLM mode requires a configured provider and consent',
       NO_USABLE_PROFILE: 'No usable API profile is configured',
+      CODEX_NOT_INSTALLED: 'Codex is not installed on this computer',
+      CODEX_NOT_AUTHENTICATED: 'Codex is installed but not signed in',
+      CODEX_BRIDGE_UNAVAILABLE: 'The local Codex bridge is unavailable',
+      CODEX_PROVIDER_REJECTED: 'Local Codex rejected the request',
       TOKEN_LIMIT_REJECTED: 'Provider rejected the requested output token limit',
       PARAGRAPH_STALE: 'The requested paragraph is no longer in the document',
       CONTEXT_BUDGET_EXCEEDED: 'The selected model context window cannot fit this request',
@@ -117,6 +128,8 @@
       WORKSPACE_DELETION_CONFLICT: 'The article workspace deletion state changed.',
       WORKSPACE_DELETION_PENDING: 'The article workspace is being deleted.',
       INVALID_WORKSPACE_GENERATION: 'The article workspace generation is invalid.',
+      TURN_NOT_FOUND: 'The saved chat turn is missing and must be recreated.',
+      TURN_ALREADY_EXISTS: 'The saved chat turn already exists.',
       INVALID_WORKSPACE: 'The article workspace is invalid.',
       INVALID_WORKSPACE_PATH: 'The article workspace path is invalid.',
       INVALID_WORKSPACE_MANIFEST: 'The article workspace manifest is invalid.',
@@ -133,6 +146,7 @@
       code,
       message: messages[code],
       runtimeRevision: RUNTIME_REVISION,
+      retryable: error?.retryable === true,
       fields: code === 'INVALID_SETTINGS' ? error.fields || [] : undefined
     };
     const allowedDiagnosticStages = new Set(['request', 'response-body']);
@@ -199,7 +213,9 @@
     if (!profile) return null;
     return {
       ...profile,
-      primaryTypeName: shared.STUDY_TYPES?.[profile?.primaryType]?.name || profile?.primaryType || ''
+      primaryTypeName: profile?.useTypeSpecificWarnings === false
+        ? '通用分析'
+        : shared.STUDY_TYPES?.[profile?.primaryType]?.name || profile?.primaryType || ''
     };
   }
 
@@ -218,10 +234,12 @@
     storageArea,
     sessionStorageArea,
     fetchImpl,
+    nativeClient = null,
     cacheStore = shared.createMemoryAnalysisCache(),
     corpusStore = shared.createMemoryCorpusStore(),
     documentStore = shared.createMemoryDocumentStore(),
     articleWorkspaceStore = null,
+    tokenUsageStore = null,
     directorySync = null,
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay))
   }) {
@@ -288,6 +306,14 @@
         .map(normalizeUnifiedCustomCategory);
       const customCategories = [...savedCustomCategories, ...normalizedSessionCategories];
       const categoryMap = shared.createUnifiedCategoryCatalog(settings.categoryOverrides);
+      const deletedBuiltInCategoryIds = new Set(
+        Array.isArray(settings.deletedBuiltInCategoryIds)
+          ? settings.deletedBuiltInCategoryIds
+          : []
+      );
+      deletedBuiltInCategoryIds.forEach(categoryId => {
+        delete categoryMap[categoryId];
+      });
       customCategories.forEach(category => { categoryMap[category.categoryId] = category; });
       return {
         savedCustomCategories,
@@ -299,15 +325,36 @@
 
     async function publicState(settings) {
       const { customCategories, categoryMap } = await loadAllCategories(settings);
+      const baseCatalog = shared.createUnifiedCategoryCatalog();
+      const deletedBuiltInCategories = (settings.deletedBuiltInCategoryIds || [])
+        .map(categoryId => baseCatalog[categoryId])
+        .filter(Boolean)
+        .map(publicCategory);
       return {
         settings: shared.toPublicSettings(settings),
         effectiveMode: shared.getEffectiveMode(settings),
+        llmReady: shared.isLlmReady(settings),
         providers: shared.getProviderDefinitions(),
         compatibleProviderPresets: shared.getCompatibleProviderPresets(),
         panelFollowupDefaults: cloneJsonLike(shared.DEFAULT_PANEL_FOLLOWUP_PROMPTS || {}),
+        panelFollowupPresetDefaults: cloneJsonLike(
+          shared.DEFAULT_PANEL_FOLLOWUP_PRESETS || []
+        ),
+        articleChatQuickPromptDefaults: cloneJsonLike(
+          shared.DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS || []
+        ),
         customCategories,
+        deletedBuiltInCategories,
         studyTypes: shared.STUDY_TYPES,
-        readingViews: shared.READING_VIEWS,
+        readingViews: Object.fromEntries((settings.analysisModes || []).map(mode => [
+          mode.id,
+          {
+            name: mode.name,
+            description: mode.description,
+            categoryIds: [...mode.categoryIds]
+          }
+        ])),
+        analysisModeDefaults: shared.createDefaultAnalysisModes(),
         availableCategories: Object.values(categoryMap).map(publicCategory)
       };
     }
@@ -318,6 +365,9 @@
       }
       const baseCatalog = shared.createUnifiedCategoryCatalog();
       const baseCategory = baseCatalog[categoryId];
+      if (baseCategory && (settings.deletedBuiltInCategoryIds || []).includes(categoryId)) {
+        throw invalidSettings(['categoryId']);
+      }
       const hasOverride = Boolean(baseCategory) && Object.prototype.hasOwnProperty.call(
         settings.categoryOverrides || {}, categoryId
       );
@@ -345,7 +395,7 @@
     }
 
     function requireLlmReady(settings) {
-      if (shared.getEffectiveMode(settings) !== 'llm') {
+      if (!shared.isLlmReady(settings)) {
         const error = new Error('LLM mode is not ready');
         error.code = 'LLM_NOT_READY';
         throw error;
@@ -374,7 +424,8 @@
       const rawAdapter = shared.createProviderAdapter({
         providerId: route.providerId,
         config: route.config,
-        fetchImpl
+        fetchImpl,
+        nativeClient
       });
       const routePublic = publicRoute(route);
       const tokenPolicyCap = Math.max(0, Number(adapterOptions.tokenPolicyCap) || 0);
@@ -417,24 +468,32 @@
 
     async function composeCategories(settings, profile) {
       const { customCategories } = await loadAllCategories(settings);
+      const viewDefinition = (settings.analysisModes || [])
+        .find(mode => mode.id === settings.readingViewId);
       return shared.composeReadingView({
         viewId: settings.readingViewId,
+        viewDefinition,
         studyProfile: profile,
         override: settings.viewCategoryOverrides?.[settings.readingViewId],
         customCategories,
         categoryOverrides: settings.categoryOverrides,
+        deletedBuiltInCategoryIds: settings.deletedBuiltInCategoryIds,
         engine: 'llm'
       });
     }
 
     async function composeManualCategories(settings, profile) {
       const { customCategories } = await loadAllCategories(settings);
+      const viewDefinition = (settings.analysisModes || [])
+        .find(mode => mode.id === settings.readingViewId);
       return shared.composeReadingView({
         viewId: settings.readingViewId,
+        viewDefinition,
         studyProfile: profile,
         override: settings.viewCategoryOverrides?.[settings.readingViewId],
         customCategories,
-        categoryOverrides: settings.categoryOverrides
+        categoryOverrides: settings.categoryOverrides,
+        deletedBuiltInCategoryIds: settings.deletedBuiltInCategoryIds
       });
     }
 
@@ -480,7 +539,14 @@
         documentHashes: [documentHash],
         legacyStudyTypeMigrated: true
       });
-      const profile = shared.createManualStudyProfile(record.studyType, document);
+      const profile = shared.createManualStudyProfile(record.studyType, document) || {
+          ...shared.createFallbackStudyProfile('使用当前分析模式，不需要选择论文类型。'),
+          primaryType: '',
+          paperBlueprint: shared.deriveManualPaperBlueprint(document),
+          requiresConfirmation: false,
+          useTypeSpecificWarnings: false,
+          manuallyOverridden: false
+        };
       const composition = await composeManualCategories(settings, profile);
       return { documentId, documentHash, record, profile, composition, paragraphs };
     }
@@ -538,7 +604,14 @@
       if (!record || !knownHashes.has(documentHash)) {
         throw invalidSettings(['documentProof']);
       }
-      const profile = shared.createManualStudyProfile(record.studyType, message.document);
+      const profile = shared.createManualStudyProfile(record.studyType, message.document) || {
+          ...shared.createFallbackStudyProfile('使用当前分析模式，不需要选择论文类型。'),
+          primaryType: '',
+          paperBlueprint: shared.deriveManualPaperBlueprint(message.document),
+          requiresConfirmation: false,
+          useTypeSpecificWarnings: false,
+          manuallyOverridden: false
+        };
       const composition = await composeCategories(settings, profile);
       documentIdsByHash.set(documentHash, documentId);
       return {
@@ -704,8 +777,22 @@
       const adapter = shared.createProviderAdapter({
         providerId: profile.providerId,
         config,
-        fetchImpl
+        fetchImpl,
+        nativeClient
       });
+      if (profile.providerId === 'codex-local' &&
+          typeof adapter.testConnection === 'function') {
+        const status = await adapter.testConnection({ timeoutMs: 120000 });
+        return {
+          connected: status?.connected === true,
+          profileId,
+          providerId: profile.providerId,
+          model: config.model || 'auto',
+          accountType: status?.accountType || '',
+          planType: status?.planType || '',
+          userAgent: status?.userAgent || ''
+        };
+      }
       const connectionParagraphs = [
         { paragraphId: 'connection-p1', sectionTitle: '', text: 'Treatment increased survival.' }
       ];
@@ -738,6 +825,7 @@
         revision: Number(settings.userDataCategoryRevision) || 0,
         sourceId: 'extension',
         categoryOverrides: cloneJsonLike(settings.categoryOverrides || {}),
+        deletedBuiltInCategoryIds: [...(settings.deletedBuiltInCategoryIds || [])],
         customCategories: cloneJsonLike(settings.customCategories || []),
         selectedCategoryIds: [...(settings.selectedCategoryIds || [])],
         viewCategoryOverrides: cloneJsonLike(settings.viewCategoryOverrides || {})
@@ -816,6 +904,16 @@
     function testCategoryRegex(category, text) {
       const flags = category.regex.caseSensitive ? 'g' : 'gi';
       const matches = [];
+      const exclusions = [];
+      (category.regex.excludePhrases || []).forEach((phrase, index) => {
+        if (!phrase) return;
+        exclusions.push(...regexMatches(
+          new RegExp(escapeRegex(phrase), flags),
+          text,
+          `excludePhrase:${index}`,
+          category.regex.wholeWord
+        ));
+      });
       category.regex.phrases.forEach((phrase, index) => {
         if (!phrase) return;
         matches.push(...regexMatches(
@@ -837,9 +935,13 @@
         left.start - right.start || left.end - right.end ||
         left.expressionRow.localeCompare(right.expressionRow)
       );
+      const included = matches.filter(match => !exclusions.some(excluded =>
+        excluded.start < match.end && excluded.end > match.start
+      ));
       return {
-        matches: matches.slice(0, 100),
-        truncated: matches.length > 100
+        matches: included.slice(0, 100),
+        excludedCount: matches.length - included.length,
+        truncated: included.length > 100
       };
     }
 
@@ -2044,6 +2146,10 @@
           !Array.isArray(value.customCategories) ||
           !Array.isArray(value.selectedCategoryIds) ||
           !isPlainObject(value.viewCategoryOverrides)) return false;
+      const deletedBuiltInCategoryIds = value.deletedBuiltInCategoryIds === undefined
+        ? []
+        : value.deletedBuiltInCategoryIds;
+      if (!Array.isArray(deletedBuiltInCategoryIds)) return false;
       if (!value.selectedCategoryIds.every(categoryId =>
         /^[a-z][a-z0-9_]*$/.test(String(categoryId || ''))
       )) return false;
@@ -2053,6 +2159,9 @@
         shared.validateUnifiedCategory(category).length
       )) return false;
       const catalog = shared.createUnifiedCategoryCatalog();
+      if (!deletedBuiltInCategoryIds.every(categoryId =>
+        Object.prototype.hasOwnProperty.call(catalog, String(categoryId || ''))
+      )) return false;
       customCategories.forEach(category => { catalog[category.categoryId] = category; });
       for (const [categoryId, override] of Object.entries(value.categoryOverrides)) {
         if (!/^[a-z][a-z0-9_]*$/.test(categoryId) || !isPlainObject(override) ||
@@ -2076,6 +2185,9 @@
         const localRevision = Number(settings.userDataCategoryRevision) || 0;
         if (value.revision <= localRevision) return { imported: false, reason: 'stale' };
         settings.categoryOverrides = cloneJsonLike(value.categoryOverrides);
+        settings.deletedBuiltInCategoryIds = [
+          ...(value.deletedBuiltInCategoryIds || [])
+        ];
         settings.customCategories = value.customCategories.map(normalizeUnifiedCustomCategory);
         settings.selectedCategoryIds = [...value.selectedCategoryIds];
         settings.viewCategoryOverrides = cloneJsonLike(value.viewCategoryOverrides);
@@ -2151,6 +2263,57 @@
       error.expectedGeneration = expected;
       error.currentGeneration = current;
       throw error;
+    }
+
+    function publicStoredArticleChatTurn(turn = {}) {
+      const value = cloneJsonLike(turn);
+      for (const key of [
+        'turnKey', 'workspaceId', 'workspaceGeneration', 'sequence', 'revision'
+      ]) delete value[key];
+      return value;
+    }
+
+    async function pageAllWorkspaceTurns(workspaceId) {
+      if (typeof articleWorkspaceStore?.pageTurns !== 'function') return [];
+      const turns = [];
+      let afterSequence = 0;
+      while (true) {
+        const page = await articleWorkspaceStore.pageTurns(workspaceId, {
+          limit: 1000, afterSequence
+        });
+        turns.push(...(page.items || []));
+        if (!page.hasMore || Number(page.nextSequence) <= afterSequence) break;
+        afterSequence = Number(page.nextSequence);
+      }
+      return turns;
+    }
+
+    function chatIndexWithTurns(indexInput, turnsInput, { authoritative = false } = {}) {
+      const index = isPlainObject(indexInput) ? cloneJsonLike(indexInput) : {};
+      const turnsById = new Map();
+      if (!authoritative) {
+        (Array.isArray(index.turns) ? index.turns : []).forEach(turn => {
+          const turnId = String(turn?.turnId || '');
+          if (turnId) turnsById.set(turnId, cloneJsonLike(turn));
+        });
+      }
+      (Array.isArray(turnsInput) ? turnsInput : []).forEach(turn => {
+        const turnId = String(turn?.turnId || '');
+        if (turnId) turnsById.set(turnId, publicStoredArticleChatTurn(turn));
+      });
+      const turns = [...turnsById.values()].sort((left, right) =>
+        Number(left.sequence || 0) - Number(right.sequence || 0) ||
+        Number(left.createdAt || 0) - Number(right.createdAt || 0) ||
+        String(left.turnId || '').localeCompare(String(right.turnId || ''))
+      );
+      return {
+        ...index,
+        turns,
+        totalTurns: turns.length,
+        returnedTurns: turns.length,
+        windowStart: 0,
+        hasEarlier: false
+      };
     }
 
     function safeWorkspaceCounts(summary = {}) {
@@ -2314,8 +2477,16 @@
           throw error;
         }
         assertWorkspaceMutationGeneration(workspace, message);
+        let content = message.content;
+        if (String(message.relativePath || '') === 'chat/index.json' &&
+            typeof articleWorkspaceStore?.pageTurns === 'function') {
+          content = chatIndexWithTurns(
+            message.content,
+            await pageAllWorkspaceTurns(workspace.workspaceId)
+          );
+        }
         const asset = await articleWorkspaceStore.putAsset(
-          workspace.workspaceId, message.relativePath, message.content, {
+          workspace.workspaceId, message.relativePath, content, {
             expectedRevision: message.expectedRevision,
             expectedContentHash: message.expectedContentHash,
             contentHash: message.contentHash
@@ -2329,6 +2500,7 @@
                 revision: asset.revision,
                 contentHash: asset.contentHash,
                 updatedAt: asset.updatedAt,
+                advanceFromDirectory: true,
                 workspaceGeneration: workspace.workspaceGeneration
               }
             );
@@ -2368,6 +2540,7 @@
               workspace, `chat/turns/${filename}.json`, turn, {
                 revision: turn.revision,
                 updatedAt: turn.updatedAt,
+                advanceFromDirectory: true,
                 workspaceGeneration: workspace.workspaceGeneration
               }
             );
@@ -2392,9 +2565,26 @@
           throw error;
         }
         assertWorkspaceMutationGeneration(workspace, message);
-        const turn = await articleWorkspaceStore.updateTurn(
-          workspace.workspaceId, message.turnId, message.turn || {}
-        );
+        let turn;
+        let recreated = false;
+        try {
+          turn = await articleWorkspaceStore.updateTurn(
+            workspace.workspaceId, message.turnId, message.turn || {}
+          );
+        } catch (error) {
+          if (error?.code !== 'TURN_NOT_FOUND' ||
+              typeof articleWorkspaceStore?.appendTurn !== 'function') {
+            throw error;
+          }
+          // A directory restore can populate the page before an older browser
+          // database contains the independent turn record. Treat update as an
+          // idempotent upsert so an explicit “保存全部” never fails merely
+          // because its aggregate chat index and turn store drifted apart.
+          turn = await articleWorkspaceStore.appendTurn(
+            workspace.workspaceId, message.turn || {}
+          );
+          recreated = true;
+        }
         let queued = false;
         if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
           const filename = encodeURIComponent(turn.turnId).slice(0, 240);
@@ -2403,6 +2593,7 @@
               workspace, `chat/turns/${filename}.json`, turn, {
                 revision: turn.revision,
                 updatedAt: turn.updatedAt,
+                advanceFromDirectory: true,
                 workspaceGeneration: workspace.workspaceGeneration
               }
             );
@@ -2410,7 +2601,7 @@
             scheduleDirectoryFlush();
           } catch (_) {}
         }
-        return { saved: true, queued, turn: cloneJsonLike(turn) };
+        return { saved: true, queued, recreated, turn: cloneJsonLike(turn) };
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_DELETE_TURN') {
@@ -2430,6 +2621,7 @@
             await directorySync.enqueueWorkspaceAsset(
               workspace, `chat/tombstones/${filename}.json`, tombstone, {
                 revision: Date.now(),
+                advanceFromDirectory: true,
                 workspaceGeneration: workspace.workspaceGeneration
               }
             );
@@ -2536,6 +2728,52 @@
               } catch (_) {}
             }
           }
+          if (typeof directorySync?.listWorkspaceChatAssets === 'function') {
+            try {
+              const discovered = await directorySync.listWorkspaceChatAssets(
+                selected.manifest
+              );
+              const loadedByPath = new Map(loadedAssets.map(asset => [
+                String(asset.relativePath || ''), asset
+              ]));
+              const manifestPaths = new Set((selected.manifest?.assets || [])
+                .map(asset => String(asset.path || '')));
+              let recoveredUnindexedChatAssets = 0;
+              let recoveredGenerationMismatchChatAssets = 0;
+              for (const asset of discovered.assets || []) {
+                const path = String(asset.relativePath || '');
+                if (!path) continue;
+                const current = loadedByPath.get(path);
+                if (!current || Number(asset.revision || 0) >=
+                    Number(current.revision || 0)) {
+                  loadedByPath.set(path, asset);
+                }
+                if ((!manifestPaths.has(path) ||
+                    asset.recoveredGenerationMismatch === true) &&
+                    typeof directorySync.enqueueWorkspaceAsset === 'function') {
+                  await directorySync.enqueueWorkspaceAsset(
+                    selected.manifest, path, asset.content, {
+                      revision: Number(asset.revision) || 0,
+                      contentHash: String(asset.contentHash || ''),
+                      updatedAt: String(asset.updatedAt || ''),
+                      workspaceGeneration:
+                        Number(selected.manifest.workspaceGeneration) || 1
+                    }
+                  );
+                  if (!manifestPaths.has(path)) recoveredUnindexedChatAssets += 1;
+                  if (asset.recoveredGenerationMismatch === true) {
+                    recoveredGenerationMismatchChatAssets += 1;
+                  }
+                }
+              }
+              loadedAssets.splice(0, loadedAssets.length, ...loadedByPath.values());
+              if (recoveredUnindexedChatAssets) scheduleDirectoryFlush();
+              result.recoveredUnindexedChatAssets = recoveredUnindexedChatAssets;
+              result.recoveredGenerationMismatchChatAssets =
+                recoveredGenerationMismatchChatAssets;
+              result.invalidChatAssets = Number(discovered.invalidAssets) || 0;
+            } catch (_) {}
+          }
           const isTurnPath = value => /^chat\/turns\/[^/]+\.json$/u.test(
             String(value || '')
           );
@@ -2555,14 +2793,81 @@
           const assets = loadedAssets.filter(asset =>
             !isTurnPath(asset.relativePath) && !isTurnTombstonePath(asset.relativePath)
           );
+          const chatIndexAsset = assets.find(asset =>
+            asset.relativePath === 'chat/index.json'
+          );
+          const indexedTurnIds = (Array.isArray(chatIndexAsset?.content?.turns)
+            ? chatIndexAsset.content.turns : []).map(turn =>
+            String(turn?.turnId || '')
+          ).filter(Boolean);
+          const restoredTurnsById = new Map();
+          (Array.isArray(chatIndexAsset?.content?.turns)
+            ? chatIndexAsset.content.turns : []).forEach(turn => {
+            const turnId = String(turn?.turnId || '');
+            if (turnId && !deletedTurnIds.has(turnId)) {
+              restoredTurnsById.set(turnId, cloneJsonLike(turn));
+            }
+          });
+          turnAssets.forEach(asset => {
+            const turnId = String(asset.content?.turnId || '');
+            if (turnId && !deletedTurnIds.has(turnId)) {
+              restoredTurnsById.set(turnId, cloneJsonLike(asset.content));
+            }
+          });
+          const restoredTurns = [...restoredTurnsById.values()].sort((left, right) =>
+            Number(left.sequence || 0) - Number(right.sequence || 0) ||
+            Number(left.createdAt || 0) - Number(right.createdAt || 0) ||
+            String(left.turnId || '').localeCompare(String(right.turnId || ''))
+          );
+          const restoredChatIndex = chatIndexWithTurns(
+            chatIndexAsset?.content || {}, restoredTurns
+          );
+          const restoredTurnIds = restoredTurns.map(turn => String(turn?.turnId || ''));
+          const chatIndexNeedsRepair = !chatIndexAsset
+            ? restoredTurns.length > 0
+            : Number(chatIndexAsset.content?.totalTurns) !== restoredTurns.length ||
+              JSON.stringify(indexedTurnIds) !== JSON.stringify(restoredTurnIds);
+          if (chatIndexAsset) {
+            chatIndexAsset.content = restoredChatIndex;
+          } else if (restoredTurns.length) {
+            assets.push({
+              relativePath: 'chat/index.json',
+              content: restoredChatIndex,
+              revision: Math.max(0, ...turnAssets.map(asset =>
+                Number(asset.revision) || 0
+              )),
+              contentHash: '',
+              updatedAt: String(restoredTurns.at(-1)?.updatedAt || '')
+            });
+          }
+          if (chatIndexNeedsRepair &&
+              typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+            try {
+              await directorySync.enqueueWorkspaceAsset(
+                selected.manifest, 'chat/index.json', restoredChatIndex, {
+                  revision: Math.max(
+                    Date.now(),
+                    Number(chatIndexAsset?.revision || 0) + 1
+                  ),
+                  workspaceGeneration:
+                    Number(selected.manifest.workspaceGeneration) || 1
+                }
+              );
+              result.repairedChatIndex = true;
+              scheduleDirectoryFlush();
+            } catch (_) {
+              result.repairedChatIndex = false;
+            }
+          }
           if (articleWorkspaceStore?.ensureWorkspace && articleWorkspaceStore?.putAsset) {
-            const currentWorkspace = typeof articleWorkspaceStore.getWorkspace === 'function'
-              ? await articleWorkspaceStore.getWorkspace(selected.manifest.workspaceId) : null;
-            const importedWorkspace = currentWorkspace ||
-              await articleWorkspaceStore.ensureWorkspace({
-                ...selected.manifest,
-                storageRevision: selected.manifest.revision
-              });
+            // Always reconcile the browser-local workspace with the directory
+            // manifest. Reusing an older generation here made the content
+            // script restore generation N+1 while IndexedDB remained on N,
+            // causing every later chat save to fail.
+            const importedWorkspace = await articleWorkspaceStore.ensureWorkspace({
+              ...selected.manifest,
+              storageRevision: selected.manifest.revision
+            });
             for (const asset of assets) {
               await articleWorkspaceStore.putAsset(
                 importedWorkspace.workspaceId, asset.relativePath, asset.content,
@@ -2616,7 +2921,11 @@
           result.restore = {
             match: selected.match,
             manifest: selected.manifest,
-            assets
+            assets,
+            // Keep the recovered turn records in the restore payload as a
+            // second source of truth. The content script can rebuild history
+            // even when an older chat/index.json was overwritten empty.
+            turns: restoredTurns.map(cloneJsonLike)
           };
         }
         return result;
@@ -2624,7 +2933,10 @@
 
       if (message.type === 'ARTICLE_WORKSPACE_LIST') {
         requireArticleWorkspaceStore('listWorkspaces');
-        const workspaces = await articleWorkspaceStore.listWorkspaces();
+        const [workspaces, tokenUsageDocuments] = await Promise.all([
+          articleWorkspaceStore.listWorkspaces(),
+          typeof tokenUsageStore?.list === 'function' ? tokenUsageStore.list() : []
+        ]);
         let directoryOverview = {
           permission: 'unconfigured', manifests: [], invalidManifests: 0,
           pendingCount: 0, conflictCount: 0, lastConflict: null
@@ -2647,9 +2959,25 @@
         }
         const manifestById = new Map((directoryOverview.manifests || [])
           .map(manifest => [manifest.workspaceId, manifest]));
-        const summaries = workspaces.map(workspace => publicWorkspaceOverview(
-          workspace, manifestById.get(workspace.workspaceId) || null, directoryOverview
-        ));
+        const usageByUrl = new Map((tokenUsageDocuments || [])
+          .map(usage => [
+            typeof shared.normalizeTokenUsageCanonicalUrl === 'function'
+              ? shared.normalizeTokenUsageCanonicalUrl(usage.canonicalUrl)
+              : String(usage.canonicalUrl || ''),
+            usage
+          ]).filter(([url]) => url));
+        const summaries = workspaces.map(workspace => {
+          const overview = publicWorkspaceOverview(
+            workspace, manifestById.get(workspace.workspaceId) || null, directoryOverview
+          );
+          const url = typeof shared.normalizeTokenUsageCanonicalUrl === 'function'
+            ? shared.normalizeTokenUsageCanonicalUrl(workspace.canonicalUrl)
+            : String(workspace.canonicalUrl || '');
+          return {
+            ...overview,
+            tokenUsage: usageByUrl.get(url) || null
+          };
+        });
         return {
           workspaces: summaries,
           totals: {
@@ -2658,7 +2986,13 @@
             chatTurnCount: summaries.reduce((sum, item) => sum + item.chatTurnCount, 0),
             figureCount: summaries.reduce((sum, item) => sum + item.figureCount, 0),
             panelCount: summaries.reduce((sum, item) => sum + item.panelCount, 0),
-            highlightCount: summaries.reduce((sum, item) => sum + item.highlightCount, 0)
+            highlightCount: summaries.reduce((sum, item) => sum + item.highlightCount, 0),
+            tokenRequests: summaries.reduce((sum, item) =>
+              sum + (Number(item.tokenUsage?.totals?.requests) || 0), 0),
+            inputTokens: summaries.reduce((sum, item) =>
+              sum + (Number(item.tokenUsage?.totals?.inputTokens) || 0), 0),
+            outputTokens: summaries.reduce((sum, item) =>
+              sum + (Number(item.tokenUsage?.totals?.outputTokens) || 0), 0)
           },
           sync: {
             permission: String(directoryOverview.permission || 'unconfigured'),
@@ -2690,7 +3024,30 @@
           if (!page.hasMore || Number(page.nextSequence) <= afterSequence) break;
           afterSequence = Number(page.nextSequence);
         }
-        return detailFromWorkspaceAssets(workspace, assets, turns);
+        const detail = detailFromWorkspaceAssets(workspace, assets, turns);
+        const tokenUsage = typeof tokenUsageStore?.getForDocument === 'function'
+          ? await tokenUsageStore.getForDocument({
+            canonicalUrl: workspace.canonicalUrl,
+            documentKey: workspace.workspaceId
+          }) : null;
+        return { ...detail, tokenUsage };
+      }
+
+      if (message.type === 'LLM_TOKEN_USAGE_LIST') {
+        return {
+          documents: typeof tokenUsageStore?.list === 'function'
+            ? await tokenUsageStore.list() : []
+        };
+      }
+
+      if (message.type === 'LLM_TOKEN_USAGE_CLEAR') {
+        if (typeof tokenUsageStore?.clearDocument !== 'function') {
+          return { deleted: false };
+        }
+        return tokenUsageStore.clearDocument({
+          canonicalUrl: message.canonicalUrl,
+          documentKey: message.documentKey
+        });
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_STATS') {
@@ -2754,18 +3111,33 @@
         if (!workspace) return { deleted: true, alreadyMissing: true };
         let disk = { removed: true, permission: 'unconfigured' };
         if (typeof directorySync?.removeWorkspaceTree === 'function') {
-          disk = await directorySync.removeWorkspaceTree(workspace);
-          if (!disk.removed && disk.permission !== 'unconfigured') {
-            return { deleted: false, pending: true, permission: disk.permission };
+          try {
+            disk = await directorySync.removeWorkspaceTree(workspace);
+          } catch (error) {
+            disk = {
+              removed: false,
+              permission: 'error',
+              pending: true,
+              errorCode: String(error?.code || error?.name || 'DIRECTORY_DELETE_FAILED')
+            };
           }
         }
         await articleWorkspaceStore.finalizeWorkspaceDeletion(
           workspace.workspaceId, message.tombstoneId
         );
+        if (typeof tokenUsageStore?.clearDocument === 'function') {
+          await tokenUsageStore.clearDocument({
+            canonicalUrl: workspace.canonicalUrl,
+            documentKey: workspace.workspaceId
+          }).catch(() => null);
+        }
+        const pendingDiskCleanup = !disk.removed && disk.permission !== 'unconfigured';
         return {
           deleted: true,
           permission: disk.permission,
           removedFromDisk: disk.removed,
+          pendingDiskCleanup,
+          diskCleanupError: disk.errorCode || null,
           workspaceGeneration: Math.max(
             1, Number(workspace.workspaceGeneration) || 1
           ) + 1
@@ -2877,7 +3249,17 @@
 
       if (message.type === 'USER_DATA_SYNC_NOW') {
         requireDirectorySync('flush');
-        return directorySync.flush(importUserDataAsset);
+        let result = await directorySync.flush(importUserDataAsset);
+        if (message.drain === true) {
+          for (let attempt = 0; attempt < 5 &&
+              result?.permission === 'granted' &&
+              !Number(result?.failed) &&
+              Number(result?.pendingCount) > 0; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
+            result = await directorySync.flush(importUserDataAsset);
+          }
+        }
+        return result;
       }
 
       if (message.type === 'USER_DATA_REBUILD_INDEX') {
@@ -2963,6 +3345,75 @@
         });
       }
 
+      if (message.type === 'CATEGORY_APPEND_FIXED_PHRASE') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const listType = message.listType === 'exclude' ? 'exclude' : 'include';
+          const field = listType === 'exclude' ? 'excludePhrases' : 'phrases';
+          const phrase = String(message.phrase || '').normalize('NFKC')
+            .replace(/\s+/gu, ' ').trim();
+          if (!phrase || phrase.length > shared.MAX_REGEX_LENGTH) {
+            throw invalidSettings(['phrase']);
+          }
+          const detail = await categoryDetail(settings, categoryId);
+          const values = Array.isArray(detail.category.regex?.[field])
+            ? [...detail.category.regex[field]] : [];
+          const comparison = detail.category.regex?.caseSensitive
+            ? phrase : phrase.toLocaleLowerCase('en-US');
+          const duplicate = values.some(value =>
+            (detail.category.regex?.caseSensitive
+              ? String(value) : String(value).toLocaleLowerCase('en-US')) === comparison
+          );
+          if (!duplicate) values.push(phrase);
+          const incoming = { regex: { [field]: values } };
+          if (!detail.metadata.builtIn) {
+            const mergedCategory = shared.mergeCategoryOverrides(detail.category, incoming);
+            mergedCategory.categoryId = categoryId;
+            mergedCategory.persistence = detail.category.persistence === 'one-off'
+              ? 'one-off' : 'saved';
+            mergedCategory.builtIn = false;
+            const errors = shared.validateUnifiedCategory(mergedCategory);
+            if (errors.length) throw invalidSettings(errors);
+            if (mergedCategory.persistence === 'one-off') {
+              const sessionCategories = await loadRouterSessionCategories();
+              await saveRouterSessionCategories([
+                ...sessionCategories.filter(item => item.categoryId !== categoryId),
+                mergedCategory
+              ]);
+              return {
+                ...(await categoryDetail(settings, categoryId)),
+                appended: !duplicate,
+                listType,
+                phrase
+              };
+            }
+            settings.customCategories = (settings.customCategories || [])
+              .filter(item => item.categoryId !== categoryId);
+            settings.customCategories.push(mergedCategory);
+          } else {
+            const current = isPlainObject(settings.categoryOverrides?.[categoryId])
+              ? settings.categoryOverrides[categoryId] : {};
+            const nextOverride = deepMergeJsonLike(current, incoming);
+            const baseCategory = shared.createUnifiedCategoryCatalog()[categoryId];
+            const mergedCategory = shared.mergeCategoryOverrides(baseCategory, nextOverride);
+            const errors = shared.validateUnifiedCategory(mergedCategory);
+            if (errors.length) throw invalidSettings(errors);
+            settings.categoryOverrides[categoryId] = nextOverride;
+          }
+          settings.userDataCategoryRevision =
+            (Number(settings.userDataCategoryRevision) || 0) + (duplicate ? 0 : 1);
+          const saved = await shared.saveSettings(storageArea, settings);
+          if (!duplicate) await mirrorCategorySettings(saved);
+          return {
+            ...(await categoryDetail(saved, categoryId)),
+            appended: !duplicate,
+            listType,
+            phrase
+          };
+        });
+      }
+
       if (message.type === 'CATEGORY_RESET_OVERRIDE') {
         return serializeSettingsMutation(async () => {
           const settings = await shared.loadSettings(storageArea);
@@ -2975,6 +3426,59 @@
           const saved = await shared.saveSettings(storageArea, settings);
           await mirrorCategorySettings(saved);
           return await categoryDetail(saved, categoryId);
+        });
+      }
+
+      if (message.type === 'CATEGORY_DELETE') {
+        return serializeAllMutations(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const baseCategory = shared.createUnifiedCategoryCatalog()[categoryId];
+          if (!baseCategory ||
+              (settings.deletedBuiltInCategoryIds || []).includes(categoryId)) {
+            throw invalidSettings(['categoryId']);
+          }
+          const referenceCount = await documentStore.countCategoryReferences(categoryId);
+          settings.deletedBuiltInCategoryIds = [
+            ...(settings.deletedBuiltInCategoryIds || []),
+            categoryId
+          ];
+          delete settings.categoryOverrides[categoryId];
+          settings.selectedCategoryIds = settings.selectedCategoryIds
+            .filter(item => item !== categoryId);
+          Object.values(settings.viewCategoryOverrides).forEach(override => {
+            override.add = override.add.filter(item => item !== categoryId);
+            override.remove = override.remove.filter(item => item !== categoryId);
+          });
+          settings.userDataCategoryRevision =
+            (Number(settings.userDataCategoryRevision) || 0) + 1;
+          const saved = await shared.saveSettings(storageArea, settings);
+          await mirrorCategorySettings(saved);
+          return {
+            ...(await publicState(saved)),
+            deleted: true,
+            builtIn: true,
+            referenceCount
+          };
+        });
+      }
+
+      if (message.type === 'CATEGORY_RESTORE_BUILT_IN') {
+        return serializeSettingsMutation(async () => {
+          const settings = await shared.loadSettings(storageArea);
+          const categoryId = String(message.categoryId || '');
+          const baseCategory = shared.createUnifiedCategoryCatalog()[categoryId];
+          if (!baseCategory ||
+              !(settings.deletedBuiltInCategoryIds || []).includes(categoryId)) {
+            throw invalidSettings(['categoryId']);
+          }
+          settings.deletedBuiltInCategoryIds = settings.deletedBuiltInCategoryIds
+            .filter(item => item !== categoryId);
+          settings.userDataCategoryRevision =
+            (Number(settings.userDataCategoryRevision) || 0) + 1;
+          const saved = await shared.saveSettings(storageArea, settings);
+          await mirrorCategorySettings(saved);
+          return publicState(saved);
         });
       }
 
@@ -3131,7 +3635,11 @@
             throw invalidSettings(['globalProfileId']);
           }
           if (!Array.isArray(settings.selectedCategoryIds)) throw invalidSettings(['selectedCategoryIds']);
-          if (!shared.isReadingView(settings.readingViewId)) throw invalidSettings(['readingViewId']);
+          const normalizedModes = shared.normalizeAnalysisModes(settings.analysisModes);
+          settings.analysisModes = normalizedModes;
+          if (!normalizedModes.some(mode => mode.id === settings.readingViewId)) {
+            throw invalidSettings(['readingViewId']);
+          }
           if (Array.isArray(preferences.selectedCategoryIds)) {
             settings.viewCategoryOverrides[settings.readingViewId] = shared.deriveViewOverride(
               settings.readingViewId,
@@ -3222,6 +3730,33 @@
         });
       }
 
+      if (message.type === 'LLM_LIST_MODELS') {
+        const settings = await shared.loadSettings(storageArea);
+        requireVersion5Settings(settings);
+        const profileId = String(message.profileId || '');
+        const profile = settings.profiles?.[profileId];
+        if (!isPlainObject(profile)) throw invalidSettings(['profileId']);
+        const providerId = String(message.providerId || profile.providerId || '');
+        if (!Object.prototype.hasOwnProperty.call(
+          shared.getProviderDefinitions(), providerId
+        )) throw invalidSettings(['providerId']);
+        const currentConfig = isPlainObject(profile.config) ? profile.config : {};
+        const incomingConfig = isPlainObject(message.config) ? message.config : {};
+        const config = {
+          ...cloneJsonLike(currentConfig),
+          ...cloneJsonLike(incomingConfig)
+        };
+        if (!String(incomingConfig.apiKey || '').trim() && currentConfig.apiKey) {
+          config.apiKey = currentConfig.apiKey;
+        }
+        return shared.discoverProviderModels({
+          providerId,
+          config,
+          fetchImpl,
+          timeoutMs: 20000
+        });
+      }
+
       if (message.type === 'LLM_TEST_PROFILE') {
         const settings = await shared.loadSettings(storageArea);
         requireVersion5Settings(settings);
@@ -3229,6 +3764,48 @@
         const profile = settings.profiles?.[profileId];
         if (!isPlainObject(profile)) throw invalidSettings(['profileId']);
         return runConnectionTest(profileId, profile, message.config);
+      }
+
+      if (message.type === 'CODEX_LOCAL_STATUS') {
+        if (!nativeClient || typeof nativeClient.health !== 'function') {
+          const error = new Error('The local Codex bridge is unavailable');
+          error.code = 'CODEX_BRIDGE_UNAVAILABLE';
+          throw error;
+        }
+        const status = await nativeClient.health({ timeoutMs: 20000 });
+        return {
+          connected: status?.connected === true,
+          accountType: String(status?.accountType || ''),
+          planType: String(status?.planType || ''),
+          hostVersion: String(status?.hostVersion || ''),
+          eventLogPath: String(status?.eventLogPath || ''),
+          latestEventPath: String(status?.latestEventPath || '')
+        };
+      }
+
+      if (message.type === 'CODEX_LOCAL_LOGIN_START') {
+        if (!nativeClient || typeof nativeClient.startLogin !== 'function') {
+          const error = new Error('The local Codex bridge is unavailable');
+          error.code = 'CODEX_BRIDGE_UNAVAILABLE';
+          throw error;
+        }
+        const login = await nativeClient.startLogin({
+          force: message.force === true,
+          timeoutMs: 30000
+        });
+        return {
+          loginId: String(login?.loginId || ''),
+          authUrl: String(login?.authUrl || '')
+        };
+      }
+
+      if (message.type === 'CODEX_LOCAL_LOGOUT') {
+        if (!nativeClient || typeof nativeClient.logout !== 'function') {
+          const error = new Error('The local Codex bridge is unavailable');
+          error.code = 'CODEX_BRIDGE_UNAVAILABLE';
+          throw error;
+        }
+        return nativeClient.logout({ timeoutMs: 30000 });
       }
 
       if (message.type === 'LLM_TEST_PROVIDER') {
@@ -3698,6 +4275,9 @@
         const samples = await corpusStore.list();
         const settings = await shared.loadSettings(storageArea);
         const categoryMap = shared.createAdaptiveCategoryCatalog();
+        (settings.deletedBuiltInCategoryIds || []).forEach(categoryId => {
+          delete categoryMap[categoryId];
+        });
         [...settings.customCategories, ...await loadRouterSessionCategories()]
           .forEach(category => { categoryMap[category.categoryId] = category; });
         return {

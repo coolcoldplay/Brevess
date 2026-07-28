@@ -2,15 +2,25 @@
 
 build39 基于 build38 冻结点 `389ab42`，重点降低全文高亮和 Figure/Panel 解读中的重复 Token、输出截断与无效重算，同时保持旧模型接口可降级使用。
 
-2.4.6 出版社聚焦版以真实页面 DOM 为依据补充单栏规则：Cell Press 旧版隐藏 `.core-sections-menu-outer`、`.core-collateral-aside` 与 `.core-header-aside` 并把三列内容网格收敛为一列；新版 ScienceDirect 隐藏粘性目录与 `RelatedContent` 两侧列；Nature、Springer Link、PLOS、Frontiers、ACS、JAMA、bioRxiv 等使用各站实际侧栏节点，并同步放宽正文的父级网格、浮动或固定宽度。真实注入回归中，Nature、Springer Link、PLOS、Frontiers 的正文分别扩展到 1248、1248、980、1536 px，bioRxiv 从 650 px 扩展到 1090 px。无法绕过 Cloudflare 的站点仍需要用户导出的完整 HTML 或适配诊断包做最终确认，不以合成页面替代。
+2.4.12 是 build39 的本地存储恢复版。它延续 2.4.11 对只读快照覆盖、独立 turn 扫描和任务状态的修复，并处理真实工作区中 manifest 已升级、后续问答仍写入上一代文件的代际漂移。扫描器只接纳写入时间晚于新 manifest 的上一代问答，随后升级 IndexedDB、turn 与聚合索引；恢复后再次保存使用幂等 upsert。目录操作在侧栏按钮的用户手势中直接恢复权限，固定扩展 ID 避免今后换构建目录时丢失 IndexedDB 句柄，并对 OneDrive 暂时写锁执行有限重试。
 
-2.4.6 同时修复悬浮图钉的静默失败：不再因缺少 Document Picture-in-Picture 而直接禁用按钮；系统窗口创建超过 4.5 秒会自动回退到独立扩展窗口；窗口坐标超出可见屏幕时会移除手动坐标重试；`null` 不再被误判为窗口 ID `0`。Edge 端到端测试同时覆盖真正的跨软件置顶窗口与兼容独立窗口，两者都绑定原论文标签页、支持跨标签页保持和图钉关闭。兼容窗口不承诺系统级 always-on-top，并在界面中明确提示升级浏览器。
+2.4.9 修复全文问答“文件已写入但重启后无法恢复”的持久化断链。每次新增问题、收到完整回答块、结束、删除或重新生成时，会按顺序更新独立 `chat/turns/*.json` 与 `chat/index.json`；后台保存索引时会与浏览器本地工作区的真实轮次合并，空快照不再覆盖已有问答。本地目录写入改为串行更新 manifest，避免并发 checkpoint 丢失资产条目。扫描恢复还会直接枚举 `chat/turns` 和 tombstone 目录，找回旧版本已经写盘但未列入 manifest 的问答文件，并将其重新加入清单。
+
+标签页生命周期在 2.4.10 改为窗口级持久侧栏。Microsoft Edge 官方文档将“切回此前打开过侧栏的标签页时不会自动重新显示”列为已知问题，因此不再依赖 tab-specific 自动恢复；工具栏点击会打开当前窗口的全局侧栏，标签切换时侧栏外壳保持，内部内容随活动标签刷新，未激活网页显示未激活状态。“加载上次结果”会优先扫描多文件工作区并恢复 `chat/turns/*.json`，只有找不到工作区时才回退旧式单文件档案；因此旧 manifest 漏列的问答也能进入聊天界面。
+
+2.4.8 将全文问答引用从“定位段落”升级为“校验段落身份后定位原句/子句”。模型必须为实验条件、参数、剂量、时间点、样本量和结果复制最短完整证据句；一个答案句综合多个原文段落时可紧邻附带多个跳转点。点击后使用浏览器 Custom Highlight API 高亮精确文本范围并将该句滚动到视口中央，匹配失败时才回退到整段。流式回答块仍可各自使用局部 marker，但界面会按整轮回答连续编号，避免不同块出现同号异址。Science/AAAS 新版页面补充无类名 `data-core-aside="right-rail"` 右栏识别，并把 `article[data-has="right-rail"]` 收敛为单列正文。
+
+2.4.7 将底部工作区固定为“导航、析文、摘句、解图、问答”，并换用指南针、文献检索、引号摘句、图片和对话文本图标。按产品取舍完整移除了顶部图钉、Document Picture-in-Picture、独立兼容窗口、跨标签页图钉会话状态及对应端到端场景，侧栏回归到单一的浏览器原生侧栏生命周期。
+
+同一版加入解图键盘导航：鼠标停在解图内容区或底部“解图”按钮时，数字键定位并展开对应主文 Figure，同时定位网页原图；字母键在当前 Figure 中定位对应 Panel。原先挂在出版社网页右下角的进度提示已移除，所有提示统一进入侧栏论文标题行右侧的通知中心，只显示带时间戳的最新一条，点击后可查看最近 40 条历史。通知按标签页与论文 URL 保存在浏览器会话存储中。
+
+Figure 任务控制改为本地优先、后台确认有时限：暂停或取消不再被无响应的后台消息拖住；取消会立即将未完成 Figure 标为终止、停止轮询并释放 UI。每张成功 Figure 在收到结果后显式落为 `running=false, completed=true`，批次完成时再次归一化所有成功节点；顶层 `completed/partial/failed/cancelled` 状态会覆盖旧子节点的残留运行标志，从而保证“逐图解读”和“主图多米诺总链”能够重新启动。
+
+2.4.6 出版社聚焦版以真实页面 DOM 为依据补充单栏规则：Cell Press 旧版隐藏 `.core-sections-menu-outer`、`.core-collateral-aside` 与 `.core-header-aside` 并把三列内容网格收敛为一列；新版 ScienceDirect 隐藏粘性目录与 `RelatedContent` 两侧列；Nature、Springer Link、PLOS、Frontiers、ACS、JAMA、bioRxiv 等使用各站实际侧栏节点，并同步放宽正文的父级网格、浮动或固定宽度。真实注入回归中，Nature、Springer Link、PLOS、Frontiers 的正文分别扩展到 1248、1248、980、1536 px，bioRxiv 从 650 px 扩展到 1090 px。无法绕过 Cloudflare 的站点仍需要用户导出的完整 HTML 或适配诊断包做最终确认，不以合成页面替代。
 
 2.4.5 Panel 修复版会在 Nature 等分层 Figure DOM 中选择 Panel 信息最完整的 caption 来源，覆盖 `a-c`、`d-f`、`g,h`、`i,j` 等逗号、句点与区间组合；检测到包含多个不同 Figure 身份的聚合容器时会将其排除，并拒绝使用身份不一致的 caption，防止编号、图片、Panel 和定位目标跨图串位。对 Nature `bottom-caption` 优先读取加粗的结构化 Panel 标记，避免把 `n.c.`、`T cells`、`Mann–Whitney` 等图注缩写误识别为 Panel。目录缓存采用 MutationObserver 精确置脏、普通读取直接复用，并保留 2 秒低成本兜底检查，避免侧栏快照反复遍历所有 Figure 造成页面卡顿。
 
 2.4.5 同时启用出版社单栏正文模式。内容脚本先记录当前适配器家族，再由限定在 `data-sci-reader-single-column=true` 下的 CSS 隐藏 16 类已适配出版社的文章目录、右侧导航和阅读伴侣，并将正文容器恢复为无浮动、单一网格列和全可用宽度。通用回退只处理带 article/content 语义标签的 `nav`、`aside` 或 `role=navigation`，避免误伤正文。由于 Edge 未向扩展开放修改原生侧栏宽度的接口，此方案直接让出版社网页切换为单栏，达到正文不再保留站内导航栏的目标。
-
-悬浮置顶窗口修复了 iframe 加载竞态：先注册 `load/error` 监听再挂载 iframe，并在呈现窗口内容的同时异步同步跨标签页图钉状态。这样即使 iframe 命中缓存，也不会因错过 `load` 事件等待 5 秒后关闭；后台同步较慢时，悬浮窗口也能先显示内容。
 
 侧栏标题栏的齿轮改为直接打开 `options.html#categoryWorkspace`，即“类别规则/识别规则与模型设置”工作区；适配诊断包入口移至当前论文全局工具栏的虫形图标。
 

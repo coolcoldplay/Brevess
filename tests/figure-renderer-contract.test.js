@@ -49,20 +49,26 @@ test('Figure side panel omits raw caption and uses snapshot-driven per-Figure st
   assert.match(popup, /figure\?\.panelHints/);
   assert.doesNotMatch(popup, /singleFigureRunningIds/);
   assert.match(renderer, /progress\?\.running === true/);
-  assert.match(popup, /正在精读此图/);
+  assert.match(popup, /解图中/);
 });
 
 test('Figure panel cards use a compact role, phenotype, and method header while retaining evidence', () => {
   const popup = read('popup.js');
+  const css = read('popup.css');
   const start = popup.indexOf('function renderFigureWorkspaceSnapshot');
   const end = popup.indexOf('function renderArticleWorkspaceSnapshot', start);
   const renderer = popup.slice(start, end) +
+    functionBody(popup, 'appendFigurePanelSummary', 'appendFigurePanelCatalog') +
     functionBody(popup, 'appendFigurePanelCatalog', 'createCollapsibleFigureResultSection');
   assert.match(popup, /const METHOD_CATEGORY_LABELS/);
   assert.match(popup, /function formatFigurePanelHeader/);
   assert.match(renderer, /formatFigurePanelHeader\(panel\)/);
   assert.match(renderer, /panel\.observationSource/);
   assert.match(renderer, /panel\.methodSource/);
+  assert.match(renderer, /workspace-panel-id/);
+  assert.match(renderer, /workspace-panel-description/);
+  assert.match(css, /\.workspace-panel-id\s*\{[^}]*font-weight:\s*800/);
+  assert.match(css, /\.workspace-panel-description\s*\{[^}]*font-weight:\s*450/);
 });
 
 test('Figure deep cards expose every evidence relation and retain a compact no-panel state', () => {
@@ -145,9 +151,54 @@ test('Figure original viewer stays in the webpage and never opens a new tab', ()
   assert.match(content, /FIGURE_IMAGE_VIEWER_ID/);
   assert.match(content, /SciLLM\.selectFigureImageSource/);
   assert.match(content, /image\.addEventListener\('error'/);
+  assert.match(content, /ArrowLeft:\s*'previous'/);
+  assert.match(content, /ArrowRight:\s*'next'/);
+  assert.match(content, /ArrowUp:\s*'first'/);
+  assert.match(content, /ArrowDown:\s*'last'/);
+  assert.match(content, /event\.key === '0' \? 10 : Number\(event\.key\)/);
+  assert.match(content, /requestedFigureNumber/);
+  assert.match(popup, /action:\s*'navigateFigureOriginalImage',[\s\S]*figureNumber/);
+  assert.match(content, /% figures\.length/);
+  assert.match(content, /figureImageCacheMode/);
   assert.match(popup, /action:\s*'showFigureOriginalImage'/);
+  assert.match(popup, /action:\s*'navigateFigureOriginalImage'/);
+  assert.match(popup, /action:\s*'getFigureOriginalImageState'/);
+  assert.match(popup, /handleFigureOriginalViewerKeyboard/);
+  assert.match(content, /request\.action === 'navigateFigureOriginalImage'/);
+  assert.match(content, /viewer\.dataset\.loading = 'true'/);
+  assert.match(content, /FIGURE_ORIGINAL_VIEWER_STATE_CHANGED/);
+  assert.match(popup, /FIGURE_ORIGINAL_VIEWER_STATE_CHANGED/);
+  assert.match(popup, /followFigureOriginalViewerInSidebar/);
+  assert.match(popup, /collapsePanels:\s*true/);
   assert.doesNotMatch(popup, /window\.open\(/);
   assert.match(css, /#sci-figure-image-viewer\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/s);
+  assert.match(css, /\.sci-figure-viewer-loading::before/);
+  assert.match(css, /@keyframes sci-figure-viewer-spin/);
+});
+
+test('Figure viewer toggles a grouped caption-only sidebar and preserves it across navigation', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const html = read('popup.html');
+  const contentCss = read('content.css');
+  const popupCss = read('popup.css');
+  assert.match(
+    content,
+    /fitControl,\s*captionControl,\s*qualityLabel/
+  );
+  assert.match(content, /captionVisible \? '隐藏图注' : '查看图注'/);
+  assert.match(content, /viewer\.dataset\.captionVisible/);
+  assert.match(content, /captionVisible:\s*viewerState\.captionVisible === true/);
+  assert.match(content, /captionVisible:\s*state\?\.captionVisible === true/);
+  assert.match(contentCss, /\.sci-figure-viewer-caption-toggle\[aria-pressed="true"\]/);
+  assert.match(html, /core\/figure-extractor\.js/);
+  assert.match(popup, /function renderFigureCaptionSidebarSnapshot/);
+  assert.match(popup, /function showFigureCaptionSidebar/);
+  assert.match(popup, /function hideFigureCaptionSidebar/);
+  assert.match(popup, /splitFigureCaptionByPanelGroups/);
+  assert.match(popup, /合并描述的 Panel 保持为同一块/);
+  assert.match(popup, /previousCaptionVisible/);
+  assert.match(popupCss, /\.workspace-figure-caption-block/);
 });
 
 test('Figure original viewer and vision preparation walk every safe source before failing', () => {
@@ -157,6 +208,7 @@ test('Figure original viewer and vision preparation walk every safe source befor
   assert.match(content, /SciLLM\.collectFigureImageSources/);
   assert.match(content, /sourceIndex \+= 1/);
   assert.match(content, /SciLLM\.collectFigureImageCandidates/);
+  assert.match(content, /FIGURE_RESOLVE_IMAGE_CANDIDATES/);
   assert.match(content, /for \(const source of candidates\)/);
 });
 
@@ -186,7 +238,7 @@ test('Panel cards provide a bounded follow-up menu using the same dedicated Pane
   assert.match(content, /type: 'LLM_ASK_FIGURE_PANEL'/);
   assert.match(content, /prepareFigurePanelImageVariants\(state\.figure, panelKey\)/);
   assert.match(content, /panelFollowupHistories/);
-  assert.match(popup, /const PANEL_FOLLOWUP_OPTIONS/);
+  assert.match(popup, /function panelFollowupPresetOptions\(/);
   assert.match(popup, /function createPanelFollowupControl\(/);
   assert.match(popup, /function runFigurePanelFollowup\(/);
   assert.match(popup, /action: 'askFigurePanelWithLLM'/);
@@ -195,6 +247,10 @@ test('Panel cards provide a bounded follow-up menu using the same dedicated Pane
   assert.match(css, /\.workspace-panel-followup-chooser/);
   assert.match(popup, /formatFigurePanelInputBasis/);
   assert.match(popup, /dataset\.panelFollowupAnswer/);
+  assert.match(popup, /function appendPanelFollowupHistory\(/);
+  assert.match(popup, /appendPanelFollowupHistory\(root, figure, panelId, answer\)/);
+  assert.match(popup, /workspace-panel-followup-history/);
+  assert.match(popup, /历史追问/);
   assert.match(popup, /function revealPanelFollowupAnswer\(/);
   assert.match(popup, /function stabilizePanelFollowupAnswer\(/);
   assert.match(popup, /完成后会自动定位到这里/);
@@ -338,6 +394,48 @@ test('a fatal batch error terminalizes every premarked Figure that did not start
   assert.match(analyzer, /SciLLM\.isFatalFigureBatchError\(error\)/);
 });
 
+test('successful Figure batches explicitly terminalize every completed Figure', () => {
+  const content = read('content.js');
+  const analyzer = functionBody(content, 'analyzeFiguresWithLLM', 'maybeAutoAnalyzeWithLLM');
+  assert.match(analyzer, /results\.push\(operationResult\)[\s\S]*?updateFigureProgress\(figure\.figureId/);
+  assert.match(analyzer, /phase:\s*'figure'/);
+  assert.match(analyzer, /running:\s*false/);
+  assert.match(analyzer, /completed:\s*true/);
+  assert.match(analyzer, /results\.forEach\(result =>/);
+  assert.match(analyzer, /await waitForLocalOperation\(operation\)[\s\S]*?if \(!response\?\.success\)/);
+});
+
+test('Figure cancellation is locally terminal and backend confirmation is bounded', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const contentControl = functionBody(content, 'controlLlmOperation', 'throwStaleFigureOperation');
+  const popupControl = functionBody(popup, 'controlActiveAnalysis', 'updateHighlightTaskControls');
+
+  assert.match(content, /function sendLlmOperationControlWithDeadline/);
+  assert.match(contentControl, /cancelPendingFigureProgress\(figureWorkspaceInventory/);
+  assert.match(contentControl, /running:\s*!operation\.cancelled/);
+  assert.match(contentControl, /backendAcknowledged/);
+  assert.match(popupControl, /if \(command === 'cancel'\) stopFigureProgressPolling\(\)/);
+  assert.match(popupControl, /new Promise\(resolve =>/);
+  assert.match(popupControl, /CONTROL_CONFIRMATION_TIMEOUT/);
+  assert.match(popupControl, /running:\s*command !== 'cancel'/);
+  assert.match(popupControl, /界面已立即释放/);
+});
+
+test('a terminal global Figure snapshot overrides stale child running flags', () => {
+  const popup = read('popup.js');
+  const helper = functionBody(
+    popup, 'hasRunningFigureProgress', 'resumeFigureProgressFromWorkspaceSnapshot'
+  );
+  assert.match(helper, /status\?\.running === false/);
+  assert.match(helper, /\['idle', 'completed', 'partial', 'failed', 'cancelled'\]/);
+  const apply = functionBody(
+    popup, 'applyFigureAnalysisProgress', 'refreshFigureAnalysisProgress'
+  );
+  assert.match(apply, /const running = hasRunningFigureProgress\(status\)/);
+  assert.match(apply, /running:\s*running \? item\.running === true : false/);
+});
+
 test('Figure workspace exposes pause, cancel, and a compact Figure Panel quick navigator', () => {
   const popup = read('popup.js');
   const html = read('popup.html');
@@ -351,6 +449,103 @@ test('Figure workspace exposes pause, cancel, and a compact Figure Panel quick n
   assert.match(popup, /function navigateFigureQuickAnchor\(/);
   assert.match(content, /request\.action === 'controlLlmOperation'/);
   assert.match(css, /\.figure-quick-nav\s*\{/);
+});
+
+test('Figure workspace keyboard navigation maps arrows and digits without Panel letters', () => {
+  const popup = read('popup.js');
+  const html = read('popup.html');
+  const handler = functionBody(
+    popup, 'handleFigureKeyboardShortcut', 'setupFigureKeyboardNavigation'
+  );
+  const setup = functionBody(
+    popup, 'setupFigureKeyboardNavigation', 'renderFigureQuickNav'
+  );
+  assert.match(html, /←\/→ 切换 Figure，↑\/↓ 切换 Panel/);
+  assert.match(popup, /function figureKeyboardNumber/);
+  assert.match(popup, /function currentFigureKeyboardTarget/);
+  assert.match(handler, /\^\[1-9\]\$/);
+  assert.doesNotMatch(handler, /\^\[a-z\]\$/i);
+  assert.doesNotMatch(handler, /event\.key\.toUpperCase\(\)/);
+  assert.match(handler, /event\.key === 'ArrowLeft'/);
+  assert.match(handler, /event\.key === 'ArrowUp'/);
+  assert.match(handler, /panelIds\.includes\('A'\)/);
+  assert.match(handler, /adjacentFigureKeyboardTarget/);
+  assert.match(handler, /isEditableKeyboardTarget\(event\.target\)/);
+  assert.match(setup, /#sidePanelApp/);
+  assert.match(setup, /handleFigureOriginalViewerKeyboard,\s*true/);
+  assert.match(setup, /document\.addEventListener\('keydown', handleFigureKeyboardShortcut\)/);
+  assert.match(popup, /focusWorkspaceSource\(\{\s*kind:\s*'figure'/);
+  assert.match(popup, /function collapseAllFigurePanels/);
+  assert.match(popup, /collapseFigurePanels/);
+});
+
+test('global shortcuts route every module and toolbar action through persisted settings', () => {
+  const popup = read('popup.js');
+  const html = read('popup.html');
+  assert.match(html, /core\/keyboard-shortcuts\.js/);
+  assert.match(popup, /function handleGlobalKeyboardShortcut/);
+  assert.match(popup, /normalizeKeyboardShortcuts/);
+  assert.match(popup, /KEYBOARD_SHORTCUT_DEFINITIONS\.find/);
+  for (const actionId of [
+    'figures', 'navigation', 'analysis', 'highlights', 'chat',
+    'zotero', 'ppt', 'scanLocal', 'saveLocal', 'deleteLocal',
+    'exportJson', 'importJson', 'settings'
+  ]) {
+    assert.match(popup, new RegExp(`${actionId}:`));
+  }
+  assert.match(popup, /actionId === 'collapseFigurePanels'/);
+  assert.match(popup, /isEditableKeyboardTarget\(event\.target\)/);
+  assert.match(popup, /figureOriginalViewerState\.open/);
+});
+
+test('side-panel shortcuts work from the active article page only while the panel is open', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const background = read('background.js');
+  assert.match(content, /function setSidePanelShortcutScope/);
+  assert.match(content, /function handleSidePanelGlobalShortcut/);
+  assert.match(content, /sidePanelShortcutScope\.enabled/);
+  assert.match(content, /isPageShortcutEditableTarget\(event\.target\)/);
+  assert.match(content, /getFigureImageViewerState\(\)\.open/);
+  assert.match(content, /type:\s*'SIDE_PANEL_GLOBAL_SHORTCUT'/);
+  assert.match(content, /request\.action === 'setSidePanelShortcutScope'/);
+  assert.match(popup, /function publishSidePanelShortcutScope/);
+  assert.match(popup, /function runGlobalKeyboardShortcutKey/);
+  assert.match(popup, /message\?\.type === 'SIDE_PANEL_GLOBAL_SHORTCUT'/);
+  assert.match(
+    popup,
+    /Number\(sender\?\.tab\?\.id\) === Number\(activePanelTabContext\.tabId\)/
+  );
+  assert.match(popup, /activePanelTabContext\.activated/);
+  assert.match(popup, /window\.addEventListener\('pagehide'[\s\S]{0,160}false/);
+  assert.match(background, /chrome\.sidePanel\?\.onClosed\?\.addListener/);
+  assert.match(background, /disableSidePanelShortcutScope/);
+});
+
+test('double Figure-module shortcut opens Figure 1 original and follows its collapsed sidebar card', () => {
+  const popup = read('popup.js');
+  assert.match(popup, /function openFigureOneOriginalFromShortcut/);
+  assert.match(popup, /figureKeyboardNumber\(item\) === 1/);
+  assert.match(popup, /followFigureOriginalViewerInSidebar\(figure\.figureId\)/);
+  assert.match(popup, /showFigureOriginalImage\(figure\.figureId\)/);
+  assert.match(popup, /pressedAt - lastFigureModuleShortcutPress\.pressedAt <= 450/);
+  assert.match(popup, /definition\.actionId === 'figures'/);
+});
+
+test('Figure header actions are one compact row and cross-Figure action is concise', () => {
+  const popup = read('popup.js');
+  const html = read('popup.html');
+  const css = read('popup.css');
+  assert.match(popup, /'图注'/);
+  assert.match(popup, /'原图'/);
+  assert.match(popup, /loading \? '解图中…' : '解图'/);
+  assert.match(
+    css,
+    /\.workspace-figure-actions\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s
+  );
+  assert.match(css, /\.workspace-figure-analyze-action\s*\{\s*grid-column:\s*auto/);
+  assert.match(html, />主图串解<\/button>/);
+  assert.match(popup, /'主图串解'/);
 });
 
 test('Figure quick navigator opens and closes promptly with Panels in one ordered column', () => {
@@ -435,6 +630,13 @@ test('Figure workspace exposes the full inventory, source jump, single deep anal
   assert.match(popup, /workspace-figure-panel-card/);
   assert.match(html, /id="analyzeFiguresFromFigures"/);
   assert.match(html, /id="figureWorkspaceSummary"/);
+  assert.match(popup, /function hasUsableLlm\(/);
+  assert.match(popup, /figureButton\.hidden = false/);
+  assert.match(popup, /analyze\.disabled = loading/);
+  assert.doesNotMatch(
+    popup,
+    /figureButton\.hidden\s*=\s*!isLlm/
+  );
 });
 
 test('Figure workspace provides a one-click cross-main-Figure domino chain with source jumps', () => {
@@ -450,6 +652,7 @@ test('Figure workspace provides a one-click cross-main-Figure domino chain with 
   assert.match(popup, /focusWorkspaceSource\(\{[\s\S]*kind: 'figure'/);
   assert.match(html, /id="analyzeCrossFigureLogic"/);
   assert.match(css, /workspace-cross-figure-card/);
+  assert.match(popup, /crossFigureButton\.hidden = false/);
 });
 
 test('navigation tree exposes hierarchy depth and separate global controls', () => {

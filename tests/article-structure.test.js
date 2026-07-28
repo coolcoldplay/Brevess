@@ -57,18 +57,26 @@ test('uses parent source keys when publisher headings share one HTML level', () 
   assert.equal(structure.nodes[0].children[0].level, 3);
 });
 
-test('stops at references and excludes utility headings', () => {
+test('keeps navigable front and end matter while excluding page utility headings', () => {
   const structure = buildArticleStructure(input([
     { sourceKey: 'h-abstract', title: 'Abstract', level: 2, order: 1 },
     { sourceKey: 'h-keywords', title: 'Keywords', level: 2, order: 2 },
     { sourceKey: 'h-results', title: 'Results', level: 2, order: 3 },
-    { sourceKey: 'h-references', title: 'References', level: 2, order: 4 },
-    { sourceKey: 'h-recommended', title: 'Recommended articles', level: 2, order: 5 }
+    { sourceKey: 'h-info', title: 'Info', level: 3, order: 4 },
+    {
+      sourceKey: 'h-accessibility',
+      title: 'Accessibility & Keyboard Shortcuts',
+      level: 3,
+      order: 5
+    },
+    { sourceKey: 'h-transcript', title: 'Transcript', level: 3, order: 6 },
+    { sourceKey: 'h-references', title: 'References', level: 2, order: 7 },
+    { sourceKey: 'h-recommended', title: 'Recommended articles', level: 2, order: 8 }
   ]));
 
   assert.deepEqual(
     flattenStructureNodes(structure.nodes).map(item => item.title),
-    ['Abstract', 'Results']
+    ['Abstract', 'Keywords', 'Results', 'References']
   );
 });
 

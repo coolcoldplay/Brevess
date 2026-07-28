@@ -13,7 +13,7 @@ let activeContext = null;
 let fixtureServer = null;
 
 function prepareQaExtension() {
-  for (const directory of ['core', 'providers', 'vendor', 'icons']) {
+  for (const directory of ['core', 'providers', 'vendor', 'icons', '_locales']) {
     fs.cpSync(path.join(root, directory), path.join(extensionDir, directory), {
       recursive: true
     });
@@ -129,7 +129,7 @@ async function configureOpfsDirectory(context, extensionId) {
       }
     });
   });
-  await options.goto(`chrome-extension://${extensionId}/options.html`, {
+  await options.goto(`chrome-extension://${extensionId}/options.html#page=data`, {
     waitUntil: 'domcontentloaded'
   });
   const chooseButton = options.locator('#chooseUserDataDirectory');
@@ -163,11 +163,27 @@ async function saveWorkspaceThroughPanel(panel) {
   const button = panel.locator('#saveCurrentArticleWorkspace');
   await button.waitFor({ state: 'visible' });
   await button.click();
-  await panel.waitForFunction(() =>
-    document.getElementById('saveCurrentArticleWorkspace')?.disabled === false &&
-    document.getElementById('saveCurrentArticleWorkspace')?.hasAttribute('aria-busy') === false &&
-    document.getElementById('statusMessage')?.textContent.includes('已保存'),
-  null, { timeout: 10000 });
+  try {
+    await panel.waitForFunction(() =>
+      document.getElementById('saveCurrentArticleWorkspace')?.disabled === false &&
+      document.getElementById('saveCurrentArticleWorkspace')?.hasAttribute('aria-busy') === false &&
+      document.getElementById('statusMessage')?.textContent.includes('已保存'),
+    null, { timeout: 10000 });
+  } catch (error) {
+    const diagnostics = await panel.evaluate(async () => ({
+      status: document.getElementById('statusMessage')?.textContent || '',
+      statusType: document.getElementById('statusMessage')?.className || '',
+      disabled: document.getElementById('saveCurrentArticleWorkspace')?.disabled,
+      busy: document.getElementById('saveCurrentArticleWorkspace')?.getAttribute('aria-busy'),
+      notification: sidePanelNotificationHistory?.[0] || null,
+      handleLoaded: articleWorkspaceDirectoryHandleLoaded,
+      hasHandle: Boolean(articleWorkspaceDirectoryHandle),
+      permission: articleWorkspaceDirectoryHandle
+        ? await articleWorkspaceDirectoryHandle.queryPermission({ mode: 'readwrite' })
+        : 'unconfigured'
+    }));
+    throw new Error(`Workspace save timed out: ${JSON.stringify(diagnostics)}`, { cause: error });
+  }
   return panel.evaluate(() => ({
     buttonRecovered: document.getElementById('saveCurrentArticleWorkspace')?.disabled === false,
     busyReleased:
@@ -251,7 +267,10 @@ async function saveRestartFixture(options, workspace) {
       ['annotations/highlights.json', { annotations: [], highlightDistribution: {} }],
       ['analysis/full-analysis.json', { llm: null, diagnostics: null }],
       ['chat/index.json', {
-        turns: [turn], totalTurns: 1, returnedTurns: 1, windowStart: 0,
+        // Reproduce the real failure mode: a read-only sidebar refresh from an
+        // older build overwrote the aggregate index, while the durable turn
+        // file still contained the complete answer.
+        turns: [], totalTurns: 0, returnedTurns: 0, windowStart: 0,
         loading: false, error: '', operationId: '', activeTurnId: '',
         coverage: null, memoryNeedsRebuild: false
       }],
@@ -430,6 +449,65 @@ async function flushAndInspectDirectory(options) {
   });
 }
 
+async function introduceWorkspaceGenerationDrift(options, directoryName) {
+  return options.evaluate(async ({ directoryName }) => {
+    const selected = await SciLLM.loadDirectoryHandle(indexedDB);
+    const root = await selected.getDirectoryHandle('SCI-Highlighter', { create: false });
+    const workspaces = await root.getDirectoryHandle('workspaces', { create: false });
+    const workspace = await workspaces.getDirectoryHandle(directoryName, { create: false });
+    const readJson = async relativePath => {
+      const parts = relativePath.split('/');
+      const filename = parts.pop();
+      let directory = workspace;
+      for (const part of parts) {
+        directory = await directory.getDirectoryHandle(part, { create: false });
+      }
+      const handle = await directory.getFileHandle(filename, { create: false });
+      return {
+        handle,
+        value: JSON.parse(await (await handle.getFile()).text())
+      };
+    };
+    const writeJson = async ({ handle, value }) => {
+      const writable = await handle.createWritable();
+      await writable.write(`${JSON.stringify(value, null, 2)}\n`);
+      await writable.close();
+    };
+    const manifest = await readJson('manifest.json');
+    const chatIndex = await readJson('chat/index.json');
+    const turn = await readJson('chat/turns/restart-turn-1.json');
+    manifest.value.workspaceGeneration = 2;
+    manifest.value.updatedAt = '2026-07-24T01:00:00.000Z';
+    // Model the real failure precisely: the workspace and all ordinary assets
+    // advanced to generation 2, but chat writes continued through a stale
+    // generation-1 page context after the manifest changed.
+    for (const asset of manifest.value.assets || []) {
+      if (asset.path === 'chat/index.json' ||
+          asset.path === 'chat/turns/restart-turn-1.json') continue;
+      const record = await readJson(asset.path);
+      record.value.workspaceGeneration = 2;
+      await writeJson(record);
+    }
+    chatIndex.value.workspaceGeneration = 1;
+    chatIndex.value.updatedAt = '2026-07-24T02:00:00.000Z';
+    turn.value.workspaceGeneration = 1;
+    turn.value.updatedAt = '2026-07-24T03:00:00.000Z';
+    if (turn.value.data && typeof turn.value.data === 'object') {
+      turn.value.data.updatedAt = '2026-07-24T03:00:00.000Z';
+    }
+    await writeJson(manifest);
+    await writeJson(chatIndex);
+    await writeJson(turn);
+    return {
+      manifestGeneration: manifest.value.workspaceGeneration,
+      chatIndexGeneration: chatIndex.value.workspaceGeneration,
+      turnGeneration: turn.value.workspaceGeneration,
+      manifestUpdatedAt: manifest.value.updatedAt,
+      turnUpdatedAt: turn.value.updatedAt
+    };
+  }, { directoryName });
+}
+
 async function clearWorkspaceThroughPanel(panel) {
   await panel.locator('[data-workspace-target="highlights"]').click();
   const button = panel.locator('#clearArticleWorkspace');
@@ -536,11 +614,15 @@ async function clearBrowserWorkspaceStores(options) {
   await firstArticle.page.bringToFront();
   await firstArticle.page.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '2.4.6-build39-publisher-focus-r6', null, { timeout: 10000 });
+      '1.0.0-build1-store-release', null, { timeout: 10000 });
   const workspace = await ensureArticleWorkspace(firstWorker, firstTab.id);
   const saveUi = await saveWorkspaceThroughPanel(firstPanel);
   const saved = await saveRestartFixture(firstOptions, workspace);
   const directory = await flushAndInspectDirectory(firstOptions);
+  const generationDrift = await introduceWorkspaceGenerationDrift(
+    firstOptions, saved.directoryName
+  );
+  const driftedDirectory = await flushAndInspectDirectory(firstOptions);
   const browserStoresCleared = await clearBrowserWorkspaceStores(firstOptions);
   await firstPanel.close();
   await firstOptions.close();
@@ -555,7 +637,7 @@ async function clearBrowserWorkspaceStores(options) {
   const secondArticle = await articlePage(secondContext, articleUrl);
   const secondTab = await findArticleTab(secondWorker, articleUrl);
   const preRestoreOptions = await secondContext.newPage();
-  await preRestoreOptions.goto(`chrome-extension://${secondExtensionId}/options.html`, {
+  await preRestoreOptions.goto(`chrome-extension://${secondExtensionId}/options.html#page=data`, {
     waitUntil: 'domcontentloaded'
   });
   const beforeRestore = await preRestoreOptions.evaluate(async () => {
@@ -578,15 +660,32 @@ async function clearBrowserWorkspaceStores(options) {
       Boolean(figure?.standard || figure?.deep || figure?.error)).length,
     activeView: activeWorkspaceView
   }));
-  await secondPanel.locator('[data-workspace-target="highlights"]').click();
-  await secondPanel.locator('#scanArticleWorkspace').waitFor({ state: 'visible' });
-  await secondPanel.locator('#scanArticleWorkspace').click();
-  await secondPanel.waitForFunction(() =>
-    currentWorkspaceSnapshot?.chat?.turns?.some(turn =>
-      turn.question.includes('RESTART QUESTION')) &&
-    currentWorkspaceSnapshot?.figures?.figures?.some(figure =>
-      figure.standard?.coreConclusion === 'RESTART FIGURE CONCLUSION') &&
-    activeWorkspaceView === 'chat', null, { timeout: 10000 });
+  // Restoration must happen without asking the user to click "load previous
+  // results" or the manual scan button when the directory is still readable.
+  try {
+    await secondPanel.waitForFunction(() =>
+      currentWorkspaceSnapshot?.chat?.turns?.some(turn =>
+        turn.question.includes('RESTART QUESTION')) &&
+      currentWorkspaceSnapshot?.figures?.figures?.some(figure =>
+        figure.standard?.coreConclusion === 'RESTART FIGURE CONCLUSION') &&
+      activeWorkspaceView === 'chat', null, { timeout: 10000 });
+  } catch (error) {
+    const diagnostics = await secondPanel.evaluate(async () => ({
+      workspace: currentWorkspaceSnapshot?.workspace || null,
+      localWorkspace: currentWorkspaceSnapshot?.localWorkspace || null,
+      chatTurns: currentWorkspaceSnapshot?.chat?.turns || [],
+      figures: currentWorkspaceSnapshot?.figures?.figures || [],
+      activeWorkspaceView,
+      notifications: sidePanelNotificationHistory || [],
+      status: document.getElementById('statusMessage')?.textContent || '',
+      directoryStatus: await sendLlmMessage({ type: 'USER_DATA_STATUS' })
+        .catch(routeError => ({ error: routeError.message }))
+    }));
+    throw new Error(
+      `Automatic restart restore timed out: ${JSON.stringify(diagnostics)}`,
+      { cause: error }
+    );
+  }
   const restoredUi = await secondPanel.evaluate(() => ({
     chatTurns: Number(currentWorkspaceSnapshot?.chat?.totalTurns) || 0,
     figures: Number(currentWorkspaceSnapshot?.figures?.totalFigures) || 0,
@@ -594,6 +693,8 @@ async function clearBrowserWorkspaceStores(options) {
     answerVisible: document.body.textContent.includes('RESTART ANSWER'),
     figureVisible: document.body.textContent.includes('RESTART FIGURE CONCLUSION'),
     activeView: activeWorkspaceView,
+    autoRestoreNotification:
+      /自动恢复本地工作区/.test(sidePanelNotificationHistory?.[0]?.message || ''),
     scanButtonRecovered: document.getElementById('scanArticleWorkspace')?.disabled === false,
     figureExpansion: figureExpansionState.get('figure-1') === true,
     panelExpansion: figurePanelExpansionState.get('figure-1:A') === true
@@ -628,6 +729,10 @@ async function clearBrowserWorkspaceStores(options) {
       turnCount: exported.turns.length
     };
   }, restoredContent.workspaceId);
+  // Saving a restored turn is the real regression path that previously
+  // surfaced as "Unable to complete the request" when the turn file existed
+  // on disk but its IndexedDB row did not.
+  const resavedUi = await saveWorkspaceThroughPanel(secondPanel);
   const sidePanelOptions = await secondWorker.evaluate(
     tabId => chrome.sidePanel.getOptions({ tabId }), secondTab.id
   );
@@ -684,12 +789,15 @@ async function clearBrowserWorkspaceStores(options) {
     saveUi,
     saved,
     directory,
+    generationDrift,
+    driftedDirectory,
     browserStoresCleared,
     beforeRestore,
     beforeScanUi,
     restoredUi,
     restoredContent,
     restoredOverview,
+    resavedUi,
     sidePanelEnabled: sidePanelOptions.enabled === true,
     clearedUi,
     clearedContent,
@@ -720,21 +828,28 @@ async function clearBrowserWorkspaceStores(options) {
     results.saved.turnCount === 1 &&
     results.directory.sync.permission === 'granted' &&
     results.directory.sync.pendingCount === 0 &&
-    results.directory.inspection.chatTurnCount === 1 &&
+    // The deliberately corrupted aggregate index is empty before restart;
+    // the independent turn file must still recover the one complete turn.
+    results.directory.inspection.chatTurnCount === 0 &&
     results.directory.inspection.figureCount === 1 &&
+    results.generationDrift.manifestGeneration === 2 &&
+    results.generationDrift.chatIndexGeneration === 1 &&
+    results.generationDrift.turnGeneration === 1 &&
+    Date.parse(results.generationDrift.turnUpdatedAt) >
+      Date.parse(results.generationDrift.manifestUpdatedAt) &&
+    results.driftedDirectory.inspection.workspaceGeneration === 2 &&
     requiredFiles.every(suffix => results.directory.files.some(file => file.endsWith(suffix))) &&
     results.browserStoresCleared.workspaceCount === 0 &&
     results.beforeRestore.handleRestored &&
     results.beforeRestore.permission === 'granted' &&
     results.beforeRestore.workspaceCount === 0 &&
-    results.beforeScanUi.chatTurns === 0 &&
-    results.beforeScanUi.analyzedFigures === 0 &&
     results.restoredUi.chatTurns === 1 &&
     results.restoredUi.figures === 1 &&
     results.restoredUi.questionVisible &&
     results.restoredUi.answerVisible &&
     results.restoredUi.figureVisible &&
     results.restoredUi.activeView === 'chat' &&
+    results.restoredUi.autoRestoreNotification &&
     results.restoredUi.scanButtonRecovered &&
     results.restoredUi.figureExpansion &&
     results.restoredUi.panelExpansion &&
@@ -743,12 +858,17 @@ async function clearBrowserWorkspaceStores(options) {
     results.restoredContent.answer.includes('RESTART ANSWER') &&
     results.restoredContent.figureConclusion === 'RESTART FIGURE CONCLUSION' &&
     results.restoredContent.sidePanelView === 'chat' &&
+    results.restoredContent.workspaceGeneration === 2 &&
     results.restoredOverview.workspaceCount === 1 &&
     results.restoredOverview.chatTurnCount === 1 &&
     results.restoredOverview.figureCount === 1 &&
     results.restoredOverview.panelCount === 1 &&
     results.restoredOverview.assetCount === 7 &&
     results.restoredOverview.turnCount === 1 &&
+    results.resavedUi.buttonRecovered &&
+    results.resavedUi.busyReleased &&
+    results.resavedUi.statusType.includes('success') &&
+    results.resavedUi.status.includes('已保存') &&
     results.sidePanelEnabled &&
     results.clearedUi.buttonRecovered &&
     results.clearedUi.statusType.includes('success') &&

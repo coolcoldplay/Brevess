@@ -23,6 +23,7 @@ require('../providers/openai.js');
 require('../providers/anthropic.js');
 require('../providers/gemini.js');
 require('../providers/deepseek.js');
+require('../providers/codex-local.js');
 require('../providers/openai-compatible.js');
 const {
   createProviderAdapter,
@@ -145,7 +146,7 @@ function successfulStructuredFetchFor(providerId) {
 
 test('registers all supported providers and validates required fields', () => {
   assert.deepEqual(Object.keys(getProviderDefinitions()), [
-    'openai', 'anthropic', 'gemini', 'deepseek', 'openai-compatible'
+    'openai', 'anthropic', 'gemini', 'deepseek', 'codex-local', 'openai-compatible'
   ]);
   assert.deepEqual(validateProviderConfig('openai', { apiKey: '', model: '' }), ['apiKey', 'model']);
   assert.deepEqual(validateProviderConfig('openai-compatible', {
@@ -160,12 +161,18 @@ test('registers all supported providers and validates required fields', () => {
   assert.deepEqual(validateProviderConfig('openai', {
     apiKey: 'key', model: 'model', baseUrl: 'https://gateway.example/v1/chat/completions'
   }), []);
+  assert.deepEqual(validateProviderConfig('codex-local', {
+    model: 'auto', reasoningEffort: 'medium'
+  }), []);
+  assert.deepEqual(validateProviderConfig('codex-local', {
+    model: 'auto', reasoningEffort: 'extreme'
+  }), ['reasoningEffort']);
 });
 
 test('publishes official Chinese-model compatible presets without coupling them to credentials', () => {
   const presets = getCompatibleProviderPresets();
   const expected = {
-    kimi: ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
+    kimi: ['https://api.moonshot.cn/v1', 'kimi-k3'],
     zhipu: ['https://open.bigmodel.cn/api/paas/v4', 'glm-5.2'],
     doubao: ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-0-lite-260215'],
     qwen: ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-flash'],
@@ -214,6 +221,59 @@ test('all providers expose a generic structured JSON request', async () => {
     assert.equal(typeof adapter.generateJson, 'function');
     assert.equal((await adapter.generateJson(structuredRequest)).primary_type, 'clinical_trial');
   }
+});
+
+test('local Codex emits one normalized usage record from native token telemetry', async () => {
+  const telemetry = [];
+  const adapter = createProviderAdapter({
+    providerId: 'codex-local',
+    config: { model: 'auto', reasoningEffort: 'medium' },
+    nativeClient: {
+      streamTurn() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text_delta', text: '{"ok":true}' };
+            yield {
+              type: 'usage',
+              usage: {
+                last: {
+                  inputTokens: 120,
+                  cachedInputTokens: 50,
+                  outputTokens: 30,
+                  reasoningOutputTokens: 12
+                }
+              }
+            };
+            yield { type: 'completed', finishReason: 'stop' };
+          }
+        };
+      },
+      async health() { return { connected: true }; }
+    }
+  });
+  assert.deepEqual(await adapter.generateJson({
+    systemPrompt: 'SYSTEM',
+    userPrompt: 'QUESTION',
+    onProviderTelemetry: event => telemetry.push(event)
+  }), { ok: true });
+  assert.equal(telemetry.length, 1);
+  assert.deepEqual({
+    providerId: telemetry[0].providerId,
+    model: telemetry[0].model,
+    inputTokens: telemetry[0].inputTokens,
+    outputTokens: telemetry[0].outputTokens,
+    reasoningTokens: telemetry[0].reasoningTokens,
+    cacheHitTokens: telemetry[0].cacheHitTokens,
+    estimated: telemetry[0].estimated
+  }, {
+    providerId: 'codex-local',
+    model: 'auto',
+    inputTokens: 120,
+    outputTokens: 30,
+    reasoningTokens: 12,
+    cacheHitTokens: 50,
+    estimated: false
+  });
 });
 
 test('all providers stream normalized text, usage, and completion events', async () => {

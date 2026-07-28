@@ -4,7 +4,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const DOCUMENT_DATABASE_NAME = shared.USER_DATA_DATABASE_NAME || 'sci-logic-highlighter-user-data';
-  const DOCUMENT_DATABASE_VERSION = shared.USER_DATA_DATABASE_VERSION || 3;
+  const DOCUMENT_DATABASE_VERSION = shared.USER_DATA_DATABASE_VERSION || 4;
   const DOCUMENT_STORE_NAME = 'documents';
   const META_STORE_NAME = 'meta';
   const DIRECTORY_HANDLE_STORE_NAME = 'directoryHandles';

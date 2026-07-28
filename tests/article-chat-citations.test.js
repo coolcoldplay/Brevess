@@ -110,6 +110,13 @@ test('verifies only a unique normalized exact quote', () => {
   assert.equal(result.candidateCount, 1);
   assert.equal(result.target.paragraphId, 'p-results-1');
   assert.ok(result.target.quoteSpan);
+  assert.equal(
+    createSnapshot().paragraphs[0].text.slice(
+      result.target.quoteSpan.sourceStart,
+      result.target.quoteSpan.sourceEnd
+    ),
+    'Heat stress significantly increased circulating IL-6 after 24 hours.'
+  );
 });
 
 test('uses a unique section-scoped tolerant quote only after exact matching fails', () => {

@@ -135,7 +135,17 @@ test('content and side panel expose archive snapshot, restore, probe, and portab
   );
 
   assert.match(popup, /async function probeCurrentArticleArchive/);
+  assert.match(popup, /workspaceAlreadyHasArticleResults/);
+  assert.match(popup, /readArticleArchivePromptDecision/);
+  assert.match(popup, /rememberArticleArchivePromptDecision\(\s*imported \? 'imported' : 'loaded'/);
+  assert.match(popup, /rememberArticleArchivePromptDecision\('skipped'/);
   assert.match(popup, /async function loadCurrentArticleArchive/);
+  assert.match(popup, /async function restoreCurrentArticleWorkspaceFromDirectory/);
+  assert.match(
+    popup,
+    /loadCurrentArticleArchive\(\)[\s\S]*restoreCurrentArticleWorkspaceFromDirectory\([\s\S]*workspace-loaded/
+  );
+  assert.match(popup, /已从本地工作区恢复全部结果和 \$\{turnCount\} 轮历史问答/);
   assert.match(popup, /async function persistCurrentArticleArchive/);
   assert.match(popup, /ARTICLE_ARCHIVE_PROBE/);
   assert.match(popup, /ARTICLE_ARCHIVE_SAVE/);

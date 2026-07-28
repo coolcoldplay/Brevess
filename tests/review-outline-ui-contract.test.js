@@ -4,6 +4,34 @@ const fs = require('node:fs');
 const path = require('node:path');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
+test('navigation separates paragraph jumps from compact summaries and scopes analysis by section', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const css = read('popup.css');
+  assert.match(content, /DEFAULT_ANALYSIS_SECTION_KINDS/);
+  assert.match(content, /'abstract', 'main', 'introduction', 'results', 'discussion', 'conclusion'/);
+  assert.match(content, /setArticleAnalysisSectionSelection/);
+  assert.match(content, /selectedArticleAnalysisParagraphIds/);
+  assert.match(popup, /workspace-section-analysis-toggle/);
+  assert.match(popup, /workspace-paragraph-jump/);
+  assert.match(popup, /workspace-paragraph-summary-action/);
+  assert.match(popup, /'概述'/);
+  assert.match(css, /\.workspace-paragraph-row/);
+  assert.match(
+    css,
+    /\.workspace-view\[data-workspace-view="navigation"\] \.workspace-outline-toolbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0/s
+  );
+  assert.match(
+    css,
+    /\.workspace-view\[data-workspace-view="navigation"\]\s*\{\s*padding-top:\s*0;/
+  );
+  assert.match(popup, /navigationButton\.disabled = reviewOutlineState\.running/);
+  assert.doesNotMatch(popup, /navigationButton\.disabled = !ready/);
+  assert.match(popup, /function selectedWorkspaceAnalysisSectionIds/);
+  assert.match(popup, /scopeSectionIds:\s*selectedWorkspaceAnalysisSectionIds\(\)/);
+  assert.match(content, /scopeSelectionProvided:\s*request\.scopeSelectionProvided === true/);
+});
+
 test('content workflow requests and tracks one review outline job', () => {
   const script = read('content.js');
   assert.match(script, /let reviewOutlinePromise\s*=\s*null/);

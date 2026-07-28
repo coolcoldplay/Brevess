@@ -3,12 +3,16 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const ARTICLE_STRUCTURE_VERSION = '2';
-  const TERMINAL_SECTION = /^(references|bibliography|literature cited)\b/i;
-  const UTILITY_SECTION = /^(?:keywords?|abbreviations?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|information|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|generative ai statement|declaration of ai use|funding|conflicts? of interest(?:\s+declaration)?|competing interests?|declaration of (?:competing )?interests?|data availability(?:\s+statement)?|supplementary (?:materials?|data)|footnotes?|recommended articles?|cited by|article metrics?|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|figures|tables|media|share|show full outline)$/i;
+  const ARTICLE_STRUCTURE_VERSION = '3';
+  const NAVIGABLE_ARTICLE_SECTION = /^(?:main|highlights?|summary|abstract|graphical abstract|keywords?|introduction|background|materials? and methods?|methods?|methodology|experimental procedures?|star\s*[★*]?\s*methods?|results?|findings?|discussion|conclusions?|concluding remarks?|limitations?|resource availability|data(?: and code)? availability(?: statement)?|code availability|references|bibliography|literature cited|appendix|extended data(?: figures?|tables?)?|supplement(?:al|ary)(?: information| materials?| data| figures?| tables?)?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|funding|conflicts? of interest(?: declaration)?|competing interests?|declaration of (?:competing )?interests?|ethics approval|institutional review board statement|informed consent statement|footnotes?)\b/i;
+  const UTILITY_SECTION = /^(?:keywords?|abbreviations?|acknowledg(?:e)?ments?|author information|information\s*&\s*authors|information|info|authors?(?:['’]s?)?\s+contributions?|credit authorship contribution statement|generative ai statement|declaration of ai use|funding|conflicts? of interest(?:\s+declaration)?|competing interests?|declaration of (?:competing )?interests?|data availability(?:\s+statement)?|supplementary (?:materials?|data)|footnotes?|recommended articles?|related content|similar content(?:\s+being viewed by others)?|you may also like|recommended for you|cited by|article metrics?|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|figures|tables|media|share|accessibility(?:\s*&\s*keyboard shortcuts)?|download options|transcript|show full outline)$/i;
 
   function normalize(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  }
+
+  function normalizeDisplay(value, fallback = '') {
+    return String(value || fallback || '').replace(/\s+/gu, ' ').trim();
   }
 
   function hash(value) {
@@ -68,7 +72,8 @@
     return (Array.isArray(value) ? value : []).map((item, index) => ({
       level: Math.min(6, Math.max(1, Number(item?.level) || 2)),
       sectionId: normalize(item?.sectionId || `section-${index + 1}`),
-      title: normalize(item?.title)
+      title: normalize(item?.title),
+      displayTitle: normalizeDisplay(item?.displayTitle, item?.title)
     })).filter(item => item.title);
   }
 
@@ -79,6 +84,8 @@
         sourceKey: normalize(item?.sourceKey || `heading-${index + 1}`),
         parentSourceKey: normalize(item?.parentSourceKey),
         title: normalize(item?.title),
+        displayTitle: normalizeDisplay(item?.displayTitle, item?.title),
+        sectionKind: normalize(item?.sectionKind),
         level: Math.min(6, Math.max(1, Number(item?.level) || 2)),
         order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index
       }))
@@ -88,20 +95,11 @@
     const nodes = [];
     const nodeBySourceKey = new Map();
     const stack = [];
-    let terminalReached = false;
     let excludedCount = 0;
 
     for (const item of sourceHeadings) {
-      if (terminalReached) {
-        excludedCount += 1;
-        continue;
-      }
-      if (TERMINAL_SECTION.test(item.title)) {
-        terminalReached = true;
-        excludedCount += 1;
-        continue;
-      }
-      if (UTILITY_SECTION.test(item.title)) {
+      if (UTILITY_SECTION.test(item.title) &&
+          !NAVIGABLE_ARTICLE_SECTION.test(item.title)) {
         excludedCount += 1;
         continue;
       }
@@ -119,7 +117,11 @@
       }
 
       const ancestry = parent
-        ? [...parent.headingPath, { sectionId: parent.sectionId, title: parent.title }]
+        ? [...parent.headingPath, {
+            sectionId: parent.sectionId,
+            title: parent.title,
+            displayTitle: parent.displayTitle || parent.title
+          }]
         : [];
       const sectionId = `sec-${hash([
         input.adapterId || 'generic',
@@ -129,13 +131,19 @@
       ])}`;
       const path = [
         ...ancestry,
-        { sectionId, title: item.title }
+        {
+          sectionId,
+          title: item.title,
+          displayTitle: item.displayTitle || item.title
+        }
       ];
       const node = {
         nodeId: `node-${sectionId.slice(4)}`,
         sectionId,
         sourceKey: item.sourceKey,
         title: item.title,
+        displayTitle: item.displayTitle || item.title,
+        sectionKind: item.sectionKind || '',
         level,
         parentSectionId: parent?.sectionId || '',
         order: item.order,
@@ -161,9 +169,14 @@
         sourceIdentity: normalize(item?.sourceIdentity),
         headingSourceKey: normalize(item?.headingSourceKey),
         text: normalize(item?.text),
+        displayText: normalizeDisplay(item?.displayText, item?.text),
         textHash: normalize(item?.textHash) || hash(normalize(item?.text)),
         recordType: normalizeRecordType(item),
         sectionTitle: normalize(item?.sectionTitle),
+        displaySectionTitle: normalizeDisplay(
+          item?.displaySectionTitle,
+          item?.sectionTitle
+        ),
         sectionPath: normalizeSectionPath(item?.sectionPath),
         order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index
       }))
@@ -188,14 +201,16 @@
         let headingPath = pathNodes.map(candidate => ({
           level: candidate.level,
           sectionId: candidate.sectionId,
-          title: candidate.title
+          title: candidate.title,
+          displayTitle: candidate.displayTitle || candidate.title
         }));
         if (!headingPath.length) headingPath = item.sectionPath;
         if (!headingPath.length && item.sectionTitle) {
           headingPath = [{
             level: 2,
             sectionId: `sec-${hash([item.sectionTitle, item.recordType])}`,
-            title: item.sectionTitle
+            title: item.sectionTitle,
+            displayTitle: item.displaySectionTitle || item.sectionTitle
           }];
         }
         if (!headingPath.length) return [];
@@ -217,11 +232,14 @@
           recordType: item.recordType,
           sectionId,
           sectionTitle,
+          displaySectionTitle: node?.displayTitle ||
+            item.displaySectionTitle || sectionTitle,
           sectionKind: item.sectionKind || 'article',
           headingLevel: node?.level || leaf.level,
           headingPath,
           kind: item.kind || 'paragraph',
           text: item.text,
+          displayText: item.displayText || item.text,
           order: item.order,
           anchor: paragraphAnchor(item, headingPath)
         }];

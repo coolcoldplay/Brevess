@@ -41,8 +41,10 @@ require('../providers/openai.js');
 require('../providers/anthropic.js');
 require('../providers/gemini.js');
 require('../providers/deepseek.js');
+require('../providers/codex-local.js');
 require('../providers/openai-compatible.js');
 require('../providers/provider-registry.js');
+require('../core/provider-model-discovery.js');
 require('../core/task-profile-router.js');
 require('../core/token-budget.js');
 require('../core/article-chat-context-planner.js');
@@ -108,6 +110,9 @@ function createDirectorySyncDouble(options = {}) {
     },
     flush() {
       this.flushCalls += 1;
+      if (typeof options.flush === 'function') {
+        return options.flush(this.flushCalls);
+      }
       return flushGate;
     },
     async status() {
@@ -141,6 +146,11 @@ function createDirectorySyncDouble(options = {}) {
         permission: 'granted', found: false, value: null
       };
     },
+    async listWorkspaceChatAssets(workspace) {
+      return options.listWorkspaceChatAssets?.(workspace) || {
+        permission: 'granted', assets: [], invalidAssets: 0
+      };
+    },
     async listWorkspaceManifests(identity) {
       return options.listWorkspaceManifests?.(identity) || {
         permission: 'granted', manifests: [], matches: []
@@ -167,7 +177,16 @@ function createArticleWorkspaceStoreDouble() {
   const deletionGenerations = new Map();
   return {
     async ensureWorkspace(workspace) {
-      const saved = { ...workspace, storageRevision: workspace.storageRevision || 0 };
+      const current = workspaces.get(workspace.workspaceId);
+      const saved = {
+        ...current,
+        ...workspace,
+        workspaceGeneration: Math.max(
+          Number(current?.workspaceGeneration || 0),
+          Number(workspace.workspaceGeneration || 1)
+        ),
+        storageRevision: workspace.storageRevision || current?.storageRevision || 0
+      };
       workspaces.set(saved.workspaceId, saved);
       return structuredClone(saved);
     },
@@ -185,6 +204,22 @@ function createArticleWorkspaceStoreDouble() {
     async appendTurn(id, turn) {
       const saved = { ...turn, workspaceId: id, sequence: (turns.get(id)?.length || 0) + 1, revision: 1 };
       turns.set(id, [...(turns.get(id) || []), saved]);
+      return structuredClone(saved);
+    },
+    async updateTurn(id, turnId, patch) {
+      const items = turns.get(id) || [];
+      const index = items.findIndex(turn => turn.turnId === turnId);
+      if (index < 0) {
+        const error = new Error('TURN_NOT_FOUND');
+        error.code = 'TURN_NOT_FOUND';
+        throw error;
+      }
+      const saved = {
+        ...items[index], ...patch, turnId, workspaceId: id,
+        revision: Number(items[index].revision || 0) + 1
+      };
+      items[index] = saved;
+      turns.set(id, items);
       return structuredClone(saved);
     },
     async pageTurns(id) { return { items: structuredClone(turns.get(id) || []), hasMore: false }; },
@@ -236,8 +271,10 @@ test('registers only the one-type study selection message in the service worker'
   const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
   assert.match(source, /'LLM_SET_STUDY_TYPE'/);
   assert.doesNotMatch(source, /'LLM_SAVE_STUDY_TYPE_OVERRIDE'/);
-  ['CATEGORY_GET', 'CATEGORY_SAVE_OVERRIDE', 'CATEGORY_RESET_OVERRIDE',
-    'CATEGORY_TEST_REGEX'].forEach(type => assert.match(source, new RegExp(`'${type}'`)));
+  ['CATEGORY_GET', 'CATEGORY_SAVE_OVERRIDE', 'CATEGORY_APPEND_FIXED_PHRASE',
+    'CATEGORY_RESET_OVERRIDE',
+    'CATEGORY_DELETE', 'CATEGORY_RESTORE_BUILT_IN', 'CATEGORY_TEST_REGEX']
+    .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   ['DOCUMENT_PREPARE', 'DOCUMENT_GET', 'ANNOTATION_UPSERT',
     'ANNOTATION_DELETE', 'ANNOTATION_CLEAR_DOCUMENT']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
@@ -252,12 +289,18 @@ test('registers only the one-type study selection message in the service worker'
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
   assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
+  assert.match(source, /'LLM_TOKEN_USAGE_LIST'/);
+  assert.match(source, /'LLM_TOKEN_USAGE_CLEAR'/);
+  assert.match(source, /progress\?\.phase !== 'provider_telemetry'/);
+  assert.match(source, /TOKEN_USAGE_FEATURES/);
   assert.ok(source.indexOf('core/figure-panel-planner.js') <
     source.indexOf('core/figure-analysis.js'));
   assert.ok(source.indexOf('core/result-validator.js') <
     source.indexOf('core/highlight-stream.js'));
   assert.ok(source.indexOf('core/highlight-stream.js') <
     source.indexOf('core/analysis-pipeline.js'));
+  assert.ok(source.indexOf('core/token-usage-store.js') <
+    source.indexOf('core/background-router.js'));
   assert.ok(source.indexOf('core/article-chat-tokenizer.js') <
     source.indexOf('core/article-chat-index.js'));
   assert.ok(source.indexOf('core/article-chat-index.js') <
@@ -719,6 +762,95 @@ test('deleting a referenced custom category retires it until references are remo
   );
 });
 
+test('permanently deletes and explicitly restores a referenced built-in category', async () => {
+  const storageArea = createMemoryStorage();
+  const documentStore = createMemoryDocumentStore();
+  const router = createBackgroundRouter({
+    storageArea,
+    documentStore,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const prepared = await router.handle({
+    type: 'DOCUMENT_PREPARE', document: manualDocument
+  });
+  const documentId = prepared.data.documentId;
+  const upserted = await router.handle({
+    type: 'ANNOTATION_UPSERT',
+    documentId,
+    annotation: routerAnnotation({ categoryId: 'objective' })
+  });
+  assert.equal(upserted.success, true);
+
+  const deleted = await router.handle({
+    type: 'CATEGORY_DELETE', categoryId: 'objective'
+  });
+  assert.equal(deleted.success, true);
+  assert.equal(deleted.data.deleted, true);
+  assert.equal(deleted.data.builtIn, true);
+  assert.equal(deleted.data.referenceCount, 1);
+  assert.equal(
+    deleted.data.availableCategories.some(category => category.categoryId === 'objective'),
+    false
+  );
+  assert.deepEqual(
+    storageArea.values.sciLlmSettingsV2.deletedBuiltInCategoryIds,
+    ['objective']
+  );
+  assert.equal(
+    storageArea.values.sciLlmSettingsV2.categoryOverrides.objective,
+    undefined
+  );
+  const analysisScope = await router.handle({
+    type: 'DOCUMENT_PREPARE', document: manualDocument
+  });
+  assert.equal(analysisScope.success, true);
+  assert.equal(
+    analysisScope.data.activeCategories.some(category =>
+      category.categoryId === 'objective'
+    ),
+    false
+  );
+
+  const missing = await router.handle({
+    type: 'CATEGORY_GET', categoryId: 'objective'
+  });
+  assert.equal(missing.success, false);
+  assert.equal(missing.error.code, 'INVALID_SETTINGS');
+  const historical = await router.handle({ type: 'DOCUMENT_GET', documentId });
+  assert.equal(
+    historical.data.record.annotations[0].categorySnapshot.name,
+    '研究目的'
+  );
+
+  const restarted = createBackgroundRouter({
+    storageArea,
+    documentStore,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const persisted = await restarted.handle({ type: 'LLM_GET_SETTINGS' });
+  assert.equal(
+    persisted.data.availableCategories.some(category => category.categoryId === 'objective'),
+    false
+  );
+  assert.equal(
+    persisted.data.deletedBuiltInCategories[0].categoryId,
+    'objective'
+  );
+
+  const restored = await restarted.handle({
+    type: 'CATEGORY_RESTORE_BUILT_IN', categoryId: 'objective'
+  });
+  assert.equal(restored.success, true);
+  assert.equal(
+    restored.data.availableCategories.some(category => category.categoryId === 'objective'),
+    true
+  );
+  assert.deepEqual(
+    storageArea.values.sciLlmSettingsV2.deletedBuiltInCategoryIds,
+    []
+  );
+});
+
 test('custom category deletion cannot hard-delete a concurrently referenced definition', async () => {
   const storageArea = createMemoryStorage();
   const baseDocumentStore = createMemoryDocumentStore();
@@ -828,7 +960,7 @@ test('fresh settings state lists merged category names and colors without prompt
   const result = await router.handle({ type: 'LLM_GET_SETTINGS' });
 
   assert.equal(result.success, true);
-  assert.equal(result.data.availableCategories.length, 47);
+  assert.equal(result.data.availableCategories.length, 48);
   const limitation = result.data.availableCategories
     .find(category => category.categoryId === 'limitation');
   assert.equal(limitation.name, '适用边界');
@@ -867,7 +999,7 @@ test('publishes compatible provider presets without exposing saved credentials',
   assert.equal(result.success, true);
   const kimi = result.data.compatibleProviderPresets.find(item => item.id === 'kimi');
   assert.equal(kimi.baseUrl, 'https://api.moonshot.cn/v1');
-  assert.equal(kimi.defaultModel, 'kimi-k2.6');
+  assert.equal(kimi.defaultModel, 'kimi-k3');
   assert.equal(kimi.authPrefix, 'Bearer');
   assert.doesNotMatch(JSON.stringify(result.data.compatibleProviderPresets), /preset-secret-987654/);
 });
@@ -1022,6 +1154,74 @@ test('tests candidate regex deterministically with whole-word and case semantics
   ]);
   assert.equal(result.data.truncated, false);
   assert.equal(JSON.stringify(storageArea.values), before);
+});
+
+test('category regex blacklist removes overlapping fixed-phrase matches', async () => {
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const result = await router.handle({
+    type: 'CATEGORY_TEST_REGEX',
+    categoryId: 'result',
+    candidateRegex: {
+      phrases: ['response signal'],
+      excludePhrases: ['baseline response signal'],
+      expressions: [],
+      caseSensitive: false,
+      wholeWord: true
+    },
+    testText: 'baseline response signal and durable response signal'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.excludedCount, 1);
+  assert.deepEqual(result.data.matches, [{
+    expressionRow: 'phrase:0',
+    start: 37,
+    end: 52,
+    text: 'response signal'
+  }]);
+});
+
+test('atomically appends manual fixed phrases to category include and exclude lists', async () => {
+  const storageArea = createMemoryStorage();
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async () => jsonResponse({})
+  });
+  const included = await router.handle({
+    type: 'CATEGORY_APPEND_FIXED_PHRASE',
+    categoryId: 'result',
+    listType: 'include',
+    phrase: '  durable response   signal  '
+  });
+  assert.equal(included.success, true);
+  assert.equal(included.data.appended, true);
+  assert.ok(included.data.category.regex.phrases.includes('durable response signal'));
+
+  const excluded = await router.handle({
+    type: 'CATEGORY_APPEND_FIXED_PHRASE',
+    categoryId: 'result',
+    listType: 'exclude',
+    phrase: 'baseline response signal'
+  });
+  assert.equal(excluded.success, true);
+  assert.deepEqual(
+    excluded.data.category.regex.excludePhrases,
+    ['baseline response signal']
+  );
+  const duplicate = await router.handle({
+    type: 'CATEGORY_APPEND_FIXED_PHRASE',
+    categoryId: 'result',
+    listType: 'exclude',
+    phrase: 'baseline response signal'
+  });
+  assert.equal(duplicate.data.appended, false);
+  assert.deepEqual(
+    storageArea.values.sciLlmSettingsV2.categoryOverrides.result.regex.excludePhrases,
+    ['baseline response signal']
+  );
 });
 
 test('bounds regex test matches and rejects unsafe candidates and oversized text', async () => {
@@ -1381,11 +1581,61 @@ test('returns bounded redacted diagnostics for an unclassified internal error', 
 
   assert.equal(response.success, false);
   assert.equal(response.error.code, 'INTERNAL_ERROR');
-  assert.equal(response.error.runtimeRevision, '2.4.6-build39-publisher-focus-r6');
+  assert.equal(response.error.runtimeRevision, '1.0.0-build1-store-release');
   assert.equal(response.error.diagnosticType, 'TypeError');
   assert.match(response.error.diagnosticMessage, /Cannot read properties of undefined/);
   assert.doesNotMatch(response.error.diagnosticMessage, /sk-abcdefghijk123456789/);
   assert.ok(response.error.diagnosticMessage.length <= 240);
+});
+
+test('routes plugin-scoped Codex authentication controls through the native client', async () => {
+  const calls = [];
+  const nativeClient = {
+    async health(options) {
+      calls.push({ type: 'health', options });
+      return {
+        connected: true,
+        accountType: 'chatgpt',
+        planType: 'plus',
+        hostVersion: '1.0.0',
+        eventLogPath: 'C:\\events\\events.ndjson',
+        latestEventPath: 'C:\\events\\latest.json'
+      };
+    },
+    async startLogin(options) {
+      calls.push({ type: 'login', options });
+      return {
+        loginId: 'plugin-login',
+        authUrl: 'https://auth.openai.com/oauth/authorize'
+      };
+    },
+    async logout(options) {
+      calls.push({ type: 'logout', options });
+      return { success: true };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    nativeClient,
+    fetchImpl: async () => jsonResponse({})
+  });
+
+  const status = await router.handle({ type: 'CODEX_LOCAL_STATUS' });
+  const login = await router.handle({
+    type: 'CODEX_LOCAL_LOGIN_START',
+    force: true
+  });
+  const logout = await router.handle({ type: 'CODEX_LOCAL_LOGOUT' });
+
+  assert.equal(status.success, true);
+  assert.equal(status.data.planType, 'plus');
+  assert.equal(status.data.eventLogPath, 'C:\\events\\events.ndjson');
+  assert.equal(status.data.latestEventPath, 'C:\\events\\latest.json');
+  assert.equal(login.success, true);
+  assert.equal(login.data.loginId, 'plugin-login');
+  assert.equal(logout.success, true);
+  assert.equal(calls[1].options.force, true);
+  assert.deepEqual(calls.map(call => call.type), ['health', 'login', 'logout']);
 });
 
 test('returns privacy-safe network stage diagnostics', async () => {
@@ -1434,6 +1684,42 @@ test('saves provider credentials but returns only masked public settings', async
   );
 });
 
+test('lists current provider models through the saved profile without exposing its key', async () => {
+  const storageArea = createMemoryStorage();
+  const requests = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return jsonResponse({
+        data: [
+          { id: 'gpt-5-mini', created: 20 },
+          { id: 'text-embedding-3-large', created: 30 },
+          { id: 'gpt-5', created: 10 }
+        ]
+      });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'openai',
+    config: { apiKey: 'model-list-secret', model: 'gpt-5-mini' }
+  });
+
+  const result = await router.handle({
+    type: 'LLM_LIST_MODELS',
+    profileId: 'profile_legacy_openai',
+    providerId: 'openai',
+    config: {}
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(result.data.models.map(item => item.id), ['gpt-5-mini', 'gpt-5']);
+  assert.equal(requests[0].url, 'https://api.openai.com/v1/models');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer model-list-secret');
+  assert.equal(JSON.stringify(result).includes('model-list-secret'), false);
+});
+
 test('updates only whitelisted preferences and reports effective mode', async () => {
   const storageArea = createMemoryStorage();
   const router = createBackgroundRouter({ storageArea, fetchImpl: async () => jsonResponse({}) });
@@ -1449,12 +1735,33 @@ test('updates only whitelisted preferences and reports effective mode', async ()
       providerId: 'deepseek',
       consentGranted: true,
       selectedCategoryIds: ['limitation'],
+      keyboardShortcuts: { figures: 'x', navigation: '', ppt: '7' },
       injected: 'must-not-save'
     }
   });
   assert.equal(result.data.effectiveMode, 'llm');
+  assert.equal(result.data.llmReady, true);
   assert.equal(storageArea.values.sciLlmSettingsV2.injected, undefined);
   assert.deepEqual(result.data.settings.selectedCategoryIds, ['limitation']);
+  assert.equal(result.data.settings.keyboardShortcuts.figures, 'X');
+  assert.equal(result.data.settings.keyboardShortcuts.navigation, '');
+  assert.equal(result.data.settings.keyboardShortcuts.ppt, '7');
+});
+
+test('reports LLM task readiness independently from the selected highlight engine', async () => {
+  const storageArea = createMemoryStorage();
+  const router = createBackgroundRouter({ storageArea, fetchImpl: async () => jsonResponse({}) });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'deepseek',
+    config: { apiKey: 'key', model: 'deepseek-v4-flash' }
+  });
+  const result = await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'regex', consentGranted: true }
+  });
+  assert.equal(result.data.effectiveMode, 'regex');
+  assert.equal(result.data.llmReady, true);
 });
 
 test('stores a normalized confidence threshold through the preference whitelist', async () => {
@@ -2897,6 +3204,16 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
     workspaceGeneration: 1,
     turn: { turnId: 'turn-1', role: 'user', content: 'Question' }
   })).success, true);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: 'chat/index.json',
+    content: { turns: [], totalTurns: 0, returnedTurns: 0 }
+  })).success, true);
+  const savedChatIndex = (await workspaceStore.listAssets(workspace.workspaceId))
+    .find(asset => asset.relativePath === 'chat/index.json').content;
+  assert.equal(savedChatIndex.totalTurns, 1);
+  assert.equal(savedChatIndex.turns[0].turnId, 'turn-1');
   const staleMutation = await router.handle({
     type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
     workspaceGeneration: 2,
@@ -2979,6 +3296,43 @@ test('deletes browser-local workspace data when no filesystem directory was conf
   assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
 });
 
+test('deletes browser-local workspace immediately when filesystem permission is unavailable', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'d'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/permission-pending-paper',
+    aliases: [], title: 'Permission pending paper',
+    directoryName: `Permission pending paper--${'d'.repeat(16)}`,
+    revision: '4'.repeat(64), contentHash: '4'.repeat(64), workspaceGeneration: 1
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    removeWorkspaceTree: async () => ({ permission: 'prompt', removed: false, pending: true })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('deletion must not call the network'); }
+  });
+
+  await router.handle({ type: 'ARTICLE_WORKSPACE_ENSURE', workspace });
+  const begun = await router.handle({
+    type: 'ARTICLE_WORKSPACE_BEGIN_DELETE', workspaceId: workspace.workspaceId
+  });
+  const finalized = await router.handle({
+    type: 'ARTICLE_WORKSPACE_FINALIZE_DELETE', workspaceId: workspace.workspaceId,
+    tombstoneId: begun.data.tombstoneId
+  });
+
+  assert.equal(finalized.success, true);
+  assert.equal(finalized.data.deleted, true);
+  assert.equal(finalized.data.pendingDiskCleanup, true);
+  assert.equal(finalized.data.permission, 'prompt');
+  assert.equal(finalized.data.removedFromDisk, false);
+  assert.equal(finalized.data.workspaceGeneration, 2);
+  assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
+});
+
 test('scan restores validated workspace assets into IndexedDB before returning them', async () => {
   const workspace = {
     schemaVersion: 1,
@@ -3040,6 +3394,20 @@ test('scan restores validated workspace assets into IndexedDB before returning t
         contentHash: 'asset-hash',
         data: storedFiles[path]
       }
+    }),
+    listWorkspaceChatAssets: async () => ({
+      permission: 'granted',
+      invalidAssets: 0,
+      assets: [{
+        relativePath: 'chat/turns/turn-orphan.json',
+        content: {
+          turnId: 'turn-orphan', question: 'Recovered from an unindexed file',
+          sequence: 3, createdAt: 3
+        },
+        revision: 6,
+        contentHash: 'turn-orphan-hash',
+        updatedAt: '2026-07-20T02:00:00.000Z'
+      }]
     })
   });
   const router = createBackgroundRouter({
@@ -3053,12 +3421,237 @@ test('scan restores validated workspace assets into IndexedDB before returning t
   });
   assert.equal(result.success, true);
   assert.equal(result.data.restore.match, 'exact');
-  assert.deepEqual(result.data.restore.assets[0].content, chat);
+  assert.equal(result.data.recoveredUnindexedChatAssets, 1);
+  assert.equal(result.data.restore.assets[0].content.totalTurns, 2);
+  assert.deepEqual(
+    result.data.restore.assets[0].content.turns.map(turn => turn.turnId),
+    ['turn-1', 'turn-orphan']
+  );
   assert.equal(result.data.restore.assets.length, 1);
-  assert.deepEqual((await workspaceStore.listAssets(workspace.workspaceId))[0].content, chat);
+  assert.equal(
+    (await workspaceStore.listAssets(workspace.workspaceId))[0].content.totalTurns,
+    2
+  );
   assert.deepEqual(
     (await workspaceStore.pageTurns(workspace.workspaceId)).items.map(turn => turn.turnId),
-    ['turn-1']
+    ['turn-1', 'turn-orphan']
+  );
+  assert.ok(directorySync.workspaceAssets.some(asset =>
+    asset.path === 'chat/turns/turn-orphan.json'
+  ));
+});
+
+test('scan treats turn files as authoritative when chat index was overwritten empty', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'e'.repeat(64)}`,
+    canonicalUrl: 'https://www.cell.com/cell/fulltext/S0092-8674(26)00346-6',
+    aliases: [],
+    title: 'A skin-hypothalamus axis',
+    directoryName: `A skin-hypothalamus axis--${'e'.repeat(16)}`,
+    revision: '5'.repeat(64), contentHash: '5'.repeat(64), workspaceGeneration: 1
+  };
+  const manifest = {
+    ...workspace,
+    kind: 'sci-logic-highlighter-workspace',
+    createdAt: '2026-07-23T00:00:00.000Z',
+    updatedAt: '2026-07-23T14:35:36.000Z',
+    assets: [{
+      path: 'chat/index.json', type: 'json', revision: 19,
+      contentHash: 'empty-index', updatedAt: '2026-07-23T14:29:24.000Z'
+    }, {
+      path: 'chat/turns/turn-2.json', type: 'json', revision: 5,
+      contentHash: 'turn-2', updatedAt: '2026-07-23T14:27:49.000Z'
+    }]
+  };
+  const turns = [{
+    turnId: 'turn-1', question: '作者定义的热暴露实验条件是什么',
+    answerBlocks: [{ blockId: 'block-1', markdown: '第一轮答案' }],
+    status: 'completed', sequence: 1, createdAt: 1
+  }, {
+    turnId: 'turn-2', question: '作者是如何定义热暴露的标准的',
+    answerBlocks: [{ blockId: 'block-1', markdown: '第二轮答案' }],
+    status: 'completed', sequence: 2, createdAt: 2
+  }];
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted', manifests: [manifest],
+      matches: [{ match: 'exact', manifest }]
+    }),
+    readWorkspaceAsset: async (_manifest, path) => ({
+      permission: 'granted', found: true,
+      value: {
+        kind: 'sci-logic-highlighter-workspace-asset',
+        revision: path === 'chat/index.json' ? 19 : 5,
+        contentHash: path,
+        data: path === 'chat/index.json'
+          ? { turns: [], totalTurns: 0, returnedTurns: 0 }
+          : turns[1]
+      }
+    }),
+    listWorkspaceChatAssets: async () => ({
+      permission: 'granted',
+      invalidAssets: 0,
+      assets: turns.map((turn, index) => ({
+        relativePath: `chat/turns/turn-${index + 1}.json`,
+        content: turn,
+        revision: index + 5,
+        contentHash: `turn-${index + 1}`,
+        updatedAt: `2026-07-23T14:2${index}:00.000Z`
+      }))
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(), directorySync, articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const result = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: workspace,
+    requestPermission: false
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.restore.assets[0].relativePath, 'chat/index.json');
+  assert.equal(result.data.restore.assets[0].content.totalTurns, 2);
+  assert.deepEqual(
+    result.data.restore.assets[0].content.turns.map(turn => turn.turnId),
+    ['turn-1', 'turn-2']
+  );
+  assert.deepEqual(
+    result.data.restore.turns.map(turn => turn.turnId),
+    ['turn-1', 'turn-2']
+  );
+  assert.equal(result.data.repairedChatIndex, true);
+  assert.ok(directorySync.workspaceAssets.some(asset =>
+    asset.path === 'chat/index.json' &&
+    asset.value?.totalTurns === 2
+  ));
+});
+
+test('scan upgrades a newer chat turn that was written with the previous generation', async () => {
+  const workspaceId = `workspace:${'f'.repeat(64)}`;
+  const localWorkspace = {
+    schemaVersion: 1,
+    workspaceId,
+    canonicalUrl: 'https://www.nature.com/articles/example',
+    aliases: [],
+    title: 'Generation drift paper',
+    directoryName: `Generation drift paper--${'f'.repeat(16)}`,
+    revision: '6'.repeat(64),
+    contentHash: '6'.repeat(64),
+    workspaceGeneration: 1
+  };
+  const manifest = {
+    ...localWorkspace,
+    kind: 'sci-logic-highlighter-workspace',
+    workspaceGeneration: 2,
+    revision: 20,
+    createdAt: '2026-07-24T00:00:00.000Z',
+    updatedAt: '2026-07-24T01:00:00.000Z',
+    assets: []
+  };
+  const recoveredTurn = {
+    turnId: 'turn-after-generation-change',
+    question: 'Was this history recovered?',
+    answerBlocks: [{ blockId: 'block-1', markdown: 'Yes.' }],
+    status: 'completed',
+    sequence: 1,
+    createdAt: 1,
+    updatedAt: '2026-07-24T02:00:00.000Z'
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  await workspaceStore.ensureWorkspace(localWorkspace);
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted',
+      manifests: [manifest],
+      matches: [{ match: 'exact', manifest }]
+    }),
+    listWorkspaceChatAssets: async () => ({
+      permission: 'granted',
+      invalidAssets: 0,
+      recoveredGenerationMismatches: 1,
+      assets: [{
+        relativePath: `chat/turns/${recoveredTurn.turnId}.json`,
+        content: recoveredTurn,
+        revision: 9,
+        contentHash: 'turn-after-generation-change',
+        updatedAt: recoveredTurn.updatedAt,
+        sourceWorkspaceGeneration: 1,
+        recoveredGenerationMismatch: true
+      }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const result = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: localWorkspace,
+    requestPermission: false
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.restore.manifest.workspaceGeneration, 2);
+  assert.equal(result.data.restore.turns.length, 1);
+  assert.equal(result.data.restore.turns[0].turnId, recoveredTurn.turnId);
+  assert.equal(result.data.recoveredGenerationMismatchChatAssets, 1);
+  assert.equal(
+    (await workspaceStore.getWorkspace(workspaceId)).workspaceGeneration,
+    2
+  );
+  assert.ok(directorySync.workspaceAssets.some(asset =>
+    asset.path.endsWith(`${recoveredTurn.turnId}.json`) &&
+    asset.metadata.workspaceGeneration === 2
+  ));
+});
+
+test('upserts a restored chat turn when its IndexedDB turn record is missing', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'9'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/chat-upsert',
+    aliases: [],
+    title: 'Chat upsert',
+    directoryName: `Chat upsert--${'9'.repeat(16)}`,
+    revision: '9'.repeat(64),
+    contentHash: '9'.repeat(64),
+    workspaceGeneration: 1
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  await workspaceStore.ensureWorkspace(workspace);
+  const directorySync = createDirectorySyncDouble();
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('turn save must stay local'); }
+  });
+
+  const result = await router.handle({
+    type: 'ARTICLE_WORKSPACE_UPDATE_TURN',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    turnId: 'turn-restored-only-in-page',
+    turn: {
+      turnId: 'turn-restored-only-in-page',
+      question: 'Can this turn be saved?',
+      status: 'completed'
+    }
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.recreated, true);
+  assert.equal(
+    (await workspaceStore.pageTurns(workspace.workspaceId)).items[0].turnId,
+    'turn-restored-only-in-page'
   );
 });
 
@@ -3088,8 +3681,27 @@ test('workspace overview returns safe summaries and loads one detail on demand',
       permission: 'granted', manifests: [], matches: [], invalidManifests: 1
     })
   });
+  const tokenUsage = {
+    canonicalUrl: workspace.canonicalUrl,
+    totals: { requests: 3, inputTokens: 900, outputTokens: 120 },
+    features: {
+      figure_walkthrough: {
+        featureId: 'figure_walkthrough',
+        label: '逐图解读',
+        requests: 3,
+        inputTokens: 900,
+        outputTokens: 120,
+        models: {}
+      }
+    }
+  };
+  const tokenUsageStore = {
+    async list() { return [tokenUsage]; },
+    async getForDocument() { return tokenUsage; }
+  };
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(), directorySync, articleWorkspaceStore: workspaceStore,
+    tokenUsageStore,
     fetchImpl: async () => { throw new Error('overview must stay local'); }
   });
 
@@ -3097,6 +3709,9 @@ test('workspace overview returns safe summaries and loads one detail on demand',
   assert.equal(overview.success, true);
   assert.equal(overview.data.workspaces[0].doi, '10.1000/overview');
   assert.equal(overview.data.totals.workspaceCount, 1);
+  assert.equal(overview.data.totals.inputTokens, 900);
+  assert.equal(overview.data.workspaces[0].tokenUsage.features
+    .figure_walkthrough.outputTokens, 120);
   assert.equal(overview.data.sync.corruptCount, 1);
   assert.doesNotMatch(JSON.stringify(overview.data), /directoryName|absolutePath|apiKey/i);
 
@@ -3107,6 +3722,7 @@ test('workspace overview returns safe summaries and loads one detail on demand',
   assert.equal(detail.data.chatTurnCount, 2);
   assert.equal(detail.data.figureCount, 1);
   assert.equal(detail.data.panelCount, 2);
+  assert.equal(detail.data.tokenUsage.totals.requests, 3);
   assert.ok(detail.data.estimatedBytes > 0);
   assert.doesNotMatch(JSON.stringify(detail.data), /relativePath|content|apiKey/i);
 });
@@ -3775,6 +4391,57 @@ test('keeps verified visual providers in visual mode', async () => {
   assert.equal(openAIInputPayload(bodies[0]).analysis_basis, 'vision_text');
 });
 
+test('routes local Codex Figure analysis with actual image inputs instead of caption fallback', async () => {
+  const storageArea = createMemoryStorage();
+  const turns = [];
+  const nativeClient = {
+    streamTurn(input) {
+      turns.push(input);
+      const prompt = JSON.parse(input.userPrompt);
+      const output = figurePassOutput(prompt);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text_delta', text: JSON.stringify(output) };
+          yield { type: 'completed' };
+        }
+      };
+    },
+    async health() { return { connected: true, hostVersion: '1.0.0' }; }
+  };
+  const router = createBackgroundRouter({
+    storageArea,
+    nativeClient,
+    fetchImpl: async () => jsonResponse({})
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'codex-local',
+    config: { model: 'auto', reasoningEffort: 'medium' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: {
+      mode: 'regex',
+      providerId: 'codex-local',
+      consentGranted: true
+    }
+  });
+
+  const response = await router.handle(figureMessage([
+    figureInput(1, [{ dataUrl: 'data:image/jpeg;base64,/9j/2Q==' }])
+  ], { analysisDepth: 'standard' }));
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.route.providerId, 'codex-local');
+  assert.equal((await router.handle({ type: 'LLM_GET_SETTINGS' }))
+    .data.settings.mode, 'regex');
+  assert.equal(response.data.route.capabilityMode, 'vision');
+  assert.equal(response.data.visionFallbacks, 0);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].images.length, 1);
+  assert.equal(JSON.parse(turns[0].userPrompt).analysis_basis, 'vision_text');
+});
+
 test('caches one Figure standard and deep results independently', async () => {
   const fixture = await configuredFigureRouter('deepseek', { model: 'deepseek-v4-flash' });
   await fixture.router.handle(figureMessage([figureInput(1)], { analysisDepth: 'standard' }));
@@ -4023,13 +4690,18 @@ test('wires durable directory sync and all four user-data routes without request
     'USER_DATA_SYNC_STATUS', 'USER_DATA_SYNC_NOW',
     'USER_DATA_REBUILD_INDEX', 'USER_DATA_EXPORT_BUNDLE',
     'LLM_SAVE_PROFILE', 'LLM_DUPLICATE_PROFILE', 'LLM_DELETE_PROFILE',
-    'LLM_UPDATE_PROFILE_ROUTING', 'LLM_TEST_PROFILE'
+    'LLM_UPDATE_PROFILE_ROUTING', 'LLM_TEST_PROFILE', 'LLM_LIST_MODELS',
+    'CODEX_LOCAL_STATUS', 'CODEX_LOCAL_LOGIN_START', 'CODEX_LOCAL_LOGOUT'
   ]) {
     assert.match(source, new RegExp(`'${type}'`));
   }
   assert.ok(
     source.indexOf("'providers/provider-registry.js'") <
       source.indexOf("'core/task-profile-router.js'")
+  );
+  assert.ok(
+    source.indexOf("'providers/provider-registry.js'") <
+      source.indexOf("'core/provider-model-discovery.js'")
   );
   assert.doesNotMatch(source, /requestPermission\s*\(/);
 });
@@ -4158,6 +4830,7 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
         value: {
           schemaVersion: 1, revision: 7, sourceId: 'directory',
           categoryOverrides: { limitation: { color: '#102030' } },
+          deletedBuiltInCategoryIds: ['objective'],
           customCategories: [], selectedCategoryIds: ['limitation'],
           viewCategoryOverrides: settings.viewCategoryOverrides
         }
@@ -4189,13 +4862,46 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   assert.equal(rebuilt.success, true);
   assert.equal(rebuilt.data.imported, 2);
   assert.equal(storageArea.values.sciLlmSettingsV2.categoryOverrides.limitation.color, '#102030');
+  assert.deepEqual(
+    storageArea.values.sciLlmSettingsV2.deletedBuiltInCategoryIds,
+    ['objective']
+  );
   assert.equal((await documentStore.getDocument('sha256:local')).studyType, 'observational');
   assert.equal(bundle.success, true);
   assert.match(JSON.stringify(bundle.data), /sha256:local/);
+  assert.deepEqual(bundle.data.categories.deletedBuiltInCategoryIds, ['objective']);
   assert.doesNotMatch(
     JSON.stringify(bundle.data),
     /sk-bundle-secret|apiKey|providers|authorization|analysisCache|directoryHandle|syncQueue/i
   );
+});
+
+test('explicit sync drain waits for a concurrently queued directory rerun', async () => {
+  const directorySync = createDirectorySyncDouble({
+    flush: call => Promise.resolve(call < 3
+      ? {
+          permission: 'granted', written: 1, imported: 0,
+          conflicts: 0, failed: 0, pendingCount: 2
+        }
+      : {
+          permission: 'granted', written: 2, imported: 0,
+          conflicts: 0, failed: 0, pendingCount: 0
+        })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    fetchImpl: async () => jsonResponse({})
+  });
+
+  const result = await router.handle({
+    type: 'USER_DATA_SYNC_NOW',
+    drain: true
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.pendingCount, 0);
+  assert.equal(directorySync.flushCalls, 3);
 });
 
 test('rebuild shares the document mutation queue so concurrent annotations are preserved', async () => {
@@ -4416,6 +5122,49 @@ test('tests the exact requested profile instead of falling back to the global pr
   assert.equal(missing.success, false);
   assert.equal(missing.error.code, 'INVALID_SETTINGS');
   assert.doesNotMatch(JSON.stringify(missing), /apiKey|customHeaders|exact-secret/);
+});
+
+test('gives a real local Codex connection probe enough time to warm up', async () => {
+  const storageArea = createMemoryStorage();
+  const turns = [];
+  const nativeClient = {
+    async health() {
+      return { connected: true, accountType: 'chatgpt', planType: 'plus' };
+    },
+    streamTurn(input) {
+      turns.push(input);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text_delta', text: 'OK' };
+          yield { type: 'completed' };
+        }
+      };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea,
+    nativeClient,
+    fetchImpl: async () => jsonResponse({})
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROFILE',
+    profile: {
+      id: 'profile_codex_test',
+      name: 'Local Codex',
+      providerId: 'codex-local',
+      config: { model: 'auto', reasoningEffort: 'auto' }
+    }
+  });
+
+  const tested = await router.handle({
+    type: 'LLM_TEST_PROFILE',
+    profileId: 'profile_codex_test'
+  });
+
+  assert.equal(tested.success, true);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].timeoutMs, 120000);
+  assert.equal(turns[0].ephemeral, true);
 });
 
 test('legacy provider saves upsert one profile without reviving the legacy settings model', async () => {

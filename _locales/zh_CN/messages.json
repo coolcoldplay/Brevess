@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "Brevess"
+  },
+  "extensionDescription": {
+    "message": "在 Edge 侧栏中导航论文、按规则或 LLM 高亮证据、解读 Figure/Panel，并基于全文连续问答。"
+  }
+}

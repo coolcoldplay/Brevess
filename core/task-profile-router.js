@@ -69,6 +69,9 @@
     if (providerId === 'anthropic') {
       return { anthropicVersion: String(config.anthropicVersion || '2023-06-01') };
     }
+    if (providerId === 'codex-local') {
+      return { reasoningEffort: String(config.reasoningEffort || 'auto') };
+    }
     return {};
   }
 

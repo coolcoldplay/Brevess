@@ -16,6 +16,7 @@ const {
   saveSettings,
   toPublicSettings,
   isConfiguredProfile,
+  isLlmReady,
   getEffectiveMode
 } = require('../core/settings-store.js');
 
@@ -41,6 +42,7 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   const settings = createDefaultSettings();
   assert.equal(settings.version, 5);
   assert.deepEqual(settings.categoryOverrides, {});
+  assert.deepEqual(settings.deletedBuiltInCategoryIds, []);
   assert.deepEqual(settings.studyTypeOverrides, {});
   assert.deepEqual(settings.customCategories, []);
   assert.deepEqual(Object.keys(settings.profiles), ['profile_default_openai']);
@@ -53,6 +55,7 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   ));
   assert.equal(settings.mode, 'regex');
   assert.equal(settings.autoAnalyze, false);
+  assert.equal(settings.autoCacheFigureImages, true);
   assert.equal(settings.consentGranted, false);
   assert.equal(getEffectiveMode(settings), 'regex');
 
@@ -61,6 +64,109 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   assert.equal(getEffectiveMode(settings), 'regex');
   settings.consentGranted = true;
   assert.equal(getEffectiveMode(settings), 'llm');
+});
+
+test('persists only valid unique deleted built-in category ids', () => {
+  const settings = mergeSettings({
+    version: 5,
+    deletedBuiltInCategoryIds: [
+      'objective', 'objective', 'causal_overreach', 'custom_unknown', '../result'
+    ]
+  });
+  assert.deepEqual(
+    settings.deletedBuiltInCategoryIds,
+    ['objective', 'causal_overreach']
+  );
+  assert.deepEqual(
+    mergeSettings(settings).deletedBuiltInCategoryIds,
+    ['objective', 'causal_overreach']
+  );
+});
+
+test('Figure original caching defaults on and preserves an explicit opt-out', () => {
+  assert.equal(mergeSettings({ version: 5 }).autoCacheFigureImages, true);
+  assert.equal(
+    mergeSettings({ version: 5, autoCacheFigureImages: false }).autoCacheFigureImages,
+    false
+  );
+});
+
+test('keyboard shortcuts default to the complete unique map and normalize overrides', () => {
+  assert.deepEqual(createDefaultSettings().keyboardShortcuts, {
+    figures: 'F',
+    navigation: 'G',
+    analysis: 'A',
+    highlights: 'H',
+    chat: 'Q',
+    zotero: 'Z',
+    ppt: 'P',
+    scanLocal: 'R',
+    saveLocal: 'S',
+    deleteLocal: 'D',
+    exportJson: 'E',
+    importJson: 'I',
+    settings: 'T',
+    collapseFigurePanels: '0'
+  });
+  const merged = mergeSettings({
+    version: 5,
+    keyboardShortcuts: { figures: 'x', navigation: '', ppt: '7' }
+  });
+  assert.equal(merged.keyboardShortcuts.figures, 'X');
+  assert.equal(merged.keyboardShortcuts.navigation, '');
+  assert.equal(merged.keyboardShortcuts.ppt, '7');
+  assert.equal(merged.keyboardShortcuts.analysis, 'A');
+});
+
+test('treats a local Codex profile as configured without storing an API key', () => {
+  const settings = createDefaultSettings();
+  settings.mode = 'llm';
+  settings.consentGranted = true;
+  settings.profiles = {
+    profile_codex_local: normalizeProfile('profile_codex_local', {
+      name: '本机 Codex',
+      providerId: 'codex-local',
+      config: { model: 'auto', reasoningEffort: 'high' }
+    })
+  };
+  settings.profileOrder = ['profile_codex_local'];
+  settings.globalProfileId = 'profile_codex_local';
+
+  assert.equal(isConfiguredProfile(settings.profiles.profile_codex_local), true);
+  assert.equal(getEffectiveMode(settings), 'llm');
+  assert.equal(
+    toPublicSettings(settings).profiles.profile_codex_local.config.hasApiKey,
+    false
+  );
+  assert.equal(settings.profiles.profile_codex_local.capabilities.vision, true);
+});
+
+test('keeps Codex-backed LLM features ready while regex remains the highlight engine', () => {
+  const settings = createDefaultSettings();
+  settings.mode = 'regex';
+  settings.consentGranted = true;
+  settings.profiles = {
+    profile_codex_local: normalizeProfile('profile_codex_local', {
+      name: '本机 Codex',
+      providerId: 'codex-local',
+      config: { model: 'auto', reasoningEffort: 'auto' }
+    })
+  };
+  settings.profileOrder = ['profile_codex_local'];
+  settings.globalProfileId = 'profile_codex_local';
+
+  assert.equal(isLlmReady(settings), true);
+  assert.equal(getEffectiveMode(settings), 'regex');
+});
+
+test('upgrades a 2.4.14 text-only local Codex profile to native vision', () => {
+  const profile = normalizeProfile('profile_codex_legacy_text', {
+    name: '本机 Codex',
+    providerId: 'codex-local',
+    config: { model: 'auto', reasoningEffort: 'medium' },
+    capabilities: { vision: false }
+  });
+  assert.equal(profile.capabilities.vision, true);
 });
 
 test('normalizes an optional advanced context-window override independently of output policy', () => {
@@ -99,6 +205,41 @@ test('stores four bounded editable Panel follow-up prompts with defaults for bla
   assert.equal(merged.figurePanelFollowupPrompts.axes_reading.length, 1000);
   assert.ok(merged.figurePanelFollowupPrompts.technique_principle.length > 0);
   assert.equal(merged.figurePanelFollowupPrompts.unsupported, undefined);
+});
+
+test('normalizes language, analysis modes, chat prompts, and Panel preset CRUD', () => {
+  const defaults = createDefaultSettings();
+  assert.equal(defaults.language, 'zh-CN');
+  assert.equal(defaults.analysisModes.length, 4);
+  assert.ok(defaults.articleChatQuickPrompts.length >= 4);
+  assert.equal(defaults.figurePanelFollowupPresets.length, 4);
+  const merged = mergeSettings({
+    ...defaults,
+    language: 'en-US',
+    readingViewId: 'my_mode',
+    analysisModes: [{
+      id: 'my_mode',
+      name: 'My mode',
+      description: 'Only selected rules',
+      categoryIds: ['objective', 'objective', 'result']
+    }],
+    articleChatQuickPrompts: [{
+      id: 'why',
+      name: 'Why',
+      prompt: 'Explain why.'
+    }],
+    figurePanelFollowupPrompts: undefined,
+    figurePanelFollowupPresets: [{
+      id: 'stats',
+      name: 'Statistics',
+      prompt: 'Explain the statistical test and its limits.'
+    }]
+  });
+  assert.equal(merged.language, 'en');
+  assert.equal(merged.readingViewId, 'my_mode');
+  assert.deepEqual(merged.analysisModes[0].categoryIds, ['objective', 'result']);
+  assert.equal(merged.articleChatQuickPrompts[0].prompt, 'Explain why.');
+  assert.equal(merged.figurePanelFollowupPresets[0].topic, '');
 });
 
 test('preserves an explicitly empty v5 profile collection', () => {
@@ -478,7 +619,8 @@ test('migrates v2 settings to reading-view defaults without losing provider conf
   });
   assert.equal(merged.version, 5);
   assert.equal(merged.readingViewId, 'quick_story');
-  assert.ok(merged.viewCategoryOverrides.quick_story.add.includes('result'));
+  assert.ok(!merged.viewCategoryOverrides.quick_story.add.includes('result'));
+  assert.ok(!merged.viewCategoryOverrides.quick_story.remove.includes('result'));
   assert.ok(merged.viewCategoryOverrides.quick_story.remove.includes('knowledge_gap'));
   assert.deepEqual(merged.studyTypeOverrides, {});
   assert.equal(merged.profiles.profile_legacy_deepseek.config.apiKey, 'key');

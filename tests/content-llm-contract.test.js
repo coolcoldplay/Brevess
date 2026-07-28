@@ -59,7 +59,9 @@ test('content script exposes full-document LLM analysis and local highlighting',
   assert.match(script, /sciLlmParagraphId/);
   assert.match(script, /normalizeTextWithOffsets/);
   assert.match(css, /\.sci-llm-highlight/);
-  assert.match(css, /#sci-llm-status/);
+  assert.match(script, /type:\s*'ARTICLE_NOTIFICATION'/);
+  assert.match(script, /timestamp:\s*Date\.now\(\)/);
+  assert.doesNotMatch(css, /#sci-llm-status/);
   assert.match(css, /#sci-llm-feedback/);
 });
 
@@ -182,6 +184,11 @@ test('article citation jumps reverify canonical evidence after a document revisi
   assert.match(workflow, /forceRefresh:\s*true/);
   assert.match(workflow, /SciLLM\.verifyArticleChatEvidence/);
   assert.match(workflow, /DOCUMENT_REVISION_CHANGED|revisionChanged/);
+  assert.match(script, /function focusArticleSourceQuote/);
+  assert.match(script, /findCanonicalQuoteSourceSpan/);
+  assert.match(script, /CSS\?\.highlights|CSS\.highlights/);
+  assert.match(workflow, /focusedGranularity/);
+  assert.match(workflow, /'sentence'/);
   assert.match(script, /citationResult/);
 });
 
@@ -227,7 +234,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /2\.4\.6-build39-publisher-focus-r6/);
+  assert.match(script, /1\.0\.0-build1-store-release/);
   assert.match(script, /dataset\.sciReaderSingleColumn\s*=\s*'true'/);
   assert.match(script, /dataset\.sciPublisherFamily/);
   assert.match(script, /selectPublisherAdapter\?\.\(location\)/);
@@ -246,6 +253,17 @@ test('content script persists safe LLM failure diagnostics across regex fallback
   assert.match(script, /response\?\.error\?\.diagnosticStage/);
   assert.match(script, /response\?\.error\?\.runtimeRevision/);
   assert.match(script, /setLlmErrorDiagnostics\(error\)/);
+});
+
+test('section-scoped analysis accepts both stable paragraph ids and DOM source keys', () => {
+  const script = read('content.js');
+  const start = script.indexOf('function selectedArticleAnalysisParagraphIds');
+  const end = script.indexOf('function filterParagraphsForArticleAnalysis', start);
+  const workflow = script.slice(start, end);
+  assert.match(workflow, /\.flatMap\(paragraph => \[/);
+  assert.match(workflow, /paragraph\.paragraphId/);
+  assert.match(workflow, /paragraph\.sourceKey/);
+  assert.match(script, /allowedParagraphIds:\s*selectedArticleAnalysisParagraphIds\(\)/);
 });
 
 test('content script explains retry waits and adaptive chunk splitting', () => {
@@ -361,7 +379,24 @@ test('stale Figure completions and persistence mutations are generation guarded'
   assert.match(script, /return \{ saved: false, stale: true \}/);
   assert.match(script, /function deleteWorkspaceTurnCheckpoint\(/);
   assert.match(script, /articleWorkspaceMutationTail\.then\(async \(\) =>/);
-  assert.match(script, /deleteWorkspaceTurnCheckpoint\(normalizedTurnId/);
+  assert.match(script, /deleteArticleChatCheckpoint\(normalizedTurnId/);
   assert.match(router, /function assertWorkspaceMutationGeneration\(/);
   assert.match(router, /WORKSPACE_GENERATION_CONFLICT/);
+});
+
+test('full-text progress never exposes NaN or undefined chunk counts', () => {
+  const script = read('content.js');
+  const start = script.indexOf("if (request.action === 'llmAnalysisProgress')");
+  const end = script.indexOf(
+    "} else if (request.action === 'getReviewOutlineStatus')",
+    start
+  );
+  const progress = script.slice(start, end);
+  assert.match(progress, /Number\.isFinite\(Number\(progress\.completedChunks\)\)/);
+  assert.match(progress, /Number\.isFinite\(Number\(progress\.totalChunks\)\)/);
+  assert.match(progress, /LLM 正在分析正文分块/);
+  assert.doesNotMatch(
+    progress,
+    /progress\.completedChunks\s*\+\s*1[^]*progress\.totalChunks/
+  );
 });

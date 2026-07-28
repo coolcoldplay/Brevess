@@ -152,15 +152,16 @@ async function selectStudyType(
   return selected;
 }
 
-test('prepares base reading categories without classifying when study type is unset', async () => {
+test('prepares a generic analysis mode without requiring a paper type', async () => {
   const harness = await createHarness();
   const result = await harness.router.handle({
     type: 'LLM_PREPARE_DOCUMENT', document: fixtureDocument
   });
 
   assert.equal(result.success, true);
-  assert.equal(result.data.requiresStudyType, true);
-  assert.equal(result.data.studyProfile, null);
+  assert.equal(result.data.requiresStudyType, false);
+  assert.equal(result.data.studyProfile.primaryType, '');
+  assert.equal(result.data.studyProfile.useTypeSpecificWarnings, false);
   assert.equal(result.data.fullTextAnalyzed, false);
   assert.ok(result.data.activeCategories.length > 0);
   assert.ok(result.data.activeCategories.every(category =>
@@ -172,16 +173,14 @@ test('prepares base reading categories without classifying when study type is un
   assert.deepEqual(harness.providerStages, []);
 });
 
-test('requires a selected study type before document analysis without calling the provider', async () => {
+test('analyzes a prepared document without a paper-type selection', async () => {
   const harness = await createHarness();
   const result = await harness.router.handle({
     type: 'LLM_ANALYZE_DOCUMENT', document: fixtureDocument
   });
 
-  assert.equal(result.success, false);
-  assert.equal(result.error.code, 'STUDY_TYPE_REQUIRED');
-  assert.equal(result.error.message, 'Study type must be selected before analysis.');
-  assert.deepEqual(harness.providerStages, []);
+  assert.equal(result.success, true);
+  assert.ok(harness.providerStages.length > 0);
 });
 
 test('saves exactly one document study type and ignores legacy secondary fields', async () => {

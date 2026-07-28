@@ -283,10 +283,10 @@ test('IndexedDB adapter uses the required database and stores and recovers after
   const saved = await store.setStudyType(DOCUMENT_ONE, 'clinical_trial');
 
   assert.deepEqual(fake.openCalls, [{
-    name: 'sci-logic-highlighter-user-data', version: 3
+    name: 'sci-logic-highlighter-user-data', version: 4
   }]);
   assert.equal(DOCUMENT_DATABASE_NAME, 'sci-logic-highlighter-user-data');
-  assert.equal(DOCUMENT_DATABASE_VERSION, 3);
+  assert.equal(DOCUMENT_DATABASE_VERSION, 4);
   assert.equal(DOCUMENT_STORE_NAME, 'documents');
   assert.equal(META_STORE_NAME, 'meta');
   assert.equal(fake.stores.has('documents'), true);
@@ -297,6 +297,7 @@ test('IndexedDB adapter uses the required database and stores and recovers after
   assert.equal(fake.stores.has('workspaceAssets'), true);
   assert.equal(fake.stores.has('workspaceTurns'), true);
   assert.equal(fake.stores.has('workspaceTombstones'), true);
+  assert.equal(fake.stores.has('figureImages'), true);
   assert.equal(saved.studyType, 'clinical_trial');
   assert.equal(saved.revision, 1);
 });

@@ -2,13 +2,34 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 test('manifest opens an action-activated native side panel and injects extraction on demand', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.4.6');
-  assert.equal(packageJson.version, '2.4.6');
+  assert.equal(manifest.name, '__MSG_extensionName__');
+  assert.equal(manifest.description, '__MSG_extensionDescription__');
+  assert.equal(manifest.default_locale, 'zh_CN');
+  const zhMessages = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '_locales', 'zh_CN', 'messages.json'), 'utf8'
+  ));
+  const enMessages = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '_locales', 'en', 'messages.json'), 'utf8'
+  ));
+  assert.equal(zhMessages.extensionName.message, 'Brevess');
+  assert.equal(enMessages.extensionName.message, 'Brevess');
+  assert.ok(zhMessages.extensionDescription.message.length > 20);
+  assert.ok(enMessages.extensionDescription.message.length > 60);
+  assert.equal(manifest.version, '1.0.0');
+  assert.equal(packageJson.name, 'brevess');
+  assert.equal(packageJson.version, '1.0.0');
   assert.equal(packageJson.license, 'AGPL-3.0-or-later');
+  const publicKey = Buffer.from(manifest.key, 'base64');
+  assert.ok(publicKey.length > 256);
+  const stableExtensionId = [...createHash('sha256').update(publicKey).digest().subarray(0, 16)]
+    .map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15)))
+    .join('');
+  assert.equal(stableExtensionId, 'finhfnjbpidfakpmkghkfjlfcfpoandh');
   assert.equal(
     packageJson.repository.url,
     'git+https://github.com/coolcoldplay/sci-logic-highlighter.git'
@@ -25,6 +46,20 @@ test('manifest opens an action-activated native side panel and injects extractio
   assert.equal(manifest.optional_host_permissions, undefined);
   assert.ok(manifest.permissions.includes('offscreen'));
   assert.ok(manifest.permissions.includes('sidePanel'));
+  assert.ok(manifest.permissions.includes('nativeMessaging'));
+});
+
+test('manifest icon set uses square Brevess PNG assets at every declared size', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+  for (const size of [16, 32, 48, 128]) {
+    const relativePath = `icons/icon${size}.png`;
+    assert.equal(manifest.icons[String(size)], relativePath);
+    assert.equal(manifest.action.default_icon[String(size)], relativePath);
+    const image = fs.readFileSync(path.join(__dirname, '..', relativePath));
+    assert.deepEqual([...image.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(image.readUInt32BE(16), size);
+    assert.equal(image.readUInt32BE(20), size);
+  }
 });
 
 test('background worker keeps routed LLM operations alive until completion', () => {
@@ -32,7 +67,7 @@ test('background worker keeps routed LLM operations alive until completion', () 
   const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
   assert.match(
     background,
-    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'2\.4\.6'/
+    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'1\.0\.0'/
   );
   assert.match(background, /core\/service-worker-keepalive\.js/);
   assert.match(background, /SciLLM\.keepAliveUntil\(\s*handleRoutedMessage/);
@@ -55,11 +90,6 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /setPanelBehavior\(\{\s*openPanelOnActionClick:\s*false\s*\}\)/);
   assert.match(background, /core\/tab-activation\.js/);
   assert.match(background, /core\/tab-messenger\.js/);
-  assert.ok(
-    background.indexOf("'core/tab-messenger.js'") <
-      background.indexOf('SciLLM.sendTabMessageWithRecovery'),
-    'background must load the tab recovery messenger before using it'
-  );
   assert.match(background, /chrome\.action\.onClicked\.addListener/);
   assert.match(background, /markTabActivated/);
   assert.match(background, /chrome\.sidePanel\.open/);
@@ -75,28 +105,50 @@ test('background worker keeps routed LLM operations alive until completion', () 
   );
   assert.doesNotMatch(actionListener, /\bawait\b/);
   assert.ok(
-    background.indexOf('chrome.sidePanel.open({ tabId: tab.id })') <
+    background.indexOf('chrome.sidePanel.open({ windowId: tab.windowId })') <
       background.indexOf('SciLLM.markTabActivated(chrome.storage.session, tab)'),
-    'sidePanel.open must be invoked synchronously inside the toolbar user gesture'
+    'the global sidePanel.open must be invoked synchronously inside the toolbar user gesture'
   );
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   const tabUpdatedStart = background.indexOf('chrome.tabs.onUpdated.addListener');
   const tabUpdatedEnd = background.indexOf('chrome.tabs.onRemoved.addListener', tabUpdatedStart);
   const tabUpdatedListener = background.slice(tabUpdatedStart, tabUpdatedEnd);
-  assert.match(tabUpdatedListener, /armTabSidePanelRestore/);
+  assert.match(tabUpdatedListener, /ensureGlobalSidePanelAvailability/);
+  assert.doesNotMatch(tabUpdatedListener, /sidePanel\.open|armTabSidePanelRestore/);
   assert.doesNotMatch(tabUpdatedListener, /clearTabActivation/);
-  assert.match(background, /async function armTabSidePanelRestore/);
-  assert.match(background, /for \(const delayMs of \[0, 40, 120\]\)/);
   assert.match(background, /chrome\.tabs\.onActivated\.addListener/);
+  const tabActivatedStart = background.indexOf('chrome.tabs.onActivated.addListener');
+  const tabActivatedEnd = background.indexOf(
+    'chrome.tabs.onUpdated.addListener', tabActivatedStart
+  );
+  const tabActivatedListener = background.slice(tabActivatedStart, tabActivatedEnd);
+  assert.match(tabActivatedListener, /syncTabSidePanelAvailability/);
+  assert.doesNotMatch(tabActivatedListener, /sidePanel\.open|armTabSidePanelRestore/);
+  assert.match(background, /async function ensureGlobalSidePanelAvailability/);
+  assert.match(background, /current\.enabled === true/);
+  assert.match(background, /setGlobalSidePanelAvailability\(true\)/);
+  assert.match(background, /async function repairLegacyTabSidePanelOptions/);
+  assert.match(
+    background,
+    /chrome\.sidePanel\.setOptions\(\{\s*tabId,[\s\S]*?path:\s*'popup\.html',[\s\S]*?enabled:\s*true/
+  );
+  assert.match(
+    background,
+    /onInstalled\.addListener\([\s\S]*?repairAllLegacyTabSidePanelOptions/
+  );
+  assert.match(
+    background,
+    /onStartup\.addListener\([\s\S]*?repairAllLegacyTabSidePanelOptions/
+  );
   assert.match(background, /const activatedSidePanelTabIds = new Set\(\)/);
-  assert.match(background, /action: 'armSidePanelRestore'/);
   assert.match(background, /message\?\.type === 'SIDE_PANEL_DOCUMENT_READY'/);
+  assert.match(background, /shouldArmRestore: false/);
   assert.match(content, /window\.addEventListener\('pageshow', announceSidePanelDocumentReady, true\)/);
   assert.match(content, /type: 'SIDE_PANEL_DOCUMENT_READY'/);
+  assert.match(content, /response\.shouldArmRestore/);
   assert.match(background, /SIDE_PANEL_RESTORE_FROM_USER_GESTURE/);
-  assert.match(background, /chrome\.sidePanel\.open\(\{ tabId \}\)/);
+  assert.match(background, /chrome\.sidePanel\.open\(\{ windowId: sender\.tab\.windowId \}\)/);
   assert.match(background, /activatedSidePanelTabIds\.delete\(tabId\)/);
-  assert.match(background, /setTabSidePanelAvailability/);
   assert.match(background, /chrome\.sidePanel\.setOptions\(\{[\s\S]*enabled:/);
   assert.match(background, /isTabActivated\(chrome\.storage\.session, tab\)/);
   assert.match(background, /chrome\.tabs\.onRemoved\.addListener/);
@@ -108,7 +160,7 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /ONBOARDING_PREPARE_FINISH/);
   assert.match(
     background,
-    /ONBOARDING_PREPARE_FINISH[\s\S]*setTabSidePanelAvailability\(sourceTab\.tabId, true\)[\s\S]*prepared: true/
+    /ONBOARDING_PREPARE_FINISH[\s\S]*ensureGlobalSidePanelAvailability\(\)[\s\S]*prepared: true/
   );
   assert.match(background, /ONBOARDING_FINISH/);
   assert.match(background, /async function resolveOnboardingSourceTab\(/);
@@ -141,8 +193,8 @@ test('Chinese user documents cover the current manual, rule, and local-data work
   for (const filename of ['README.md', '使用教程.md']) {
     const document = fs.readFileSync(path.join(root, filename), 'utf8');
     for (const pattern of [
-      /首次 AI 分析前必须且只能选择一个研究类型/,
-      /当前视图.*活动类别/s,
+      /不再要求先选择论文类型|不要求先选择文献类型/,
+      /分析模式.*活动类别/s,
       /查看\/编辑规则.*提示词.*正则/s,
       /同一段落.*荧光笔.*类别.*备注/s,
       /自动.*粗下划线.*手动.*荧光笔/s,

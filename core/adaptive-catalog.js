@@ -21,7 +21,8 @@
       description: '为什么做、如何验证、发现什么、说明什么',
       categoryIds: [
         'known_background', 'knowledge_gap', 'objective', 'hypothesis',
-        'study_strategy', 'key_result', 'conclusion', 'significance_novelty', 'limitation'
+        'study_strategy', 'method', 'result', 'key_result', 'interpretation',
+        'conclusion', 'significance_novelty', 'limitation'
       ]
     },
     mechanism_chain: {
@@ -31,7 +32,8 @@
         'driver_intervention', 'association_evidence', 'causal_effect',
         'mechanism_mediator', 'necessity_evidence', 'sufficiency_evidence',
         'rescue_evidence', 'temporal_dose_evidence', 'cross_system_validation',
-        'mechanism_gap', 'alternative_mechanism'
+        'mechanism_gap', 'alternative_mechanism',
+        'evidence', 'interpretation'
       ]
     },
     critical_review: {
@@ -51,7 +53,8 @@
       categoryIds: [
         'review_scope_thesis', 'evidence_consensus', 'conflicting_evidence',
         'heterogeneity_source', 'evidence_quality_certainty', 'integrative_framework',
-        'author_synthesis', 'knowledge_gap', 'limitation', 'future'
+        'author_synthesis', 'knowledge_gap', 'evidence', 'conclusion',
+        'limitation', 'future'
       ]
     }
   });
@@ -185,6 +188,478 @@
     ].join(' ')
   });
 
+  const ADAPTIVE_REGEX_RULES = Object.freeze({
+    known_background: Object.freeze({
+      phrases: Object.freeze([
+        'it is well established that', 'it is widely accepted that',
+        'it is known that', 'is known to', 'are known to',
+        'has long been recognized', 'has long been recognised',
+        'previous work has shown', 'previous studies have shown',
+        'prior studies have shown', 'a growing body of evidence'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:is|are|was|were) well established\\b',
+        '\\b(?:evidence|studies) consistently (?:shows?|indicates?|supports?)\\b'
+      ])
+    }),
+    knowledge_gap: Object.freeze({
+      phrases: Object.freeze([
+        'remains unclear', 'remain unclear', 'remains unknown', 'remain unknown',
+        'poorly understood', 'not fully understood', 'little is known about',
+        'has yet to be determined', 'have yet to be determined',
+        'is not known whether', 'it is unclear whether',
+        'has not been established', 'have not been established',
+        'lacks a formal definition', 'has no formal definition'
+      ]),
+      expressions: Object.freeze([
+        '\\bit (?:is|remains) not clear (?:whether|if|how|why|when|where)\\b',
+        '\\b(?:precise |exact |underlying )?mechanism remains (?:unclear|unknown)\\b',
+        '\\b(?:question|issue) remains (?:unanswered|unresolved)\\b'
+      ])
+    }),
+    study_strategy: Object.freeze({
+      phrases: Object.freeze([
+        'to address this question', 'to address these questions',
+        'to address this gap', 'to test this hypothesis',
+        'to investigate this question', 'to examine this question',
+        'we combined', 'we integrated', 'we leveraged',
+        'our strategy was to', 'our approach was to'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:in this (?:study|work)|here),?\\s+we (?:combined|integrated|leveraged|applied|employed|used)\\b',
+        '\\bwe (?:designed|developed) (?:a|an|the) (?:study|approach|framework|pipeline|strategy)\\b',
+        '\\bwe used (?:a|an) (?:integrated|multimodal|multi-omic|multiscale) approach\\b'
+      ])
+    }),
+    key_result: Object.freeze({
+      phrases: Object.freeze([
+        'the key finding', 'our key finding', 'the main finding',
+        'our main finding', 'the principal finding', 'our principal finding',
+        'most importantly, we found', 'most importantly, our results',
+        'a central finding of this study', 'a major finding of this study',
+        'one of the main findings', 'one of our main findings',
+        'the primary finding', 'our primary finding',
+        'most strikingly, we found',
+        'a striking finding was', 'the most striking finding',
+        'a major finding', 'one major finding', 'another major finding',
+        'our major finding', 'the main result of this study',
+        'our main result'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:our|the) (?:key|main|principal|central) (?:finding|result) (?:is|was) that\\b',
+        '\\bmost importantly,? (?:we|our (?:data|results|findings))\\b'
+      ])
+    }),
+    significance_novelty: Object.freeze({
+      phrases: Object.freeze([
+        'for the first time', 'to our knowledge',
+        'our findings provide new insights', 'these findings provide new insights',
+        'our findings provide novel insights', 'these findings provide novel insights',
+        'our study provides new insights', 'this study provides new insights',
+        'a marked step towards', 'a marked step toward'
+      ]),
+      expressions: Object.freeze([
+        '\\bthis (?:study|work) is the first to\\b',
+        '\\b(?:our|these) findings (?:provide|offer) (?:new|novel|important) insights?\\b',
+        '\\b(?:our|these) findings have (?:important|broad|clinical) implications\\b',
+        '\\b(?:our|these) findings (?:advance|advances) our understanding\\b',
+        '\\b(?:this|our|the present) (?:study|work|approach|method|findings?|results?) (?:paves?|paved) the way for\\b',
+        '\\b(?:our|these|the) (?:findings?|results?) open(?:s|ed)? new avenues for\\b'
+      ])
+    }),
+    driver_intervention: Object.freeze({
+      phrases: Object.freeze([
+        'following treatment with', 'after treatment with', 'in response to',
+        'upon stimulation', 'upon inhibition', 'upon activation',
+        'knockdown of', 'depletion of', 'deletion of', 'overexpression of',
+        'pharmacological inhibition', 'genetic ablation',
+        'were treated with', 'was treated with'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:cells?|mice|animals?|patients?|participants?) (?:were|was) (?:treated|stimulated|exposed) with\\b',
+        '\\bfollowing (?:treatment|stimulation|inhibition|activation)\\b'
+      ])
+    }),
+    association_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'associated with', 'association between', 'correlated with',
+        'correlation between', 'linked to', 'relationship between',
+        'covaried with'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:positively|negatively|significantly) correlat(?:e|es|ed) with\\b',
+        '\\b(?:positive|negative|significant) correlation (?:with|between)\\b'
+      ])
+    }),
+    causal_effect: Object.freeze({
+      phrases: Object.freeze([
+        'caused a', 'caused an',
+        'was abolished by', 'were abolished by',
+        'was prevented by', 'were prevented by',
+        'was blocked by', 'were blocked by'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:treatments?|intervention|stimulation|activation|inhibition|depletion|deletion|knockdown|overexpression|exposure)[^,.;]{0,48}\\b(?:resulted in|led to|caused|induced|promoted|suppressed|reduced|increased|decreased)\\b',
+        '\\b(?:caused|induced) (?:an?|the) (?:increase|decrease|reduction|response|effect|phenotype)\\b'
+      ])
+    }),
+    mechanism_mediator: Object.freeze({
+      phrases: Object.freeze([
+        'is mediated by', 'was mediated by', 'are mediated by', 'were mediated by',
+        'mediated through', 'acts through', 'acted through'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:effect|response|phenotype) (?:is|was) mediated by\\b',
+        '\\bthrough (?:activation|inhibition|induction|suppression) of\\b',
+        '\\b(?:effect|response|phenotype|activity|progression|survival) (?:depends|depended) on\\b'
+      ])
+    }),
+    necessity_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'is required for', 'was required for', 'are required for', 'were required for',
+        'is necessary for', 'was necessary for', 'are necessary for',
+        'is essential for', 'was essential for',
+        'was abolished by', 'was prevented by', 'was blocked by',
+        'loss of function abolished', 'loss-of-function abolished'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:required|necessary|essential) for (?:the )?(?:effect|response|phenotype|development|formation|maintenance)\\b',
+        '\\b(?:inhibition|depletion|deletion|knockdown) (?:abolished|prevented|blocked)\\b'
+      ])
+    }),
+    sufficiency_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'is sufficient to', 'was sufficient to', 'are sufficient to',
+        'alone is sufficient', 'alone was sufficient',
+        'by itself was sufficient', 'by itself is sufficient',
+        'in the absence of the upstream', 'without the upstream stimulus'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:expression|activation|stimulation|treatment) alone (?:is|was) sufficient to\\b',
+        '\\b(?:alone|by itself) (?:induced|triggered|produced|recapitulated)\\b'
+      ])
+    }),
+    rescue_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'rescued the', 'rescues the', 'partially rescued', 'fully rescued',
+        'was rescued by', 'were rescued by', 'could be rescued by',
+        'restored the', 'restores the', 'restored to control levels',
+        'reversed the', 'reverses the', 'rescue experiment'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:rescue|restoration) of (?:the )?(?:phenotype|effect|response|defect)\\b',
+        '\\b(?:restored|rescued|reversed) (?:the )?(?:phenotype|effect|response|defect)\\b'
+      ])
+    }),
+    temporal_dose_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'dose-dependent', 'dose dependent', 'concentration-dependent',
+        'concentration dependent', 'time-dependent', 'time dependent',
+        'in a dose-dependent manner', 'in a time-dependent manner',
+        'with increasing doses', 'with increasing concentrations',
+        'dose-response relationship', 'time course'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:dose|concentration|time)[ -]dependent\\b',
+        '\\bat (?:increasing|higher) (?:doses|concentrations)\\b'
+      ])
+    }),
+    cross_system_validation: Object.freeze({
+      phrases: Object.freeze([
+        'independent cohort', 'independent dataset', 'independent data set',
+        'consistent across', 'in both human and mouse',
+        'in both humans and mice',
+        'validated in a separate', 'validated in an independent',
+        'replicated in a separate', 'replicated in an independent',
+        'confirmed in a separate', 'confirmed in an independent'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:validated|confirmed|replicated) in (?:a|an) independent (?:cohort|dataset|sample|population)\\b',
+        '\\bconsistent across (?:models|datasets|cohorts|species|systems)\\b',
+        '\\b(?:demonstrated|confirmed|validated|observed|replicated|recapitulated|shown) (?:both )?in vitro and in vivo\\b',
+        '\\b(?:both )?in vitro and in vivo (?:studies|experiments|models|results)[^,.;]{0,36}\\b(?:show|showed|demonstrate|demonstrated|confirm|confirmed|indicate|indicated|support|supported)\\b'
+      ])
+    }),
+    mechanism_gap: Object.freeze({
+      phrases: Object.freeze([
+        'mechanism remains unclear', 'mechanisms remain unclear',
+        'mechanism remains unknown', 'mechanisms remain unknown',
+        'underlying mechanism is unknown', 'underlying mechanisms are unknown',
+        'mechanistic basis remains unclear', 'mechanistic basis remains unknown',
+        'mechanism has yet to be determined', 'mechanisms have yet to be determined',
+        'requires further mechanistic study', 'requires further mechanistic investigation'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:precise |exact |underlying )?mechanisms? (?:remains?|is|are) (?:unclear|unknown|unresolved)\\b',
+        '\\bmechanisms? (?:by|through) which[^,.;]{0,80}\\b(?:remain|remains|is|are) (?:unclear|unknown|poorly understood)\\b'
+      ])
+    }),
+    alternative_mechanism: Object.freeze({
+      phrases: Object.freeze([
+        'an alternative mechanism', 'another possible mechanism',
+        'another mechanism may', 'a different mechanism',
+        'an alternative pathway', 'a parallel mechanism',
+        'may also be mediated by', 'might also be mediated by',
+        'could instead reflect', 'may instead reflect', 'might instead reflect',
+        'could instead involve', 'may instead involve'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:may|might|could) instead (?:reflect|involve|result from)\\b'
+      ])
+    }),
+    design_control: Object.freeze({
+      phrases: Object.freeze([
+        'randomized controlled', 'randomised controlled', 'double-blind',
+        'double blind', 'single-blind', 'single blind', 'placebo-controlled',
+        'placebo controlled', 'vehicle control', 'sham control',
+        'negative control', 'positive control', 'matched controls',
+        'allocation concealment'
+      ]),
+      expressions: Object.freeze([
+        '\\bparticipants? (?:were|was) randomi[sz]ed\\b',
+        '\\b(?:age|sex|baseline)[ -]matched controls?\\b'
+      ])
+    }),
+    sample_population: Object.freeze({
+      phrases: Object.freeze([
+        'sample size', 'study population', 'participants were', 'patients were',
+        'subjects were', 'inclusion criteria', 'exclusion criteria',
+        'eligible patients', 'eligible participants',
+        'cohort consisted of', 'we enrolled', 'we recruited'
+      ]),
+      expressions: Object.freeze([
+        '\\b[nN] ?= ?\\d+\\b',
+        '\\bwe (?:enrolled|recruited|included) \\d+ (?:patients|participants|subjects|mice|animals)\\b'
+      ])
+    }),
+    measurement_validity: Object.freeze({
+      phrases: Object.freeze([
+        'sensitivity and specificity', 'inter-rater reliability',
+        'interrater reliability', 'intra-rater reliability',
+        'intrarater reliability', 'measurement error', 'validated assay',
+        'validated instrument', 'limit of detection', 'limit of quantification',
+        'technical replicates', 'reference standard'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:assay|instrument|questionnaire|scale) was validated\\b',
+        '\\b(?:reliability|validity) (?:was|were) assessed\\b'
+      ])
+    }),
+    effect_uncertainty: Object.freeze({
+      phrases: Object.freeze([
+        'confidence interval', 'credible interval', 'effect size',
+        'standard error', 'hazard ratio', 'odds ratio', 'risk ratio',
+        'relative risk', 'mean difference', 'standardized mean difference',
+        'standardised mean difference'
+      ]),
+      expressions: Object.freeze([
+        '\\b95% (?:CI|confidence interval)\\b',
+        '\\b(?:HR|OR|RR) ?[=:] ?\\d'
+      ])
+    }),
+    statistical_robustness: Object.freeze({
+      phrases: Object.freeze([
+        'false discovery rate', 'multiple testing correction',
+        'multiple comparison correction', 'adjusted p value',
+        'adjusted p-value', 'sensitivity analysis', 'permutation test',
+        'bootstrap analysis', 'bootstrapping', 'cross-validation',
+        'cross validation', 'robustness check'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:bonferroni|benjamini-hochberg) correction\\b',
+        '\\bresults? (?:remained|were) (?:robust|significant) after\\b'
+      ])
+    }),
+    confounding_reverse_causality: Object.freeze({
+      phrases: Object.freeze([
+        'residual confounding', 'potential confounding', 'unmeasured confounding',
+        'reverse causality', 'confounding factors', 'adjusted for confounders',
+        'cannot exclude confounding', 'cannot rule out confounding'
+      ]),
+      expressions: Object.freeze([
+        '\\bcannot exclude (?:residual |unmeasured )?confounding\\b',
+        '\\bthe possibility of reverse causality\\b'
+      ])
+    }),
+    causal_overreach: Object.freeze({
+      phrases: Object.freeze([
+        'association does not imply causation',
+        'association cannot establish causality',
+        'causality cannot be inferred', 'cannot infer causality',
+        'does not prove causation', 'precludes causal inference',
+        'observational design precludes', 'cannot establish causality',
+        'cannot determine causality', 'unable to establish causality',
+        'does not allow causal inference', 'cannot draw causal conclusions',
+        'causal relationship cannot be established',
+        'causal direction cannot be determined',
+        'causal direction is unclear', 'causal direction remains unclear',
+        'limits causal inference', 'limit causal inference',
+        'restricts causal inference', 'restrict causal inference',
+        'constrains causal inference', 'constrain causal inference',
+        'limits causal interpretation', 'limit causal interpretation'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:cannot|could not) (?:establish|infer|determine) causality\\b',
+        '\\bno causal (?:claim|conclusion|inference) can be made\\b',
+        '\\b(?:observational|cross-sectional) design (?:limits|restricts|precludes) causal (?:inference|interpretation)\\b',
+        '\\bcausal inferences? should (?:still )?be interpreted with caution\\b',
+        '\\bdoes not allow (?:for )?(?:strong )?causal inference\\b'
+      ])
+    }),
+    alternative_explanation: Object.freeze({
+      phrases: Object.freeze([
+        'alternative explanation', 'another explanation',
+        'may reflect', 'might reflect', 'could reflect',
+        'could be explained by', 'may be explained by',
+        'may be attributable to', 'might be attributable to'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:may|might|could) instead be (?:due|attributable) to\\b',
+        '\\b(?:one|another) possible explanation (?:is|was)\\b'
+      ])
+    }),
+    replication_external_validation: Object.freeze({
+      phrases: Object.freeze([
+        'external validation cohort', 'external validation dataset',
+        'independent validation cohort', 'independent validation dataset',
+        'replication cohort', 'validation cohort',
+        'validated using an independent', 'validated in an independent',
+        'for independent validation that'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:validated|replicated|reproduced) in (?:a|an) independent (?:cohort|dataset|sample|population)\\b',
+        '\\bexternally validated (?:in|using)\\b'
+      ])
+    }),
+    generalizability: Object.freeze({
+      phrases: Object.freeze([
+        'may not generalize', 'may not generalise',
+        'might not generalize', 'might not generalise',
+        'limited generalizability', 'limited generalisability',
+        'external validity', 'generalizable to', 'generalisable to',
+        'applicability to other'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:results|findings) (?:may|might) not be generali[sz]able\\b',
+        '\\bthe generali[sz]ability of (?:these|our) findings\\b'
+      ])
+    }),
+    statistical_vs_practical_significance: Object.freeze({
+      phrases: Object.freeze([
+        'clinically meaningful', 'practical significance',
+        'biologically meaningful', 'statistically significant but',
+        'despite statistical significance', 'not clinically meaningful',
+        'not clinically significant', 'not biologically meaningful'
+      ]),
+      expressions: Object.freeze([
+        '\\bstatistical significance does not (?:necessarily )?imply\\b',
+        '\\b(?:small|modest) effect despite (?:statistical )?significance\\b'
+      ])
+    }),
+    transparency_reproducibility: Object.freeze({
+      phrases: Object.freeze([
+        'data are available', 'data is available', 'code is available',
+        'source code is available', 'publicly available repository',
+        'preregistered', 'pre-registered', 'registered protocol',
+        'analysis plan', 'reporting guideline', 'reproducible workflow',
+        'materials are available', 'protocol is available'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:data|code|materials|protocols?) (?:is|are) (?:publicly )?available\\b',
+        '\\b(?:scripts?|code) (?:is|are) available (?:at|from|on)\\b'
+      ])
+    }),
+    review_scope_thesis: Object.freeze({
+      phrases: Object.freeze([
+        'this review summarizes', 'this review summarises',
+        'this review discusses', 'this review examines',
+        'this review focuses on', 'we review',
+        'we provide an overview', 'the aim of this review',
+        'the purpose of this review'
+      ]),
+      expressions: Object.freeze([
+        '\\bthis (?:review|article) (?:provides|presents) (?:a|an) (?:overview|synthesis)\\b',
+        '\\bwe (?:summari[sz]e|synthesize|synthesise) (?:the|current) evidence\\b'
+      ])
+    }),
+    evidence_consensus: Object.freeze({
+      phrases: Object.freeze([
+        'consistent evidence', 'evidence consistently',
+        'broad consensus', 'general consensus', 'there is consensus',
+        'multiple studies have shown', 'studies consistently show',
+        'converging evidence', 'convergent evidence'
+      ]),
+      expressions: Object.freeze([
+        '\\bthe literature consistently (?:shows|indicates|supports)\\b',
+        '\\bfindings (?:are|were) consistent across (?:studies|cohorts|datasets)\\b'
+      ])
+    }),
+    conflicting_evidence: Object.freeze({
+      phrases: Object.freeze([
+        'conflicting evidence', 'inconsistent findings', 'mixed results',
+        'contradictory findings', 'studies have yielded conflicting',
+        'remains controversial', 'remain controversial',
+        'is controversial', 'are controversial', 'debate remains'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:evidence|results|findings) (?:is|are|were) (?:mixed|inconsistent|conflicting)\\b',
+        '\\bstudies (?:have )?(?:reported|produced|yielded) (?:mixed|inconsistent|conflicting) (?:results|findings)\\b'
+      ])
+    }),
+    heterogeneity_source: Object.freeze({
+      phrases: Object.freeze([
+        'between-study heterogeneity', 'between study heterogeneity',
+        'heterogeneity may be due to', 'heterogeneity could reflect',
+        'sources of heterogeneity', 'source of heterogeneity',
+        'heterogeneity was driven by', 'heterogeneity is driven by',
+        'heterogeneity can be explained by', 'heterogeneity was explained by',
+        'between-study differences'
+      ]),
+      expressions: Object.freeze([
+        '\\bheterogeneity (?:arose|arises|resulted) from\\b',
+        '\\bvariability across (?:studies|cohorts|populations|assays|models)\\b',
+        '\\b(?:population|methodological|clinical|design) differences (?:accounted for|explained|drove) (?:the )?heterogeneity\\b'
+      ])
+    }),
+    evidence_quality_certainty: Object.freeze({
+      phrases: Object.freeze([
+        'quality of evidence', 'certainty of evidence',
+        'low-certainty evidence', 'low certainty evidence',
+        'moderate-certainty evidence', 'moderate certainty evidence',
+        'high-certainty evidence', 'high certainty evidence',
+        'risk of bias', 'publication bias', 'GRADE assessment'
+      ]),
+      expressions: Object.freeze([
+        '\\bthe evidence was rated as (?:very low|low|moderate|high) certainty\\b',
+        '\\b(?:low|moderate|high) quality evidence\\b'
+      ])
+    }),
+    integrative_framework: Object.freeze({
+      phrases: Object.freeze([
+        'conceptual framework', 'integrative framework',
+        'unifying framework', 'working model', 'unified model',
+        'we propose a model', 'we propose a framework',
+        'provides a framework', 'integrated model'
+      ]),
+      expressions: Object.freeze([
+        '\\b(?:this|the) framework integrates\\b',
+        '\\bwe propose (?:a|an) (?:integrative|unifying|conceptual) (?:model|framework)\\b'
+      ])
+    }),
+    author_synthesis: Object.freeze({
+      phrases: Object.freeze([
+        'we conclude that', 'we propose that', 'we argue that',
+        'we suggest that', 'taken together', 'collectively, these studies',
+        'collectively, the evidence', 'overall, the evidence',
+        'in our view', 'we synthesize', 'we synthesise'
+      ]),
+      expressions: Object.freeze([
+        '\\bbased on (?:the|this|these) (?:evidence|literature|findings),? we\\b',
+        '\\bwe synthesi[sz]e (?:these|the) findings\\b'
+      ])
+    })
+  });
+
   function defineCategory(input) {
     return Object.freeze({
       categoryId: input.categoryId,
@@ -204,6 +679,12 @@
       minimumConfidence: Number(input.minimumConfidence) || 0.8,
       claimMode: input.claimMode || 'explicit',
       relationRequired: Boolean(input.relationRequired),
+      regex: Object.freeze({
+        phrases: Object.freeze([...(input.regex?.phrases || [])]),
+        expressions: Object.freeze([...(input.regex?.expressions || [])]),
+        caseSensitive: Boolean(input.regex?.caseSensitive),
+        wholeWord: input.regex?.wholeWord !== false
+      }),
       color: input.color,
       version: Number(input.version) || 1,
       persistence: 'saved',
@@ -231,6 +712,11 @@
       minimumConfidence,
       claimMode,
       relationRequired,
+      regex: {
+        ...(ADAPTIVE_REGEX_RULES[id] || {}),
+        caseSensitive: false,
+        wholeWord: true
+      },
       version,
       color
     });
@@ -650,14 +1136,26 @@
 
   function composeReadingView({
     viewId,
+    viewDefinition = null,
     studyProfile,
     override,
     customCategories = [],
     categoryOverrides = {},
+    deletedBuiltInCategoryIds = [],
     engine = ''
   }) {
-    const normalizedViewId = isReadingView(viewId) ? viewId : 'quick_story';
-    const view = READING_VIEWS[normalizedViewId];
+    const suppliedView = viewDefinition && typeof viewDefinition === 'object' &&
+      Array.isArray(viewDefinition.categoryIds)
+      ? {
+          id: String(viewDefinition.id || viewId || 'custom_mode'),
+          name: String(viewDefinition.name || ''),
+          description: String(viewDefinition.description || ''),
+          categoryIds: viewDefinition.categoryIds.map(String)
+        }
+      : null;
+    const normalizedViewId = suppliedView?.id ||
+      (isReadingView(viewId) ? viewId : 'quick_story');
+    const view = suppliedView || READING_VIEWS[normalizedViewId];
     const primaryOverlay = TYPE_OVERLAYS[studyProfile?.primaryType]?.[normalizedViewId] || [];
     const secondaryOverlay = TYPE_OVERLAYS[studyProfile?.secondaryType]?.[normalizedViewId] || [];
     const primary = studyProfile?.useTypeSpecificWarnings === false
@@ -666,6 +1164,11 @@
       ? [] : [...secondaryOverlay].slice(0, 4);
     const add = Array.isArray(override?.add) ? override.add.map(String) : [];
     const remove = new Set(Array.isArray(override?.remove) ? override.remove.map(String) : []);
+    const deletedBuiltIns = new Set(
+      Array.isArray(deletedBuiltInCategoryIds)
+        ? deletedBuiltInCategoryIds.map(String)
+        : []
+    );
     const customMap = Object.fromEntries(
       customCategories.filter(Boolean).map(category => {
         const unified = typeof shared.toUnifiedCategory === 'function'
@@ -678,7 +1181,8 @@
     const ordered = [...view.categoryIds, ...primary, ...secondary, ...add];
     const categoryIds = [...new Set(ordered)]
       .filter(categoryId => {
-        if (remove.has(categoryId) || !catalog[categoryId]) return false;
+        if (remove.has(categoryId) || deletedBuiltIns.has(categoryId) ||
+            !catalog[categoryId]) return false;
         return !engine || catalog[categoryId].enabledEngines?.includes(engine);
       });
     const sources = categoryIds.map(categoryId => ({

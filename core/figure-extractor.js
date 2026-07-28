@@ -16,6 +16,7 @@
   const CAPTION_SELECTOR = [
     'figcaption',
     '.caption',
+    '.captions',
     '.figure__caption',
     '.figure-caption',
     '.fig-caption',
@@ -28,6 +29,7 @@
   const STRUCTURAL_CAPTION_SELECTOR = [
     'figcaption',
     '.caption',
+    '.captions',
     '.figure__caption',
     '.figure-caption',
     '.fig-caption',
@@ -62,7 +64,21 @@
   }
 
   function parseFigureLabel(value) {
-    const text = normalizeText(value);
+    // Publisher controls and the real caption can be adjacent DOM nodes whose
+    // textContent is concatenated, for example `full-size imageFigure 1`.
+    // Restore that lost boundary before applying the conservative label parser.
+    // Cell also inserts the product name `Figure360 author presentation` into
+    // some captions. It is branding, not Figure 360, and must be removed before
+    // scanning the same caption for the real Figure 1/2/3 label.
+    const text = normalizeText(value)
+      .replace(
+        /\bFigure360(?=\s+(?:author\s+)?presentation\b)/gi,
+        'Figure viewer'
+      )
+      .replace(
+        /([a-z0-9)])(?=fig(?:ure)?s?\.?\s*(?:S\s*)?\d{1,3}(?!\d))/gi,
+        '$1 '
+      );
     if (!text) return null;
     const match = text.match(/(?:\bfig(?:ure)?s?\.?\s*|\u56fe\s*)(S\s*)?(\d{1,3})(?!\d)/i);
     if (!match) return null;
@@ -208,6 +224,98 @@
       }
     }
     return [...panels].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  }
+
+  function expandCaptionPanelGroup(value) {
+    const normalized = normalizeText(value)
+      .toUpperCase()
+      .replace(/\b(?:PANELS?|SUBPANELS?)\b/g, ' ')
+      .replace(/\b(?:AND|OR|TO)\b/g, ',')
+      .replace(/[&;/]/g, ',');
+    const panels = new Set();
+    normalized.split(/\s*,\s*/).filter(Boolean).forEach(part => {
+      const range = part.match(/^([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])$/);
+      if (range) {
+        const start = range[1].charCodeAt(0);
+        const end = range[2].charCodeAt(0);
+        if (end >= start && end - start <= 25) {
+          for (let code = start; code <= end; code += 1) {
+            panels.add(String.fromCharCode(code));
+          }
+        }
+        return;
+      }
+      const single = part.match(/^([A-Z])$/);
+      if (single) panels.add(single[1]);
+    });
+    return [...panels].sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }));
+  }
+
+  function splitFigureCaptionByPanelGroups(value) {
+    const caption = normalizeText(value);
+    if (!caption) return [];
+    const markers = [];
+    const addMarker = (index, length, group) => {
+      const panels = expandCaptionPanelGroup(group);
+      if (!panels.length) return;
+      markers.push({
+        index: Math.max(0, Number(index) || 0),
+        length: Math.max(0, Number(length) || 0),
+        panels
+      });
+    };
+    const groupPattern =
+      '[A-Z](?:\\s*[-\\u2010-\\u2015\\u2212]\\s*[A-Z])?' +
+      '(?:(?:\\s*(?:,|&|;)\\s*|\\s+(?:and|or|to)\\s+)' +
+      '[A-Z](?:\\s*[-\\u2010-\\u2015\\u2212]\\s*[A-Z])?)*';
+    const parenthesized = new RegExp(`\\((${groupPattern})\\)\\s*`, 'gi');
+    for (const match of caption.matchAll(parenthesized)) {
+      addMarker(match.index, match[0].length, match[1]);
+    }
+    const inline = new RegExp(
+      `(^|[.;]\\s*)(${groupPattern})(\\s*[,;:]\\s*)`,
+      'gi'
+    );
+    for (const match of caption.matchAll(inline)) {
+      const prefixLength = match[1]?.length || 0;
+      addMarker(
+        (match.index || 0) + prefixLength,
+        match[2].length + match[3].length,
+        match[2]
+      );
+    }
+    markers.sort((left, right) =>
+      left.index - right.index || right.length - left.length);
+    const filtered = [];
+    markers.forEach(marker => {
+      const previous = filtered.at(-1);
+      if (previous && marker.index < previous.index + previous.length) return;
+      filtered.push(marker);
+    });
+    if (!filtered.length) {
+      return [{ kind: 'overview', panels: [], text: caption }];
+    }
+    const blocks = [];
+    const overview = caption.slice(0, filtered[0].index).trim();
+    if (overview) blocks.push({
+      kind: 'overview',
+      panels: [],
+      text: overview
+    });
+    filtered.forEach((marker, index) => {
+      const end = filtered[index + 1]?.index ?? caption.length;
+      const text = caption.slice(marker.index, end).trim();
+      if (!text) return;
+      blocks.push({
+        kind: 'panels',
+        panels: marker.panels,
+        text
+      });
+    });
+    return blocks.length
+      ? blocks
+      : [{ kind: 'overview', panels: [], text: caption }];
   }
 
   function figureInventoryNeedsRefresh(figures) {
@@ -370,6 +478,8 @@
     CAPTION_SELECTOR,
     parseFigureLabel,
     extractPanelHints,
+    expandCaptionPanelGroup,
+    splitFigureCaptionByPanelGroups,
     extractStructuredPanelHints,
     extractElementPanelHints,
     figureInventoryNeedsRefresh,

@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const HIGHLIGHT_DISTRIBUTION_VERSION = '2';
+  const HIGHLIGHT_DISTRIBUTION_VERSION = '3';
   const HIGHLIGHT_SOURCES = ['manual', 'llm', 'regex', 'other'];
 
   function normalize(value) {
@@ -50,9 +50,40 @@
     ]));
     const unresolved = [];
     const sourceCounts = Object.fromEntries(HIGHLIGHT_SOURCES.map(source => [source, 0]));
+    const seenAutomaticOccurrences = new Set();
+    let deduplicatedHighlights = 0;
 
     (Array.isArray(occurrences) ? occurrences : []).forEach((item, index) => {
       const categoryId = normalize(item?.categoryId) || 'uncategorized';
+      const sectionId = normalize(item?.sectionId) ||
+        paragraphSection.get(normalize(item?.paragraphId)) || '';
+      const occurrence = {
+        ...item,
+        highlightId: normalize(item?.highlightId) || `highlight-${index + 1}`,
+        categoryId,
+        categoryName: normalize(item?.categoryName) || categoryId,
+        color: normalize(item?.color) || '#D9D6CE',
+        sectionId,
+        source: normalizeSource(item?.source),
+        sourceStart: Number.isInteger(item?.sourceStart) ? item.sourceStart : null,
+        sourceEnd: Number.isInteger(item?.sourceEnd) ? item.sourceEnd : null
+      };
+      const positionKey = occurrence.source !== 'manual' &&
+        occurrence.paragraphId && Number.isInteger(occurrence.sourceStart)
+        ? [
+            occurrence.source,
+            occurrence.categoryId,
+            normalize(occurrence.paragraphId),
+            occurrence.sourceStart,
+            occurrence.sourceEnd
+          ].join('\n')
+        : '';
+      if (positionKey && seenAutomaticOccurrences.has(positionKey)) {
+        deduplicatedHighlights += 1;
+        return;
+      }
+      if (positionKey) seenAutomaticOccurrences.add(positionKey);
+
       const category = categoryMap.get(categoryId) || {
         categoryId,
         name: normalize(item?.categoryName) || categoryId,
@@ -61,18 +92,8 @@
       };
       category.count += 1;
       categoryMap.set(categoryId, category);
-
-      const sectionId = normalize(item?.sectionId) ||
-        paragraphSection.get(normalize(item?.paragraphId)) || '';
-      const occurrence = {
-        ...item,
-        highlightId: normalize(item?.highlightId) || `highlight-${index + 1}`,
-        categoryId,
-        categoryName: category.name,
-        color: category.color,
-        sectionId,
-        source: normalizeSource(item?.source)
-      };
+      occurrence.categoryName = category.name;
+      occurrence.color = category.color;
       sourceCounts[occurrence.source] += 1;
       const row = rowMap.get(sectionId);
       if (!row) {
@@ -101,7 +122,8 @@
       rows,
       unresolved,
       sourceCounts,
-      totalHighlights: (Array.isArray(occurrences) ? occurrences : []).length
+      totalHighlights: Object.values(sourceCounts).reduce((sum, count) => sum + count, 0),
+      deduplicatedHighlights
     };
   }
 
