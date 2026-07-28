@@ -246,7 +246,7 @@ test('settings expose the AGPL license, public source, and third-party notices',
   const options = read('options.html');
   assert.match(options, /id="openSource"/);
   assert.match(options, /AGPL-3\.0-or-later/);
-  assert.match(options, /https:\/\/github\.com\/coolcoldplay\/sci-logic-highlighter/);
+  assert.match(options, /https:\/\/github\.com\/coolcoldplay\/Brevess/);
   assert.match(options, /href="LICENSE"/);
   assert.match(options, /href="THIRD_PARTY_NOTICES\.md"/);
   assert.match(options, /不提供任何明示或默示担保/);

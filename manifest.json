@@ -5,7 +5,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA+B4vL4I4bJQVURPfrGIV4YjSJ5h0NQBP3NY72ZyN26DX0ffpmTMlRpc1DKaNj21pjN46/Ig1MYu2b3ReoBdQKgzrKMDPACu1GoOOnF37ei79fJXPCovCaMRBXQrEYgsaYCf6RmTlkU98qQQjV6o211akZO0l7Ba4OrNQzUzULFP+AF88rl45cpjRtVFgsM6/duDnnQVWWCaKv1nLtvJvNRfO2AsydO0354f/iI3Ikirpx61xxWP0y/6uElWsqGI6Sm135IG8E+ahF4juNciziGmX+cgRDz2QN+KAdxL2GVewdmTU5AHC2/r9N5kf5JQkvYKb+5Ar0nLQBb31/ChmEQIDAQAB",
   "description": "__MSG_extensionDescription__",
   "default_locale": "zh_CN",
-  "homepage_url": "https://github.com/coolcoldplay/sci-logic-highlighter",
+  "homepage_url": "https://github.com/coolcoldplay/Brevess",
   "permissions": [
     "activeTab",
     "storage",

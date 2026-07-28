@@ -73,6 +73,6 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 
 ## Privacy policy URL
 
-`https://coolcoldplay.github.io/sci-logic-highlighter/privacy-policy.html`
+`https://coolcoldplay.github.io/Brevess/privacy-policy.html`
 
 发布前必须从无登录的浏览器窗口验证该 URL 可访问，并确认页面内容与当前版本一致。

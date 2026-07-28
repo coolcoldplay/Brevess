@@ -32,7 +32,7 @@ test('manifest opens an action-activated native side panel and injects extractio
   assert.equal(stableExtensionId, 'finhfnjbpidfakpmkghkfjlfcfpoandh');
   assert.equal(
     packageJson.repository.url,
-    'git+https://github.com/coolcoldplay/sci-logic-highlighter.git'
+    'git+https://github.com/coolcoldplay/Brevess.git'
   );
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.equal(manifest.action.default_popup, undefined);

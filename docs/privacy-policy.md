@@ -175,5 +175,5 @@ subject to the updated policy.
 ## 10. Contact / 联系方式
 
 - Email: [brevess0729@163.com](mailto:brevess0729@163.com)
-- Issues: <https://github.com/coolcoldplay/sci-logic-highlighter/issues>
-- Source: <https://github.com/coolcoldplay/sci-logic-highlighter>
+- Issues: <https://github.com/coolcoldplay/Brevess/issues>
+- Source: <https://github.com/coolcoldplay/Brevess>

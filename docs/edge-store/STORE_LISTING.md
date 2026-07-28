@@ -105,9 +105,9 @@ Important:
 
 ## URLs to enter
 
-- Website: `https://github.com/coolcoldplay/sci-logic-highlighter`
-- Support: `https://github.com/coolcoldplay/sci-logic-highlighter/issues`
-- Privacy policy: `https://coolcoldplay.github.io/sci-logic-highlighter/privacy-policy.html`
-- Reviewer demo: `https://coolcoldplay.github.io/sci-logic-highlighter/reviewer-demo.html`
+- Website: `https://github.com/coolcoldplay/Brevess`
+- Support: `https://github.com/coolcoldplay/Brevess/issues`
+- Privacy policy: `https://coolcoldplay.github.io/Brevess/privacy-policy.html`
+- Reviewer demo: `https://coolcoldplay.github.io/Brevess/reviewer-demo.html`
 
 Do not submit until every URL above returns HTTP 200 without requiring a login.

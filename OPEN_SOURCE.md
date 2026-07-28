@@ -7,7 +7,7 @@ SCI论文逻辑助手 is free software licensed under
 it under that license. The software is provided without warranty.
 
 Source repository:
-<https://github.com/coolcoldplay/sci-logic-highlighter>
+<https://github.com/coolcoldplay/Brevess>
 
 ## Corresponding source
 
@@ -25,7 +25,7 @@ verification.
 ```powershell
 npm.cmd ci
 npm.cmd test
-npm.cmd run build:unpacked -- -BuildName sci-logic-highlighter-v2.3.0
+npm.cmd run build:unpacked -- -BuildName brevess-v1.0.0
 ```
 
 The unpacked extension is generated under `dist/`. Load that directory from

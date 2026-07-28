@@ -4,7 +4,7 @@ The extension can be fully tested without a paid account or shared test credenti
 
 ## Recommended test page
 
-`https://coolcoldplay.github.io/sci-logic-highlighter/reviewer-demo.html`
+`https://coolcoldplay.github.io/Brevess/reviewer-demo.html`
 
 This is an original, synthetic, copyright-free scientific article fixture created for certification. It contains Highlights, Summary, Results subsections, a synthetic Figure and Panel caption, Methods, Data availability, and References.
 
@@ -35,7 +35,7 @@ The Windows Codex Bridge is optional external companion software. Microsoft Edge
 
 If certification needs this route, download the separately published companion package:
 
-`https://github.com/coolcoldplay/sci-logic-highlighter/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip`
+`https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip`
 
 After the Edge Add-ons item has an assigned extension ID, that ID must be listed in the companion package’s `catalog-extension-ids.txt` before testing Native Messaging.
 

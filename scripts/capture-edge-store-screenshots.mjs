@@ -75,7 +75,7 @@ async function compose(filename, articlePage, sidePanel) {
 const fixture = context.pages()[0] || await context.newPage();
 await fixture.setViewportSize({ width: 860, height: 800 });
 await fixture.route(
-  'https://coolcoldplay.github.io/sci-logic-highlighter/reviewer-demo.html',
+  'https://coolcoldplay.github.io/Brevess/reviewer-demo.html',
   route => route.fulfill({
     status: 200,
     contentType: 'text/html; charset=utf-8',
@@ -83,14 +83,14 @@ await fixture.route(
   })
 );
 await fixture.goto(
-  'https://coolcoldplay.github.io/sci-logic-highlighter/reviewer-demo.html',
+  'https://coolcoldplay.github.io/Brevess/reviewer-demo.html',
   { waitUntil: 'domcontentloaded' }
 );
 const worker = await extensionWorker();
 const extensionId = new URL(worker.url()).host;
 const tabs = await worker.evaluate(() => chrome.tabs.query({}));
 const fixtureTab = tabs.find(tab =>
-  tab.url?.includes('/sci-logic-highlighter/reviewer-demo.html')
+  tab.url?.includes('/Brevess/reviewer-demo.html')
 );
 if (!fixtureTab?.id) throw new Error('Unable to resolve the reviewer demo tab.');
 await worker.evaluate(async tab => {

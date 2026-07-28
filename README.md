@@ -179,7 +179,7 @@ npm.cmd test
 [GNU AGPL-3.0-or-later](LICENSE) 发布。你可以依照许可证使用、研究、修改和
 再分发本项目；软件不提供任何明示或默示担保。
 
-- 公开源码：<https://github.com/coolcoldplay/sci-logic-highlighter>
+- 公开源码：<https://github.com/coolcoldplay/Brevess>
 - 开源发布与对应源码规则：[OPEN_SOURCE.md](OPEN_SOURCE.md)
 - 第三方组件与代码来源：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 参与贡献：[CONTRIBUTING.md](CONTRIBUTING.md)

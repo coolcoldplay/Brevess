@@ -46,4 +46,4 @@ that folder manually only if you also want to erase the local bridge data.
   tools for paper-analysis turns.
 
 Source code and full setup notes:
-https://github.com/coolcoldplay/sci-logic-highlighter
+https://github.com/coolcoldplay/Brevess

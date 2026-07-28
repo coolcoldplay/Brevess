@@ -62,7 +62,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 - `docs/privacy-policy.html`
 - `docs/reviewer-demo.html`
 
-把当前仓库提交并推送到 `coolcoldplay/sci-logic-highlighter` 后：
+把当前仓库提交并推送到 `coolcoldplay/Brevess` 后：
 
 1. 打开 GitHub 仓库的 **Settings > Pages**。
 2. 在 **Build and deployment** 中选择 **Deploy from a branch**。
@@ -70,8 +70,8 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 4. 保存并等待 Pages 构建完成。
 5. 使用 Edge InPrivate 窗口检查：
 
-   - `https://coolcoldplay.github.io/sci-logic-highlighter/privacy-policy.html`
-   - `https://coolcoldplay.github.io/sci-logic-highlighter/reviewer-demo.html`
+   - `https://coolcoldplay.github.io/Brevess/privacy-policy.html`
+   - `https://coolcoldplay.github.io/Brevess/reviewer-demo.html`
 
 两条 URL 都必须无需登录、无证书警告并返回正常页面。否则不要提交商店审核。
 
@@ -144,7 +144,7 @@ Brevess-Codex-Bridge-Windows-x64.zip
 第二个稳定文件名必须保持不变，因为插件设置页使用：
 
 ```text
-https://github.com/coolcoldplay/sci-logic-highlighter/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip
+https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip
 ```
 
 发布后，从 InPrivate 窗口实际下载一次并检查：
@@ -168,11 +168,11 @@ https://github.com/coolcoldplay/sci-logic-highlighter/releases/latest/download/B
 ### Properties
 
 - Category：**Productivity**
-- Website：`https://github.com/coolcoldplay/sci-logic-highlighter`
-- Support：`https://github.com/coolcoldplay/sci-logic-highlighter/issues`
+- Website：`https://github.com/coolcoldplay/Brevess`
+- Support：`https://github.com/coolcoldplay/Brevess/issues`
 - Mature content：不勾选
 - Privacy information：选择 **Yes**，因为扩展会访问当前网页内容，并可在用户同意后把内容发给其选择的模型服务。
-- Privacy URL：`https://coolcoldplay.github.io/sci-logic-highlighter/privacy-policy.html`
+- Privacy URL：`https://coolcoldplay.github.io/Brevess/privacy-policy.html`
 
 ## 第八阶段：填写新的 Privacy 页面
 
