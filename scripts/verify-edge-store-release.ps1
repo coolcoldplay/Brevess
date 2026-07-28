@@ -33,6 +33,9 @@ try {
   if ([string]$manifest.version -ne [string]$release.version) {
     throw 'ZIP manifest version does not match release-manifest.json.'
   }
+  if ($null -ne $manifest.PSObject.Properties['key']) {
+    throw 'Microsoft Edge store ZIP manifest must not contain the key field.'
+  }
   foreach ($required in @(
     '_locales\zh_CN\messages.json',
     '_locales\en\messages.json',

@@ -62,6 +62,29 @@ test('manifest icon set uses square Brevess PNG assets at every declared size', 
   }
 });
 
+test('Edge store release strips the local stable-ID key and verifies it cannot leak', () => {
+  const buildScript = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'build-edge-store-release.ps1'),
+    'utf8'
+  );
+  const verifyScript = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'verify-edge-store-release.ps1'),
+    'utf8'
+  );
+  assert.match(
+    buildScript,
+    /\$storeManifest\.PSObject\.Properties\.Remove\('key'\)/
+  );
+  assert.match(
+    buildScript,
+    /\$storeManifestPath\s*=\s*Join-Path \$extensionStage 'manifest\.json'/
+  );
+  assert.match(
+    verifyScript,
+    /Microsoft Edge store ZIP manifest must not contain the key field/
+  );
+});
+
 test('background worker keeps routed LLM operations alive until completion', () => {
   const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
   const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');

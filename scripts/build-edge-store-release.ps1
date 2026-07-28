@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $manifestPath = Join-Path $projectRoot 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 |
   ConvertFrom-Json
@@ -58,6 +59,21 @@ foreach ($file in @(
   Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $extensionStage
 }
 
+# The source manifest keeps a public key so local/unpacked installs retain a
+# stable extension ID. Microsoft Edge Add-ons assigns the catalog ID itself and
+# rejects uploaded manifests that contain the Chrome-specific `key` field, so
+# remove it only from the staged store package.
+$storeManifestPath = Join-Path $extensionStage 'manifest.json'
+$storeManifest = Get-Content -LiteralPath $storeManifestPath -Raw -Encoding utf8 |
+  ConvertFrom-Json
+$storeManifest.PSObject.Properties.Remove('key')
+$storeManifestJson = $storeManifest | ConvertTo-Json -Depth 20
+[System.IO.File]::WriteAllText(
+  $storeManifestPath,
+  $storeManifestJson + [Environment]::NewLine,
+  $utf8NoBom
+)
+
 $extensionZip = Join-Path $releaseRoot "Brevess-v$version-Microsoft-Edge.zip"
 Compress-Archive -Path (Join-Path $extensionStage '*') `
   -DestinationPath $extensionZip -CompressionLevel Optimal
@@ -101,7 +117,6 @@ $catalogText = @(
   '# Allowed Microsoft Edge / Chromium extension IDs'
   $catalogIds
 ) -join [Environment]::NewLine
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText(
   (Join-Path $bridgeStage 'catalog-extension-ids.txt'),
   $catalogText + [Environment]::NewLine,

@@ -33,6 +33,10 @@ The API key is stored only in local extension storage and is excluded from expor
 
 The Windows Codex Bridge is optional external companion software. Microsoft Edge does not install or manage it. Local navigation, regular-expression highlighting, and manual annotations do not depend on it.
 
+The Microsoft Edge Add-ons catalog CRX ID for this submission is
+`lamcjfhklhdljkhmcadnkcbngdlboihp`. The companion package allows this catalog
+origin together with the stable local-development origin.
+
 If certification needs this route, download the separately published companion package:
 
 `https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip`
