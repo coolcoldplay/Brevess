@@ -2,7 +2,7 @@
 
 ## License
 
-SCI论文逻辑助手 is free software licensed under
+Brevess is free software licensed under
 [GNU AGPL-3.0-or-later](LICENSE). You may use, study, modify, and redistribute
 it under that license. The software is provided without warranty.
 

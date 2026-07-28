@@ -32,7 +32,7 @@ Multiple IDs can be passed as a comma-separated value.
 
 Double-click `Uninstall-Brevess-Codex-Bridge.cmd`, or run `uninstall.ps1`.
 The script removes Native Messaging registration. It intentionally keeps the
-recoverable session mapping under `%LOCALAPPDATA%\SCIReaderCodexBridge`; remove
+recoverable session mapping under `%LOCALAPPDATA%\BrevessCodexBridge`; remove
 that folder manually only if you also want to erase the local bridge data.
 
 ## Security boundary

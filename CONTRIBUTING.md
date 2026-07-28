@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve SCI论文逻辑助手 for students and researchers.
+Thank you for helping improve Brevess for students and researchers.
 
 - Open an issue before a large behavioral or architectural change.
 - Do not commit API keys, authentication headers, browser profiles, user

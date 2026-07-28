@@ -1,4 +1,4 @@
-# SCI 论文阅读助手 2.4.12
+# Brevess 2.4.12
 
 运行修订：`2.4.12-build39-storage-recovery-r12`
 

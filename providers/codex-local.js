@@ -126,7 +126,7 @@
         let responseText = '';
         for await (const event of nativeClient.streamTurn({
           conversationKey: '',
-          conversationLabel: 'SCI Reader connection test',
+          conversationLabel: 'Brevess connection test',
           profileId: String(config.profileId || 'profile_codex_connection_test'),
           model: String(config.model || 'auto'),
           reasoningEffort: 'low',
@@ -185,7 +185,7 @@
         let completed = false;
         for await (const event of nativeClient.streamTurn(turnInput(request, {
           conversationKey: '',
-          conversationLabel: 'SCI Reader structured task',
+          conversationLabel: 'Brevess structured task',
           ephemeral: true
         }))) {
           if (event?.type === 'text_delta') text += String(event.text || '');

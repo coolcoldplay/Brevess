@@ -446,7 +446,7 @@ test('clearing automatic highlights clears restorable state and persists an empt
   assert.match(popup, /response\.persisted === false/);
 });
 
-test('manual fluorescent and automatic underline channels follow Evidence Lens tokens', () => {
+test('manual fluorescent and automatic underline channels follow Brevess tokens', () => {
   const css = read('content.css');
   const manualCss = css.slice(
     css.indexOf('/* Manual annotation UI: start */'),

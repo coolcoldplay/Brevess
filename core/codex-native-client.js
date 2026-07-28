@@ -3,6 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+  // Native Messaging host IDs are persistent protocol identifiers, not display branding.
   const CODEX_NATIVE_HOST = 'com.sci_reader.codex_bridge';
   const DEFAULT_TIMEOUT_MS = 300000;
 

@@ -1,8 +1,8 @@
 # 本机 Codex 全文问答
 
-版本 2.4.15 的“本机 Codex”模型提供商通过 Chromium Native Messaging 调用
+Brevess 1.0.0 的“本机 Codex”模型提供商通过 Chromium Native Messaging 调用
 Codex App Server。插件不读取或保存明文登录令牌；App Server 把认证状态保存在
-`%LOCALAPPDATA%\SCIReaderCodexBridge\codex-home`，与桌面 Codex 和 Codex CLI 隔离。
+`%LOCALAPPDATA%\BrevessCodexBridge\codex-home`，与桌面 Codex 和 Codex CLI 隔离。
 
 ## Windows 安装
 
@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 实际扩展
 ## 数据与权限边界
 
 - 每篇论文和每个 Codex Profile 会绑定一个 Codex thread。
-- thread 映射保存在 `%LOCALAPPDATA%\SCIReaderCodexBridge\threads.json`。
+- thread 映射保存在 `%LOCALAPPDATA%\BrevessCodexBridge\threads.json`。
 - Codex 自己管理插件专用登录状态，插件和桥接程序都不会导出登录令牌。
 - 桌面 Codex、Codex CLI 与插件不会共享刷新令牌，避免并发刷新导致会话失效。
 - Codex 线程以只读 sandbox、永不请求审批的方式启动；提示词明确禁止使用命令、
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 实际扩展
 - 本机 Codex 现在被注册为视觉模型。解图前，网页端会提取并压缩 Figure 原图，再通过
   Native Messaging 发送到本机桥。
 - 桥接程序只在
-  `%LOCALAPPDATA%\SCIReaderCodexBridge\turn-images`
+  `%LOCALAPPDATA%\BrevessCodexBridge\turn-images`
   创建本轮请求使用的临时图片，并以 Codex App Server 的 `localImage` 输入传给模型。
 - 模型回合完成、失败或取消后，临时图片会立即删除。
 - 如果网页图片受到跨域、登录墙或加载超时限制，插件仍会明确回退到“图注与正文”，并在
@@ -62,9 +62,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 实际扩展
 本机 Codex 生成 Figure、Panel 或跨图结果时，插件会把进度与最终结果实时写入：
 
 - 最新状态：
-  `%LOCALAPPDATA%\SCIReaderCodexBridge\reader-events\latest.json`
+  `%LOCALAPPDATA%\BrevessCodexBridge\reader-events\latest.json`
 - 追加式事件流：
-  `%LOCALAPPDATA%\SCIReaderCodexBridge\reader-events\events.ndjson`
+  `%LOCALAPPDATA%\BrevessCodexBridge\reader-events\events.ndjson`
 
 设置页的“本机 Codex”状态会显示这两个实际路径。事件中不保存 API Key、登录令牌或图片
 Base64，只包含页面身份、任务进度和模型结果；事件日志达到 16 MB 后轮换为
@@ -75,4 +75,4 @@ DOM 是否允许自动化访问。
 
 运行 `native-host\uninstall.ps1` 删除 Edge 和 Chrome 的 Native Messaging 注册。
 为了保留可恢复的 thread 映射，脚本不会自动删除
-`%LOCALAPPDATA%\SCIReaderCodexBridge`。
+`%LOCALAPPDATA%\BrevessCodexBridge`。

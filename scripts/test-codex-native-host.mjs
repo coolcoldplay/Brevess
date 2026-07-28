@@ -12,7 +12,7 @@ const visionImageFlag = process.argv.indexOf('--vision-image');
 const visionImagePath = visionImageFlag >= 0
   ? resolve(process.argv[visionImageFlag + 1] || '') : '';
 const executablePath = join(
-  projectRoot, 'native-host', 'bin', 'sci-reader-codex-host.exe'
+  projectRoot, 'native-host', 'bin', 'brevess-codex-host.exe'
 );
 const child = spawn(
   useExecutable ? executablePath : process.execPath,
@@ -81,7 +81,7 @@ async function runTurn(requestId, question) {
     type: 'turn.start',
     requestId,
     conversationKey: 'sci-reader-real-codex-smoke-test',
-    conversationLabel: 'SCI Reader Codex smoke test',
+    conversationLabel: 'Brevess Codex smoke test',
     profileId: 'profile_codex_smoke',
     model: 'auto',
     reasoningEffort: 'low',
@@ -115,7 +115,7 @@ async function runVisionTurn(requestId, imagePath) {
     type: 'turn.start',
     requestId,
     conversationKey: '',
-    conversationLabel: 'SCI Reader Codex vision smoke test',
+    conversationLabel: 'Brevess Codex vision smoke test',
     profileId: 'profile_codex_vision_smoke',
     model: 'auto',
     reasoningEffort: 'low',
@@ -156,7 +156,7 @@ async function publishReverseChannelProbe() {
       eventType: 'reader.figure.result',
       streamKey: 'native-host-smoke-test',
       operationId: 'native-host-smoke-test',
-      source: { title: 'SCI Reader reverse-channel smoke test', url: 'about:blank' },
+      source: { title: 'Brevess reverse-channel smoke test', url: 'about:blank' },
       result: { passed: true, basis: 'vision_text' }
     }
   });

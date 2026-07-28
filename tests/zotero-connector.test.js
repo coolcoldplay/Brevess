@@ -46,8 +46,8 @@ test('enhanced snapshot follows the Zotero Connector session protocol', async ()
     title: 'Mechanism paper',
     url: 'https://example.org/article',
     snapshotContent: '<html><body><mark>highlight</mark></body></html>',
-    figureNoteHtml: '<h1>SCI Reader：图解</h1>',
-    chatNoteHtml: '<h1>SCI Reader：全文问答</h1>'
+    figureNoteHtml: '<h1>Brevess：图解</h1>',
+    chatNoteHtml: '<h1>Brevess：全文问答</h1>'
   }, { fetchImpl });
 
   assert.equal(result.imported, true);
@@ -68,11 +68,11 @@ test('enhanced snapshot follows the Zotero Connector session protocol', async ()
   assert.equal(calls[2].body.items[0].itemType, 'webpage');
   assert.deepEqual(
     calls[2].body.items[0].notes.map(note => note.note),
-    ['<h1>SCI Reader：图解</h1>', '<h1>SCI Reader：全文问答</h1>']
+    ['<h1>Brevess：图解</h1>', '<h1>Brevess：全文问答</h1>']
   );
   assert.deepEqual(
     calls[2].body.items[0].tags,
-    [{ tag: 'SCI Reader' }, { tag: '增强网页快照' }]
+    [{ tag: 'Brevess' }, { tag: '增强网页快照' }]
   );
   assert.match(calls[3].body.snapshotContent, /<mark>highlight<\/mark>/);
   assert.equal(calls[3].body.items[0].id, calls[2].body.items[0].id);

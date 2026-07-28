@@ -146,7 +146,7 @@
 
 ## 9. 候选构建
 
-- 目录：`dist/SCI论文阅读助手-v2.4.11-build39-release-candidate`
+- 目录：`dist/Brevess-v2.4.11-build39-release-candidate`
 - 文件数：90
 - 目录内容哈希（按相对路径和文件 SHA-256 排序后计算）：`c602c24d0d3ab058652f877a74cbac802941e464d0fde98e1f73de929f310d9e`
 - 源码与打包文件哈希差异：0

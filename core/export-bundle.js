@@ -816,8 +816,8 @@
     return [
       `<div data-sci-reader-note="${escapeHtml(kind)}">`,
       `<h1>${kind === 'figure-interpretation'
-        ? 'SCI Reader：图解'
-        : 'SCI Reader：全文问答'}</h1>`,
+        ? 'Brevess：图解'
+        : 'Brevess：全文问答'}</h1>`,
       `<h2>${escapeHtml(input.title || '')}</h2>`,
       sourceUrl
         ? `<p><a href="${escapeHtml(sourceUrl)}">打开论文原网页</a></p>`

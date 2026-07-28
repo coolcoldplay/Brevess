@@ -18,7 +18,7 @@
 - 自动化验证：Edge 主流程、浏览器重启、文章归档、全文问答、Figure、目录同步和 UI 契约测试
 - 文档：`README.md`、`BUILD39_OPTIMIZATION.md`
 
-`dist/SCI论文阅读助手-v2.4.10-edge-global-sidebar-build39` 及此前各 Build 39 目录均属于审计前产物，不是本轮最终候选构建。
+`dist/Brevess-v2.4.10-edge-global-sidebar-build39` 及此前各 Build 39 目录均属于审计前产物，不是本轮最终候选构建。
 
 ## 审计入口已知验证状态
 

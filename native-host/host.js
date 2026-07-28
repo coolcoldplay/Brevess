@@ -19,7 +19,7 @@ const MAX_READER_EVENT_LOG_BYTES = 16 * 1024 * 1024;
 
 function stateDirectory() {
   const root = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-  return path.join(root, 'SCIReaderCodexBridge');
+  return path.join(root, 'BrevessCodexBridge');
 }
 
 function codexHomeDirectory() {
@@ -313,7 +313,7 @@ function classifyCodexError(message, fallback = 'CODEX_PROVIDER_REJECTED') {
   if (/(?:not signed in|not logged in|token[_ -]?expired|authentication token|refresh token|401 unauthorized)/i.test(text)) {
     return codedError(
       'CODEX_NOT_AUTHENTICATED',
-      'The SCI Reader Codex session expired. Sign in again from extension settings.'
+      'The Brevess Codex session expired. Sign in again from extension settings.'
     );
   }
   if (/\b(?:502|503|504)\b|bad gateway|server overloaded|temporarily unavailable/i.test(text)) {
@@ -351,7 +351,7 @@ function classifyTurnError(turnError = {}) {
   if (infoName === 'unauthorized' || status === 401) {
     return codedError(
       'CODEX_NOT_AUTHENTICATED',
-      'The SCI Reader Codex session has expired. Sign in again from extension settings.'
+      'The Brevess Codex session has expired. Sign in again from extension settings.'
     );
   }
   if (infoName === 'usageLimitExceeded' || status === 429) {
@@ -507,7 +507,7 @@ class CodexAppServer {
     lines.on('line', line => this.handleLine(line));
     const initialized = await this.request('initialize', {
       clientInfo: {
-        name: 'sci_reader_browser_extension',
+        name: 'brevess_browser_extension',
         title: 'Brevess',
         version: HOST_VERSION
       },
@@ -712,7 +712,7 @@ class CodexBridgeHost {
       if (account?.requiresOpenaiAuth && !account?.account) {
         throw codedError(
           'CODEX_NOT_AUTHENTICATED',
-          'The SCI Reader Codex session is not signed in. Use extension settings to sign in.'
+          'The Brevess Codex session is not signed in. Use extension settings to sign in.'
         );
       }
       this.send({

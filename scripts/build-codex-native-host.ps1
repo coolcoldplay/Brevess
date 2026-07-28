@@ -6,8 +6,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $hostRoot = Join-Path $projectRoot 'native-host'
 $binRoot = Join-Path $hostRoot 'bin'
-$blobPath = Join-Path $binRoot 'sci-reader-codex-host.blob'
-$executablePath = Join-Path $binRoot 'sci-reader-codex-host.exe'
+$blobPath = Join-Path $binRoot 'brevess-codex-host.blob'
+$executablePath = Join-Path $binRoot 'brevess-codex-host.exe'
 
 New-Item -ItemType Directory -Path $binRoot -Force | Out-Null
 

@@ -655,7 +655,10 @@ test('side panel keeps one compact paper header, a direct gear, and one diagnost
   const script = read('popup.js');
   const css = read('popup.css');
   assert.doesNotMatch(html, /side-panel-brand-icon/);
-  assert.doesNotMatch(html, />SCI 论文逻辑助手</);
+  const compactHeader = html.match(
+    /<header id="sidePanelHeader"[\s\S]*?<\/header>/
+  )?.[0] || '';
+  assert.doesNotMatch(compactHeader, />\s*Brevess\s*</);
   assert.doesNotMatch(html, /<h1>分析工作区<\/h1>/);
   assert.doesNotMatch(html, /class="llm-provider-row"/);
   assert.equal((html.match(/id="exportAdapterDiagnosticBundle"/g) || []).length, 1);

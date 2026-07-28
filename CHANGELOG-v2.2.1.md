@@ -1,4 +1,4 @@
-# SCI 论文逻辑助手 v2.2.1
+# Brevess v2.2.1
 
 运行修订：`2.2.1-interaction-control-r1`
 

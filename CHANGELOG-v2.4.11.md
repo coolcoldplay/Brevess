@@ -1,4 +1,4 @@
-# SCI 论文阅读助手 2.4.11
+# Brevess 2.4.11
 
 发布日期：2026-07-24
 运行修订：`2.4.11-build39-release-candidate-r11`

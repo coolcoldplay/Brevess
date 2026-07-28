@@ -130,7 +130,7 @@ test('Zotero exports Figure interpretation and full-text Q&A as separate child n
     'Figure 1 to Figure 2',
     'Calcium imaging'
   ].forEach(value => assert.match(figureHtml, new RegExp(value)));
-  assert.match(figureHtml, /SCI Reader：图解/);
+  assert.match(figureHtml, /Brevess：图解/);
   assert.match(figureHtml, /核心结论/);
   assert.match(figureHtml, /Panel 分解/);
   assert.match(figureHtml, /主图串解/);
@@ -142,7 +142,7 @@ test('Zotero exports Figure interpretation and full-text Q&A as separate child n
   assert.doesNotMatch(figureHtml, /追问历史|What is the control\?/);
   assert.doesNotMatch(figureHtml, /<dl>|<details>|<summary>/);
   assert.doesNotMatch(figureHtml, /What is the mechanism/);
-  assert.match(chatHtml, /SCI Reader：全文问答/);
+  assert.match(chatHtml, /Brevess：全文问答/);
   assert.match(chatHtml, /What is the mechanism/);
   assert.match(chatHtml, /A receptor-mediated pathway/);
   assert.doesNotMatch(chatHtml, /Figure 1 to Figure 2/);

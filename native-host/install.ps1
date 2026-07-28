@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Keep the registered host ID stable so existing browser permissions continue to work.
 $hostName = 'com.sci_reader.codex_bridge'
 $hostRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $catalogIdPath = Join-Path $hostRoot 'catalog-extension-ids.txt'
@@ -30,7 +31,7 @@ $ExtensionIds = @(
 )
 
 if ([string]::IsNullOrWhiteSpace($HostExecutable)) {
-  $HostExecutable = Join-Path $hostRoot 'bin\sci-reader-codex-host.exe'
+  $HostExecutable = Join-Path $hostRoot 'bin\brevess-codex-host.exe'
 }
 $HostExecutable = [System.IO.Path]::GetFullPath($HostExecutable)
 if (-not (Test-Path -LiteralPath $HostExecutable -PathType Leaf)) {
@@ -42,15 +43,23 @@ foreach ($extensionId in $ExtensionIds) {
   }
 }
 
-$installRoot = Join-Path $env:LOCALAPPDATA 'SCIReaderCodexBridge'
+$installRoot = Join-Path $env:LOCALAPPDATA 'BrevessCodexBridge'
+$legacyInstallRoot = Join-Path $env:LOCALAPPDATA 'SCIReaderCodexBridge'
+if (-not (Test-Path -LiteralPath $installRoot) -and
+    (Test-Path -LiteralPath $legacyInstallRoot -PathType Container)) {
+  New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+  Get-ChildItem -LiteralPath $legacyInstallRoot -Force |
+    Where-Object { $_.Name -notin @('sci-reader-codex-host.exe', "$hostName.json") } |
+    Copy-Item -Destination $installRoot -Recurse -Force
+}
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-$installedExecutable = Join-Path $installRoot 'sci-reader-codex-host.exe'
+$installedExecutable = Join-Path $installRoot 'brevess-codex-host.exe'
 Copy-Item -LiteralPath $HostExecutable -Destination $installedExecutable -Force
 
 $manifestPath = Join-Path $installRoot "$hostName.json"
 $manifest = [ordered]@{
   name = $hostName
-  description = 'Local Codex bridge for SCI Reader'
+  description = 'Local Codex bridge for Brevess'
   path = $installedExecutable
   type = 'stdio'
   allowed_origins = @($ExtensionIds | ForEach-Object { "chrome-extension://$_/" })

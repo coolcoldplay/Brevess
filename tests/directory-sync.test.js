@@ -191,6 +191,40 @@ function json(revision, extra = {}) {
   return { schemaVersion: 1, revision, ...extra };
 }
 
+test('continues using a legacy workspace root when upgrading to Brevess', async () => {
+  const handles = createFakeHandleStore();
+  const legacyRoot = await handles.root.getDirectoryHandle('SCI-Highlighter', {
+    create: false
+  });
+  const selectedRoot = {
+    ...handles.root,
+    async getDirectoryHandle(name, options) {
+      if (name === 'Brevess' && options?.create === false) {
+        const error = new Error('Missing Brevess directory');
+        error.name = 'NotFoundError';
+        throw error;
+      }
+      if (name === 'SCI-Highlighter') return legacyRoot;
+      return handles.root.getDirectoryHandle(name, options);
+    }
+  };
+  const sync = createDirectorySync({
+    handleStore: {
+      async load() { return selectedRoot; },
+      async save() {}
+    },
+    queueStore: createMemorySyncQueue()
+  });
+  await sync.enqueueJson('categories.json', json(1, { value: 'legacy' }));
+  const result = await sync.flush();
+  assert.equal(result.permission, 'granted');
+  assert.equal(
+    JSON.parse(handles.readText('SCI-Highlighter/categories.json')).value,
+    'legacy'
+  );
+  assert.equal(handles.has('Brevess/categories.json'), false);
+});
+
 test('serializes concurrent workspace assets so the manifest retains every chat file', async () => {
   const handles = createFakeHandleStore();
   const sync = createDirectorySync({
@@ -211,7 +245,7 @@ test('serializes concurrent workspace assets so the manifest retains every chat 
   ]);
   await sync.flush();
   const manifest = JSON.parse(handles.readText(
-    `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`
+    `Brevess/workspaces/${workspace.directoryName}/manifest.json`
   ));
   assert.deepEqual(manifest.assets.map(asset => asset.path).sort(), [
     'chat/index.json',
@@ -232,11 +266,11 @@ test('discovers valid chat turn files omitted by an older workspace manifest', a
   });
   await sync.flush();
   const manifest = JSON.parse(handles.readText(
-    `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`
+    `Brevess/workspaces/${workspace.directoryName}/manifest.json`
   ));
   const relativePath = 'chat/turns/turn-orphan.json';
   handles.writeText(
-    `SCI-Highlighter/workspaces/${workspace.directoryName}/${relativePath}`,
+    `Brevess/workspaces/${workspace.directoryName}/${relativePath}`,
     JSON.stringify({
       schemaVersion: 1,
       kind: 'sci-logic-highlighter-workspace-asset',
@@ -271,7 +305,7 @@ test('recovers only post-manifest chat writes from an older workspace generation
     createdAt: '2026-07-24T00:00:00.000Z',
     updatedAt: '2026-07-24T01:00:00.000Z'
   }, []);
-  const root = `SCI-Highlighter/workspaces/${workspace.directoryName}`;
+  const root = `Brevess/workspaces/${workspace.directoryName}`;
   const writeTurn = (turnId, updatedAt) => {
     const relativePath = `chat/turns/${turnId}.json`;
     handles.writeText(`${root}/${relativePath}`, JSON.stringify({
@@ -307,7 +341,7 @@ test('recovers only post-manifest chat writes from an older workspace generation
 test('reads exactly one requested JSON asset without enumerating or loading the index', async () => {
   const handles = createFakeHandleStore();
   handles.writeText(
-    'SCI-Highlighter/articles/a1b2c3d4.json',
+    'Brevess/articles/a1b2c3d4.json',
     JSON.stringify(json(3, { kind: 'sci-logic-highlighter-article', documentId: 'doc-1' }))
   );
   const sync = createDirectorySync({
@@ -319,12 +353,12 @@ test('reads exactly one requested JSON asset without enumerating or loading the 
   assert.equal(found.permission, 'granted');
   assert.equal(found.found, true);
   assert.equal(found.value.documentId, 'doc-1');
-  assert.deepEqual(handles.reads, ['SCI-Highlighter/articles/a1b2c3d4.json']);
+  assert.deepEqual(handles.reads, ['Brevess/articles/a1b2c3d4.json']);
 
   handles.reads.length = 0;
   const missing = await sync.readJson('articles/ffffffff.json');
   assert.equal(missing.found, false);
-  assert.deepEqual(handles.reads, ['SCI-Highlighter/articles/ffffffff.json']);
+  assert.deepEqual(handles.reads, ['Brevess/articles/ffffffff.json']);
 });
 
 test('rejects absolute and traversal paths before queueing', async () => {
@@ -362,7 +396,7 @@ test('coalesces the latest path while permission is prompt or denied, then flush
   const result = await sync.flush();
   assert.equal(result.written, 1);
   assert.equal((await sync.status()).pendingCount, 0);
-  assert.equal(JSON.parse(handles.readText('SCI-Highlighter/categories.json')).value, 'latest');
+  assert.equal(JSON.parse(handles.readText('Brevess/categories.json')).value, 'latest');
 });
 
 test('backs up valid JSON deterministically before replacement', async () => {
@@ -377,7 +411,7 @@ test('backs up valid JSON deterministically before replacement', async () => {
 
   assert.equal(
     JSON.parse(handles.readText(
-      'SCI-Highlighter/backups/annotations/doc-1.previous.json'
+      'Brevess/backups/annotations/doc-1.previous.json'
     )).revision,
     1
   );
@@ -385,7 +419,7 @@ test('backs up valid JSON deterministically before replacement', async () => {
 
 test('preserves divergent equal revisions as a conflict without replacing primary', async () => {
   const handles = createFakeHandleStore();
-  handles.writeText('SCI-Highlighter/categories.json', JSON.stringify(
+  handles.writeText('Brevess/categories.json', JSON.stringify(
     json(3, { sourceId: 'folder', value: 'folder' })
   ));
   const sync = createDirectorySync({
@@ -403,15 +437,15 @@ test('preserves divergent equal revisions as a conflict without replacing primar
   assert.equal(status.pendingCount, 0);
   assert.equal(status.conflictCount, 1);
   assert.ok(status.lastConflict.path.length <= 240);
-  assert.equal(JSON.parse(handles.readText('SCI-Highlighter/categories.json')).value, 'folder');
-  assert.equal(handles.has('SCI-Highlighter/conflicts/categories.r3.extension.json'), true);
-  const indexed = JSON.parse(handles.readText('SCI-Highlighter/index.json'));
+  assert.equal(JSON.parse(handles.readText('Brevess/categories.json')).value, 'folder');
+  assert.equal(handles.has('Brevess/conflicts/categories.r3.extension.json'), true);
+  const indexed = JSON.parse(handles.readText('Brevess/index.json'));
   assert.equal(indexed.assets[0].sourceId, 'folder');
 });
 
 test('uses the per-flush importer when the directory revision is newer', async () => {
   const handles = createFakeHandleStore();
-  handles.writeText('SCI-Highlighter/categories.json', JSON.stringify(
+  handles.writeText('Brevess/categories.json', JSON.stringify(
     json(4, { sourceId: 'folder', value: 'folder-newer' })
   ));
   const queue = createMemorySyncQueue();
@@ -438,7 +472,7 @@ test('keeps a newer enqueue made during flush pending for the next flush', async
   const queue = createMemorySyncQueue();
   const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
   await sync.enqueueJson('categories.json', json(1, { value: 'first' }));
-  handles.pauseNextWrite('SCI-Highlighter/categories.json');
+  handles.pauseNextWrite('Brevess/categories.json');
   const flushing = sync.flush();
   await handles.waitForPausedWrite();
   await sync.enqueueJson('categories.json', json(2, { value: 'second' }));
@@ -449,7 +483,7 @@ test('keeps a newer enqueue made during flush pending for the next flush', async
   for (let attempt = 0; attempt < 20 && (await sync.status()).pendingCount; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-  assert.equal(JSON.parse(handles.readText('SCI-Highlighter/categories.json')).value, 'second');
+  assert.equal(JSON.parse(handles.readText('Brevess/categories.json')).value, 'second');
   assert.equal((await sync.status()).pendingCount, 0);
 });
 
@@ -512,7 +546,7 @@ test('a post-restore workspace save advances beyond a newer disk envelope revisi
   const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
   const workspace = workspaceFixture({ workspaceGeneration: 2 });
   const relativePath = 'chat/index.json';
-  const root = `SCI-Highlighter/workspaces/${workspace.directoryName}`;
+  const root = `Brevess/workspaces/${workspace.directoryName}`;
   handles.writeText(`${root}/${relativePath}`, JSON.stringify({
     schemaVersion: 1,
     kind: 'sci-logic-highlighter-workspace-asset',
@@ -545,7 +579,7 @@ test('a post-restore workspace save advances beyond a newer disk envelope revisi
 test('does not overwrite a malformed existing index during flush', async () => {
   const handles = createFakeHandleStore();
   const queue = createMemorySyncQueue();
-  handles.writeText('SCI-Highlighter/index.json', '{malformed');
+  handles.writeText('Brevess/index.json', '{malformed');
   const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
   await sync.enqueueJson('categories.json', json(1, { categoryOverrides: {} }));
 
@@ -554,13 +588,13 @@ test('does not overwrite a malformed existing index during flush', async () => {
   assert.equal(result.failed, 1);
   assert.equal((await sync.status()).pendingCount, 1);
   assert.match((await sync.status()).lastError, /INVALID_INDEX/);
-  assert.equal(handles.readText('SCI-Highlighter/index.json'), '{malformed');
-  assert.equal(handles.has('SCI-Highlighter/categories.json'), false);
+  assert.equal(handles.readText('Brevess/index.json'), '{malformed');
+  assert.equal(handles.has('Brevess/categories.json'), false);
 });
 
 test('rebuild imports only valid indexed assets and skips traversal and malformed entries', async () => {
   const handles = createFakeHandleStore();
-  handles.writeText('SCI-Highlighter/index.json', JSON.stringify({
+  handles.writeText('Brevess/index.json', JSON.stringify({
     schemaVersion: 1,
     assets: [
       { path: 'annotations/doc-1.json', revision: 4, type: 'json' },
@@ -569,12 +603,12 @@ test('rebuild imports only valid indexed assets and skips traversal and malforme
       { path: 'unlisted.json', revision: 1, type: 'json' }
     ]
   }));
-  handles.writeText('SCI-Highlighter/annotations/doc-1.json', JSON.stringify(
+  handles.writeText('Brevess/annotations/doc-1.json', JSON.stringify(
     json(4, { documentId: 'doc-1', annotations: [] })
   ));
-  handles.writeText('SCI-Highlighter/annotations/broken.json', '{broken');
-  handles.writeText('SCI-Highlighter/unlisted.json', JSON.stringify(json(1)));
-  handles.writeText('SCI-Highlighter/not-in-index.json', JSON.stringify(json(99)));
+  handles.writeText('Brevess/annotations/broken.json', '{broken');
+  handles.writeText('Brevess/unlisted.json', JSON.stringify(json(1)));
+  handles.writeText('Brevess/not-in-index.json', JSON.stringify(json(99)));
   const imported = [];
   const sync = createDirectorySync({
     handleStore: handles,
@@ -593,12 +627,12 @@ test('rebuild imports only valid indexed assets and skips traversal and malforme
 
 test('rebuild restores a validated backup without replacing a corrupt primary', async () => {
   const handles = createFakeHandleStore();
-  handles.writeText('SCI-Highlighter/index.json', JSON.stringify({
+  handles.writeText('Brevess/index.json', JSON.stringify({
     schemaVersion: 1,
     assets: [{ path: 'categories.json', revision: 2, type: 'json' }]
   }));
-  handles.writeText('SCI-Highlighter/categories.json', '{broken');
-  handles.writeText('SCI-Highlighter/backups/categories.previous.json', JSON.stringify(
+  handles.writeText('Brevess/categories.json', '{broken');
+  handles.writeText('Brevess/backups/categories.previous.json', JSON.stringify(
     json(1, { categoryOverrides: {} })
   ));
   const imported = [];
@@ -614,7 +648,7 @@ test('rebuild restores a validated backup without replacing a corrupt primary', 
   const result = await sync.rebuildIndex();
   assert.equal(result.restoredBackups, 1);
   assert.equal(imported[0][1].revision, 1);
-  assert.equal(handles.readText('SCI-Highlighter/categories.json'), '{broken');
+  assert.equal(handles.readText('Brevess/categories.json'), '{broken');
 });
 
 test('rebuild rejects malformed index and stale assets reported by the importer', async () => {
@@ -623,19 +657,19 @@ test('rebuild rejects malformed index and stale assets reported by the importer'
     handleStore: handles,
     queueStore: createMemorySyncQueue()
   });
-  handles.writeText('SCI-Highlighter/index.json', '{broken');
+  handles.writeText('Brevess/index.json', '{broken');
   await assert.rejects(() => sync.rebuildIndex(), /INVALID_INDEX/);
 
-  handles.writeText('SCI-Highlighter/index.json', JSON.stringify({
+  handles.writeText('Brevess/index.json', JSON.stringify({
     schemaVersion: 1, revision: -1, assets: []
   }));
   await assert.rejects(() => sync.rebuildIndex(), /INVALID_INDEX/);
 
-  handles.writeText('SCI-Highlighter/index.json', JSON.stringify({
+  handles.writeText('Brevess/index.json', JSON.stringify({
     schemaVersion: 1,
     assets: [{ path: 'categories.json', revision: 2, type: 'json' }]
   }));
-  handles.writeText('SCI-Highlighter/categories.json', JSON.stringify(
+  handles.writeText('Brevess/categories.json', JSON.stringify(
     json(2, { categoryOverrides: {} })
   ));
   const staleSync = createDirectorySync({
@@ -673,11 +707,11 @@ test('export bundle strips credentials, provider headers, cache, handles, and qu
 
 test('accepts per-call importer and bundle snapshots for serialized router operations', async () => {
   const handles = createFakeHandleStore();
-  handles.writeText('SCI-Highlighter/index.json', JSON.stringify({
+  handles.writeText('Brevess/index.json', JSON.stringify({
     schemaVersion: 1,
     assets: [{ path: 'categories.json', revision: 3, type: 'json' }]
   }));
-  handles.writeText('SCI-Highlighter/categories.json', JSON.stringify(
+  handles.writeText('Brevess/categories.json', JSON.stringify(
     json(3, { categoryOverrides: {} })
   ));
   const imported = [];
@@ -882,10 +916,10 @@ test('queues nested workspace assets before manifest and central index while per
   handles.setPermission('granted');
   const flushed = await sync.flush();
   assert.equal(flushed.written, 3);
-  const assetPath = `SCI-Highlighter/workspaces/${workspace.directoryName}/figures/figure-1/panel-questions/q-1.json`;
-  const manifestPath = `SCI-Highlighter/workspaces/${workspace.directoryName}/manifest.json`;
+  const assetPath = `Brevess/workspaces/${workspace.directoryName}/figures/figure-1/panel-questions/q-1.json`;
+  const manifestPath = `Brevess/workspaces/${workspace.directoryName}/manifest.json`;
   assert.ok(handles.writes.indexOf(assetPath) < handles.writes.indexOf(manifestPath));
-  assert.ok(handles.writes.indexOf(manifestPath) < handles.writes.indexOf('SCI-Highlighter/workspace-index.json'));
+  assert.ok(handles.writes.indexOf(manifestPath) < handles.writes.indexOf('Brevess/workspace-index.json'));
   const loaded = await sync.readWorkspaceAsset(workspace, 'figures/figure-1/panel-questions/q-1.json');
   assert.equal(loaded.found, true);
   assert.equal(loaded.value.data.answer, 'Signal increased.');
@@ -916,7 +950,7 @@ test('merges a newer on-disk workspace index with a stale queued index without l
 
   const secondManifest = createWorkspaceManifest(second);
   handles.writeText(
-    `SCI-Highlighter/workspaces/${second.directoryName}/manifest.json`,
+    `Brevess/workspaces/${second.directoryName}/manifest.json`,
     `${JSON.stringify(secondManifest)}\n`
   );
   const diskIndex = createWorkspaceIndex([
@@ -924,7 +958,7 @@ test('merges a newer on-disk workspace index with a stale queued index without l
     secondManifest
   ], { revision: 50, updatedAt: '2026-07-28T12:00:00.000Z' });
   handles.writeText(
-    'SCI-Highlighter/workspace-index.json',
+    'Brevess/workspace-index.json',
     `${JSON.stringify(diskIndex)}\n`
   );
 
@@ -932,7 +966,7 @@ test('merges a newer on-disk workspace index with a stale queued index without l
   assert.equal(flushed.failed, 0);
   assert.equal(flushed.pendingCount, 0);
   const merged = validateWorkspaceIndex(JSON.parse(
-    handles.readText('SCI-Highlighter/workspace-index.json')
+    handles.readText('Brevess/workspace-index.json')
   ));
   assert.equal(merged.revision, 51);
   assert.deepEqual(merged.workspaces.map(item => item.workspaceId), [
@@ -952,18 +986,18 @@ test('rebuilds a workspace index from manifests, quarantines malformed data, and
     directoryName: `Same visible title--${'b'.repeat(16)}`,
     contentHash: '2'.repeat(64), revision: '2'.repeat(64)
   });
-  handles.writeText(`SCI-Highlighter/workspaces/${first.directoryName}/manifest.json`,
+  handles.writeText(`Brevess/workspaces/${first.directoryName}/manifest.json`,
     `${JSON.stringify(createWorkspaceManifest(first))}\n`);
-  handles.writeText(`SCI-Highlighter/workspaces/${second.directoryName}/manifest.json`,
+  handles.writeText(`Brevess/workspaces/${second.directoryName}/manifest.json`,
     `${JSON.stringify(createWorkspaceManifest(second))}\n`);
-  handles.writeText('SCI-Highlighter/workspaces/Broken--cccccccccccccccc/manifest.json', '{bad json');
+  handles.writeText('Brevess/workspaces/Broken--cccccccccccccccc/manifest.json', '{bad json');
   const sync = createDirectorySync({ handleStore: handles, queueStore: createMemorySyncQueue() });
 
   const rebuilt = await sync.rebuildWorkspaceIndex();
   assert.equal(rebuilt.workspaceCount, 2);
   assert.equal(rebuilt.quarantined, 1);
-  assert.ok(handles.has('SCI-Highlighter/conflicts/quarantine/Broken--cccccccccccccccc.manifest.invalid.json'));
-  const index = validateWorkspaceIndex(JSON.parse(handles.readText('SCI-Highlighter/workspace-index.json')));
+  assert.ok(handles.has('Brevess/conflicts/quarantine/Broken--cccccccccccccccc.manifest.invalid.json'));
+  const index = validateWorkspaceIndex(JSON.parse(handles.readText('Brevess/workspace-index.json')));
   assert.equal(index.workspaces.length, 2);
 
   const exactUrl = await sync.listWorkspaceManifests({
@@ -1000,19 +1034,19 @@ test('workspace deletion removes its active, backup, and conflict trees without 
   const conflict = await sync.flush();
   assert.ok(conflict.conflicts >= 1);
   assert.equal(JSON.parse(handles.readText(
-    `SCI-Highlighter/workspaces/${first.directoryName}/chat/turns/turn-1.json`
+    `Brevess/workspaces/${first.directoryName}/chat/turns/turn-1.json`
   )).data.answer, 'first');
 
   await sync.enqueueWorkspaceAsset(first, 'ui/state.json', { view: 'chat' }, { revision: 2 });
   await sync.enqueueWorkspaceAsset(second, 'ui/state.json', { view: 'figure' }, { revision: 2 });
   const firstBackup =
-    `SCI-Highlighter/backups/workspaces/${first.directoryName}/chat/index.previous.json`;
+    `Brevess/backups/workspaces/${first.directoryName}/chat/index.previous.json`;
   const secondBackup =
-    `SCI-Highlighter/backups/workspaces/${second.directoryName}/chat/index.previous.json`;
+    `Brevess/backups/workspaces/${second.directoryName}/chat/index.previous.json`;
   const firstConflict =
-    `SCI-Highlighter/conflicts/workspaces/${first.directoryName}/chat/index.r2.extension.json`;
+    `Brevess/conflicts/workspaces/${first.directoryName}/chat/index.r2.extension.json`;
   const secondConflict =
-    `SCI-Highlighter/conflicts/workspaces/${second.directoryName}/chat/index.r2.extension.json`;
+    `Brevess/conflicts/workspaces/${second.directoryName}/chat/index.r2.extension.json`;
   handles.writeText(firstBackup, JSON.stringify({ answer: 'first-backup' }));
   handles.writeText(secondBackup, JSON.stringify({ answer: 'second-backup' }));
   handles.writeText(firstConflict, JSON.stringify({ answer: 'first-conflict' }));
@@ -1022,8 +1056,8 @@ test('workspace deletion removes its active, backup, and conflict trees without 
   assert.ok((await queue.getAll()).some(item => item.relativePath.includes(second.directoryName)));
   const removed = await sync.removeWorkspaceTree(first);
   assert.equal(removed.removed, true);
-  assert.equal(handles.has(`SCI-Highlighter/workspaces/${first.directoryName}/chat/turns/turn-1.json`), false);
-  assert.equal(handles.has(`SCI-Highlighter/workspaces/${second.directoryName}/chat/turns/turn-1.json`), true);
+  assert.equal(handles.has(`Brevess/workspaces/${first.directoryName}/chat/turns/turn-1.json`), false);
+  assert.equal(handles.has(`Brevess/workspaces/${second.directoryName}/chat/turns/turn-1.json`), true);
   assert.equal(handles.has(firstBackup), false);
   assert.equal(handles.has(firstConflict), false);
   assert.equal(handles.has(secondBackup), true);

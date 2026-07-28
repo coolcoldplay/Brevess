@@ -3,9 +3,7 @@ param(
 )
 
 if ([string]::IsNullOrWhiteSpace($BuildName)) {
-  $BuildName = 'SCI' + [char]0x8BBA + [char]0x6587 +
-    [char]0x9605 + [char]0x8BFB + [char]0x52A9 + [char]0x624B +
-    '-v1.0.0-build1-store-release'
+  $BuildName = 'Brevess-v1.0.0-build1-store-release'
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -39,7 +37,7 @@ foreach ($file in @(
     -Destination $nativeTarget
 }
 Copy-Item -LiteralPath (
-  Join-Path $projectRoot 'native-host\bin\sci-reader-codex-host.exe'
+  Join-Path $projectRoot 'native-host\bin\brevess-codex-host.exe'
 ) -Destination $nativeBinTarget
 
 foreach ($file in @(

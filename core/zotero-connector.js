@@ -186,7 +186,7 @@
         title: value.title,
         url: value.url,
         accessDate: new Date().toISOString(),
-        tags: [{ tag: 'SCI Reader' }, { tag: '增强网页快照' }],
+        tags: [{ tag: 'Brevess' }, { tag: '增强网页快照' }],
         notes
       }]
     }, requestOptions);
@@ -196,7 +196,7 @@
         items: [{ id: itemKey }],
         snapshotContent: value.snapshotContent,
         url: value.url,
-        title: `${value.title} — SCI Reader 增强快照`
+        title: `${value.title} — Brevess 增强快照`
       }, requestOptions);
     }
     return {

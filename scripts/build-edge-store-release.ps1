@@ -68,7 +68,7 @@ if (-not $SkipNativeHostBuild) {
     throw 'Unable to build the optional Codex Native Messaging host.'
   }
 }
-$hostExecutable = Join-Path $projectRoot 'native-host\bin\sci-reader-codex-host.exe'
+$hostExecutable = Join-Path $projectRoot 'native-host\bin\brevess-codex-host.exe'
 if (-not (Test-Path -LiteralPath $hostExecutable -PathType Leaf)) {
   throw "Codex Bridge executable is missing: $hostExecutable"
 }

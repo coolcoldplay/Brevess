@@ -59,14 +59,14 @@ Local data remains until the user deletes the relevant article workspace,
 clears extension data, removes files from the selected folder, or uninstalls the
 extension. Files explicitly exported or saved to a user-selected folder can
 remain after uninstallation. Optional Local Codex bridge data under
-`%LOCALAPPDATA%\SCIReaderCodexBridge` remains until the user removes it.
+`%LOCALAPPDATA%\BrevessCodexBridge` remains until the user removes it.
 
 设置和论文工作区保存在 Microsoft Edge 扩展本地存储、IndexedDB，以及用户主动选择的
 本地文件夹中。Brevess 不会把副本上传到开发者运营的云端。
 
 数据会保留到用户删除相应论文工作区、清除扩展数据、删除所选目录文件或卸载扩展为止。
 用户明确导出或写入自选目录的文件可能在卸载扩展后继续存在。可选本机 Codex 桥位于
-`%LOCALAPPDATA%\SCIReaderCodexBridge` 的数据会保留到用户自行删除。
+`%LOCALAPPDATA%\BrevessCodexBridge` 的数据会保留到用户自行删除。
 
 ## 3. Data transmission and third parties / 数据传输与第三方
 

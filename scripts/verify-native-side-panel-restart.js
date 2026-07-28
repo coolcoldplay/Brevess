@@ -427,7 +427,7 @@ async function flushAndInspectDirectory(options) {
               const payload = parsed?.data && typeof parsed.data === 'object'
                 ? parsed.data : parsed;
               const activeWorkspaceFile =
-                relativePath.startsWith('SCI-Highlighter/workspaces/');
+                relativePath.startsWith('Brevess/workspaces/');
               if (activeWorkspaceFile && relativePath.endsWith('/chat/index.json')) {
                 inspection.chatTurnCount = Array.isArray(payload.turns)
                   ? payload.turns.length : Number(payload.totalTurns) || 0;
@@ -452,7 +452,7 @@ async function flushAndInspectDirectory(options) {
 async function introduceWorkspaceGenerationDrift(options, directoryName) {
   return options.evaluate(async ({ directoryName }) => {
     const selected = await SciLLM.loadDirectoryHandle(indexedDB);
-    const root = await selected.getDirectoryHandle('SCI-Highlighter', { create: false });
+    const root = await selected.getDirectoryHandle('Brevess', { create: false });
     const workspaces = await root.getDirectoryHandle('workspaces', { create: false });
     const workspace = await workspaces.getDirectoryHandle(directoryName, { create: false });
     const readJson = async relativePath => {
@@ -903,7 +903,7 @@ async function clearBrowserWorkspaceStores(options) {
     results.bulkDirectoryBefore.sync.pendingCount === 0 &&
     results.bulkDirectoryBefore.inspection.bulkWorkspaceSentinel &&
     results.bulkSeed.every(item => results.bulkDirectoryBefore.files.some(file =>
-      file.startsWith(`SCI-Highlighter/workspaces/${item.directoryName}/`))) &&
+      file.startsWith(`Brevess/workspaces/${item.directoryName}/`))) &&
     results.bulkUi.selectedCount === 2 &&
     results.bulkUi.selectAllChecked &&
     results.bulkUi.clearEnabled &&

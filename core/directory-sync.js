@@ -9,7 +9,9 @@
   const META_STORE_NAME = 'meta';
   const DIRECTORY_HANDLE_STORE_NAME = 'directoryHandles';
   const SYNC_QUEUE_STORE_NAME = 'syncQueue';
-  const ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
+  const ROOT_DIRECTORY_NAME = 'Brevess';
+  // Keep reading the pre-1.0 directory so an upgrade never strands existing workspaces.
+  const LEGACY_ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
   const WORKSPACE_INDEX_PATH = 'workspace-index.json';
   const WORKSPACE_ROOT_PATH = 'workspaces';
   const HANDLE_KEY = 'selected-directory';
@@ -358,6 +360,16 @@
   }
 
   async function getRootDirectory(handle, create) {
+    try {
+      return await handle.getDirectoryHandle(ROOT_DIRECTORY_NAME, { create: false });
+    } catch (error) {
+      if (error?.name !== 'NotFoundError') throw error;
+    }
+    try {
+      return await handle.getDirectoryHandle(LEGACY_ROOT_DIRECTORY_NAME, { create: false });
+    } catch (error) {
+      if (error?.name !== 'NotFoundError') throw error;
+    }
     return handle.getDirectoryHandle(ROOT_DIRECTORY_NAME, { create });
   }
 
@@ -1457,6 +1469,8 @@
     USER_DATA_DATABASE_VERSION,
     DIRECTORY_HANDLE_STORE_NAME,
     SYNC_QUEUE_STORE_NAME,
+    ROOT_DIRECTORY_NAME,
+    LEGACY_ROOT_DIRECTORY_NAME,
     WORKSPACE_INDEX_PATH,
     createMemoryDirectoryHandleStore,
     createMemorySyncQueue,

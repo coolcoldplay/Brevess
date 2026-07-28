@@ -47,7 +47,7 @@
 
   <h2>2. Storage and retention / 存储与保留</h2>
   <p>Settings and article workspaces are stored locally using Microsoft Edge extension storage, IndexedDB, and—only when selected by the user—the local folder chosen through the File System Access API. Brevess does not upload a copy to a developer-operated cloud service.</p>
-  <p>设置和论文工作区保存在 Edge 扩展本地存储、IndexedDB 和用户主动选择的本地文件夹中，不会上传至开发者运营的云端。数据保留到用户删除工作区、清除扩展数据、删除目录文件或卸载扩展为止。明确导出的文件可能在卸载后继续存在；可选桥接数据位于 <code>%LOCALAPPDATA%\SCIReaderCodexBridge</code>，会保留到用户自行删除。</p>
+  <p>设置和论文工作区保存在 Edge 扩展本地存储、IndexedDB 和用户主动选择的本地文件夹中，不会上传至开发者运营的云端。数据保留到用户删除工作区、清除扩展数据、删除目录文件或卸载扩展为止。明确导出的文件可能在卸载后继续存在；可选桥接数据位于 <code>%LOCALAPPDATA%\BrevessCodexBridge</code>，会保留到用户自行删除。</p>
 
   <h2>3. Data transmission and third parties / 数据传输与第三方</h2>
   <p>Model-assisted features remain disabled until the user configures a provider and grants the in-extension permission to send article content. Depending on the task, Brevess may send necessary article excerpts, captions, compressed Figure images, questions and limited conversation context directly to the provider or compatible endpoint selected by the user. Provider availability, retention, billing and processing are governed by that provider's terms and privacy policy.</p>

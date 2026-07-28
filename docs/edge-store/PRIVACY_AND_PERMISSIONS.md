@@ -67,7 +67,7 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 ## Storage and retention
 
 - 默认：`chrome.storage.local` 与 IndexedDB。
-- 可选：用户通过系统目录选择器授权的本地 `SCI-Highlighter` 文件夹。
+- 可选：用户通过系统目录选择器授权的本地 `Brevess` 文件夹。
 - 保留期限：直到用户删除对应工作区、清空数据、删除本地文件或卸载扩展。
 - API Key、页面原始载荷和凭据不会进入备份、导出、缓存、日志或诊断包。
 

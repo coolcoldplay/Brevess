@@ -278,7 +278,7 @@ chrome.action.onClicked.addListener(tab => {
   const panelOpen = knownOnboarding && SciLLM.shouldStartOnboarding(knownOnboarding)
     ? null : beginToolbarSidePanelOpen(tab);
   handleToolbarAction(tab, panelOpen, knownOnboarding).catch(error =>
-    console.warn('SCI 论文逻辑助手：无法激活当前标签页', error)
+    console.warn('Brevess：无法激活当前标签页', error)
   );
 });
 
@@ -338,7 +338,7 @@ chrome.runtime.onInstalled.addListener(() => {
     syncActiveTabSidePanels(),
     repairAllLegacyTabSidePanelOptions()
   ]).catch(error =>
-    console.warn('SCI 论文逻辑助手：无法启用侧栏点击行为', error)
+    console.warn('Brevess：无法启用侧栏点击行为', error)
   );
 });
 chrome.runtime.onStartup.addListener(() => {
@@ -347,11 +347,11 @@ chrome.runtime.onStartup.addListener(() => {
     syncActiveTabSidePanels(),
     repairAllLegacyTabSidePanelOptions()
   ]).catch(error =>
-    console.warn('SCI 论文逻辑助手：无法恢复侧栏点击行为', error)
+    console.warn('Brevess：无法恢复侧栏点击行为', error)
   );
 });
 configureSidePanelAction().catch(error =>
-  console.warn('SCI 论文逻辑助手：侧栏初始化失败', error)
+  console.warn('Brevess：侧栏初始化失败', error)
 );
 Promise.all([
   syncActiveTabSidePanels(),
@@ -454,7 +454,7 @@ async function publishCodexReverseEvent(stage, message, sender, payload, state =
     ...(response?.success === true ? { result: response.data || {} } : {}),
     ...(response?.success === false ? { error: response.error || {} } : {})
   }, { timeoutMs: 3000 }).catch(error => {
-    console.warn('SCI Reader: unable to publish local Codex reverse event', error);
+    console.warn('Brevess: unable to publish local Codex reverse event', error);
     return null;
   });
 }
@@ -559,7 +559,7 @@ function recordTokenUsageProgress(message, sender, progress, reverseState) {
     cacheMissTokens: progress.cacheMissTokens,
     estimated: progress.estimated === true
   }).catch(error => {
-    console.warn('SCI Reader: unable to record token usage', error);
+    console.warn('Brevess: unable to record token usage', error);
     return null;
   });
   if (!Array.isArray(reverseState.tokenUsageWrites)) reverseState.tokenUsageWrites = [];

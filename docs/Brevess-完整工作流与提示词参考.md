@@ -1,4 +1,4 @@
-# SCI 论文逻辑助手：完整工作流、内部原理与提示词参考
+# Brevess：完整工作流、内部原理与提示词参考
 
 > 版本：2.1.9  
 > 文档对应代码版本：`2.1.9-figure-resilience-progressive-r1`  

@@ -311,7 +311,7 @@ test('thread mapping is stable per paper and profile without storing raw documen
 
 test('bridge isolates Codex state and disables unrelated tools', () => {
   const isolatedHome = codexHomeDirectory().replaceAll('\\', '/');
-  assert.match(isolatedHome, /SCIReaderCodexBridge\/codex-home$/);
+  assert.match(isolatedHome, /BrevessCodexBridge\/codex-home$/);
   const launch = codexSpawnSpec('C:\\tools\\codex.exe');
   assert.deepEqual(launch.args.slice(0, 3), [
     'app-server', '--disable', 'shell_tool'

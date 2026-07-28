@@ -2,6 +2,13 @@
 
 `Brevess`（Brevity · Evidence · Essence）首个公开商店版本。
 
+## 品牌与升级兼容
+
+- 界面、文档标题、文件名、Zotero 导出、构建产物和本机桥展示统一为 `Brevess`。
+- 新的本地工作区目录名为 `Brevess`，同时继续读取旧版本工作区。
+- Windows Codex Bridge 改用 `BrevessCodexBridge` 和 `brevess-codex-host.exe`；
+  安装与登录脚本会迁移旧会话和线程映射。
+
 ## 论文阅读
 
 - 从当前论文网页本地提取章节树、正文段落、Figure、Panel 和缩写表。
@@ -31,7 +38,7 @@
 
 ## 质量验证
 
-- 1104 项单元与契约测试通过。
+- 1105 项单元与契约测试通过。
 - Microsoft Edge 完整端到端流程通过。
 - 浏览器重启、本地目录恢复、批量清理与重新保存回归通过。
 - Microsoft Edge 商店包体校验通过。

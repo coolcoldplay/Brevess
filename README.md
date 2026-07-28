@@ -4,7 +4,7 @@
 论文阅读扩展。它使用原生浏览器侧栏，提供论文导航、离线正则与可选 LLM
 证据高亮、Figure/Panel 解读、全文问答和本地工作区。
 
-完整的基础工作流、缓存策略和提示词字段见：[完整工作流与提示词参考](docs/SCI论文逻辑助手-完整工作流与提示词参考-v2.1.9.md)。2.2 的并发、Token 和 Figure 优化见：[性能与质量优化说明](docs/SCI论文逻辑助手-性能与质量优化-v2.2.0.md)。
+完整的基础工作流、缓存策略和提示词字段见：[完整工作流与提示词参考](docs/Brevess-完整工作流与提示词参考.md)。并发、Token 和 Figure 优化见：[性能与质量优化说明](docs/Brevess-性能与质量优化.md)。
 
 ## 核心能力
 
@@ -195,3 +195,6 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 按网页/功能/模型统计 Token、规则白名单和黑名单，以及经过 Zotero Uminer
 文献库回归的正则目录。详见 [1.0.0 变更记录](CHANGELOG-v1.0.0.md)、
 [正则优化记录](CHANGELOG-v2.4.28.md) 和 [本机 Codex 设置](CODEX_LOCAL_SETUP.md)。
+
+升级用户的 IndexedDB、旧归档、本地工作区和 Native Messaging 权限会继续兼容；
+保留的非展示型协议标识见[持久化兼容标识说明](docs/COMPATIBILITY_IDENTIFIERS.md)。

@@ -70,7 +70,7 @@ let pendingMigrationBundle = null;
 const SETTINGS_PAGE_ORDER = ['categories', 'modes', 'models', 'shortcuts', 'data', 'about'];
 const SETTINGS_PAGE_COPY = Object.freeze({
   categories: {
-    eyebrow: 'Evidence Lens · 规则工作区',
+    eyebrow: 'Brevess · 规则工作区',
     title: '让每一种证据都有清楚的判定边界',
     subtitle: '新增、修改或删除类别，并分别维护 AI 提示词和离线正则规则。'
   },
@@ -687,7 +687,7 @@ function renderOnboarding() {
   document.getElementById('onboardingStepTitle').textContent = step === 'storage'
     ? '选择本地保存目录' : '配置 LLM API';
   document.getElementById('onboardingStepDescription').textContent = step === 'storage'
-    ? '插件会在你选择的位置建立 SCI-Highlighter 文件夹，并为每篇网页保存独立工作区。跳过后仍使用浏览器 IndexedDB 自动保存。'
+    ? '插件会在你选择的位置建立 Brevess 文件夹，并为每篇网页保存独立工作区。跳过后仍使用浏览器 IndexedDB 自动保存。'
     : '沿用下方命名 API Profile 表单，可配置 Provider、模型、密钥、服务地址并测试连接。现有配置不会被重置。';
   document.getElementById('onboardingStepState').textContent =
     onboardingStateText(step, status);

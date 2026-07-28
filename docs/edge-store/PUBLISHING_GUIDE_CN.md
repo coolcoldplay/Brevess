@@ -151,7 +151,7 @@ https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-B
 
 1. ZIP 能打开。
 2. `catalog-extension-ids.txt` 包含 Partner Center 的真实 ID。
-3. `Install-Brevess-Codex-Bridge.cmd`、卸载脚本、README 和 `bin\sci-reader-codex-host.exe` 都存在。
+3. `Install-Brevess-Codex-Bridge.cmd`、卸载脚本、README 和 `bin\brevess-codex-host.exe` 都存在。
 4. Windows Defender 没有报毒。
 
 如果 Bridge 未完成代码签名或 SmartScreen 信誉积累，必须在商店说明中明确它是“可选 Windows 辅助程序”，不要描述为无警告的一键安装。

@@ -1,4 +1,4 @@
-# SCI 论文逻辑助手 v2.3.0
+# Brevess v2.3.0
 
 运行修订：`2.3.0-panel-chat-r3`
 

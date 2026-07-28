@@ -21,7 +21,7 @@ PowerShell 运行 `install.ps1`，然后重新加载扩展。设置页中新建 
 [CODEX_LOCAL_SETUP.md](CODEX_LOCAL_SETUP.md)。
 
 2.4.15 起，本机 Codex 同时支持 Figure 图片像素输入；解图进度与结果会写入
-`%LOCALAPPDATA%\SCIReaderCodexBridge\reader-events`。升级时必须重新运行新版
+`%LOCALAPPDATA%\BrevessCodexBridge\reader-events`。升级时必须重新运行新版
 `native-host\install.ps1` 并重新加载扩展，否则旧的 1.1 桥接程序只能处理文本。
 
 如果浏览器提示清单错误，请确认选择的不是 ZIP 文件，也不是多套了一层的父文件夹。

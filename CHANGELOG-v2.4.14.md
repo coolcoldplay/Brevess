@@ -2,7 +2,7 @@
 
 ## 已修复
 
-- 本机桥现在使用 `%LOCALAPPDATA%\SCIReaderCodexBridge\codex-home` 作为插件专用
+- 本机桥现在使用 `%LOCALAPPDATA%\BrevessCodexBridge\codex-home` 作为插件专用
   `CODEX_HOME`，不再与 Codex Desktop、Codex CLI 或其他 App Server 进程共享刷新令牌。
 - 设置页新增插件专用 Codex 的登录、状态刷新和退出入口；网页登录完成后会自动检测。
 - 健康检查不再主动刷新令牌，避免只为显示状态而消耗或轮换认证信息。

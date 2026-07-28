@@ -1,6 +1,6 @@
 # Third-party notices
 
-SCI论文逻辑助手 is licensed under the GNU Affero General Public License,
+Brevess is licensed under the GNU Affero General Public License,
 version 3 or any later version. See [LICENSE](LICENSE).
 
 ## Phosphor Icons

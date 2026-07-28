@@ -46,7 +46,7 @@ class SciPaperHighlighter {
             });
         }
 
-        console.log(`SCI高亮助手: 已高亮 ${this.highlightedElements.length} 个元素`);
+        console.log(`Brevess: 已高亮 ${this.highlightedElements.length} 个元素`);
         console.log('匹配计数:', this.matchCounts);
         
         this.activeAnalysisModeId = '';
@@ -549,8 +549,8 @@ class SciPaperHighlighter {
         this.matchCounts = {};
         
         console.log(targetId
-            ? `SCI高亮助手: 已替换分析模式 ${targetId} 的高亮`
-            : 'SCI高亮助手: 已清除所有高亮');
+            ? `Brevess: 已替换分析模式 ${targetId} 的高亮`
+            : 'Brevess: 已清除所有高亮');
     }
 
     // 获取所有文本节点
@@ -2662,7 +2662,7 @@ async function prepareManualDocumentFresh(href) {
     try {
         extracted = getManualDocumentInputAndBlocks();
     } catch (error) {
-        console.warn('SCI高亮助手: 无法准备手动标注正文', error.message);
+        console.warn('Brevess: 无法准备手动标注正文', error.message);
         return;
     }
     if (!extracted.input.paragraphs.length || !extracted.blocks.length) return;
@@ -9629,7 +9629,7 @@ function appendSnapshotAnnotationAppendix(targetBody, annotations) {
     const section = outputDocument.createElement('section');
     section.id = 'sci-reader-snapshot-annotations';
     const heading = outputDocument.createElement('h2');
-    heading.textContent = `SCI 阅读助手：手动高亮与注释（${annotations.length}）`;
+    heading.textContent = `Brevess：手动高亮与注释（${annotations.length}）`;
     section.appendChild(heading);
     const list = outputDocument.createElement('ol');
     annotations.forEach(annotation => {
@@ -10137,7 +10137,7 @@ async function loadZoteroSnapshotPluginCss() {
         } catch (_) {}
         return css;
     } catch (error) {
-        console.warn('SCI 阅读助手：未能读取快照样式，使用最小兼容样式', error);
+        console.warn('Brevess：未能读取快照样式，使用最小兼容样式', error);
         return `
           html[data-sci-reader-single-column="true"] :is(
             .c-article-main-column,.c-article-body,#article-body,.article-body,
@@ -10213,7 +10213,7 @@ function buildEnhancedArticleSnapshotHtml(options = {}) {
         head.appendChild(style);
         const generator = head.ownerDocument.createElement('meta');
         generator.name = 'generator';
-        generator.content = `SCI Reader faithful Zotero snapshot; ${
+        generator.content = `Brevess faithful Zotero snapshot; ${
             options.exportedAt || new Date().toISOString()
         }`;
         head.appendChild(generator);
@@ -10410,7 +10410,7 @@ async function maybeAutoAnalyzeWithLLM() {
             await prepareArticleProfileWithLLM({ auto: true });
         }
     } catch (error) {
-        console.warn('SCI高亮助手: 自动 LLM 分析未启动', error.message);
+        console.warn('Brevess: 自动 LLM 分析未启动', error.message);
     }
 }
 
