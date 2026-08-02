@@ -20,6 +20,7 @@ const {
 const PASSPHRASE = 'correct horse battery staple';
 const OTHER_PASSPHRASE = 'another suitably long passphrase';
 const SETTINGS_KEY = 'settings-key';
+const REAL_SETTINGS_KEY = 'sciLlmSettingsV2';
 const ABBREVIATION_KEY = 'abbreviation-key';
 const FIXED_SALT = new Uint8Array(16).fill(7);
 
@@ -157,6 +158,15 @@ function normalizeAbbreviations(value) {
     throw error;
   }
   return { schemaVersion: 1, entries: clone(value.entries) };
+}
+
+function loadSettingsLikeBackground(storageArea) {
+  const portableSettingsStorage = {
+    get(keys) {
+      return storageArea.get(keys);
+    }
+  };
+  return settingsApi.loadSettings(portableSettingsStorage);
 }
 
 function managerFixture({ disk = null, storage = {}, directoryOptions = {}, overrides = {} } = {}) {
@@ -978,6 +988,97 @@ test('dispose waits for the queue and cancels an automatic backup not yet starte
   assert.equal(directorySync.casWrites.length, 0);
 });
 
+test('Promise-only real settings failures abort create and backup before portable CAS', async () => {
+  const savedSettings = settingsApi.createDefaultSettings();
+  savedSettings.language = 'en';
+  savedSettings.profiles.profile_default_openai.config.apiKey = 'sk-local-preserved';
+  const realSettingsOverrides = {
+    settingsKey: REAL_SETTINGS_KEY,
+    normalizeSettings: settingsApi.mergeSettings,
+    loadSettings: area => loadSettingsLikeBackground(area)
+  };
+  const settingsRead = keys => (Array.isArray(keys) ? keys : [keys])
+    .includes(REAL_SETTINGS_KEY);
+  const { envelope } = await encryptedFixture({ settings: savedSettings });
+  const backupFixture = managerFixture({
+    disk: envelope,
+    storage: {
+      [REAL_SETTINGS_KEY]: savedSettings,
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    },
+    overrides: realSettingsOverrides
+  });
+  await backupFixture.manager.unlock(PASSPHRASE);
+  const backupDiskBefore = backupFixture.directorySync.disk;
+  backupFixture.storageArea.failGetWhen(settingsRead, new Error('real settings read failed'));
+
+  await assert.rejects(
+    () => backupFixture.manager.backupNow(),
+    error => error.code === 'PORTABLE_CONFIG_BACKUP_FAILED'
+  );
+  assert.equal(backupFixture.directorySync.casWrites.length, 0);
+  assert.deepEqual(backupFixture.directorySync.disk, backupDiskBefore);
+
+  const createFixture = managerFixture({
+    storage: {
+      [REAL_SETTINGS_KEY]: savedSettings,
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    },
+    overrides: realSettingsOverrides
+  });
+  createFixture.storageArea.failGetWhen(settingsRead, new Error('real settings read failed'));
+
+  await assert.rejects(
+    () => createFixture.manager.create(PASSPHRASE),
+    error => error.code === 'PORTABLE_CONFIG_CREATE_FAILED'
+  );
+  assert.equal(createFixture.directorySync.casWrites.length, 0);
+  assert.equal(createFixture.directorySync.disk, null);
+});
+
+test('Promise-only real settings reader preserves language and the complete secret profile', async () => {
+  const savedSettings = settingsApi.createDefaultSettings();
+  savedSettings.language = 'en';
+  savedSettings.profiles.profile_default_openai.config.apiKey = 'sk-local-preserved';
+  savedSettings.profiles.profile_default_openai.futureMetadata = {
+    nested: [{ preserve: true }]
+  };
+  const expectedSettings = settingsApi.mergeSettings(savedSettings);
+  const { manager, directorySync } = managerFixture({
+    storage: {
+      [REAL_SETTINGS_KEY]: savedSettings,
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    },
+    overrides: {
+      settingsKey: REAL_SETTINGS_KEY,
+      normalizeSettings: settingsApi.mergeSettings,
+      loadSettings: area => loadSettingsLikeBackground(area)
+    }
+  });
+
+  await manager.create(PASSPHRASE);
+  const salt = codec.fromBase64(directorySync.disk.encryption.salt);
+  const keyBytes = await codec.derivePortableConfigKey(PASSPHRASE, {
+    salt,
+    iterations: directorySync.disk.encryption.iterations,
+    cryptoRef: webcrypto
+  });
+  const { payload } = await codec.decryptPortableConfig(directorySync.disk, {
+    keyBytes,
+    cryptoRef: webcrypto
+  });
+
+  assert.equal(payload.settings.language, 'en');
+  assert.equal(
+    payload.settings.profiles.profile_default_openai.config.apiKey,
+    'sk-local-preserved'
+  );
+  assert.deepEqual(
+    payload.settings.profiles.profile_default_openai,
+    expectedSettings.profiles.profile_default_openai
+  );
+});
+
 test('background dependency graph can instantiate the manager with the real exported names', () => {
   const directorySync = createDirectory();
   const storageArea = createStorage({
@@ -1040,4 +1141,11 @@ test('background loads and creates the manager between codec and directory/route
   assert.ok(managerIndex < directoryIndex && directoryIndex < routerImportIndex);
   assert.ok(createIndex >= 0 && createIndex < routerIndex);
   assert.match(source, /portableConfigManager\.probe\(\)/u);
+  const managerWiring = source.slice(createIndex, routerIndex);
+  assert.match(source, /const portableSettingsStorage = \{[\s\S]*?return chrome\.storage\.local\.get\(keys\);[\s\S]*?\};/u);
+  assert.match(
+    managerWiring,
+    /loadSettings:\s*\(\)\s*=>\s*SciLLM\.loadSettings\(portableSettingsStorage\)/u
+  );
+  assert.doesNotMatch(managerWiring, /loadSettings:\s*SciLLM\.loadSettings/u);
 });

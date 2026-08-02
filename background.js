@@ -372,6 +372,11 @@ const directorySync = SciLLM.createDirectorySync({
   queueStore: SciLLM.createIndexedDbSyncQueue(indexedDB),
   sourceId: 'extension'
 });
+const portableSettingsStorage = {
+  get(keys) {
+    return chrome.storage.local.get(keys);
+  }
+};
 const portableConfigManager = SciLLM.createPortableConfigManager({
   directorySync,
   storageArea: chrome.storage.local,
@@ -386,7 +391,7 @@ const portableConfigManager = SciLLM.createPortableConfigManager({
   fromBase64: SciLLM.fromBase64,
   normalizeSettings: SciLLM.mergeSettings,
   normalizeAbbreviations: SciLLM.normalizeGlobalAbbreviationMemory,
-  loadSettings: SciLLM.loadSettings,
+  loadSettings: () => SciLLM.loadSettings(portableSettingsStorage),
   loadGlobalAbbreviations: async storageArea => {
     const key = SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY;
     const stored = await storageArea.get(key);
