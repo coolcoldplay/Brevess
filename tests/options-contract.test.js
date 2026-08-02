@@ -431,6 +431,184 @@ test('local data controls form one accessible section and load the shared direct
   assert.doesNotMatch(html, /<svg|😀|📁|💾/u);
 });
 
+test('portable encrypted settings expose an accessible safe passphrase workflow', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  [
+    'portableConfigState', 'portableConfigRevision', 'portableConfigUpdatedAt',
+    'unlockPortableConfig', 'rotatePortableConfigPassphrase',
+    'forgetPortableConfigKey', 'backupPortableConfigNow',
+    'portableConfigDialog', 'portableConfigDialogTitle',
+    'portableConfigDialogDescription', 'portableConfigCurrentPassphrase',
+    'portableConfigPassphrase', 'portableConfigPassphraseConfirm',
+    'portableConfigDialogError', 'cancelPortableConfigDialog',
+    'confirmPortableConfigDialog'
+  ].forEach(id => assert.match(html, new RegExp(`id=["']${id}["']`)));
+  assert.match(html, /id=["']portableConfigDialog["'][^>]*aria-labelledby=["']portableConfigDialogTitle["'][^>]*aria-describedby=["']portableConfigDialogDescription["']/);
+  assert.match(html, /id=["']portableConfigDialogError["'][^>]*aria-live=["']polite["']/);
+  ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+    'portableConfigPassphraseConfirm'].forEach(id => {
+    assert.match(html, new RegExp(`id=["']${id}["'][^>]*type=["']password["']|type=["']password["'][^>]*id=["']${id}["']`));
+  });
+  assert.match(html, /autocomplete=["']current-password["']/);
+  assert.match(html, /autocomplete=["']new-password["']/);
+  assert.match(html, /API Key、模型设置和全局缩略词表以加密形式存放在所选目录/);
+  assert.match(html, /遗忘口令无法恢复密文凭据/);
+  assert.match(script, /function openPortableConfigDialog\(mode\)/);
+  assert.match(css, /\.portable-config-card\s*\{/);
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+});
+
+test('portable directory preparation probes before any drained sync and gates every non-ready path', async () => {
+  const script = read('options.js');
+  const chooseStart = script.indexOf('async function chooseUserDataDirectory(');
+  const chooseEnd = script.indexOf('\n}', chooseStart) + 2;
+  const chooseSource = script.slice(chooseStart, chooseEnd);
+  const pickerIndex = chooseSource.indexOf('window.showDirectoryPicker');
+  const saveIndex = chooseSource.indexOf('SciLLM.saveDirectoryHandle');
+  const prepareIndex = chooseSource.indexOf('preparePortableConfigForDirectory');
+  assert.ok(pickerIndex >= 0 && pickerIndex < saveIndex && saveIndex < prepareIndex);
+  assert.doesNotMatch(chooseSource.slice(0, prepareIndex), /USER_DATA_SYNC_NOW/);
+  const start = script.indexOf('async function preparePortableConfigForDirectory(');
+  const end = script.indexOf('\n}', start) + 2;
+  assert.ok(start >= 0 && end > start);
+  const source = script.slice(start, end);
+
+  async function run(probeState, dialogResult) {
+    const events = [];
+    const context = { Error };
+    vm.runInNewContext(`${source}\nglobalThis.prepare = preparePortableConfigForDirectory;`, context);
+    const result = await context.prepare({
+      call: async message => {
+        events.push(['call', message.type, message.drain]);
+        if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: probeState };
+        return { permission: 'granted' };
+      },
+      openDialog: async mode => {
+        events.push(['dialog', mode]);
+        return dialogResult;
+      },
+      reloadSettings: async () => { events.push(['reload', 'reload']); },
+      renderStatus: status => { events.push(['render', status?.state]); }
+    });
+    return { events, result };
+  }
+
+  const cached = await run('ready');
+  assert.deepEqual(cached.events.map(event => event[1]), [
+    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW'
+  ]);
+  assert.equal(cached.events.at(-1)[2], true);
+
+  const created = await run('missing', { state: 'ready' });
+  assert.deepEqual(created.events.map(event => event[1]), [
+    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready',
+    'USER_DATA_SYNC_NOW'
+  ]);
+
+  const unlocked = await run('locked', { state: 'ready' });
+  assert.deepEqual(unlocked.events.map(event => event[1]), [
+    'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload',
+    'USER_DATA_SYNC_NOW'
+  ]);
+
+  for (const [state, dialogResult] of [
+    ['locked', { cancelled: true }], ['locked', { state: 'locked' }],
+    ['missing', { state: 'error' }], ['error', undefined],
+    ['unavailable', undefined]
+  ]) {
+    const blocked = await run(state, dialogResult);
+    assert.equal(
+      blocked.events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false,
+      `${state} must never sync until portable settings are ready`
+    );
+    assert.equal(blocked.result.ready, false);
+  }
+});
+
+test('portable passphrase mode helpers validate and map only the intended background fields', () => {
+  const script = read('options.js');
+  const start = script.indexOf('// Portable config dialog helpers: start.');
+  const end = script.indexOf('// Portable config dialog helpers: end.');
+  assert.ok(start >= 0 && end > start);
+  const source = script.slice(start, end);
+  const context = { Error };
+  vm.runInNewContext(`${source}\n` +
+    'globalThis.validate = validatePortableConfigPassphrases;' +
+    'globalThis.request = portableConfigRequestForMode;' +
+    'globalThis.errorText = portableConfigErrorText;', context);
+
+  assert.equal(context.validate('create', '', 'short', 'short'), '口令至少需要 10 个字符。');
+  assert.equal(context.validate('create', '', '1234567890', '1234567891'), '两次输入的口令不一致。');
+  assert.equal(context.validate('rotate', 'short', '1234567890', '1234567890'), '当前口令至少需要 10 个字符。');
+  assert.equal(context.validate('unlock', '', '1234567890', ''), '');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.request('create', '', 'new-secret-1'))),
+    { type: 'PORTABLE_CONFIG_CREATE', passphrase: 'new-secret-1' }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.request('unlock', '', 'old-secret-1'))),
+    { type: 'PORTABLE_CONFIG_UNLOCK', passphrase: 'old-secret-1' }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.request('rotate', 'old-secret-1', 'new-secret-1'))),
+    {
+      type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE',
+      currentPassphrase: 'old-secret-1', newPassphrase: 'new-secret-1'
+    }
+  );
+  assert.equal(context.errorText({ code: 'PORTABLE_CONFIG_UNLOCK_FAILED', message: 'old-secret-1' }), '口令不正确或备份无法解密。');
+  assert.doesNotMatch(context.errorText({ code: 'UNKNOWN', message: 'new-secret-1' }), /new-secret-1/);
+});
+
+test('portable public status renderer ignores hostile private fields and rejects unsafe metadata', () => {
+  const script = read('options.js');
+  const start = script.indexOf('// Portable config status renderer: start.');
+  const end = script.indexOf('// Portable config status renderer: end.');
+  assert.ok(start >= 0 && end > start);
+  const source = script.slice(start, end);
+  const elements = Object.fromEntries([
+    'portableConfigState', 'portableConfigRevision', 'portableConfigUpdatedAt',
+    'portableConfigNotice', 'unlockPortableConfig',
+    'rotatePortableConfigPassphrase', 'forgetPortableConfigKey',
+    'backupPortableConfigNow'
+  ].map(id => [id, { textContent: '', hidden: false, disabled: false, dataset: {} }]));
+  const context = {
+    document: { getElementById: id => elements[id] },
+    userDataUi: { pendingAction: false, portableConfigStatus: null },
+    Date, Number, String, Set, Object
+  };
+  vm.runInNewContext(`${source}\nglobalThis.render = renderPortableConfigStatus;`, context);
+  const accessed = [];
+  const hostile = new Proxy({
+    state: 'ready', revision: Number.MAX_SAFE_INTEGER + 1,
+    updatedAt: 'not-a-date', pending: false, lastError: '',
+    backupId: 'private-backup', salt: 'private-salt', iv: 'private-iv',
+    ciphertext: 'private-ciphertext', passphrase: 'private-passphrase',
+    key: 'private-key', apiKey: 'private-api-key', profile: { secret: true }
+  }, { get(target, property) { accessed.push(String(property)); return target[property]; } });
+  context.render(hostile);
+  assert.equal(elements.portableConfigState.textContent, '已加密');
+  assert.equal(elements.portableConfigRevision.textContent, '—');
+  assert.equal(elements.portableConfigUpdatedAt.textContent, '—');
+  ['backupId', 'salt', 'iv', 'ciphertext', 'passphrase', 'key', 'apiKey', 'profile']
+    .forEach(field => assert.equal(accessed.includes(field), false));
+  assert.doesNotMatch(Object.values(elements).map(item => item.textContent).join(' '), /private-/);
+});
+
+test('portable dialog clears secrets, blocks duplicate submits, and never persists or logs passphrases', () => {
+  const script = read('options.js');
+  assert.match(script, /if\s*\(portableConfigUi\.submitting\)\s*return/);
+  assert.match(script, /function clearPortableConfigDialogSecrets\(/);
+  assert.match(script, /addEventListener\(['"]close['"],\s*clearPortableConfigDialogSecrets\)/);
+  assert.match(script, /addEventListener\(['"]cancel['"]/);
+  assert.match(script, /passphrase\s*=\s*['"]["']/);
+  assert.doesNotMatch(script, /(?:localStorage|sessionStorage)[\s\S]{0,160}passphrase|passphrase[\s\S]{0,160}(?:localStorage|sessionStorage)/i);
+  assert.doesNotMatch(script, /console\.(?:log|info|warn|error)\([^\n]*(?:passphrase|portableConfigPassphrase)/i);
+  assert.doesNotMatch(script, /dataset\.[A-Za-z]*passphrase|data-passphrase/i);
+});
+
 test('directory picker and permission prompts exist only in direct click handlers', () => {
   const script = read('options.js');
   assert.match(

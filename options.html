@@ -554,6 +554,26 @@
             <strong id="userDataDirectory">尚未选择目录</strong>
           </div>
           <p id="userDataSupportMessage" class="support-message" role="status" aria-live="polite" hidden></p>
+          <section class="portable-config-card" aria-labelledby="portableConfigHeading">
+            <div class="portable-config-heading">
+              <div>
+                <h4 id="portableConfigHeading">加密配置备份</h4>
+                <p>API Key、模型设置和全局缩略词表以加密形式存放在所选目录；遗忘口令无法恢复密文凭据。</p>
+              </div>
+              <span id="portableConfigState" class="portable-config-state" data-state="disabled">未启用</span>
+            </div>
+            <dl class="portable-config-metrics" aria-label="加密配置备份状态">
+              <div><dt>修订版本</dt><dd id="portableConfigRevision">—</dd></div>
+              <div><dt>上次同步</dt><dd id="portableConfigUpdatedAt">—</dd></div>
+            </dl>
+            <p id="portableConfigNotice" class="portable-config-notice" role="status" aria-live="polite">加密配置备份未启用。</p>
+            <div class="portable-config-actions">
+              <button id="unlockPortableConfig" class="button secondary" type="button" hidden>解锁配置备份</button>
+              <button id="rotatePortableConfigPassphrase" class="button secondary" type="button" hidden>更换口令</button>
+              <button id="forgetPortableConfigKey" class="button quiet" type="button" hidden>遗忘本机密钥</button>
+              <button id="backupPortableConfigNow" class="button primary" type="button" hidden>立即备份配置</button>
+            </div>
+          </section>
           <dl class="sync-metrics" aria-label="目录同步状态">
             <div><dt>待同步</dt><dd id="userDataPendingCount">0</dd></div>
             <div><dt>冲突</dt><dd id="userDataConflictCount">0</dd></div>
@@ -672,6 +692,34 @@
       <div class="dialog-actions">
         <button class="button quiet" value="cancel">取消</button>
         <button id="confirmMigrationImport" class="button primary" type="button">确认导入</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="portableConfigDialog" class="confirm-dialog portable-config-dialog"
+    aria-labelledby="portableConfigDialogTitle" aria-describedby="portableConfigDialogDescription">
+    <form id="portableConfigForm" novalidate>
+      <p class="section-kicker">加密配置备份</p>
+      <h2 id="portableConfigDialogTitle">解锁配置备份</h2>
+      <p id="portableConfigDialogDescription">输入口令后，插件会从当前目录安全恢复加密设置。</p>
+      <label id="portableConfigCurrentPassphraseField" class="field" hidden>
+        <span>当前口令</span>
+        <input id="portableConfigCurrentPassphrase" type="password" minlength="10"
+          autocomplete="current-password">
+      </label>
+      <label class="field">
+        <span id="portableConfigPassphraseLabel">口令</span>
+        <input id="portableConfigPassphrase" type="password" minlength="10"
+          autocomplete="new-password" required>
+      </label>
+      <label id="portableConfigPassphraseConfirmField" class="field">
+        <span>确认新口令</span>
+        <input id="portableConfigPassphraseConfirm" type="password" minlength="10"
+          autocomplete="new-password">
+      </label>
+      <p id="portableConfigDialogError" class="portable-config-dialog-error" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="cancelPortableConfigDialog" class="button quiet" type="button">取消</button>
+        <button id="confirmPortableConfigDialog" class="button primary" type="submit">确认</button>
       </div>
     </form>
   </dialog>
