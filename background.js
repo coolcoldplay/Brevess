@@ -405,6 +405,12 @@ const portableConfigManager = SciLLM.createPortableConfigManager({
   path: SciLLM.PORTABLE_CONFIG_PATH,
   payloadKind: SciLLM.PORTABLE_CONFIG_PAYLOAD_KIND
 });
+if ([
+  'probe', 'create', 'unlock', 'rotatePassphrase', 'forgetKey', 'backupNow',
+  'scheduleBackup'
+].some(method => typeof portableConfigManager?.[method] !== 'function')) {
+  throw new Error('Portable configuration manager is unavailable');
+}
 portableConfigManager.probe().catch(() => {});
 const providerFetch = SciLLM.createOffscreenFetch(chrome);
 const codexNativeClient = SciLLM.createCodexNativeClient(chrome.runtime);
@@ -418,7 +424,22 @@ const llmRouter = SciLLM.createBackgroundRouter({
   documentStore,
   articleWorkspaceStore,
   tokenUsageStore,
-  directorySync
+  directorySync,
+  portableConfigManager
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes || (
+    !Object.prototype.hasOwnProperty.call(changes, 'sciLlmSettingsV2') &&
+    !Object.prototype.hasOwnProperty.call(changes, SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY)
+  )) return;
+  try {
+    Promise.resolve(portableConfigManager.scheduleBackup(changes)).catch(() => {
+      console.warn('Brevess: portable configuration backup scheduling failed');
+    });
+  } catch (_) {
+    console.warn('Brevess: portable configuration backup scheduling failed');
+  }
 });
 
 const CODEX_REVERSE_CHANNEL_TASKS = new Map([
@@ -559,6 +580,13 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_TOKEN_USAGE_CLEAR',
   'LLM_EXPORT_CORPUS',
   'LLM_DISTILL_RULES',
+  'PORTABLE_CONFIG_PROBE',
+  'PORTABLE_CONFIG_CREATE',
+  'PORTABLE_CONFIG_UNLOCK',
+  'PORTABLE_CONFIG_ROTATE_PASSPHRASE',
+  'PORTABLE_CONFIG_FORGET_KEY',
+  'PORTABLE_CONFIG_BACKUP_NOW',
+  'PORTABLE_CONFIG_STATUS',
   'USER_DATA_SYNC_STATUS',
   'USER_DATA_SYNC_NOW',
   'USER_DATA_REBUILD_INDEX',

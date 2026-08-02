@@ -87,7 +87,11 @@
       'CODEX_NOT_INSTALLED', 'CODEX_NOT_AUTHENTICATED',
       'CODEX_BRIDGE_UNAVAILABLE', 'CODEX_PROVIDER_REJECTED'
     ]);
-    const code = allowedCodes.has(error?.code) ? error.code : 'INTERNAL_ERROR';
+    const portableConfigCode = /^PORTABLE_CONFIG_[A-Z0-9_]+$/u.test(String(error?.code || ''))
+      ? String(error.code) : '';
+    const code = allowedCodes.has(error?.code)
+      ? error.code
+      : portableConfigCode || 'INTERNAL_ERROR';
     const messages = {
       INVALID_SETTINGS: 'Provider settings are incomplete or invalid',
       AUTH_INVALID: 'API authentication failed',
@@ -140,8 +144,10 @@
       INVALID_MIGRATION_DOCUMENTS: 'The migration document records are invalid.',
       INVALID_MIGRATION_FEEDBACK: 'The migration feedback records are invalid.',
       MIGRATION_BUNDLE_TOO_LARGE: 'The migration file is too large.',
+      PORTABLE_CONFIG_FAILED: 'Portable configuration request failed.',
       INTERNAL_ERROR: 'Unable to complete the request'
     };
+    if (portableConfigCode) messages[portableConfigCode] = messages.PORTABLE_CONFIG_FAILED;
     const result = {
       code,
       message: messages[code],
@@ -179,6 +185,15 @@
       result.diagnosticMessage = diagnosticMessage;
     }
     return result;
+  }
+
+  function safePortableConfigError(error) {
+    const code = /^PORTABLE_CONFIG_[A-Z0-9_]+$/u.test(String(error?.code || ''))
+      ? String(error.code) : 'PORTABLE_CONFIG_FAILED';
+    return Object.assign(new Error(code), {
+      code,
+      retryable: error?.retryable === true
+    });
   }
 
   async function testAdapterWithRetry(adapter, request, maxAttempts = 2) {
@@ -230,6 +245,30 @@
     return normalized;
   }
 
+  function portableConfigStatus(value = {}) {
+    return {
+      state: String(value?.state || 'unknown'),
+      revision: Math.max(0, Number(value?.revision) || 0),
+      updatedAt: String(value?.updatedAt || ''),
+      pending: value?.pending === true,
+      lastError: String(value?.lastError || '')
+    };
+  }
+
+  function createDisabledPortableConfigManager() {
+    const status = () => portableConfigStatus({ state: 'disabled' });
+    return Object.freeze({
+      probe: status,
+      create: status,
+      unlock: status,
+      rotatePassphrase: status,
+      forgetKey: status,
+      backupNow: status,
+      status,
+      publicStatus: status
+    });
+  }
+
   function createBackgroundRouter({
     storageArea,
     sessionStorageArea,
@@ -241,12 +280,20 @@
     articleWorkspaceStore = null,
     tokenUsageStore = null,
     directorySync = null,
+    portableConfigManager = createDisabledPortableConfigManager(),
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay))
   }) {
     let memorySessionCategories = [];
     const documentIdsByHash = new Map();
     let documentMutationTail = Promise.resolve();
     const operationRegistry = shared.createOperationRegistry?.();
+
+    async function currentPortableConfigStatus() {
+      const status = typeof portableConfigManager?.status === 'function'
+        ? await portableConfigManager.status()
+        : await portableConfigManager?.publicStatus?.();
+      return portableConfigStatus(status);
+    }
 
     function operationFor(message) {
       return operationRegistry?.getOrCreate(message?.operationId) || null;
@@ -3242,9 +3289,47 @@
         return { archive, applied, permission: result.permission, relativePath };
       }
 
+      if (message.type === 'PORTABLE_CONFIG_PROBE') {
+        return portableConfigStatus(await portableConfigManager.probe());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_CREATE') {
+        return portableConfigStatus(await portableConfigManager.create(
+          String(message.passphrase || '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_UNLOCK') {
+        return portableConfigStatus(await portableConfigManager.unlock(
+          String(message.passphrase || '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_ROTATE_PASSPHRASE') {
+        return portableConfigStatus(await portableConfigManager.rotatePassphrase(
+          String(message.currentPassphrase || ''),
+          String(message.newPassphrase || '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_FORGET_KEY') {
+        return portableConfigStatus(await portableConfigManager.forgetKey());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_BACKUP_NOW') {
+        return portableConfigStatus(await portableConfigManager.backupNow());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_STATUS') {
+        return currentPortableConfigStatus();
+      }
+
       if (message.type === 'USER_DATA_SYNC_STATUS') {
         requireDirectorySync('status');
-        return directorySync.status();
+        const [directoryStatus, portableConfig] = await Promise.all([
+          directorySync.status(), currentPortableConfigStatus()
+        ]);
+        return { ...directoryStatus, portableConfig };
       }
 
       if (message.type === 'USER_DATA_SYNC_NOW') {
@@ -4293,7 +4378,10 @@
       try {
         return { success: true, data: await handleUnsafe(message || {}, context) };
       } catch (error) {
-        return { success: false, error: safeError(error) };
+        const safe = String(message?.type || '').startsWith('PORTABLE_CONFIG_')
+          ? safePortableConfigError(error)
+          : error;
+        return { success: false, error: safeError(safe) };
       }
     }
 

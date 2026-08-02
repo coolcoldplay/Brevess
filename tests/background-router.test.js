@@ -4876,6 +4876,117 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   );
 });
 
+test('routes portable configuration commands once, maps passphrases, and exposes only public status', async () => {
+  const calls = [];
+  const publicStatus = {
+    state: 'ready', revision: 7, updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: false, lastError: '', backupId: 'must-not-leak', salt: 'must-not-leak'
+  };
+  const portableConfigManager = {
+    probe: async () => { calls.push(['probe']); return publicStatus; },
+    create: async passphrase => { calls.push(['create', passphrase]); return publicStatus; },
+    unlock: async passphrase => { calls.push(['unlock', passphrase]); return publicStatus; },
+    rotatePassphrase: async (current, next) => {
+      calls.push(['rotatePassphrase', current, next]);
+      return publicStatus;
+    },
+    forgetKey: async () => { calls.push(['forgetKey']); return publicStatus; },
+    backupNow: async () => { calls.push(['backupNow']); return publicStatus; },
+    status: () => publicStatus
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager,
+    fetchImpl: async () => jsonResponse({})
+  });
+  const commands = [
+    [{ type: 'PORTABLE_CONFIG_PROBE' }, ['probe']],
+    [{ type: 'PORTABLE_CONFIG_CREATE', passphrase: 123 }, ['create', '123']],
+    [{ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: 'unlock-secret' }, ['unlock', 'unlock-secret']],
+    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: 'old-secret', newPassphrase: 'new-secret' }, ['rotatePassphrase', 'old-secret', 'new-secret']],
+    [{ type: 'PORTABLE_CONFIG_FORGET_KEY' }, ['forgetKey']],
+    [{ type: 'PORTABLE_CONFIG_BACKUP_NOW' }, ['backupNow']],
+    [{ type: 'PORTABLE_CONFIG_STATUS' }, []]
+  ];
+
+  for (const [message, expectedCall] of commands) {
+    const response = await router.handle(message);
+    assert.equal(response.success, true, message.type);
+    assert.deepEqual(response.data, {
+      state: 'ready', revision: 7, updatedAt: '2026-08-03T00:00:00.000Z',
+      pending: false, lastError: ''
+    });
+    if (expectedCall.length) assert.deepEqual(calls.at(-1), expectedCall);
+  }
+  assert.equal(calls.length, 6);
+});
+
+test('portable configuration command failures never echo a passphrase and disabled routers are explicit', async () => {
+  const secret = 'portable-route-passphrase-secret';
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    portableConfigManager: {
+      unlock: async () => { throw new Error(`unlock failed: ${secret}`); },
+      probe: async () => ({}), create: async () => ({}), rotatePassphrase: async () => ({}),
+      forgetKey: async () => ({}), backupNow: async () => ({}), status: () => ({})
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  const failed = await router.handle({ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: secret });
+  assert.equal(failed.success, false);
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret));
+
+  const disabled = createBackgroundRouter({
+    storageArea: createMemoryStorage(), fetchImpl: async () => jsonResponse({})
+  });
+  const response = await disabled.handle({ type: 'PORTABLE_CONFIG_BACKUP_NOW' });
+  assert.deepEqual(response, {
+    success: true,
+    data: { state: 'disabled', revision: 0, updatedAt: '', pending: false, lastError: '' }
+  });
+});
+
+test('user-data status includes a strict portable configuration status whitelist', async () => {
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager: {
+      status: () => ({
+        state: 'locked', revision: 4, updatedAt: '2026-08-03T00:00:00.000Z',
+        pending: true, lastError: 'PORTABLE_CONFIG_LOCKED', backupId: 'private',
+        salt: 'private', iterations: 999, keyBytes: 'private', payload: 'private',
+        passphrase: 'private', ciphertext: 'private'
+      })
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  const response = await router.handle({ type: 'USER_DATA_SYNC_STATUS' });
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data.portableConfig, {
+    state: 'locked', revision: 4, updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: true, lastError: 'PORTABLE_CONFIG_LOCKED'
+  });
+  assert.doesNotMatch(JSON.stringify(response.data), /private|iterations|keyBytes|payload|passphrase|ciphertext/);
+});
+
+test('background wires portable manager before its router and schedules only local portable keys', () => {
+  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  for (const type of [
+    'PORTABLE_CONFIG_PROBE', 'PORTABLE_CONFIG_CREATE', 'PORTABLE_CONFIG_UNLOCK',
+    'PORTABLE_CONFIG_ROTATE_PASSPHRASE', 'PORTABLE_CONFIG_FORGET_KEY',
+    'PORTABLE_CONFIG_BACKUP_NOW', 'PORTABLE_CONFIG_STATUS'
+  ]) assert.match(source, new RegExp(`'${type}'`));
+  assert.ok(source.indexOf('const portableConfigManager =') < source.indexOf('const llmRouter ='));
+  assert.match(source, /portableConfigManager\s*\n?\s*\}/);
+  assert.match(source, /chrome\.storage\.onChanged\.addListener\(\(changes, areaName\) =>/);
+  assert.match(source, /areaName !== 'local'/);
+  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(changes, 'sciLlmSettingsV2'\)/);
+  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(changes, SciLLM\.GLOBAL_ABBREVIATION_MEMORY_KEY\)/);
+  assert.match(source, /portableConfigManager\.scheduleBackup\(changes\)/);
+  assert.doesNotMatch(source, /console\.(?:log|warn|error)\([^\n]*(?:passphrase|apiKey|changes)/i);
+});
+
 test('explicit sync drain waits for a concurrently queued directory rerun', async () => {
   const directorySync = createDirectorySyncDouble({
     flush: call => Promise.resolve(call < 3
