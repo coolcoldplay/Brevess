@@ -1478,10 +1478,25 @@ async function forgetPortableConfigKey() {
     let status;
     try {
       status = await callBackground({ type: 'PORTABLE_CONFIG_PROBE' });
-    } catch {
-      status = { state: 'locked', pending: false };
+    } catch (error) {
+      renderPortableConfigStatus({
+        state: 'unavailable', pending: false,
+        lastError: 'PORTABLE_CONFIG_PROBE_FAILED'
+      });
+      showUserDataStatus(
+        '本机密钥已遗忘，但无法确认配置备份状态。请恢复目录授权后重试。',
+        'error'
+      );
+      return;
     }
     renderPortableConfigStatus(status);
+    if (status?.state !== 'locked' || status?.pending === true) {
+      showUserDataStatus(
+        '本机密钥已遗忘，但配置备份状态尚未确认。请检查目录后重试。',
+        'error'
+      );
+      return;
+    }
     showUserDataStatus('本机密钥已遗忘；配置备份现在处于待解锁状态。', 'info');
   } catch (error) {
     showUserDataStatus(portableConfigErrorText(error), 'error');

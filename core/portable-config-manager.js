@@ -568,6 +568,15 @@
       return true;
     }
 
+    function runWhenReady(operation) {
+      return serializeOperation(() => {
+        if (privateState.state !== 'ready' || privateState.pending) {
+          fail('PORTABLE_CONFIG_NOT_READY');
+        }
+        return operation();
+      });
+    }
+
     async function rotatePassphraseNow(currentPassphrase, newPassphrase) {
       let envelope;
       let committed = false;
@@ -665,6 +674,7 @@
       create,
       backupNow,
       scheduleBackup,
+      runWhenReady,
       rotatePassphrase,
       forgetKey,
       dispose

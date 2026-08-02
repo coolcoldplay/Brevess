@@ -46,7 +46,7 @@
     'PORTABLE_CONFIG_KDF_SALT_INVALID', 'PORTABLE_CONFIG_KEY_INVALID',
     'PORTABLE_CONFIG_LOCKED', 'PORTABLE_CONFIG_MANAGER_DISPOSED',
     'PORTABLE_CONFIG_MANAGER_INVALID_DEPENDENCIES', 'PORTABLE_CONFIG_MISSING',
-    'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT',
+    'PORTABLE_CONFIG_NOT_READY', 'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT',
     'PORTABLE_CONFIG_PAYLOAD_GLOBAL_ABBREVIATIONS_INVALID',
     'PORTABLE_CONFIG_PAYLOAD_INVALID', 'PORTABLE_CONFIG_PAYLOAD_KIND_INVALID',
     'PORTABLE_CONFIG_PAYLOAD_SCHEMA_VERSION_INVALID',
@@ -323,6 +323,11 @@
 
   function createDisabledPortableConfigManager() {
     const status = () => portableConfigStatus({ state: 'disabled' });
+    const rejectNotReady = async () => {
+      throw Object.assign(new Error('PORTABLE_CONFIG_NOT_READY'), {
+        code: 'PORTABLE_CONFIG_NOT_READY'
+      });
+    };
     return Object.freeze({
       probe: status,
       create: status,
@@ -330,6 +335,7 @@
       rotatePassphrase: status,
       forgetKey: status,
       backupNow: status,
+      runWhenReady: rejectNotReady,
       status,
       publicStatus: status
     });
@@ -360,6 +366,14 @@
           ? await portableConfigManager.publicStatus()
           : await portableConfigManager?.status?.();
         return portableConfigStatus(status);
+      } catch (error) {
+        throw safePortableConfigError(error);
+      }
+    }
+
+    async function runWithPortableConfigReady(operation) {
+      try {
+        return await portableConfigManager.runWhenReady(operation);
       } catch (error) {
         throw safePortableConfigError(error);
       }
@@ -3404,23 +3418,25 @@
 
       if (message.type === 'USER_DATA_SYNC_NOW') {
         requireDirectorySync('flush');
-        let result = await directorySync.flush(importUserDataAsset);
-        if (message.drain === true) {
-          for (let attempt = 0; attempt < 5 &&
-              result?.permission === 'granted' &&
-              !Number(result?.failed) &&
-              Number(result?.pendingCount) > 0; attempt += 1) {
-            await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
-            result = await directorySync.flush(importUserDataAsset);
+        return runWithPortableConfigReady(async () => {
+          let result = await directorySync.flush(importUserDataAsset);
+          if (message.drain === true) {
+            for (let attempt = 0; attempt < 5 &&
+                result?.permission === 'granted' &&
+                !Number(result?.failed) &&
+                Number(result?.pendingCount) > 0; attempt += 1) {
+              await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
+              result = await directorySync.flush(importUserDataAsset);
+            }
           }
-        }
-        return result;
+          return result;
+        });
       }
 
       if (message.type === 'USER_DATA_REBUILD_INDEX') {
         requireDirectorySync('rebuildIndex');
-        return serializeAllMutations(() =>
-          directorySync.rebuildIndex(importUserDataAsset)
+        return runWithPortableConfigReady(() =>
+          serializeAllMutations(() => directorySync.rebuildIndex(importUserDataAsset))
         );
       }
 

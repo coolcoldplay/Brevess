@@ -407,7 +407,7 @@ const portableConfigManager = SciLLM.createPortableConfigManager({
 });
 if ([
   'probe', 'create', 'unlock', 'rotatePassphrase', 'forgetKey', 'backupNow',
-  'scheduleBackup', 'publicStatus'
+  'scheduleBackup', 'runWhenReady', 'publicStatus'
 ].some(method => typeof portableConfigManager?.[method] !== 'function')) {
   throw new Error('Portable configuration manager is unavailable');
 }

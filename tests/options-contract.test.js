@@ -885,9 +885,10 @@ test('forgetting a portable key reprobes authoritative state and leaves unlock u
   context.render({ state: 'ready', pending: false });
   await context.forget();
   assert.deepEqual(calls, ['PORTABLE_CONFIG_FORGET_KEY', 'PORTABLE_CONFIG_PROBE']);
-  assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
+  assert.equal(context.userDataUi.portableConfigStatus.state, 'unavailable');
   assert.equal(context.userDataUi.portableConfigStatus.pending, false);
-  assert.equal(elements.unlockPortableConfig.disabled, false);
+  assert.equal(elements.unlockPortableConfig.hidden, true);
+  assert.equal(notices.at(-1)?.[1], 'error');
   assert.doesNotMatch(notices.flat().join(' '), /probe-secret/);
 });
 

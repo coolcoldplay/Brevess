@@ -84,6 +84,13 @@ function createDelayedCloneStorage() {
   };
 }
 
+function createReadyPortableConfigManagerDouble() {
+  return {
+    publicStatus: () => ({ state: 'ready', pending: false }),
+    runWhenReady: operation => operation()
+  };
+}
+
 function createDirectorySyncDouble(options = {}) {
   const json = [];
   const text = [];
@@ -4852,6 +4859,7 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   });
   const router = createBackgroundRouter({
     storageArea, documentStore, directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
 
@@ -4877,6 +4885,48 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
     JSON.stringify(bundle.data),
     /sk-bundle-secret|apiKey|providers|authorization|analysisCache|directoryHandle|syncQueue/i
   );
+});
+
+test('manual directory actions use the authoritative portable gate before touching disk', async () => {
+  for (const authoritativeStatus of [
+    { state: 'locked', pending: false },
+    { state: 'ready', pending: true },
+    { state: 'unavailable', pending: false },
+    { state: 'error', pending: false }
+  ]) {
+    const directorySync = createDirectorySyncDouble();
+    let rebuildCalls = 0;
+    directorySync.rebuildIndex = async () => {
+      rebuildCalls += 1;
+      return { imported: 0 };
+    };
+    const portableConfigManager = {
+      publicStatus: () => ({ state: 'ready', pending: false }),
+      async runWhenReady(operation) {
+        if (authoritativeStatus.state !== 'ready' || authoritativeStatus.pending) {
+          throw Object.assign(new Error('private-state-detail'), {
+            code: 'PORTABLE_CONFIG_NOT_READY'
+          });
+        }
+        return operation();
+      }
+    };
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(), directorySync, portableConfigManager,
+      fetchImpl: async () => jsonResponse({})
+    });
+
+    const synced = await router.handle({ type: 'USER_DATA_SYNC_NOW' });
+    const rebuilt = await router.handle({ type: 'USER_DATA_REBUILD_INDEX' });
+
+    assert.equal(synced.success, false, authoritativeStatus.state);
+    assert.equal(synced.error.code, 'PORTABLE_CONFIG_NOT_READY');
+    assert.equal(rebuilt.success, false, authoritativeStatus.state);
+    assert.equal(rebuilt.error.code, 'PORTABLE_CONFIG_NOT_READY');
+    assert.equal(directorySync.flushCalls, 0);
+    assert.equal(rebuildCalls, 0);
+    assert.doesNotMatch(JSON.stringify([synced, rebuilt]), /private-state-detail/);
+  }
 });
 
 test('routes portable configuration commands once, maps passphrases, and exposes only public status', async () => {
@@ -5192,6 +5242,7 @@ test('explicit sync drain waits for a concurrently queued directory rerun', asyn
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(),
     directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
 
@@ -5222,6 +5273,7 @@ test('rebuild shares the document mutation queue so concurrent annotations are p
   };
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(), documentStore, directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
   await documentStore.prepareDocument({

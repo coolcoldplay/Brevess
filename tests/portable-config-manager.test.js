@@ -963,6 +963,41 @@ test('create followed immediately by backup executes in one state queue', async 
   assert.equal(directorySync.disk.revision, 2);
 });
 
+test('runWhenReady checks private portable state inside the serialized operation queue', async () => {
+  const { envelope } = await encryptedFixture();
+  let scheduled = null;
+  const { manager } = managerFixture({
+    disk: envelope,
+    overrides: {
+      setTimeoutRef(callback) { scheduled = callback; return 1; },
+      clearTimeoutRef() {}
+    }
+  });
+  let operationCalls = 0;
+  const operation = async () => {
+    operationCalls += 1;
+    return 'ran';
+  };
+
+  await assert.rejects(
+    manager.runWhenReady(operation),
+    error => error?.code === 'PORTABLE_CONFIG_NOT_READY'
+  );
+  assert.equal(operationCalls, 0);
+
+  await manager.unlock(PASSPHRASE);
+  assert.equal(await manager.runWhenReady(operation), 'ran');
+  assert.equal(operationCalls, 1);
+
+  manager.scheduleBackup({ [SETTINGS_KEY]: { newValue: { changed: true } } });
+  assert.equal(typeof scheduled, 'function');
+  await assert.rejects(
+    manager.runWhenReady(operation),
+    error => error?.code === 'PORTABLE_CONFIG_NOT_READY'
+  );
+  assert.equal(operationCalls, 1);
+});
+
 test('dispose waits for the queue and cancels an automatic backup not yet started', async () => {
   let scheduled = null;
   const { envelope } = await encryptedFixture();
