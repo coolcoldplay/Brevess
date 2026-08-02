@@ -49,7 +49,10 @@ require('../core/task-profile-router.js');
 require('../core/token-budget.js');
 require('../core/article-chat-context-planner.js');
 require('../core/operation-control.js');
-const { createBackgroundRouter } = require('../core/background-router.js');
+const {
+  createBackgroundRouter,
+  createPortableConfigStorageChangeListener
+} = require('../core/background-router.js');
 const { validBlueprint } = require('./helpers/adaptive-fixtures.js');
 
 function createMemoryStorage() {
@@ -4892,7 +4895,7 @@ test('routes portable configuration commands once, maps passphrases, and exposes
     },
     forgetKey: async () => { calls.push(['forgetKey']); return publicStatus; },
     backupNow: async () => { calls.push(['backupNow']); return publicStatus; },
-    status: () => publicStatus
+    publicStatus: () => { calls.push(['publicStatus']); return publicStatus; }
   };
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(),
@@ -4902,12 +4905,13 @@ test('routes portable configuration commands once, maps passphrases, and exposes
   });
   const commands = [
     [{ type: 'PORTABLE_CONFIG_PROBE' }, ['probe']],
-    [{ type: 'PORTABLE_CONFIG_CREATE', passphrase: 123 }, ['create', '123']],
-    [{ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: 'unlock-secret' }, ['unlock', 'unlock-secret']],
-    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: 'old-secret', newPassphrase: 'new-secret' }, ['rotatePassphrase', 'old-secret', 'new-secret']],
+    [{ type: 'PORTABLE_CONFIG_CREATE', passphrase: 0 }, ['create', '0']],
+    [{ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: false }, ['unlock', 'false']],
+    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: 0, newPassphrase: false }, ['rotatePassphrase', '0', 'false']],
+    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: null }, ['rotatePassphrase', '', '']],
     [{ type: 'PORTABLE_CONFIG_FORGET_KEY' }, ['forgetKey']],
     [{ type: 'PORTABLE_CONFIG_BACKUP_NOW' }, ['backupNow']],
-    [{ type: 'PORTABLE_CONFIG_STATUS' }, []]
+    [{ type: 'PORTABLE_CONFIG_STATUS' }, ['publicStatus']]
   ];
 
   for (const [message, expectedCall] of commands) {
@@ -4929,7 +4933,7 @@ test('portable configuration command failures never echo a passphrase and disabl
     portableConfigManager: {
       unlock: async () => { throw new Error(`unlock failed: ${secret}`); },
       probe: async () => ({}), create: async () => ({}), rotatePassphrase: async () => ({}),
-      forgetKey: async () => ({}), backupNow: async () => ({}), status: () => ({})
+      forgetKey: async () => ({}), backupNow: async () => ({}), publicStatus: () => ({})
     },
     fetchImpl: async () => jsonResponse({})
   });
@@ -4952,7 +4956,7 @@ test('user-data status includes a strict portable configuration status whitelist
     storageArea: createMemoryStorage(),
     directorySync: createDirectorySyncDouble(),
     portableConfigManager: {
-      status: () => ({
+      publicStatus: () => ({
         state: 'locked', revision: 4, updatedAt: '2026-08-03T00:00:00.000Z',
         pending: true, lastError: 'PORTABLE_CONFIG_LOCKED', backupId: 'private',
         salt: 'private', iterations: 999, keyBytes: 'private', payload: 'private',
@@ -4979,12 +4983,48 @@ test('background wires portable manager before its router and schedules only loc
   ]) assert.match(source, new RegExp(`'${type}'`));
   assert.ok(source.indexOf('const portableConfigManager =') < source.indexOf('const llmRouter ='));
   assert.match(source, /portableConfigManager\s*\n?\s*\}/);
-  assert.match(source, /chrome\.storage\.onChanged\.addListener\(\(changes, areaName\) =>/);
-  assert.match(source, /areaName !== 'local'/);
-  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(changes, 'sciLlmSettingsV2'\)/);
-  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(changes, SciLLM\.GLOBAL_ABBREVIATION_MEMORY_KEY\)/);
-  assert.match(source, /portableConfigManager\.scheduleBackup\(changes\)/);
+  assert.match(source, /createPortableConfigStorageChangeListener\(\s*portableConfigManager\s*\)/);
+  assert.equal((source.match(/chrome\.storage\.onChanged\.addListener/g) || []).length, 1);
   assert.doesNotMatch(source, /console\.(?:log|warn|error)\([^\n]*(?:passphrase|apiKey|changes)/i);
+});
+
+test('portable storage change listener filters safely, preserves change identity, and warns once without secrets', async () => {
+  const secret = 'portable-storage-listener-secret';
+  const calls = [];
+  const warnings = [];
+  const listener = createPortableConfigStorageChangeListener({
+    scheduleBackup(changes) { calls.push(changes); return { state: 'ready' }; }
+  }, { warn: (...args) => warnings.push(args) });
+  const settingsChange = { sciLlmSettingsV2: { oldValue: {}, newValue: { apiKey: secret } } };
+  const abbreviationChange = { sciGlobalAbbreviationMemoryV1: { oldValue: {}, newValue: {} } };
+  const bothChanges = { ...settingsChange, ...abbreviationChange };
+
+  listener(settingsChange, 'sync');
+  listener({ ignored: { newValue: secret } }, 'local');
+  assert.equal(calls.length, 0);
+  listener(bothChanges, 'local');
+  assert.equal(calls.length, 1);
+  assert.strictEqual(calls[0], bothChanges);
+  assert.deepEqual(warnings, []);
+
+  const syncWarnings = [];
+  createPortableConfigStorageChangeListener({
+    scheduleBackup() { throw new Error(secret); }
+  }, { warn: (...args) => syncWarnings.push(args) })(settingsChange, 'local');
+  assert.deepEqual(syncWarnings, [[
+    'Brevess: portable configuration backup scheduling failed'
+  ]]);
+  assert.doesNotMatch(JSON.stringify(syncWarnings), new RegExp(secret));
+
+  const asyncWarnings = [];
+  createPortableConfigStorageChangeListener({
+    scheduleBackup() { return Promise.reject(new Error(secret)); }
+  }, { warn: (...args) => asyncWarnings.push(args) })(abbreviationChange, 'local');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(asyncWarnings, [[
+    'Brevess: portable configuration backup scheduling failed'
+  ]]);
+  assert.doesNotMatch(JSON.stringify(asyncWarnings), new RegExp(secret));
 });
 
 test('explicit sync drain waits for a concurrently queued directory rerun', async () => {

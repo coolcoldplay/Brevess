@@ -196,6 +196,27 @@
     });
   }
 
+  function createPortableConfigStorageChangeListener(manager, {
+    warn = console.warn
+  } = {}) {
+    const warnSchedulingFailure = () => {
+      try {
+        warn('Brevess: portable configuration backup scheduling failed');
+      } catch (_) {}
+    };
+    return (changes, areaName) => {
+      if (areaName !== 'local' || !changes || (
+        !Object.prototype.hasOwnProperty.call(changes, 'sciLlmSettingsV2') &&
+        !Object.prototype.hasOwnProperty.call(changes, 'sciGlobalAbbreviationMemoryV1')
+      )) return;
+      try {
+        Promise.resolve(manager.scheduleBackup(changes)).catch(warnSchedulingFailure);
+      } catch (_) {
+        warnSchedulingFailure();
+      }
+    };
+  }
+
   async function testAdapterWithRetry(adapter, request, maxAttempts = 2) {
     let attempt = 0;
     while (attempt < maxAttempts) {
@@ -289,9 +310,9 @@
     const operationRegistry = shared.createOperationRegistry?.();
 
     async function currentPortableConfigStatus() {
-      const status = typeof portableConfigManager?.status === 'function'
-        ? await portableConfigManager.status()
-        : await portableConfigManager?.publicStatus?.();
+      const status = typeof portableConfigManager?.publicStatus === 'function'
+        ? await portableConfigManager.publicStatus()
+        : await portableConfigManager?.status?.();
       return portableConfigStatus(status);
     }
 
@@ -3295,20 +3316,20 @@
 
       if (message.type === 'PORTABLE_CONFIG_CREATE') {
         return portableConfigStatus(await portableConfigManager.create(
-          String(message.passphrase || '')
+          String(message.passphrase ?? '')
         ));
       }
 
       if (message.type === 'PORTABLE_CONFIG_UNLOCK') {
         return portableConfigStatus(await portableConfigManager.unlock(
-          String(message.passphrase || '')
+          String(message.passphrase ?? '')
         ));
       }
 
       if (message.type === 'PORTABLE_CONFIG_ROTATE_PASSPHRASE') {
         return portableConfigStatus(await portableConfigManager.rotatePassphrase(
-          String(message.currentPassphrase || ''),
-          String(message.newPassphrase || '')
+          String(message.currentPassphrase ?? ''),
+          String(message.newPassphrase ?? '')
         ));
       }
 
@@ -4388,5 +4409,5 @@
     return { handle };
   }
 
-  return { createBackgroundRouter };
+  return { createBackgroundRouter, createPortableConfigStorageChangeListener };
 });
