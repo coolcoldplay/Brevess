@@ -587,7 +587,7 @@ test('deferred portable activation finishes create and unlock safely before onbo
 
   const created = await run('missing', { state: 'ready' });
   assert.deepEqual(created.events, [
-    ['dialog', 'create'], ['render', 'ready'],
+    ['dialog', 'create'], ['render', 'ready'], ['reload'],
     ['call', 'USER_DATA_SYNC_NOW', true], ['refresh'],
     ['onboarding', 'completed']
   ]);
@@ -622,21 +622,25 @@ test('deferred portable activation finishes create and unlock safely before onbo
   context.refreshSettings = async () => {
     restoreEvents.push(['legacy-reload']);
   };
-  const restoreFailed = await context.activate({
-    currentState: 'locked',
-    openDialog: async () => ({ state: 'ready' }),
-    call: async message => { restoreEvents.push(['call', message.type]); },
-    refreshStatus: async () => { restoreEvents.push(['refresh']); },
-    isOnboardingActive: () => true,
-    markStorageCompleted: async () => { restoreEvents.push(['onboarding']); },
-    renderStatus: () => {},
-    showStatus: (message, type) => restoreNotices.push([message, type]),
-    errorText: () => '无法完成加密配置操作，请稍后重试。'
-  });
-  assert.deepEqual(restoreEvents, [['portable-reload']]);
-  assert.equal(restoreFailed.completed, false);
-  assert.equal(restoreNotices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
-  assert.doesNotMatch(restoreNotices.flat().join(' '), new RegExp(restoreSecret));
+  for (const currentState of ['locked', 'missing']) {
+    restoreEvents.length = 0;
+    restoreNotices.length = 0;
+    const restoreFailed = await context.activate({
+      currentState,
+      openDialog: async () => ({ state: 'ready' }),
+      call: async message => { restoreEvents.push(['call', message.type]); },
+      refreshStatus: async () => { restoreEvents.push(['refresh']); },
+      isOnboardingActive: () => true,
+      markStorageCompleted: async () => { restoreEvents.push(['onboarding']); },
+      renderStatus: () => {},
+      showStatus: (message, type) => restoreNotices.push([message, type]),
+      errorText: () => '无法完成加密配置操作，请稍后重试。'
+    });
+    assert.deepEqual(restoreEvents, [['portable-reload']], currentState);
+    assert.equal(restoreFailed.completed, false);
+    assert.equal(restoreNotices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
+    assert.doesNotMatch(restoreNotices.flat().join(' '), new RegExp(restoreSecret));
+  }
 });
 
 test('portable settings refresh rejects safely and initial unlock stops before sync', async () => {

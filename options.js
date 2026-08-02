@@ -1352,7 +1352,7 @@ async function activatePortableConfigFromStatusCard({
       return { completed: false, mode };
     }
     await finishActivation({
-      restored: mode === 'unlock', call, reloadSettings, refreshStatus,
+      restored: true, call, reloadSettings, refreshStatus,
       isOnboardingActive, markStorageCompleted
     });
     showStatus(
