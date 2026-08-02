@@ -25,9 +25,13 @@ function clone(value) {
 function createStorage(initial = {}) {
   const data = clone(initial);
   const sets = [];
+  let setFailure = null;
   return {
     data,
     sets,
+    failSetWhen(predicate, error = new Error('storage write failed')) {
+      setFailure = { predicate, error };
+    },
     async get(keys) {
       if (keys === null || keys === undefined) return clone(data);
       const selected = Array.isArray(keys) ? keys : [keys];
@@ -36,6 +40,7 @@ function createStorage(initial = {}) {
         .map(key => [key, clone(data[key])]));
     },
     async set(values) {
+      if (setFailure?.predicate(values)) throw setFailure.error;
       sets.push(clone(values));
       Object.assign(data, clone(values));
     }
@@ -53,6 +58,7 @@ function createDirectory(initialValue = null, options = {}) {
     enqueues,
     get flushCalls() { return flushCalls; },
     get disk() { return clone(disk); },
+    replaceDisk(value) { disk = clone(value); },
     async readJson(path) {
       reads.push(path);
       return { permission: 'granted', found: disk !== null, value: clone(disk) };
@@ -539,6 +545,137 @@ test('backupNow with a lost cache key writes nothing and transitions to locked p
   assert.equal(manager.publicStatus().pending, true);
   assert.equal(directorySync.enqueues.length, 0);
 });
+
+test('unlock atomically leaves settings, abbreviations, and cache unchanged when cache persistence fails', async () => {
+  const { envelope } = await encryptedFixture();
+  const initial = {
+    [SETTINGS_KEY]: { local: 'keep' },
+    [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+    [PORTABLE_CONFIG_KEY_CACHE]: {
+      other: codec.toBase64(new Uint8Array(32).fill(6))
+    }
+  };
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    storage: initial
+  });
+  storageArea.failSetWhen(values =>
+    Object.prototype.hasOwnProperty.call(values, PORTABLE_CONFIG_KEY_CACHE));
+
+  await assert.rejects(() => manager.unlock(PASSPHRASE), error =>
+    error.code === 'PORTABLE_CONFIG_UNLOCK_FAILED');
+  assert.deepEqual(storageArea.data, initial);
+  assert.equal(storageArea.sets.length, 0);
+  assert.equal(directorySync.enqueues.length, 0);
+});
+
+test('probe keeps a valid cached key when payload normalization fails', async () => {
+  const { envelope, keyBytes } = await encryptedFixture();
+  const cached = codec.toBase64(keyBytes);
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: 'keep' },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+      [PORTABLE_CONFIG_KEY_CACHE]: { [envelope.backupId]: cached }
+    },
+    overrides: {
+      normalizeSettings() {
+        const error = new Error('normalizer exposed private data');
+        error.code = 'INVALID_SETTINGS';
+        throw error;
+      }
+    }
+  });
+
+  const status = await manager.probe();
+  assert.equal(status.state, 'error');
+  assert.equal(status.lastError, 'PORTABLE_CONFIG_RESTORE_FAILED');
+  assert.equal(storageArea.data[PORTABLE_CONFIG_KEY_CACHE][envelope.backupId], cached);
+  assert.deepEqual(storageArea.data[SETTINGS_KEY], { local: 'keep' });
+  assert.equal(directorySync.enqueues.length, 0);
+});
+
+test('probe keeps a valid cached key and local data when atomic restore storage fails', async () => {
+  const { envelope, keyBytes } = await encryptedFixture();
+  const initial = {
+    [SETTINGS_KEY]: { local: 'keep' },
+    [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+    [PORTABLE_CONFIG_KEY_CACHE]: {
+      [envelope.backupId]: codec.toBase64(keyBytes)
+    }
+  };
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    storage: initial
+  });
+  storageArea.failSetWhen(values =>
+    Object.prototype.hasOwnProperty.call(values, SETTINGS_KEY));
+
+  const status = await manager.probe();
+  assert.equal(status.state, 'error');
+  assert.equal(status.lastError, 'PORTABLE_CONFIG_RESTORE_FAILED');
+  assert.deepEqual(storageArea.data, initial);
+  assert.equal(directorySync.enqueues.length, 0);
+});
+
+test('backupNow removes an authentication-failing 32-byte cached key before any enqueue', async () => {
+  const { envelope } = await encryptedFixture();
+  const other = codec.toBase64(new Uint8Array(32).fill(4));
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+      [PORTABLE_CONFIG_KEY_CACHE]: { other }
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  storageArea.data[PORTABLE_CONFIG_KEY_CACHE][envelope.backupId] =
+    codec.toBase64(new Uint8Array(32).fill(1));
+  directorySync.reads.length = 0;
+
+  await assert.rejects(() => manager.backupNow(), error =>
+    error.code === 'PORTABLE_CONFIG_BACKUP_FAILED');
+  assert.deepEqual(directorySync.reads, [codec.PORTABLE_CONFIG_PATH]);
+  assert.equal(directorySync.enqueues.length, 0);
+  assert.equal(directorySync.flushCalls, 0);
+  assert.deepEqual(storageArea.data[PORTABLE_CONFIG_KEY_CACHE], { other });
+  assert.equal(manager.publicStatus().state, 'locked');
+  assert.equal(manager.publicStatus().pending, true);
+});
+
+for (const [label, mutate] of [
+  ['revision', envelope => { envelope.revision += 1; }],
+  ['salt', envelope => {
+    envelope.encryption.salt = codec.toBase64(new Uint8Array(16).fill(9));
+  }]
+]) {
+  test(`backupNow refuses a directory ${label} change before enqueue and preserves cache`, async () => {
+    const { envelope } = await encryptedFixture({ revision: 20 });
+    const { manager, storageArea, directorySync } = managerFixture({
+      disk: envelope,
+      storage: {
+        [SETTINGS_KEY]: { local: true },
+        [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+      }
+    });
+    await manager.unlock(PASSPHRASE);
+    const cacheBefore = clone(storageArea.data[PORTABLE_CONFIG_KEY_CACHE]);
+    const changed = clone(envelope);
+    mutate(changed);
+    directorySync.replaceDisk(changed);
+    directorySync.reads.length = 0;
+
+    await assert.rejects(() => manager.backupNow(), error =>
+      error.code === 'PORTABLE_CONFIG_BACKUP_FAILED');
+    assert.deepEqual(directorySync.reads, [codec.PORTABLE_CONFIG_PATH]);
+    assert.equal(directorySync.enqueues.length, 0);
+    assert.equal(directorySync.flushCalls, 0);
+    assert.deepEqual(storageArea.data[PORTABLE_CONFIG_KEY_CACHE], cacheBefore);
+    assert.equal(manager.publicStatus().pending, true);
+  });
+}
 
 test('background loads and creates the manager between codec and directory/router wiring', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');

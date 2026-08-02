@@ -129,16 +129,21 @@
       }
     }
 
-    async function cachedKey(backupId) {
-      const cache = await readCache();
-      return decodeCachedKey(cache[backupId]);
-    }
-
     async function updateCache(backupId, keyBytes) {
       const cache = await readCache();
-      delete cache[backupId];
-      if (keyBytes) cache[backupId] = toBase64(keyBytes);
-      await callStorage('set', { [PORTABLE_CONFIG_KEY_CACHE]: cache });
+      const nextCache = cacheWithKey(cache, backupId, keyBytes);
+      await callStorage('set', { [PORTABLE_CONFIG_KEY_CACHE]: nextCache });
+    }
+
+    function cacheWithKey(cache, backupId, keyBytes) {
+      const nextCache = { ...cache };
+      delete nextCache[backupId];
+      if (keyBytes) nextCache[backupId] = toBase64(keyBytes);
+      return nextCache;
+    }
+
+    async function removeCachedKey(backupId) {
+      await updateCache(backupId, null);
     }
 
     async function readEnvelope() {
@@ -156,12 +161,13 @@
       return { settings, globalAbbreviations };
     }
 
-    async function restorePayload(payload) {
-      const normalized = normalizedPayload(payload);
-      await callStorage('set', {
+    async function commitRestoredPayload(normalized, cache) {
+      const values = {
         [settingsKey]: normalized.settings,
         [abbreviationKey]: normalized.globalAbbreviations
-      });
+      };
+      if (cache) values[PORTABLE_CONFIG_KEY_CACHE] = cache;
+      await callStorage('set', values);
       suppressedRestoreSnapshot = normalized;
       return normalized;
     }
@@ -205,28 +211,56 @@
         privateState.pending = false;
         return publicStatus();
       }
-      const keyBytes = await cachedKey(envelope.backupId);
+      let cache;
+      try {
+        cache = await readCache();
+      } catch (_) {
+        privateState.state = 'error';
+        privateState.lastError = 'PORTABLE_CONFIG_PROBE_FAILED';
+        return publicStatus();
+      }
+      const keyBytes = decodeCachedKey(cache[envelope.backupId]);
       if (!keyBytes) {
-        const cache = await readCache();
         if (Object.prototype.hasOwnProperty.call(cache, envelope.backupId)) {
-          await updateCache(envelope.backupId, null);
           privateState.lastError = 'PORTABLE_CONFIG_CACHED_KEY_INVALID';
         }
         privateState.state = 'locked';
         privateState.pending = false;
         return publicStatus();
       }
+      let payload;
       try {
-        const { payload } = await decryptPortableConfig(envelope, { keyBytes, cryptoRef });
-        await restorePayload(payload);
+        ({ payload } = await decryptPortableConfig(envelope, { keyBytes, cryptoRef }));
+      } catch (error) {
+        if (error?.code !== 'PORTABLE_CONFIG_DECRYPT_FAILED') {
+          privateState.state = 'error';
+          privateState.pending = false;
+          privateState.lastError = 'PORTABLE_CONFIG_PROBE_FAILED';
+          return publicStatus();
+        }
+        try {
+          await removeCachedKey(envelope.backupId);
+        } catch (_) {
+          privateState.state = 'error';
+          privateState.pending = false;
+          privateState.lastError = 'PORTABLE_CONFIG_PROBE_FAILED';
+          return publicStatus();
+        }
+        privateState.state = 'locked';
+        privateState.pending = false;
+        privateState.lastError = 'PORTABLE_CONFIG_CACHED_KEY_REJECTED';
+        return publicStatus();
+      }
+      try {
+        const normalized = normalizedPayload(payload);
+        await commitRestoredPayload(normalized);
         privateState.state = 'ready';
         privateState.pending = false;
         privateState.lastError = '';
       } catch (_) {
-        await updateCache(envelope.backupId, null);
-        privateState.state = 'locked';
+        privateState.state = 'error';
         privateState.pending = false;
-        privateState.lastError = 'PORTABLE_CONFIG_CACHED_KEY_REJECTED';
+        privateState.lastError = 'PORTABLE_CONFIG_RESTORE_FAILED';
       }
       return publicStatus();
     }
@@ -242,8 +276,10 @@
           cryptoRef
         });
         const { payload } = await decryptPortableConfig(envelope, { keyBytes, cryptoRef });
-        await restorePayload(payload);
-        await updateCache(envelope.backupId, keyBytes);
+        const normalized = normalizedPayload(payload);
+        const cache = await readCache();
+        const nextCache = cacheWithKey(cache, envelope.backupId, keyBytes);
+        await commitRestoredPayload(normalized, nextCache);
         privateState.state = 'ready';
         privateState.pending = false;
         privateState.lastError = '';
@@ -349,29 +385,62 @@
         privateState.lastError = 'PORTABLE_CONFIG_LOCKED';
         fail('PORTABLE_CONFIG_LOCKED');
       }
-      const keyBytes = await cachedKey(privateState.backupId);
+      let cache;
+      try {
+        cache = await readCache();
+      } catch (_) {
+        privateState.state = 'error';
+        privateState.pending = true;
+        privateState.lastError = 'PORTABLE_CONFIG_BACKUP_FAILED';
+        fail('PORTABLE_CONFIG_BACKUP_FAILED');
+      }
+      const keyBytes = decodeCachedKey(cache[privateState.backupId]);
       if (!keyBytes) {
-        const cache = await readCache();
-        if (Object.prototype.hasOwnProperty.call(cache, privateState.backupId)) {
-          await updateCache(privateState.backupId, null);
-        }
         privateState.state = 'locked';
         privateState.pending = true;
         privateState.lastError = 'PORTABLE_CONFIG_LOCKED';
         fail('PORTABLE_CONFIG_LOCKED');
       }
-      const exportedAt = timestamp();
       privateState.pending = true;
       privateState.lastError = '';
+      let currentEnvelope;
+      try {
+        const current = await directorySync.readJson(path);
+        if (!current?.found) fail('PORTABLE_CONFIG_BACKUP_SOURCE_MISSING');
+        currentEnvelope = validatePortableEnvelope(current.value);
+        if (currentEnvelope.backupId !== privateState.backupId ||
+            currentEnvelope.revision !== privateState.revision ||
+            currentEnvelope.encryption.salt !== privateState.salt ||
+            currentEnvelope.encryption.iterations !== privateState.iterations) {
+          fail('PORTABLE_CONFIG_BACKUP_DIVERGED');
+        }
+        try {
+          await decryptPortableConfig(currentEnvelope, { keyBytes, cryptoRef });
+        } catch (error) {
+          if (error?.code !== 'PORTABLE_CONFIG_DECRYPT_FAILED') throw error;
+          await removeCachedKey(privateState.backupId);
+          privateState.state = 'locked';
+          privateState.lastError = 'PORTABLE_CONFIG_CACHED_KEY_REJECTED';
+          fail('PORTABLE_CONFIG_BACKUP_AUTH_FAILED');
+        }
+      } catch (error) {
+        if (error?.code !== 'PORTABLE_CONFIG_BACKUP_AUTH_FAILED') {
+          privateState.state = 'error';
+          privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_BACKUP_FAILED');
+        }
+        privateState.pending = true;
+        fail('PORTABLE_CONFIG_BACKUP_FAILED');
+      }
+      const exportedAt = timestamp();
       try {
         const payload = await loadPayload(exportedAt);
         const envelope = await encryptPortableConfig(payload, {
           keyBytes,
-          salt: privateState.salt,
-          backupId: privateState.backupId,
-          revision: privateState.revision + 1,
+          salt: currentEnvelope.encryption.salt,
+          backupId: currentEnvelope.backupId,
+          revision: currentEnvelope.revision + 1,
           now: exportedAt,
-          iterations: privateState.iterations,
+          iterations: currentEnvelope.encryption.iterations,
           cryptoRef
         });
         await writeEnvelope(envelope);
