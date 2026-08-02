@@ -59,6 +59,7 @@ importScripts(
   'core/token-usage-store.js',
   'core/document-store.js',
   'core/portable-config.js',
+  'core/portable-config-manager.js',
   'core/directory-sync.js',
   'core/background-router.js'
 );
@@ -370,6 +371,36 @@ const directorySync = SciLLM.createDirectorySync({
   queueStore: SciLLM.createIndexedDbSyncQueue(indexedDB),
   sourceId: 'extension'
 });
+const portableConfigManager = SciLLM.createPortableConfigManager({
+  directorySync,
+  storageArea: chrome.storage.local,
+  settingsKey: 'sciLlmSettingsV2',
+  abbreviationKey: SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY,
+  derivePortableConfigKey: SciLLM.derivePortableConfigKey,
+  encryptPortableConfig: SciLLM.encryptPortableConfig,
+  decryptPortableConfig: SciLLM.decryptPortableConfig,
+  validatePortablePayload: SciLLM.validatePortablePayload,
+  validatePortableEnvelope: SciLLM.validatePortableEnvelope,
+  toBase64: SciLLM.toBase64,
+  fromBase64: SciLLM.fromBase64,
+  normalizeSettings: SciLLM.mergeSettings,
+  normalizeAbbreviations: SciLLM.normalizeGlobalAbbreviationMemory,
+  loadSettings: SciLLM.loadSettings,
+  loadGlobalAbbreviations: async storageArea => {
+    const key = SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY;
+    const stored = await storageArea.get(key);
+    return SciLLM.normalizeGlobalAbbreviationMemory(stored?.[key]);
+  },
+  extensionVersion: chrome.runtime.getManifest().version,
+  now: () => new Date().toISOString(),
+  randomId: () => crypto.randomUUID(),
+  cryptoRef: crypto,
+  iterations: SciLLM.PORTABLE_CONFIG_KDF_ITERATIONS,
+  importer: async () => ({ imported: false }),
+  path: SciLLM.PORTABLE_CONFIG_PATH,
+  payloadKind: SciLLM.PORTABLE_CONFIG_PAYLOAD_KIND
+});
+portableConfigManager.probe().catch(() => {});
 const providerFetch = SciLLM.createOffscreenFetch(chrome);
 const codexNativeClient = SciLLM.createCodexNativeClient(chrome.runtime);
 const llmRouter = SciLLM.createBackgroundRouter({
