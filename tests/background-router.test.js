@@ -5060,6 +5060,70 @@ test('portable status reads never echo manager failures, whether synchronous or 
   }
 });
 
+test('portable status snapshots accessor fields once before sanitizing them', async () => {
+  const secret = 'portable-status-accessor-secret';
+  const validStatus = {
+    state: 'locked',
+    revision: 7,
+    updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: true,
+    lastError: 'PORTABLE_CONFIG_LOCKED'
+  };
+  const fallbackStatus = {
+    state: 'unknown', revision: 0, updatedAt: '', pending: false,
+    lastError: 'PORTABLE_CONFIG_FAILED'
+  };
+  for (const firstValues of [validStatus, {
+    state: secret, revision: secret, updatedAt: secret, pending: secret, lastError: secret
+  }]) {
+    for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+      const counts = Object.fromEntries(Object.keys(validStatus).map(key => [key, 0]));
+      const status = new Proxy({}, {
+        get(target, property) {
+          if (!(property in counts)) return undefined;
+          counts[property] += 1;
+          return counts[property] === 1 ? firstValues[property] : secret;
+        }
+      });
+      const router = createBackgroundRouter({
+        storageArea: createMemoryStorage(),
+        directorySync: createDirectorySyncDouble(),
+        portableConfigManager: { publicStatus: () => status },
+        fetchImpl: async () => jsonResponse({})
+      });
+      const response = await router.handle({ type });
+      const publicStatus = type === 'PORTABLE_CONFIG_STATUS'
+        ? response.data : response.data.portableConfig;
+      assert.equal(response.success, true, type);
+      assert.deepEqual(publicStatus, firstValues === validStatus ? validStatus : fallbackStatus, type);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+      assert.deepEqual(counts, {
+        state: 1, revision: 1, updatedAt: 1, pending: 1, lastError: 1
+      });
+    }
+  }
+});
+
+test('portable status getter failures are converted to fixed safe errors', async () => {
+  const secret = 'portable-status-getter-secret';
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager: {
+      publicStatus: () => new Proxy({}, {
+        get() { throw new Error(secret); }
+      })
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+    const response = await router.handle({ type });
+    assert.equal(response.success, false, type);
+    assert.equal(response.error.code, 'PORTABLE_CONFIG_FAILED', type);
+    assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+  }
+});
+
 test('background wires portable manager before its router and schedules only local portable keys', () => {
   const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
   for (const type of [

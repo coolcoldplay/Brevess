@@ -298,23 +298,26 @@
 
   function portableConfigStatus(value) {
     const status = isPlainObject(value) ? value : {};
+    const state = status.state;
+    const revision = status.revision;
+    const updatedAtValue = status.updatedAt;
+    const pending = status.pending;
+    const lastError = status.lastError;
     const allowedStates = new Set([
       'unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled'
     ]);
-    const updatedAt = typeof status.updatedAt === 'string' && status.updatedAt.length <= 80 &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(status.updatedAt) &&
-      Number.isFinite(Date.parse(status.updatedAt))
-      ? new Date(status.updatedAt).toISOString()
+    const updatedAt = typeof updatedAtValue === 'string' && updatedAtValue.length <= 80 &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(updatedAtValue) &&
+      Number.isFinite(Date.parse(updatedAtValue))
+      ? new Date(updatedAtValue).toISOString()
       : '';
     return {
-      state: typeof status.state === 'string' && allowedStates.has(status.state)
-        ? status.state : 'unknown',
-      revision: Number.isSafeInteger(status.revision) && status.revision >= 0
-        ? status.revision : 0,
+      state: typeof state === 'string' && allowedStates.has(state) ? state : 'unknown',
+      revision: Number.isSafeInteger(revision) && revision >= 0 ? revision : 0,
       updatedAt,
-      pending: status.pending === true,
-      lastError: typeof status.lastError === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(status.lastError)
-        ? status.lastError : status.lastError ? 'PORTABLE_CONFIG_FAILED' : ''
+      pending: pending === true,
+      lastError: typeof lastError === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(lastError)
+        ? lastError : lastError ? 'PORTABLE_CONFIG_FAILED' : ''
     };
   }
 
