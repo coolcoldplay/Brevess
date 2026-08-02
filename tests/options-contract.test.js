@@ -472,8 +472,11 @@ test('portable directory preparation probes before any drained sync and gates ev
   assert.doesNotMatch(chooseSource.slice(0, prepareIndex), /USER_DATA_SYNC_NOW/);
   const start = script.indexOf('async function preparePortableConfigForDirectory(');
   const end = script.indexOf('\n}', start) + 2;
+  const activationStart = script.indexOf('// Portable config activation: start.');
+  const activationEnd = script.indexOf('// Portable config activation: end.');
   assert.ok(start >= 0 && end > start);
-  const source = script.slice(start, end);
+  assert.ok(activationStart >= 0 && activationEnd > activationStart);
+  const source = `${script.slice(activationStart, activationEnd)}\n${script.slice(start, end)}`;
 
   async function run(probeState, dialogResult) {
     const events = [];
@@ -490,6 +493,9 @@ test('portable directory preparation probes before any drained sync and gates ev
         return dialogResult;
       },
       reloadSettings: async () => { events.push(['reload', 'reload']); },
+      refreshStatus: async () => { events.push(['refresh', 'status']); },
+      isOnboardingActive: () => true,
+      markStorageCompleted: async () => { events.push(['onboarding', 'completed']); },
       renderStatus: status => { events.push(['render', status?.state]); }
     });
     return { events, result };
@@ -497,20 +503,21 @@ test('portable directory preparation probes before any drained sync and gates ev
 
   const cached = await run('ready');
   assert.deepEqual(cached.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW'
+    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW', 'status',
+    'completed'
   ]);
-  assert.equal(cached.events.at(-1)[2], true);
+  assert.equal(cached.events.find(event => event[1] === 'USER_DATA_SYNC_NOW')[2], true);
 
   const created = await run('missing', { state: 'ready' });
   assert.deepEqual(created.events.map(event => event[1]), [
     'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready',
-    'USER_DATA_SYNC_NOW'
+    'USER_DATA_SYNC_NOW', 'status', 'completed'
   ]);
 
   const unlocked = await run('locked', { state: 'ready' });
   assert.deepEqual(unlocked.events.map(event => event[1]), [
     'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload',
-    'USER_DATA_SYNC_NOW'
+    'USER_DATA_SYNC_NOW', 'status', 'completed'
   ]);
 
   for (const [state, dialogResult] of [
@@ -525,6 +532,71 @@ test('portable directory preparation probes before any drained sync and gates ev
     );
     assert.equal(blocked.result.ready, false);
   }
+});
+
+test('deferred portable activation finishes create and unlock safely before onboarding completion', async () => {
+  const script = read('options.js');
+  const start = script.indexOf('// Portable config activation: start.');
+  const end = script.indexOf('// Portable config activation: end.');
+  assert.ok(start >= 0 && end > start);
+  const portableFlow = script.slice(start, script.indexOf('async function syncUserDataNow('));
+  assert.doesNotMatch(portableFlow, /friendlyError\(|error\.message/);
+  const context = { Error };
+  vm.runInNewContext(`${script.slice(start, end)}\n` +
+    'globalThis.activate = activatePortableConfigFromStatusCard;', context);
+
+  async function run(currentState, dialogResult, { failSync = false } = {}) {
+    const events = [];
+    const notices = [];
+    const secret = 'secret-must-not-be-rendered';
+    const result = await context.activate({
+      currentState,
+      openDialog: async mode => {
+        events.push(['dialog', mode]);
+        return dialogResult;
+      },
+      call: async message => {
+        events.push(['call', message.type, message.drain]);
+        if (failSync) throw Object.assign(new Error(secret), { code: 'UNKNOWN_FAILURE' });
+        return { permission: 'granted' };
+      },
+      reloadSettings: async () => { events.push(['reload']); },
+      refreshStatus: async () => { events.push(['refresh']); },
+      isOnboardingActive: () => true,
+      markStorageCompleted: async () => { events.push(['onboarding', 'completed']); },
+      renderStatus: status => { events.push(['render', status?.state]); },
+      showStatus: (message, type) => notices.push([message, type]),
+      errorText: () => '无法完成加密配置操作，请稍后重试。'
+    });
+    return { events, notices, result, secret };
+  }
+
+  const created = await run('missing', { state: 'ready' });
+  assert.deepEqual(created.events, [
+    ['dialog', 'create'], ['render', 'ready'],
+    ['call', 'USER_DATA_SYNC_NOW', true], ['refresh'],
+    ['onboarding', 'completed']
+  ]);
+  assert.equal(created.result.completed, true);
+
+  const unlocked = await run('locked', { state: 'ready' });
+  assert.deepEqual(unlocked.events, [
+    ['dialog', 'unlock'], ['render', 'ready'], ['reload'],
+    ['call', 'USER_DATA_SYNC_NOW', true], ['refresh'],
+    ['onboarding', 'completed']
+  ]);
+  assert.equal(unlocked.result.completed, true);
+
+  const cancelled = await run('locked', { cancelled: true });
+  assert.deepEqual(cancelled.events, [['dialog', 'unlock']]);
+  assert.equal(cancelled.result.cancelled, true);
+
+  const failed = await run('missing', { state: 'ready' }, { failSync: true });
+  assert.equal(failed.events.some(event => event[0] === 'onboarding'), false);
+  assert.equal(failed.events.some(event => event[0] === 'refresh'), false);
+  assert.equal(failed.result.completed, false);
+  assert.equal(failed.notices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(failed.notices.flat().join(' '), new RegExp(failed.secret));
 });
 
 test('portable passphrase mode helpers validate and map only the intended background fields', () => {
@@ -597,8 +669,184 @@ test('portable public status renderer ignores hostile private fields and rejects
   assert.doesNotMatch(Object.values(elements).map(item => item.textContent).join(' '), /private-/);
 });
 
-test('portable dialog clears secrets, blocks duplicate submits, and never persists or logs passphrases', () => {
+test('portable dialog controller maps modes, deduplicates submits, and clears every secret path', async () => {
   const script = read('options.js');
+  const helpersStart = script.indexOf('// Portable config dialog helpers: start.');
+  const helpersEnd = script.indexOf('// Portable config dialog helpers: end.');
+  const controllerStart = script.indexOf('// Portable config dialog controller: start.');
+  const controllerEnd = script.indexOf('// Portable config dialog controller: end.');
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(controllerStart >= 0 && controllerEnd > controllerStart);
+
+  function createHarness() {
+    const calls = [];
+    const rendered = [];
+    const storageWrites = [];
+    const consoleWrites = [];
+    let settleBackground = null;
+    const controls = [];
+    const makeElement = value => ({
+      value, textContent: '', hidden: false, disabled: false,
+      autocomplete: '', focus() {}
+    });
+    const elements = {
+      portableConfigCurrentPassphrase: makeElement(''),
+      portableConfigPassphrase: makeElement(''),
+      portableConfigPassphraseConfirm: makeElement(''),
+      portableConfigDialogError: makeElement(''),
+      portableConfigDialogTitle: makeElement(''),
+      portableConfigDialogDescription: makeElement(''),
+      portableConfigPassphraseLabel: makeElement(''),
+      confirmPortableConfigDialog: makeElement(''),
+      portableConfigCurrentPassphraseField: makeElement(''),
+      portableConfigPassphraseConfirmField: makeElement('')
+    };
+    controls.push(
+      elements.portableConfigCurrentPassphrase,
+      elements.portableConfigPassphrase,
+      elements.portableConfigPassphraseConfirm,
+      elements.confirmPortableConfigDialog,
+      makeElement('')
+    );
+    const attributes = new Map();
+    const dialog = {
+      open: false,
+      showModal() { this.open = true; },
+      close() {
+        this.open = false;
+        context.clearSecrets();
+      },
+      querySelectorAll() { return controls; },
+      setAttribute(name, value) { attributes.set(name, value); },
+      removeAttribute(name) { attributes.delete(name); }
+    };
+    elements.portableConfigDialog = dialog;
+    const context = {
+      document: { getElementById: id => elements[id] },
+      portableConfigUi: {
+        mode: '', submitting: false, dialogPromise: null, resolveDialog: null
+      },
+      callBackground(message) {
+        calls.push(structuredClone(message));
+        return new Promise((resolve, reject) => { settleBackground = { resolve, reject }; });
+      },
+      normalizePortableConfigStatus(status) {
+        return {
+          state: status?.state === 'ready' ? 'ready' : 'unknown',
+          revision: Number.isSafeInteger(status?.revision) ? status.revision : null,
+          updatedAt: '', pending: false, lastError: ''
+        };
+      },
+      renderPortableConfigStatus(status) { rendered.push(structuredClone(status)); },
+      localStorage: {
+        setItem(...args) { storageWrites.push(['local', ...args]); }
+      },
+      sessionStorage: {
+        setItem(...args) { storageWrites.push(['session', ...args]); }
+      },
+      console: Object.fromEntries(['log', 'info', 'warn', 'error'].map(method => [
+        method, (...args) => consoleWrites.push([method, ...args])
+      ])),
+      Error, Promise, Set, Object, Number, String
+    };
+    const source = `${script.slice(helpersStart, helpersEnd)}\n` +
+      `${script.slice(controllerStart, controllerEnd)}\n` +
+      'globalThis.openDialog = openPortableConfigDialog;' +
+      'globalThis.submitDialog = submitPortableConfigDialog;' +
+      'globalThis.cancelDialog = cancelPortableConfigDialog;' +
+      'globalThis.clearSecrets = clearPortableConfigDialogSecrets;';
+    vm.runInNewContext(source, context);
+    return {
+      context, elements, controls, attributes, calls, rendered,
+      storageWrites, consoleWrites,
+      settle(status) { settleBackground.resolve(status); },
+      fail(error) { settleBackground.reject(error); }
+    };
+  }
+
+  const modes = [
+    ['create', '', 'new-secret-1', 'new-secret-1', {
+      type: 'PORTABLE_CONFIG_CREATE', passphrase: 'new-secret-1'
+    }],
+    ['unlock', '', 'old-secret-1', '', {
+      type: 'PORTABLE_CONFIG_UNLOCK', passphrase: 'old-secret-1'
+    }],
+    ['rotate', 'old-secret-1', 'new-secret-1', 'new-secret-1', {
+      type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE',
+      currentPassphrase: 'old-secret-1', newPassphrase: 'new-secret-1'
+    }]
+  ];
+  for (const [mode, current, passphrase, confirmation, expected] of modes) {
+    const harness = createHarness();
+    const firstOpen = harness.context.openDialog(mode);
+    const secondOpen = harness.context.openDialog(mode);
+    assert.equal(firstOpen, secondOpen);
+    harness.elements.portableConfigCurrentPassphrase.value = current;
+    harness.elements.portableConfigPassphrase.value = passphrase;
+    harness.elements.portableConfigPassphraseConfirm.value = confirmation;
+    const firstSubmit = harness.context.submitDialog({ preventDefault() {} });
+    const secondSubmit = harness.context.submitDialog({ preventDefault() {} });
+    await Promise.resolve();
+    assert.equal(harness.calls.length, 1);
+    assert.deepEqual(harness.calls[0], expected);
+    assert.equal(harness.attributes.get('aria-busy'), 'true');
+    assert.equal(harness.controls.every(control => control.disabled), true);
+    harness.settle({ state: 'ready', revision: 7, secret: 'must-not-echo' });
+    await Promise.all([firstSubmit, secondSubmit]);
+    const publicStatus = await firstOpen;
+    assert.deepEqual(publicStatus, {
+      state: 'ready', revision: 7, updatedAt: '', pending: false, lastError: ''
+    });
+    assert.equal('secret' in publicStatus, false);
+    assert.equal(harness.rendered.some(status => 'secret' in status), false);
+    assert.equal(harness.elements.portableConfigDialog.open, false);
+    assert.equal(harness.attributes.has('aria-busy'), false);
+    assert.equal(harness.controls.every(control => !control.disabled), true);
+    ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+      'portableConfigPassphraseConfirm', 'portableConfigDialogError']
+      .forEach(id => assert.equal(harness.elements[id].value ||
+        harness.elements[id].textContent, ''));
+    assert.equal(harness.storageWrites.length, 0);
+    assert.equal(harness.consoleWrites.length, 0);
+  }
+
+  for (const eventKind of ['cancel-event', 'close-button']) {
+    const harness = createHarness();
+    const opened = harness.context.openDialog('unlock');
+    harness.elements.portableConfigCurrentPassphrase.value = `${eventKind}-current`;
+    harness.elements.portableConfigPassphrase.value = `${eventKind}-secret`;
+    harness.elements.portableConfigPassphraseConfirm.value = `${eventKind}-confirm`;
+    harness.elements.portableConfigDialogError.textContent = 'temporary';
+    harness.context.cancelDialog({ preventDefault() {} });
+    assert.deepEqual(JSON.parse(JSON.stringify(await opened)), { cancelled: true });
+    ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+      'portableConfigPassphraseConfirm'].forEach(id => {
+      assert.equal(harness.elements[id].value, '');
+    });
+    assert.equal(harness.elements.portableConfigDialogError.textContent, '');
+    assert.equal(harness.attributes.has('aria-busy'), false);
+    assert.equal(harness.controls.every(control => !control.disabled), true);
+  }
+
+  const failed = createHarness();
+  const failedOpen = failed.context.openDialog('unlock');
+  failed.elements.portableConfigCurrentPassphrase.value = 'current-secret-1';
+  failed.elements.portableConfigPassphrase.value = 'old-secret-1';
+  failed.elements.portableConfigPassphraseConfirm.value = 'confirm-secret-1';
+  const failedSubmit = failed.context.submitDialog({ preventDefault() {} });
+  await Promise.resolve();
+  failed.fail(Object.assign(new Error('old-secret-1'), { code: 'UNKNOWN' }));
+  await failedSubmit;
+  assert.doesNotMatch(failed.elements.portableConfigDialogError.textContent, /old-secret-1/);
+  assert.equal(failed.attributes.has('aria-busy'), false);
+  failed.context.cancelDialog({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(await failedOpen)), { cancelled: true });
+  ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+    'portableConfigPassphraseConfirm'].forEach(id => {
+    assert.equal(failed.elements[id].value, '');
+  });
+  assert.equal(failed.elements.portableConfigDialogError.textContent, '');
+
   assert.match(script, /if\s*\(portableConfigUi\.submitting\)\s*return/);
   assert.match(script, /function clearPortableConfigDialogSecrets\(/);
   assert.match(script, /addEventListener\(['"]close['"],\s*clearPortableConfigDialogSecrets\)/);
@@ -662,8 +910,9 @@ test('reauthorization invokes cached handle permission synchronously before yiel
     },
     showUserDataStatus() {},
     callBackground: async () => ({ permission: 'granted' }),
+    preparePortableConfigForDirectory: async () => ({ ready: true }),
     refreshUserDataStatus: async () => {},
-    friendlyError: error => error.message,
+    portableConfigErrorText: () => '安全错误',
     Error
   };
   vm.runInNewContext(`${source}\nglobalThis.runReauthorize = reauthorizeUserDataDirectory;`, context);

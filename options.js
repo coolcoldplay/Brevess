@@ -1039,6 +1039,7 @@ function renderPortableConfigStatus(status) {
 }
 // Portable config status renderer: end.
 
+// Portable config dialog controller: start.
 function clearPortableConfigDialogSecrets() {
   ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
     'portableConfigPassphraseConfirm'].forEach(id => {
@@ -1047,6 +1048,11 @@ function clearPortableConfigDialogSecrets() {
   });
   const error = document.getElementById('portableConfigDialogError');
   if (error) error.textContent = '';
+  const dialog = document.getElementById('portableConfigDialog');
+  dialog?.querySelectorAll('input, button').forEach(control => {
+    control.disabled = false;
+  });
+  dialog?.removeAttribute('aria-busy');
   portableConfigUi.mode = '';
   portableConfigUi.submitting = false;
   if (portableConfigUi.resolveDialog) {
@@ -1136,8 +1142,10 @@ async function submitPortableConfigDialog(event) {
   controls.forEach(control => { control.disabled = true; });
   dialog.setAttribute('aria-busy', 'true');
   try {
-    const status = await callBackground(
-      portableConfigRequestForMode(mode, currentPassphrase, passphrase)
+    const status = normalizePortableConfigStatus(
+      await callBackground(portableConfigRequestForMode(
+        mode, currentPassphrase, passphrase
+      ))
     );
     renderPortableConfigStatus(status);
     completePortableConfigDialog(status);
@@ -1152,6 +1160,7 @@ async function submitPortableConfigDialog(event) {
     dialog.removeAttribute('aria-busy');
   }
 }
+// Portable config dialog controller: end.
 
 function updateUserDataActionButtons() {
   const current = userDataUi.lastStatus || {};
@@ -1214,26 +1223,95 @@ function renderUserDataStatus(status) {
   updateUserDataActionButtons();
 }
 
-async function refreshUserDataStatus() {
+async function refreshUserDataStatus({ rethrow = false } = {}) {
   const requestToken = startUserDataStatusRequest();
   try {
     const status = await callBackground({ type: 'USER_DATA_SYNC_STATUS' });
-    if (!isCurrentUserDataStatus(requestToken)) return;
+    if (!isCurrentUserDataStatus(requestToken)) return false;
     renderUserDataStatus(status);
     if (status?.lastError) showUserDataStatus(`上次同步未完成：${status.lastError}`, 'error');
+    return true;
   } catch (error) {
-    if (!isCurrentUserDataStatus(requestToken)) return;
-    showUserDataStatus(`读取本地数据状态失败：${friendlyError(error)}`, 'error');
+    if (!isCurrentUserDataStatus(requestToken)) return false;
+    showUserDataStatus('读取本地数据状态失败，请稍后重试。', 'error');
+    if (rethrow) throw error;
+    return false;
   }
 }
 
+// Portable config activation: start.
+async function completePortableConfigActivation({ restored = false,
+  call = callBackground, reloadSettings = refreshSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed')
+} = {}) {
+  if (restored) await reloadSettings();
+  await call({ type: 'USER_DATA_SYNC_NOW', drain: true });
+  const refreshed = await refreshStatus();
+  if (refreshed === false) {
+    const error = new Error('Portable configuration status refresh failed');
+    error.code = 'PORTABLE_CONFIG_FAILED';
+    throw error;
+  }
+  if (isOnboardingActive()) await markStorageCompleted();
+}
+
+async function activatePortableConfigFromStatusCard({
+  currentState = userDataUi.portableConfigStatus?.state,
+  openDialog = openPortableConfigDialog,
+  finishActivation = completePortableConfigActivation,
+  call = callBackground,
+  reloadSettings = refreshSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
+  renderStatus = renderPortableConfigStatus,
+  showStatus = showUserDataStatus,
+  errorText = portableConfigErrorText
+} = {}) {
+  const mode = currentState === 'missing' ? 'create' : 'unlock';
+  try {
+    const result = await openDialog(mode);
+    if (result?.cancelled) {
+      showStatus(mode === 'create' ? '配置备份待创建。' : '配置备份待解锁。', 'info');
+      return { completed: false, cancelled: true, mode };
+    }
+    renderStatus(result);
+    if (result?.state !== 'ready') {
+      showStatus('加密配置尚未就绪，已停止后续操作。', 'error');
+      return { completed: false, mode };
+    }
+    await finishActivation({
+      restored: mode === 'unlock', call, reloadSettings, refreshStatus,
+      isOnboardingActive, markStorageCompleted
+    });
+    showStatus(
+      mode === 'create'
+        ? '加密配置备份已创建并完成目录同步。'
+        : '配置备份已解锁、恢复设置并完成目录同步。',
+      'success'
+    );
+    return { completed: true, mode };
+  } catch (error) {
+    showStatus(errorText(error), 'error');
+    return { completed: false, failed: true, mode };
+  }
+}
+// Portable config activation: end.
+
 async function preparePortableConfigForDirectory({ call = callBackground,
   openDialog = openPortableConfigDialog, reloadSettings = refreshSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
+  finishActivation = completePortableConfigActivation,
   renderStatus = renderPortableConfigStatus } = {}) {
   let status = await call({ type: 'PORTABLE_CONFIG_PROBE' });
   renderStatus(status);
+  let mode = '';
   if (status?.state === 'missing' || status?.state === 'locked') {
-    const mode = status.state === 'missing' ? 'create' : 'unlock';
+    mode = status.state === 'missing' ? 'create' : 'unlock';
     const dialogResult = await openDialog(mode);
     if (dialogResult?.cancelled === true) {
       return { ready: false, cancelled: true, status };
@@ -1241,10 +1319,12 @@ async function preparePortableConfigForDirectory({ call = callBackground,
     status = dialogResult;
     renderStatus(status);
     if (status?.state !== 'ready') return { ready: false, status };
-    if (mode === 'unlock') await reloadSettings();
   }
   if (status?.state !== 'ready') return { ready: false, status };
-  await call({ type: 'USER_DATA_SYNC_NOW', drain: true });
+  await finishActivation({
+    restored: mode === 'unlock', call, reloadSettings, refreshStatus,
+    isOnboardingActive, markStorageCompleted
+  });
   return { ready: true, status };
 }
 
@@ -1264,7 +1344,6 @@ async function chooseUserDataDirectory() {
     userDataUi.directoryHandle = handle;
     userDataUi.handleLoaded = true;
     const prepared = await preparePortableConfigForDirectory();
-    await refreshUserDataStatus();
     if (!prepared.ready) {
       if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
         const pendingState = prepared.status.state === 'missing' ? '创建' : '解锁';
@@ -1274,7 +1353,6 @@ async function chooseUserDataDirectory() {
       }
       return;
     }
-    if (onboardingUi.active) await setOnboardingStepState('storage', 'completed');
     showUserDataStatus('目录已保存，加密配置已就绪并完成本地数据同步。', 'success');
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -1290,28 +1368,9 @@ async function chooseUserDataDirectory() {
 
 async function unlockPortableConfig() {
   if (userDataUi.pendingAction) return;
-  const mode = userDataUi.portableConfigStatus?.state === 'missing' ? 'create' : 'unlock';
   setUserDataActionPending(true);
   try {
-    const result = await openPortableConfigDialog(mode);
-    if (result?.cancelled) {
-      showUserDataStatus(
-        mode === 'create' ? '配置备份待创建。' : '配置备份待解锁。',
-        'info'
-      );
-      return;
-    }
-    if (result?.state !== 'ready') {
-      renderPortableConfigStatus(result);
-      showUserDataStatus('加密配置尚未就绪，已停止后续操作。', 'error');
-      return;
-    }
-    if (result?.state === 'ready' && mode === 'unlock') await refreshSettings();
-    await refreshUserDataStatus();
-    showUserDataStatus(
-      mode === 'create' ? '加密配置备份已创建。' : '配置备份已解锁并恢复设置。',
-      'success'
-    );
+    await activatePortableConfigFromStatusCard();
   } finally {
     setUserDataActionPending(false);
   }
@@ -1386,7 +1445,6 @@ async function reauthorizeUserDataDirectory() {
       return;
     }
     const prepared = await preparePortableConfigForDirectory();
-    await refreshUserDataStatus();
     if (prepared.ready) {
       showUserDataStatus('目录权限已恢复，加密配置已就绪并完成同步。', 'success');
     } else if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
@@ -1395,7 +1453,7 @@ async function reauthorizeUserDataDirectory() {
       showUserDataStatus('目录权限已恢复，但加密配置状态异常；已停止同步。', 'error');
     }
   } catch (error) {
-    showUserDataStatus(`重新授权失败：${friendlyError(error)}`, 'error');
+    showUserDataStatus(`重新授权失败：${portableConfigErrorText(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);
   }
