@@ -10,7 +10,8 @@ const {
   encryptPortableConfig,
   decryptPortableConfig,
   validatePortableEnvelope,
-  toBase64
+  toBase64,
+  fromBase64
 } = require('../core/portable-config.js');
 
 const passphrase = 'correct horse battery staple';
@@ -33,12 +34,34 @@ function options(keyBytes, revision = 7) {
   };
 }
 
+async function deriveKeyForOptions() {
+  return derivePortableConfigKey(passphrase, { salt: options().salt });
+}
+
+function aadForEnvelope(envelope) {
+  return new TextEncoder().encode(JSON.stringify({
+    kind: envelope.kind,
+    schemaVersion: envelope.schemaVersion,
+    backupId: envelope.backupId,
+    revision: envelope.revision,
+    updatedAt: envelope.updatedAt,
+    encryption: {
+      algorithm: envelope.encryption.algorithm,
+      keyLength: envelope.encryption.keyLength,
+      kdf: envelope.encryption.kdf,
+      iterations: envelope.encryption.iterations,
+      salt: envelope.encryption.salt,
+      iv: envelope.encryption.iv
+    }
+  }));
+}
+
 test('encrypts a full portable payload into an opaque envelope and round-trips it', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   assert.equal(keyBytes.byteLength, 32);
 
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
-  assert.deepEqual(await decryptPortableConfig(envelope, { keyBytes }), payload);
+  assert.deepEqual((await decryptPortableConfig(envelope, { keyBytes })).payload, payload);
 
   const serialized = JSON.stringify(envelope);
   assert.equal(serialized.includes('apiKey'), false);
@@ -47,8 +70,8 @@ test('encrypts a full portable payload into an opaque envelope and round-trips i
 });
 
 test('rejects a wrong passphrase without exposing plaintext', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
-  const wrongKeyBytes = await derivePortableConfigKey('a different long passphrase', { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
+  const wrongKeyBytes = await derivePortableConfigKey('a different long passphrase', { salt: options().salt });
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
   await assert.rejects(
     () => decryptPortableConfig(envelope, { keyBytes: wrongKeyBytes }),
@@ -57,7 +80,7 @@ test('rejects a wrong passphrase without exposing plaintext', async () => {
 });
 
 test('rejects an envelope whose authenticated revision was altered', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
   envelope.revision += 1;
   await assert.rejects(
@@ -67,13 +90,13 @@ test('rejects an envelope whose authenticated revision was altered', async () =>
 });
 
 test('uses cached key bytes to encrypt and decrypt without retaining a passphrase', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   const envelope = await encryptPortableConfig(payload, options(keyBytes, 8));
-  assert.deepEqual(await decryptPortableConfig(envelope, { keyBytes }), payload);
+  assert.deepEqual((await decryptPortableConfig(envelope, { keyBytes })).payload, payload);
 });
 
 test('uses a fresh IV for each encryption of the same payload', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   const first = await encryptPortableConfig(payload, options(keyBytes));
   const second = await encryptPortableConfig(payload, options(keyBytes));
   assert.notEqual(first.encryption.iv, second.encryption.iv);
@@ -87,7 +110,7 @@ test('rejects unbounded KDF iterations before PBKDF2', async () => {
 });
 
 test('validates hostile envelope fields before decrypting', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
   const cases = [
     draft => { draft.ciphertext = '!!!='; },
@@ -110,7 +133,7 @@ test('validates hostile envelope fields before decrypting', async () => {
 });
 
 test('rejects ciphertext tampering, invalid JSON, and invalid decrypted payload uniformly', async () => {
-  const keyBytes = await derivePortableConfigKey(passphrase, { salt: new Uint8Array(16) });
+  const keyBytes = await deriveKeyForOptions();
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
   const tampered = structuredClone(envelope);
   tampered.ciphertext = `${tampered.ciphertext.slice(0, -2)}AA`;
@@ -120,11 +143,38 @@ test('rejects ciphertext tampering, invalid JSON, and invalid decrypted payload 
   for (const plaintext of ['not json', JSON.stringify({ kind: 'wrong', schemaVersion: 1, settings: {}, globalAbbreviations: {} })]) {
     const forged = await encryptPortableConfig({ ...payload }, options(keyBytes));
     const cryptoKey = await webcrypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
-    const aad = new TextEncoder().encode(JSON.stringify({ kind: forged.kind, schemaVersion: forged.schemaVersion, backupId: forged.backupId, revision: forged.revision }));
+    const aad = aadForEnvelope(forged);
     forged.ciphertext = toBase64(await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv: Buffer.from(forged.encryption.iv, 'base64'), additionalData: aad }, cryptoKey, new TextEncoder().encode(plaintext)));
     await assert.rejects(() => decryptPortableConfig(forged, { keyBytes }),
       error => error.code === 'PORTABLE_CONFIG_DECRYPT_FAILED');
   }
+});
+
+test('authenticates all portable metadata even when a cached key is used', async () => {
+  const keyBytes = await deriveKeyForOptions();
+  const envelope = await encryptPortableConfig(payload, options(keyBytes));
+  const cases = [
+    draft => { draft.encryption.salt = toBase64(new Uint8Array(16).fill(9)); },
+    draft => { draft.encryption.iterations = 310001; },
+    draft => { draft.updatedAt = '2026-08-04T00:00:00.000Z'; }
+  ];
+  for (const mutate of cases) {
+    const tampered = structuredClone(envelope);
+    mutate(tampered);
+    await assert.rejects(() => decryptPortableConfig(tampered, { keyBytes }),
+      error => error.code === 'PORTABLE_CONFIG_DECRYPT_FAILED');
+  }
+});
+
+test('can derive a portable key from the encrypted envelope salt on another device', async () => {
+  const sourceKeyBytes = await deriveKeyForOptions();
+  const envelope = await encryptPortableConfig(payload, options(sourceKeyBytes));
+  const restoredKeyBytes = await derivePortableConfigKey(passphrase, {
+    salt: fromBase64(envelope.encryption.salt),
+    iterations: envelope.encryption.iterations
+  });
+  const decrypted = await decryptPortableConfig(envelope, { keyBytes: restoredKeyBytes });
+  assert.deepEqual(decrypted, { envelope, payload });
 });
 
 test('base64 helpers use browser atob and btoa when Buffer is unavailable', () => {

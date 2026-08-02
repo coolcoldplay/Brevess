@@ -61,13 +61,26 @@
     }
   }
 
-  function aadFor(envelope) {
-    return new TextEncoder().encode(JSON.stringify({
+  function authenticatedMetadata(envelope) {
+    return {
       kind: envelope.kind,
       schemaVersion: envelope.schemaVersion,
       backupId: envelope.backupId,
-      revision: envelope.revision
-    }));
+      revision: envelope.revision,
+      updatedAt: envelope.updatedAt,
+      encryption: {
+        algorithm: envelope.encryption.algorithm,
+        keyLength: envelope.encryption.keyLength,
+        kdf: envelope.encryption.kdf,
+        iterations: envelope.encryption.iterations,
+        salt: envelope.encryption.salt,
+        iv: envelope.encryption.iv
+      }
+    };
+  }
+
+  function aadFor(envelope) {
+    return new TextEncoder().encode(JSON.stringify(authenticatedMetadata(envelope)));
   }
 
   function validIsoTime(value) {
@@ -163,7 +176,7 @@
       const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(envelope.encryption.iv), additionalData: aadFor(envelope), tagLength: 128 }, key, fromBase64(envelope.ciphertext));
       const payload = JSON.parse(new TextDecoder().decode(plaintext));
       validatePortablePayload(payload);
-      return payload;
+      return { envelope, payload };
     } catch (_) {
       fail('PORTABLE_CONFIG_DECRYPT_FAILED');
     }
