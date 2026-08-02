@@ -1239,9 +1239,14 @@ async function refreshUserDataStatus({ rethrow = false } = {}) {
   }
 }
 
+async function refreshPortableSettings() {
+  const settings = await callBackground({ type: 'LLM_GET_SETTINGS' });
+  applyState(settings);
+}
+
 // Portable config activation: start.
 async function completePortableConfigActivation({ restored = false,
-  call = callBackground, reloadSettings = refreshSettings,
+  call = callBackground, reloadSettings = refreshPortableSettings,
   refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
   isOnboardingActive = () => onboardingUi.active,
   markStorageCompleted = () => setOnboardingStepState('storage', 'completed')
@@ -1262,7 +1267,7 @@ async function activatePortableConfigFromStatusCard({
   openDialog = openPortableConfigDialog,
   finishActivation = completePortableConfigActivation,
   call = callBackground,
-  reloadSettings = refreshSettings,
+  reloadSettings = refreshPortableSettings,
   refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
   isOnboardingActive = () => onboardingUi.active,
   markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
@@ -1301,7 +1306,7 @@ async function activatePortableConfigFromStatusCard({
 // Portable config activation: end.
 
 async function preparePortableConfigForDirectory({ call = callBackground,
-  openDialog = openPortableConfigDialog, reloadSettings = refreshSettings,
+  openDialog = openPortableConfigDialog, reloadSettings = refreshPortableSettings,
   refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
   isOnboardingActive = () => onboardingUi.active,
   markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),

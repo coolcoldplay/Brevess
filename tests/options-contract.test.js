@@ -597,6 +597,116 @@ test('deferred portable activation finishes create and unlock safely before onbo
   assert.equal(failed.result.completed, false);
   assert.equal(failed.notices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
   assert.doesNotMatch(failed.notices.flat().join(' '), new RegExp(failed.secret));
+
+  const restoreEvents = [];
+  const restoreNotices = [];
+  const restoreSecret = 'restore-secret-must-not-render';
+  context.refreshPortableSettings = async () => {
+    restoreEvents.push(['portable-reload']);
+    throw Object.assign(new Error(restoreSecret), { code: 'SETTINGS_RESTORE_FAILED' });
+  };
+  context.refreshSettings = async () => {
+    restoreEvents.push(['legacy-reload']);
+  };
+  const restoreFailed = await context.activate({
+    currentState: 'locked',
+    openDialog: async () => ({ state: 'ready' }),
+    call: async message => { restoreEvents.push(['call', message.type]); },
+    refreshStatus: async () => { restoreEvents.push(['refresh']); },
+    isOnboardingActive: () => true,
+    markStorageCompleted: async () => { restoreEvents.push(['onboarding']); },
+    renderStatus: () => {},
+    showStatus: (message, type) => restoreNotices.push([message, type]),
+    errorText: () => '无法完成加密配置操作，请稍后重试。'
+  });
+  assert.deepEqual(restoreEvents, [['portable-reload']]);
+  assert.equal(restoreFailed.completed, false);
+  assert.equal(restoreNotices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(restoreNotices.flat().join(' '), new RegExp(restoreSecret));
+});
+
+test('portable settings refresh rejects safely and initial unlock stops before sync', async () => {
+  const script = read('options.js');
+  const refreshStart = script.indexOf('async function refreshPortableSettings(');
+  const refreshEnd = script.indexOf('\n}', refreshStart) + 2;
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
+  const refreshEvents = [];
+  const refreshContext = {
+    callBackground: async message => {
+      refreshEvents.push(['call', message.type]);
+      return { settings: { globalProfileId: 'restored-profile' } };
+    },
+    applyState: value => refreshEvents.push(['apply', value.settings.globalProfileId])
+  };
+  vm.runInNewContext(`${script.slice(refreshStart, refreshEnd)}\n` +
+    'globalThis.refreshPortable = refreshPortableSettings;', refreshContext);
+  await refreshContext.refreshPortable();
+  assert.deepEqual(refreshEvents, [
+    ['call', 'LLM_GET_SETTINGS'], ['apply', 'restored-profile']
+  ]);
+
+  const activationStart = script.indexOf('// Portable config activation: start.');
+  const activationEnd = script.indexOf('// Portable config activation: end.');
+  const prepareStart = script.indexOf('async function preparePortableConfigForDirectory(');
+  const prepareEnd = script.indexOf('\n}', prepareStart) + 2;
+  const chooseStart = script.indexOf('async function chooseUserDataDirectory(');
+  const chooseEnd = script.indexOf('\n}', chooseStart) + 2;
+  const events = [];
+  const notices = [];
+  const secret = 'initial-restore-secret';
+  const context = {
+    userDataUi: { pendingAction: false, directoryHandle: null, handleLoaded: false },
+    onboardingUi: { active: true },
+    window: {
+      showDirectoryPicker: async () => {
+        events.push(['picker']);
+        return { name: 'chosen' };
+      }
+    },
+    SciLLM: {
+      saveDirectoryHandle: async () => { events.push(['save-handle']); }
+    },
+    indexedDB: {},
+    callBackground: async message => {
+      events.push(['call', message.type, message.drain]);
+      if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: 'locked' };
+      return { permission: 'granted' };
+    },
+    openPortableConfigDialog: async mode => {
+      events.push(['dialog', mode]);
+      return { state: 'ready' };
+    },
+    refreshPortableSettings: async () => {
+      events.push(['portable-reload']);
+      throw Object.assign(new Error(secret), { code: 'SETTINGS_RESTORE_FAILED' });
+    },
+    refreshSettings: async () => { events.push(['legacy-reload']); },
+    refreshUserDataStatus: async () => { events.push(['refresh-status']); },
+    setOnboardingStepState: async () => { events.push(['onboarding-complete']); },
+    setUserDataActionPending: value => events.push(['pending', value]),
+    renderPortableConfigStatus: status => events.push(['render', status.state]),
+    showUserDataStatus: (message, type) => notices.push([message, type]),
+    portableConfigErrorText: () => '无法完成加密配置操作，请稍后重试。',
+    Error
+  };
+  const source = `${script.slice(activationStart, activationEnd)}\n` +
+    `${script.slice(prepareStart, prepareEnd)}\n${script.slice(chooseStart, chooseEnd)}\n` +
+    'globalThis.choose = chooseUserDataDirectory;';
+  vm.runInNewContext(source, context);
+  await context.choose();
+  assert.deepEqual(events.filter(event => [
+    'picker', 'save-handle', 'call', 'dialog', 'render', 'portable-reload'
+  ].includes(event[0])), [
+    ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
+    ['render', 'locked'], ['dialog', 'unlock'], ['render', 'ready'],
+    ['portable-reload'], ['render', 'error']
+  ]);
+  assert.equal(events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false);
+  assert.equal(events.some(event => event[0] === 'refresh-status'), false);
+  assert.equal(events.some(event => event[0] === 'onboarding-complete'), false);
+  assert.equal(events.some(event => event[0] === 'legacy-reload'), false);
+  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
 });
 
 test('portable passphrase mode helpers validate and map only the intended background fields', () => {
