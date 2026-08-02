@@ -39,7 +39,6 @@
       randomId = () => globalThis.crypto.randomUUID(),
       cryptoRef = globalThis.crypto,
       iterations = shared.PORTABLE_CONFIG_KDF_ITERATIONS,
-      importer,
       path = shared.PORTABLE_CONFIG_PATH,
       payloadKind = shared.PORTABLE_CONFIG_PAYLOAD_KIND,
       setTimeoutRef = globalThis.setTimeout,
@@ -47,8 +46,8 @@
       debounceMs = 500
     } = options;
 
-    if (!directorySync?.readJson || !directorySync?.enqueueJson ||
-        !directorySync?.flush || !storageArea?.get || !storageArea?.set ||
+    if (!directorySync?.readJson || !directorySync?.compareAndSwapJson ||
+        !storageArea?.get || !storageArea?.set ||
         typeof settingsKey !== 'string' || typeof abbreviationKey !== 'string' ||
         !derivePortableConfigKey || !encryptPortableConfig || !decryptPortableConfig ||
         !validatePortablePayload || !validatePortableEnvelope || !toBase64 || !fromBase64 ||
@@ -70,6 +69,7 @@
     let backupTimer = null;
     let suppressedRestoreSnapshot = null;
     let disposed = false;
+    let operationTail = Promise.resolve();
 
     function publicStatus() {
       return {
@@ -95,22 +95,23 @@
     }
 
     function callStorage(method, value) {
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const done = result => {
-          if (settled) return;
-          settled = true;
-          resolve(result);
-        };
-        try {
-          const maybePromise = storageArea[method](value, done);
-          if (maybePromise && typeof maybePromise.then === 'function') {
-            maybePromise.then(done, reject);
-          }
-        } catch (error) {
-          reject(error);
-        }
-      });
+      return Promise.resolve().then(() => storageArea[method](value));
+    }
+
+    function serializeOperation(operation, { automatic = false } = {}) {
+      if (disposed && !automatic) {
+        return Promise.reject(Object.assign(
+          new Error('PORTABLE_CONFIG_MANAGER_DISPOSED'),
+          { code: 'PORTABLE_CONFIG_MANAGER_DISPOSED' }
+        ));
+      }
+      const execute = () => {
+        if (automatic && disposed) return publicStatus();
+        return operation();
+      };
+      const result = operationTail.then(execute, execute);
+      operationTail = result.catch(() => undefined);
+      return result;
     }
 
     async function readCache() {
@@ -146,8 +147,16 @@
       await updateCache(backupId, null);
     }
 
+    function assertDirectoryAvailable(result) {
+      if (result?.permission !== 'granted') {
+        fail('PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+      }
+      return result;
+    }
+
     async function readEnvelope() {
       const result = await directorySync.readJson(path);
+      assertDirectoryAvailable(result);
       if (!result?.found) return null;
       const envelope = validatePortableEnvelope(result.value);
       setEnvelopeState(envelope);
@@ -192,12 +201,18 @@
         sameJsonValue(changes[key]?.newValue, restored));
     }
 
-    async function probe() {
+    async function probeNow() {
       privateState.lastError = '';
       let envelope;
       try {
         envelope = await readEnvelope();
       } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.pending = false;
+          privateState.lastError = error.code;
+          return publicStatus();
+        }
         privateState.state = 'error';
         privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_PROBE_FAILED');
         return publicStatus();
@@ -222,6 +237,14 @@
       const keyBytes = decodeCachedKey(cache[envelope.backupId]);
       if (!keyBytes) {
         if (Object.prototype.hasOwnProperty.call(cache, envelope.backupId)) {
+          try {
+            await removeCachedKey(envelope.backupId);
+          } catch (_) {
+            privateState.state = 'error';
+            privateState.pending = false;
+            privateState.lastError = 'PORTABLE_CONFIG_STORAGE_FAILED';
+            return publicStatus();
+          }
           privateState.lastError = 'PORTABLE_CONFIG_CACHED_KEY_INVALID';
         }
         privateState.state = 'locked';
@@ -265,7 +288,7 @@
       return publicStatus();
     }
 
-    async function unlock(passphrase) {
+    async function unlockNow(passphrase) {
       let envelope;
       try {
         envelope = await readEnvelope();
@@ -284,7 +307,13 @@
         privateState.pending = false;
         privateState.lastError = '';
         return publicStatus();
-      } catch (_) {
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.pending = false;
+          privateState.lastError = error.code;
+          fail(error.code);
+        }
         privateState.state = envelope ? 'locked' : 'missing';
         privateState.lastError = 'PORTABLE_CONFIG_UNLOCK_FAILED';
         fail('PORTABLE_CONFIG_UNLOCK_FAILED');
@@ -316,15 +345,25 @@
       return buildPayload(settings, globalAbbreviations, exportedAt);
     }
 
-    async function writeEnvelope(envelope) {
-      await directorySync.enqueueJson(path, envelope);
-      const result = await directorySync.flush(importer);
-      if (Number(result?.conflicts) > 0) fail('PORTABLE_CONFIG_DIRECTORY_CONFLICT');
-      if (Number(result?.failed) > 0 || Number(result?.pendingCount) > 0 ||
-          (result?.permission && result.permission !== 'granted')) {
+    async function writeEnvelope(envelope, { mode, expected } = {}) {
+      try {
+        const result = await directorySync.compareAndSwapJson(path, envelope, {
+          mode,
+          ...(expected ? { expected } : {})
+        });
+        if (!result?.committed) fail('PORTABLE_CONFIG_DIRECTORY_WRITE_FAILED');
+        return result;
+      } catch (error) {
+        if (error?.code === 'DIRECTORY_PERMISSION_REQUIRED') {
+          fail('PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+        }
+        if (error?.code === 'DIRECTORY_CAS_CONFLICT' ||
+            error?.code === 'DIRECTORY_CAS_CURRENT_INVALID') {
+          fail('PORTABLE_CONFIG_DIRECTORY_CONFLICT');
+        }
+        if (error?.code?.startsWith?.('PORTABLE_CONFIG_')) throw error;
         fail('PORTABLE_CONFIG_DIRECTORY_WRITE_FAILED');
       }
-      return result;
     }
 
     function randomSalt() {
@@ -332,11 +371,18 @@
       return cryptoRef.getRandomValues(new Uint8Array(16));
     }
 
-    async function create(passphrase) {
+    async function createNow(passphrase) {
       let existing;
       try {
         existing = await directorySync.readJson(path);
-      } catch (_) {
+        assertDirectoryAvailable(existing);
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.pending = false;
+          privateState.lastError = error.code;
+          fail(error.code);
+        }
         privateState.state = 'missing';
         privateState.lastError = 'PORTABLE_CONFIG_CREATE_FAILED';
         fail('PORTABLE_CONFIG_CREATE_FAILED');
@@ -347,12 +393,14 @@
       const exportedAt = timestamp();
       privateState.pending = true;
       privateState.lastError = '';
+      let keyBytes;
+      let envelope;
       try {
-        const keyBytes = await derivePortableConfigKey(passphrase, {
+        keyBytes = await derivePortableConfigKey(passphrase, {
           salt, iterations, cryptoRef
         });
         const payload = await loadPayload(exportedAt);
-        const envelope = await encryptPortableConfig(payload, {
+        envelope = await encryptPortableConfig(payload, {
           keyBytes,
           salt,
           backupId,
@@ -361,24 +409,45 @@
           iterations,
           cryptoRef
         });
-        await writeEnvelope(envelope);
-        await updateCache(backupId, keyBytes);
-        setEnvelopeState(envelope);
-        privateState.state = 'ready';
-        privateState.pending = false;
-        privateState.lastError = '';
-        return publicStatus();
       } catch (error) {
         privateState.state = 'missing';
         privateState.pending = true;
         privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_CREATE_FAILED');
-        const code = privateState.lastError === 'PORTABLE_CONFIG_ALREADY_EXISTS'
-          ? privateState.lastError : 'PORTABLE_CONFIG_CREATE_FAILED';
-        fail(code);
+        fail('PORTABLE_CONFIG_CREATE_FAILED');
       }
+      try {
+        await writeEnvelope(envelope, { mode: 'create' });
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.pending = true;
+          privateState.lastError = error.code;
+          fail(error.code);
+        }
+        privateState.state = 'missing';
+        privateState.pending = true;
+        privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_CREATE_FAILED');
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_CONFLICT') {
+          fail('PORTABLE_CONFIG_ALREADY_EXISTS');
+        }
+        fail('PORTABLE_CONFIG_CREATE_FAILED');
+      }
+      setEnvelopeState(envelope);
+      try {
+        await updateCache(backupId, keyBytes);
+      } catch (_) {
+        privateState.state = 'locked';
+        privateState.pending = true;
+        privateState.lastError = 'PORTABLE_CONFIG_STORAGE_FAILED';
+        fail('PORTABLE_CONFIG_CREATED_KEY_CACHE_FAILED');
+      }
+      privateState.state = 'ready';
+      privateState.pending = false;
+      privateState.lastError = '';
+      return publicStatus();
     }
 
-    async function backupNow() {
+    async function backupNowInternal() {
       if (privateState.state !== 'ready' || !privateState.backupId) {
         privateState.state = 'locked';
         privateState.pending = true;
@@ -396,6 +465,16 @@
       }
       const keyBytes = decodeCachedKey(cache[privateState.backupId]);
       if (!keyBytes) {
+        if (Object.prototype.hasOwnProperty.call(cache, privateState.backupId)) {
+          try {
+            await removeCachedKey(privateState.backupId);
+          } catch (_) {
+            privateState.state = 'error';
+            privateState.pending = true;
+            privateState.lastError = 'PORTABLE_CONFIG_STORAGE_FAILED';
+            fail('PORTABLE_CONFIG_BACKUP_FAILED');
+          }
+        }
         privateState.state = 'locked';
         privateState.pending = true;
         privateState.lastError = 'PORTABLE_CONFIG_LOCKED';
@@ -406,6 +485,7 @@
       let currentEnvelope;
       try {
         const current = await directorySync.readJson(path);
+        assertDirectoryAvailable(current);
         if (!current?.found) fail('PORTABLE_CONFIG_BACKUP_SOURCE_MISSING');
         currentEnvelope = validatePortableEnvelope(current.value);
         if (currentEnvelope.backupId !== privateState.backupId ||
@@ -424,6 +504,12 @@
           fail('PORTABLE_CONFIG_BACKUP_AUTH_FAILED');
         }
       } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.lastError = error.code;
+          privateState.pending = true;
+          fail(error.code);
+        }
         if (error?.code !== 'PORTABLE_CONFIG_BACKUP_AUTH_FAILED') {
           privateState.state = 'error';
           privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_BACKUP_FAILED');
@@ -443,7 +529,7 @@
           iterations: currentEnvelope.encryption.iterations,
           cryptoRef
         });
-        await writeEnvelope(envelope);
+        await writeEnvelope(envelope, { mode: 'update', expected: currentEnvelope });
         setEnvelopeState(envelope);
         privateState.state = 'ready';
         privateState.pending = false;
@@ -452,6 +538,10 @@
       } catch (error) {
         privateState.pending = true;
         privateState.lastError = safeCode(error, 'PORTABLE_CONFIG_BACKUP_FAILED');
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          fail(error.code);
+        }
         fail('PORTABLE_CONFIG_BACKUP_FAILED');
       }
     }
@@ -472,13 +562,15 @@
       privateState.pending = true;
       backupTimer = setTimeoutRef(() => {
         backupTimer = null;
-        void backupNow().catch(() => undefined);
+        void serializeOperation(backupNowInternal, { automatic: true })
+          .catch(() => undefined);
       }, debounceMs);
       return true;
     }
 
-    async function rotatePassphrase(currentPassphrase, newPassphrase) {
+    async function rotatePassphraseNow(currentPassphrase, newPassphrase) {
       let envelope;
+      let committed = false;
       try {
         envelope = await readEnvelope();
         if (!envelope) fail('PORTABLE_CONFIG_MISSING');
@@ -514,14 +606,27 @@
           cryptoRef
         });
         privateState.pending = true;
-        await writeEnvelope(rotated);
-        await updateCache(envelope.backupId, newKeyBytes);
+        await writeEnvelope(rotated, { mode: 'update', expected: envelope });
+        committed = true;
         setEnvelopeState(rotated);
+        await updateCache(envelope.backupId, newKeyBytes);
         privateState.state = 'ready';
         privateState.pending = false;
         privateState.lastError = '';
         return publicStatus();
       } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE') {
+          privateState.state = 'unavailable';
+          privateState.pending = true;
+          privateState.lastError = error.code;
+          fail(error.code);
+        }
+        if (committed) {
+          privateState.state = 'locked';
+          privateState.pending = true;
+          privateState.lastError = 'PORTABLE_CONFIG_STORAGE_FAILED';
+          fail('PORTABLE_CONFIG_ROTATE_FAILED');
+        }
         if (privateState.pending || privateState.state !== 'ready') {
           privateState.state = envelope ? 'locked' : 'missing';
         }
@@ -530,7 +635,7 @@
       }
     }
 
-    async function forgetKey() {
+    async function forgetKeyNow() {
       if (privateState.backupId) await updateCache(privateState.backupId, null);
       privateState.state = 'locked';
       privateState.pending = true;
@@ -542,7 +647,16 @@
       disposed = true;
       if (backupTimer !== null) clearTimeoutRef(backupTimer);
       backupTimer = null;
+      return operationTail.then(() => undefined);
     }
+
+    const probe = () => serializeOperation(probeNow);
+    const unlock = passphrase => serializeOperation(() => unlockNow(passphrase));
+    const create = passphrase => serializeOperation(() => createNow(passphrase));
+    const backupNow = () => serializeOperation(backupNowInternal);
+    const rotatePassphrase = (currentPassphrase, newPassphrase) =>
+      serializeOperation(() => rotatePassphraseNow(currentPassphrase, newPassphrase));
+    const forgetKey = () => serializeOperation(forgetKeyNow);
 
     return {
       publicStatus,

@@ -8,6 +8,7 @@ importScripts(
   'core/confidence-policy.js',
   'core/publisher-adapters.js',
   'core/article-structure.js',
+  'core/abbreviation-extractor.js',
   'providers/provider-utils.js',
   'core/codex-native-client.js',
   'core/prompt-compiler.js',
@@ -396,7 +397,6 @@ const portableConfigManager = SciLLM.createPortableConfigManager({
   randomId: () => crypto.randomUUID(),
   cryptoRef: crypto,
   iterations: SciLLM.PORTABLE_CONFIG_KDF_ITERATIONS,
-  importer: async () => ({ imported: false }),
   path: SciLLM.PORTABLE_CONFIG_PATH,
   payloadKind: SciLLM.PORTABLE_CONFIG_PAYLOAD_KIND
 });

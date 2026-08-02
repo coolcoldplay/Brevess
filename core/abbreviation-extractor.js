@@ -15,6 +15,9 @@
   ]);
   const REAGENT_OR_METADATA = /(?:\banti-|antibod(?:y|ies)\b|\bbeads?\b|\bcatalog(?:ue)?\b|\bcat\.?\s*no\b|\blot\s*(?:no\.?|number)\b|\bclone\b|\brrid\b|\bmiltenyi\b|\bbiotec\b|\bthermo fisher\b|\bsigma(?:-aldrich)?\b|\babcam\b)/i;
   const DESCRIPTOR_ONLY = /^(?:cluster|group|class|subtype|subset|population|sample|batch)\s*(?:no\.?\s*)?[A-Za-z0-9.-]+$/i;
+  const GLOBAL_ABBREVIATION_MEMORY_KEY = 'sciGlobalAbbreviationMemoryV1';
+  const GLOBAL_ABBREVIATION_SCHEMA_VERSION = 1;
+  const MAX_GLOBAL_ABBREVIATION_ENTRIES = 5000;
 
   function normalizeSpace(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
@@ -28,6 +31,118 @@
     return plainScientificText(value)
       .replace(/[^A-Za-z0-9\u0370-\u03ff]/g, '')
       .toLowerCase();
+  }
+
+  function isSafeUserAbbreviation(value) {
+    const abbreviation = plainScientificText(value);
+    return abbreviation.length >= 1 &&
+      abbreviation.length <= 30 &&
+      !/\s/.test(abbreviation) &&
+      !STRUCTURAL_ABBREVIATIONS.has(abbreviation.toLowerCase()) &&
+      /^[A-Za-z\u0370-\u03ff][A-Za-z0-9\u0370-\u03ff+./-]*$/.test(abbreviation);
+  }
+
+  function abbreviationPairKey(abbreviation, fullName) {
+    return `${abbreviationKey(abbreviation)}\u0000${plainScientificText(fullName).toLowerCase()}`;
+  }
+
+  function normalizeChineseMeaning(value) {
+    const meaning = plainScientificText(value).slice(0, 240);
+    return /[\u3400-\u9fff]/u.test(meaning) ? meaning : '';
+  }
+
+  function normalizeAbbreviationTimestamp(value, fallback = '') {
+    const timestamp = String(value || '').trim();
+    if (timestamp && !Number.isNaN(Date.parse(timestamp))) {
+      return new Date(timestamp).toISOString();
+    }
+    return fallback;
+  }
+
+  function normalizeUserAbbreviationEntry(value = {}, defaults = {}) {
+    const abbreviation = plainScientificText(value.abbreviation);
+    const fullName = plainScientificText(value.fullName).slice(0, 240);
+    if (!isSafeUserAbbreviation(abbreviation) ||
+        fullName.length < 2 ||
+        abbreviationKey(fullName) === abbreviationKey(abbreviation)) {
+      return null;
+    }
+    const now = normalizeAbbreviationTimestamp(defaults.now) || new Date().toISOString();
+    const addedAt = normalizeAbbreviationTimestamp(value.addedAt, now);
+    const updatedAt = normalizeAbbreviationTimestamp(value.updatedAt, addedAt);
+    const entry = {
+      abbreviation,
+      fullName,
+      supportCount: Math.min(
+        100000,
+        Math.max(1, Math.floor(Number(value.supportCount) || 1))
+      ),
+      addedAt,
+      updatedAt
+    };
+    const meaningZh = normalizeChineseMeaning(value.meaningZh);
+    if (meaningZh) entry.meaningZh = meaningZh;
+    const paragraphId = String(value.paragraphId || '').slice(0, 500);
+    const sourceKey = String(value.sourceKey || paragraphId || '').slice(0, 500);
+    const navigationRevision = Math.max(
+      0,
+      Math.floor(Number(value.navigationRevision) || 0)
+    );
+    if (paragraphId) entry.paragraphId = paragraphId;
+    if (sourceKey) entry.sourceKey = sourceKey;
+    if (navigationRevision) entry.navigationRevision = navigationRevision;
+    return entry;
+  }
+
+  function normalizeGlobalAbbreviationMemory(value = {}) {
+    const source = Array.isArray(value) ? value :
+      (Array.isArray(value?.entries) ? value.entries : []);
+    const store = new Map();
+    source.slice(0, MAX_GLOBAL_ABBREVIATION_ENTRIES * 2).forEach(item => {
+      const normalizedEntry = normalizeUserAbbreviationEntry(item);
+      if (!normalizedEntry) return;
+      const entry = {
+        abbreviation: normalizedEntry.abbreviation,
+        fullName: normalizedEntry.fullName,
+        supportCount: normalizedEntry.supportCount,
+        addedAt: normalizedEntry.addedAt,
+        updatedAt: normalizedEntry.updatedAt,
+        ...(normalizedEntry.meaningZh
+          ? { meaningZh: normalizedEntry.meaningZh }
+          : {})
+      };
+      const key = abbreviationPairKey(entry.abbreviation, entry.fullName);
+      const existing = store.get(key);
+      if (!existing) {
+        store.set(key, entry);
+        return;
+      }
+      existing.supportCount = Math.min(
+        100000,
+        existing.supportCount + entry.supportCount
+      );
+      if (Date.parse(entry.updatedAt) > Date.parse(existing.updatedAt)) {
+        existing.updatedAt = entry.updatedAt;
+        if (entry.meaningZh) existing.meaningZh = entry.meaningZh;
+      } else if (!existing.meaningZh && entry.meaningZh) {
+        existing.meaningZh = entry.meaningZh;
+      }
+    });
+    const entries = [...store.values()]
+      .sort((left, right) =>
+        left.abbreviation.localeCompare(
+          right.abbreviation,
+          'en',
+          { sensitivity: 'base', numeric: true }
+        ) ||
+        right.supportCount - left.supportCount ||
+        left.fullName.localeCompare(right.fullName, 'zh-CN')
+      )
+      .slice(0, MAX_GLOBAL_ABBREVIATION_ENTRIES);
+    return {
+      schemaVersion: GLOBAL_ABBREVIATION_SCHEMA_VERSION,
+      entries
+    };
   }
 
   function isCandidateAbbreviation(value) {
@@ -290,9 +405,12 @@
   }
 
   return {
+    GLOBAL_ABBREVIATION_MEMORY_KEY,
+    GLOBAL_ABBREVIATION_SCHEMA_VERSION,
     abbreviationKey,
     isCandidateAbbreviation,
     expansionScore,
-    extractArticleAbbreviations
+    extractArticleAbbreviations,
+    normalizeGlobalAbbreviationMemory
   };
 });

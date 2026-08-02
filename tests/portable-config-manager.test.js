@@ -7,6 +7,11 @@ const path = require('node:path');
 globalThis.crypto = webcrypto;
 
 const codec = require('../core/portable-config.js');
+const abbreviationApi = require('../core/abbreviation-extractor.js');
+require('../core/confidence-policy.js');
+require('../core/category-store.js');
+require('../core/adaptive-catalog.js');
+const settingsApi = require('../core/settings-store.js');
 const {
   createPortableConfigManager,
   PORTABLE_CONFIG_KEY_CACHE
@@ -26,20 +31,30 @@ function createStorage(initial = {}) {
   const data = clone(initial);
   const sets = [];
   let setFailure = null;
+  let getFailure = null;
+  let promiseOnly = false;
   return {
     data,
     sets,
+    requirePromiseOnly() { promiseOnly = true; },
     failSetWhen(predicate, error = new Error('storage write failed')) {
       setFailure = { predicate, error };
     },
-    async get(keys) {
+    failGetWhen(predicate, error = new Error('storage read failed')) {
+      getFailure = { predicate, error };
+    },
+    clearSetFailure() { setFailure = null; },
+    async get(keys, ...extra) {
+      if (promiseOnly && extra.length) throw new Error('callback API forbidden');
+      if (getFailure?.predicate(keys)) throw getFailure.error;
       if (keys === null || keys === undefined) return clone(data);
       const selected = Array.isArray(keys) ? keys : [keys];
       return Object.fromEntries(selected
         .filter(key => Object.prototype.hasOwnProperty.call(data, key))
         .map(key => [key, clone(data[key])]));
     },
-    async set(values) {
+    async set(values, ...extra) {
+      if (promiseOnly && extra.length) throw new Error('callback API forbidden');
       if (setFailure?.predicate(values)) throw setFailure.error;
       sets.push(clone(values));
       Object.assign(data, clone(values));
@@ -50,18 +65,61 @@ function createStorage(initial = {}) {
 function createDirectory(initialValue = null, options = {}) {
   let disk = clone(initialValue);
   let queued = null;
+  let permission = options.permission || 'granted';
   const reads = [];
   const enqueues = [];
+  const casWrites = [];
   let flushCalls = 0;
   return {
     reads,
     enqueues,
+    casWrites,
     get flushCalls() { return flushCalls; },
     get disk() { return clone(disk); },
     replaceDisk(value) { disk = clone(value); },
+    setPermission(value) { permission = value; },
     async readJson(path) {
       reads.push(path);
-      return { permission: 'granted', found: disk !== null, value: clone(disk) };
+      return {
+        permission,
+        found: permission === 'granted' && disk !== null,
+        value: permission === 'granted' ? clone(disk) : null
+      };
+    },
+    async compareAndSwapJson(path, value, casOptions = {}) {
+      if (permission !== 'granted') {
+        const error = new Error('DIRECTORY_PERMISSION_REQUIRED');
+        error.code = 'DIRECTORY_PERMISSION_REQUIRED';
+        error.permission = permission;
+        throw error;
+      }
+      const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+      const conflict = () => {
+        const error = new Error('DIRECTORY_CAS_CONFLICT');
+        error.code = 'DIRECTORY_CAS_CONFLICT';
+        throw error;
+      };
+      if (options.flushError) throw options.flushError;
+      if (options.conflict) conflict();
+      if (casOptions.mode === 'create') {
+        if (disk !== null) conflict();
+      } else if (casOptions.mode === 'update') {
+        if (disk === null || !same(disk, casOptions.expected)) conflict();
+      } else {
+        throw new Error('invalid CAS mode');
+      }
+      if (typeof options.beforeCasCommit === 'function') {
+        await options.beforeCasCommit({ path, value: clone(value), options: clone(casOptions) });
+      }
+      disk = clone(value);
+      casWrites.push({ path, value: clone(value), options: clone(casOptions) });
+      return {
+        committed: true,
+        permission: 'granted',
+        mode: casOptions.mode,
+        revision: value.revision,
+        previousRevision: casOptions.expected?.revision ?? null
+      };
     },
     async enqueueJson(path, value) {
       queued = { path, value: clone(value) };
@@ -271,8 +329,8 @@ test('create writes revision 1 ciphertext that decrypts to complete normalized l
   const status = await manager.create(PASSPHRASE);
   assert.equal(status.state, 'ready');
   assert.equal(status.revision, 1);
-  assert.equal(directorySync.enqueues.length, 1);
-  assert.equal(directorySync.enqueues[0].path, codec.PORTABLE_CONFIG_PATH);
+  assert.equal(directorySync.casWrites.length, 1);
+  assert.equal(directorySync.casWrites[0].path, codec.PORTABLE_CONFIG_PATH);
   const envelope = directorySync.disk;
   const keyBytes = await codec.derivePortableConfigKey(PASSPHRASE, {
     salt: codec.fromBase64(envelope.encryption.salt),
@@ -472,12 +530,12 @@ test('debounce merges user changes, exact restore callbacks are suppressed, and 
   assert.equal(manager.scheduleBackup({ [SETTINGS_KEY]: { newValue: { user: 'changed-again' } } }), true);
   assert.equal(manager.scheduleBackup({ [ABBREVIATION_KEY]: { newValue: restoredAbbreviations } }), true);
   await new Promise(resolve => setTimeout(resolve, 45));
-  assert.equal(directorySync.enqueues.length, 1);
+  assert.equal(directorySync.casWrites.length, 1);
 
   manager.scheduleBackup({ [SETTINGS_KEY]: { newValue: { after: 'dispose' } } });
   manager.dispose();
   await new Promise(resolve => setTimeout(resolve, 35));
-  assert.equal(directorySync.enqueues.length, 1);
+  assert.equal(directorySync.casWrites.length, 1);
 });
 
 test('a real user change is not swallowed when no restore callback was observed', async () => {
@@ -497,12 +555,12 @@ test('a real user change is not swallowed when no restore callback was observed'
     [SETTINGS_KEY]: { newValue: { actualUserEdit: true } }
   }), true);
   await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(directorySync.enqueues.length, 1);
+  assert.equal(directorySync.casWrites.length, 1);
 });
 
 for (const [label, directoryOptions, expectedLastError] of [
   ['conflict', { conflict: true }, 'PORTABLE_CONFIG_DIRECTORY_CONFLICT'],
-  ['flush failure', { flushError: new Error('disk contained private content') }, 'PORTABLE_CONFIG_BACKUP_FAILED']
+  ['CAS write failure', { flushError: new Error('disk contained private content') }, 'PORTABLE_CONFIG_DIRECTORY_WRITE_FAILED']
 ]) {
   test(`${label} leaves the original directory value intact and reports safe pending state`, async () => {
     const { envelope } = await encryptedFixture();
@@ -677,15 +735,309 @@ for (const [label, mutate] of [
   });
 }
 
+test('manager uses the MV3 Promise-only storage API and restores successfully', async () => {
+  const { envelope } = await encryptedFixture();
+  const { manager, storageArea } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: 'old' },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    }
+  });
+  storageArea.requirePromiseOnly();
+
+  assert.equal((await manager.unlock(PASSPHRASE)).state, 'ready');
+  assert.equal(storageArea.data[SETTINGS_KEY].profiles.p1.config.apiKey, 'sk-portable');
+});
+
+test('storage Promise rejection never reports ready or partially restores unlock', async () => {
+  const { envelope } = await encryptedFixture();
+  const initial = {
+    [SETTINGS_KEY]: { local: 'keep' },
+    [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+  };
+  const { manager, storageArea } = managerFixture({ disk: envelope, storage: initial });
+  storageArea.failGetWhen(keys => keys === PORTABLE_CONFIG_KEY_CACHE);
+
+  await assert.rejects(() => manager.unlock(PASSPHRASE), error =>
+    error.code === 'PORTABLE_CONFIG_UNLOCK_FAILED');
+  assert.notEqual(manager.publicStatus().state, 'ready');
+  assert.deepEqual(storageArea.data, initial);
+});
+
+test('permission states never masquerade as a missing portable file', async () => {
+  for (const permission of ['unconfigured', 'prompt', 'denied']) {
+    const { manager, directorySync } = managerFixture({
+      directoryOptions: { permission },
+      storage: {
+        [SETTINGS_KEY]: { local: true },
+        [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+      }
+    });
+    const status = await manager.probe();
+    assert.equal(status.state, 'unavailable');
+    assert.equal(status.lastError, 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+    await assert.rejects(() => manager.create(PASSPHRASE), error =>
+      error.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+    await assert.rejects(() => manager.unlock(PASSPHRASE), error =>
+      error.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+    await assert.rejects(() => manager.rotatePassphrase(PASSPHRASE, OTHER_PASSPHRASE), error =>
+      error.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+    assert.equal(directorySync.casWrites.length, 0);
+    assert.equal(directorySync.enqueues.length, 0);
+  }
+});
+
+test('backup permission loss fails before CAS with a directory-unavailable error', async () => {
+  const { envelope } = await encryptedFixture();
+  const { manager, directorySync } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  directorySync.setPermission('denied');
+
+  await assert.rejects(() => manager.backupNow(), error =>
+    error.code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE');
+  assert.equal(directorySync.casWrites.length, 0);
+  assert.equal(manager.publicStatus().pending, true);
+});
+
+test('create committed but cache failure remains unlockable and never reports missing', async () => {
+  const { manager, storageArea, directorySync } = managerFixture({
+    storage: {
+      [SETTINGS_KEY]: { profiles: { p1: { config: { apiKey: 'sk-created' } } } },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    }
+  });
+  storageArea.failSetWhen(values =>
+    Object.prototype.hasOwnProperty.call(values, PORTABLE_CONFIG_KEY_CACHE));
+
+  await assert.rejects(() => manager.create(PASSPHRASE), error =>
+    error.code === 'PORTABLE_CONFIG_CREATED_KEY_CACHE_FAILED');
+  assert.equal(directorySync.disk.revision, 1);
+  assert.equal(manager.publicStatus().state, 'locked');
+  assert.equal(manager.publicStatus().revision, 1);
+  assert.equal(manager.publicStatus().pending, true);
+  await assert.rejects(() => manager.create(PASSPHRASE), error =>
+    error.code === 'PORTABLE_CONFIG_ALREADY_EXISTS');
+  storageArea.clearSetFailure();
+  assert.equal((await manager.unlock(PASSPHRASE)).state, 'ready');
+});
+
+test('probe removes only an invalid cached key and reports storage cleanup failure safely', async () => {
+  const { envelope } = await encryptedFixture();
+  const other = codec.toBase64(new Uint8Array(32).fill(3));
+  const { manager, storageArea } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+      [PORTABLE_CONFIG_KEY_CACHE]: {
+        other,
+        [envelope.backupId]: 'not-valid-base64'
+      }
+    }
+  });
+  assert.equal((await manager.probe()).state, 'locked');
+  assert.deepEqual(storageArea.data[PORTABLE_CONFIG_KEY_CACHE], { other });
+
+  storageArea.data[PORTABLE_CONFIG_KEY_CACHE][envelope.backupId] = 'still-invalid';
+  storageArea.failSetWhen(values =>
+    Object.prototype.hasOwnProperty.call(values, PORTABLE_CONFIG_KEY_CACHE));
+  const failed = await manager.probe();
+  assert.equal(failed.state, 'error');
+  assert.equal(failed.lastError, 'PORTABLE_CONFIG_STORAGE_FAILED');
+});
+
+test('concurrent manual backups serialize into consecutive revisions', async () => {
+  const { envelope } = await encryptedFixture({ revision: 30 });
+  let releaseFirstCas;
+  let markFirstCasEntered;
+  let casCalls = 0;
+  const firstCasEntered = new Promise(resolve => { markFirstCasEntered = resolve; });
+  const firstCasGate = new Promise(resolve => { releaseFirstCas = resolve; });
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    directoryOptions: {
+      async beforeCasCommit() {
+        casCalls += 1;
+        if (casCalls !== 1) return;
+        markFirstCasEntered();
+        await firstCasGate;
+      }
+    },
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  await storageArea.set({ [SETTINGS_KEY]: { changed: true } });
+
+  const firstBackup = manager.backupNow();
+  await firstCasEntered;
+  const secondBackup = manager.backupNow();
+  releaseFirstCas();
+  const [first, second] = await Promise.all([firstBackup, secondBackup]);
+  assert.deepEqual([first.revision, second.revision], [31, 32]);
+  assert.deepEqual(directorySync.casWrites.map(write => write.value.revision), [31, 32]);
+  assert.equal(directorySync.disk.revision, 32);
+});
+
+test('rotate followed immediately by backup serializes disk, cache, and state', async () => {
+  const { envelope, payload } = await encryptedFixture({ revision: 40 });
+  let releaseRotateCas;
+  let markRotateCasEntered;
+  let casCalls = 0;
+  const rotateCasEntered = new Promise(resolve => { markRotateCasEntered = resolve; });
+  const rotateCasGate = new Promise(resolve => { releaseRotateCas = resolve; });
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    directoryOptions: {
+      async beforeCasCommit() {
+        casCalls += 1;
+        if (casCalls !== 1) return;
+        markRotateCasEntered();
+        await rotateCasGate;
+      }
+    },
+    storage: {
+      [SETTINGS_KEY]: payload.settings,
+      [ABBREVIATION_KEY]: payload.globalAbbreviations
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  const newPassphrase = 'new serialized portable passphrase';
+
+  const rotate = manager.rotatePassphrase(PASSPHRASE, newPassphrase);
+  await rotateCasEntered;
+  const backup = manager.backupNow();
+  releaseRotateCas();
+  const [rotated, backedUp] = await Promise.all([rotate, backup]);
+  assert.deepEqual([rotated.revision, backedUp.revision], [41, 42]);
+  assert.equal(directorySync.disk.revision, 42);
+  const keyBytes = codec.fromBase64(
+    storageArea.data[PORTABLE_CONFIG_KEY_CACHE][envelope.backupId]
+  );
+  await codec.decryptPortableConfig(directorySync.disk, { keyBytes, cryptoRef: webcrypto });
+  assert.equal(manager.publicStatus().revision, 42);
+});
+
+test('create followed immediately by backup executes in one state queue', async () => {
+  let releaseCreateCas;
+  let markCreateCasEntered;
+  const createCasEntered = new Promise(resolve => { markCreateCasEntered = resolve; });
+  const createCasGate = new Promise(resolve => { releaseCreateCas = resolve; });
+  const { manager, directorySync } = managerFixture({
+    directoryOptions: {
+      async beforeCasCommit() {
+        markCreateCasEntered();
+        await createCasGate;
+      }
+    },
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    }
+  });
+  const create = manager.create(PASSPHRASE);
+  await createCasEntered;
+  const backup = manager.backupNow();
+  releaseCreateCas();
+  const [created, backedUp] = await Promise.all([create, backup]);
+  assert.deepEqual([created.revision, backedUp.revision], [1, 2]);
+  assert.equal(directorySync.disk.revision, 2);
+});
+
+test('dispose waits for the queue and cancels an automatic backup not yet started', async () => {
+  let scheduled = null;
+  const { envelope } = await encryptedFixture();
+  const { manager, storageArea, directorySync } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { local: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] }
+    },
+    overrides: {
+      setTimeoutRef(callback) { scheduled = callback; return 1; },
+      clearTimeoutRef() {}
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  await storageArea.set({ [SETTINGS_KEY]: { userEdit: true } });
+  manager.scheduleBackup({ [SETTINGS_KEY]: { newValue: { userEdit: true } } });
+  scheduled();
+  const closing = manager.dispose();
+
+  assert.equal(typeof closing?.then, 'function');
+  await closing;
+  assert.equal(directorySync.casWrites.length, 0);
+});
+
+test('background dependency graph can instantiate the manager with the real exported names', () => {
+  const directorySync = createDirectory();
+  const storageArea = createStorage({
+    sciLlmSettingsV2: settingsApi.createDefaultSettings(),
+    [abbreviationApi.GLOBAL_ABBREVIATION_MEMORY_KEY]: { schemaVersion: 1, entries: [] }
+  });
+  const integrated = globalThis.SciLLM;
+
+  assert.doesNotThrow(() => integrated.createPortableConfigManager({
+    directorySync,
+    storageArea,
+    settingsKey: 'sciLlmSettingsV2',
+    abbreviationKey: integrated.GLOBAL_ABBREVIATION_MEMORY_KEY,
+    derivePortableConfigKey: integrated.derivePortableConfigKey,
+    encryptPortableConfig: integrated.encryptPortableConfig,
+    decryptPortableConfig: integrated.decryptPortableConfig,
+    validatePortablePayload: integrated.validatePortablePayload,
+    validatePortableEnvelope: integrated.validatePortableEnvelope,
+    toBase64: integrated.toBase64,
+    fromBase64: integrated.fromBase64,
+    normalizeSettings: integrated.mergeSettings,
+    normalizeAbbreviations: integrated.normalizeGlobalAbbreviationMemory,
+    loadSettings: integrated.loadSettings,
+    loadGlobalAbbreviations: async area => {
+      const key = integrated.GLOBAL_ABBREVIATION_MEMORY_KEY;
+      const stored = await area.get(key);
+      return integrated.normalizeGlobalAbbreviationMemory(stored?.[key]);
+    },
+    extensionVersion: '1.0.0',
+    cryptoRef: webcrypto,
+    iterations: integrated.PORTABLE_CONFIG_KDF_ITERATIONS,
+    path: integrated.PORTABLE_CONFIG_PATH,
+    payloadKind: integrated.PORTABLE_CONFIG_PAYLOAD_KIND
+  }));
+});
+
+test('manager portable writes use only direct directory CAS, never queue or global flush', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'core', 'portable-config-manager.js'),
+    'utf8'
+  );
+  assert.match(source, /directorySync\.compareAndSwapJson/u);
+  assert.doesNotMatch(source, /directorySync\.(?:enqueueJson|flush)\s*\(/u);
+});
+
 test('background loads and creates the manager between codec and directory/router wiring', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
-  const codecIndex = source.indexOf("'core/portable-config.js'");
-  const managerIndex = source.indexOf("'core/portable-config-manager.js'");
-  const directoryIndex = source.indexOf("'core/directory-sync.js'");
+  const importBlock = source.slice(source.indexOf('importScripts('), source.indexOf(');') + 2);
+  const imports = [...importBlock.matchAll(/'([^']+)'/gu)].map(match => match[1]);
+  const abbreviationIndex = imports.indexOf('core/abbreviation-extractor.js');
+  const codecIndex = imports.indexOf('core/portable-config.js');
+  const managerIndex = imports.indexOf('core/portable-config-manager.js');
+  const directoryIndex = imports.indexOf('core/directory-sync.js');
+  const routerImportIndex = imports.indexOf('core/background-router.js');
   const createIndex = source.indexOf('SciLLM.createPortableConfigManager({');
   const routerIndex = source.indexOf('SciLLM.createBackgroundRouter({');
 
-  assert.ok(codecIndex >= 0 && codecIndex < managerIndex && managerIndex < directoryIndex);
+  assert.ok(abbreviationIndex >= 0 && abbreviationIndex < managerIndex);
+  assert.ok(codecIndex >= 0 && codecIndex < managerIndex);
+  assert.ok(managerIndex < directoryIndex && directoryIndex < routerImportIndex);
   assert.ok(createIndex >= 0 && createIndex < routerIndex);
   assert.match(source, /portableConfigManager\.probe\(\)/u);
 });

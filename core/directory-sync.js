@@ -14,6 +14,8 @@
   const LEGACY_ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
   const WORKSPACE_INDEX_PATH = 'workspace-index.json';
   const WORKSPACE_ROOT_PATH = 'workspaces';
+  const PORTABLE_CONFIG_PATH = shared.PORTABLE_CONFIG_PATH ||
+    'settings/portable-config.enc.json';
   const HANDLE_KEY = 'selected-directory';
   const META_KEY = 'meta';
   const MAX_ERROR_LENGTH = 240;
@@ -547,11 +549,125 @@
     let rerunRequested = false;
     let rerunImporter = null;
     let workspaceMutationTail = Promise.resolve();
+    const directJsonMutationTails = new Map();
 
     function serializeWorkspaceMutation(operation) {
       const result = workspaceMutationTail.then(operation, operation);
       workspaceMutationTail = result.catch(() => undefined);
       return result;
+    }
+
+    function serializeDirectJsonMutation(relativePath, operation) {
+      const previous = directJsonMutationTails.get(relativePath) || Promise.resolve();
+      const result = previous.then(operation, operation);
+      const settled = result.catch(() => undefined);
+      directJsonMutationTails.set(relativePath, settled);
+      settled.then(() => {
+        if (directJsonMutationTails.get(relativePath) === settled) {
+          directJsonMutationTails.delete(relativePath);
+        }
+      });
+      return result;
+    }
+
+    function directoryError(code, details = {}) {
+      const error = new Error(code);
+      error.code = code;
+      Object.assign(error, details);
+      return error;
+    }
+
+    function validatePortableCasEnvelope(input) {
+      if (typeof shared.validatePortableEnvelope !== 'function') {
+        fail('PORTABLE_CONFIG_SCHEMA_UNAVAILABLE');
+      }
+      const envelope = shared.validatePortableEnvelope(cloneJsonLike(input));
+      const allowedEnvelopeKeys = new Set([
+        'schemaVersion', 'revision', 'kind', 'backupId', 'updatedAt',
+        'encryption', 'ciphertext', 'sourceId'
+      ]);
+      const allowedEncryptionKeys = new Set([
+        'algorithm', 'keyLength', 'kdf', 'iterations', 'salt', 'iv'
+      ]);
+      if (Object.keys(envelope).some(key => !allowedEnvelopeKeys.has(key)) ||
+          Object.keys(envelope.encryption).some(key => !allowedEncryptionKeys.has(key))) {
+        fail('PORTABLE_CONFIG_ENVELOPE_UNSAFE');
+      }
+      return envelope;
+    }
+
+    async function compareAndSwapJson(relativePath, input, options = {}) {
+      const normalizedPath = normalizeRelativePath(relativePath);
+      if (normalizedPath !== PORTABLE_CONFIG_PATH) {
+        fail('DIRECTORY_CAS_PATH_UNSUPPORTED');
+      }
+      const mode = options.mode === 'create' ? 'create' :
+        (options.mode === 'update' ? 'update' : '');
+      if (!mode) fail('DIRECTORY_CAS_MODE_INVALID');
+      const incoming = validatePortableCasEnvelope(input);
+      const expected = mode === 'update'
+        ? validatePortableCasEnvelope(options.expected) : null;
+      if (mode === 'update' && (
+        incoming.backupId !== expected.backupId ||
+        incoming.revision !== expected.revision + 1
+      )) fail('DIRECTORY_CAS_UPDATE_INVALID');
+
+      return serializeDirectJsonMutation(normalizedPath, async () => {
+        const handle = await handleStore.load();
+        const permission = await permissionState(handle);
+        if (!handle || permission !== 'granted') {
+          throw directoryError('DIRECTORY_PERMISSION_REQUIRED', { permission });
+        }
+        let root = null;
+        try {
+          root = await getRootDirectory(handle, mode === 'create');
+        } catch (error) {
+          if (error?.name !== 'NotFoundError') throw error;
+        }
+        let content = null;
+        if (root) content = await readText(root, normalizedPath);
+
+        if (mode === 'create') {
+          if (content !== null) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode, expectedRevision: null, actualRevision: null
+            });
+          }
+          if (!root) root = await getRootDirectory(handle, true);
+        } else {
+          if (content === null) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode, expectedRevision: expected.revision, actualRevision: null
+            });
+          }
+          let current;
+          try {
+            current = validatePortableCasEnvelope(JSON.parse(content));
+          } catch (_) {
+            throw directoryError('DIRECTORY_CAS_CURRENT_INVALID', {
+              mode, expectedRevision: expected.revision
+            });
+          }
+          if (stableStringify(current) !== stableStringify(expected)) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode,
+              expectedRevision: expected.revision,
+              actualRevision: current.revision
+            });
+          }
+          await writeText(root, backupRelativePath(normalizedPath), content);
+        }
+
+        await writeText(root, normalizedPath,
+          `${JSON.stringify(stableValue(incoming), null, 2)}\n`);
+        return {
+          committed: true,
+          permission: 'granted',
+          mode,
+          revision: incoming.revision,
+          previousRevision: expected ? expected.revision : null
+        };
+      });
     }
 
     async function permissionState(handle) {
@@ -1449,6 +1565,7 @@
       requestDirectoryPermission,
       enqueueJson,
       enqueueText,
+      compareAndSwapJson,
       flush,
       status,
       readJson,

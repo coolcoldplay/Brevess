@@ -3,6 +3,11 @@ const assert = require('node:assert/strict');
 
 require('../core/user-data-database.js');
 const {
+  PORTABLE_CONFIG_PATH,
+  PORTABLE_CONFIG_KDF_ITERATIONS,
+  toBase64
+} = require('../core/portable-config.js');
+const {
   createWorkspaceManifest,
   createWorkspaceIndex,
   validateWorkspaceIndex
@@ -1064,4 +1069,129 @@ test('workspace deletion removes its active, backup, and conflict trees without 
   assert.equal(handles.has(secondConflict), true);
   assert.equal(removed.removedConflicts, 1);
   assert.equal((await sync.status()).conflictCount, 0);
+});
+
+function portableEnvelope(revision, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'brevess-encrypted-portable-config',
+    backupId: 'backup-cas-test-0001',
+    revision,
+    updatedAt: `2026-08-03T00:00:${String(revision).padStart(2, '0')}.000Z`,
+    encryption: {
+      algorithm: 'AES-GCM',
+      keyLength: 256,
+      kdf: 'PBKDF2-SHA-256',
+      iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+      salt: toBase64(new Uint8Array(16).fill(7)),
+      iv: toBase64(new Uint8Array(12).fill(revision % 255))
+    },
+    ciphertext: toBase64(new Uint8Array([revision + 1, 2, 3, 4])),
+    ...overrides
+  };
+}
+
+test('portable CAS requires granted permission and never queues or writes when unavailable', async () => {
+  for (const permission of ['prompt', 'denied']) {
+    const handles = createFakeHandleStore(permission);
+    const queue = createMemorySyncQueue();
+    const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+
+    await assert.rejects(
+      () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1), {
+        mode: 'create'
+      }),
+      error => error.code === 'DIRECTORY_PERMISSION_REQUIRED' &&
+        error.permission === permission
+    );
+    assert.equal(handles.writes.length, 0);
+    assert.deepEqual(await queue.getAll(), []);
+  }
+});
+
+test('portable CAS creates only a genuinely missing encrypted file without queue/index writes', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const envelope = portableEnvelope(1);
+
+  const result = await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, envelope, {
+    mode: 'create'
+  });
+
+  assert.deepEqual(result, {
+    committed: true,
+    permission: 'granted',
+    mode: 'create',
+    revision: 1,
+    previousRevision: null
+  });
+  assert.deepEqual(
+    JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)),
+    envelope
+  );
+  assert.deepEqual(await queue.getAll(), []);
+  assert.equal(handles.has('Brevess/index.json'), false);
+});
+
+test('portable CAS update mismatch performs zero writes and preserves the primary', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = portableEnvelope(1);
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  const writesBefore = handles.writes.length;
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(3), {
+      mode: 'update',
+      expected: portableEnvelope(2)
+    }),
+    error => error.code === 'DIRECTORY_CAS_CONFLICT'
+  );
+  assert.equal(handles.writes.length, writesBefore);
+  assert.deepEqual(JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)), first);
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('failed portable CAS leaves no replayable item for a later ordinary flush', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  handles.failNextWrites();
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1), {
+      mode: 'create'
+    })
+  );
+  assert.deepEqual(await queue.getAll(), []);
+  await sync.flush();
+  assert.equal(handles.has(`Brevess/${PORTABLE_CONFIG_PATH}`), false);
+});
+
+test('concurrent portable CAS updates with one expected revision commit exactly once', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = portableEnvelope(1);
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  const secondA = portableEnvelope(2, { ciphertext: toBase64(new Uint8Array([8, 8, 8])) });
+  const secondB = portableEnvelope(2, { ciphertext: toBase64(new Uint8Array([9, 9, 9])) });
+
+  const results = await Promise.allSettled([
+    sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, secondA, {
+      mode: 'update', expected: first
+    }),
+    sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, secondB, {
+      mode: 'update', expected: first
+    })
+  ]);
+
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter(result =>
+    result.status === 'rejected' && result.reason?.code === 'DIRECTORY_CAS_CONFLICT'
+  ).length, 1);
+  assert.equal(JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)).revision, 2);
+  assert.deepEqual(await queue.getAll(), []);
 });
