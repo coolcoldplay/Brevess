@@ -7,7 +7,9 @@
   const WORKSPACE_MANIFEST_KIND = 'sci-logic-highlighter-workspace';
   const WORKSPACE_INDEX_KIND = 'sci-logic-highlighter-workspace-index';
   const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
-  const CREDENTIAL_KEY = /(?:api.?key|authorization|credential|secret|access.?token|refresh.?token|password|bearer|custom.?headers?)/iu;
+  const privacy = typeof shared.isCredentialKey === 'function'
+    ? shared
+    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
 
   function fail(code) {
     const error = new Error(code);
@@ -72,7 +74,7 @@
       value.forEach(item => assertWorkspaceSafeValue(item, depth + 1, seen));
     } else {
       for (const [key, item] of Object.entries(value)) {
-        if (CREDENTIAL_KEY.test(key.replace(/[^a-z0-9]/giu, ''))) {
+        if (privacy.isCredentialKey?.(key) === true) {
           fail('WORKSPACE_CONTAINS_CREDENTIALS');
         }
         assertWorkspaceSafeValue(item, depth + 1, seen);

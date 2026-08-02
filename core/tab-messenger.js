@@ -20,6 +20,7 @@
     'core/manual-annotations.js',
     'core/cache-planner.js',
     'core/review-outline.js',
+    'core/privacy-sanitizer.js',
     'core/article-workspace.js',
     'core/article-archive.js',
     'core/export-bundle.js',

@@ -25,11 +25,16 @@ require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
 require('../core/cache-planner.js');
+require('../core/privacy-sanitizer.js');
 require('../core/article-workspace.js');
 const {
   articleArchiveRelativePath,
   createArticleArchive
 } = require('../core/article-archive.js');
+const {
+  createMemorySyncQueue,
+  createDirectorySync
+} = require('../core/directory-sync.js');
 require('../core/migration-bundle.js');
 require('../core/analysis-pipeline.js');
 require('../core/analysis-cache.js');
@@ -177,6 +182,53 @@ function createDirectorySyncDouble(options = {}) {
     async removeWorkspaceTree(workspace) {
       return options.removeWorkspaceTree?.(workspace) || { permission: 'granted', removed: true };
     }
+  };
+}
+
+function createWritableDirectoryHandleStore() {
+  const files = new Map();
+
+  function fileHandle(path) {
+    return {
+      name: path.split('/').at(-1),
+      kind: 'file',
+      async getFile() {
+        if (!files.has(path)) {
+          const error = new Error(`Missing file ${path}`);
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        return { async text() { return files.get(path); } };
+      },
+      async createWritable() {
+        let content = '';
+        return {
+          async write(value) { content = String(value); },
+          async close() { files.set(path, content); }
+        };
+      }
+    };
+  }
+
+  function directoryHandle(prefix, name) {
+    return {
+      name,
+      kind: 'directory',
+      async queryPermission() { return 'granted'; },
+      async getDirectoryHandle(child) {
+        return directoryHandle(`${prefix}${child}/`, child);
+      },
+      async getFileHandle(child) {
+        return fileHandle(`${prefix}${child}`);
+      }
+    };
+  }
+
+  const root = directoryHandle('', 'chosen-folder');
+  return {
+    async load() { return root; },
+    async save() {},
+    readText(path) { return files.get(path) || ''; }
   };
 }
 
@@ -420,6 +472,60 @@ test('probes, saves, and applies one per-article archive through the background 
   assert.equal(loaded.data.archive.workspace.ledger[0].quote, 'A result');
   assert.equal(loaded.data.applied, true);
   assert.equal((await documentStore.getDocument(archive.documentId)).title, 'Archived paper');
+});
+
+test('raw article archives are credential-free after router save and real directory flush', async () => {
+  const archive = portableArchive();
+  archive.workspace.privacyAudit = {
+    apiKey: 'sk-raw-api-key',
+    customHeaders: { Authorization: 'Bearer raw-authorization' },
+    token: 'raw-generic-token',
+    providerToken: 'raw-provider-token',
+    providerId: 'raw-provider-id',
+    password: 'raw-password',
+    bearer: 'raw-bearer',
+    authToken: 'raw-auth-token',
+    accessToken: 'raw-access-token',
+    refreshToken: 'raw-refresh-token',
+    credential: 'raw-credential',
+    secret: 'raw-secret',
+    experimentalProtocol: 'kept-protocol',
+    secretoryPathway: 'kept-secretory-pathway',
+    tokenizationMethod: 'kept-tokenization-method',
+    tokenUsage: 42,
+    headerTitle: 'kept-header-title',
+    proteinAccess: 'kept-protein-access'
+  };
+  const handleStore = createWritableDirectoryHandleStore();
+  const directorySync = createDirectorySync({
+    handleStore,
+    queueStore: createMemorySyncQueue(),
+    sourceId: 'background-router-privacy-test'
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
+    fetchImpl: async () => { throw new Error('archive operations must stay local'); }
+  });
+
+  const saved = await router.handle({ type: 'ARTICLE_ARCHIVE_SAVE', archive });
+  assert.equal(saved.success, true);
+  await directorySync.flush();
+
+  const diskText = handleStore.readText(`Brevess/${saved.data.relativePath}`);
+  assert.ok(diskText, 'the archive should reach the selected directory');
+  assert.doesNotMatch(diskText,
+    /sk-raw-api-key|raw-authorization|raw-generic-token|raw-provider-token|raw-provider-id|raw-password|raw-bearer|raw-auth-token|raw-access-token|raw-refresh-token|raw-credential|raw-secret/u);
+  const diskArchive = JSON.parse(diskText);
+  assert.deepEqual(diskArchive.workspace.privacyAudit, {
+    experimentalProtocol: 'kept-protocol',
+    headerTitle: 'kept-header-title',
+    proteinAccess: 'kept-protein-access',
+    secretoryPathway: 'kept-secretory-pathway',
+    tokenUsage: 42,
+    tokenizationMethod: 'kept-tokenization-method'
+  });
 });
 
 test('exports and imports a complete migration bundle including provider credentials', async () => {

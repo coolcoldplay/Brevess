@@ -8,6 +8,13 @@
   const PORTABLE_CONFIG_PAYLOAD_KIND = 'brevess-portable-user-config';
   const PORTABLE_CONFIG_KDF_ITERATIONS = 310000;
   const PORTABLE_CONFIG_MAX_KDF_ITERATIONS = 2000000;
+  const PORTABLE_CONFIG_ENVELOPE_FIELDS = Object.freeze([
+    'kind', 'schemaVersion', 'backupId', 'revision', 'updatedAt',
+    'encryption', 'ciphertext'
+  ]);
+  const PORTABLE_CONFIG_ENCRYPTION_FIELDS = Object.freeze([
+    'algorithm', 'keyLength', 'kdf', 'iterations', 'salt', 'iv'
+  ]);
 
   function fail(code) {
     const error = new Error(code);
@@ -19,6 +26,13 @@
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const prototype = Object.getPrototypeOf(value);
     return prototype === Object.prototype || prototype === null;
+  }
+
+  function hasExactFields(value, fields) {
+    const keys = Object.keys(value);
+    return keys.length === fields.length && fields.every(field =>
+      Object.prototype.hasOwnProperty.call(value, field)
+    );
   }
 
   function cryptoApi() {
@@ -106,13 +120,20 @@
 
   function validatePortableEnvelope(envelope) {
     if (!isPlainObject(envelope)) fail('PORTABLE_CONFIG_ENVELOPE_INVALID');
+    if (!hasExactFields(envelope, PORTABLE_CONFIG_ENVELOPE_FIELDS)) {
+      fail('PORTABLE_CONFIG_ENVELOPE_FIELDS_INVALID');
+    }
     if (envelope.kind !== PORTABLE_CONFIG_ENVELOPE_KIND) fail('PORTABLE_CONFIG_ENVELOPE_KIND_INVALID');
     if (envelope.schemaVersion !== 1) fail('PORTABLE_CONFIG_ENVELOPE_SCHEMA_VERSION_INVALID');
     if (!Number.isSafeInteger(envelope.revision) || envelope.revision < 0) fail('PORTABLE_CONFIG_ENVELOPE_REVISION_INVALID');
     if (typeof envelope.backupId !== 'string' || !/^[A-Za-z0-9-]{8,100}$/u.test(envelope.backupId)) fail('PORTABLE_CONFIG_ENVELOPE_BACKUP_ID_INVALID');
     if (!validIsoTime(envelope.updatedAt)) fail('PORTABLE_CONFIG_ENVELOPE_UPDATED_AT_INVALID');
     const encryption = envelope.encryption;
-    if (!isPlainObject(encryption) || encryption.algorithm !== 'AES-GCM' || encryption.keyLength !== 256 ||
+    if (!isPlainObject(encryption) ||
+        !hasExactFields(encryption, PORTABLE_CONFIG_ENCRYPTION_FIELDS)) {
+      fail('PORTABLE_CONFIG_ENVELOPE_FIELDS_INVALID');
+    }
+    if (encryption.algorithm !== 'AES-GCM' || encryption.keyLength !== 256 ||
       encryption.kdf !== 'PBKDF2-SHA-256' || !Number.isSafeInteger(encryption.iterations) ||
       encryption.iterations < PORTABLE_CONFIG_KDF_ITERATIONS) fail('PORTABLE_CONFIG_ENVELOPE_ENCRYPTION_INVALID');
     if (encryption.iterations > PORTABLE_CONFIG_MAX_KDF_ITERATIONS) fail('INVALID_PORTABLE_CONFIG_KDF_ITERATIONS');

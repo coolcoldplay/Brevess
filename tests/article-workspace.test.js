@@ -54,6 +54,29 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     /WORKSPACE_CONTAINS_CREDENTIALS/);
   assert.throws(() => assertWorkspaceSafeValue({ Authorization: 'Bearer secret' }),
     /WORKSPACE_CONTAINS_CREDENTIALS/);
+  for (const key of [
+    'token', 'providerToken', 'password', 'bearer', 'authToken',
+    'accessToken', 'refreshToken', 'credential', 'secret'
+  ]) {
+    assert.throws(
+      () => assertWorkspaceSafeValue({ [key]: 'must-not-persist' }),
+      /WORKSPACE_CONTAINS_CREDENTIALS/,
+      key
+    );
+  }
+  assert.deepEqual(assertWorkspaceSafeValue({
+    providerId: 'openai',
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12 }
+  }), {
+    providerId: 'openai',
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12 }
+  });
 });
 
 test('workspace manifests expose only relative assets and exact identity matching ignores titles', async () => {

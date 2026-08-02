@@ -7,6 +7,9 @@
   const ARTICLE_ARCHIVE_SCHEMA_VERSION = 1;
   const MAX_ARTICLE_ARCHIVE_BYTES = 12 * 1024 * 1024;
   const OMIT = Symbol('omit');
+  const privacy = typeof shared.isExportSensitiveKey === 'function'
+    ? shared
+    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
 
   function fail(code) {
     const error = new Error(code);
@@ -47,8 +50,8 @@
 
   function forbiddenKey(value) {
     const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/gu, '');
-    return /(apikey|authorization|credential|secret|accesstoken|refreshtoken|headers?|dataurl|pagehtml|documenthtml|outerhtml|innerhtml|rawhtml|fullhtml)/u
-      .test(key);
+    return privacy.isExportSensitiveKey?.(value) === true ||
+      /(dataurl|pagehtml|documenthtml|outerhtml|innerhtml|rawhtml|fullhtml)/u.test(key);
   }
 
   function sanitizePortableValue(value, depth = 0) {

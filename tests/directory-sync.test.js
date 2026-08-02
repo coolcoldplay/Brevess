@@ -8,6 +8,7 @@ const {
   PORTABLE_CONFIG_KDF_ITERATIONS,
   derivePortableConfigKey,
   encryptPortableConfig,
+  decryptPortableConfig,
   toBase64
 } = require('../core/portable-config.js');
 const {
@@ -1231,6 +1232,99 @@ test('portable settings primary, backup, conflicts, queue metadata, and index st
   assert.doesNotMatch(
     JSON.stringify(await sync.status()),
     new RegExp(`${secret}|${headerSecret}|${abbreviationSecret}`)
+  );
+});
+
+test('normal export removes the complete credential/provider family without over-removing scientific fields', async () => {
+  const sync = createDirectorySync({
+    handleStore: createFakeHandleStore(),
+    queueStore: createMemorySyncQueue()
+  });
+  const bundle = await sync.exportBundle({
+    schemaVersion: 1,
+    nested: {
+      apiKey: 'secret-api-key',
+      customHeaders: { Authorization: 'secret-authorization' },
+      token: 'secret-generic-token',
+      providerToken: 'secret-provider-token',
+      providerId: 'secret-provider-id',
+      provider: 'secret-provider',
+      password: 'secret-password',
+      bearer: 'secret-bearer',
+      authToken: 'secret-auth-token',
+      accessToken: 'secret-access-token',
+      refreshToken: 'secret-refresh-token',
+      credential: 'secret-credential',
+      secret: 'secret-secret',
+      experimentalProtocol: 'retain protocol',
+      secretoryPathway: 'retain secretory biology',
+      tokenizationMethod: 'retain scientific tokenization',
+      tokenUsage: { input: 12, output: 4 },
+      headerTitle: 'retain section header',
+      proteinAccess: 'retain assay access'
+    }
+  });
+
+  assert.deepEqual(bundle.nested, {
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  });
+});
+
+test('portable previous backup canonicalizes validated JSON before writing it', async () => {
+  const smuggled = 'apiKey=sk-duplicate-ciphertext-smuggle';
+  const salt = new Uint8Array(16).fill(19);
+  const keyBytes = await derivePortableConfigKey('portable-canonical-password', {
+    salt,
+    iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+    cryptoRef: webcrypto
+  });
+  const payload = {
+    kind: 'brevess-portable-user-config',
+    schemaVersion: 1,
+    settings: { profiles: { safe: { config: { apiKey: 'encrypted-only' } } } },
+    globalAbbreviations: { schemaVersion: 1, entries: [] }
+  };
+  const encryptRevision = revision => encryptPortableConfig(payload, {
+    keyBytes,
+    salt,
+    backupId: 'backup-canonical-regression',
+    revision,
+    now: `2026-08-03T00:02:${String(revision).padStart(2, '0')}.000Z`,
+    cryptoRef: webcrypto
+  });
+  const first = await encryptRevision(1);
+  const second = await encryptRevision(2);
+  const canonicalFirst = JSON.stringify(first);
+  const rawFirst = `  ${canonicalFirst.replace(
+    `"ciphertext":"${first.ciphertext}"`,
+    `"ciphertext":"${smuggled}","ciphertext":"${first.ciphertext}"`
+  )}  \n`;
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  handles.writeText(`Brevess/${PORTABLE_CONFIG_PATH}`, rawFirst);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+    mode: 'update', expected: first
+  });
+
+  const previousPath = 'Brevess/backups/settings/portable-config.enc.previous.json';
+  const previousText = handles.readText(previousPath);
+  const previous = JSON.parse(previousText);
+  assert.doesNotMatch(previousText, new RegExp(smuggled));
+  assert.equal(previousText, `${JSON.stringify(previous, null, 2)}\n`);
+  assert.deepEqual(Object.keys(previous).sort(), [
+    'backupId', 'ciphertext', 'encryption', 'kind', 'revision',
+    'schemaVersion', 'updatedAt'
+  ]);
+  assert.deepEqual(
+    (await decryptPortableConfig(previous, { keyBytes, cryptoRef: webcrypto })).payload,
+    payload
   );
 });
 

@@ -292,6 +292,38 @@ test('a wrong passphrase changes neither local values nor directory/cache state'
   assert.equal(directorySync.flushCalls, 0);
 });
 
+test('unlock rejects envelopes with unauthenticated extra fields before restoring local data', async () => {
+  const { envelope } = await encryptedFixture();
+  const cases = [
+    { ...envelope, sourceId: 'apiKey=sk-manager-smuggle' },
+    {
+      ...envelope,
+      encryption: { ...envelope.encryption, extra: 'sk-manager-encryption-smuggle' }
+    }
+  ];
+
+  for (const hostile of cases) {
+    const initial = {
+      [SETTINGS_KEY]: { local: 'keep' },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+      [PORTABLE_CONFIG_KEY_CACHE]: { other: codec.toBase64(new Uint8Array(32).fill(2)) }
+    };
+    const { manager, storageArea, directorySync } = managerFixture({
+      disk: hostile,
+      storage: initial
+    });
+
+    await assert.rejects(
+      () => manager.unlock(PASSPHRASE),
+      error => error.code === 'PORTABLE_CONFIG_UNLOCK_FAILED'
+    );
+    assert.deepEqual(storageArea.data, initial);
+    assert.equal(storageArea.sets.length, 0);
+    assert.deepEqual(directorySync.disk, hostile);
+    assert.equal(directorySync.casWrites.length, 0);
+  }
+});
+
 test('invalid cached key falls back to locked without changing local values', async () => {
   const { envelope } = await encryptedFixture();
   const initialSettings = { local: 'keep' };

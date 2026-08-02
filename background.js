@@ -30,6 +30,7 @@ importScripts(
   'core/review-outline.js',
   'core/zotero-connector.js',
   'core/cache-planner.js',
+  'core/privacy-sanitizer.js',
   'core/article-archive.js',
   'core/migration-bundle.js',
   'core/keyboard-shortcuts.js',

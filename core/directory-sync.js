@@ -20,16 +20,21 @@
   const META_KEY = 'meta';
   const MAX_ERROR_LENGTH = 240;
   const MAX_CONFLICTS = 50;
+  const privacy = typeof shared.isExportSensitiveKey === 'function'
+    ? shared
+    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
   const FORBIDDEN_EXPORT_KEYS = new Set([
-    'apikey', 'authorization', 'headers', 'providers', 'analysiscache',
-    'directoryhandle', 'directoryhandles', 'syncqueue', 'cachestore', 'handlestore'
+    'analysiscache', 'directoryhandle', 'directoryhandles', 'syncqueue',
+    'cachestore', 'handlestore'
   ]);
 
   function forbiddenExportKey(value) {
     const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return FORBIDDEN_EXPORT_KEYS.has(key) ||
-      /(apikey|authorization|credential|secret|token|header|provider|cache|handle|syncqueue)/u
-        .test(key);
+    return privacy.isExportSensitiveKey?.(value) === true ||
+      FORBIDDEN_EXPORT_KEYS.has(key) ||
+      key.endsWith('cache') || key.endsWith('caches') ||
+      key.endsWith('handle') || key.endsWith('handles') ||
+      key.includes('syncqueue');
   }
 
   function fail(code) {
@@ -598,19 +603,14 @@
       if (typeof shared.validatePortableEnvelope !== 'function') {
         fail('PORTABLE_CONFIG_SCHEMA_UNAVAILABLE');
       }
-      const envelope = shared.validatePortableEnvelope(cloneJsonLike(input));
-      const allowedEnvelopeKeys = new Set([
-        'schemaVersion', 'revision', 'kind', 'backupId', 'updatedAt',
-        'encryption', 'ciphertext'
-      ]);
-      const allowedEncryptionKeys = new Set([
-        'algorithm', 'keyLength', 'kdf', 'iterations', 'salt', 'iv'
-      ]);
-      if (Object.keys(envelope).some(key => !allowedEnvelopeKeys.has(key)) ||
-          Object.keys(envelope.encryption).some(key => !allowedEncryptionKeys.has(key))) {
-        fail('PORTABLE_CONFIG_ENVELOPE_UNSAFE');
+      try {
+        return shared.validatePortableEnvelope(cloneJsonLike(input));
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_ENVELOPE_FIELDS_INVALID') {
+          fail('PORTABLE_CONFIG_ENVELOPE_UNSAFE');
+        }
+        throw error;
       }
-      return envelope;
     }
 
     async function compareAndSwapJson(relativePath, input, options = {}) {
@@ -673,7 +673,8 @@
               actualRevision: current.revision
             });
           }
-          await writeText(root, backupRelativePath(normalizedPath), content);
+          await writeText(root, backupRelativePath(normalizedPath),
+            `${JSON.stringify(stableValue(current), null, 2)}\n`);
         }
 
         await writeText(root, normalizedPath,

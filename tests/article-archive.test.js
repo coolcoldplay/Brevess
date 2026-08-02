@@ -86,6 +86,47 @@ test('creates a complete portable article archive while stripping secrets and pa
   assert.deepEqual(validateArticleArchive(JSON.parse(serialized)), archive);
 });
 
+test('article archives remove the complete credential and provider key family', () => {
+  const input = sampleArchiveInput();
+  input.workspace.privacyAudit = {
+    apiKey: 'secret-api-key',
+    customHeaders: { Authorization: 'secret-authorization' },
+    token: 'secret-generic-token',
+    providerToken: 'secret-provider-token',
+    providerId: 'secret-provider-id',
+    provider: 'secret-provider',
+    password: 'secret-password',
+    bearer: 'secret-bearer',
+    authToken: 'secret-auth-token',
+    accessToken: 'secret-access-token',
+    refreshToken: 'secret-refresh-token',
+    credential: 'secret-credential',
+    secret: 'secret-secret',
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  };
+
+  const archive = createArticleArchive(input);
+  const audit = archive.workspace.privacyAudit;
+  const serialized = JSON.stringify(archive);
+  assert.doesNotMatch(
+    serialized,
+    /secret-api-key|secret-authorization|secret-generic-token|secret-provider-token|secret-provider-id|secret-provider|secret-password|secret-bearer|secret-auth-token|secret-access-token|secret-refresh-token|secret-credential|secret-secret/u
+  );
+  assert.deepEqual(audit, {
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  });
+});
+
 test('rejects mismatched identities, unsupported schemas, and oversized archives', () => {
   const mismatched = sampleArchiveInput();
   mismatched.documentRecord.documentId = `sha256:${'b'.repeat(64)}`;

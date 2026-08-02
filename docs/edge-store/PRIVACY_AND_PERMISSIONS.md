@@ -41,7 +41,7 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 2. **User-provided content / 用户提供的内容**
    问题、备注、规则、白名单、黑名单、模型配置及手动选择的文本。
 3. **Authentication information / 身份验证信息**
-   用户自行填写的 Provider API Key，或本机 Codex Bridge 的本地会话状态。API Key 仅保存在扩展本地存储。
+   用户自行填写的 Provider API Key，或本机 Codex Bridge 的本地会话状态。API Key 默认保存在扩展本地存储；用户启用便携配置备份后，也会以认证密文写入用户选择的本地文件夹。
 4. **Website identifiers / 网站标识信息**
    当前论文 URL、canonical URL、DOI 和标题，用于区分本机文章工作区及恢复跳转。
 5. **Product interaction and diagnostics / 产品交互与诊断**
@@ -69,7 +69,7 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 - 默认：`chrome.storage.local` 与 IndexedDB。
 - 可选：用户通过系统目录选择器授权的本地 `Brevess` 文件夹。
 - 保留期限：直到用户删除对应工作区、清空数据、删除本地文件或卸载扩展。
-- 用户启用便携配置备份后，模型/API 设置（包括 API Key 和自定义鉴权头）与全局缩略词表只以 AES-GCM 认证密文写入 `Brevess/settings/portable-config.enc.json`，密钥由 PBKDF2 从备份口令派生。
+- 用户启用便携配置备份后，模型/API 设置（包括 API Key 和自定义鉴权头）与全局缩略词表只以 AES-GCM 认证密文写入主文件 `Brevess/settings/portable-config.enc.json`；成功更新后，最多保留一个同样加密的滚动旧版副本 `Brevess/backups/settings/portable-config.enc.previous.json`。密钥由 PBKDF2 从备份口令派生。
 - 备份口令不写入目录或任何导出文件；派生密钥只缓存在本机，可用“忘记备份解锁”清除。忘记口令后无法恢复密文副本。
 - 普通论文导出、诊断、日志、Token 报告、缓存和单篇工作区仍排除 API 凭据；页面原始载荷也不进入便携配置备份。
 

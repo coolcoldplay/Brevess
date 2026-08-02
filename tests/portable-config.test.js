@@ -132,6 +132,29 @@ test('validates hostile envelope fields before decrypting', async () => {
   }
 });
 
+test('rejects every unauthenticated top-level or encryption descriptor field', async () => {
+  const keyBytes = await deriveKeyForOptions();
+  const envelope = await encryptPortableConfig(payload, options(keyBytes));
+  const cases = [
+    draft => { draft.sourceId = 'apiKey=sk-plaintext-smuggle'; },
+    draft => { draft.unexpected = { apiKey: 'sk-extra-top-level' }; },
+    draft => { draft.encryption.extra = 'sk-extra-encryption-field'; }
+  ];
+
+  for (const mutate of cases) {
+    const hostile = structuredClone(envelope);
+    mutate(hostile);
+    assert.throws(
+      () => validatePortableEnvelope(hostile),
+      error => error.code === 'PORTABLE_CONFIG_ENVELOPE_FIELDS_INVALID'
+    );
+    await assert.rejects(
+      () => decryptPortableConfig(hostile, { keyBytes }),
+      error => error.code === 'PORTABLE_CONFIG_DECRYPT_FAILED'
+    );
+  }
+});
+
 test('rejects ciphertext tampering, invalid JSON, and invalid decrypted payload uniformly', async () => {
   const keyBytes = await deriveKeyForOptions();
   const envelope = await encryptPortableConfig(payload, options(keyBytes));
