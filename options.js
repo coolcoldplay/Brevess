@@ -931,6 +931,9 @@ function portableConfigRequestForMode(mode, currentPassphrase, passphrase) {
 
 function portableConfigErrorText(error) {
   const code = typeof error?.code === 'string' ? error.code : '';
+  if (code === 'PORTABLE_CONFIG_NOT_READY') {
+    return '加密配置尚未就绪，请先创建或解锁配置备份。';
+  }
   if (code === 'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT') {
     return '口令至少需要 10 个字符。';
   }
@@ -1224,6 +1227,23 @@ function rejectBlockedManualDirectoryAction() {
     return false;
   }
   showUserDataStatus('请先完成加密配置备份，再同步或重建目录。', 'error');
+  return true;
+}
+
+function portableConfigNotReadyError(value) {
+  const candidate = value?.error && typeof value.error === 'object'
+    ? value.error : value;
+  return candidate?.code === 'PORTABLE_CONFIG_NOT_READY' ? candidate : null;
+}
+
+async function refreshAfterPortableConfigNotReady(value, actionLabel) {
+  const error = portableConfigNotReadyError(value);
+  if (!error) return false;
+  renderPortableConfigStatus({
+    state: 'unknown', pending: true, lastError: 'PORTABLE_CONFIG_NOT_READY'
+  });
+  await refreshUserDataStatus();
+  showUserDataStatus(`${actionLabel}：${portableConfigErrorText(error)}`, 'error');
   return true;
 }
 
@@ -1562,6 +1582,7 @@ async function syncUserDataNow() {
   showUserDataStatus('正在同步本地数据…', 'info');
   try {
     const result = await callBackground({ type: 'USER_DATA_SYNC_NOW' });
+    if (await refreshAfterPortableConfigNotReady(result, '同步已停止')) return;
     await refreshUserDataStatus();
     if (result.permission !== 'granted') {
       showUserDataStatus('目录需要重新授权后才能同步。', 'error');
@@ -1569,6 +1590,7 @@ async function syncUserDataNow() {
       showUserDataStatus(`同步完成：写入 ${result.written || 0} 项。`, 'success');
     }
   } catch (error) {
+    if (await refreshAfterPortableConfigNotReady(error, '同步已停止')) return;
     showUserDataStatus(`同步失败：${friendlyError(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);
@@ -1591,6 +1613,7 @@ async function confirmRebuildUserDataIndex(event) {
   showUserDataStatus('正在核对目录索引并导入较新数据…', 'info');
   try {
     const result = await callBackground({ type: 'USER_DATA_REBUILD_INDEX' });
+    if (await refreshAfterPortableConfigNotReady(result, '重建已停止')) return;
     await refreshSettings();
     await refreshUserDataStatus();
     showUserDataStatus(
@@ -1598,6 +1621,7 @@ async function confirmRebuildUserDataIndex(event) {
       'success'
     );
   } catch (error) {
+    if (await refreshAfterPortableConfigNotReady(error, '重建已停止')) return;
     showUserDataStatus(`重建失败：${friendlyError(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);

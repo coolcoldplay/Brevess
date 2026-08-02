@@ -899,6 +899,10 @@ test('manual directory sync and rebuild require ready non-pending portable state
   const predicateEnd = script.indexOf('\n}', predicateStart) + 2;
   const rejectStart = script.indexOf('function rejectBlockedManualDirectoryAction(');
   const rejectEnd = script.indexOf('\n}', rejectStart) + 2;
+  const recoveryStart = script.indexOf('function portableConfigNotReadyError(');
+  const recoveryEnd = script.indexOf(
+    '\n}', script.indexOf('async function refreshAfterPortableConfigNotReady(')
+  ) + 2;
   const updateStart = script.indexOf('function updateUserDataActionButtons(');
   const updateEnd = script.indexOf('\n}', updateStart) + 2;
   const syncStart = script.indexOf('async function syncUserDataNow(');
@@ -909,6 +913,7 @@ test('manual directory sync and rebuild require ready non-pending portable state
   const confirmEnd = script.indexOf('\n}', confirmStart) + 2;
   const source = `${script.slice(predicateStart, predicateEnd)}\n` +
     `${script.slice(rejectStart, rejectEnd)}\n` +
+    `${script.slice(recoveryStart, recoveryEnd)}\n` +
     `${script.slice(updateStart, updateEnd)}\n${script.slice(syncStart, syncEnd)}\n` +
     `${script.slice(openStart, openEnd)}\n${script.slice(confirmStart, confirmEnd)}\n` +
     'globalThis.allows = portableConfigAllowsManualDirectoryAction;' +
@@ -972,6 +977,106 @@ test('manual directory sync and rebuild require ready non-pending portable state
     assert.equal(rebuildDialog.showCount > 0, allowed, `rebuild open ${state}/${pending}`);
     if (!allowed) assert.ok(notices.length >= 3, `blocked ${state}/${pending} reports safely`);
   }
+});
+
+test('backend portable readiness rejection refreshes stale-ready controls before actions unlock', async () => {
+  const script = read('options.js');
+  const rendererStart = script.indexOf('// Portable config status renderer: start.');
+  const rendererEnd = script.indexOf('// Portable config status renderer: end.');
+  const actionStart = script.indexOf('function portableConfigAllowsManualDirectoryAction(');
+  const actionEnd = script.indexOf('\n}', script.indexOf('function updateUserDataActionButtons(')) + 2;
+  const recoveryStart = script.indexOf('function portableConfigNotReadyError(');
+  assert.ok(recoveryStart >= actionStart, 'manual actions need backend readiness recovery');
+  const syncStart = script.indexOf('async function syncUserDataNow(');
+  const syncEnd = script.indexOf('\n}', syncStart) + 2;
+  const rebuildStart = script.indexOf('async function confirmRebuildUserDataIndex(');
+  const rebuildEnd = script.indexOf('\n}', rebuildStart) + 2;
+  const elements = Object.fromEntries([
+    'portableConfigState', 'portableConfigRevision', 'portableConfigUpdatedAt',
+    'portableConfigNotice', 'unlockPortableConfig',
+    'rotatePortableConfigPassphrase', 'forgetPortableConfigKey',
+    'backupPortableConfigNow', 'chooseUserDataDirectory',
+    'reauthorizeUserDataDirectory', 'syncUserDataNow',
+    'rebuildUserDataIndex', 'exportUserDataBundle'
+  ].map(id => [id, {
+    textContent: '', hidden: false, disabled: false, dataset: {},
+    setAttribute() {}
+  }]));
+  elements.rebuildUserDataDialog = { close() {} };
+  const calls = [];
+  const notices = [];
+  const refreshPendingStates = [];
+  let action = 'sync';
+  const context = {
+    userDataUi: {
+      pendingAction: false,
+      lastStatus: { directoryName: 'Brevess', permission: 'granted' },
+      directoryHandle: {}, portableConfigStatus: { state: 'ready', pending: false }
+    },
+    window: { showDirectoryPicker() {} },
+    document: { getElementById: id => elements[id] },
+    callBackground: async message => {
+      calls.push(message.type);
+      if (action === 'sync') {
+        return { error: { code: 'PORTABLE_CONFIG_NOT_READY', message: 'private' } };
+      }
+      throw Object.assign(new Error('private'), { code: 'PORTABLE_CONFIG_NOT_READY' });
+    },
+    refreshUserDataStatus: async () => {
+      refreshPendingStates.push(context.userDataUi.pendingAction);
+      await Promise.resolve();
+      context.render({ state: 'locked', pending: true });
+      return true;
+    },
+    refreshSettings: async () => { calls.push('REFRESH_SETTINGS'); },
+    showUserDataStatus: (message, type) => notices.push([message, type]),
+    portableConfigErrorText: error => {
+      assert.equal(error.code, 'PORTABLE_CONFIG_NOT_READY');
+      return '安全配置提示';
+    },
+    friendlyError: () => '不应使用通用错误',
+    Date, Number, String, Set, Object, Boolean, Error
+  };
+  const source = `${script.slice(rendererStart, rendererEnd)}\n` +
+    `${script.slice(actionStart, actionEnd)}\n` +
+    `${script.slice(syncStart, syncEnd)}\n${script.slice(rebuildStart, rebuildEnd)}\n` +
+    'globalThis.render = renderPortableConfigStatus;' +
+    'globalThis.updateButtons = updateUserDataActionButtons;' +
+    'globalThis.syncNow = syncUserDataNow;' +
+    'globalThis.rebuild = confirmRebuildUserDataIndex;';
+  vm.runInNewContext(source, context);
+  context.setUserDataActionPending = value => {
+    context.userDataUi.pendingAction = Boolean(value);
+    context.updateButtons();
+  };
+
+  context.render({ state: 'ready', pending: false });
+  await context.syncNow();
+  assert.deepEqual(calls, ['USER_DATA_SYNC_NOW']);
+  assert.deepEqual(refreshPendingStates, [true]);
+  assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
+  assert.equal(context.userDataUi.portableConfigStatus.pending, true);
+  assert.equal(elements.syncUserDataNow.disabled, true);
+  assert.equal(elements.rebuildUserDataIndex.disabled, true);
+  assert.equal(elements.unlockPortableConfig.hidden, false);
+  assert.equal(elements.unlockPortableConfig.disabled, false);
+  assert.equal(notices.at(-1)?.[1], 'error');
+  assert.match(notices.at(-1)?.[0] || '', /安全配置提示/);
+  assert.doesNotMatch(notices.flat().join(' '), /private|不应使用通用错误/);
+
+  action = 'rebuild';
+  calls.length = 0;
+  notices.length = 0;
+  refreshPendingStates.length = 0;
+  context.render({ state: 'ready', pending: false });
+  await context.rebuild({ preventDefault() {} });
+  assert.deepEqual(calls, ['USER_DATA_REBUILD_INDEX']);
+  assert.deepEqual(refreshPendingStates, [true]);
+  assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
+  assert.equal(elements.syncUserDataNow.disabled, true);
+  assert.equal(elements.unlockPortableConfig.hidden, false);
+  assert.equal(notices.at(-1)?.[1], 'error');
+  assert.match(notices.at(-1)?.[0] || '', /安全配置提示/);
 });
 
 test('portable dialog controller maps modes, deduplicates submits, and clears every secret path', async () => {

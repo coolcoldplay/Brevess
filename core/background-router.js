@@ -375,7 +375,10 @@
       try {
         return await portableConfigManager.runWhenReady(operation);
       } catch (error) {
-        throw safePortableConfigError(error);
+        if (error?.code === 'PORTABLE_CONFIG_NOT_READY') {
+          throw safePortableConfigError(error);
+        }
+        throw error;
       }
     }
 

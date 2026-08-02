@@ -4929,6 +4929,35 @@ test('manual directory actions use the authoritative portable gate before touchi
   }
 });
 
+test('ready portable gate preserves directory operation error codes', async () => {
+  const secret = 'directory-operation-secret';
+  for (const type of ['USER_DATA_SYNC_NOW', 'USER_DATA_REBUILD_INDEX']) {
+    const directorySync = createDirectorySyncDouble({
+      flush: () => {
+        throw Object.assign(new Error(secret), { code: 'DIRECTORY_SYNC_UNAVAILABLE' });
+      }
+    });
+    let rebuildCalls = 0;
+    directorySync.rebuildIndex = async () => {
+      rebuildCalls += 1;
+      throw Object.assign(new Error(secret), { code: 'DIRECTORY_SYNC_UNAVAILABLE' });
+    };
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(), directorySync,
+      portableConfigManager: createReadyPortableConfigManagerDouble(),
+      fetchImpl: async () => jsonResponse({})
+    });
+
+    const response = await router.handle({ type });
+
+    assert.equal(response.success, false, type);
+    assert.equal(response.error.code, 'DIRECTORY_SYNC_UNAVAILABLE', type);
+    assert.equal(directorySync.flushCalls, type === 'USER_DATA_SYNC_NOW' ? 1 : 0);
+    assert.equal(rebuildCalls, type === 'USER_DATA_REBUILD_INDEX' ? 1 : 0);
+    assert.doesNotMatch(JSON.stringify(response), new RegExp(secret));
+  }
+});
+
 test('routes portable configuration commands once, maps passphrases, and exposes only public status', async () => {
   const calls = [];
   const publicStatus = {
