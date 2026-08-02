@@ -478,8 +478,10 @@ test('portable directory preparation probes before any drained sync and gates ev
   assert.ok(activationStart >= 0 && activationEnd > activationStart);
   const source = `${script.slice(activationStart, activationEnd)}\n${script.slice(start, end)}`;
 
-  async function run(probeState, dialogResult) {
-    const events = [];
+  async function run(probeState, dialogResult, {
+    failReload = false, events = []
+  } = {}) {
+    const secret = 'cached-ready-secret';
     const context = { Error };
     vm.runInNewContext(`${source}\nglobalThis.prepare = preparePortableConfigForDirectory;`, context);
     const result = await context.prepare({
@@ -492,25 +494,28 @@ test('portable directory preparation probes before any drained sync and gates ev
         events.push(['dialog', mode]);
         return dialogResult;
       },
-      reloadSettings: async () => { events.push(['reload', 'reload']); },
+      reloadSettings: async () => {
+        events.push(['reload', 'reload']);
+        if (failReload) throw new Error(secret);
+      },
       refreshStatus: async () => { events.push(['refresh', 'status']); },
       isOnboardingActive: () => true,
       markStorageCompleted: async () => { events.push(['onboarding', 'completed']); },
       renderStatus: status => { events.push(['render', status?.state]); }
     });
-    return { events, result };
+    return { events, result, secret };
   }
 
   const cached = await run('ready');
   assert.deepEqual(cached.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW', 'status',
+    'PORTABLE_CONFIG_PROBE', 'ready', 'reload', 'USER_DATA_SYNC_NOW', 'status',
     'completed'
   ]);
   assert.equal(cached.events.find(event => event[1] === 'USER_DATA_SYNC_NOW')[2], true);
 
   const created = await run('missing', { state: 'ready' });
   assert.deepEqual(created.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready',
+    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready', 'reload',
     'USER_DATA_SYNC_NOW', 'status', 'completed'
   ]);
 
@@ -518,6 +523,15 @@ test('portable directory preparation probes before any drained sync and gates ev
   assert.deepEqual(unlocked.events.map(event => event[1]), [
     'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload',
     'USER_DATA_SYNC_NOW', 'status', 'completed'
+  ]);
+
+  const cachedFailureEvents = [];
+  await assert.rejects(
+    run('ready', undefined, { failReload: true, events: cachedFailureEvents }),
+    /cached-ready-secret/
+  );
+  assert.deepEqual(cachedFailureEvents.map(event => event[1]), [
+    'PORTABLE_CONFIG_PROBE', 'ready', 'reload'
   ]);
 
   for (const [state, dialogResult] of [
@@ -654,6 +668,7 @@ test('portable settings refresh rejects safely and initial unlock stops before s
   const events = [];
   const notices = [];
   const secret = 'initial-restore-secret';
+  let probeState = 'locked';
   const context = {
     userDataUi: { pendingAction: false, directoryHandle: null, handleLoaded: false },
     onboardingUi: { active: true },
@@ -669,7 +684,7 @@ test('portable settings refresh rejects safely and initial unlock stops before s
     indexedDB: {},
     callBackground: async message => {
       events.push(['call', message.type, message.drain]);
-      if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: 'locked' };
+      if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: probeState };
       return { permission: 'granted' };
     },
     openPortableConfigDialog: async mode => {
@@ -699,12 +714,28 @@ test('portable settings refresh rejects safely and initial unlock stops before s
   ].includes(event[0])), [
     ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
     ['render', 'locked'], ['dialog', 'unlock'], ['render', 'ready'],
-    ['portable-reload'], ['render', 'error']
+    ['portable-reload']
   ]);
   assert.equal(events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false);
-  assert.equal(events.some(event => event[0] === 'refresh-status'), false);
+  assert.equal(events.filter(event => event[0] === 'refresh-status').length, 1);
   assert.equal(events.some(event => event[0] === 'onboarding-complete'), false);
   assert.equal(events.some(event => event[0] === 'legacy-reload'), false);
+  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
+
+  events.length = 0;
+  notices.length = 0;
+  probeState = 'ready';
+  await context.choose();
+  assert.deepEqual(events.filter(event => [
+    'picker', 'save-handle', 'call', 'dialog', 'render', 'portable-reload',
+    'refresh-status'
+  ].includes(event[0])), [
+    ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
+    ['render', 'ready'], ['portable-reload'], ['refresh-status']
+  ]);
+  assert.equal(events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false);
+  assert.equal(events.some(event => event[0] === 'onboarding-complete'), false);
   assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
   assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
 });
@@ -777,6 +808,165 @@ test('portable public status renderer ignores hostile private fields and rejects
   ['backupId', 'salt', 'iv', 'ciphertext', 'passphrase', 'key', 'apiKey', 'profile']
     .forEach(field => assert.equal(accessed.includes(field), false));
   assert.doesNotMatch(Object.values(elements).map(item => item.textContent).join(' '), /private-/);
+
+  context.render({ state: 'locked', pending: true });
+  assert.equal(elements.portableConfigState.dataset.state, 'pending');
+  assert.equal(elements.unlockPortableConfig.hidden, false);
+  assert.equal(elements.unlockPortableConfig.disabled, false);
+  assert.match(read('options.css'), /\.portable-config-state\[data-state=["']pending["']\]/);
+});
+
+test('forgetting a portable key reprobes authoritative state and leaves unlock usable', async () => {
+  const script = read('options.js');
+  const rendererStart = script.indexOf('// Portable config status renderer: start.');
+  const rendererEnd = script.indexOf('// Portable config status renderer: end.');
+  const forgetStart = script.indexOf('async function forgetPortableConfigKey(');
+  const forgetEnd = script.indexOf('\n}', forgetStart) + 2;
+  const unlockStart = script.indexOf('async function unlockPortableConfig(');
+  const unlockEnd = script.indexOf('\n}', unlockStart) + 2;
+  const elements = Object.fromEntries([
+    'portableConfigState', 'portableConfigRevision', 'portableConfigUpdatedAt',
+    'portableConfigNotice', 'unlockPortableConfig',
+    'rotatePortableConfigPassphrase', 'forgetPortableConfigKey',
+    'backupPortableConfigNow'
+  ].map(id => [id, { textContent: '', hidden: false, disabled: false, dataset: {} }]));
+  const calls = [];
+  const notices = [];
+  let failProbe = false;
+  const context = {
+    document: { getElementById: id => elements[id] },
+    userDataUi: {
+      pendingAction: false,
+      portableConfigStatus: { state: 'ready', pending: false }
+    },
+    window: { confirm: () => true },
+    callBackground: async message => {
+      calls.push(message.type);
+      if (message.type === 'PORTABLE_CONFIG_FORGET_KEY') {
+        return { state: 'locked', pending: true };
+      }
+      if (failProbe) {
+        throw Object.assign(new Error('probe-secret'), { code: 'PRIVATE_PROBE_FAILURE' });
+      }
+      return { state: 'locked', pending: false };
+    },
+    showUserDataStatus: (message, type) => notices.push([message, type]),
+    portableConfigErrorText: () => '无法完成加密配置操作，请稍后重试。',
+    activatePortableConfigFromStatusCard: async () => { calls.push('OPEN_UNLOCK'); },
+    Date, Number, String, Set, Object, Error
+  };
+  const source = `${script.slice(rendererStart, rendererEnd)}\n` +
+    `${script.slice(forgetStart, forgetEnd)}\n${script.slice(unlockStart, unlockEnd)}\n` +
+    'globalThis.render = renderPortableConfigStatus;' +
+    'globalThis.forget = forgetPortableConfigKey;' +
+    'globalThis.unlock = unlockPortableConfig;';
+  vm.runInNewContext(source, context);
+  context.setUserDataActionPending = value => {
+    context.userDataUi.pendingAction = Boolean(value);
+    context.render(context.userDataUi.portableConfigStatus);
+  };
+
+  await context.forget();
+  assert.deepEqual(calls, ['PORTABLE_CONFIG_FORGET_KEY', 'PORTABLE_CONFIG_PROBE']);
+  assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
+  assert.equal(context.userDataUi.portableConfigStatus.pending, false);
+  assert.equal(elements.unlockPortableConfig.hidden, false);
+  assert.equal(elements.unlockPortableConfig.disabled, false);
+  await context.unlock();
+  assert.equal(calls.at(-1), 'OPEN_UNLOCK');
+
+  calls.length = 0;
+  notices.length = 0;
+  failProbe = true;
+  context.render({ state: 'ready', pending: false });
+  await context.forget();
+  assert.deepEqual(calls, ['PORTABLE_CONFIG_FORGET_KEY', 'PORTABLE_CONFIG_PROBE']);
+  assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
+  assert.equal(context.userDataUi.portableConfigStatus.pending, false);
+  assert.equal(elements.unlockPortableConfig.disabled, false);
+  assert.doesNotMatch(notices.flat().join(' '), /probe-secret/);
+});
+
+test('manual directory sync and rebuild require ready non-pending portable state at runtime', async () => {
+  const script = read('options.js');
+  const predicateStart = script.indexOf('function portableConfigAllowsManualDirectoryAction(');
+  assert.ok(predicateStart >= 0, 'manual actions need one shared strict portable predicate');
+  const predicateEnd = script.indexOf('\n}', predicateStart) + 2;
+  const rejectStart = script.indexOf('function rejectBlockedManualDirectoryAction(');
+  const rejectEnd = script.indexOf('\n}', rejectStart) + 2;
+  const updateStart = script.indexOf('function updateUserDataActionButtons(');
+  const updateEnd = script.indexOf('\n}', updateStart) + 2;
+  const syncStart = script.indexOf('async function syncUserDataNow(');
+  const syncEnd = script.indexOf('\n}', syncStart) + 2;
+  const openStart = script.indexOf('function openRebuildUserDataDialog(');
+  const openEnd = script.indexOf('\n}', openStart) + 2;
+  const confirmStart = script.indexOf('async function confirmRebuildUserDataIndex(');
+  const confirmEnd = script.indexOf('\n}', confirmStart) + 2;
+  const source = `${script.slice(predicateStart, predicateEnd)}\n` +
+    `${script.slice(rejectStart, rejectEnd)}\n` +
+    `${script.slice(updateStart, updateEnd)}\n${script.slice(syncStart, syncEnd)}\n` +
+    `${script.slice(openStart, openEnd)}\n${script.slice(confirmStart, confirmEnd)}\n` +
+    'globalThis.allows = portableConfigAllowsManualDirectoryAction;' +
+    'globalThis.updateButtons = updateUserDataActionButtons;' +
+    'globalThis.syncNow = syncUserDataNow;' +
+    'globalThis.openRebuild = openRebuildUserDataDialog;' +
+    'globalThis.confirmRebuild = confirmRebuildUserDataIndex;';
+  const cases = [
+    ['unknown', false, false], ['disabled', false, false],
+    ['missing', false, false], ['locked', false, false],
+    ['error', false, false], ['unavailable', false, false],
+    ['ready', true, false], ['ready', false, true]
+  ];
+
+  for (const [state, allowed, pending] of cases) {
+    const calls = [];
+    const notices = [];
+    const elements = Object.fromEntries([
+      'chooseUserDataDirectory', 'reauthorizeUserDataDirectory',
+      'syncUserDataNow', 'rebuildUserDataIndex', 'exportUserDataBundle'
+    ].map(id => [id, { disabled: false }]));
+    const rebuildDialog = {
+      open: false, showCount: 0, closeCount: 0,
+      showModal() { this.open = true; this.showCount++; },
+      close() { this.open = false; this.closeCount++; }
+    };
+    elements.rebuildUserDataDialog = rebuildDialog;
+    const context = {
+      userDataUi: {
+        pendingAction: false,
+        lastStatus: { directoryName: 'Brevess', permission: 'granted' },
+        directoryHandle: {}, portableConfigStatus: { state, pending }
+      },
+      window: { showDirectoryPicker() {} },
+      document: { getElementById: id => elements[id] },
+      renderPortableConfigStatus() {},
+      showUserDataStatus: (message, type) => notices.push([message, type]),
+      setUserDataActionPending(value) { context.userDataUi.pendingAction = Boolean(value); },
+      callBackground: async message => {
+        calls.push(message.type);
+        return message.type === 'USER_DATA_SYNC_NOW'
+          ? { permission: 'granted', written: 1 }
+          : { imported: 1, stale: 0 };
+      },
+      refreshUserDataStatus: async () => {},
+      refreshSettings: async () => {},
+      friendlyError: () => '安全错误',
+      Error, Boolean
+    };
+    vm.runInNewContext(source, context);
+    assert.equal(context.allows({ state, pending }), allowed, `${state}/${pending}`);
+    context.updateButtons();
+    assert.equal(elements.syncUserDataNow.disabled, !allowed, `sync button ${state}/${pending}`);
+    assert.equal(elements.rebuildUserDataIndex.disabled, !allowed, `rebuild button ${state}/${pending}`);
+
+    await context.syncNow();
+    context.openRebuild();
+    await context.confirmRebuild({ preventDefault() {} });
+    assert.equal(calls.includes('USER_DATA_SYNC_NOW'), allowed, `sync handler ${state}/${pending}`);
+    assert.equal(calls.includes('USER_DATA_REBUILD_INDEX'), allowed, `rebuild handler ${state}/${pending}`);
+    assert.equal(rebuildDialog.showCount > 0, allowed, `rebuild open ${state}/${pending}`);
+    if (!allowed) assert.ok(notices.length >= 3, `blocked ${state}/${pending} reports safely`);
+  }
 });
 
 test('portable dialog controller maps modes, deduplicates submits, and clears every secret path', async () => {
@@ -795,10 +985,18 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     const consoleWrites = [];
     let settleBackground = null;
     const controls = [];
-    const makeElement = value => ({
-      value, textContent: '', hidden: false, disabled: false,
-      autocomplete: '', focus() {}
-    });
+    const makeElement = value => {
+      const elementAttributes = new Map();
+      return {
+        value, textContent: '', hidden: false, disabled: false,
+        autocomplete: '', focusCount: 0,
+        focus() { if (!this.disabled) this.focusCount++; },
+        setAttribute(name, next) { elementAttributes.set(name, String(next)); },
+        removeAttribute(name) { elementAttributes.delete(name); },
+        getAttribute(name) { return elementAttributes.get(name) ?? null; },
+        hasAttribute(name) { return elementAttributes.has(name); }
+      };
+    };
     const elements = {
       portableConfigCurrentPassphrase: makeElement(''),
       portableConfigPassphrase: makeElement(''),
@@ -822,9 +1020,12 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     const dialog = {
       open: false,
       showModal() { this.open = true; },
-      close() {
-        this.open = false;
-        context.clearSecrets();
+      close(returnValue = '') {
+        this.returnValue = returnValue;
+        queueMicrotask(() => {
+          this.open = false;
+          context.settleDialog();
+        });
       },
       querySelectorAll() { return controls; },
       setAttribute(name, value) { attributes.set(name, value); },
@@ -834,7 +1035,8 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     const context = {
       document: { getElementById: id => elements[id] },
       portableConfigUi: {
-        mode: '', submitting: false, dialogPromise: null, resolveDialog: null
+        mode: '', submitting: false, dialogPromise: null, resolveDialog: null,
+        pendingResult: null
       },
       callBackground(message) {
         calls.push(structuredClone(message));
@@ -864,7 +1066,8 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
       'globalThis.openDialog = openPortableConfigDialog;' +
       'globalThis.submitDialog = submitPortableConfigDialog;' +
       'globalThis.cancelDialog = cancelPortableConfigDialog;' +
-      'globalThis.clearSecrets = clearPortableConfigDialogSecrets;';
+      'globalThis.clearSecrets = clearPortableConfigDialogSecrets;' +
+      'globalThis.settleDialog = settlePortableConfigDialog;';
     vm.runInNewContext(source, context);
     return {
       context, elements, controls, attributes, calls, rendered,
@@ -891,6 +1094,8 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     const firstOpen = harness.context.openDialog(mode);
     const secondOpen = harness.context.openDialog(mode);
     assert.equal(firstOpen, secondOpen);
+    let settleCount = 0;
+    firstOpen.then(() => { settleCount++; });
     harness.elements.portableConfigCurrentPassphrase.value = current;
     harness.elements.portableConfigPassphrase.value = passphrase;
     harness.elements.portableConfigPassphraseConfirm.value = confirmation;
@@ -902,8 +1107,14 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     assert.equal(harness.attributes.get('aria-busy'), 'true');
     assert.equal(harness.controls.every(control => control.disabled), true);
     harness.settle({ state: 'ready', revision: 7, secret: 'must-not-echo' });
-    await Promise.all([firstSubmit, secondSubmit]);
+    await Promise.resolve();
+    assert.equal(settleCount, 0, 'dialog promise must wait for the native close event');
+    assert.equal(harness.context.openDialog(mode), firstOpen);
+    assert.equal(harness.attributes.get('aria-busy'), 'true');
+    assert.equal(harness.controls.every(control => control.disabled), true);
     const publicStatus = await firstOpen;
+    await Promise.all([firstSubmit, secondSubmit]);
+    assert.equal(settleCount, 1);
     assert.deepEqual(publicStatus, {
       state: 'ready', revision: 7, updatedAt: '', pending: false, lastError: ''
     });
@@ -918,17 +1129,25 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
         harness.elements[id].textContent, ''));
     assert.equal(harness.storageWrites.length, 0);
     assert.equal(harness.consoleWrites.length, 0);
+    harness.context.settleDialog();
+    await Promise.resolve();
+    assert.equal(settleCount, 1, 'a repeated close event must not resolve twice');
   }
 
   for (const eventKind of ['cancel-event', 'close-button']) {
     const harness = createHarness();
     const opened = harness.context.openDialog('unlock');
+    let settled = false;
+    opened.then(() => { settled = true; });
     harness.elements.portableConfigCurrentPassphrase.value = `${eventKind}-current`;
     harness.elements.portableConfigPassphrase.value = `${eventKind}-secret`;
     harness.elements.portableConfigPassphraseConfirm.value = `${eventKind}-confirm`;
     harness.elements.portableConfigDialogError.textContent = 'temporary';
     harness.context.cancelDialog({ preventDefault() {} });
+    assert.equal(settled, false);
+    assert.equal(harness.context.openDialog('unlock'), opened);
     assert.deepEqual(JSON.parse(JSON.stringify(await opened)), { cancelled: true });
+    assert.equal(settled, true);
     ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
       'portableConfigPassphraseConfirm'].forEach(id => {
       assert.equal(harness.elements[id].value, '');
@@ -938,8 +1157,32 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
     assert.equal(harness.controls.every(control => !control.disabled), true);
   }
 
+  const invalid = createHarness();
+  const invalidOpen = invalid.context.openDialog('create');
+  const invalidInitialFocus = invalid.elements.portableConfigPassphrase.focusCount;
+  invalid.elements.portableConfigPassphrase.value = 'short';
+  invalid.elements.portableConfigPassphraseConfirm.value = 'short';
+  await invalid.context.submitDialog({ preventDefault() {} });
+  assert.equal(invalid.calls.length, 0);
+  assert.equal(invalid.elements.portableConfigPassphrase.getAttribute('aria-invalid'), 'true');
+  assert.equal(
+    invalid.elements.portableConfigPassphrase.getAttribute('aria-describedby'),
+    'portableConfigDialogError'
+  );
+  assert.equal(
+    invalid.elements.portableConfigPassphrase.focusCount > invalidInitialFocus,
+    true
+  );
+  invalid.context.cancelDialog({ preventDefault() {} });
+  await invalidOpen;
+  assert.equal(invalid.elements.portableConfigPassphrase.hasAttribute('aria-invalid'), false);
+  assert.equal(invalid.elements.portableConfigPassphrase.hasAttribute('aria-describedby'), false);
+
   const failed = createHarness();
   const failedOpen = failed.context.openDialog('unlock');
+  const failedInitialFocus = failed.elements.portableConfigPassphrase.focusCount;
+  let failedSettled = false;
+  failedOpen.then(() => { failedSettled = true; });
   failed.elements.portableConfigCurrentPassphrase.value = 'current-secret-1';
   failed.elements.portableConfigPassphrase.value = 'old-secret-1';
   failed.elements.portableConfigPassphraseConfirm.value = 'confirm-secret-1';
@@ -949,17 +1192,31 @@ test('portable dialog controller maps modes, deduplicates submits, and clears ev
   await failedSubmit;
   assert.doesNotMatch(failed.elements.portableConfigDialogError.textContent, /old-secret-1/);
   assert.equal(failed.attributes.has('aria-busy'), false);
+  assert.equal(failed.elements.portableConfigPassphrase.getAttribute('aria-invalid'), 'true');
+  assert.equal(
+    failed.elements.portableConfigPassphrase.getAttribute('aria-describedby'),
+    'portableConfigDialogError'
+  );
+  assert.equal(
+    failed.elements.portableConfigPassphrase.focusCount > failedInitialFocus,
+    true
+  );
   failed.context.cancelDialog({ preventDefault() {} });
+  assert.equal(failedSettled, false);
+  assert.equal(failed.context.openDialog('unlock'), failedOpen);
   assert.deepEqual(JSON.parse(JSON.stringify(await failedOpen)), { cancelled: true });
+  assert.equal(failedSettled, true);
   ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
     'portableConfigPassphraseConfirm'].forEach(id => {
     assert.equal(failed.elements[id].value, '');
   });
   assert.equal(failed.elements.portableConfigDialogError.textContent, '');
+  assert.equal(failed.elements.portableConfigPassphrase.hasAttribute('aria-invalid'), false);
+  assert.equal(failed.elements.portableConfigPassphrase.hasAttribute('aria-describedby'), false);
 
   assert.match(script, /if\s*\(portableConfigUi\.submitting\)\s*return/);
   assert.match(script, /function clearPortableConfigDialogSecrets\(/);
-  assert.match(script, /addEventListener\(['"]close['"],\s*clearPortableConfigDialogSecrets\)/);
+  assert.match(script, /addEventListener\(['"]close['"],\s*settlePortableConfigDialog\)/);
   assert.match(script, /addEventListener\(['"]cancel['"]/);
   assert.match(script, /passphrase\s*=\s*['"]["']/);
   assert.doesNotMatch(script, /(?:localStorage|sessionStorage)[\s\S]{0,160}passphrase|passphrase[\s\S]{0,160}(?:localStorage|sessionStorage)/i);
@@ -1031,6 +1288,79 @@ test('reauthorization invokes cached handle permission synchronously before yiel
   resolvePermission('granted');
   await pending;
   assert.equal(context.userDataUi.pendingAction, false);
+});
+
+test('saved directory exits refresh authoritative status without overwriting portable state', async () => {
+  const script = read('options.js');
+  const chooseStart = script.indexOf('async function chooseUserDataDirectory(');
+  const chooseEnd = script.indexOf('\n}', chooseStart) + 2;
+  const reauthorizeStart = script.indexOf('async function reauthorizeUserDataDirectory(');
+  const reauthorizeEnd = script.indexOf('\n}', reauthorizeStart) + 2;
+  const events = [];
+  const notices = [];
+  const secret = 'saved-directory-secret';
+  let prepareBehavior = 'cancelled';
+  const handle = {
+    requestPermission() {
+      events.push('request-permission');
+      return Promise.resolve('granted');
+    }
+  };
+  const context = {
+    userDataUi: {
+      pendingAction: false, directoryHandle: handle, handleLoaded: true,
+      lastStatus: null, portableConfigStatus: { state: 'locked', pending: false }
+    },
+    window: { showDirectoryPicker: async () => handle },
+    SciLLM: { saveDirectoryHandle: async () => { events.push('save-handle'); } },
+    indexedDB: {},
+    setUserDataActionPending(value) { context.userDataUi.pendingAction = Boolean(value); },
+    showUserDataStatus(message, type) { notices.push([message, type]); },
+    async preparePortableConfigForDirectory() {
+      events.push('prepare');
+      if (prepareBehavior === 'cancelled') {
+        return { ready: false, cancelled: true, status: { state: 'locked' } };
+      }
+      throw Object.assign(new Error(secret), { code: 'PRIVATE_FINALIZER_FAILURE' });
+    },
+    async refreshUserDataStatus() {
+      events.push('authoritative-refresh');
+      context.userDataUi.lastStatus = { directoryName: 'Brevess', permission: 'granted' };
+      context.userDataUi.portableConfigStatus = { state: 'ready', pending: false };
+      return true;
+    },
+    renderPortableConfigStatus(status) { events.push(`synthetic-render:${status?.state}`); },
+    portableConfigErrorText: () => '无法完成加密配置操作，请稍后重试。',
+    Error
+  };
+  vm.runInNewContext(
+    `${script.slice(chooseStart, chooseEnd)}\n${script.slice(reauthorizeStart, reauthorizeEnd)}\n` +
+    'globalThis.choose = chooseUserDataDirectory;' +
+    'globalThis.reauthorize = reauthorizeUserDataDirectory;',
+    context
+  );
+
+  await context.choose();
+  assert.deepEqual(events, ['save-handle', 'prepare', 'authoritative-refresh']);
+  assert.deepEqual(context.userDataUi.lastStatus, {
+    directoryName: 'Brevess', permission: 'granted'
+  });
+
+  events.length = 0;
+  notices.length = 0;
+  prepareBehavior = 'failure';
+  await context.choose();
+  assert.deepEqual(events, ['save-handle', 'prepare', 'authoritative-refresh']);
+  assert.doesNotMatch(events.join(' '), /synthetic-render:error/);
+  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
+
+  events.length = 0;
+  notices.length = 0;
+  await context.reauthorize();
+  assert.deepEqual(events, ['request-permission', 'prepare', 'authoritative-refresh']);
+  assert.equal(notices.at(-1)[0], '重新授权失败：无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
 });
 
 test('local data actions guard duplicates, ignore stale status, and recover from cancellation and errors', () => {

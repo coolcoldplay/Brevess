@@ -367,6 +367,7 @@ body[data-settings-direction="backward"] [data-settings-page].is-active-page {
 .portable-config-heading p { max-width: 680px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .portable-config-state { flex: none; padding: 5px 9px; border: 1px solid #d6dee7; border-radius: 999px; color: #596672; background: #fff; font-size: 10px; font-weight: 780; }
 .portable-config-state[data-state="ready"] { border-color: #bfd8c9; color: #246a45; background: #ecf7f0; }
+.portable-config-state[data-state="pending"] { border-color: #b8cee0; color: #0b4778; background: #f1f7fb; }
 .portable-config-state[data-state="missing"], .portable-config-state[data-state="locked"], .portable-config-state[data-state="unknown"] { border-color: #e4d2a8; color: #765617; background: #fcf8ec; }
 .portable-config-state[data-state="error"], .portable-config-state[data-state="unavailable"] { border-color: #e4c6c3; color: #94342f; background: #fdf0ef; }
 .portable-config-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
