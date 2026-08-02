@@ -15,7 +15,7 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 | 权限 | 可粘贴的说明 |
 |---|---|
 | `activeTab` | 用户点击插件图标后，临时访问当前标签页，以确认页面、激活论文工作区并把侧栏操作限定到用户明确选择的网页。 |
-| `storage` | 在本机保存设置、分析模式、规则、用户同意状态、可选 API Profile/API Key、文章工作区索引、标注及 Token 使用量。密钥不会写入导出文件或诊断包。 |
+| `storage` | 在本机保存设置、分析模式、规则、用户同意状态、可选 API Profile/API Key、文章工作区索引、标注及 Token 使用量。API 凭据不会进入普通导出或诊断包；用户主动启用便携配置备份时，只会以口令保护的认证密文写入所选目录。 |
 | `scripting` | 仅在用户激活的当前论文页注入内容脚本，用于读取可见论文 HTML、生成导航、绘制/编辑高亮以及跳转原文。 |
 | `offscreen` | 在 Manifest V3 后台 Service Worker 可能休眠时，使用扩展自带的离屏文档完成用户发起的流式模型网络请求；不用于播放媒体、跟踪或执行远程代码。 |
 | `sidePanel` | 在 Microsoft Edge 原生侧栏中提供论文导航、高亮、摘句、解图和全文问答工作区。 |
@@ -69,7 +69,9 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 - 默认：`chrome.storage.local` 与 IndexedDB。
 - 可选：用户通过系统目录选择器授权的本地 `Brevess` 文件夹。
 - 保留期限：直到用户删除对应工作区、清空数据、删除本地文件或卸载扩展。
-- API Key、页面原始载荷和凭据不会进入备份、导出、缓存、日志或诊断包。
+- 用户启用便携配置备份后，模型/API 设置（包括 API Key 和自定义鉴权头）与全局缩略词表只以 AES-GCM 认证密文写入 `Brevess/settings/portable-config.enc.json`，密钥由 PBKDF2 从备份口令派生。
+- 备份口令不写入目录或任何导出文件；派生密钥只缓存在本机，可用“忘记备份解锁”清除。忘记口令后无法恢复密文副本。
+- 普通论文导出、诊断、日志、Token 报告、缓存和单篇工作区仍排除 API 凭据；页面原始载荷也不进入便携配置备份。
 
 ## Privacy policy URL
 

@@ -601,7 +601,7 @@
       const envelope = shared.validatePortableEnvelope(cloneJsonLike(input));
       const allowedEnvelopeKeys = new Set([
         'schemaVersion', 'revision', 'kind', 'backupId', 'updatedAt',
-        'encryption', 'ciphertext', 'sourceId'
+        'encryption', 'ciphertext'
       ]);
       const allowedEncryptionKeys = new Set([
         'algorithm', 'keyLength', 'kdf', 'iterations', 'salt', 'iv'

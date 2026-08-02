@@ -1,10 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { webcrypto } = require('node:crypto');
 
 require('../core/user-data-database.js');
 const {
   PORTABLE_CONFIG_PATH,
   PORTABLE_CONFIG_KDF_ITERATIONS,
+  derivePortableConfigKey,
+  encryptPortableConfig,
   toBase64
 } = require('../core/portable-config.js');
 const {
@@ -138,6 +141,7 @@ function createFakeHandleStore(initialPermission = 'granted') {
     readText(path) { return files.get(path) || ''; },
     has(path) { return files.has(path); },
     writeText(path, value) { files.set(path, String(value)); },
+    fileEntries() { return [...files.entries()]; },
     writes,
     reads
   };
@@ -1132,6 +1136,102 @@ test('portable CAS creates only a genuinely missing encrypted file without queue
   );
   assert.deepEqual(await queue.getAll(), []);
   assert.equal(handles.has('Brevess/index.json'), false);
+});
+
+test('portable CAS rejects unauthenticated metadata that could smuggle plaintext credentials', async () => {
+  const secret = 'sk-portable-metadata-secret-123';
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1, {
+      sourceId: `apiKey=${secret}`
+    }), { mode: 'create' }),
+    error => error.code === 'PORTABLE_CONFIG_ENVELOPE_UNSAFE'
+  );
+
+  assert.equal(handles.writes.length, 0);
+  assert.deepEqual(await queue.getAll(), []);
+  assert.doesNotMatch(JSON.stringify(await sync.status()), new RegExp(secret));
+});
+
+test('portable settings primary, backup, conflicts, queue metadata, and index stay ciphertext-only', async () => {
+  const secret = 'sk-portable-folder-secret-123';
+  const headerSecret = 'portable-authorization-secret';
+  const abbreviationSecret = 'tumor necrosis factor';
+  const salt = new Uint8Array(16).fill(13);
+  const keyBytes = await derivePortableConfigKey('portable-test-password', {
+    salt,
+    iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+    cryptoRef: webcrypto
+  });
+  const payload = {
+    kind: 'brevess-portable-user-config',
+    schemaVersion: 1,
+    settings: {
+      profiles: {
+        private: {
+          providerId: 'openai-compatible',
+          config: {
+            apiKey: secret,
+            model: 'private-model',
+            customHeaders: { Authorization: `Bearer ${headerSecret}` }
+          }
+        }
+      }
+    },
+    globalAbbreviations: {
+      schemaVersion: 1,
+      entries: [{ abbreviation: 'TNF', fullName: abbreviationSecret }]
+    }
+  };
+  const encryptRevision = revision => encryptPortableConfig(payload, {
+    keyBytes,
+    salt,
+    backupId: 'backup-ciphertext-regression',
+    revision,
+    now: `2026-08-03T00:01:${String(revision).padStart(2, '0')}.000Z`,
+    cryptoRef: webcrypto
+  });
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = await encryptRevision(1);
+  const second = await encryptRevision(2);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+    mode: 'update', expected: first
+  });
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+      mode: 'update', expected: first
+    }),
+    error => error.code === 'DIRECTORY_CAS_CONFLICT'
+  );
+
+  const portableFiles = handles.fileEntries().filter(([path]) =>
+    path.includes('portable-config')
+  );
+  assert.deepEqual(portableFiles.map(([path]) => path).sort(), [
+    'Brevess/backups/settings/portable-config.enc.previous.json',
+    `Brevess/${PORTABLE_CONFIG_PATH}`
+  ]);
+  for (const [, content] of portableFiles) {
+    assert.doesNotMatch(content, new RegExp(secret));
+    assert.doesNotMatch(content, new RegExp(headerSecret));
+    assert.doesNotMatch(content, new RegExp(abbreviationSecret));
+    assert.doesNotMatch(content, /"apiKey"|"customHeaders"|Authorization/u);
+    assert.equal(JSON.parse(content).kind, 'brevess-encrypted-portable-config');
+  }
+  assert.deepEqual(await queue.getAll(), []);
+  assert.equal(handles.has('Brevess/index.json'), false);
+  assert.equal(handles.fileEntries().some(([path]) => path.includes('/conflicts/')), false);
+  assert.doesNotMatch(
+    JSON.stringify(await sync.status()),
+    new RegExp(`${secret}|${headerSecret}|${abbreviationSecret}`)
+  );
 });
 
 test('portable CAS update mismatch performs zero writes and preserves the primary', async () => {

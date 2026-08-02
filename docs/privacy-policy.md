@@ -1,6 +1,6 @@
 # Brevess Privacy Policy / 隐私政策
 
-**Effective date / 生效日期：2026-07-28**
+**Effective date / 生效日期：2026-08-03**
 **Applies to / 适用产品：Brevess Microsoft Edge 扩展**
 
 Brevess helps users read and analyze scientific article pages in Microsoft Edge.
@@ -61,12 +61,28 @@ extension. Files explicitly exported or saved to a user-selected folder can
 remain after uninstallation. Optional Local Codex bridge data under
 `%LOCALAPPDATA%\BrevessCodexBridge` remains until the user removes it.
 
+If the user enables portable configuration backup, Brevess stores model/API
+settings (including API credentials) and the global abbreviation table in the
+selected folder at `Brevess/settings/portable-config.enc.json`. This asset is
+authenticated-encrypted with AES-GCM using a key derived from the user's backup
+password by PBKDF2. The password is never written to the folder or included in
+an export. The derived key is cached only on the local device and can be cleared
+with **Forget backup unlock / 忘记备份解锁**. If the password is forgotten, the
+encrypted copy cannot be recovered. Normal article exports, diagnostics, logs,
+and token reports continue to exclude API credentials.
+
 设置和论文工作区保存在 Microsoft Edge 扩展本地存储、IndexedDB，以及用户主动选择的
 本地文件夹中。Brevess 不会把副本上传到开发者运营的云端。
 
 数据会保留到用户删除相应论文工作区、清除扩展数据、删除所选目录文件或卸载扩展为止。
 用户明确导出或写入自选目录的文件可能在卸载扩展后继续存在。可选本机 Codex 桥位于
 `%LOCALAPPDATA%\BrevessCodexBridge` 的数据会保留到用户自行删除。
+
+如果用户启用便携配置备份，Brevess 会把模型/API 设置（包括 API 凭据）和全局缩略词表写入
+所选文件夹的 `Brevess/settings/portable-config.enc.json`，且只以 AES-GCM 认证密文保存；
+加密密钥由 PBKDF2 从用户的备份口令派生。口令不会写入目录或任何导出文件，派生密钥仅
+缓存在本机，可通过“忘记备份解锁”清除。忘记口令后无法恢复该密文副本。普通论文导出、
+诊断、日志和 Token 报告仍排除 API 凭据。
 
 ## 3. Data transmission and third parties / 数据传输与第三方
 

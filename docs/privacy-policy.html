@@ -29,7 +29,7 @@
     <div class="mark" aria-label="Brevess"><span></span><span></span><span></span><span></span><span></span></div>
     <div>
       <h1>Brevess Privacy Policy / 隐私政策</h1>
-      <div class="meta">Effective / 生效：2026-07-28 · Microsoft Edge extension</div>
+      <div class="meta">Effective / 生效：2026-08-03 · Microsoft Edge extension</div>
     </div>
   </header>
 
@@ -48,6 +48,8 @@
   <h2>2. Storage and retention / 存储与保留</h2>
   <p>Settings and article workspaces are stored locally using Microsoft Edge extension storage, IndexedDB, and—only when selected by the user—the local folder chosen through the File System Access API. Brevess does not upload a copy to a developer-operated cloud service.</p>
   <p>设置和论文工作区保存在 Edge 扩展本地存储、IndexedDB 和用户主动选择的本地文件夹中，不会上传至开发者运营的云端。数据保留到用户删除工作区、清除扩展数据、删除目录文件或卸载扩展为止。明确导出的文件可能在卸载后继续存在；可选桥接数据位于 <code>%LOCALAPPDATA%\BrevessCodexBridge</code>，会保留到用户自行删除。</p>
+  <p>If the user enables portable configuration backup, Brevess writes model/API settings (including API credentials) and the global abbreviation table to <code>Brevess/settings/portable-config.enc.json</code> in the selected folder only as an AES-GCM authenticated encrypted asset. Its key is derived from the user's backup password with PBKDF2. The password is never written to the folder or included in an export. The derived key is cached only on the local device and can be cleared with <strong>Forget backup unlock / 忘记备份解锁</strong>. A forgotten password makes the encrypted copy unrecoverable. Normal article exports, diagnostics, logs and token reports continue to exclude API credentials.</p>
+  <p>用户启用便携配置备份后，模型/API 设置（包括 API 凭据）和全局缩略词表只会以 AES-GCM 认证密文写入所选目录的 <code>Brevess/settings/portable-config.enc.json</code>；密钥由 PBKDF2 从备份口令派生。口令不写入目录或任何导出文件，派生密钥仅缓存在本机并可用“忘记备份解锁”清除。忘记口令后无法恢复密文；普通论文导出、诊断、日志和 Token 报告仍排除 API 凭据。</p>
 
   <h2>3. Data transmission and third parties / 数据传输与第三方</h2>
   <p>Model-assisted features remain disabled until the user configures a provider and grants the in-extension permission to send article content. Depending on the task, Brevess may send necessary article excerpts, captions, compressed Figure images, questions and limited conversation context directly to the provider or compatible endpoint selected by the user. Provider availability, retention, billing and processing are governed by that provider's terms and privacy policy.</p>

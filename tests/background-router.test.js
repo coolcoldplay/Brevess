@@ -362,7 +362,14 @@ function portableArchive(documentId = `sha256:${'c'.repeat(64)}`) {
       revision: 3,
       updatedAt: '2026-07-17T08:00:00.000Z'
     },
-    workspace: { ledger: [{ categoryId: 'key_result', quote: 'A result' }] }
+    workspace: {
+      ledger: [{ categoryId: 'key_result', quote: 'A result' }],
+      modelRuntime: {
+        providerId: 'openai-compatible',
+        apiKey: 'sk-archive-secret',
+        customHeaders: { Authorization: 'Bearer archive-secret' }
+      }
+    }
   });
 }
 
@@ -398,6 +405,10 @@ test('probes, saves, and applies one per-article archive through the background 
   assert.equal(saved.success, true);
   assert.equal(saved.data.relativePath, expectedPath);
   assert.equal(directorySync.json.at(-1).path, expectedPath);
+  assert.doesNotMatch(
+    JSON.stringify(directorySync.json.at(-1)),
+    /sk-archive-secret|archive-secret|apiKey|customHeaders|Authorization/u
+  );
 
   const loaded = await router.handle({
     type: 'ARTICLE_ARCHIVE_LOAD',
@@ -4826,7 +4837,14 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   const storageArea = createMemoryStorage();
   const settings = globalThis.SciLLM.createDefaultSettings();
   settings.profiles.profile_default_openai.config.apiKey = 'sk-bundle-secret';
+  settings.profiles.profile_default_openai.config.customHeaders = {
+    Authorization: 'Bearer bundle-header-secret'
+  };
   storageArea.values.sciLlmSettingsV2 = settings;
+  storageArea.values.sciGlobalAbbreviationMemoryV1 = {
+    schemaVersion: 1,
+    entries: [{ abbreviation: 'TNF', fullName: 'bundle-abbreviation-private-value' }]
+  };
   const documentStore = createMemoryDocumentStore();
   await documentStore.prepareDocument({
     schemaVersion: 1, documentId: 'sha256:local', title: 'Local', canonicalUrl: '',
@@ -4883,7 +4901,7 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   assert.deepEqual(bundle.data.categories.deletedBuiltInCategoryIds, ['objective']);
   assert.doesNotMatch(
     JSON.stringify(bundle.data),
-    /sk-bundle-secret|apiKey|providers|authorization|analysisCache|directoryHandle|syncQueue/i
+    /sk-bundle-secret|bundle-header-secret|bundle-abbreviation-private-value|apiKey|customHeaders|providers|authorization|analysisCache|directoryHandle|syncQueue/i
   );
 });
 
