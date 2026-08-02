@@ -4921,9 +4921,25 @@ test('routes portable configuration commands once, maps passphrases, and exposes
       state: 'ready', revision: 7, updatedAt: '2026-08-03T00:00:00.000Z',
       pending: false, lastError: ''
     });
-    if (expectedCall.length) assert.deepEqual(calls.at(-1), expectedCall);
+    assert.deepEqual(calls.at(-1), expectedCall);
   }
-  assert.equal(calls.length, 6);
+  assert.equal(commands.length, 8);
+  assert.equal(calls.length, commands.length);
+  assert.deepEqual(calls, commands.map(([, expectedCall]) => expectedCall));
+  assert.deepEqual(
+    Object.fromEntries([...new Set(calls.map(([method]) => method))].map(method => [
+      method, calls.filter(([calledMethod]) => calledMethod === method).length
+    ])),
+    {
+      probe: 1,
+      create: 1,
+      unlock: 1,
+      rotatePassphrase: 2,
+      forgetKey: 1,
+      backupNow: 1,
+      publicStatus: 1
+    }
+  );
 });
 
 test('portable configuration command failures never echo a passphrase and disabled routers are explicit', async () => {
