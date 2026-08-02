@@ -27,6 +27,34 @@
     'articleChatQuickPrompts',
     'keyboardShortcuts'
   ]);
+  const PORTABLE_CONFIG_ERROR_CODES = new Set([
+    'PORTABLE_CONFIG_FAILED',
+    'PORTABLE_CONFIG_ALREADY_EXISTS', 'PORTABLE_CONFIG_BACKUP_AUTH_FAILED',
+    'PORTABLE_CONFIG_BACKUP_DIVERGED', 'PORTABLE_CONFIG_BACKUP_FAILED',
+    'PORTABLE_CONFIG_BACKUP_SOURCE_MISSING', 'PORTABLE_CONFIG_CACHED_KEY_INVALID',
+    'PORTABLE_CONFIG_CACHED_KEY_REJECTED', 'PORTABLE_CONFIG_CREATE_FAILED',
+    'PORTABLE_CONFIG_CREATED_KEY_CACHE_FAILED', 'PORTABLE_CONFIG_CRYPTO_UNAVAILABLE',
+    'PORTABLE_CONFIG_DECRYPT_FAILED', 'PORTABLE_CONFIG_DIRECTORY_CONFLICT',
+    'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE', 'PORTABLE_CONFIG_DIRECTORY_WRITE_FAILED',
+    'PORTABLE_CONFIG_ENVELOPE_BACKUP_ID_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_CIPHERTEXT_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_ENCRYPTION_INVALID', 'PORTABLE_CONFIG_ENVELOPE_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_KIND_INVALID', 'PORTABLE_CONFIG_ENVELOPE_REVISION_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_SCHEMA_VERSION_INVALID', 'PORTABLE_CONFIG_ENVELOPE_UNSAFE',
+    'PORTABLE_CONFIG_ENVELOPE_UPDATED_AT_INVALID', 'PORTABLE_CONFIG_INVALID_BASE64',
+    'PORTABLE_CONFIG_INVALID_BINARY', 'PORTABLE_CONFIG_KDF_ITERATIONS',
+    'PORTABLE_CONFIG_KDF_SALT_INVALID', 'PORTABLE_CONFIG_KEY_INVALID',
+    'PORTABLE_CONFIG_LOCKED', 'PORTABLE_CONFIG_MANAGER_DISPOSED',
+    'PORTABLE_CONFIG_MANAGER_INVALID_DEPENDENCIES', 'PORTABLE_CONFIG_MISSING',
+    'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT',
+    'PORTABLE_CONFIG_PAYLOAD_GLOBAL_ABBREVIATIONS_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_INVALID', 'PORTABLE_CONFIG_PAYLOAD_KIND_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_SCHEMA_VERSION_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_SETTINGS_INVALID', 'PORTABLE_CONFIG_PROBE_FAILED',
+    'PORTABLE_CONFIG_REQUIRES_CAS', 'PORTABLE_CONFIG_RESTORE_FAILED',
+    'PORTABLE_CONFIG_ROTATE_FAILED', 'PORTABLE_CONFIG_SCHEMA_UNAVAILABLE',
+    'PORTABLE_CONFIG_STORAGE_FAILED', 'PORTABLE_CONFIG_UNLOCK_FAILED'
+  ]);
 
   function invalidSettings(fields) {
     const error = new Error('Provider settings are incomplete or invalid');
@@ -87,8 +115,10 @@
       'CODEX_NOT_INSTALLED', 'CODEX_NOT_AUTHENTICATED',
       'CODEX_BRIDGE_UNAVAILABLE', 'CODEX_PROVIDER_REJECTED'
     ]);
-    const portableConfigCode = /^PORTABLE_CONFIG_[A-Z0-9_]+$/u.test(String(error?.code || ''))
-      ? String(error.code) : '';
+    const rawCode = typeof error?.code === 'string' ? error.code : '';
+    const portableConfigCode = PORTABLE_CONFIG_ERROR_CODES.has(rawCode)
+      ? rawCode
+      : rawCode.startsWith('PORTABLE_CONFIG_') ? 'PORTABLE_CONFIG_FAILED' : '';
     const code = allowedCodes.has(error?.code)
       ? error.code
       : portableConfigCode || 'INTERNAL_ERROR';
@@ -188,8 +218,8 @@
   }
 
   function safePortableConfigError(error) {
-    const code = /^PORTABLE_CONFIG_[A-Z0-9_]+$/u.test(String(error?.code || ''))
-      ? String(error.code) : 'PORTABLE_CONFIG_FAILED';
+    const code = typeof error?.code === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(error.code)
+      ? error.code : 'PORTABLE_CONFIG_FAILED';
     return Object.assign(new Error(code), {
       code,
       retryable: error?.retryable === true
@@ -266,13 +296,25 @@
     return normalized;
   }
 
-  function portableConfigStatus(value = {}) {
+  function portableConfigStatus(value) {
+    const status = isPlainObject(value) ? value : {};
+    const allowedStates = new Set([
+      'unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled'
+    ]);
+    const updatedAt = typeof status.updatedAt === 'string' && status.updatedAt.length <= 80 &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(status.updatedAt) &&
+      Number.isFinite(Date.parse(status.updatedAt))
+      ? new Date(status.updatedAt).toISOString()
+      : '';
     return {
-      state: String(value?.state || 'unknown'),
-      revision: Math.max(0, Number(value?.revision) || 0),
-      updatedAt: String(value?.updatedAt || ''),
-      pending: value?.pending === true,
-      lastError: String(value?.lastError || '')
+      state: typeof status.state === 'string' && allowedStates.has(status.state)
+        ? status.state : 'unknown',
+      revision: Number.isSafeInteger(status.revision) && status.revision >= 0
+        ? status.revision : 0,
+      updatedAt,
+      pending: status.pending === true,
+      lastError: typeof status.lastError === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(status.lastError)
+        ? status.lastError : status.lastError ? 'PORTABLE_CONFIG_FAILED' : ''
     };
   }
 
@@ -310,10 +352,14 @@
     const operationRegistry = shared.createOperationRegistry?.();
 
     async function currentPortableConfigStatus() {
-      const status = typeof portableConfigManager?.publicStatus === 'function'
-        ? await portableConfigManager.publicStatus()
-        : await portableConfigManager?.status?.();
-      return portableConfigStatus(status);
+      try {
+        const status = typeof portableConfigManager?.publicStatus === 'function'
+          ? await portableConfigManager.publicStatus()
+          : await portableConfigManager?.status?.();
+        return portableConfigStatus(status);
+      } catch (error) {
+        throw safePortableConfigError(error);
+      }
     }
 
     function operationFor(message) {

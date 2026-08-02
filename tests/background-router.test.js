@@ -4990,6 +4990,76 @@ test('user-data status includes a strict portable configuration status whitelist
   assert.doesNotMatch(JSON.stringify(response.data), /private|iterations|keyBytes|payload|passphrase|ciphertext/);
 });
 
+test('portable status commands sanitize malicious manager status fields and unknown portable codes', async () => {
+  const secret = 'portable-status-manager-secret';
+  const hostileStatuses = [
+    {
+      state: { secret }, revision: Infinity, updatedAt: { secret }, pending: 'true',
+      lastError: secret, ciphertext: secret
+    },
+    {
+      state: secret, revision: 1.5, updatedAt: 'x'.repeat(81), pending: false,
+      lastError: 'PORTABLE_CONFIG_EVIL_SECRET', payload: secret
+    },
+    {
+      state: 'ready', revision: Number.MAX_SAFE_INTEGER + 1, updatedAt: 'not-an-iso-date',
+      pending: true, lastError: 'PORTABLE_CONFIG_EVIL_SECRET', keyBytes: secret
+    },
+    {
+      state: 'locked', revision: -1, updatedAt: '2026-08-03T00:00:00.000Z',
+      pending: true, lastError: 'PORTABLE_CONFIG_LOCKED', backupId: secret
+    }
+  ];
+  for (const hostileStatus of hostileStatuses) {
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      directorySync: createDirectorySyncDouble(),
+      portableConfigManager: { publicStatus: () => hostileStatus },
+      fetchImpl: async () => jsonResponse({})
+    });
+    const direct = await router.handle({ type: 'PORTABLE_CONFIG_STATUS' });
+    const bundled = await router.handle({ type: 'USER_DATA_SYNC_STATUS' });
+    for (const response of [direct, { ...bundled, data: bundled.data.portableConfig }]) {
+      assert.equal(response.success, true);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret));
+      assert.deepEqual(Object.keys(response.data).sort(), [
+        'lastError', 'pending', 'revision', 'state', 'updatedAt'
+      ]);
+      assert.ok(Number.isSafeInteger(response.data.revision));
+      assert.ok(response.data.revision >= 0);
+      assert.ok(['unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled']
+        .includes(response.data.state));
+      assert.ok(response.data.updatedAt === '' || (
+        response.data.updatedAt.length <= 80 &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(response.data.updatedAt)
+      ));
+      assert.notEqual(response.data.lastError, 'PORTABLE_CONFIG_EVIL_SECRET');
+    }
+  }
+});
+
+test('portable status reads never echo manager failures, whether synchronous or asynchronous', async () => {
+  const secret = 'portable-status-error-secret';
+  for (const publicStatus of [
+    () => { throw new Error(secret); },
+    async () => { throw Object.assign(new Error(secret), { code: 'PORTABLE_CONFIG_EVIL_SECRET' }); }
+  ]) {
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      directorySync: createDirectorySyncDouble(),
+      portableConfigManager: { publicStatus },
+      fetchImpl: async () => jsonResponse({})
+    });
+    for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+      const response = await router.handle({ type });
+      assert.equal(response.success, false, type);
+      assert.equal(response.error.code, 'PORTABLE_CONFIG_FAILED', type);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+      assert.doesNotMatch(JSON.stringify(response), /PORTABLE_CONFIG_EVIL_SECRET/, type);
+    }
+  }
+});
+
 test('background wires portable manager before its router and schedules only local portable keys', () => {
   const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
   for (const type of [
