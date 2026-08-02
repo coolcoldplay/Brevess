@@ -102,6 +102,13 @@
     return normalized;
   }
 
+  function assertOrdinaryQueuePath(relativePath) {
+    if (relativePath === PORTABLE_CONFIG_PATH) {
+      fail('PORTABLE_CONFIG_REQUIRES_CAS');
+    }
+    return relativePath;
+  }
+
   function validateRevision(value) {
     const revision = Number(value);
     if (!Number.isSafeInteger(revision) || revision < 0) fail('INVALID_REVISION');
@@ -577,6 +584,16 @@
       return error;
     }
 
+    async function discardQueuedPortableConfig() {
+      while (true) {
+        const queued = await queueStore.get(PORTABLE_CONFIG_PATH);
+        if (!queued) return false;
+        if (await queueStore.remove(PORTABLE_CONFIG_PATH, queued.queueRevision)) {
+          return true;
+        }
+      }
+    }
+
     function validatePortableCasEnvelope(input) {
       if (typeof shared.validatePortableEnvelope !== 'function') {
         fail('PORTABLE_CONFIG_SCHEMA_UNAVAILABLE');
@@ -613,6 +630,7 @@
       )) fail('DIRECTORY_CAS_UPDATE_INVALID');
 
       return serializeDirectJsonMutation(normalizedPath, async () => {
+        await discardQueuedPortableConfig();
         const handle = await handleStore.load();
         const permission = await permissionState(handle);
         if (!handle || permission !== 'granted') {
@@ -704,7 +722,7 @@
     }
 
     async function enqueueJson(relativePath, input) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       const sanitized = sanitizeValue(cloneJsonLike(input));
       validateJsonAsset(sanitized);
       if (!sanitized.sourceId) sanitized.sourceId = sourceId;
@@ -720,7 +738,7 @@
     }
 
     async function enqueueText(relativePath, value) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       const previous = await queueStore.get(path);
       const revision = Math.max(Date.now(), Number(previous?.revision || 0) + 1);
       const content = String(value ?? '');
@@ -735,7 +753,7 @@
     }
 
     async function enqueueWorkspaceJson(relativePath, input) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       if (typeof shared.assertWorkspaceSafeValue !== 'function') {
         fail('WORKSPACE_SCHEMA_UNAVAILABLE');
       }
@@ -1152,6 +1170,7 @@
         failedPath: '',
         requiresReauthorization: false, requiresReselection: false
       };
+      await discardQueuedPortableConfig();
       const handle = await handleStore.load();
       result.permission = await permissionState(handle);
       if (!handle || result.permission !== 'granted') {
@@ -1183,6 +1202,10 @@
       const items = await queueStore.getAll();
       for (const item of items) {
         try {
+          if (item.relativePath === PORTABLE_CONFIG_PATH) {
+            await queueStore.remove(item.relativePath, item.queueRevision);
+            continue;
+          }
           const latestQueued = await queueStore.get(item.relativePath);
           if (!latestQueued || latestQueued.queueRevision !== item.queueRevision) continue;
           const existingContent = await readText(root, item.relativePath);

@@ -1195,3 +1195,75 @@ test('concurrent portable CAS updates with one expected revision commit exactly 
   assert.equal(JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)).revision, 2);
   assert.deepEqual(await queue.getAll(), []);
 });
+
+test('ordinary JSON and text queues reject the reserved portable config path', async () => {
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({
+    handleStore: createFakeHandleStore(),
+    queueStore: queue
+  });
+
+  await assert.rejects(
+    () => sync.enqueueJson(PORTABLE_CONFIG_PATH, portableEnvelope(1)),
+    error => error.code === 'PORTABLE_CONFIG_REQUIRES_CAS'
+  );
+  await assert.rejects(
+    () => sync.enqueueText(PORTABLE_CONFIG_PATH, 'legacy portable config'),
+    error => error.code === 'PORTABLE_CONFIG_REQUIRES_CAS'
+  );
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('flush discards a legacy portable queue item and continues ordinary assets', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const legacy = portableEnvelope(1);
+  await queue.put({
+    relativePath: PORTABLE_CONFIG_PATH,
+    type: 'json',
+    content: `${JSON.stringify(legacy, null, 2)}\n`,
+    revision: legacy.revision,
+    sourceId: 'legacy-portable-queue',
+    contentHash: 'legacy-portable-queue'
+  });
+  await sync.enqueueJson('categories.json', json(1, { value: 'ordinary' }));
+
+  const result = await sync.flush();
+
+  assert.equal(result.failed, 0);
+  assert.equal(result.written, 1);
+  assert.equal(result.pendingCount, 0);
+  assert.equal(handles.has(`Brevess/${PORTABLE_CONFIG_PATH}`), false);
+  assert.equal(JSON.parse(handles.readText('Brevess/categories.json')).value, 'ordinary');
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('portable CAS clears a legacy queue item so a later flush cannot replay it', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const legacy = portableEnvelope(1, {
+    backupId: 'legacy-portable-queue',
+    ciphertext: toBase64(new Uint8Array([9, 9, 9]))
+  });
+  await queue.put({
+    relativePath: PORTABLE_CONFIG_PATH,
+    type: 'json',
+    content: `${JSON.stringify(legacy, null, 2)}\n`,
+    revision: legacy.revision,
+    sourceId: 'legacy-portable-queue',
+    contentHash: 'legacy-portable-queue'
+  });
+  const committed = portableEnvelope(1);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, committed, { mode: 'create' });
+  assert.deepEqual(await queue.getAll(), []);
+  await sync.flush();
+
+  assert.deepEqual(
+    JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)),
+    committed
+  );
+  assert.deepEqual(await queue.getAll(), []);
+});
