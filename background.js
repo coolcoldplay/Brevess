@@ -59,6 +59,7 @@ importScripts(
   'core/token-usage-store.js',
   'core/document-store.js',
   'core/directory-sync.js',
+  'core/portable-config.js',
   'core/background-router.js'
 );
 
