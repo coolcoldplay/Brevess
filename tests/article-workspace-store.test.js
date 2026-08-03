@@ -10,10 +10,25 @@ const {
 } = require('../core/user-data-database.js');
 require('../core/article-workspace.js');
 const { createIndexedDbDocumentStore } = require('../core/document-store.js');
+require('../core/analysis-cache.js');
+require('../core/corpus-store.js');
+require('../core/operation-control.js');
+const {
+  createSupplementalFigureImportDraft
+} = require('../core/supplemental-materials.js');
+const { createBackgroundRouter } = require('../core/background-router.js');
 const { createIndexedDbDirectoryHandleStore } = require('../core/directory-sync.js');
 const {
   createIndexedDbArticleWorkspaceStore
 } = require('../core/article-workspace-store.js');
+
+function createMemoryStorage() {
+  const values = {};
+  return {
+    get(key, callback) { callback({ [key]: values[key] }); },
+    set(input, callback) { Object.assign(values, input); callback(); }
+  };
+}
 
 function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = false } = {}) {
   let currentVersion = version;
@@ -24,15 +39,17 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
   const keyPaths = new Map();
   const openCalls = [];
   let failPutStore = '';
+  let readwriteTail = Promise.resolve();
 
   function request(transaction, operation) {
     const output = {};
     transaction.pending += 1;
-    queueMicrotask(() => {
-      if (transaction.aborted) return;
+    transaction.ready.then(() => queueMicrotask(() => {
       try {
-        output.result = operation();
-        output.onsuccess?.();
+        if (!transaction.aborted) {
+          output.result = operation();
+          output.onsuccess?.();
+        }
       } catch (error) {
         output.error = error;
         transaction.error = error;
@@ -43,43 +60,56 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
         transaction.pending -= 1;
         transaction.schedule();
       }
-    }, 0);
+    }));
     return output;
   }
 
   function transactionFor(storeNames, mode) {
     const names = Array.isArray(storeNames) ? storeNames : [storeNames];
-    const snapshots = new Map(names.map(name => [name, new Map(stores.get(name) || [])]));
+    let snapshots = new Map();
+    let releaseWrite = () => {};
+    let released = false;
     const transaction = {
       mode,
+      ready: Promise.resolve(),
+      active: mode !== 'readwrite',
       pending: 0,
       aborted: false,
       error: null,
       completionScheduled: false,
+      release() {
+        if (released) return;
+        released = true;
+        releaseWrite();
+      },
       abort() {
         if (this.aborted) return;
         this.aborted = true;
         for (const [name, snapshot] of snapshots) stores.set(name, snapshot);
-        queueMicrotask(() => this.onabort?.());
+        queueMicrotask(() => {
+          try { this.onabort?.(); } finally { this.release(); }
+        });
       },
       schedule() {
-        if (this.completionScheduled || this.aborted) return;
+        if (!this.active || this.completionScheduled || this.aborted) return;
         this.completionScheduled = true;
         queueMicrotask(() => {
           this.completionScheduled = false;
-          if (!this.aborted && this.pending === 0) this.oncomplete?.();
-        }, 0);
+          if (!this.aborted && this.pending === 0) {
+            try { this.oncomplete?.(); } finally { this.release(); }
+          }
+        });
       },
       objectStore(name) {
         if (!names.includes(name) || !stores.has(name)) throw new Error(`Missing store ${name}`);
-        const records = stores.get(name);
         return {
           get(key) {
-            return request(transaction, () => records.has(key)
-              ? structuredClone(records.get(key)) : undefined);
+            return request(transaction, () => stores.get(name).has(key)
+              ? structuredClone(stores.get(name).get(key)) : undefined);
           },
           getAll() {
-            return request(transaction, () => [...records.values()].map(value => structuredClone(value)));
+            return request(transaction, () => [...stores.get(name).values()]
+              .map(value => structuredClone(value)));
           },
           put(value) {
             return request(transaction, () => {
@@ -94,14 +124,26 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
               })[name];
               const key = value[keyPath];
               if (key === undefined) throw new Error(`Missing key ${keyPath}`);
-              records.set(key, structuredClone(value));
+              stores.get(name).set(key, structuredClone(value));
               return key;
             });
           },
-          delete(key) { return request(transaction, () => records.delete(key)); }
+          delete(key) { return request(transaction, () => stores.get(name).delete(key)); }
         };
       }
     };
+    if (mode === 'readwrite') {
+      const predecessor = readwriteTail;
+      let resolveWrite;
+      const completed = new Promise(resolve => { resolveWrite = resolve; });
+      readwriteTail = predecessor.then(() => completed);
+      releaseWrite = resolveWrite;
+      transaction.ready = predecessor.then(() => {
+        snapshots = new Map(names.map(name => [name, new Map(stores.get(name) || [])]));
+        transaction.active = true;
+        transaction.schedule();
+      });
+    }
     transaction.schedule();
     return transaction;
   }
@@ -251,6 +293,117 @@ test('workspace asset createOnly conflicts without replacing the existing asset'
   );
   assert.equal(persisted.revision, 1);
   assert.equal(persisted.content.marker, 'first');
+});
+
+test('fake IndexedDB serializes concurrent readwrite create-only transactions', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const writes = await Promise.allSettled([
+    store.putAsset(owner.workspaceId, 'figures/supplemental/concurrent.json',
+      { marker: 'first' }, { expectedRevision: 0, createOnly: true }),
+    store.putAsset(owner.workspaceId, 'figures/supplemental/concurrent.json',
+      { marker: 'second' }, { expectedRevision: 0, createOnly: true })
+  ]);
+
+  assert.equal(writes.filter(item => item.status === 'fulfilled').length, 1);
+  assert.equal(writes.filter(item => item.status === 'rejected').length, 1);
+  assert.equal(
+    writes.find(item => item.status === 'rejected').reason?.code,
+    'ASSET_REVISION_CONFLICT'
+  );
+  assert.equal((await store.getAsset(
+    owner.workspaceId, 'figures/supplemental/concurrent.json'
+  )).revision, 1);
+});
+
+test('router and real workspace store preserve create-only assets and concurrent closed drafts', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  let providerCalls = 0;
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('provider must not be called');
+    }
+  });
+
+  const relativePath = 'figures/supplemental/generic-create-only.json';
+  const first = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration,
+    relativePath,
+    content: { marker: 'first' },
+    expectedRevision: 0,
+    createOnly: true
+  });
+  assert.equal(first.success, true);
+  const conflict = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration,
+    relativePath,
+    content: { marker: 'must-not-overwrite' },
+    expectedRevision: first.data.asset.revision,
+    createOnly: true
+  });
+  assert.equal(conflict.success, false);
+  assert.equal(conflict.error.code, 'ASSET_REVISION_CONFLICT');
+  assert.equal((await store.getAsset(owner.workspaceId, relativePath)).content.marker, 'first');
+
+  const sourceFingerprint = `sha256:${'d'.repeat(64)}`;
+  const draft = createSupplementalFigureImportDraft({
+    sourceMode: 'caption',
+    sourceMaterialId: 'manual-caption-s1',
+    sourceImportedAt: '2026-08-03T03:04:05.000Z',
+    sourceFingerprint,
+    caption: 'A, treatment increases signal. B, matched control remains stable.',
+    figureLabel: 'Supplemental Figure S1'
+  });
+  const message = {
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: {
+      workspaceId: owner.workspaceId,
+      workspaceGeneration: owner.workspaceGeneration,
+      targetArticleTabId: 91,
+      canonicalUrl: owner.canonicalUrl,
+      documentHash: `sha256:${owner.contentHash}`
+    },
+    draft
+  };
+  const concurrent = await Promise.all([
+    router.handle(structuredClone(message)),
+    router.handle(structuredClone(message))
+  ]);
+  assert.ok(concurrent.every(response => response.success));
+  assert.equal(new Set(concurrent.map(response => response.data.asset.relativePath)).size, 2);
+
+  const supplementalAssets = (await store.listAssets(owner.workspaceId))
+    .filter(asset => asset.relativePath.startsWith('figures/supplemental/') &&
+      asset.relativePath !== relativePath);
+  assert.equal(supplementalAssets.length, 2);
+  for (const asset of supplementalAssets) {
+    const persisted = await store.getAsset(owner.workspaceId, asset.relativePath);
+    assert.equal(persisted.content.analysisStatus, 'awaiting_article_context');
+    assert.equal(persisted.revision, 1);
+  }
+
+  const beforeWrongTarget = (await store.listAssets(owner.workspaceId)).length;
+  const wrongTarget = await router.handle({
+    ...structuredClone(message),
+    target: {
+      ...message.target,
+      workspaceId: `workspace:${'b'.repeat(64)}`
+    }
+  });
+  assert.equal(wrongTarget.success, false);
+  assert.equal(wrongTarget.error.code, 'WORKSPACE_NOT_FOUND');
+  assert.equal((await store.listAssets(owner.workspaceId)).length, beforeWrongTarget);
+  assert.equal(providerCalls, 0);
 });
 
 test('workspace summaries stay exact across asset replacement and turn mutations', async () => {

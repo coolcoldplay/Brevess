@@ -16,6 +16,7 @@ const {
   normalizeSupplementalFigureSource,
   normalizeSupplementalTransientImage,
   allocateSupplementalMaterialId,
+  createManualSupplementalDraft,
   createSupplementalFigureImportDraft
 } = require('../core/supplemental-materials.js');
 
@@ -379,6 +380,78 @@ test('retries injected id collisions and stops after the bounded attempt budget'
     }, { exists: async () => true, randomHex: () => 'cccccccc' }),
     /SUPPLEMENTAL_MATERIAL_ID_COLLISION/
   );
+});
+
+test('creates concurrent manual drafts with create-only persistence and unique material ids', async () => {
+  const records = new Map();
+  const conflicts = [];
+  let randomIndex = 0;
+  const deps = {
+    exists: async materialId => records.has(supplementalFigureAssetPath(materialId)),
+    randomHex: () => String(++randomIndex).padStart(8, '0'),
+    save: async ({ relativePath, draft, conflict }) => {
+      await Promise.resolve();
+      conflicts.push(conflict);
+      if (records.has(relativePath)) {
+        const error = new Error('ASSET_REVISION_CONFLICT');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+      const asset = { relativePath, content: draft, revision: 1 };
+      records.set(relativePath, asset);
+      return asset;
+    }
+  };
+  const input = {
+    sourceMode: 'caption',
+    sourceMaterialId: 'caption-s1',
+    caption: 'Figure S1. Replication.',
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('3')
+  };
+
+  const created = await Promise.all([
+    createManualSupplementalDraft(input, deps),
+    createManualSupplementalDraft(input, deps)
+  ]);
+
+  assert.equal(records.size, 2);
+  assert.notEqual(created[0].materialId, created[1].materialId);
+  assert.notEqual(created[0].relativePath, created[1].relativePath);
+  assert.deepEqual(conflicts, conflicts.map(() => ({
+    expectedRevision: 0,
+    createOnly: true
+  })));
+  assert.deepEqual(
+    new Set(created.map(item => item.asset.content.materialId)),
+    new Set(created.map(item => item.materialId))
+  );
+});
+
+test('stops manual draft creation after eight atomic create conflicts', async () => {
+  let saveCalls = 0;
+  let randomIndex = 0;
+  await assert.rejects(
+    createManualSupplementalDraft({
+      sourceMode: 'caption',
+      sourceMaterialId: 'caption-s2',
+      caption: 'Figure S2. Rescue.',
+      sourceImportedAt: importedAt,
+      sourceFingerprint: fingerprint('4')
+    }, {
+      exists: async () => false,
+      randomHex: () => (++randomIndex).toString(16).padStart(8, '0'),
+      save: async ({ conflict }) => {
+        saveCalls += 1;
+        assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+        const error = new Error('ASSET_REVISION_CONFLICT');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+    }),
+    error => error?.code === 'SUPPLEMENTAL_MATERIAL_ID_COLLISION'
+  );
+  assert.equal(saveCalls, 8);
 });
 
 test('migrates only legacy PDF supplemental Figures to the explicit pdf source mode', () => {

@@ -525,6 +525,55 @@
     };
   }
 
+  async function createManualSupplementalDraft(input = {}, deps = {}) {
+    const source = normalizeSupplementalFigureSource(input);
+    if (!['image', 'caption'].includes(source.sourceMode)) {
+      throw supplementalError('SUPPLEMENTAL_SOURCE_MODE');
+    }
+    if (typeof deps.exists !== 'function') {
+      throw supplementalError('SUPPLEMENTAL_EXISTS_REQUIRED');
+    }
+    if (typeof deps.save !== 'function') {
+      throw supplementalError('SUPPLEMENTAL_DRAFT_INVALID');
+    }
+    const conflictedMaterialIds = new Set();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const materialId = await allocateSupplementalMaterialId({
+        sourceFingerprint: source.sourceFingerprint,
+        readablePrefix: input.readablePrefix || source.sourceMaterialId ||
+          `manual-${source.sourceMode}`
+      }, {
+        exists: async candidate => conflictedMaterialIds.has(candidate) ||
+          Boolean(await deps.exists(candidate)),
+        randomHex: deps.randomHex
+      });
+      const draft = createSupplementalFigureImportDraft({
+        ...source,
+        sourceMaterialId: materialId,
+        title: input.title,
+        figureId: input.figureId,
+        figureLabel: input.figureLabel
+      });
+      const persistedDraft = typeof deps.decorateDraft === 'function'
+        ? await deps.decorateDraft(draft, { materialId })
+        : draft;
+      const relativePath = supplementalFigureAssetPath(materialId);
+      try {
+        const asset = await deps.save({
+          materialId,
+          relativePath,
+          draft: persistedDraft,
+          conflict: { expectedRevision: 0, createOnly: true }
+        });
+        return { materialId, relativePath, draft: persistedDraft, asset };
+      } catch (error) {
+        if (error?.code !== 'ASSET_REVISION_CONFLICT') throw error;
+        conflictedMaterialIds.add(materialId);
+      }
+    }
+    throw supplementalError('SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+  }
+
   function mergeSupplementalFigureAssets(mainFigures = [], assets = []) {
     const merged = [];
     const seen = new Set();
@@ -692,6 +741,7 @@
     normalizeSupplementalFigureSource,
     normalizeSupplementalTransientImage,
     allocateSupplementalMaterialId,
+    createManualSupplementalDraft,
     createSupplementalFigureImportDraft,
     supplementalMaterialKind,
     discoverSupplementalMaterials,

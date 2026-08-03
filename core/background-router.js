@@ -103,6 +103,7 @@
       'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
       'INVALID_JSON_ASSET', 'DIRECTORY_SYNC_UNAVAILABLE',
       'WORKSPACE_STORE_UNAVAILABLE', 'WORKSPACE_NOT_FOUND',
+      'ASSET_REVISION_CONFLICT',
       'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
       'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
       'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
@@ -2555,7 +2556,7 @@
       if (typeof shared.normalizeWorkspaceCanonicalUrl !== 'function' ||
           typeof shared.normalizeSupplementalFigureSource !== 'function' ||
           typeof shared.normalizeSupplementalTransientImage !== 'function' ||
-          typeof shared.allocateSupplementalMaterialId !== 'function' ||
+          typeof shared.createManualSupplementalDraft !== 'function' ||
           typeof shared.createSupplementalFigureImportDraft !== 'function' ||
           typeof shared.supplementalFigureAssetPath !== 'function') {
         throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
@@ -2568,28 +2569,7 @@
       assertSupplementalDraftWorkspaceTarget(workspace, target);
       const normalized = supplementalDraftSourceInput(message);
       const manualSource = ['image', 'caption'].includes(normalized.source.sourceMode);
-
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const materialId = manualSource
-          ? await shared.allocateSupplementalMaterialId({
-            sourceFingerprint: normalized.source.sourceFingerprint,
-            readablePrefix: normalized.source.sourceMaterialId ||
-              `manual-${normalized.source.sourceMode}`
-          }, {
-            exists: async candidate => Boolean(await articleWorkspaceStore.getAsset(
-              target.workspaceId,
-              shared.supplementalFigureAssetPath(candidate)
-            ))
-          })
-          : normalized.source.sourceMaterialId;
-        const draft = shared.createSupplementalFigureImportDraft({
-          ...normalized.source,
-          sourceMaterialId: materialId,
-          title: normalized.title,
-          figureId: normalized.figureId,
-          figureLabel: normalized.figureLabel
-        });
-        const content = {
+      const decorateDraft = draft => ({
           ...draft,
           analysisStatus: 'awaiting_article_context',
           figures: draft.figures.map(figure => ({
@@ -2599,30 +2579,49 @@
               ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
               : {})
           }))
-        };
-        try {
-          const asset = await articleWorkspaceStore.putAsset(
+        });
+      let asset;
+      if (manualSource) {
+        const created = await shared.createManualSupplementalDraft({
+          ...normalized.source,
+          title: normalized.title,
+          figureId: normalized.figureId,
+          figureLabel: normalized.figureLabel
+        }, {
+          exists: async candidate => Boolean(await articleWorkspaceStore.getAsset(
             target.workspaceId,
-            shared.supplementalFigureAssetPath(materialId),
-            content,
-            { expectedRevision: 0, createOnly: true }
-          );
-          return {
-            saved: true,
-            asset: {
-              relativePath: String(asset.relativePath || ''),
-              revision: Number(asset.revision) || 0,
-              contentHash: String(asset.contentHash || '')
-            },
-            analysisStatus: 'awaiting_article_context'
-          };
-        } catch (error) {
-          if (!manualSource || error?.code !== 'ASSET_REVISION_CONFLICT') {
-            throw error;
-          }
-        }
+            shared.supplementalFigureAssetPath(candidate)
+          )),
+          decorateDraft,
+          save: ({ relativePath, draft, conflict }) => articleWorkspaceStore.putAsset(
+            target.workspaceId, relativePath, draft, conflict
+          )
+        });
+        asset = created.asset;
+      } else {
+        const materialId = normalized.source.sourceMaterialId;
+        const draft = shared.createSupplementalFigureImportDraft({
+          ...normalized.source,
+          title: normalized.title,
+          figureId: normalized.figureId,
+          figureLabel: normalized.figureLabel
+        });
+        asset = await articleWorkspaceStore.putAsset(
+          target.workspaceId,
+          shared.supplementalFigureAssetPath(materialId),
+          decorateDraft(draft),
+          { expectedRevision: 0, createOnly: true }
+        );
       }
-      throw supplementalRouteError('SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+      return {
+        saved: true,
+        asset: {
+          relativePath: String(asset.relativePath || ''),
+          revision: Number(asset.revision) || 0,
+          contentHash: String(asset.contentHash || '')
+        },
+        analysisStatus: 'awaiting_article_context'
+      };
     }
 
     function publicStoredArticleChatTurn(turn = {}) {
@@ -2853,7 +2852,8 @@
           workspace.workspaceId, message.relativePath, content, {
             expectedRevision: message.expectedRevision,
             expectedContentHash: message.expectedContentHash,
-            contentHash: message.contentHash
+            contentHash: message.contentHash,
+            createOnly: message.createOnly === true
           }
         );
         let queued = false;
