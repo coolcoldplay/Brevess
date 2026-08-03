@@ -20,6 +20,7 @@
     'image/webp'
   ]);
   const SUPPLEMENTAL_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+  const SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES = 1572864;
   const SUPPLEMENTAL_PDF_MAX_BYTES = 200 * 1024 * 1024;
   const SUPPLEMENTAL_MATERIAL_SEGMENT_MAX = 48;
   const SUPPLEMENTAL_FIGURE_SEGMENT_MAX = 24;
@@ -89,6 +90,10 @@
     const sourceMaterialRaw = compactText(input.sourceMaterialId);
     if (!sourceMaterialRaw) throw new Error('SUPPLEMENTAL_MATERIAL_ID');
     const sourceMaterialId = safeId(sourceMaterialRaw);
+    if ((sourceMode === 'image' || sourceMode === 'caption') &&
+        sourceMaterialId.length > SUPPLEMENTAL_MATERIAL_SEGMENT_MAX) {
+      throw new Error('SUPPLEMENTAL_MATERIAL_ID_BOUNDS');
+    }
     const sourceFileName = text(input.sourceFileName, 240);
     const sourceMimeType = text(input.sourceMimeType, 80).toLowerCase();
     const sourceFileSize = Math.max(0, Math.floor(Number(input.sourceFileSize) || 0));
@@ -132,18 +137,45 @@
     };
   }
 
-  function normalizeSupplementalTransientImage(input = {}) {
+  function strictBase64ByteLength(value) {
+    const payload = String(value || '');
+    if (!payload || !/^(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i
+      .test(payload)) return -1;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    if (payload.endsWith('==') &&
+        (alphabet.indexOf(payload[payload.length - 3]) & 15) !== 0) return -1;
+    if (payload.endsWith('=') && !payload.endsWith('==') &&
+        (alphabet.indexOf(payload[payload.length - 2]) & 3) !== 0) return -1;
+    const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+    return (payload.length / 4) * 3 - padding;
+  }
+
+  function normalizeSupplementalTransientImage(input = {}, expected = '') {
     const mediaType = text(input.mediaType, 80).toLowerCase();
     const dataUrl = String(input.dataUrl || '').trim();
     const width = Math.floor(Number(input.width) || 0);
     const height = Math.floor(Number(input.height) || 0);
     const sourceFingerprint = text(input.sourceFingerprint, 80).toLowerCase();
-    const dataMediaType = dataUrl.match(/^data:([^;,]+);base64,[a-z0-9+/=\s]+$/i)?.[1]
-      ?.toLowerCase();
+    const dataUrlMatch = dataUrl.match(/^data:([^;,]+);base64,(.*)$/i);
+    const dataMediaType = dataUrlMatch?.[1]?.toLowerCase();
+    const decodedByteLength = strictBase64ByteLength(dataUrlMatch?.[2]);
     if (!SUPPLEMENTAL_IMAGE_MIME_TYPES.includes(mediaType) ||
         dataMediaType !== mediaType || width <= 0 || height <= 0 ||
+        decodedByteLength < 0 ||
         !/^sha256:[a-f0-9]{64}$/.test(sourceFingerprint)) {
       throw new Error('SUPPLEMENTAL_TRANSIENT_IMAGE');
+    }
+    if (decodedByteLength > SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES) {
+      throw new Error('SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE');
+    }
+    const expectedSourceFingerprint = text(
+      typeof expected === 'string'
+        ? expected
+        : expected?.sourceFingerprint || input.expectedSourceFingerprint,
+      80
+    ).toLowerCase();
+    if (expectedSourceFingerprint && expectedSourceFingerprint !== sourceFingerprint) {
+      throw new Error('SUPPLEMENTAL_TRANSIENT_FINGERPRINT');
     }
     return { mediaType, dataUrl, width, height, sourceFingerprint };
   }
@@ -165,7 +197,8 @@
     if (!/^[a-f0-9]{64}$/.test(fingerprintBody)) {
       throw new Error('SUPPLEMENTAL_SOURCE_FINGERPRINT');
     }
-    const exists = typeof deps.exists === 'function' ? deps.exists : async () => false;
+    if (typeof deps.exists !== 'function') throw new Error('SUPPLEMENTAL_EXISTS_REQUIRED');
+    const exists = deps.exists;
     const randomHex = typeof deps.randomHex === 'function' ? deps.randomHex : defaultRandomHex;
     const prefix = boundedIdSegment(
       input.readablePrefix || 'manual-figure',
@@ -366,6 +399,29 @@
     return supplement ? `s${Number(supplement[1])}` : '';
   }
 
+  function migratedSupplementalFigureSourceMode(figure = {}, asset = {}) {
+    for (const candidate of [figure.sourceMode, asset.sourceMode]) {
+      const raw = String(candidate || '').trim().toLowerCase();
+      if (!raw) continue;
+      return SUPPLEMENTAL_FIGURE_SOURCE_MODES.includes(raw) ? raw : '';
+    }
+    const legacyPdfSignals = [
+      figure.sourceMimeType,
+      asset.sourceMimeType
+    ].some(value => text(value, 80).toLowerCase() === 'application/pdf') || [
+      figure.sourceFileName,
+      asset.sourceFileName,
+      figure.sourceUrl,
+      asset.sourceUrl
+    ].some(value => /\.pdf(?:$|[?#])/i.test(String(value || ''))) ||
+      text(asset.kind, 40).toLowerCase() === 'pdf' ||
+      Boolean(asset.parsedDocument && typeof asset.parsedDocument === 'object') ||
+      /(?:^|\/)pdf-reader\.html(?:$|[?#])/i.test(String(
+        figure.sourceReaderUrl || asset.sourceReaderUrl || ''
+      ));
+    return legacyPdfSignals ? 'pdf' : '';
+  }
+
   function normalizeSupplementalFigure(figure = {}, asset = {}) {
     const originalFigureId = text(figure.originalFigureId || figure.figureId, 160);
     const figureLabel = text(figure.figureLabel || figure.label ||
@@ -392,7 +448,7 @@
       /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(existingFigureSegment)
       ? existingFigureId
       : `${expectedPrefix}${figureSegment}`;
-    return {
+    const normalized = {
       ...figure,
       figureId,
       originalFigureId,
@@ -403,6 +459,10 @@
       sourceUrl: normalizeSupplementalUrl(figure.sourceUrl || asset.sourceUrl),
       sourcePage: Math.max(0, Number(figure.sourcePage) || 0)
     };
+    const sourceMode = migratedSupplementalFigureSourceMode(figure, asset);
+    if (sourceMode) normalized.sourceMode = sourceMode;
+    else delete normalized.sourceMode;
+    return normalized;
   }
 
   function createSupplementalFigureImportDraft(input = {}) {

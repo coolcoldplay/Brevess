@@ -146,6 +146,44 @@ test('requires a sha256 fingerprint and bounds the transient image payload shape
     () => normalizeSupplementalTransientImage({ ...transient, width: 0 }),
     /SUPPLEMENTAL_TRANSIENT_IMAGE/
   );
+  assert.throws(
+    () => normalizeSupplementalTransientImage(transient, fingerprint('d')),
+    /SUPPLEMENTAL_TRANSIENT_FINGERPRINT/
+  );
+});
+
+test('strictly decodes transient base64 and enforces the encoded image byte ceiling', () => {
+  const exactBytes = 1572864;
+  const exactBase64 = 'AAAA'.repeat(exactBytes / 3);
+  const base = {
+    mediaType: 'image/png',
+    width: 1600,
+    height: 900,
+    sourceFingerprint: fingerprint('e')
+  };
+  assert.equal(
+    normalizeSupplementalTransientImage({
+      ...base,
+      dataUrl: `data:image/png;base64,${exactBase64}`
+    }).dataUrl.length,
+    'data:image/png;base64,'.length + exactBase64.length
+  );
+  assert.throws(
+    () => normalizeSupplementalTransientImage({
+      ...base,
+      dataUrl: `data:image/png;base64,${exactBase64}AA==`
+    }),
+    /SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE/
+  );
+  for (const malformed of ['A===', 'AAAA===', 'AA=A', 'AAAA*', 'AAA']) {
+    assert.throws(
+      () => normalizeSupplementalTransientImage({
+        ...base,
+        dataUrl: `data:image/png;base64,${malformed}`
+      }),
+      /SUPPLEMENTAL_TRANSIENT_IMAGE/
+    );
+  }
 });
 
 test('creates a bounded persisted source draft without copying transient image data', () => {
@@ -196,6 +234,42 @@ test('bounds the Figure id material segment while retaining the PDF binding mate
   assert.ok(figureSegment.length <= 24);
 });
 
+test('does not let manual image or caption material ids bypass the persisted path segment cap', () => {
+  const longMaterialId = `manual-${'x'.repeat(60)}`;
+  const shared = {
+    sourceMaterialId: longMaterialId,
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('6')
+  };
+  assert.throws(() => normalizeSupplementalFigureSource({
+    ...shared,
+    sourceMode: 'caption',
+    caption: 'Figure S1. Replication.'
+  }), /SUPPLEMENTAL_MATERIAL_ID_BOUNDS/);
+  assert.throws(() => normalizeSupplementalFigureSource({
+    ...shared,
+    sourceMode: 'image',
+    sourceFileName: 'figure.png',
+    sourceMimeType: 'image/png',
+    sourceFileSize: 10,
+    imageWidth: 1,
+    imageHeight: 1
+  }), /SUPPLEMENTAL_MATERIAL_ID_BOUNDS/);
+
+  const pdf = normalizeSupplementalFigureSource({
+    ...shared,
+    sourceMode: 'pdf',
+    sourceFileName: 'supplement.pdf',
+    sourceMimeType: 'application/pdf',
+    sourceFileSize: 10
+  });
+  assert.equal(pdf.sourceMaterialId, longMaterialId);
+  assert.equal(
+    supplementalFigureAssetPath(pdf.sourceMaterialId),
+    `figures/supplemental/${longMaterialId}.json`
+  );
+});
+
 test('allocates collision-safe bounded manual ids without overwriting same-name imports', async () => {
   const occupied = new Set();
   const exists = async id => occupied.has(id);
@@ -213,6 +287,16 @@ test('allocates collision-safe bounded manual ids without overwriting same-name 
   assert.ok(first.length <= 48 && second.length <= 48);
   assert.match(first, /^figure-s1-/);
   assert.match(second, /-22222222$/);
+});
+
+test('requires an injected existence check before allocating a manual material id', async () => {
+  await assert.rejects(
+    allocateSupplementalMaterialId({
+      readablePrefix: 'figure-s1',
+      sourceFingerprint: fingerprint('7')
+    }),
+    /SUPPLEMENTAL_EXISTS_REQUIRED/
+  );
 });
 
 test('retries injected id collisions and stops after the bounded attempt budget', async () => {
@@ -236,6 +320,35 @@ test('retries injected id collisions and stops after the bounded attempt budget'
     }, { exists: async () => true, randomHex: () => 'cccccccc' }),
     /SUPPLEMENTAL_MATERIAL_ID_COLLISION/
   );
+});
+
+test('migrates only legacy PDF supplemental Figures to the explicit pdf source mode', () => {
+  const merged = mergeSupplementalFigureAssets([], [{
+    materialId: 'legacy-pdf',
+    sourceUrl: 'https://journal.example/mmc1.pdf',
+    parsedDocument: { markdown: '# Supplemental information' },
+    figures: [{ figureId: 'figure-s1', figureLabel: 'Figure S1' }]
+  }, {
+    materialId: 'explicit-caption',
+    sourceMode: 'caption',
+    sourceUrl: 'https://journal.example/looks-like.pdf',
+    figures: [{ figureId: 'figure-s2', figureLabel: 'Figure S2' }]
+  }, {
+    materialId: 'explicit-image',
+    parsedDocument: { markdown: '# stale metadata' },
+    figures: [{
+      figureId: 'figure-s3',
+      figureLabel: 'Figure S3',
+      sourceMode: 'image'
+    }]
+  }, {
+    materialId: 'legacy-unknown',
+    figures: [{ figureId: 'figure-s4', figureLabel: 'Figure S4' }]
+  }]);
+  assert.equal(merged[0].sourceMode, 'pdf');
+  assert.equal(merged[1].sourceMode, 'caption');
+  assert.equal(merged[2].sourceMode, 'image');
+  assert.equal(Object.hasOwn(merged[3], 'sourceMode'), false);
 });
 
 test('discovers publisher supplemental links and inline videos without treating the article PDF as supplemental', () => {
