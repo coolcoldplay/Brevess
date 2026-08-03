@@ -502,6 +502,11 @@ test('persists editable supplemental evidence and validates its two connection m
           sourceGroupId: 'missing',
           targetStepId: 'step-1',
           targetGroupId: 'group-1'
+        },
+        {
+          connectionId: 'misspelled-mode',
+          mode: 'panel-gropu',
+          targetStepId: 'step-1'
         }
       ]
     }]

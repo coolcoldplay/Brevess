@@ -604,8 +604,11 @@
     );
     const used = new Set();
     return source.slice(0, 120).map((connection, index) => {
-      const mode = connection?.mode === 'evidence-group'
-        ? 'evidence-group' : 'figure';
+      const requestedMode = text(connection?.mode, 40);
+      if (requestedMode && !['figure', 'evidence-group'].includes(requestedMode)) {
+        return null;
+      }
+      const mode = requestedMode || 'figure';
       const targetStepId = safeId(connection?.targetStepId, '');
       const sourceGroupId = mode === 'evidence-group'
         ? safeId(connection?.sourceGroupId, '') : '';
