@@ -7,9 +7,15 @@
   const ARTICLE_ARCHIVE_SCHEMA_VERSION = 1;
   const MAX_ARTICLE_ARCHIVE_BYTES = 12 * 1024 * 1024;
   const OMIT = Symbol('omit');
-  const privacy = typeof shared.isExportSensitiveKey === 'function'
-    ? shared
-    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
+  let privacy = shared;
+  if (typeof privacy.isExportSensitiveKey !== 'function' && typeof require === 'function') {
+    try { privacy = require('./privacy-sanitizer.js'); } catch (_) {}
+  }
+  if (typeof privacy.isExportSensitiveKey !== 'function') {
+    const error = new Error('PRIVACY_SANITIZER_UNAVAILABLE');
+    error.code = 'PRIVACY_SANITIZER_UNAVAILABLE';
+    throw error;
+  }
 
   function fail(code) {
     const error = new Error(code);
@@ -50,7 +56,7 @@
 
   function forbiddenKey(value) {
     const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/gu, '');
-    return privacy.isExportSensitiveKey?.(value) === true ||
+    return privacy.isExportSensitiveKey(value) ||
       /(dataurl|pagehtml|documenthtml|outerhtml|innerhtml|rawhtml|fullhtml)/u.test(key);
   }
 

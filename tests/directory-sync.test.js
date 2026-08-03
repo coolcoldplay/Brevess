@@ -1256,10 +1256,26 @@ test('normal export removes the complete credential/provider family without over
       refreshToken: 'secret-refresh-token',
       credential: 'secret-credential',
       secret: 'secret-secret',
+      apiToken: 'secret-api-token',
+      githubToken: 'secret-github-token',
+      privateToken: 'secret-private-token',
+      personalAccessToken: 'secret-personal-access-token',
+      webhookSecret: 'secret-webhook-secret',
+      privateSecret: 'secret-private-secret',
+      clientSecret: 'secret-client-secret',
+      privateKey: 'secret-private-key',
+      activeProvider: 'secret-active-provider',
+      authorizationHeader: 'secret-authorization-header',
+      authHeader: 'secret-auth-header',
+      bearerToken: 'secret-bearer-token',
+      databasePassword: 'secret-database-password',
       experimentalProtocol: 'retain protocol',
       secretoryPathway: 'retain secretory biology',
+      secretome: 'retain secretome biology',
       tokenizationMethod: 'retain scientific tokenization',
       tokenUsage: { input: 12, output: 4 },
+      tokenCount: 16,
+      inputTokenCount: 12,
       headerTitle: 'retain section header',
       proteinAccess: 'retain assay access'
     }
@@ -1268,8 +1284,11 @@ test('normal export removes the complete credential/provider family without over
   assert.deepEqual(bundle.nested, {
     experimentalProtocol: 'retain protocol',
     secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
     tokenizationMethod: 'retain scientific tokenization',
     tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
     headerTitle: 'retain section header',
     proteinAccess: 'retain assay access'
   });

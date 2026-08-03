@@ -20,9 +20,15 @@
   const META_KEY = 'meta';
   const MAX_ERROR_LENGTH = 240;
   const MAX_CONFLICTS = 50;
-  const privacy = typeof shared.isExportSensitiveKey === 'function'
-    ? shared
-    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
+  let privacy = shared;
+  if (typeof privacy.isExportSensitiveKey !== 'function' && typeof require === 'function') {
+    try { privacy = require('./privacy-sanitizer.js'); } catch (_) {}
+  }
+  if (typeof privacy.isExportSensitiveKey !== 'function') {
+    const error = new Error('PRIVACY_SANITIZER_UNAVAILABLE');
+    error.code = 'PRIVACY_SANITIZER_UNAVAILABLE';
+    throw error;
+  }
   const FORBIDDEN_EXPORT_KEYS = new Set([
     'analysiscache', 'directoryhandle', 'directoryhandles', 'syncqueue',
     'cachestore', 'handlestore'
@@ -30,7 +36,7 @@
 
   function forbiddenExportKey(value) {
     const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return privacy.isExportSensitiveKey?.(value) === true ||
+    return privacy.isExportSensitiveKey(value) ||
       FORBIDDEN_EXPORT_KEYS.has(key) ||
       key.endsWith('cache') || key.endsWith('caches') ||
       key.endsWith('handle') || key.endsWith('handles') ||

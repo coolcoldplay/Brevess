@@ -56,7 +56,11 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     /WORKSPACE_CONTAINS_CREDENTIALS/);
   for (const key of [
     'token', 'providerToken', 'password', 'bearer', 'authToken',
-    'accessToken', 'refreshToken', 'credential', 'secret'
+    'accessToken', 'refreshToken', 'credential', 'secret', 'apiToken',
+    'githubToken', 'privateToken', 'personalAccessToken', 'webhookSecret',
+    'privateSecret', 'clientSecret', 'privateKey', 'activeProvider',
+    'providerId', 'authorizationHeader', 'authHeader', 'bearerToken',
+    'databasePassword'
   ]) {
     assert.throws(
       () => assertWorkspaceSafeValue({ [key]: 'must-not-persist' }),
@@ -65,17 +69,23 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     );
   }
   assert.deepEqual(assertWorkspaceSafeValue({
-    providerId: 'openai',
     experimentalProtocol: 'retain protocol',
     secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
     tokenizationMethod: 'retain scientific tokenization',
-    tokenUsage: { input: 12 }
+    tokenUsage: { input: 12 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    headerTitle: 'retain section header'
   }), {
-    providerId: 'openai',
     experimentalProtocol: 'retain protocol',
     secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
     tokenizationMethod: 'retain scientific tokenization',
-    tokenUsage: { input: 12 }
+    tokenUsage: { input: 12 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    headerTitle: 'retain section header'
   });
 });
 

@@ -102,10 +102,26 @@ test('article archives remove the complete credential and provider key family', 
     refreshToken: 'secret-refresh-token',
     credential: 'secret-credential',
     secret: 'secret-secret',
+    apiToken: 'secret-api-token',
+    githubToken: 'secret-github-token',
+    privateToken: 'secret-private-token',
+    personalAccessToken: 'secret-personal-access-token',
+    webhookSecret: 'secret-webhook-secret',
+    privateSecret: 'secret-private-secret',
+    clientSecret: 'secret-client-secret',
+    privateKey: 'secret-private-key',
+    activeProvider: 'secret-active-provider',
+    authorizationHeader: 'secret-authorization-header',
+    authHeader: 'secret-auth-header',
+    bearerToken: 'secret-bearer-token',
+    databasePassword: 'secret-database-password',
     experimentalProtocol: 'retain protocol',
     secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
     tokenizationMethod: 'retain scientific tokenization',
     tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
     headerTitle: 'retain section header',
     proteinAccess: 'retain assay access'
   };
@@ -115,13 +131,16 @@ test('article archives remove the complete credential and provider key family', 
   const serialized = JSON.stringify(archive);
   assert.doesNotMatch(
     serialized,
-    /secret-api-key|secret-authorization|secret-generic-token|secret-provider-token|secret-provider-id|secret-provider|secret-password|secret-bearer|secret-auth-token|secret-access-token|secret-refresh-token|secret-credential|secret-secret/u
+    /secret-api-key|secret-authorization|secret-generic-token|secret-provider-token|secret-provider-id|secret-provider|secret-password|secret-bearer|secret-auth-token|secret-access-token|secret-refresh-token|secret-credential|secret-secret|secret-api-token|secret-github-token|secret-private-token|secret-personal-access-token|secret-webhook-secret|secret-private-secret|secret-client-secret|secret-private-key|secret-active-provider|secret-authorization-header|secret-auth-header|secret-bearer-token|secret-database-password/u
   );
   assert.deepEqual(audit, {
     experimentalProtocol: 'retain protocol',
     secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
     tokenizationMethod: 'retain scientific tokenization',
     tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
     headerTitle: 'retain section header',
     proteinAccess: 'retain assay access'
   });

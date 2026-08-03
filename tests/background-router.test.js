@@ -489,10 +489,26 @@ test('raw article archives are credential-free after router save and real direct
     refreshToken: 'raw-refresh-token',
     credential: 'raw-credential',
     secret: 'raw-secret',
+    apiToken: 'raw-api-token',
+    githubToken: 'raw-github-token',
+    privateToken: 'raw-private-token',
+    personalAccessToken: 'raw-personal-access-token',
+    webhookSecret: 'raw-webhook-secret',
+    privateSecret: 'raw-private-secret',
+    clientSecret: 'raw-client-secret',
+    privateKey: 'raw-private-key',
+    activeProvider: 'raw-active-provider',
+    authorizationHeader: 'raw-authorization-header',
+    authHeader: 'raw-auth-header',
+    bearerToken: 'raw-bearer-token',
+    databasePassword: 'raw-database-password',
     experimentalProtocol: 'kept-protocol',
     secretoryPathway: 'kept-secretory-pathway',
+    secretome: 'kept-secretome',
     tokenizationMethod: 'kept-tokenization-method',
     tokenUsage: 42,
+    tokenCount: 42,
+    inputTokenCount: 40,
     headerTitle: 'kept-header-title',
     proteinAccess: 'kept-protein-access'
   };
@@ -516,13 +532,16 @@ test('raw article archives are credential-free after router save and real direct
   const diskText = handleStore.readText(`Brevess/${saved.data.relativePath}`);
   assert.ok(diskText, 'the archive should reach the selected directory');
   assert.doesNotMatch(diskText,
-    /sk-raw-api-key|raw-authorization|raw-generic-token|raw-provider-token|raw-provider-id|raw-password|raw-bearer|raw-auth-token|raw-access-token|raw-refresh-token|raw-credential|raw-secret/u);
+    /sk-raw-api-key|raw-authorization|raw-generic-token|raw-provider-token|raw-provider-id|raw-password|raw-bearer|raw-auth-token|raw-access-token|raw-refresh-token|raw-credential|raw-secret|raw-api-token|raw-github-token|raw-private-token|raw-personal-access-token|raw-webhook-secret|raw-private-secret|raw-client-secret|raw-private-key|raw-active-provider|raw-authorization-header|raw-auth-header|raw-bearer-token|raw-database-password/u);
   const diskArchive = JSON.parse(diskText);
   assert.deepEqual(diskArchive.workspace.privacyAudit, {
     experimentalProtocol: 'kept-protocol',
     headerTitle: 'kept-header-title',
+    inputTokenCount: 40,
     proteinAccess: 'kept-protein-access',
+    secretome: 'kept-secretome',
     secretoryPathway: 'kept-secretory-pathway',
+    tokenCount: 42,
     tokenUsage: 42,
     tokenizationMethod: 'kept-tokenization-method'
   });

@@ -7,9 +7,15 @@
   const WORKSPACE_MANIFEST_KIND = 'sci-logic-highlighter-workspace';
   const WORKSPACE_INDEX_KIND = 'sci-logic-highlighter-workspace-index';
   const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
-  const privacy = typeof shared.isCredentialKey === 'function'
-    ? shared
-    : (typeof require === 'function' ? require('./privacy-sanitizer.js') : {});
+  let privacy = shared;
+  if (typeof privacy.isExportSensitiveKey !== 'function' && typeof require === 'function') {
+    try { privacy = require('./privacy-sanitizer.js'); } catch (_) {}
+  }
+  if (typeof privacy.isExportSensitiveKey !== 'function') {
+    const error = new Error('PRIVACY_SANITIZER_UNAVAILABLE');
+    error.code = 'PRIVACY_SANITIZER_UNAVAILABLE';
+    throw error;
+  }
 
   function fail(code) {
     const error = new Error(code);
@@ -74,7 +80,7 @@
       value.forEach(item => assertWorkspaceSafeValue(item, depth + 1, seen));
     } else {
       for (const [key, item] of Object.entries(value)) {
-        if (privacy.isCredentialKey?.(key) === true) {
+        if (privacy.isExportSensitiveKey(key)) {
           fail('WORKSPACE_CONTAINS_CREDENTIALS');
         }
         assertWorkspaceSafeValue(item, depth + 1, seen);

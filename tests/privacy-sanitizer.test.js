@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const { runInNewContext } = require('node:vm');
 
 const {
+  tokenizePrivacyKey,
   isCredentialKey,
   isExportSensitiveKey
 } = require('../core/privacy-sanitizer.js');
@@ -12,27 +14,62 @@ test('recognizes credential-bearing keys without treating scientific words as cr
   for (const key of [
     'apiKey', 'api_key', 'customHeaders', 'Authorization', 'token',
     'providerToken', 'password', 'bearer', 'authToken', 'accessToken',
-    'refreshToken', 'credential', 'clientSecret'
+    'refreshToken', 'credential', 'clientSecret', 'apiToken', 'APIToken',
+    'githubToken', 'privateToken', 'personalAccessToken', 'webhookSecret',
+    'privateSecret', 'privateKey', 'authorizationHeader', 'authHeader',
+    'bearerToken', 'databasePassword'
   ]) {
     assert.equal(isCredentialKey(key), true, key);
   }
   for (const key of [
     'experimentalProtocol', 'secretoryPathway', 'tokenizationMethod',
-    'tokenUsage', 'headerTitle', 'proteinAccess', 'providerId'
+    'tokenUsage', 'tokenCount', 'inputTokenCount', 'secretome',
+    'headerTitle', 'proteinAccess', 'providerId'
   ]) {
     assert.equal(isCredentialKey(key), false, key);
   }
 });
 
+test('canonicalizes common key naming styles into stable word boundaries', () => {
+  for (const key of [
+    'personalAccessToken', 'PersonalAccessToken', 'personal_access_token',
+    'personal-access-token', 'personal access token'
+  ]) {
+    assert.deepEqual(tokenizePrivacyKey(key), ['personal', 'access', 'token'], key);
+  }
+  assert.deepEqual(tokenizePrivacyKey('APIToken'), ['api', 'token']);
+  assert.deepEqual(tokenizePrivacyKey('authorizationHeader'), ['authorization', 'header']);
+  assert.deepEqual(tokenizePrivacyKey('tokenizationMethod'), ['tokenization', 'method']);
+});
+
 test('export policy additionally removes provider metadata but preserves scientific fields', () => {
-  for (const key of ['provider', 'providerId', 'providerToken', 'selectedProvider']) {
+  for (const key of [
+    'provider', 'providerId', 'providerToken', 'selectedProvider', 'activeProvider'
+  ]) {
     assert.equal(isExportSensitiveKey(key), true, key);
   }
   for (const key of [
     'experimentalProtocol', 'secretoryPathway', 'tokenizationMethod',
-    'tokenUsage', 'headerTitle', 'proteinAccess'
+    'tokenUsage', 'tokenCount', 'inputTokenCount', 'secretome',
+    'headerTitle', 'proteinAccess'
   ]) {
     assert.equal(isExportSensitiveKey(key), false, key);
+  }
+});
+
+test('privacy consumers fail closed when the shared sanitizer is unavailable', () => {
+  const root = join(__dirname, '..');
+  for (const relativePath of [
+    join('core', 'article-workspace.js'),
+    join('core', 'article-archive.js'),
+    join('core', 'directory-sync.js')
+  ]) {
+    const source = readFileSync(join(root, relativePath), 'utf8');
+    assert.throws(
+      () => runInNewContext(source, { globalThis: {} }, { filename: relativePath }),
+      error => error?.code === 'PRIVACY_SANITIZER_UNAVAILABLE',
+      relativePath
+    );
   }
 });
 
