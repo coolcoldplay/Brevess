@@ -536,6 +536,13 @@
     if (typeof deps.save !== 'function') {
       throw supplementalError('SUPPLEMENTAL_DRAFT_INVALID');
     }
+    const rawAnalysisImages = input.analysisImages;
+    if (rawAnalysisImages !== undefined &&
+        (!Array.isArray(rawAnalysisImages) || rawAnalysisImages.length > 1)) {
+      throw supplementalError('SUPPLEMENTAL_TRANSIENT_IMAGE');
+    }
+    const analysisImages = (rawAnalysisImages || []).map(image =>
+      normalizeSupplementalTransientImage(image, source.sourceFingerprint));
     const conflictedMaterialIds = new Set();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const materialId = await allocateSupplementalMaterialId({
@@ -547,25 +554,32 @@
           Boolean(await deps.exists(candidate)),
         randomHex: deps.randomHex
       });
-      const draft = createSupplementalFigureImportDraft({
+      const sourceDraft = createSupplementalFigureImportDraft({
         ...source,
         sourceMaterialId: materialId,
         title: input.title,
         figureId: input.figureId,
         figureLabel: input.figureLabel
       });
-      const persistedDraft = typeof deps.decorateDraft === 'function'
-        ? await deps.decorateDraft(draft, { materialId })
-        : draft;
+      const draftContent = {
+        ...sourceDraft,
+        analysisStatus: 'awaiting_article_context',
+        figures: sourceDraft.figures.map((figure, index) => ({
+          ...figure,
+          analysisStatus: 'awaiting_article_context',
+          ...(index === 0 && analysisImages.length
+            ? { analysisImages }
+            : {})
+        }))
+      };
       const relativePath = supplementalFigureAssetPath(materialId);
       try {
-        const asset = await deps.save({
-          materialId,
+        const persisted = await deps.save(
           relativePath,
-          draft: persistedDraft,
-          conflict: { expectedRevision: 0, createOnly: true }
-        });
-        return { materialId, relativePath, draft: persistedDraft, asset };
+          draftContent,
+          { expectedRevision: 0, createOnly: true }
+        );
+        return { materialId, relativePath, asset: draftContent, persisted };
       } catch (error) {
         if (error?.code !== 'ASSET_REVISION_CONFLICT') throw error;
         conflictedMaterialIds.add(materialId);

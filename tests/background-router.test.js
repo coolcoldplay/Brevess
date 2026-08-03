@@ -3426,6 +3426,19 @@ function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}
   });
 }
 
+test('closed-tab manual drafts use the shared positional save and image contract', () => {
+  const source = readFileSync(join(__dirname, '..', 'core', 'background-router.js'), 'utf8');
+  const start = source.indexOf('async function saveClosedTabSupplementalDraft');
+  const end = source.indexOf('function publicStoredArticleChatTurn', start);
+  const route = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(route, /decorateDraft/);
+  assert.match(route, /analysisImages:\s*\[cloneJsonLike\(normalized\.transientImage\)\]/);
+  assert.match(route, /save:\s*\(relativePath, draftContent, conflict\)/);
+  assert.match(route, /asset\s*=\s*created\.persisted/);
+});
+
 test('bound supplemental asset routes validate the parent identity before any asset access', async () => {
   const workspace = closedTabSupplementalWorkspace();
   let assetReads = 0;

@@ -2579,47 +2579,47 @@
       assertSupplementalDraftWorkspaceTarget(workspace, target);
       const normalized = supplementalDraftSourceInput(message);
       const manualSource = ['image', 'caption'].includes(normalized.source.sourceMode);
-      const decorateDraft = draft => ({
-          ...draft,
-          analysisStatus: 'awaiting_article_context',
-          figures: draft.figures.map(figure => ({
-            ...figure,
-            analysisStatus: 'awaiting_article_context',
-            ...(normalized.transientImage
-              ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
-              : {})
-          }))
-        });
       let asset;
       if (manualSource) {
         const created = await shared.createManualSupplementalDraft({
           ...normalized.source,
           title: normalized.title,
           figureId: normalized.figureId,
-          figureLabel: normalized.figureLabel
+          figureLabel: normalized.figureLabel,
+          ...(normalized.transientImage
+            ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
+            : {})
         }, {
           exists: async candidate => Boolean(await articleWorkspaceStore.getAsset(
             target.workspaceId,
             shared.supplementalFigureAssetPath(candidate)
           )),
-          decorateDraft,
-          save: ({ relativePath, draft, conflict }) => articleWorkspaceStore.putAsset(
-            target.workspaceId, relativePath, draft, conflict
-          )
+          save: (relativePath, draftContent, conflict) =>
+            articleWorkspaceStore.putAsset(
+              target.workspaceId, relativePath, draftContent, conflict
+            )
         });
-        asset = created.asset;
+        asset = created.persisted;
       } else {
         const materialId = normalized.source.sourceMaterialId;
-        const draft = shared.createSupplementalFigureImportDraft({
+        const sourceDraft = shared.createSupplementalFigureImportDraft({
           ...normalized.source,
           title: normalized.title,
           figureId: normalized.figureId,
           figureLabel: normalized.figureLabel
         });
+        const draftContent = {
+          ...sourceDraft,
+          analysisStatus: 'awaiting_article_context',
+          figures: sourceDraft.figures.map(figure => ({
+            ...figure,
+            analysisStatus: 'awaiting_article_context'
+          }))
+        };
         asset = await articleWorkspaceStore.putAsset(
           target.workspaceId,
           shared.supplementalFigureAssetPath(materialId),
-          decorateDraft(draft),
+          draftContent,
           { expectedRevision: 0, createOnly: true }
         );
       }

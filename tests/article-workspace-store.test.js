@@ -322,9 +322,42 @@ test('router and real workspace store preserve create-only assets and concurrent
   const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
   const owner = await store.ensureWorkspace(workspace());
   let providerCalls = 0;
+  let barrierEnabled = false;
+  let initialExistsReads = 0;
+  let releaseInitialExistsReads;
+  let conflictCount = 0;
+  const bothInitialExistsReads = new Promise(resolve => {
+    releaseInitialExistsReads = resolve;
+  });
+  const initialExistsPaths = [];
+  const integrationStore = {
+    ...store,
+    async getAsset(workspaceId, path) {
+      const asset = await store.getAsset(workspaceId, path);
+      if (barrierEnabled && initialExistsReads < 2) {
+        initialExistsPaths.push(path);
+        assert.equal(asset, null);
+        initialExistsReads += 1;
+        if (initialExistsReads === 2) releaseInitialExistsReads();
+        await bothInitialExistsReads;
+      }
+      return asset;
+    },
+    async putAsset(...args) {
+      try {
+        return await store.putAsset(...args);
+      } catch (error) {
+        if (error?.code === 'ASSET_REVISION_CONFLICT') {
+          conflictCount += 1;
+          throw error;
+        }
+        throw error;
+      }
+    }
+  };
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(),
-    articleWorkspaceStore: store,
+    articleWorkspaceStore: integrationStore,
     fetchImpl: async () => {
       providerCalls += 1;
       throw new Error('provider must not be called');
@@ -354,6 +387,7 @@ test('router and real workspace store preserve create-only assets and concurrent
   assert.equal(conflict.success, false);
   assert.equal(conflict.error.code, 'ASSET_REVISION_CONFLICT');
   assert.equal((await store.getAsset(owner.workspaceId, relativePath)).content.marker, 'first');
+  conflictCount = 0;
 
   const sourceFingerprint = `sha256:${'d'.repeat(64)}`;
   const draft = createSupplementalFigureImportDraft({
@@ -375,11 +409,15 @@ test('router and real workspace store preserve create-only assets and concurrent
     },
     draft
   };
+  barrierEnabled = true;
   const concurrent = await Promise.all([
     router.handle(structuredClone(message)),
     router.handle(structuredClone(message))
   ]);
   assert.ok(concurrent.every(response => response.success));
+  assert.equal(initialExistsReads, 2);
+  assert.equal(new Set(initialExistsPaths).size, 1);
+  assert.ok(conflictCount >= 1);
   assert.equal(new Set(concurrent.map(response => response.data.asset.relativePath)).size, 2);
 
   const supplementalAssets = (await store.listAssets(owner.workspaceId))
@@ -390,6 +428,10 @@ test('router and real workspace store preserve create-only assets and concurrent
     const persisted = await store.getAsset(owner.workspaceId, asset.relativePath);
     assert.equal(persisted.content.analysisStatus, 'awaiting_article_context');
     assert.equal(persisted.revision, 1);
+    assert.equal(
+      asset.relativePath,
+      `figures/supplemental/${persisted.content.materialId}.json`
+    );
   }
 
   const beforeWrongTarget = (await store.listAssets(owner.workspaceId)).length;

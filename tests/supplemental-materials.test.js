@@ -389,7 +389,7 @@ test('creates concurrent manual drafts with create-only persistence and unique m
   const deps = {
     exists: async materialId => records.has(supplementalFigureAssetPath(materialId)),
     randomHex: () => String(++randomIndex).padStart(8, '0'),
-    save: async ({ relativePath, draft, conflict }) => {
+    save: async (relativePath, draft, conflict) => {
       await Promise.resolve();
       conflicts.push(conflict);
       if (records.has(relativePath)) {
@@ -416,6 +416,9 @@ test('creates concurrent manual drafts with create-only persistence and unique m
   ]);
 
   assert.equal(records.size, 2);
+  assert.deepEqual(Object.keys(created[0]).sort(), [
+    'asset', 'materialId', 'persisted', 'relativePath'
+  ]);
   assert.notEqual(created[0].materialId, created[1].materialId);
   assert.notEqual(created[0].relativePath, created[1].relativePath);
   assert.deepEqual(conflicts, conflicts.map(() => ({
@@ -423,7 +426,11 @@ test('creates concurrent manual drafts with create-only persistence and unique m
     createOnly: true
   })));
   assert.deepEqual(
-    new Set(created.map(item => item.asset.content.materialId)),
+    new Set(created.map(item => item.asset.materialId)),
+    new Set(created.map(item => item.materialId))
+  );
+  assert.deepEqual(
+    new Set(created.map(item => item.persisted.content.materialId)),
     new Set(created.map(item => item.materialId))
   );
 });
@@ -441,7 +448,7 @@ test('stops manual draft creation after eight atomic create conflicts', async ()
     }, {
       exists: async () => false,
       randomHex: () => (++randomIndex).toString(16).padStart(8, '0'),
-      save: async ({ conflict }) => {
+      save: async (_relativePath, _draft, conflict) => {
         saveCalls += 1;
         assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
         const error = new Error('ASSET_REVISION_CONFLICT');
@@ -452,6 +459,66 @@ test('stops manual draft creation after eight atomic create conflicts', async ()
     error => error?.code === 'SUPPLEMENTAL_MATERIAL_ID_COLLISION'
   );
   assert.equal(saveCalls, 8);
+});
+
+test('normalizes one manual analysis image inside the shared draft contract', async () => {
+  const sourceFingerprint = fingerprint('5');
+  let savedDraft = null;
+  const created = await createManualSupplementalDraft({
+    sourceMode: 'image',
+    sourceMaterialId: 'manual-image-s5',
+    sourceFileName: 'figure-s5.png',
+    sourceMimeType: 'image/png',
+    sourceFileSize: 4,
+    sourceImportedAt: importedAt,
+    sourceFingerprint,
+    analysisImages: [{
+      mediaType: 'image/png',
+      dataUrl: 'data:image/png;base64,AAAA',
+      width: 1,
+      height: 1,
+      sourceFingerprint,
+      rawFileName: 'must-not-persist.png'
+    }]
+  }, {
+    exists: async () => false,
+    save: async (_relativePath, draft, conflict) => {
+      savedDraft = draft;
+      assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+      return { revision: 1, contentHash: 'saved' };
+    }
+  });
+
+  assert.equal(created.asset, savedDraft);
+  assert.equal(created.persisted.revision, 1);
+  assert.equal(created.asset.analysisStatus, 'awaiting_article_context');
+  assert.equal(created.asset.figures[0].analysisStatus, 'awaiting_article_context');
+  assert.deepEqual(created.asset.figures[0].analysisImages, [{
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AAAA',
+    width: 1,
+    height: 1,
+    sourceFingerprint
+  }]);
+  await assert.rejects(
+    createManualSupplementalDraft({
+      sourceMode: 'image',
+      sourceMaterialId: 'manual-image-s5',
+      sourceFileName: 'figure-s5.png',
+      sourceMimeType: 'image/png',
+      sourceFileSize: 4,
+      sourceImportedAt: importedAt,
+      sourceFingerprint,
+      analysisImages: [{
+        mediaType: 'image/png', dataUrl: 'data:image/png;base64,AAAA',
+        width: 1, height: 1, sourceFingerprint
+      }, {
+        mediaType: 'image/png', dataUrl: 'data:image/png;base64,AAAA',
+        width: 1, height: 1, sourceFingerprint
+      }]
+    }, { exists: async () => false, save: async () => ({}) }),
+    error => error?.code === 'SUPPLEMENTAL_TRANSIENT_IMAGE'
+  );
 });
 
 test('migrates only legacy PDF supplemental Figures to the explicit pdf source mode', () => {
