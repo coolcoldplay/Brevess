@@ -33,7 +33,8 @@
 - 导航、缩写、手动标注和正则高亮无需 LLM。
 - 问答、高亮和 Figure/Panel 结果默认保存在浏览器本地。
 - 用户可明确选择本地目录进行备份、恢复、导入、导出和跨重启恢复。
-- LLM 采用用户自带 Provider；API Key 仅保存在扩展本地存储。
+- LLM 采用用户自带 Provider；默认情况下 API Key 仅保存在扩展本地存储。
+- 选择同一个 Brevess 文件夹时，新版本可恢复完整的模型/API profiles 和全局缩略词表。开启该功能后，凭据在所选文件夹内仅存在用户备份密码保护的主 AES-GCM 认证密文与最多一份 rolling previous 密文中；备份密码不写入磁盘。
 - Windows Codex Bridge 为可选组件，不捆绑在商店扩展 ZIP 中。
 
 ## 质量验证
