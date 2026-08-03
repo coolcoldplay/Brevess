@@ -277,6 +277,9 @@
           const owner = await request(workspaceStore.get(id));
           if (!owner || owner.deletionPending) fail('WORKSPACE_NOT_FOUND');
           const current = await request(assets.get(key));
+          if (conflict.createOnly === true && current) {
+            fail('ASSET_REVISION_CONFLICT');
+          }
           if (conflict.expectedRevision !== undefined &&
               Number(current?.revision || 0) !== Number(conflict.expectedRevision)) {
             fail('ASSET_REVISION_CONFLICT');

@@ -106,6 +106,17 @@
       'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
       'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
       'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
+      'SUPPLEMENTAL_TARGET_INVALID', 'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH',
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH', 'SUPPLEMENTAL_DRAFT_INVALID',
+      'SUPPLEMENTAL_SOURCE_MODE', 'SUPPLEMENTAL_CAPTION_TOO_LONG',
+      'SUPPLEMENTAL_CAPTION_EMPTY', 'SUPPLEMENTAL_MATERIAL_ID',
+      'SUPPLEMENTAL_MATERIAL_ID_BOUNDS', 'SUPPLEMENTAL_IMAGE_INVALID',
+      'SUPPLEMENTAL_PDF_INVALID', 'SUPPLEMENTAL_SOURCE_FINGERPRINT',
+      'SUPPLEMENTAL_SOURCE_TIME', 'SUPPLEMENTAL_TRANSIENT_IMAGE',
+      'SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE',
+      'SUPPLEMENTAL_TRANSIENT_FINGERPRINT', 'SUPPLEMENTAL_EXISTS_REQUIRED',
+      'SUPPLEMENTAL_RANDOM_UNAVAILABLE', 'SUPPLEMENTAL_RANDOM_INVALID',
+      'SUPPLEMENTAL_MATERIAL_ID_COLLISION',
       'TURN_NOT_FOUND', 'TURN_ALREADY_EXISTS',
       'INVALID_WORKSPACE', 'INVALID_WORKSPACE_PATH', 'INVALID_WORKSPACE_MANIFEST',
       'INVALID_WORKSPACE_INDEX', 'WORKSPACE_CONTAINS_CREDENTIALS',
@@ -156,12 +167,38 @@
       DIRECTORY_SYNC_UNAVAILABLE: 'A local archive directory has not been configured.',
       WORKSPACE_STORE_UNAVAILABLE: 'Local article workspaces are unavailable.',
       WORKSPACE_NOT_FOUND: 'The local article workspace was not found.',
+      ASSET_REVISION_CONFLICT: 'This saved item changed before the save completed.',
       WORKSPACE_REVISION_CONFLICT: 'The article workspace changed before this save completed.',
       WORKSPACE_HASH_CONFLICT: 'The article workspace content hash no longer matches.',
       WORKSPACE_GENERATION_CONFLICT: 'This save belongs to an older cleared workspace.',
       WORKSPACE_DELETION_CONFLICT: 'The article workspace deletion state changed.',
       WORKSPACE_DELETION_PENDING: 'The article workspace is being deleted.',
       INVALID_WORKSPACE_GENERATION: 'The article workspace generation is invalid.',
+      SUPPLEMENTAL_TARGET_INVALID: 'The target article workspace is invalid.',
+      SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH:
+        'The target article URL no longer matches the saved workspace.',
+      SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH:
+        'The target article content no longer matches the saved workspace.',
+      SUPPLEMENTAL_DRAFT_INVALID: 'The supplemental Figure draft is invalid.',
+      SUPPLEMENTAL_SOURCE_MODE: 'The supplemental Figure source type is invalid.',
+      SUPPLEMENTAL_CAPTION_TOO_LONG: 'The supplemental Figure caption is too long.',
+      SUPPLEMENTAL_CAPTION_EMPTY: 'The supplemental Figure caption is empty.',
+      SUPPLEMENTAL_MATERIAL_ID: 'The supplemental Figure identifier is invalid.',
+      SUPPLEMENTAL_MATERIAL_ID_BOUNDS: 'The supplemental Figure identifier is too long.',
+      SUPPLEMENTAL_IMAGE_INVALID: 'The supplemental Figure image is invalid.',
+      SUPPLEMENTAL_PDF_INVALID: 'The supplemental Figure PDF is invalid.',
+      SUPPLEMENTAL_SOURCE_FINGERPRINT: 'The supplemental Figure fingerprint is invalid.',
+      SUPPLEMENTAL_SOURCE_TIME: 'The supplemental Figure import time is invalid.',
+      SUPPLEMENTAL_TRANSIENT_IMAGE: 'The supplemental Figure image payload is invalid.',
+      SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE:
+        'The supplemental Figure image payload is too large.',
+      SUPPLEMENTAL_TRANSIENT_FINGERPRINT:
+        'The supplemental Figure image no longer matches its source.',
+      SUPPLEMENTAL_EXISTS_REQUIRED: 'Supplemental Figure collision checking is unavailable.',
+      SUPPLEMENTAL_RANDOM_UNAVAILABLE: 'Secure supplemental Figure identifiers are unavailable.',
+      SUPPLEMENTAL_RANDOM_INVALID: 'The supplemental Figure identifier is invalid.',
+      SUPPLEMENTAL_MATERIAL_ID_COLLISION:
+        'A unique supplemental Figure identifier could not be allocated.',
       TURN_NOT_FOUND: 'The saved chat turn is missing and must be recreated.',
       TURN_ALREADY_EXISTS: 'The saved chat turn already exists.',
       INVALID_WORKSPACE: 'The article workspace is invalid.',
@@ -2407,6 +2444,180 @@
       throw error;
     }
 
+    function supplementalRouteError(code) {
+      const error = new Error(code);
+      error.code = code;
+      return error;
+    }
+
+    function normalizeSupplementalDraftTarget(input) {
+      if (!isPlainObject(input)) throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      const workspaceId = String(input.workspaceId || '').trim().toLowerCase();
+      const workspaceGeneration = input.workspaceGeneration;
+      const targetArticleTabId = input.targetArticleTabId;
+      if (!/^workspace:[a-f0-9]{64}$/.test(workspaceId) ||
+          !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
+          !Number.isSafeInteger(targetArticleTabId) || targetArticleTabId < 0 ||
+          typeof input.canonicalUrl !== 'string') {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      let canonicalUrl = '';
+      try {
+        canonicalUrl = shared.normalizeWorkspaceCanonicalUrl(input.canonicalUrl);
+      } catch (_) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      if (!canonicalUrl) throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      const hasDocumentHash = Object.prototype.hasOwnProperty.call(input, 'documentHash');
+      const rawDocumentHash = hasDocumentHash
+        ? String(input.documentHash || '').trim().toLowerCase() : '';
+      const documentHash = rawDocumentHash.replace(/^sha256:/, '');
+      if (hasDocumentHash && !/^[a-f0-9]{64}$/.test(documentHash)) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      return {
+        workspaceId,
+        workspaceGeneration,
+        targetArticleTabId,
+        canonicalUrl,
+        documentHash
+      };
+    }
+
+    function supplementalDraftSourceInput(message = {}) {
+      const draft = message.draft;
+      if (!isPlainObject(draft)) throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
+      const source = isPlainObject(message.source) ? message.source : {};
+      const figure = Array.isArray(draft.figures) && isPlainObject(draft.figures[0])
+        ? draft.figures[0] : {};
+      const candidate = {
+        sourceMode: source.sourceMode || draft.sourceMode || figure.sourceMode,
+        sourceMaterialId: source.sourceMaterialId || draft.sourceMaterialId ||
+          draft.materialId || figure.sourceMaterialId,
+        sourceFileName: source.sourceFileName ?? draft.sourceFileName ??
+          figure.sourceFileName,
+        sourceMimeType: source.sourceMimeType ?? draft.sourceMimeType ??
+          figure.sourceMimeType,
+        sourceFileSize: source.sourceFileSize ?? draft.sourceFileSize ??
+          figure.sourceFileSize,
+        sourceImportedAt: source.sourceImportedAt || draft.sourceImportedAt ||
+          figure.sourceImportedAt,
+        sourceFingerprint: source.sourceFingerprint || draft.sourceFingerprint ||
+          figure.sourceFingerprint,
+        caption: source.caption ?? draft.caption ?? figure.caption
+      };
+      const normalizedSource = shared.normalizeSupplementalFigureSource(candidate);
+      if (message.transientImage !== undefined) {
+        if (normalizedSource.sourceMode !== 'image') {
+          throw supplementalRouteError('SUPPLEMENTAL_TRANSIENT_IMAGE');
+        }
+        shared.normalizeSupplementalTransientImage(
+          message.transientImage,
+          normalizedSource.sourceFingerprint
+        );
+      }
+      return {
+        source: normalizedSource,
+        title: String(draft.title || source.title || figure.sourceTitle || '').slice(0, 500),
+        figureId: String(figure.figureId || '').slice(0, 200),
+        figureLabel: String(figure.figureLabel || source.figureLabel || '').slice(0, 240)
+      };
+    }
+
+    function assertSupplementalDraftWorkspaceTarget(workspace, target) {
+      assertWorkspaceMutationGeneration(workspace, target);
+      let canonicalUrl = '';
+      try {
+        canonicalUrl = shared.normalizeWorkspaceCanonicalUrl(workspace.canonicalUrl);
+      } catch (_) {}
+      if (!canonicalUrl || canonicalUrl !== target.canonicalUrl) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH');
+      }
+      if (target.documentHash) {
+        const workspaceDocumentHash = String(
+          workspace.contentHash || workspace.revision || ''
+        ).replace(/^sha256:/i, '').toLowerCase();
+        if (!/^[a-f0-9]{64}$/.test(workspaceDocumentHash) ||
+            workspaceDocumentHash !== target.documentHash) {
+          throw supplementalRouteError('SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH');
+        }
+      }
+    }
+
+    async function saveClosedTabSupplementalDraft(message) {
+      requireArticleWorkspaceStore('getWorkspace');
+      requireArticleWorkspaceStore('getAsset');
+      requireArticleWorkspaceStore('putAsset');
+      if (typeof shared.normalizeWorkspaceCanonicalUrl !== 'function' ||
+          typeof shared.normalizeSupplementalFigureSource !== 'function' ||
+          typeof shared.normalizeSupplementalTransientImage !== 'function' ||
+          typeof shared.allocateSupplementalMaterialId !== 'function' ||
+          typeof shared.createSupplementalFigureImportDraft !== 'function' ||
+          typeof shared.supplementalFigureAssetPath !== 'function') {
+        throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
+      }
+      const target = normalizeSupplementalDraftTarget(message.target);
+      const workspace = await articleWorkspaceStore.getWorkspace(target.workspaceId);
+      if (!workspace || workspace.deletionPending) {
+        throw supplementalRouteError('WORKSPACE_NOT_FOUND');
+      }
+      assertSupplementalDraftWorkspaceTarget(workspace, target);
+      const normalized = supplementalDraftSourceInput(message);
+      const manualSource = ['image', 'caption'].includes(normalized.source.sourceMode);
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const materialId = manualSource
+          ? await shared.allocateSupplementalMaterialId({
+            sourceFingerprint: normalized.source.sourceFingerprint,
+            readablePrefix: normalized.source.sourceMaterialId ||
+              `manual-${normalized.source.sourceMode}`
+          }, {
+            exists: async candidate => Boolean(await articleWorkspaceStore.getAsset(
+              target.workspaceId,
+              shared.supplementalFigureAssetPath(candidate)
+            ))
+          })
+          : normalized.source.sourceMaterialId;
+        const draft = shared.createSupplementalFigureImportDraft({
+          ...normalized.source,
+          sourceMaterialId: materialId,
+          title: normalized.title,
+          figureId: normalized.figureId,
+          figureLabel: normalized.figureLabel
+        });
+        const content = {
+          ...draft,
+          analysisStatus: 'awaiting_article_context',
+          figures: draft.figures.map(figure => ({
+            ...figure,
+            analysisStatus: 'awaiting_article_context'
+          }))
+        };
+        try {
+          const asset = await articleWorkspaceStore.putAsset(
+            target.workspaceId,
+            shared.supplementalFigureAssetPath(materialId),
+            content,
+            { expectedRevision: 0, createOnly: true }
+          );
+          return {
+            saved: true,
+            asset: {
+              relativePath: String(asset.relativePath || ''),
+              revision: Number(asset.revision) || 0,
+              contentHash: String(asset.contentHash || '')
+            },
+            analysisStatus: 'awaiting_article_context'
+          };
+        } catch (error) {
+          if (!manualSource || error?.code !== 'ASSET_REVISION_CONFLICT' || attempt === 7) {
+            throw error;
+          }
+        }
+      }
+      throw supplementalRouteError('SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+    }
+
     function publicStoredArticleChatTurn(turn = {}) {
       const value = cloneJsonLike(turn);
       for (const key of [
@@ -2607,6 +2818,10 @@
           expectedContentHash: message.expectedContentHash
         });
         return { workspace: publicWorkspace(workspace) };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT') {
+        return saveClosedTabSupplementalDraft(message);
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_SAVE_ASSET') {

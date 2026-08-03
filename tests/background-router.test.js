@@ -15,6 +15,7 @@ require('../core/result-validator.js');
 require('../core/evidence-ledger.js');
 require('../core/figure-analysis.js');
 require('../core/figure-panel-planner.js');
+require('../core/supplemental-materials.js');
 require('../core/article-chat-tokenizer.js');
 require('../core/article-chat-index.js');
 require('../core/article-chat-retrieval.js');
@@ -345,12 +346,16 @@ test('registers only the one-type study selection message in the service worker'
   ['ARTICLE_ARCHIVE_PROBE', 'ARTICLE_ARCHIVE_SAVE', 'ARTICLE_ARCHIVE_LOAD']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   ['ARTICLE_WORKSPACE_ENSURE', 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
     'ARTICLE_WORKSPACE_SAVE_TURN', 'ARTICLE_WORKSPACE_PROBE',
     'ARTICLE_WORKSPACE_SCAN_RESTORE', 'ARTICLE_WORKSPACE_LIST',
     'ARTICLE_WORKSPACE_STATS', 'ARTICLE_WORKSPACE_EXPORT',
     'ARTICLE_WORKSPACE_BEGIN_DELETE', 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
     'ARTICLE_WORKSPACE_REBUILD_INDEX']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
+  assert.equal((source.match(/chrome\.runtime\.onMessage\.addListener\(/g) || []).length, 1);
+  assert.ok(source.indexOf('core/supplemental-materials.js') <
+    source.indexOf('core/background-router.js'));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
   assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
   assert.match(source, /'LLM_TOKEN_USAGE_LIST'/);
@@ -3378,6 +3383,210 @@ test('repairs one structurally invalid targeted Panel follow-up response', async
   assert.match(instructions[1], /SCHEMA_REPAIR_PASS/);
   assert.equal(response.data.panelFollowup.inputBasis.attempts, 2);
   assert.ok(progress.some(event => event.phase === 'figure_panel_schema_retry'));
+});
+
+function closedTabSupplementalWorkspace(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'8'.repeat(64)}`,
+    canonicalUrl: 'https://journal.example/article',
+    aliases: [],
+    title: 'Closed article tab',
+    directoryName: `Closed article tab--${'8'.repeat(16)}`,
+    revision: '7'.repeat(64),
+    contentHash: '7'.repeat(64),
+    workspaceGeneration: 4,
+    ...overrides
+  };
+}
+
+function closedTabSupplementalTarget(workspace, overrides = {}) {
+  return {
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: workspace.workspaceGeneration,
+    targetArticleTabId: 91,
+    canonicalUrl: `${workspace.canonicalUrl}?ignored=1#section`,
+    documentHash: `sha256:${workspace.contentHash}`,
+    ...overrides
+  };
+}
+
+function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}) {
+  const sourceFingerprint = `sha256:${fingerprint.repeat(64)}`;
+  return globalThis.SciLLM.createSupplementalFigureImportDraft({
+    sourceMode: mode,
+    sourceMaterialId: `manual-${mode}-${fingerprint.repeat(10)}`,
+    sourceFileName: mode === 'image' ? 'figure-s1.png' : '',
+    sourceMimeType: mode === 'image' ? 'image/png' : '',
+    sourceFileSize: mode === 'image' ? 4 : 0,
+    sourceImportedAt: '2026-08-03T03:04:05.000Z',
+    sourceFingerprint,
+    caption: 'A, treatment increases signal. B, matched control remains stable.',
+    figureLabel: 'Supplemental Figure S1'
+  });
+}
+
+test('closed-tab supplemental draft route forces create-only storage and never persists image bytes', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const assets = new Map();
+  const calls = [];
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset(id, path) {
+      return structuredClone(assets.get(`${id}:${path}`) || null);
+    },
+    async putAsset(id, path, content, conflict) {
+      calls.push({ id, path, content: structuredClone(content), conflict: { ...conflict } });
+      const saved = {
+        workspaceId: id,
+        relativePath: path,
+        content: structuredClone(content),
+        revision: 1,
+        contentHash: 'stored-content-hash'
+      };
+      assets.set(`${id}:${path}`, saved);
+      return structuredClone(saved);
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('provider must not be called');
+    }
+  });
+  const draft = closedTabSupplementalDraft({ mode: 'image' });
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: { ...draft, dataUrl: 'data:image/png;base64,U0VDUkVU' },
+    transientImage: {
+      mediaType: 'image/png',
+      dataUrl: 'data:image/png;base64,AQID',
+      width: 1,
+      height: 1,
+      sourceFingerprint: draft.sourceFingerprint
+    },
+    expectedRevision: 999,
+    createOnly: false
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data, {
+    saved: true,
+    asset: {
+      relativePath: calls[0].path,
+      revision: 1,
+      contentHash: 'stored-content-hash'
+    },
+    analysisStatus: 'awaiting_article_context'
+  });
+  assert.deepEqual(calls[0].conflict, { expectedRevision: 0, createOnly: true });
+  assert.equal(calls[0].content.analysisStatus, 'awaiting_article_context');
+  assert.equal(calls[0].content.figures[0].analysisStatus, 'awaiting_article_context');
+  assert.doesNotMatch(JSON.stringify(calls[0].content), /data:image|U0VDUkVU|AQID/);
+  assert.equal(providerCalls, 0);
+});
+
+test('closed-tab supplemental draft rejects stale or mismatched targets before any write', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let writes = 0;
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset() { return null; },
+    async putAsset() { writes += 1; throw new Error('must not write'); }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+  const draft = closedTabSupplementalDraft();
+  const cases = [
+    [{ ...closedTabSupplementalTarget(workspace), workspaceGeneration: 5 },
+      'WORKSPACE_GENERATION_CONFLICT'],
+    [{ ...closedTabSupplementalTarget(workspace), canonicalUrl: 'https://journal.example/other' },
+      'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH'],
+    [{ ...closedTabSupplementalTarget(workspace), documentHash: 'not-a-hash' },
+      'SUPPLEMENTAL_TARGET_INVALID'],
+    [{ ...closedTabSupplementalTarget(workspace), documentHash: '5'.repeat(64) },
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH'],
+    [{ ...closedTabSupplementalTarget(workspace), targetArticleTabId: -1 },
+      'SUPPLEMENTAL_TARGET_INVALID']
+  ];
+
+  for (const [target, expectedCode] of cases) {
+    const response = await router.handle({
+      type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT', target, draft
+    });
+    assert.equal(response.success, false);
+    assert.equal(response.error.code, expectedCode);
+  }
+  assert.equal(writes, 0);
+  assert.equal(providerCalls, 0);
+});
+
+test('concurrent closed-tab supplemental drafts resolve create-only collisions to distinct paths', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const assets = new Map();
+  const successfulWrites = [];
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset(id, path) {
+      await Promise.resolve();
+      return structuredClone(assets.get(`${id}:${path}`) || null);
+    },
+    async putAsset(id, path, content, conflict) {
+      assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+      await Promise.resolve();
+      const key = `${id}:${path}`;
+      if (assets.has(key)) {
+        const error = new Error('ASSET_REVISION_CONFLICT');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+      const saved = {
+        workspaceId: id,
+        relativePath: path,
+        content: structuredClone(content),
+        revision: 1,
+        contentHash: `hash-${successfulWrites.length + 1}`
+      };
+      assets.set(key, saved);
+      successfulWrites.push(path);
+      return structuredClone(saved);
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+  const message = {
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft()
+  };
+  const responses = await Promise.all([
+    router.handle(structuredClone(message)),
+    router.handle(structuredClone(message))
+  ]);
+
+  assert.ok(responses.every(response => response.success));
+  assert.equal(new Set(responses.map(response => response.data.asset.relativePath)).size, 2);
+  assert.equal(new Set(successfulWrites).size, 2);
+  assert.equal(assets.size, 2);
+  assert.equal(providerCalls, 0);
 });
 
 test('persists Figure and chat provider route metadata through router storage and directory flush', async () => {

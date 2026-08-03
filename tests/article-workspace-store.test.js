@@ -227,6 +227,32 @@ test('workspace assets are atomic and enforce revision and content-hash conflict
     ownerBeforeFailure.storageRevision);
 });
 
+test('workspace asset createOnly conflicts without replacing the existing asset', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const first = await store.putAsset(
+    owner.workspaceId,
+    'figures/supplemental/manual-caption.json',
+    { analysisStatus: 'awaiting_article_context', marker: 'first' },
+    { expectedRevision: 0, createOnly: true }
+  );
+
+  await assert.rejects(() => store.putAsset(
+    owner.workspaceId,
+    'figures/supplemental/manual-caption.json',
+    { analysisStatus: 'awaiting_article_context', marker: 'second' },
+    { expectedRevision: first.revision, createOnly: true }
+  ), error => error?.code === 'ASSET_REVISION_CONFLICT');
+
+  const persisted = await store.getAsset(
+    owner.workspaceId,
+    'figures/supplemental/manual-caption.json'
+  );
+  assert.equal(persisted.revision, 1);
+  assert.equal(persisted.content.marker, 'first');
+});
+
 test('workspace summaries stay exact across asset replacement and turn mutations', async () => {
   const fake = createFakeIndexedDb();
   const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
