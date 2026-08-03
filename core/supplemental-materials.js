@@ -21,6 +21,9 @@
   ]);
   const SUPPLEMENTAL_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
   const SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES = 1572864;
+  const SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE = 1600;
+  const SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BASE64_CHARS =
+    4 * Math.ceil(SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES / 3);
   const SUPPLEMENTAL_PDF_MAX_BYTES = 200 * 1024 * 1024;
   const SUPPLEMENTAL_MATERIAL_SEGMENT_MAX = 48;
   const SUPPLEMENTAL_FIGURE_SEGMENT_MAX = 24;
@@ -39,6 +42,12 @@
 
   function text(value, limit = 1200) {
     return compactText(value).slice(0, limit);
+  }
+
+  function supplementalError(code) {
+    const error = new Error(code);
+    error.code = code;
+    return error;
   }
 
   function hash(value) {
@@ -80,50 +89,45 @@
   function normalizeSupplementalFigureSource(input = {}) {
     const sourceMode = String(input.sourceMode || '').trim().toLowerCase();
     if (!SUPPLEMENTAL_FIGURE_SOURCE_MODES.includes(sourceMode)) {
-      throw new Error('SUPPLEMENTAL_SOURCE_MODE');
+      throw supplementalError('SUPPLEMENTAL_SOURCE_MODE');
     }
     const rawCaption = compactText(input.caption);
-    if (rawCaption.length > 8000) throw new Error('SUPPLEMENTAL_CAPTION_TOO_LONG');
+    if (rawCaption.length > 8000) throw supplementalError('SUPPLEMENTAL_CAPTION_TOO_LONG');
     const caption = rawCaption;
-    if (sourceMode === 'caption' && !caption) throw new Error('SUPPLEMENTAL_CAPTION_EMPTY');
+    if (sourceMode === 'caption' && !caption) {
+      throw supplementalError('SUPPLEMENTAL_CAPTION_EMPTY');
+    }
 
     const sourceMaterialRaw = compactText(input.sourceMaterialId);
-    if (!sourceMaterialRaw) throw new Error('SUPPLEMENTAL_MATERIAL_ID');
+    if (!sourceMaterialRaw) throw supplementalError('SUPPLEMENTAL_MATERIAL_ID');
     const sourceMaterialId = safeId(sourceMaterialRaw);
     if ((sourceMode === 'image' || sourceMode === 'caption') &&
         sourceMaterialId.length > SUPPLEMENTAL_MATERIAL_SEGMENT_MAX) {
-      throw new Error('SUPPLEMENTAL_MATERIAL_ID_BOUNDS');
+      throw supplementalError('SUPPLEMENTAL_MATERIAL_ID_BOUNDS');
     }
     const sourceFileName = text(input.sourceFileName, 240);
     const sourceMimeType = text(input.sourceMimeType, 80).toLowerCase();
     const sourceFileSize = Math.max(0, Math.floor(Number(input.sourceFileSize) || 0));
     if (sourceMode === 'image') {
-      const imageWidth = Math.floor(Number(
-        input.imageWidth ?? input.naturalWidth ?? input.width
-      ) || 0);
-      const imageHeight = Math.floor(Number(
-        input.imageHeight ?? input.naturalHeight ?? input.height
-      ) || 0);
       if (!SUPPLEMENTAL_IMAGE_MIME_TYPES.includes(sourceMimeType) ||
           !imageMimeMatchesExtension(sourceFileName, sourceMimeType) ||
-          !sourceFileSize || sourceFileSize > SUPPLEMENTAL_IMAGE_MAX_BYTES ||
-          imageWidth <= 0 || imageHeight <= 0) {
-        throw new Error('SUPPLEMENTAL_IMAGE_INVALID');
+          !sourceFileSize || sourceFileSize > SUPPLEMENTAL_IMAGE_MAX_BYTES) {
+        throw supplementalError('SUPPLEMENTAL_IMAGE_INVALID');
       }
     }
     if (sourceMode === 'pdf' &&
         (sourceFileExtension(sourceFileName) !== 'pdf' ||
          sourceMimeType !== 'application/pdf' ||
          !sourceFileSize || sourceFileSize > SUPPLEMENTAL_PDF_MAX_BYTES)) {
-      throw new Error('SUPPLEMENTAL_PDF_INVALID');
+      throw supplementalError('SUPPLEMENTAL_PDF_INVALID');
     }
     const sourceFingerprint = text(input.sourceFingerprint, 80).toLowerCase();
     if (!/^sha256:[a-f0-9]{64}$/.test(sourceFingerprint)) {
-      throw new Error('SUPPLEMENTAL_SOURCE_FINGERPRINT');
+      throw supplementalError('SUPPLEMENTAL_SOURCE_FINGERPRINT');
     }
     const sourceImportedAt = text(input.sourceImportedAt, 80);
     if (!sourceImportedAt || !Number.isFinite(Date.parse(sourceImportedAt))) {
-      throw new Error('SUPPLEMENTAL_SOURCE_TIME');
+      throw supplementalError('SUPPLEMENTAL_SOURCE_TIME');
     }
     return {
       sourceMode,
@@ -152,21 +156,30 @@
 
   function normalizeSupplementalTransientImage(input = {}, expected = '') {
     const mediaType = text(input.mediaType, 80).toLowerCase();
-    const dataUrl = String(input.dataUrl || '').trim();
-    const width = Math.floor(Number(input.width) || 0);
-    const height = Math.floor(Number(input.height) || 0);
+    const dataUrl = String(input.dataUrl || '');
+    const width = Number(input.width);
+    const height = Number(input.height);
     const sourceFingerprint = text(input.sourceFingerprint, 80).toLowerCase();
-    const dataUrlMatch = dataUrl.match(/^data:([^;,]+);base64,(.*)$/i);
-    const dataMediaType = dataUrlMatch?.[1]?.toLowerCase();
-    const decodedByteLength = strictBase64ByteLength(dataUrlMatch?.[2]);
+    const separatorIndex = dataUrl.indexOf(',');
+    const dataHeader = separatorIndex >= 0 ? dataUrl.slice(0, separatorIndex) : '';
+    const payload = separatorIndex >= 0 ? dataUrl.slice(separatorIndex + 1) : '';
+    const dataMediaType = dataHeader.match(/^data:([^;,]+);base64$/i)?.[1]
+      ?.toLowerCase();
+    const validDimensions = Number.isSafeInteger(width) && Number.isSafeInteger(height) &&
+      width > 0 && height > 0 &&
+      Math.max(width, height) <= SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE;
     if (!SUPPLEMENTAL_IMAGE_MIME_TYPES.includes(mediaType) ||
-        dataMediaType !== mediaType || width <= 0 || height <= 0 ||
-        decodedByteLength < 0 ||
+        dataMediaType !== mediaType || !validDimensions ||
         !/^sha256:[a-f0-9]{64}$/.test(sourceFingerprint)) {
-      throw new Error('SUPPLEMENTAL_TRANSIENT_IMAGE');
+      throw supplementalError('SUPPLEMENTAL_TRANSIENT_IMAGE');
     }
+    if (payload.length > SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BASE64_CHARS) {
+      throw supplementalError('SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE');
+    }
+    const decodedByteLength = strictBase64ByteLength(payload);
+    if (decodedByteLength < 0) throw supplementalError('SUPPLEMENTAL_TRANSIENT_IMAGE');
     if (decodedByteLength > SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES) {
-      throw new Error('SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE');
+      throw supplementalError('SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE');
     }
     const expectedSourceFingerprint = text(
       typeof expected === 'string'
@@ -175,7 +188,7 @@
       80
     ).toLowerCase();
     if (expectedSourceFingerprint && expectedSourceFingerprint !== sourceFingerprint) {
-      throw new Error('SUPPLEMENTAL_TRANSIENT_FINGERPRINT');
+      throw supplementalError('SUPPLEMENTAL_TRANSIENT_FINGERPRINT');
     }
     return { mediaType, dataUrl, width, height, sourceFingerprint };
   }
@@ -184,7 +197,9 @@
     const size = Math.max(1, Math.ceil(Number(length) / 2));
     const bytes = new Uint8Array(size);
     const cryptoApi = globalThis.crypto;
-    if (!cryptoApi?.getRandomValues) throw new Error('SUPPLEMENTAL_RANDOM_UNAVAILABLE');
+    if (!cryptoApi?.getRandomValues) {
+      throw supplementalError('SUPPLEMENTAL_RANDOM_UNAVAILABLE');
+    }
     cryptoApi.getRandomValues(bytes);
     return [...bytes]
       .map(byte => byte.toString(16).padStart(2, '0'))
@@ -192,12 +207,16 @@
   }
 
   async function allocateSupplementalMaterialId(input = {}, deps = {}) {
+    // This only screens a candidate against a point-in-time existence check.
+    // Persistence must still use create-only CAS so concurrent importers cannot overwrite.
     const sourceFingerprint = text(input.sourceFingerprint, 80).toLowerCase();
     const fingerprintBody = sourceFingerprint.replace(/^sha256:/, '');
     if (!/^[a-f0-9]{64}$/.test(fingerprintBody)) {
-      throw new Error('SUPPLEMENTAL_SOURCE_FINGERPRINT');
+      throw supplementalError('SUPPLEMENTAL_SOURCE_FINGERPRINT');
     }
-    if (typeof deps.exists !== 'function') throw new Error('SUPPLEMENTAL_EXISTS_REQUIRED');
+    if (typeof deps.exists !== 'function') {
+      throw supplementalError('SUPPLEMENTAL_EXISTS_REQUIRED');
+    }
     const exists = deps.exists;
     const randomHex = typeof deps.randomHex === 'function' ? deps.randomHex : defaultRandomHex;
     const prefix = boundedIdSegment(
@@ -212,12 +231,14 @@
     if (!await exists(base)) return base;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const suffix = String(randomHex(8) || '').toLowerCase();
-      if (!/^[a-f0-9]{8}$/.test(suffix)) throw new Error('SUPPLEMENTAL_RANDOM_INVALID');
+      if (!/^[a-f0-9]{8}$/.test(suffix)) {
+        throw supplementalError('SUPPLEMENTAL_RANDOM_INVALID');
+      }
       const candidate = `${base.slice(0, SUPPLEMENTAL_MATERIAL_SEGMENT_MAX - 9)
         .replace(/-+$/g, '')}-${suffix}`;
       if (!await exists(candidate)) return candidate;
     }
-    throw new Error('SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+    throw supplementalError('SUPPLEMENTAL_MATERIAL_ID_COLLISION');
   }
 
   function normalizeSupplementalUrl(value, baseUrl = '') {
@@ -644,6 +665,8 @@
     SUPPLEMENTAL_FIGURE_ASSET_PREFIX,
     SUPPLEMENTAL_BINDING_KEYS,
     SUPPLEMENTAL_FIGURE_SOURCE_MODES,
+    SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES,
+    SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE,
     normalizeSupplementalUrl,
     normalizeSupplementalFigureSource,
     normalizeSupplementalTransientImage,

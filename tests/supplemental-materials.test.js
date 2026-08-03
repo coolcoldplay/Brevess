@@ -4,6 +4,8 @@ require('../core/pdf-workspace.js');
 require('../core/figure-extractor.js');
 const {
   SUPPLEMENTAL_FIGURE_SOURCE_MODES,
+  SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES,
+  SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE,
   discoverSupplementalMaterials,
   extractSupplementalReferences,
   mergeSupplementalFigureAssets,
@@ -39,6 +41,7 @@ test('normalizes exactly pdf image and caption supplemental Figure sources', () 
   assert.equal(image.sourceMode, 'image');
   assert.equal(image.sourceFileSize, 1024);
   assert.equal(image.caption, '');
+  assert.deepEqual(normalizeSupplementalFigureSource(image), image);
   const pdf = normalizeSupplementalFigureSource({
     ...shared,
     sourceMode: 'pdf',
@@ -92,9 +95,7 @@ test('rejects invalid PDF and image file metadata at their hard limits', () => {
     { sourceFileName: 'figure.jpg' },
     { sourceMimeType: 'image/gif' },
     { sourceFileSize: 0 },
-    { sourceFileSize: 20 * 1024 * 1024 + 1 },
-    { imageWidth: 0 },
-    { imageHeight: 0 }
+    { sourceFileSize: 20 * 1024 * 1024 + 1 }
   ]) assert.throws(() => image(overrides), /SUPPLEMENTAL_IMAGE_INVALID/);
 
   const pdf = overrides => normalizeSupplementalFigureSource({
@@ -115,6 +116,8 @@ test('rejects invalid PDF and image file metadata at their hard limits', () => {
 });
 
 test('requires a sha256 fingerprint and bounds the transient image payload shape', () => {
+  assert.equal(SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES, 1572864);
+  assert.equal(SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE, 1600);
   const base = {
     sourceMode: 'caption',
     sourceMaterialId: 'caption-s1',
@@ -152,6 +155,31 @@ test('requires a sha256 fingerprint and bounds the transient image payload shape
   );
 });
 
+test('requires finite safe positive transient dimensions within the shared max edge', () => {
+  const transient = {
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AAAA',
+    width: 1600,
+    height: 1,
+    sourceFingerprint: fingerprint('8')
+  };
+  assert.equal(normalizeSupplementalTransientImage(transient).width, 1600);
+  for (const [field, value] of [
+    ['width', 1601],
+    ['height', 1601],
+    ['width', Infinity],
+    ['height', NaN],
+    ['width', 1.5],
+    ['height', -1]
+  ]) {
+    assert.throws(
+      () => normalizeSupplementalTransientImage({ ...transient, [field]: value }),
+      error => error?.code === 'SUPPLEMENTAL_TRANSIENT_IMAGE' &&
+        error.message === 'SUPPLEMENTAL_TRANSIENT_IMAGE'
+    );
+  }
+});
+
 test('strictly decodes transient base64 and enforces the encoded image byte ceiling', () => {
   const exactBytes = 1572864;
   const exactBase64 = 'AAAA'.repeat(exactBytes / 3);
@@ -175,7 +203,11 @@ test('strictly decodes transient base64 and enforces the encoded image byte ceil
     }),
     /SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE/
   );
-  for (const malformed of ['A===', 'AAAA===', 'AA=A', 'AAAA*', 'AAA']) {
+  for (const malformed of [
+    'A===', 'AAAA===', 'AA=A', 'AAAA*', 'AAA',
+    'AB==', // valid alphabet and padding shape, but non-canonical pad bits
+    'AAB='
+  ]) {
     assert.throws(
       () => normalizeSupplementalTransientImage({
         ...base,
@@ -184,6 +216,14 @@ test('strictly decodes transient base64 and enforces the encoded image byte ceil
       /SUPPLEMENTAL_TRANSIENT_IMAGE/
     );
   }
+  const tooLongAndMalformed = `${'A'.repeat(2097153)}*`;
+  assert.throws(
+    () => normalizeSupplementalTransientImage({
+      ...base,
+      dataUrl: `data:image/png;base64,${tooLongAndMalformed}`
+    }),
+    error => error?.code === 'SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE'
+  );
 });
 
 test('creates a bounded persisted source draft without copying transient image data', () => {
@@ -212,6 +252,25 @@ test('creates a bounded persisted source draft without copying transient image d
     'figures/supplemental/caption-s1.json');
   assert.equal(JSON.stringify(asset).includes('data:image/'), false);
   assert.equal(JSON.stringify(asset).includes('transientImage'), false);
+});
+
+test('creates an image draft from already-normalized persistent provenance', () => {
+  const normalized = normalizeSupplementalFigureSource({
+    sourceMode: 'image',
+    sourceMaterialId: 'manual-image-s3',
+    sourceFileName: 'figure-s3.webp',
+    sourceMimeType: 'image/webp',
+    sourceFileSize: 2048,
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('9'),
+    imageWidth: 1200,
+    imageHeight: 800
+  });
+  const draft = createSupplementalFigureImportDraft(normalized);
+  assert.equal(draft.sourceMode, 'image');
+  assert.equal(draft.figures[0].sourceMode, 'image');
+  assert.equal(draft.figures[0].analysisStatus, 'draft');
+  assert.doesNotMatch(JSON.stringify(draft), /data:image\//);
 });
 
 test('bounds the Figure id material segment while retaining the PDF binding material id', () => {
@@ -270,7 +329,7 @@ test('does not let manual image or caption material ids bypass the persisted pat
   );
 });
 
-test('allocates collision-safe bounded manual ids without overwriting same-name imports', async () => {
+test('allocates bounded candidate ids while final create-only CAS prevents concurrent overwrite', async () => {
   const occupied = new Set();
   const exists = async id => occupied.has(id);
   const longPrefix = `figure-s1-${'x'.repeat(100)}`;
