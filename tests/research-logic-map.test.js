@@ -448,6 +448,9 @@ test('normalizes v3 view and top-level supplemental placeholders', () => {
     supplementalId: 'supplement-1',
     type: 'video',
     label: 'Video S1',
+    proofItems: [],
+    evidenceGroups: [],
+    connections: [],
     manuallyEdited: true,
     manuallyEditedFields: ['label'],
     humanReviewed: true
@@ -458,6 +461,138 @@ test('normalizes v3 view and top-level supplemental placeholders', () => {
     collapsedStepIds: ['step-1'],
     collapsedSupplementalIds: ['supplement-1']
   });
+});
+
+test('persists editable supplemental evidence and validates its two connection modes', () => {
+  const map = normalizeResearchLogicMap(v3Fixture({
+    supplementalMaterials: [{
+      supplementalId: 'supplement-1',
+      type: 'figure',
+      label: 'Supplementary Figure 1',
+      proofItems: [{ itemId: 'supplement-proof-1', text: 'The control excludes drift.' }],
+      evidenceGroups: [{
+        groupId: 'supplement-group-1',
+        title: 'Control panels',
+        groupConclusion: 'The assay remains stable.',
+        evidencePoints: [{
+          pointId: 'supplement-point-1',
+          locator: { kind: 'panels', values: ['S1A', 'S1B'] },
+          observation: 'Both controls remain stable.',
+          argumentRole: 'control',
+          limitation: 'One batch',
+          sourceRefs: []
+        }]
+      }],
+      connections: [
+        {
+          connectionId: 'whole-figure-link',
+          mode: 'figure',
+          targetStepId: 'step-1'
+        },
+        {
+          connectionId: 'panel-group-link',
+          mode: 'evidence-group',
+          sourceGroupId: 'supplement-group-1',
+          targetStepId: 'step-1',
+          targetGroupId: 'group-1'
+        },
+        {
+          connectionId: 'dangling-link',
+          mode: 'evidence-group',
+          sourceGroupId: 'missing',
+          targetStepId: 'step-1',
+          targetGroupId: 'group-1'
+        }
+      ]
+    }]
+  }));
+
+  const material = map.supplementalMaterials[0];
+  assert.deepEqual(material.proofItems.map(item => item.text), [
+    'The control excludes drift.'
+  ]);
+  assert.equal(material.evidenceGroups[0].evidencePoints[0].argumentRole, 'control');
+  assert.deepEqual(material.connections, [
+    {
+      connectionId: 'whole-figure-link',
+      mode: 'figure',
+      targetStepId: 'step-1',
+      sourceGroupId: '',
+      targetGroupId: '',
+      manuallyEdited: false,
+      manuallyEditedFields: [],
+      humanReviewed: false
+    },
+    {
+      connectionId: 'panel-group-link',
+      mode: 'evidence-group',
+      targetStepId: 'step-1',
+      sourceGroupId: 'supplement-group-1',
+      targetGroupId: 'group-1',
+      manuallyEdited: false,
+      manuallyEditedFields: [],
+      humanReviewed: false
+    }
+  ]);
+  assert.deepEqual(map, normalizeResearchLogicMap(map));
+});
+
+test('maps analyzed supplemental Figures into the left-lane material contract', () => {
+  const map = createResearchLogicMapFromFigures({
+    workspaceId: 'workspace-1',
+    articleTitle: 'Example paper',
+    canonicalUrl: 'https://example.test/paper',
+    figureWorkspace: figureWorkspace(),
+    now: '2026-07-30T12:00:00.000Z'
+  });
+
+  assert.equal(map.supplementalMaterials.length, 1);
+  const material = map.supplementalMaterials[0];
+  assert.equal(material.label, 'Supplementary Figure 1');
+  assert.ok(material.evidenceGroups.length > 0);
+  assert.deepEqual(material.connections.map(connection => ({
+    mode: connection.mode,
+    targetStepId: connection.targetStepId
+  })), [{
+    mode: 'figure',
+    targetStepId: map.steps[1].stepId
+  }]);
+});
+
+test('uses each preceding Figure handoff as the single next-Figure question source', () => {
+  const workspace = figureWorkspace();
+  workspace.figures[1].standard.figureQuestion = 'A conflicting independently analyzed question';
+  workspace.crossFigureLogic.result.dominoChain[0].transition =
+    'The authoritative handoff question';
+  const map = createResearchLogicMapFromFigures({
+    workspaceId: 'workspace-1',
+    figureWorkspace: workspace,
+    now: '2026-07-30T12:00:00.000Z'
+  });
+
+  assert.deepEqual(map.steps[1].questionItems.map(item => item.text), [
+    'The authoritative handoff question'
+  ]);
+  assert.equal('nextQuestion' in map.steps[0], false);
+});
+
+test('exports pathway-standard long mechanism connectors', () => {
+  const svg = buildResearchLogicMapSvg(normalizeResearchLogicMap(v3Fixture({
+    meta: {
+      mechanismEdges: [
+        { sourceId: 'A', targetId: 'B', effect: 'promote', evidence: 'strong' },
+        { sourceId: 'B', targetId: 'C', effect: 'inhibit', evidence: 'strong' },
+        { sourceId: 'C', targetId: 'D', effect: 'associate', evidence: 'strong' },
+        { sourceId: 'D', targetId: 'E', effect: 'promote', evidence: 'weak' }
+      ]
+    }
+  })));
+
+  assert.match(svg, /class="mechanism-connector is-promote is-strong"/);
+  assert.match(svg, /marker-end="url\(#mechanism-arrowhead\)"/);
+  assert.match(svg, /class="mechanism-inhibition-bar"/);
+  assert.match(svg, /class="mechanism-connector is-associate is-weak"[^>]*stroke-dasharray=/);
+  assert.match(svg, /class="mechanism-connector is-promote is-weak"[^>]*stroke-dasharray=/);
 });
 
 test('normalizes editable maps, indexes them, and exports every v3 chain layer', () => {

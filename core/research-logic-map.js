@@ -596,17 +596,81 @@
     })).filter(edge => edge.sourceId && edge.targetId);
   }
 
-  function normalizeSupplementalPlaceholders(value) {
+  function normalizeSupplementalConnections(value, material, steps) {
+    const source = Array.isArray(value) ? value : [];
+    const stepById = new Map(steps.map(step => [step.stepId, step]));
+    const sourceGroupIds = new Set(
+      material.evidenceGroups.map(group => group.groupId)
+    );
+    const used = new Set();
+    return source.slice(0, 120).map((connection, index) => {
+      const mode = connection?.mode === 'evidence-group'
+        ? 'evidence-group' : 'figure';
+      const targetStepId = safeId(connection?.targetStepId, '');
+      const sourceGroupId = mode === 'evidence-group'
+        ? safeId(connection?.sourceGroupId, '') : '';
+      const targetGroupId = mode === 'evidence-group'
+        ? safeId(connection?.targetGroupId, '') : '';
+      const targetStep = stepById.get(targetStepId);
+      const targetGroupIds = new Set(
+        (targetStep?.evidenceGroups || []).map(group => group.groupId)
+      );
+      const valid = Boolean(targetStep) && (mode === 'figure' || (
+        sourceGroupIds.has(sourceGroupId) && targetGroupIds.has(targetGroupId)
+      ));
+      if (!valid) return null;
+      return {
+        connectionId: allocateCollectionId(
+          connection?.connectionId,
+          `${material.supplementalId}-connection`,
+          index,
+          used
+        ),
+        mode,
+        targetStepId,
+        sourceGroupId,
+        targetGroupId,
+        ...editedState(connection, [
+          'mode', 'targetStepId', 'sourceGroupId', 'targetGroupId'
+        ])
+      };
+    }).filter(Boolean);
+  }
+
+  function normalizeSupplementalPlaceholders(value, steps = []) {
     const source = Array.isArray(value) ? value : [];
     const used = new Set();
-    return source.slice(0, 120).map((item, index) => ({
-      supplementalId: allocateCollectionId(
+    return source.slice(0, 120).map((item, index) => {
+      const supplementalId = allocateCollectionId(
         item?.supplementalId, 'supplemental', index, used
-      ),
-      type: ['figure', 'video', 'table'].includes(item?.type) ? item.type : 'figure',
-      label: text(item?.label || item?.figureLabel, 240),
-      ...editedState(item, ['type', 'label'])
-    })).filter(item => item.label);
+      );
+      const groupIds = new Set();
+      const allocateGroupId = (value, groupIndex) => allocateCollectionId(
+        value, `${supplementalId}-evidence`, groupIndex, groupIds
+      );
+      const material = {
+        supplementalId,
+        type: ['figure', 'video', 'table'].includes(item?.type) ? item.type : 'figure',
+        label: text(item?.label || item?.figureLabel, 240),
+        proofItems: normalizeTextItems(
+          Array.isArray(item?.proofItems) ? item.proofItems : item?.conclusion,
+          `${supplementalId}-proof`
+        ),
+        evidenceGroups: (Array.isArray(item?.evidenceGroups)
+          ? item.evidenceGroups : []).slice(0, 30)
+          .map((group, groupIndex) => normalizeEvidenceGroupV3(
+            group, supplementalId, groupIndex, allocateGroupId
+          )),
+        connections: [],
+        ...editedState(item, [
+          'type', 'label', 'proofItems', 'evidenceGroups', 'connections'
+        ])
+      };
+      material.connections = normalizeSupplementalConnections(
+        item?.connections, material, steps
+      );
+      return material;
+    }).filter(item => item.label);
   }
 
   function normalizeResearchLogicMap(input = {}) {
@@ -691,7 +755,7 @@
           ...mechanismEdges.map(edge => edge.targetId)].join(' → ')
       : '';
     const supplementalMaterials = normalizeSupplementalPlaceholders(
-      input?.supplementalMaterials
+      input?.supplementalMaterials, steps
     );
     const supplementalIds = new Set(
       supplementalMaterials.map(item => item.supplementalId)
@@ -800,7 +864,11 @@
     const steps = figures.map((figure, index) => {
       const result = mapFigureResult(figure);
       const node = nodes.get(text(figure.figureId, 120)) || {};
-      const question = text(result?.figureQuestion || node?.question ||
+      const previousFigureId = index > 0
+        ? text(figures[index - 1]?.figureId, 120) : '';
+      const precedingHandoff = previousFigureId
+        ? text(linksBySource.get(previousFigureId)?.transition, 1800) : '';
+      const question = text(precedingHandoff || result?.figureQuestion || node?.question ||
         '这张图要回答什么问题？', 1800);
       const proof = text(node?.established || result?.coreConclusion, 2400);
       return {
@@ -841,11 +909,33 @@
       input.scientificQuestion || steps[0]?.questionItems?.[0]?.text,
       2400
     );
-    const supplementalMaterials = [...supplemental.values()].flat().map(item => ({
-      supplementalId: safeId(item.figureId, 'supplemental'),
-      type: 'figure',
-      label: text(item.figureLabel || item.figureId, 240)
-    }));
+    const supplementalFigureById = new Map(
+      supplementalFigures.map(figure => [text(figure.figureId, 120), figure])
+    );
+    const supplementalMaterials = [...supplemental.entries()]
+      .flatMap(([mainFigureId, items]) => items.map(item => {
+        const targetStep = steps.find(step => step.figureId === mainFigureId);
+        const figure = supplementalFigureById.get(item.figureId);
+        const result = mapFigureResult(figure);
+        const evidenceGroups = figure && result
+          ? supplementalEvidenceGroups(figure, result, item) : [];
+        const proof = text(item.conclusion || result?.coreConclusion, 2400);
+        return {
+          supplementalId: safeId(item.figureId, 'supplemental'),
+          type: 'figure',
+          label: text(item.figureLabel || item.figureId, 240),
+          proofItems: proof ? [{
+            itemId: `${safeId(item.figureId, 'supplemental')}-proof-1`,
+            text: proof
+          }] : [],
+          evidenceGroups,
+          connections: targetStep ? [{
+            connectionId: `${safeId(item.figureId, 'supplemental')}-figure-link`,
+            mode: 'figure',
+            targetStepId: targetStep.stepId
+          }] : []
+        };
+      }));
     return normalizeResearchLogicMap({
       schemaVersion: RESEARCH_LOGIC_MAP_SCHEMA_VERSION,
       mapId: input.mapId || `figure-argument-${sourceHash}`,
@@ -1530,7 +1620,7 @@
     addBulletSection('科学问题', map.meta.scientificQuestions, '#eef7fb');
 
     if (map.meta.mechanismEdges.length) {
-      const rowHeight = 76;
+      const rowHeight = 104;
       const height = 62 + map.meta.mechanismEdges.length * rowHeight;
       parts.push(
         `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${height}" ` +
@@ -1538,23 +1628,48 @@
         `<text class="section-title" x="${margin + 24}" y="${y + 39}">机制链</text>`
       );
       map.meta.mechanismEdges.forEach((edge, index) => {
-        const rowY = y + 78 + index * rowHeight;
-        const symbol = edge.effect === 'inhibit' ? '⊣' : '→';
+        const rowTop = y + 66 + index * rowHeight;
+        const nodeY = rowTop + 10;
+        const nodeHeight = 52;
+        const nodeWidth = 430;
+        const sourceX = margin + 44;
+        const targetX = margin + contentWidth - nodeWidth - 44;
+        const connectorStartX = sourceX + nodeWidth;
+        const connectorEndX = targetX;
+        const connectorY = nodeY + nodeHeight / 2;
+        const dashed = edge.effect === 'associate' || edge.evidence !== 'strong';
+        const evidenceClass = dashed ? 'is-weak' : 'is-strong';
+        const dashAttribute = dashed ? ' stroke-dasharray="13 10"' : '';
         const relation = edge.effect === 'promote'
           ? '促进' : edge.effect === 'inhibit' ? '抑制' : '相关';
         const evidence = edge.evidence === 'strong' ? '强证据' : '弱证据';
         parts.push(
-          `<text class="mechanism-node" x="${margin + 44}" y="${rowY}">` +
-          `${escapeXml(edge.sourceId)}</text>`,
-          `<text class="mechanism-arrow" x="${margin + 490}" y="${rowY}">${symbol}</text>`,
-          `<text class="mechanism-node" x="${margin + 570}" y="${rowY}">` +
-          `${escapeXml(edge.targetId)}</text>`,
-          `<text class="mechanism-meta" x="${margin + 1030}" y="${rowY}">` +
-          `${escapeXml(`${relation} · ${evidence}`)}</text>`
+          `<rect class="mechanism-node-box" x="${sourceX}" y="${nodeY}" ` +
+          `width="${nodeWidth}" height="${nodeHeight}" rx="12"/>`,
+          `<rect class="mechanism-node-box" x="${targetX}" y="${nodeY}" ` +
+          `width="${nodeWidth}" height="${nodeHeight}" rx="12"/>`,
+          `<text class="mechanism-node" text-anchor="middle" ` +
+          `x="${sourceX + nodeWidth / 2}" y="${nodeY + 33}">` +
+          `${escapeXml(firstSentence(edge.sourceId, 42))}</text>`,
+          `<text class="mechanism-node" text-anchor="middle" ` +
+          `x="${targetX + nodeWidth / 2}" y="${nodeY + 33}">` +
+          `${escapeXml(firstSentence(edge.targetId, 42))}</text>`,
+          `<line class="mechanism-connector is-${edge.effect} ${evidenceClass}" ` +
+          `x1="${connectorStartX}" y1="${connectorY}" ` +
+          `x2="${connectorEndX}" y2="${connectorY}"${dashAttribute}` +
+          `${edge.effect === 'inhibit'
+            ? '' : ' marker-end="url(#mechanism-arrowhead)"'}/>`
         );
-        if (edge.supportPanels.length) parts.push(
-          `<text class="mechanism-meta" x="${margin + 1250}" y="${rowY}">` +
-          `${escapeXml(compressPanelReferences(edge.supportPanels))}</text>`
+        if (edge.effect === 'inhibit') parts.push(
+          `<line class="mechanism-inhibition-bar" x1="${connectorEndX}" ` +
+          `y1="${connectorY - 13}" x2="${connectorEndX}" y2="${connectorY + 13}"/>`
+        );
+        const support = edge.supportPanels.length
+          ? ` · ${compressPanelReferences(edge.supportPanels)}` : '';
+        parts.push(
+          `<text class="mechanism-meta" text-anchor="middle" ` +
+          `x="${(connectorStartX + connectorEndX) / 2}" y="${connectorY + 34}">` +
+          `${escapeXml(`${relation} · ${evidence}${support}`)}</text>`
         );
       });
       y += height + 22;
@@ -1670,6 +1785,9 @@
     return [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
       `viewBox="0 0 ${width} ${height}">`,
+      '<defs><marker id="mechanism-arrowhead" markerWidth="12" markerHeight="12" ' +
+      'refX="10" refY="6" orient="auto" markerUnits="strokeWidth">' +
+      '<path d="M1,1 L11,6 L1,11 z" fill="#247a6f"/></marker></defs>',
       '<rect width="100%" height="100%" fill="#f4f8fa"/>',
       '<style>',
       'text{font-family:"Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif;fill:#17384c}',
@@ -1680,7 +1798,8 @@
       '.bullet{font-size:24px;fill:#3b88a5}.strong{font-weight:750;fill:#173d4e}',
       '.group-index{font-size:18px;font-weight:800;fill:#247769}.evidence{font-size:18px;fill:#365d66}',
       '.mechanism-node{font-size:20px;font-weight:750;fill:#214f4a}',
-      '.mechanism-arrow{font-size:30px;font-weight:800;fill:#247a6f}',
+      '.mechanism-node-box{fill:#fff;stroke:#b9d8d1;stroke-width:2}',
+      '.mechanism-connector,.mechanism-inhibition-bar{stroke:#247a6f;stroke-width:4;fill:none}',
       '.mechanism-meta{font-size:16px;fill:#52796f}',
       '</style>',
       ...parts,
