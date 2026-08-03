@@ -4758,18 +4758,81 @@ function clearFigureWalkthroughs() {
 }
 
 function buildFigureInputHash(figure, images) {
+    const hashText = input => {
+        const source = String(input || '');
+        let result = 2166136261;
+        for (let index = 0; index < source.length; index += 1) {
+            result ^= source.charCodeAt(index);
+            result = Math.imul(result, 16777619);
+        }
+        return (result >>> 0).toString(16).padStart(8, '0');
+    };
+    const compactText = (input, limit = 240) => String(input || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, limit);
+    const imageIdentity = (image, persistedImage) => {
+        const dataUrl = String(image?.dataUrl || persistedImage?.dataUrl || '');
+        const separatorIndex = dataUrl.indexOf(',');
+        const encoded = separatorIndex >= 0 ? dataUrl.slice(separatorIndex + 1) : '';
+        const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+        const decodedLength = encoded
+            ? Math.max(0, Math.floor(encoded.length * 3 / 4) - padding)
+            : 0;
+        const sourceUrl = [
+            image?.persistedSourceUrl,
+            image?.sourceUrl,
+            image?.url,
+            persistedImage?.persistedSourceUrl,
+            persistedImage?.sourceUrl,
+            persistedImage?.url
+        ].map(value => String(value || '').trim())
+            .find(value => value && !/^data:/i.test(value)) || '';
+        return {
+            mediaType: compactText(
+                image?.mediaType || persistedImage?.mediaType,
+                80
+            ).toLowerCase(),
+            encodedLength: encoded.length,
+            decodedLength,
+            declaredByteLength: Math.max(0, Math.floor(Number(
+                image?.byteLength || persistedImage?.byteLength
+            ) || 0)),
+            width: Math.max(0, Math.floor(Number(
+                image?.width || persistedImage?.width
+            ) || 0)),
+            height: Math.max(0, Math.floor(Number(
+                image?.height || persistedImage?.height
+            ) || 0)),
+            sourceFingerprint: compactText(
+                image?.sourceFingerprint || persistedImage?.sourceFingerprint,
+                100
+            ).toLowerCase(),
+            persistedFingerprint: compactText(
+                image?.persistedFingerprint || image?.contentHash || image?.fingerprint,
+                160
+            ).toLowerCase() || compactText(
+                persistedImage?.persistedFingerprint || persistedImage?.contentHash ||
+                    persistedImage?.fingerprint,
+                160
+            ).toLowerCase(),
+            sourceUrlFingerprint: sourceUrl ? hashText(sourceUrl) : '',
+            dataFingerprint: dataUrl ? hashText(dataUrl) : ''
+        };
+    };
+    const preparedImages = (Array.isArray(images) ? images : [])
+        .slice(0, FIGURE_IMAGE_LIMIT);
+    const persistedImages = (Array.isArray(figure?.analysisImages)
+        ? figure.analysisImages : []).slice(0, FIGURE_IMAGE_LIMIT);
     const value = JSON.stringify({
         figureId: figure?.figureId || '',
         caption: figure?.caption || '',
         panelHints: figure?.panelHints || [],
-        contextParagraphs: figure?.contextParagraphs || []
+        contextParagraphs: figure?.contextParagraphs || [],
+        sourceFingerprint: compactText(figure?.sourceFingerprint, 100).toLowerCase(),
+        imageIdentities: Array.from({
+            length: Math.max(preparedImages.length, persistedImages.length)
+        }, (_, index) => imageIdentity(preparedImages[index], persistedImages[index]))
     });
-    let hash = 2166136261;
-    for (let index = 0; index < value.length; index += 1) {
-        hash ^= value.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(16).padStart(8, '0');
+    return hashText(value);
 }
 
 function getFigureWorkspaceInventory({ forceRefresh = false } = {}) {

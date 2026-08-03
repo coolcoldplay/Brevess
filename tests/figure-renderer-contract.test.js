@@ -26,6 +26,69 @@ test('content script defines bounded Figure image preparation', () => {
   assert.match(script, /signal:\s*controller\.signal/);
 });
 
+test('Figure input hashes use compact image identity and invalidate replaced supplemental sources', () => {
+  const script = read('content.js');
+  const source = functionBody(script, 'buildFigureInputHash', 'getFigureWorkspaceInventory');
+  const buildFigureInputHash = new Function(
+    'FIGURE_IMAGE_LIMIT',
+    `${source}\nreturn buildFigureInputHash;`
+  )(4);
+  const figure = {
+    figureId: 'supp-manual-s1-s1',
+    caption: 'Figure S1. Replication.',
+    panelHints: ['A'],
+    contextParagraphs: [],
+    sourceFingerprint: `sha256:${'a'.repeat(64)}`
+  };
+  const firstImage = [{
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AAAA',
+    width: 1,
+    height: 1,
+    sourceFingerprint: `sha256:${'b'.repeat(64)}`,
+    sourceUrl: 'https://journal.example/figure-s1.png'
+  }];
+  const replacementWithSameLength = [{
+    ...firstImage[0],
+    dataUrl: 'data:image/png;base64,AAAB'
+  }];
+
+  const first = buildFigureInputHash(figure, firstImage);
+  assert.equal(buildFigureInputHash(structuredClone(figure), structuredClone(firstImage)), first);
+  assert.notEqual(buildFigureInputHash(figure, replacementWithSameLength), first);
+  assert.notEqual(buildFigureInputHash({
+    ...figure,
+    sourceFingerprint: `sha256:${'c'.repeat(64)}`
+  }, firstImage), first);
+  const strippedPreparedImage = [{
+    mediaType: firstImage[0].mediaType,
+    dataUrl: firstImage[0].dataUrl
+  }];
+  const persisted = buildFigureInputHash({
+    ...figure,
+    analysisImages: firstImage
+  }, strippedPreparedImage);
+  assert.notEqual(buildFigureInputHash({
+    ...figure,
+    analysisImages: [{
+      ...firstImage[0],
+      persistedFingerprint: `sha256:${'d'.repeat(64)}`,
+      sourceUrl: 'https://journal.example/replaced-figure-s1.png'
+    }]
+  }, strippedPreparedImage), persisted);
+  assert.equal(
+    buildFigureInputHash(figure, []),
+    buildFigureInputHash(structuredClone(figure), [])
+  );
+
+  assert.match(source, /sourceFingerprint/);
+  assert.match(source, /encodedLength/);
+  assert.match(source, /decodedLength/);
+  assert.match(source, /dataFingerprint/);
+  assert.doesNotMatch(source, /images:\s*images/);
+  assert.doesNotMatch(source, /dataUrl:\s*(?:dataUrl|image\??\.)/);
+});
+
 test('active Figure workflows never inject walkthrough cards beside webpage captions', () => {
   const script = read('content.js');
   const css = read('content.css');
