@@ -3426,6 +3426,110 @@ function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}
   });
 }
 
+test('bound supplemental asset routes validate the parent identity before any asset access', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let assetReads = 0;
+  let assetWrites = 0;
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset() {
+      assetReads += 1;
+      return { relativePath: 'figures/supplemental/s1.json', content: { marker: 'existing' } };
+    },
+    async putAsset(id, relativePath, content) {
+      assetWrites += 1;
+      return { workspaceId: id, relativePath, content, revision: 1, contentHash: 'saved' };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('provider must not be called');
+    }
+  });
+  const validTarget = closedTabSupplementalTarget(workspace);
+  const withoutDocumentHash = { ...validTarget };
+  delete withoutDocumentHash.documentHash;
+  const cases = [
+    [{ ...validTarget, workspaceId: `workspace:${'b'.repeat(64)}` },
+      'SUPPLEMENTAL_TARGET_INVALID'],
+    [{ ...validTarget, workspaceGeneration: workspace.workspaceGeneration + 1 },
+      'WORKSPACE_GENERATION_CONFLICT'],
+    [{ ...validTarget, canonicalUrl: 'https://journal.example/other' },
+      'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH'],
+    [withoutDocumentHash, 'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH'],
+    [{ ...validTarget, documentHash: '5'.repeat(64) },
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH']
+  ];
+
+  for (const type of ['ARTICLE_WORKSPACE_GET_ASSET', 'ARTICLE_WORKSPACE_SAVE_ASSET']) {
+    for (const [target, expectedCode] of cases) {
+      const response = await router.handle({
+        type,
+        workspaceId: workspace.workspaceId,
+        workspaceGeneration: workspace.workspaceGeneration,
+        relativePath: 'figures/supplemental/s1.json',
+        content: { marker: 'replacement' },
+        target
+      });
+      assert.equal(response.success, false, `${type}:${expectedCode}`);
+      assert.equal(response.error.code, expectedCode, type);
+    }
+  }
+
+  assert.equal(assetReads, 0);
+  assert.equal(assetWrites, 0);
+  assert.equal(providerCalls, 0);
+});
+
+test('bound supplemental asset routes accept a normalized bare parent hash', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const calls = [];
+  const store = {
+    async getWorkspace() { return structuredClone(workspace); },
+    async getAsset(id, relativePath) {
+      calls.push(['get', id, relativePath]);
+      return { relativePath, content: { marker: 'existing' }, revision: 1 };
+    },
+    async putAsset(id, relativePath, content) {
+      calls.push(['put', id, relativePath]);
+      return { workspaceId: id, relativePath, content, revision: 2, contentHash: 'saved' };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const target = {
+    ...closedTabSupplementalTarget(workspace),
+    documentHash: workspace.contentHash
+  };
+  const getResponse = await router.handle({
+    type: 'ARTICLE_WORKSPACE_GET_ASSET',
+    workspaceId: workspace.workspaceId,
+    relativePath: 'figures/supplemental/s1.json',
+    target
+  });
+  const saveResponse = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: workspace.workspaceGeneration,
+    relativePath: 'figures/supplemental/s1.json',
+    content: { marker: 'replacement' },
+    target
+  });
+
+  assert.equal(getResponse.success, true);
+  assert.equal(saveResponse.success, true);
+  assert.deepEqual(calls.map(call => call[0]), ['get', 'put']);
+});
+
 test('closed-tab supplemental image draft persists only the normalized compressed analysis image', async () => {
   const workspace = closedTabSupplementalWorkspace();
   const assets = new Map();

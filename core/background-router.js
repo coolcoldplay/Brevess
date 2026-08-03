@@ -2485,6 +2485,16 @@
       };
     }
 
+    function supplementalAssetWorkspaceTarget(message = {}) {
+      if (message.target === undefined) return null;
+      const target = normalizeSupplementalDraftTarget(message.target);
+      const workspaceId = String(message.workspaceId || '').trim().toLowerCase();
+      if (workspaceId !== target.workspaceId) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      return target;
+    }
+
     function supplementalDraftSourceInput(message = {}) {
       const draft = message.draft;
       if (!isPlainObject(draft)) throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
@@ -2538,14 +2548,14 @@
       if (!canonicalUrl || canonicalUrl !== target.canonicalUrl) {
         throw supplementalRouteError('SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH');
       }
-      if (target.documentHash) {
-        const workspaceDocumentHash = String(
-          workspace.contentHash || workspace.revision || ''
-        ).replace(/^sha256:/i, '').toLowerCase();
-        if (!/^[a-f0-9]{64}$/.test(workspaceDocumentHash) ||
-            workspaceDocumentHash !== target.documentHash) {
-          throw supplementalRouteError('SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH');
-        }
+      const workspaceDocumentHash = String(
+        workspace.contentHash || workspace.revision || ''
+      ).replace(/^sha256:/i, '').toLowerCase();
+      const workspaceHasDocumentHash = /^[a-f0-9]{64}$/.test(workspaceDocumentHash);
+      if ((workspaceHasDocumentHash && !target.documentHash) ||
+          (target.documentHash && (!workspaceHasDocumentHash ||
+            workspaceDocumentHash !== target.documentHash))) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH');
       }
     }
 
@@ -2833,13 +2843,17 @@
       if (message.type === 'ARTICLE_WORKSPACE_SAVE_ASSET') {
         requireArticleWorkspaceStore('putAsset');
         requireArticleWorkspaceStore('getWorkspace');
-        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        const target = supplementalAssetWorkspaceTarget(message);
+        const workspace = await articleWorkspaceStore.getWorkspace(
+          target?.workspaceId || message.workspaceId
+        );
         if (!workspace || workspace.deletionPending) {
           const error = new Error('WORKSPACE_NOT_FOUND');
           error.code = 'WORKSPACE_NOT_FOUND';
           throw error;
         }
         assertWorkspaceMutationGeneration(workspace, message);
+        if (target) assertSupplementalDraftWorkspaceTarget(workspace, target);
         let content = message.content;
         if (String(message.relativePath || '') === 'chat/index.json' &&
             typeof articleWorkspaceStore?.pageTurns === 'function') {
@@ -3401,6 +3415,36 @@
         return {
           documents: typeof tokenUsageStore?.list === 'function'
             ? await tokenUsageStore.list() : []
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_GET_ASSET') {
+        requireArticleWorkspaceStore('getAsset');
+        requireArticleWorkspaceStore('getWorkspace');
+        const target = supplementalAssetWorkspaceTarget(message);
+        const workspace = await articleWorkspaceStore.getWorkspace(
+          target?.workspaceId || message.workspaceId
+        );
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        if (target) assertSupplementalDraftWorkspaceTarget(workspace, target);
+        const asset = await articleWorkspaceStore.getAsset(
+          workspace.workspaceId, message.relativePath
+        );
+        return {
+          found: Boolean(asset),
+          workspaceGeneration: Number(workspace.workspaceGeneration || 1),
+          asset: asset ? {
+            relativePath: asset.relativePath,
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            byteSize: asset.byteSize,
+            updatedAt: asset.updatedAt,
+            content: asset.content
+          } : null
         };
       }
 
