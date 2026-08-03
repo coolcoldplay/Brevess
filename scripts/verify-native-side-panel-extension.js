@@ -4866,11 +4866,26 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     globalThis.__qaMigrationDirectoryHandle = handle;
     userDataUi.directoryHandle = handle;
     userDataUi.handleLoaded = true;
+    const portableProbe = await callBackground({ type: 'PORTABLE_CONFIG_PROBE' });
+    let portableStatus = portableProbe;
+    if (portableProbe?.state === 'missing') {
+      portableStatus = await callBackground({
+        type: 'PORTABLE_CONFIG_CREATE',
+        passphrase: 'brevess migration directory qa'
+      });
+    } else if (portableProbe?.state !== 'ready' || portableProbe?.pending) {
+      throw new Error('QA_PORTABLE_CONFIG_UNEXPECTED_STATE');
+    }
+    if (portableStatus?.state !== 'ready' || portableStatus?.pending) {
+      throw new Error('QA_PORTABLE_CONFIG_NOT_READY');
+    }
     await callBackground({ type: 'USER_DATA_SYNC_NOW' });
     await refreshUserDataStatus();
     return {
       permission: await handle.queryPermission({ mode: 'readwrite' }),
       directoryName: handle.name,
+      portableState: portableStatus.state,
+      portablePending: portableStatus.pending,
       displayedDirectory:
         document.getElementById('userDataDirectory')?.textContent || ''
     };
@@ -6118,6 +6133,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     supportEmail?.trim() === 'brevess0729@163.com' &&
     results.migrationDirectoryQa.permission === 'granted' &&
     results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
+    results.migrationDirectoryQa.portableState === 'ready' &&
+    !results.migrationDirectoryQa.portablePending &&
     results.migrationDirectoryQa.displayedDirectory === 'migration-directory-sentinel' &&
     results.directorySyncButtonQa.pendingReleased &&
     results.directorySyncButtonQa.syncEnabled &&
