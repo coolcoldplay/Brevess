@@ -397,6 +397,18 @@ test('supplemental Figure import rejects mismatched files, empty captions, and z
   );
 });
 
+test('supplemental import targets normalize production bare document hashes', () => {
+  const tools = loadSupplementalFigureImportTools();
+  const target = tools.validateTarget({
+    workspaceId: `workspace:${'a'.repeat(64)}`,
+    workspaceGeneration: 2,
+    targetArticleTabId: 42,
+    canonicalUrl: 'https://journal.example/paper',
+    documentHash: 'B'.repeat(64)
+  });
+  assert.equal(target.documentHash, `sha256:${'b'.repeat(64)}`);
+});
+
 test('supplemental image import hashes the original file but sends only the bounded transient image shape', async () => {
   const sent = [];
   const runtimeMessages = [];
@@ -559,6 +571,8 @@ test('supplemental PDF opening consumes the validated target tuple without activ
   assert.match(source, /openSupplementalMaterialPdf\(material, target\)/);
   assert.match(source, /validateTarget\(target\)/);
   assert.match(source, /target\.targetArticleTabId/);
+  assert.match(source, /已在新标签页打开/);
+  assert.doesNotMatch(source, /指定论文标签页/);
   assert.doesNotMatch(source, /activePanelTabContext|currentWorkspaceSnapshot|chrome\.tabs\.query/);
   const created = [];
   const bindings = [];

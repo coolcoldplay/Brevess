@@ -511,6 +511,25 @@ test('round-trips a parent workspace binding through the supplemental PDF reader
   assert.equal(supplementalFigureAssetPath('MMC 1'), 'figures/supplemental/mmc-1.json');
 });
 
+test('normalizes production bare document hashes in supplemental PDF URL bindings', () => {
+  const bareDocumentHash = 'E'.repeat(64);
+  const url = createSupplementalPdfReaderUrl(
+    path => `chrome-extension://test/${path}`,
+    {
+      materialId: 'manual-supplement',
+      parentWorkspaceId: `workspace:${'d'.repeat(64)}`,
+      parentDocumentHash: bareDocumentHash
+    }
+  );
+  const parsed = new URL(url);
+  const normalized = `sha256:${'e'.repeat(64)}`;
+  assert.equal(parsed.searchParams.get('suppParentDocumentHash'), normalized);
+  assert.equal(readSupplementalPdfBinding(url).parentDocumentHash, normalized);
+
+  parsed.searchParams.set('suppParentDocumentHash', bareDocumentHash);
+  assert.equal(readSupplementalPdfBinding(parsed.href).parentDocumentHash, normalized);
+});
+
 test('supplemental PDF bindings omit malformed optional parent document hashes', () => {
   const url = createSupplementalPdfReaderUrl(
     path => `chrome-extension://test/${path}`,

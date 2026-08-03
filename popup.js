@@ -6944,12 +6944,15 @@ function createSupplementalFigureImportTools(dependencies = {}) {
         const canonicalUrl = typeof shared.normalizeSupplementalUrl === 'function'
             ? shared.normalizeSupplementalUrl(rawCanonicalUrl)
             : rawCanonicalUrl;
-        const documentHash = String(input.documentHash || '').trim().toLowerCase();
+        const rawDocumentHash = String(input.documentHash || '').trim().toLowerCase();
+        const documentHashHex = rawDocumentHash.replace(/^sha256:/, '');
+        const documentHash = /^[a-f0-9]{64}$/.test(documentHashHex)
+            ? `sha256:${documentHashHex}` : '';
         if (!/^workspace:[a-f0-9]{64}$/.test(workspaceId) ||
             !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
             !Number.isSafeInteger(targetArticleTabId) || targetArticleTabId < 0 ||
             !canonicalUrl ||
-            (documentHash && !/^(?:sha256:)?[a-f0-9]{64}$/.test(documentHash))) {
+            (rawDocumentHash && !documentHash)) {
             throw importError(
                 'SUPPLEMENTAL_TARGET_INVALID',
                 '当前论文工作区尚未准备完成，请刷新后重试'
@@ -7339,7 +7342,7 @@ async function openSupplementalMaterialPdf(material, target) {
         pendingUrl: readerUrl,
         title: material?.title || '补充材料 PDF'
     });
-    showStatus('已在指定论文标签页打开补充 PDF 工作区；请选择本地 PDF，解析结果会自动纳入原论文', 'success');
+    showStatus('已在新标签页打开补充 PDF 工作区；请选择本地 PDF，解析结果会自动纳入原论文', 'success');
 }
 
 let supplementalFigureImportTarget = null;
@@ -7435,12 +7438,12 @@ async function submitSupplementalFigureImport(event) {
             await supplementalFigureImportTools.deliverImport(target, request);
         }
         setSupplementalFigureImportStatus(
-            mode === 'pdf' ? '已打开 PDF 工作区' : '已发出补充 Figure 草稿'
+            mode === 'pdf' ? '已在新标签页打开 PDF 工作区' : '已发出补充 Figure 草稿'
         );
         closeSupplementalFigureImportDialog();
         showStatus(
             mode === 'pdf'
-                ? '已打开补充 PDF 工作区'
+                ? '已在新标签页打开补充 PDF 工作区'
                 : '补充 Figure 已提交；接收端接入后会自动加入图目录',
             'success'
         );

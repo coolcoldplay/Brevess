@@ -590,6 +590,13 @@
     return `${SUPPLEMENTAL_FIGURE_ASSET_PREFIX}${safeId(materialId)}.json`;
   }
 
+  function normalizeSupplementalDocumentHash(value) {
+    const raw = text(value, 80).toLowerCase();
+    if (!raw) return '';
+    const hex = raw.replace(/^sha256:/, '');
+    return /^[a-f0-9]{64}$/.test(hex) ? `sha256:${hex}` : '';
+  }
+
   function createSupplementalPdfReaderUrl(runtimeGetUrl, input = {}) {
     const sourceUrl = normalizeSupplementalUrl(input.sourceUrl || input.url);
     if (typeof runtimeGetUrl !== 'function') return '';
@@ -612,8 +619,10 @@
     if (parentUrl) {
       url.searchParams.set(SUPPLEMENTAL_BINDING_KEYS.parentCanonicalUrl, parentUrl);
     }
-    const parentDocumentHash = text(input.parentDocumentHash, 80).toLowerCase();
-    if (/^sha256:[a-f0-9]{64}$/.test(parentDocumentHash)) {
+    const parentDocumentHash = normalizeSupplementalDocumentHash(
+      input.parentDocumentHash
+    );
+    if (parentDocumentHash) {
       url.searchParams.set(
         SUPPLEMENTAL_BINDING_KEYS.parentDocumentHash,
         parentDocumentHash
@@ -647,9 +656,9 @@
       url.searchParams.get('source') || ''
     );
     if (!/^workspace:[a-f0-9]{64}$/i.test(workspaceId) || !materialId) return null;
-    const parentDocumentHash = text(
-      url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentDocumentHash), 80
-    ).toLowerCase();
+    const parentDocumentHash = normalizeSupplementalDocumentHash(
+      url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentDocumentHash)
+    );
     return {
       parentWorkspaceId: workspaceId.toLowerCase(),
       parentWorkspaceGeneration: Math.max(1, Number(
@@ -658,8 +667,7 @@
       parentCanonicalUrl: normalizeSupplementalUrl(
         url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentCanonicalUrl)
       ),
-      parentDocumentHash: /^sha256:[a-f0-9]{64}$/.test(parentDocumentHash)
-        ? parentDocumentHash : '',
+      parentDocumentHash,
       parentTitle: text(
         url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentTitle), 500
       ),
