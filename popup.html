@@ -236,6 +236,10 @@
         <div class="figure-workspace-toolbar">
           <button id="analyzeFiguresFromFigures" class="btn btn-figure" type="button">逐图解读</button>
           <button id="analyzeCrossFigureLogic" class="btn btn-cross-figure" type="button">主图串解</button>
+          <button id="openSupplementalFigureImport"
+            class="btn btn-secondary supplemental-figure-import-open" type="button">
+            <i class="ph ph-plus-circle" aria-hidden="true"></i>新建补充 Figure
+          </button>
           <div id="figureTaskControls" class="analysis-task-controls" hidden>
             <button id="pauseFigureAnalysis" class="btn btn-secondary" type="button">暂停图解</button>
             <button id="cancelFigureAnalysis" class="btn btn-danger-outline" type="button">取消图解</button>
@@ -332,6 +336,67 @@
       </form>
     </dialog>
 
+    <dialog id="supplementalFigureImportDialog" class="supplemental-figure-import-dialog"
+      aria-labelledby="supplementalFigureImportTitle">
+      <form id="supplementalFigureImportForm" class="supplemental-figure-import-content"
+        novalidate>
+        <header class="supplemental-figure-import-header">
+          <div>
+            <p class="supplemental-figure-import-kicker">手动补全证据</p>
+            <h2 id="supplementalFigureImportTitle">新建补充 Figure</h2>
+            <p>三种来源互斥；切换时保留已填内容，可随时切回继续。</p>
+          </div>
+          <button id="closeSupplementalFigureImport"
+            class="supplemental-figure-import-close" type="button"
+            aria-label="关闭新建补充 Figure" title="关闭">×</button>
+        </header>
+
+        <fieldset class="supplemental-figure-source-modes">
+          <legend>选择来源</legend>
+          <label>
+            <input type="radio" name="supplementalFigureSourceMode" value="pdf" checked>
+            <span>PDF 解析</span>
+          </label>
+          <label>
+            <input type="radio" name="supplementalFigureSourceMode" value="image">
+            <span>上传 Figure</span>
+          </label>
+          <label>
+            <input type="radio" name="supplementalFigureSourceMode" value="caption">
+            <span>粘贴图注</span>
+          </label>
+        </fieldset>
+
+        <div class="supplemental-figure-source-panes">
+          <section data-supplemental-source-pane="pdf" aria-label="PDF 来源">
+            <strong>用 MinerU 解析补充 PDF</strong>
+            <p>将在绑定当前论文的 PDF 工作区中，由你选择已下载的补充材料。</p>
+          </section>
+          <section data-supplemental-source-pane="image" aria-label="Figure 图片来源" hidden>
+            <label for="supplementalFigureImageFile">选择 Figure 图片</label>
+            <input id="supplementalFigureImageFile" type="file"
+              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+            <p>PNG、JPEG 或 WebP，原文件不超过 20 MiB。发送前会在本地缩放和压缩。</p>
+          </section>
+          <section data-supplemental-source-pane="caption" aria-label="Figure 图注来源" hidden>
+            <label for="supplementalFigureCaption">完整图注</label>
+            <textarea id="supplementalFigureCaption" rows="9" required maxlength="8000"
+              placeholder="例如：Figure S1. (A) ... (B) ..."></textarea>
+            <p>可直接粘贴期刊页面或 PDF 中的图注；空白内容不会提交。</p>
+          </section>
+        </div>
+
+        <p id="supplementalFigureImportStatus" class="supplemental-figure-import-status"
+          role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+        <footer class="supplemental-figure-import-footer">
+          <button id="cancelSupplementalFigureImport" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="submitSupplementalFigureImport" class="btn btn-primary"
+            type="submit">继续</button>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog id="clearManualDialog" class="confirmation-dialog"
         aria-labelledby="clearManualTitle" aria-describedby="clearManualDescription">
         <form method="dialog" class="confirmation-dialog-content">
@@ -351,6 +416,7 @@
     <script src="core/abbreviation-extractor.js"></script>
     <script src="core/panel-context-guard.js"></script>
     <script src="core/tab-activation.js"></script>
+    <script src="core/supplemental-materials.js"></script>
     <script src="core/tab-messenger.js"></script>
     <script src="core/keyboard-shortcuts.js"></script>
     <script src="core/i18n.js"></script>

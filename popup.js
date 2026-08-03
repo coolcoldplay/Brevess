@@ -5392,6 +5392,7 @@ async function initializeCurrentArticle({ retry = false } = {}) {
 document.addEventListener('DOMContentLoaded', async () => {
     setupSidePanelNotificationCenter();
     setupWorkspaceNavigation();
+    setupSupplementalFigureImport();
     setupSidePanelSettingsShortcut();
     setupArticleArchiveControls();
     setupAdapterDiagnosticControls();
@@ -6881,6 +6882,556 @@ async function applyRegexOnTab(tabId) {
         categories,
         mode: highlightMode,
         analysisModeId: readingViewId
+    });
+}
+
+function createSupplementalFigureImportTools(dependencies = {}) {
+    const shared = dependencies.shared || {};
+    const chromeApi = dependencies.chromeApi || globalThis.chrome;
+    const cryptoApi = dependencies.cryptoApi || globalThis.crypto;
+    const createImageBitmapImpl = dependencies.createImageBitmapImpl ||
+        globalThis.createImageBitmap;
+    const ImageImpl = dependencies.ImageImpl || globalThis.Image;
+    const urlApi = dependencies.urlApi || globalThis.URL;
+    const createCanvas = dependencies.createCanvas ||
+        (() => globalThis.document?.createElement('canvas'));
+    const btoaImpl = dependencies.btoaImpl || globalThis.btoa;
+    const now = dependencies.now || (() => new Date().toISOString());
+    const sendTabMessageWithRecovery = dependencies.sendTabMessageWithRecovery ||
+        shared.sendTabMessageWithRecovery;
+    const imageMaxSourceBytes = 20 * 1024 * 1024;
+    const imageMaxBytes = Number(shared.SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES) ||
+        1572864;
+    const imageMaxEdge = Number(shared.SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE) || 1600;
+    const imageMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+    const extensionMimeTypes = Object.freeze({
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp'
+    });
+
+    function importError(code, message, fieldId = '') {
+        const error = new Error(message || code);
+        error.code = code;
+        error.fieldId = fieldId;
+        return error;
+    }
+
+    function syncSourceMode(root, requestedMode) {
+        const modes = ['pdf', 'image', 'caption'];
+        const mode = modes.includes(String(requestedMode)) ? String(requestedMode) : 'pdf';
+        const radios = [...(root?.querySelectorAll?.(
+            'input[name="supplementalFigureSourceMode"]'
+        ) || [])];
+        const panes = [...(root?.querySelectorAll?.(
+            '[data-supplemental-source-pane]'
+        ) || [])];
+        radios.forEach(radio => {
+            radio.checked = radio.value === mode;
+        });
+        panes.forEach(pane => {
+            pane.hidden = pane.dataset?.supplementalSourcePane !== mode;
+        });
+        return mode;
+    }
+
+    function validateTarget(input = {}) {
+        const workspaceId = String(input.workspaceId || '').trim().toLowerCase();
+        const workspaceGeneration = Number(input.workspaceGeneration);
+        const targetArticleTabId = Number(input.targetArticleTabId);
+        const rawCanonicalUrl = String(input.canonicalUrl || '').trim();
+        const canonicalUrl = typeof shared.normalizeSupplementalUrl === 'function'
+            ? shared.normalizeSupplementalUrl(rawCanonicalUrl)
+            : rawCanonicalUrl;
+        const documentHash = String(input.documentHash || '').trim().toLowerCase();
+        if (!/^workspace:[a-f0-9]{64}$/.test(workspaceId) ||
+            !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
+            !Number.isSafeInteger(targetArticleTabId) || targetArticleTabId < 0 ||
+            !canonicalUrl ||
+            (documentHash && !/^(?:sha256:)?[a-f0-9]{64}$/.test(documentHash))) {
+            throw importError(
+                'SUPPLEMENTAL_TARGET_INVALID',
+                '当前论文工作区尚未准备完成，请刷新后重试'
+            );
+        }
+        const target = {
+            workspaceId,
+            workspaceGeneration,
+            targetArticleTabId,
+            canonicalUrl
+        };
+        if (documentHash) target.documentHash = documentHash;
+        return Object.freeze(target);
+    }
+
+    function buildTarget(snapshot, targetArticleTabId, documentHash = '') {
+        const workspace = snapshot?.localWorkspace || {};
+        return validateTarget({
+            workspaceId: workspace.workspaceId,
+            workspaceGeneration: workspace.workspaceGeneration,
+            targetArticleTabId,
+            canonicalUrl: snapshot?.url || workspace.canonicalUrl,
+            documentHash: documentHash || snapshot?.documentHash || workspace.documentHash
+        });
+    }
+
+    function validateImageFile(file) {
+        const name = String(file?.name || '').trim();
+        const mediaType = String(file?.type || '').trim().toLowerCase();
+        const size = Number(file?.size);
+        const extension = name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() || '';
+        if (!file || !imageMimeTypes.has(mediaType) ||
+            extensionMimeTypes[extension] !== mediaType ||
+            !Number.isSafeInteger(size) || size <= 0 || size > imageMaxSourceBytes ||
+            typeof file.arrayBuffer !== 'function') {
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_INVALID',
+                '请选择不超过 20 MiB 的 PNG、JPEG 或 WebP 图片，且扩展名与文件类型一致',
+                'supplementalFigureImageFile'
+            );
+        }
+        return file;
+    }
+
+    function normalizeCaption(value) {
+        const caption = String(value || '').trim();
+        if (!caption) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_EMPTY', '请粘贴完整图注',
+                'supplementalFigureCaption'
+            );
+        }
+        if (caption.length > 8000) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_TOO_LONG', '图注不能超过 8000 个字符',
+                'supplementalFigureCaption'
+            );
+        }
+        return caption;
+    }
+
+    async function sha256Fingerprint(value) {
+        if (!cryptoApi?.subtle?.digest) {
+            throw importError('SUPPLEMENTAL_CRYPTO_UNAVAILABLE', '当前环境无法计算文件指纹');
+        }
+        const bytes = typeof value === 'string'
+            ? new TextEncoder().encode(value)
+            : value instanceof ArrayBuffer
+                ? new Uint8Array(value)
+                : new Uint8Array(value?.buffer || value || []);
+        const digest = new Uint8Array(await cryptoApi.subtle.digest('SHA-256', bytes));
+        return `sha256:${[...digest]
+            .map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
+    }
+
+    async function decodeImageFile(file) {
+        let bitmapError = null;
+        if (typeof createImageBitmapImpl === 'function') {
+            try {
+                const bitmap = await createImageBitmapImpl(file);
+                return {
+                    source: bitmap,
+                    width: Number(bitmap?.width),
+                    height: Number(bitmap?.height),
+                    dispose: () => bitmap?.close?.()
+                };
+            } catch (error) {
+                bitmapError = error;
+            }
+        }
+        if (typeof ImageImpl === 'function' && urlApi?.createObjectURL) {
+            const objectUrl = urlApi.createObjectURL(file);
+            try {
+                const image = new ImageImpl();
+                await new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(bitmapError ||
+                        importError('SUPPLEMENTAL_IMAGE_DECODE', '图片无法解码'));
+                    image.src = objectUrl;
+                });
+                return {
+                    source: image,
+                    width: Number(image.naturalWidth || image.width),
+                    height: Number(image.naturalHeight || image.height),
+                    dispose: () => urlApi.revokeObjectURL?.(objectUrl)
+                };
+            } catch (error) {
+                urlApi.revokeObjectURL?.(objectUrl);
+                throw error;
+            }
+        }
+        if (bitmapError) throw bitmapError;
+        throw importError('SUPPLEMENTAL_IMAGE_DECODE', '图片无法解码');
+    }
+
+    function canvasToBlob(canvas, mediaType, quality) {
+        return new Promise((resolve, reject) => {
+            try {
+                canvas.toBlob(blob => {
+                    if (blob) resolve(blob);
+                    else reject(importError('SUPPLEMENTAL_IMAGE_ENCODE', '图片压缩失败'));
+                }, mediaType, quality);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    async function blobToDataUrl(blob, mediaType) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (let index = 0; index < bytes.length; index += 32768) {
+            binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+        }
+        return `data:${mediaType};base64,${btoaImpl(binary)}`;
+    }
+
+    async function prepareTransientImage(file) {
+        validateImageFile(file);
+        const sourceBytes = await file.arrayBuffer();
+        const sourceFingerprint = await sha256Fingerprint(sourceBytes);
+        let decoded;
+        try {
+            decoded = await decodeImageFile(file);
+        } catch (_) {
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_DECODE', '无法解码这张图片，请重新导出后再试',
+                'supplementalFigureImageFile'
+            );
+        }
+        const sourceWidth = Number(decoded?.width);
+        const sourceHeight = Number(decoded?.height);
+        if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) ||
+            sourceWidth <= 0 || sourceHeight <= 0) {
+            decoded?.dispose?.();
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_DECODE', '图片宽高无效，请重新选择',
+                'supplementalFigureImageFile'
+            );
+        }
+        const canvas = createCanvas();
+        const context = canvas?.getContext?.('2d', { alpha: true });
+        if (!canvas || !context || typeof canvas.toBlob !== 'function') {
+            decoded?.dispose?.();
+            throw importError('SUPPLEMENTAL_IMAGE_ENCODE', '当前环境无法处理图片');
+        }
+        let longestEdge = Math.min(imageMaxEdge, Math.max(sourceWidth, sourceHeight));
+        let encoded = null;
+        let outputWidth = 0;
+        let outputHeight = 0;
+        const qualities = file.type === 'image/png'
+            ? [undefined]
+            : [0.92, 0.84, 0.76, 0.68, 0.58];
+        try {
+            while (longestEdge >= 1 && !encoded) {
+                const scale = Math.min(1, longestEdge / Math.max(sourceWidth, sourceHeight));
+                outputWidth = Math.max(1, Math.round(sourceWidth * scale));
+                outputHeight = Math.max(1, Math.round(sourceHeight * scale));
+                canvas.width = outputWidth;
+                canvas.height = outputHeight;
+                context.drawImage(decoded.source, 0, 0, outputWidth, outputHeight);
+                for (const quality of qualities) {
+                    const candidate = await canvasToBlob(canvas, file.type, quality);
+                    if (candidate.size > 0 && candidate.size <= imageMaxBytes) {
+                        encoded = candidate;
+                        break;
+                    }
+                }
+                if (!encoded) {
+                    if (longestEdge === 1) break;
+                    longestEdge = Math.max(1, Math.floor(longestEdge * 0.82));
+                }
+            }
+        } finally {
+            decoded.dispose?.();
+        }
+        if (!encoded) {
+            throw importError(
+                'SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE',
+                '图片压缩后仍超过 1.5 MiB，请裁剪后重试',
+                'supplementalFigureImageFile'
+            );
+        }
+        const mediaType = imageMimeTypes.has(String(encoded.type).toLowerCase())
+            ? String(encoded.type).toLowerCase() : file.type;
+        const transient = {
+            mediaType,
+            dataUrl: await blobToDataUrl(encoded, mediaType),
+            width: outputWidth,
+            height: outputHeight,
+            sourceFingerprint
+        };
+        return typeof shared.normalizeSupplementalTransientImage === 'function'
+            ? shared.normalizeSupplementalTransientImage(transient, sourceFingerprint)
+            : transient;
+    }
+
+    function sourceMaterialId(mode, sourceFingerprint) {
+        return `manual-${mode}-${String(sourceFingerprint || '')
+            .replace(/^sha256:/, '').slice(0, 16)}`;
+    }
+
+    function createImageImport(file, transientImage) {
+        validateImageFile(file);
+        const sourceFingerprint = String(transientImage?.sourceFingerprint || '');
+        const draftInput = {
+            sourceMode: 'image',
+            sourceMaterialId: sourceMaterialId('image', sourceFingerprint),
+            sourceFileName: file.name,
+            sourceMimeType: file.type,
+            sourceFileSize: file.size,
+            sourceImportedAt: now(),
+            sourceFingerprint,
+            figureLabel: file.name.replace(/\.[^.]+$/, '') || 'Supplemental Figure'
+        };
+        const draft = shared.createSupplementalFigureImportDraft(draftInput);
+        return { draft, transientImage };
+    }
+
+    async function createCaptionImport(value) {
+        const caption = normalizeCaption(value);
+        const sourceFingerprint = await sha256Fingerprint(caption);
+        const draft = shared.createSupplementalFigureImportDraft({
+            sourceMode: 'caption',
+            sourceMaterialId: sourceMaterialId('caption', sourceFingerprint),
+            sourceImportedAt: now(),
+            sourceFingerprint,
+            caption,
+            figureLabel: 'Supplemental Figure'
+        });
+        return { draft };
+    }
+
+    function isClosedTabError(error) {
+        return /No tab with id|Invalid tab ID|tab (?:was )?closed|tab not found/i
+            .test(String(error?.message || error || ''));
+    }
+
+    async function deliverImport(targetInput, request = {}) {
+        const target = validateTarget(targetInput);
+        const draft = request?.draft;
+        if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+            throw importError('SUPPLEMENTAL_DRAFT_INVALID', '补充 Figure 草稿无效');
+        }
+        const message = {
+            action: 'importSupplementalFigureDraft',
+            target,
+            draft
+        };
+        if (request.transientImage) {
+            const transientImage = shared.normalizeSupplementalTransientImage(
+                request.transientImage,
+                request.transientImage.sourceFingerprint
+            );
+            message.transientImage = {
+                mediaType: transientImage.mediaType,
+                dataUrl: transientImage.dataUrl,
+                width: transientImage.width,
+                height: transientImage.height,
+                sourceFingerprint: transientImage.sourceFingerprint
+            };
+        }
+        try {
+            return await sendTabMessageWithRecovery(
+                chromeApi, target.targetArticleTabId, message
+            );
+        } catch (error) {
+            if (!isClosedTabError(error)) throw error;
+            const fallback = await chromeApi.runtime.sendMessage({
+                type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+                target,
+                draft
+            });
+            if (fallback?.success === false) {
+                throw importError(
+                    fallback?.error?.code || fallback?.code || 'SUPPLEMENTAL_DRAFT_SAVE_FAILED',
+                    fallback?.error?.message || fallback?.error || '无法保存补充 Figure 草稿'
+                );
+            }
+            return { ...(fallback || {}), savedAsDraft: true };
+        }
+    }
+
+    return {
+        syncSourceMode,
+        validateTarget,
+        buildTarget,
+        validateImageFile,
+        normalizeCaption,
+        prepareTransientImage,
+        createImageImport,
+        createCaptionImport,
+        deliverImport
+    };
+}
+
+const supplementalFigureImportTools = createSupplementalFigureImportTools({
+    shared: SciLLM,
+    chromeApi: chrome
+});
+
+async function openSupplementalMaterialPdf(material, target) {
+    target = supplementalFigureImportTools.validateTarget(target);
+    const readerUrl = SciLLM.createSupplementalPdfReaderUrl?.(
+        chrome.runtime.getURL.bind(chrome.runtime),
+        {
+            sourceUrl: material?.url,
+            title: material?.title,
+            materialId: material?.materialId,
+            parentWorkspaceId: target.workspaceId,
+            parentWorkspaceGeneration: target.workspaceGeneration,
+            parentCanonicalUrl: target.canonicalUrl,
+            parentTabId: target.targetArticleTabId
+        }
+    );
+    if (!readerUrl) {
+        showStatus('这个补充材料不是可直接解析的 PDF 链接', 'error');
+        return;
+    }
+    const targetTab = await chrome.tabs.get(target.targetArticleTabId)
+        .catch(() => null);
+    const tab = targetTab?.id === target.targetArticleTabId
+        ? await chrome.tabs.update(target.targetArticleTabId, {
+            url: readerUrl,
+            active: true
+        })
+        : await chrome.tabs.create({ url: readerUrl, active: true });
+    await SciLLM.markTabActivated?.(chrome.storage.session, {
+        ...tab,
+        url: readerUrl,
+        pendingUrl: readerUrl,
+        title: material?.title || '补充材料 PDF'
+    });
+    showStatus('已在指定论文标签页打开补充 PDF 工作区；请选择本地 PDF，解析结果会自动纳入原论文', 'success');
+}
+
+let supplementalFigureImportTarget = null;
+
+function supplementalFigureImportMode(form = document.getElementById(
+    'supplementalFigureImportForm'
+)) {
+    return form?.querySelector?.(
+        'input[name="supplementalFigureSourceMode"]:checked'
+    )?.value || 'pdf';
+}
+
+function setSupplementalFigureImportStatus(message = '', { error = false } = {}) {
+    const status = document.getElementById('supplementalFigureImportStatus');
+    if (!status) return;
+    status.textContent = String(message || '');
+    status.classList.toggle('is-error', error);
+}
+
+function focusSupplementalFigureImportError(error) {
+    const field = error?.fieldId ? document.getElementById(error.fieldId) : null;
+    if (field) {
+        field.setAttribute('aria-invalid', 'true');
+        field.focus();
+    } else {
+        document.getElementById('supplementalFigureImportStatus')?.focus?.();
+    }
+}
+
+function openSupplementalFigureImportDialog() {
+    const dialog = document.getElementById('supplementalFigureImportDialog');
+    try {
+        supplementalFigureImportTarget = supplementalFigureImportTools.buildTarget(
+            currentWorkspaceSnapshot,
+            activePanelTabContext.tabId,
+            preparedDocumentState?.documentHash || manualAnnotationState.documentHash
+        );
+    } catch (error) {
+        showStatus(error.message, 'error');
+        return;
+    }
+    setSupplementalFigureImportStatus('');
+    supplementalFigureImportTools.syncSourceMode(
+        dialog,
+        supplementalFigureImportMode(dialog)
+    );
+    dialog?.showModal();
+}
+
+function closeSupplementalFigureImportDialog() {
+    document.getElementById('supplementalFigureImportDialog')?.close();
+}
+
+async function submitSupplementalFigureImport(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = document.getElementById('submitSupplementalFigureImport');
+    const mode = supplementalFigureImportMode(form);
+    form.querySelectorAll('[aria-invalid="true"]').forEach(field =>
+        field.removeAttribute('aria-invalid')
+    );
+    if (submit?.disabled) return;
+    if (submit) submit.disabled = true;
+    setSupplementalFigureImportStatus('正在验证来源…');
+    try {
+        const target = supplementalFigureImportTools.validateTarget(
+            supplementalFigureImportTarget
+        );
+        if (mode === 'pdf') {
+            await openSupplementalMaterialPdf({
+                materialId: `manual-supplement-${Date.now()}`,
+                title: '本地补充材料 PDF',
+                url: ''
+            }, target);
+        } else if (mode === 'image') {
+            const fileInput = document.getElementById('supplementalFigureImageFile');
+            const file = supplementalFigureImportTools.validateImageFile(
+                fileInput?.files?.[0]
+            );
+            setSupplementalFigureImportStatus('正在本地校验、缩放并压缩图片…');
+            const transientImage = await supplementalFigureImportTools
+                .prepareTransientImage(file);
+            const request = supplementalFigureImportTools.createImageImport(
+                file, transientImage
+            );
+            await supplementalFigureImportTools.deliverImport(target, request);
+        } else {
+            const caption = document.getElementById('supplementalFigureCaption')?.value;
+            const request = await supplementalFigureImportTools.createCaptionImport(caption);
+            await supplementalFigureImportTools.deliverImport(target, request);
+        }
+        setSupplementalFigureImportStatus(
+            mode === 'pdf' ? '已打开 PDF 工作区' : '已发出补充 Figure 草稿'
+        );
+        closeSupplementalFigureImportDialog();
+        showStatus(
+            mode === 'pdf'
+                ? '已打开补充 PDF 工作区'
+                : '补充 Figure 已提交；接收端接入后会自动加入图目录',
+            'success'
+        );
+    } catch (error) {
+        setSupplementalFigureImportStatus(error.message, { error: true });
+        focusSupplementalFigureImportError(error);
+    } finally {
+        if (submit) submit.disabled = false;
+    }
+}
+
+function setupSupplementalFigureImport() {
+    const dialog = document.getElementById('supplementalFigureImportDialog');
+    const form = document.getElementById('supplementalFigureImportForm');
+    document.getElementById('openSupplementalFigureImport')?.addEventListener(
+        'click', openSupplementalFigureImportDialog
+    );
+    document.getElementById('closeSupplementalFigureImport')?.addEventListener(
+        'click', closeSupplementalFigureImportDialog
+    );
+    document.getElementById('cancelSupplementalFigureImport')?.addEventListener(
+        'click', closeSupplementalFigureImportDialog
+    );
+    form?.addEventListener('change', event => {
+        if (event.target?.name !== 'supplementalFigureSourceMode') return;
+        supplementalFigureImportTools.syncSourceMode(dialog, event.target.value);
+        setSupplementalFigureImportStatus('');
+    });
+    form?.addEventListener('submit', event => {
+        void submitSupplementalFigureImport(event);
     });
 }
 

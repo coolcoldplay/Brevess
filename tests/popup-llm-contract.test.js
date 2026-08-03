@@ -299,3 +299,237 @@ test('regex apply resolves current unified overrides without mixed revisions', (
   assert.match(script, /shouldApplyRegexSnapshot/);
   assert.doesNotMatch(script, /DEFAULT_CATEGORIES|sanitizeBuiltInRegexRules/);
 });
+
+function loadSupplementalFigureImportTools(overrides = {}) {
+  const script = read('popup.js');
+  const start = script.indexOf('function createSupplementalFigureImportTools');
+  const end = script.indexOf('const supplementalFigureImportTools', start);
+  assert.ok(start >= 0 && end > start, 'supplemental Figure import factory is present');
+  const factory = new Function(
+    `${script.slice(start, end)}\nreturn createSupplementalFigureImportTools;`
+  )();
+  const shared = require('../core/supplemental-materials.js');
+  return factory({
+    shared,
+    cryptoApi: {
+      subtle: {
+        digest: async () => Uint8Array.from({ length: 32 }, (_, index) => index).buffer
+      }
+    },
+    btoaImpl: value => Buffer.from(value, 'binary').toString('base64'),
+    now: () => '2026-08-03T00:00:00.000Z',
+    ...overrides
+  });
+}
+
+test('new supplemental Figure dialog exposes exactly three accessible source panes', () => {
+  const html = read('popup.html');
+  const css = read('popup.css');
+  assert.match(html, /id="openSupplementalFigureImport"/);
+  assert.match(html, /id="supplementalFigureImportStatus"[^>]*aria-live="polite"/);
+  for (const mode of ['pdf', 'image', 'caption']) {
+    assert.match(html, new RegExp(`name="supplementalFigureSourceMode"[^>]*value="${mode}"`));
+    assert.match(html, new RegExp(`data-supplemental-source-pane="${mode}"`));
+  }
+  assert.match(
+    html,
+    /id="supplementalFigureImageFile"[^>]*accept="[^"]*(?:image\/png)[^"]*(?:image\/jpeg)[^"]*(?:image\/webp)[^"]*"/
+  );
+  assert.match(html, /id="supplementalFigureCaption"[^>]*required[^>]*maxlength="8000"/);
+  assert.ok(html.indexOf('core/supplemental-materials.js') < html.indexOf('popup.js'));
+  assert.match(css, /\.supplemental-figure-import-dialog/);
+  assert.match(css, /\[data-supplemental-source-pane\]\[hidden\]/);
+});
+
+test('supplemental Figure source mode keeps one pane visible without clearing retry input', () => {
+  const tools = loadSupplementalFigureImportTools();
+  const radios = ['pdf', 'image', 'caption'].map(value => ({ value, checked: value === 'pdf' }));
+  const panes = ['pdf', 'image', 'caption'].map(value => ({
+    dataset: { supplementalSourcePane: value },
+    hidden: value !== 'pdf'
+  }));
+  const root = {
+    querySelectorAll(selector) {
+      if (selector === '[data-supplemental-source-pane]') return panes;
+      if (selector === 'input[name="supplementalFigureSourceMode"]') return radios;
+      return [];
+    }
+  };
+  const retainedFile = { name: 'figure-s1.png' };
+  const retainedCaption = 'Figure S1. Replication.';
+  tools.syncSourceMode(root, 'caption');
+  assert.deepEqual(panes.filter(pane => !pane.hidden).map(pane => pane.dataset.supplementalSourcePane), ['caption']);
+  assert.equal(radios.filter(radio => radio.checked)[0].value, 'caption');
+  assert.equal(retainedFile.name, 'figure-s1.png');
+  assert.equal(retainedCaption, 'Figure S1. Replication.');
+});
+
+test('supplemental Figure import rejects mismatched files, empty captions, and zero-size decodes', async () => {
+  const tools = loadSupplementalFigureImportTools({
+    createImageBitmapImpl: async () => ({ width: 0, height: 100, close() {} })
+  });
+  assert.throws(
+    () => tools.validateImageFile({ name: 'figure-s1.png', type: 'image/jpeg', size: 200 }),
+    error => error?.code === 'SUPPLEMENTAL_IMAGE_INVALID' &&
+      error.fieldId === 'supplementalFigureImageFile'
+  );
+  assert.throws(
+    () => tools.normalizeCaption('   '),
+    error => error?.code === 'SUPPLEMENTAL_CAPTION_EMPTY' &&
+      error.fieldId === 'supplementalFigureCaption'
+  );
+  await assert.rejects(
+    () => tools.prepareTransientImage({
+      name: 'figure-s1.png',
+      type: 'image/png',
+      size: 4,
+      arrayBuffer: async () => Uint8Array.of(1, 2, 3, 4).buffer
+    }),
+    error => error?.code === 'SUPPLEMENTAL_IMAGE_DECODE'
+  );
+});
+
+test('supplemental image import hashes the original file but sends only the bounded transient image shape', async () => {
+  const sent = [];
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({ drawImage() {} }),
+    toBlob(callback, mediaType) {
+      callback(new Blob([Uint8Array.of(1, 2, 3)], { type: mediaType }));
+    }
+  };
+  const tools = loadSupplementalFigureImportTools({
+    chromeApi: { runtime: { sendMessage: async () => ({ success: true }) } },
+    sendTabMessageWithRecovery: async (_chrome, tabId, message) => {
+      sent.push({ tabId, message });
+      return { success: true };
+    },
+    createImageBitmapImpl: async () => ({ width: 3200, height: 1600, close() {} }),
+    createCanvas: () => canvas
+  });
+  const target = tools.validateTarget({
+    workspaceId: `workspace:${'a'.repeat(64)}`,
+    workspaceGeneration: 3,
+    targetArticleTabId: 42,
+    canonicalUrl: 'https://journal.example/paper',
+    documentHash: `sha256:${'b'.repeat(64)}`
+  });
+  const file = {
+    name: 'figure-s1.png',
+    type: 'image/png',
+    size: 4,
+    arrayBuffer: async () => Uint8Array.of(9, 8, 7, 6).buffer
+  };
+  const prepared = await tools.prepareTransientImage(file);
+  assert.equal(Math.max(prepared.width, prepared.height), 1600);
+  assert.match(prepared.sourceFingerprint, /^sha256:[a-f0-9]{64}$/);
+  await tools.deliverImport(target, {
+    draft: { materialId: 'manual-image-test', sourceMode: 'image' },
+    transientImage: prepared,
+    originalFile: file,
+    extra: 'must-not-cross-boundary'
+  });
+  assert.equal(sent[0].tabId, 42);
+  assert.deepEqual(Object.keys(sent[0].message).sort(), [
+    'action', 'draft', 'target', 'transientImage'
+  ]);
+  assert.deepEqual(Object.keys(sent[0].message.transientImage).sort(), [
+    'dataUrl', 'height', 'mediaType', 'sourceFingerprint', 'width'
+  ]);
+  assert.equal(sent[0].message.transientImage.dataUrl, 'data:image/png;base64,AQID');
+  assert.equal(JSON.stringify(sent[0].message).includes('originalFile'), false);
+  assert.equal(JSON.stringify(sent[0].message).includes('must-not-cross-boundary'), false);
+});
+
+test('supplemental caption delivery targets the captured article tab and falls back to a workspace draft only when closed', async () => {
+  const runtimeMessages = [];
+  const tabMessages = [];
+  let closed = false;
+  const tools = loadSupplementalFigureImportTools({
+    chromeApi: {
+      runtime: {
+        sendMessage: async message => {
+          runtimeMessages.push(message);
+          return { success: true };
+        }
+      }
+    },
+    sendTabMessageWithRecovery: async (_chrome, tabId, message) => {
+      tabMessages.push({ tabId, message });
+      if (closed) throw new Error(`No tab with id: ${tabId}.`);
+      return { success: true };
+    }
+  });
+  const target = tools.validateTarget({
+    workspaceId: `workspace:${'c'.repeat(64)}`,
+    workspaceGeneration: 7,
+    targetArticleTabId: 77,
+    canonicalUrl: 'https://journal.example/article'
+  });
+  const request = { draft: { materialId: 'manual-caption-test', sourceMode: 'caption' } };
+  await tools.deliverImport(target, request);
+  assert.equal(tabMessages[0].tabId, 77);
+  closed = true;
+  await tools.deliverImport(target, request);
+  assert.equal(runtimeMessages.length, 1);
+  assert.equal(runtimeMessages[0].type, 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT');
+  assert.deepEqual(runtimeMessages[0].target, target);
+  assert.deepEqual(Object.keys(runtimeMessages[0]).sort(), ['draft', 'target', 'type']);
+});
+
+test('supplemental PDF opening consumes the validated target tuple without active-tab fallback', async () => {
+  const script = read('popup.js');
+  const start = script.indexOf('async function openSupplementalMaterialPdf');
+  const end = script.indexOf('let supplementalFigureImportTarget', start);
+  const source = script.slice(start, end);
+  assert.match(source, /openSupplementalMaterialPdf\(material, target\)/);
+  assert.match(source, /validateTarget\(target\)/);
+  assert.match(source, /target\.targetArticleTabId/);
+  assert.doesNotMatch(source, /activePanelTabContext|currentWorkspaceSnapshot|chrome\.tabs\.query/);
+  const updates = [];
+  const bindings = [];
+  const target = {
+    workspaceId: `workspace:${'e'.repeat(64)}`,
+    workspaceGeneration: 2,
+    targetArticleTabId: 55,
+    canonicalUrl: 'https://journal.example/paper'
+  };
+  const openPdf = new Function(
+    'supplementalFigureImportTools', 'SciLLM', 'chrome', 'showStatus',
+    `${source}\nreturn openSupplementalMaterialPdf;`
+  )(
+    { validateTarget: value => ({ ...value }) },
+    {
+      createSupplementalPdfReaderUrl: (_getUrl, binding) => {
+        bindings.push(binding);
+        return 'chrome-extension://test/pdf-reader.html';
+      },
+      markTabActivated: async () => {}
+    },
+    {
+      runtime: { getURL: value => `chrome-extension://test/${value}` },
+      storage: { session: {} },
+      tabs: {
+        get: async tabId => ({ id: tabId }),
+        update: async (tabId, options) => {
+          updates.push({ tabId, options });
+          return { id: tabId };
+        },
+        create: async () => assert.fail('must not create an unrelated active-tab fallback')
+      }
+    },
+    () => {}
+  );
+  await openPdf({ materialId: 'supplement-s1', title: 'Supplement S1', url: '' }, target);
+  assert.equal(updates[0].tabId, 55);
+  assert.deepEqual(bindings[0], {
+    sourceUrl: '',
+    title: 'Supplement S1',
+    materialId: 'supplement-s1',
+    parentWorkspaceId: target.workspaceId,
+    parentWorkspaceGeneration: 2,
+    parentCanonicalUrl: target.canonicalUrl,
+    parentTabId: 55
+  });
+});
