@@ -486,6 +486,7 @@ test('merges imported supplemental figures with collision-safe ids and reports c
 
 test('round-trips a parent workspace binding through the supplemental PDF reader URL', () => {
   const workspaceId = `workspace:${'a'.repeat(64)}`;
+  const documentHash = `sha256:${'c'.repeat(64)}`;
   const url = createSupplementalPdfReaderUrl(
     path => `chrome-extension://test/${path}`,
     {
@@ -495,6 +496,7 @@ test('round-trips a parent workspace binding through the supplemental PDF reader
       parentWorkspaceId: workspaceId,
       parentWorkspaceGeneration: 3,
       parentCanonicalUrl: 'https://journal.example/article/1',
+      parentDocumentHash: documentHash,
       parentTitle: 'Paper',
       parentTabId: 314
     }
@@ -502,10 +504,25 @@ test('round-trips a parent workspace binding through the supplemental PDF reader
   const binding = readSupplementalPdfBinding(url);
   assert.equal(binding.parentWorkspaceId, workspaceId);
   assert.equal(binding.parentWorkspaceGeneration, 3);
+  assert.equal(binding.parentDocumentHash, documentHash);
   assert.equal(binding.materialId, 'mmc1');
   assert.equal(binding.parentTabId, 314);
   assert.equal(binding.sourceUrl, 'https://journal.example/mmc1.pdf');
   assert.equal(supplementalFigureAssetPath('MMC 1'), 'figures/supplemental/mmc-1.json');
+});
+
+test('supplemental PDF bindings omit malformed optional parent document hashes', () => {
+  const url = createSupplementalPdfReaderUrl(
+    path => `chrome-extension://test/${path}`,
+    {
+      materialId: 'manual-supplement',
+      parentWorkspaceId: `workspace:${'d'.repeat(64)}`,
+      parentDocumentHash: 'not-a-document-hash'
+    }
+  );
+  const binding = readSupplementalPdfBinding(url);
+  assert.equal(binding.parentDocumentHash, '');
+  assert.equal(new URL(url).searchParams.has('suppParentDocumentHash'), false);
 });
 
 test('creates a bound local-file picker when the publisher exposes no supplemental PDF URL', () => {

@@ -8,6 +8,7 @@
     parentWorkspaceId: 'suppParentWorkspace',
     parentWorkspaceGeneration: 'suppParentGeneration',
     parentCanonicalUrl: 'suppParentUrl',
+    parentDocumentHash: 'suppParentDocumentHash',
     parentTitle: 'suppParentTitle',
     parentTabId: 'suppParentTab',
     materialId: 'suppMaterial',
@@ -611,6 +612,13 @@
     if (parentUrl) {
       url.searchParams.set(SUPPLEMENTAL_BINDING_KEYS.parentCanonicalUrl, parentUrl);
     }
+    const parentDocumentHash = text(input.parentDocumentHash, 80).toLowerCase();
+    if (/^sha256:[a-f0-9]{64}$/.test(parentDocumentHash)) {
+      url.searchParams.set(
+        SUPPLEMENTAL_BINDING_KEYS.parentDocumentHash,
+        parentDocumentHash
+      );
+    }
     const parentTitle = text(input.parentTitle, 500);
     if (parentTitle) url.searchParams.set(SUPPLEMENTAL_BINDING_KEYS.parentTitle, parentTitle);
     const parentTabId = Number(input.parentTabId);
@@ -639,6 +647,9 @@
       url.searchParams.get('source') || ''
     );
     if (!/^workspace:[a-f0-9]{64}$/i.test(workspaceId) || !materialId) return null;
+    const parentDocumentHash = text(
+      url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentDocumentHash), 80
+    ).toLowerCase();
     return {
       parentWorkspaceId: workspaceId.toLowerCase(),
       parentWorkspaceGeneration: Math.max(1, Number(
@@ -647,6 +658,8 @@
       parentCanonicalUrl: normalizeSupplementalUrl(
         url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentCanonicalUrl)
       ),
+      parentDocumentHash: /^sha256:[a-f0-9]{64}$/.test(parentDocumentHash)
+        ? parentDocumentHash : '',
       parentTitle: text(
         url.searchParams.get(SUPPLEMENTAL_BINDING_KEYS.parentTitle), 500
       ),

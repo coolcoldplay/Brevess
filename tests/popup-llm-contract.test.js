@@ -335,6 +335,14 @@ test('new supplemental Figure dialog exposes exactly three accessible source pan
     html,
     /id="supplementalFigureImageFile"[^>]*accept="[^"]*(?:image\/png)[^"]*(?:image\/jpeg)[^"]*(?:image\/webp)[^"]*"/
   );
+  assert.match(
+    html,
+    /id="supplementalFigureImageCaption"[^>]*maxlength="8000"/
+  );
+  assert.doesNotMatch(
+    html,
+    /id="supplementalFigureImageCaption"[^>]*required/
+  );
   assert.match(html, /id="supplementalFigureCaption"[^>]*required[^>]*maxlength="8000"/);
   assert.ok(html.indexOf('core/supplemental-materials.js') < html.indexOf('popup.js'));
   assert.match(css, /\.supplemental-figure-import-dialog/);
@@ -391,6 +399,8 @@ test('supplemental Figure import rejects mismatched files, empty captions, and z
 
 test('supplemental image import hashes the original file but sends only the bounded transient image shape', async () => {
   const sent = [];
+  const runtimeMessages = [];
+  let closed = false;
   const canvas = {
     width: 0,
     height: 0,
@@ -400,9 +410,19 @@ test('supplemental image import hashes the original file but sends only the boun
     }
   };
   const tools = loadSupplementalFigureImportTools({
-    chromeApi: { runtime: { sendMessage: async () => ({ success: true }) } },
+    chromeApi: {
+      runtime: {
+        sendMessage: async message => {
+          runtimeMessages.push(message);
+          return { success: true };
+        }
+      }
+    },
     sendTabMessageWithRecovery: async (_chrome, tabId, message) => {
       sent.push({ tabId, message });
+      if (closed) {
+        throw Object.assign(new Error('target disappeared'), { code: 'TAB_NOT_FOUND' });
+      }
       return { success: true };
     },
     createImageBitmapImpl: async () => ({ width: 3200, height: 1600, close() {} }),
@@ -424,9 +444,14 @@ test('supplemental image import hashes the original file but sends only the boun
   const prepared = await tools.prepareTransientImage(file);
   assert.equal(Math.max(prepared.width, prepared.height), 1600);
   assert.match(prepared.sourceFingerprint, /^sha256:[a-f0-9]{64}$/);
+  const request = tools.createImageImport(
+    file,
+    prepared,
+    '  Figure S1. (A) Replication.  '
+  );
+  assert.equal(request.draft.figures[0].caption, 'Figure S1. (A) Replication.');
   await tools.deliverImport(target, {
-    draft: { materialId: 'manual-image-test', sourceMode: 'image' },
-    transientImage: prepared,
+    ...request,
     originalFile: file,
     extra: 'must-not-cross-boundary'
   });
@@ -440,6 +465,17 @@ test('supplemental image import hashes the original file but sends only the boun
   assert.equal(sent[0].message.transientImage.dataUrl, 'data:image/png;base64,AQID');
   assert.equal(JSON.stringify(sent[0].message).includes('originalFile'), false);
   assert.equal(JSON.stringify(sent[0].message).includes('must-not-cross-boundary'), false);
+  closed = true;
+  await tools.deliverImport(target, request);
+  assert.equal(runtimeMessages.length, 1);
+  assert.deepEqual(Object.keys(runtimeMessages[0]).sort(), [
+    'draft', 'target', 'transientImage', 'type'
+  ]);
+  assert.deepEqual(runtimeMessages[0].transientImage, sent[0].message.transientImage);
+  assert.deepEqual(Object.keys(runtimeMessages[0].transientImage).sort(), [
+    'dataUrl', 'height', 'mediaType', 'sourceFingerprint', 'width'
+  ]);
+  assert.equal(JSON.stringify(runtimeMessages[0]).includes('originalFile'), false);
 });
 
 test('supplemental caption delivery targets the captured article tab and falls back to a workspace draft only when closed', async () => {
@@ -478,6 +514,43 @@ test('supplemental caption delivery targets the captured article tab and falls b
   assert.deepEqual(Object.keys(runtimeMessages[0]).sort(), ['draft', 'target', 'type']);
 });
 
+test('supplemental import rejects explicit failure responses from live and closed-tab routes', async () => {
+  const target = {
+    workspaceId: `workspace:${'d'.repeat(64)}`,
+    workspaceGeneration: 4,
+    targetArticleTabId: 88,
+    canonicalUrl: 'https://journal.example/failure'
+  };
+  const draft = { materialId: 'manual-caption-failure', sourceMode: 'caption' };
+  const liveFailure = loadSupplementalFigureImportTools({
+    chromeApi: { runtime: { sendMessage: async () => ({ success: true }) } },
+    sendTabMessageWithRecovery: async () => ({
+      success: false,
+      code: 'SUPPLEMENTAL_TARGET_MISMATCH',
+      error: 'target changed'
+    })
+  });
+  await assert.rejects(
+    () => liveFailure.deliverImport(target, { draft }),
+    error => error?.code === 'SUPPLEMENTAL_TARGET_MISMATCH'
+  );
+
+  const fallbackFailure = loadSupplementalFigureImportTools({
+    chromeApi: {
+      runtime: {
+        sendMessage: async () => ({ success: false, error: 'save rejected' })
+      }
+    },
+    sendTabMessageWithRecovery: async () => {
+      throw Object.assign(new Error('gone'), { code: 'TAB_NOT_FOUND' });
+    }
+  });
+  await assert.rejects(
+    () => fallbackFailure.deliverImport(target, { draft }),
+    error => error?.code === 'SUPPLEMENTAL_DRAFT_SAVE_FAILED'
+  );
+});
+
 test('supplemental PDF opening consumes the validated target tuple without active-tab fallback', async () => {
   const script = read('popup.js');
   const start = script.indexOf('async function openSupplementalMaterialPdf');
@@ -487,13 +560,14 @@ test('supplemental PDF opening consumes the validated target tuple without activ
   assert.match(source, /validateTarget\(target\)/);
   assert.match(source, /target\.targetArticleTabId/);
   assert.doesNotMatch(source, /activePanelTabContext|currentWorkspaceSnapshot|chrome\.tabs\.query/);
-  const updates = [];
+  const created = [];
   const bindings = [];
   const target = {
     workspaceId: `workspace:${'e'.repeat(64)}`,
     workspaceGeneration: 2,
     targetArticleTabId: 55,
-    canonicalUrl: 'https://journal.example/paper'
+    canonicalUrl: 'https://journal.example/paper',
+    documentHash: `sha256:${'f'.repeat(64)}`
   };
   const openPdf = new Function(
     'supplementalFigureImportTools', 'SciLLM', 'chrome', 'showStatus',
@@ -511,18 +585,21 @@ test('supplemental PDF opening consumes the validated target tuple without activ
       runtime: { getURL: value => `chrome-extension://test/${value}` },
       storage: { session: {} },
       tabs: {
-        get: async tabId => ({ id: tabId }),
-        update: async (tabId, options) => {
-          updates.push({ tabId, options });
-          return { id: tabId };
-        },
-        create: async () => assert.fail('must not create an unrelated active-tab fallback')
+        get: async () => assert.fail('must not inspect or reuse the paper tab'),
+        update: async () => assert.fail('must not overwrite the paper tab'),
+        create: async options => {
+          created.push(options);
+          return { id: 99, ...options };
+        }
       }
     },
     () => {}
   );
   await openPdf({ materialId: 'supplement-s1', title: 'Supplement S1', url: '' }, target);
-  assert.equal(updates[0].tabId, 55);
+  assert.deepEqual(created, [{
+    url: 'chrome-extension://test/pdf-reader.html',
+    active: true
+  }]);
   assert.deepEqual(bindings[0], {
     sourceUrl: '',
     title: 'Supplement S1',
@@ -530,6 +607,7 @@ test('supplemental PDF opening consumes the validated target tuple without activ
     parentWorkspaceId: target.workspaceId,
     parentWorkspaceGeneration: 2,
     parentCanonicalUrl: target.canonicalUrl,
+    parentDocumentHash: target.documentHash,
     parentTabId: 55
   });
 });

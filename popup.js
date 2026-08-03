@@ -7011,6 +7011,17 @@ function createSupplementalFigureImportTools(dependencies = {}) {
         return caption;
     }
 
+    function normalizeOptionalCaption(value) {
+        const caption = String(value || '').trim();
+        if (caption.length > 8000) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_TOO_LONG', '图注不能超过 8000 个字符',
+                'supplementalFigureImageCaption'
+            );
+        }
+        return caption;
+    }
+
     async function sha256Fingerprint(value) {
         if (!cryptoApi?.subtle?.digest) {
             throw importError('SUPPLEMENTAL_CRYPTO_UNAVAILABLE', '当前环境无法计算文件指纹');
@@ -7172,7 +7183,7 @@ function createSupplementalFigureImportTools(dependencies = {}) {
             .replace(/^sha256:/, '').slice(0, 16)}`;
     }
 
-    function createImageImport(file, transientImage) {
+    function createImageImport(file, transientImage, caption = '') {
         validateImageFile(file);
         const sourceFingerprint = String(transientImage?.sourceFingerprint || '');
         const draftInput = {
@@ -7183,6 +7194,7 @@ function createSupplementalFigureImportTools(dependencies = {}) {
             sourceFileSize: file.size,
             sourceImportedAt: now(),
             sourceFingerprint,
+            caption: normalizeOptionalCaption(caption),
             figureLabel: file.name.replace(/\.[^.]+$/, '') || 'Supplemental Figure'
         };
         const draft = shared.createSupplementalFigureImportDraft(draftInput);
@@ -7204,8 +7216,25 @@ function createSupplementalFigureImportTools(dependencies = {}) {
     }
 
     function isClosedTabError(error) {
+        const code = String(error?.code || '').trim().toUpperCase();
+        if ([
+            'TAB_NOT_FOUND',
+            'NO_TAB',
+            'INVALID_TAB_ID',
+            'TAB_CLOSED',
+            'TARGET_TAB_CLOSED'
+        ].includes(code)) return true;
         return /No tab with id|Invalid tab ID|tab (?:was )?closed|tab not found/i
             .test(String(error?.message || error || ''));
+    }
+
+    function responseError(response, fallbackCode, fallbackMessage) {
+        const structured = response?.error && typeof response.error === 'object'
+            ? response.error : null;
+        return importError(
+            response?.code || structured?.code || fallbackCode,
+            structured?.message || response?.error || fallbackMessage
+        );
     }
 
     async function deliverImport(targetInput, request = {}) {
@@ -7233,20 +7262,32 @@ function createSupplementalFigureImportTools(dependencies = {}) {
             };
         }
         try {
-            return await sendTabMessageWithRecovery(
+            const response = await sendTabMessageWithRecovery(
                 chromeApi, target.targetArticleTabId, message
             );
+            if (response?.success === false) {
+                throw responseError(
+                    response,
+                    'SUPPLEMENTAL_IMPORT_FAILED',
+                    '无法导入补充 Figure 草稿'
+                );
+            }
+            return response;
         } catch (error) {
             if (!isClosedTabError(error)) throw error;
             const fallback = await chromeApi.runtime.sendMessage({
                 type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
                 target,
-                draft
+                draft,
+                ...(message.transientImage
+                    ? { transientImage: message.transientImage }
+                    : {})
             });
             if (fallback?.success === false) {
-                throw importError(
-                    fallback?.error?.code || fallback?.code || 'SUPPLEMENTAL_DRAFT_SAVE_FAILED',
-                    fallback?.error?.message || fallback?.error || '无法保存补充 Figure 草稿'
+                throw responseError(
+                    fallback,
+                    'SUPPLEMENTAL_DRAFT_SAVE_FAILED',
+                    '无法保存补充 Figure 草稿'
                 );
             }
             return { ...(fallback || {}), savedAsDraft: true };
@@ -7259,6 +7300,7 @@ function createSupplementalFigureImportTools(dependencies = {}) {
         buildTarget,
         validateImageFile,
         normalizeCaption,
+        normalizeOptionalCaption,
         prepareTransientImage,
         createImageImport,
         createCaptionImport,
@@ -7282,6 +7324,7 @@ async function openSupplementalMaterialPdf(material, target) {
             parentWorkspaceId: target.workspaceId,
             parentWorkspaceGeneration: target.workspaceGeneration,
             parentCanonicalUrl: target.canonicalUrl,
+            parentDocumentHash: target.documentHash,
             parentTabId: target.targetArticleTabId
         }
     );
@@ -7289,14 +7332,7 @@ async function openSupplementalMaterialPdf(material, target) {
         showStatus('这个补充材料不是可直接解析的 PDF 链接', 'error');
         return;
     }
-    const targetTab = await chrome.tabs.get(target.targetArticleTabId)
-        .catch(() => null);
-    const tab = targetTab?.id === target.targetArticleTabId
-        ? await chrome.tabs.update(target.targetArticleTabId, {
-            url: readerUrl,
-            active: true
-        })
-        : await chrome.tabs.create({ url: readerUrl, active: true });
+    const tab = await chrome.tabs.create({ url: readerUrl, active: true });
     await SciLLM.markTabActivated?.(chrome.storage.session, {
         ...tab,
         url: readerUrl,
@@ -7386,8 +7422,11 @@ async function submitSupplementalFigureImport(event) {
             setSupplementalFigureImportStatus('正在本地校验、缩放并压缩图片…');
             const transientImage = await supplementalFigureImportTools
                 .prepareTransientImage(file);
+            const caption = document.getElementById(
+                'supplementalFigureImageCaption'
+            )?.value;
             const request = supplementalFigureImportTools.createImageImport(
-                file, transientImage
+                file, transientImage, caption
             );
             await supplementalFigureImportTools.deliverImport(target, request);
         } else {
