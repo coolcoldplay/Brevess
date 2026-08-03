@@ -17,13 +17,14 @@ test('recognizes credential-bearing keys without treating scientific words as cr
     'refreshToken', 'credential', 'clientSecret', 'apiToken', 'APIToken',
     'githubToken', 'privateToken', 'personalAccessToken', 'webhookSecret',
     'privateSecret', 'privateKey', 'authorizationHeader', 'authHeader',
-    'bearerToken', 'databasePassword'
+    'bearerToken', 'databasePassword', 'accessTokens'
   ]) {
     assert.equal(isCredentialKey(key), true, key);
   }
   for (const key of [
     'experimentalProtocol', 'secretoryPathway', 'tokenizationMethod',
-    'tokenUsage', 'tokenCount', 'inputTokenCount', 'secretome',
+    'tokenUsage', 'tokenCount', 'inputTokenCount', 'inputTokens',
+    'outputTokens', 'cacheHitTokens', 'totalTokens', 'maxOutputTokens', 'secretome',
     'headerTitle', 'proteinAccess', 'providerId'
   ]) {
     assert.equal(isCredentialKey(key), false, key);
@@ -50,7 +51,8 @@ test('export policy additionally removes provider metadata but preserves scienti
   }
   for (const key of [
     'experimentalProtocol', 'secretoryPathway', 'tokenizationMethod',
-    'tokenUsage', 'tokenCount', 'inputTokenCount', 'secretome',
+    'tokenUsage', 'tokenCount', 'inputTokenCount', 'inputTokens',
+    'outputTokens', 'cacheHitTokens', 'totalTokens', 'maxOutputTokens', 'secretome',
     'headerTitle', 'proteinAccess'
   ]) {
     assert.equal(isExportSensitiveKey(key), false, key);

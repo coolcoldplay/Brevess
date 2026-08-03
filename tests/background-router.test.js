@@ -185,7 +185,8 @@ function createDirectorySyncDouble(options = {}) {
   };
 }
 
-function createWritableDirectoryHandleStore() {
+function createWritableDirectoryHandleStore(initialPermission = 'granted') {
+  let permission = initialPermission;
   const files = new Map();
 
   function fileHandle(path) {
@@ -214,7 +215,7 @@ function createWritableDirectoryHandleStore() {
     return {
       name,
       kind: 'directory',
-      async queryPermission() { return 'granted'; },
+      async queryPermission() { return permission; },
       async getDirectoryHandle(child) {
         return directoryHandle(`${prefix}${child}/`, child);
       },
@@ -228,6 +229,7 @@ function createWritableDirectoryHandleStore() {
   return {
     async load() { return root; },
     async save() {},
+    setPermission(value) { permission = value; },
     readText(path) { return files.get(path) || ''; }
   };
 }
@@ -3314,6 +3316,105 @@ test('repairs one structurally invalid targeted Panel follow-up response', async
   assert.match(instructions[1], /SCHEMA_REPAIR_PASS/);
   assert.equal(response.data.panelFollowup.inputBasis.attempts, 2);
   assert.ok(progress.some(event => event.phase === 'figure_panel_schema_retry'));
+});
+
+test('persists Figure and chat provider route metadata through router storage and directory flush', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'9'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/provider-route-paper',
+    aliases: [],
+    title: 'Provider route paper',
+    directoryName: `Provider route paper--${'9'.repeat(16)}`,
+    revision: '9'.repeat(64),
+    contentHash: '9'.repeat(64),
+    workspaceGeneration: 1
+  };
+  const handleStore = createWritableDirectoryHandleStore('prompt');
+  const queueStore = createMemorySyncQueue();
+  const directorySync = createDirectorySync({
+    handleStore,
+    queueStore,
+    sourceId: 'background-router-workspace-provider-test'
+  });
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const putAsset = workspaceStore.putAsset.bind(workspaceStore);
+  workspaceStore.putAsset = async (workspaceId, path, content) => {
+    globalThis.SciLLM.assertWorkspaceSafeValue(content);
+    return putAsset(workspaceId, path, content);
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('workspace operations must stay local'); }
+  });
+
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_ENSURE', workspace
+  })).success, true);
+  const usage = {
+    inputTokens: 120,
+    outputTokens: 40,
+    cacheHitTokens: 80,
+    totalTokens: 160,
+    maxOutputTokens: 4096
+  };
+  const assets = [
+    {
+      path: 'figures/figure-1/analysis.json',
+      content: {
+        figureId: 'figure-1',
+        route: { providerId: 'vision-main', provider: 'openai', model: 'gpt-4.1' },
+        usage
+      }
+    },
+    {
+      path: 'chat/turns/turn-1-analysis.json',
+      content: {
+        turnId: 'turn-1',
+        route: { providerId: 'chat-main', provider: 'deepseek', model: 'deepseek-chat' },
+        usage
+      }
+    }
+  ];
+  for (const asset of assets) {
+    const response = await router.handle({
+      type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath: asset.path,
+      content: asset.content
+    });
+    assert.equal(response.success, true, asset.path);
+    assert.equal(response.data.queued, true, asset.path);
+  }
+  const rejected = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: 'figures/figure-1/credential-leak.json',
+    content: { apiKey: 'sk-must-not-persist', providerToken: 'must-not-persist' }
+  });
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.error.code, 'WORKSPACE_CONTAINS_CREDENTIALS');
+
+  const queuedPaths = (await queueStore.getAll()).map(item => item.relativePath);
+  for (const asset of assets) {
+    assert.ok(queuedPaths.includes(`workspaces/${workspace.directoryName}/${asset.path}`));
+  }
+  assert.ok(!queuedPaths.some(path => path.includes('credential-leak')));
+
+  handleStore.setPermission('granted');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const flushed = await directorySync.flush();
+  assert.equal(flushed.failed, 0);
+  assert.equal(flushed.pendingCount, 0);
+  for (const asset of assets) {
+    const path = `Brevess/workspaces/${workspace.directoryName}/${asset.path}`;
+    const envelope = JSON.parse(handleStore.readText(path));
+    assert.deepEqual(envelope.data, asset.content);
+  }
 });
 
 test('routes credential-free multi-file workspace save, scan, export, and crash-safe deletion', async () => {

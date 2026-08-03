@@ -7,6 +7,10 @@
     'budget', 'budgets', 'count', 'counts', 'estimate', 'estimates',
     'metric', 'metrics', 'stat', 'stats', 'usage'
   ]);
+  const TOKEN_METRIC_PREFIXES = new Set([
+    'cache', 'cached', 'completion', 'hit', 'input', 'max', 'output',
+    'prompt', 'reasoning', 'total'
+  ]);
   const TOKEN_CREDENTIAL_QUALIFIERS = new Set([
     'access', 'api', 'auth', 'authentication', 'bearer', 'client', 'github',
     'id', 'personal', 'private', 'provider', 'refresh', 'session', 'webhook'
@@ -53,7 +57,10 @@
         TOKEN_CREDENTIAL_QUALIFIERS.has(tokens[index - 1]))) return true;
     for (let index = 0; index < tokens.length; index += 1) {
       if (tokens[index] !== 'token' && tokens[index] !== 'tokens') continue;
+      const prefixes = tokens.slice(0, index);
+      if (prefixes.some(token => TOKEN_CREDENTIAL_QUALIFIERS.has(token))) return true;
       if (TOKEN_METRIC_SUFFIXES.has(tokens[index + 1])) continue;
+      if (prefixes.some(token => TOKEN_METRIC_PREFIXES.has(token))) continue;
       return true;
     }
     if (hasAdjacentPair(tokens, 'custom', 'header') ||

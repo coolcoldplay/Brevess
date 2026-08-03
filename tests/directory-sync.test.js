@@ -1269,6 +1269,7 @@ test('normal export removes the complete credential/provider family without over
       authHeader: 'secret-auth-header',
       bearerToken: 'secret-bearer-token',
       databasePassword: 'secret-database-password',
+      accessTokens: 'secret-access-tokens',
       experimentalProtocol: 'retain protocol',
       secretoryPathway: 'retain secretory biology',
       secretome: 'retain secretome biology',
@@ -1276,6 +1277,11 @@ test('normal export removes the complete credential/provider family without over
       tokenUsage: { input: 12, output: 4 },
       tokenCount: 16,
       inputTokenCount: 12,
+      inputTokens: 12,
+      outputTokens: 4,
+      cacheHitTokens: 8,
+      totalTokens: 16,
+      maxOutputTokens: 4096,
       headerTitle: 'retain section header',
       proteinAccess: 'retain assay access'
     }
@@ -1289,6 +1295,11 @@ test('normal export removes the complete credential/provider family without over
     tokenUsage: { input: 12, output: 4 },
     tokenCount: 16,
     inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
     headerTitle: 'retain section header',
     proteinAccess: 'retain assay access'
   });

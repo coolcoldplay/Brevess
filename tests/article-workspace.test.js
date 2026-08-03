@@ -58,9 +58,9 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     'token', 'providerToken', 'password', 'bearer', 'authToken',
     'accessToken', 'refreshToken', 'credential', 'secret', 'apiToken',
     'githubToken', 'privateToken', 'personalAccessToken', 'webhookSecret',
-    'privateSecret', 'clientSecret', 'privateKey', 'activeProvider',
-    'providerId', 'authorizationHeader', 'authHeader', 'bearerToken',
-    'databasePassword'
+    'privateSecret', 'clientSecret', 'privateKey',
+    'authorizationHeader', 'authHeader', 'bearerToken', 'databasePassword',
+    'accessTokens'
   ]) {
     assert.throws(
       () => assertWorkspaceSafeValue({ [key]: 'must-not-persist' }),
@@ -76,6 +76,13 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     tokenUsage: { input: 12 },
     tokenCount: 16,
     inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
+    activeProvider: 'vision-route',
+    route: { providerId: 'vision-route', provider: 'openai', model: 'gpt-4.1' },
     headerTitle: 'retain section header'
   }), {
     experimentalProtocol: 'retain protocol',
@@ -85,6 +92,13 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     tokenUsage: { input: 12 },
     tokenCount: 16,
     inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
+    activeProvider: 'vision-route',
+    route: { providerId: 'vision-route', provider: 'openai', model: 'gpt-4.1' },
     headerTitle: 'retain section header'
   });
 });
