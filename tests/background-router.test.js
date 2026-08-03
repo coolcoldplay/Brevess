@@ -3426,7 +3426,7 @@ function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}
   });
 }
 
-test('closed-tab supplemental draft route forces create-only storage and never persists image bytes', async () => {
+test('closed-tab supplemental image draft persists only the normalized compressed analysis image', async () => {
   const workspace = closedTabSupplementalWorkspace();
   const assets = new Map();
   const calls = [];
@@ -3488,8 +3488,40 @@ test('closed-tab supplemental draft route forces create-only storage and never p
   assert.deepEqual(calls[0].conflict, { expectedRevision: 0, createOnly: true });
   assert.equal(calls[0].content.analysisStatus, 'awaiting_article_context');
   assert.equal(calls[0].content.figures[0].analysisStatus, 'awaiting_article_context');
-  assert.doesNotMatch(JSON.stringify(calls[0].content), /data:image|U0VDUkVU|AQID/);
+  assert.deepEqual(calls[0].content.figures[0].analysisImages, [{
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AQID',
+    width: 1,
+    height: 1,
+    sourceFingerprint: draft.sourceFingerprint
+  }]);
+  assert.equal(Object.hasOwn(calls[0].content, 'dataUrl'), false);
+  assert.doesNotMatch(JSON.stringify(calls[0].content), /U0VDUkVU/);
   assert.equal(providerCalls, 0);
+});
+
+test('closed-tab supplemental image draft requires a normalized transient image', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let writes = 0;
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: {
+      async getWorkspace() { return structuredClone(workspace); },
+      async getAsset() { return null; },
+      async putAsset() { writes += 1; throw new Error('must not write'); }
+    },
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft({ mode: 'image' })
+  });
+
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'SUPPLEMENTAL_TRANSIENT_IMAGE');
+  assert.equal(writes, 0);
 });
 
 test('closed-tab supplemental draft rejects stale or mismatched targets before any write', async () => {
@@ -3586,6 +3618,39 @@ test('concurrent closed-tab supplemental drafts resolve create-only collisions t
   assert.equal(new Set(responses.map(response => response.data.asset.relativePath)).size, 2);
   assert.equal(new Set(successfulWrites).size, 2);
   assert.equal(assets.size, 2);
+  assert.equal(providerCalls, 0);
+});
+
+test('closed-tab supplemental draft maps eight create-only conflicts to one safe collision error', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let putCalls = 0;
+  let providerCalls = 0;
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: {
+      async getWorkspace() { return structuredClone(workspace); },
+      async getAsset() { return null; },
+      async putAsset(_id, _path, _content, conflict) {
+        putCalls += 1;
+        assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+        const error = new Error('raw conflict details must not escape');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+    },
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft()
+  });
+
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+  assert.doesNotMatch(JSON.stringify(response), /raw conflict details/);
+  assert.equal(putCalls, 8);
   assert.equal(providerCalls, 0);
 });
 

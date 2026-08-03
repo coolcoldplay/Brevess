@@ -2507,17 +2507,21 @@
         caption: source.caption ?? draft.caption ?? figure.caption
       };
       const normalizedSource = shared.normalizeSupplementalFigureSource(candidate);
-      if (message.transientImage !== undefined) {
-        if (normalizedSource.sourceMode !== 'image') {
+      let transientImage = null;
+      if (normalizedSource.sourceMode === 'image') {
+        if (message.transientImage === undefined) {
           throw supplementalRouteError('SUPPLEMENTAL_TRANSIENT_IMAGE');
         }
-        shared.normalizeSupplementalTransientImage(
+        transientImage = shared.normalizeSupplementalTransientImage(
           message.transientImage,
           normalizedSource.sourceFingerprint
         );
+      } else if (message.transientImage !== undefined) {
+        throw supplementalRouteError('SUPPLEMENTAL_TRANSIENT_IMAGE');
       }
       return {
         source: normalizedSource,
+        transientImage,
         title: String(draft.title || source.title || figure.sourceTitle || '').slice(0, 500),
         figureId: String(figure.figureId || '').slice(0, 200),
         figureLabel: String(figure.figureLabel || source.figureLabel || '').slice(0, 240)
@@ -2590,7 +2594,10 @@
           analysisStatus: 'awaiting_article_context',
           figures: draft.figures.map(figure => ({
             ...figure,
-            analysisStatus: 'awaiting_article_context'
+            analysisStatus: 'awaiting_article_context',
+            ...(normalized.transientImage
+              ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
+              : {})
           }))
         };
         try {
@@ -2610,7 +2617,7 @@
             analysisStatus: 'awaiting_article_context'
           };
         } catch (error) {
-          if (!manualSource || error?.code !== 'ASSET_REVISION_CONFLICT' || attempt === 7) {
+          if (!manualSource || error?.code !== 'ASSET_REVISION_CONFLICT') {
             throw error;
           }
         }
