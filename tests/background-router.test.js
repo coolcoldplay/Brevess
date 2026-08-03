@@ -2970,6 +2970,68 @@ async function configuredFigureRouter(providerId, config) {
   return { router, bodies };
 }
 
+test('analyzes a bounded supplemental Figure id with direct vision input and no caption', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const figureId = 'supp-manual-s1-s1';
+  const response = await router.handle(figureMessage([{
+    figureId,
+    figureLabel: 'Figure S1',
+    caption: '',
+    images: [{ dataUrl: 'data:image/png;base64,AA==' }]
+  }], { analysisDepth: 'standard' }));
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.figureResults[0].figureId, figureId);
+  assert.equal(openAIInputPayload(bodies[0]).analysis_basis, 'vision_text');
+  assert.ok(bodies[0].input[0].content.some(item => item.type === 'input_image'));
+});
+
+test('analyzes a bounded caption-only supplemental Figure without fabricating vision input', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const figureId = 'supp-caption-s2-s2';
+  const response = await router.handle(figureMessage([{
+    figureId,
+    figureLabel: 'Figure S2',
+    caption: 'Figure S2. (A) Replication and (B) rescue support the main result.',
+    panelHints: ['A', 'B'],
+    images: []
+  }], { analysisDepth: 'standard' }));
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.figureResults[0].figureId, figureId);
+  assert.equal(openAIInputPayload(bodies[0]).analysis_basis, 'caption_context');
+  assert.doesNotMatch(JSON.stringify(bodies[0]), /input_image|data:image\//);
+});
+
+test('rejects malformed or overlong supplemental Figure ids before any provider request', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const invalidIds = [
+    'supp-../escape-s1',
+    `supp-${'a'.repeat(49)}-s1`,
+    `supp-valid-material-${'b'.repeat(25)}`,
+    'supp-UPPER-s1',
+    'custom-any-id'
+  ];
+  for (const figureId of invalidIds) {
+    const response = await router.handle(figureMessage([{
+      figureId,
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Supplemental evidence.',
+      images: []
+    }], { forceRefresh: true }));
+    assert.equal(response.success, false, figureId);
+    assert.equal(response.error.code, 'INVALID_SETTINGS', figureId);
+    assert.deepEqual(response.error.fields, ['figures'], figureId);
+  }
+  assert.equal(bodies.length, 0);
+});
+
 test('builds and caches an ordered cross-figure domino chain', async () => {
   const storageArea = createMemoryStorage();
   let calls = 0;

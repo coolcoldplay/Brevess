@@ -1079,11 +1079,19 @@
       };
     }
 
+    function validFigureAnalysisId(value) {
+      const figureId = String(value || '');
+      return /^figure-(?:s)?\d{1,3}$/.test(figureId) ||
+        /^supp-[a-z0-9](?:[a-z0-9-]{0,47})-[a-z0-9](?:[a-z0-9-]{0,23})$/
+          .test(figureId);
+    }
+
     function normalizeFigureInput(value, articleTitle) {
-      const figureId = String(value?.figureId || '').trim().slice(0, 80);
+      const figureId = String(value?.figureId || '').trim();
       const caption = String(value?.caption || '').normalize('NFKC')
         .replace(/\s+/g, ' ').trim().slice(0, 8000);
-      if (!/^figure-(?:s)?\d{1,3}$/.test(figureId) || !caption) {
+      const images = shared.normalizeImageInputs(value?.images);
+      if (!validFigureAnalysisId(figureId) || (!caption && !images.length)) {
         throw invalidSettings(['figures']);
       }
       const imageVariants = (Array.isArray(value?.imageVariants) ? value.imageVariants : [])
@@ -1121,7 +1129,7 @@
           text: String(item?.text || '').normalize('NFKC')
             .replace(/\s+/g, ' ').trim().slice(0, 1200)
         })),
-        images: shared.normalizeImageInputs(value?.images),
+        images,
         imageVariants
       };
     }
