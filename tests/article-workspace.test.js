@@ -43,6 +43,10 @@ test('workspace identity uses normalized canonical URL, aliases, and content has
 
 test('workspace paths reject traversal, absolute, reserved, control, and credential-shaped data', () => {
   assert.equal(normalizeWorkspaceCanonicalUrl('https://example.org/a/?x=1#b'), 'https://example.org/a');
+  assert.equal(
+    normalizeWorkspaceCanonicalUrl('file:///D:/papers/Article.pdf?ignored=1#page=4'),
+    'file:///D:/papers/Article.pdf'
+  );
   assert.equal(normalizeWorkspaceRelativePath('chat/turns.jsonl'), 'chat/turns.jsonl');
   for (const path of ['../secret', '/absolute', 'C:/secret', 'chat/../../secret', 'CON/file.json',
     'chat/bad\u0000name.json']) {

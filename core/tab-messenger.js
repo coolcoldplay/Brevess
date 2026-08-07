@@ -11,12 +11,15 @@
     'core/publisher-adapters.js',
     'core/article-structure.js',
     'core/article-extractor.js',
+    'core/abbreviation-extractor.js',
     'core/article-chat-citations.js',
     'core/publisher-diagnostics.js',
     'core/highlight-distribution.js',
+    'core/supplemental-materials.js',
     'core/figure-extractor.js',
     'core/figure-viewer.js',
     'core/figure-analysis.js',
+    'core/research-logic-map.js',
     'core/manual-annotations.js',
     'core/cache-planner.js',
     'core/review-outline.js',
@@ -28,9 +31,9 @@
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.0-build1-store-release';
+    '1.0.0-build39-supplemental-coverage-r1';
   const FIGURE_EXTRACTOR_REVISION =
-    '1.0.0-build1-store-release';
+    '1.0.0-build39-supplemental-coverage-r1';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';

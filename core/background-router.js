@@ -15,7 +15,10 @@
     highlight: 3,
     summary: 2,
     chat: 1,
-    figure: 3,
+    // Figure requests are large multimodal calls. A single ordered worker avoids
+    // provider throttling and prevents late responses from interleaving state
+    // checkpoints while still preserving per-Figure retry/resume behavior.
+    figure: 1,
     crossFigure: 1
   });
   const PREFERENCE_KEYS = new Set([
@@ -103,7 +106,9 @@
       'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
       'INVALID_JSON_ASSET', 'DIRECTORY_SYNC_UNAVAILABLE',
       'WORKSPACE_STORE_UNAVAILABLE', 'WORKSPACE_NOT_FOUND',
-      'ASSET_REVISION_CONFLICT',
+      'ASSET_REVISION_CONFLICT', 'ASSET_HASH_CONFLICT',
+      'INVALID_BINARY_ASSET', 'INVALID_BINARY_HASH',
+      'WORKSPACE_BINARY_UNAVAILABLE', 'WORKSPACE_BINARY_HASH_MISMATCH',
       'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
       'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
       'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
@@ -169,6 +174,7 @@
       WORKSPACE_STORE_UNAVAILABLE: 'Local article workspaces are unavailable.',
       WORKSPACE_NOT_FOUND: 'The local article workspace was not found.',
       ASSET_REVISION_CONFLICT: 'This saved item changed before the save completed.',
+      ASSET_HASH_CONFLICT: 'This saved item no longer matches the version being edited.',
       WORKSPACE_REVISION_CONFLICT: 'The article workspace changed before this save completed.',
       WORKSPACE_HASH_CONFLICT: 'The article workspace content hash no longer matches.',
       WORKSPACE_GENERATION_CONFLICT: 'This save belongs to an older cleared workspace.',
@@ -275,7 +281,8 @@
     return (changes, areaName) => {
       if (areaName !== 'local' || !changes || (
         !Object.prototype.hasOwnProperty.call(changes, 'sciLlmSettingsV2') &&
-        !Object.prototype.hasOwnProperty.call(changes, 'sciGlobalAbbreviationMemoryV1')
+        !Object.prototype.hasOwnProperty.call(changes, 'sciGlobalAbbreviationMemoryV1') &&
+        !Object.prototype.hasOwnProperty.call(changes, 'sciPdfMineruSettingsV1')
       )) return;
       try {
         Promise.resolve(manager.scheduleBackup(changes)).catch(warnSchedulingFailure);
@@ -1189,15 +1196,15 @@
         }
         return raw;
       };
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
           return await requestOnce(request);
         } catch (error) {
           if (operation?.controller?.signal?.aborted) throw shared.operationError();
-          if (!error?.retryable || attempt >= 2) throw error;
+          if (!error?.retryable || attempt >= 3) throw error;
           const waitMs = Math.max(
             Number(error?.retryAfterMs) || 0,
-            attempt === 1 ? 1500 : 4000
+            attempt === 1 ? 1500 : 5000
           );
           context.onProgress?.({
             phase: 'figure_retry',
@@ -1217,7 +1224,9 @@
       if (!panels.length) return [[]];
       // Deep analysis contains many required fields per panel.  Small batches keep
       // its structured response below the output limit of economical models.
-      const batchSize = analysisDepth === 'deep' ? 2 : 4;
+      // Keep paired readouts together, but never ask a model to distribute a
+      // whole behavioral battery across four labels in one response.
+      const batchSize = 2;
       const batches = [];
       for (let index = 0; index < panels.length; index += batchSize) {
         batches.push(panels.slice(index, index + batchSize));
@@ -1263,6 +1272,7 @@
           unexpectedPanels,
           ignoredUnexpectedPanelCount: unexpectedPanels.length
         },
+        figureTitleZh: firstText('figureTitleZh'),
         figureQuestion: firstText('figureQuestion'),
         authorAssembly: firstText('authorAssembly'),
         coreConclusion: firstText('coreConclusion'),
@@ -1310,7 +1320,8 @@
       analysisDepth,
       progress,
       progressBase,
-      operation
+      operation,
+      panelConcurrency = TASK_CONCURRENCY.figure
     }) {
       const panelBatches = splitFigurePanelBatches(figure, analysisDepth);
       let visionFallback = route.capabilityMode === 'caption_text_only';
@@ -1453,7 +1464,11 @@
           return requestValidated({
             prompt, request, progressDetails: batchBase,
             validate: raw => shared.validateFigureAnalysis(
-              raw, batchFigure, { visualInput, analysisDepth }
+              raw, batchFigure, {
+                visualInput,
+                analysisDepth,
+                requireCompletePanels: true
+              }
             )
           });
         };
@@ -1552,7 +1567,7 @@
         let completedCount = 0;
         return mapWithConcurrency(
           panelBatches,
-          TASK_CONCURRENCY.figure,
+          panelConcurrency,
           async (panelHints, batchIndex) => {
             const batchFigure = { ...figure, panelHints };
             const batchBase = {
@@ -1773,7 +1788,9 @@
             analysisDepth,
             progress,
             progressBase,
-            operation
+            operation,
+            panelConcurrency: message?.parallelBatch === true
+              ? 1 : TASK_CONCURRENCY.figure
           });
           result = {
             ...analyzed.result,
@@ -2240,6 +2257,7 @@
       requireLlmReady(settings);
       const input = shared.normalizeCrossFigureLogicInput({
         articleTitle: message?.document?.title || '',
+        backgroundItems: message?.document?.backgroundItems,
         figures: message?.figures
       });
       if (input.mainFigureIds.length < 2) throw invalidSettings(['figures']);
@@ -2283,16 +2301,101 @@
         totalFigures: input.mainFigureIds.length,
         figureLabel: 'Cross-figure domino chain'
       });
-      const prompt = shared.compileCrossFigureLogicPrompt(input);
-      const raw = await requestFigureJson(adapter, {
-        ...prompt,
-        outputUnits: input.mainFigureIds.length
-      }, { onProgress: progress }, {
-        completedFigures: 0,
-        totalFigures: input.mainFigureIds.length,
-        figureLabel: 'Cross-figure domino chain'
+      const mainInput = shared.normalizeCrossFigureLogicInput({
+        articleTitle: input.articleTitle,
+        backgroundItems: input.backgroundItems,
+        figures: input.figures.filter(figure => !figure.isSupplemental)
       });
-      const crossFigureLogic = shared.validateCrossFigureLogic(raw, input);
+      const prompt = shared.compileCrossFigureLogicPrompt(mainInput);
+      const mainRequest = {
+        ...prompt,
+        outputUnits: mainInput.mainFigureIds.length
+      };
+      const mainProgress = {
+        completedFigures: 0,
+        totalFigures: mainInput.mainFigureIds.length,
+        figureLabel: 'Cross-figure domino chain'
+      };
+      let raw;
+      try {
+        raw = await requestFigureJson(
+          adapter, mainRequest, { onProgress: progress }, mainProgress
+        );
+      } catch (error) {
+        const recoverable = [
+          'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'SCHEMA_VALIDATION_FAILED',
+          'JSON_PARSE_ERROR'
+        ].includes(String(error?.code || '').toUpperCase()) ||
+          /invalid response|invalid json|truncat|schema/i.test(String(error?.message || ''));
+        if (!recoverable) throw error;
+        progress({
+          phase: 'cross_figure_repair',
+          ...mainProgress,
+          errorCode: String(error?.code || 'INVALID_RESPONSE')
+        });
+        raw = await requestFigureJson(adapter, {
+          ...mainRequest,
+          systemPrompt: `${mainRequest.systemPrompt}\n` +
+            'REPAIR RETRY: keep every explanatory field concise, preserve all required main Figure ids, and return one complete valid JSON object.'
+        }, { onProgress: progress }, mainProgress);
+      }
+      const mainLogic = shared.validateCrossFigureLogic(raw, mainInput);
+      const analyzedSupplemental = input.figures.filter(figure =>
+        figure.isSupplemental && figure.analysis?.coreConclusion
+      );
+      const supplementalSupport = [];
+      const recoverableSupplementalError = error => [
+        'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'SCHEMA_VALIDATION_FAILED',
+        'JSON_PARSE_ERROR'
+      ].includes(String(error?.code || '').toUpperCase()) ||
+        /invalid response|invalid json|truncat|schema/i.test(String(error?.message || ''));
+      const attachSupplementalBatch = async batch => {
+        if (!batch.length) return;
+        const batchInput = shared.normalizeCrossFigureLogicInput({
+          articleTitle: input.articleTitle,
+          backgroundItems: input.backgroundItems,
+          figures: [...mainInput.figures, ...batch]
+        });
+        try {
+          const supportPrompt = shared.compileSupplementalSupportPrompt(
+            batchInput,
+            mainLogic
+          );
+          const supportRaw = await requestFigureJson(adapter, {
+            ...supportPrompt,
+            outputUnits: Math.max(1, batch.length)
+          }, { onProgress: progress }, {
+            completedFigures: mainInput.mainFigureIds.length + supplementalSupport.length,
+            totalFigures: mainInput.mainFigureIds.length + analyzedSupplemental.length,
+            figureLabel: batch.map(figure => figure.figureLabel).join('、')
+          });
+          supplementalSupport.push(
+            ...shared.validateSupplementalSupport(supportRaw, batchInput)
+          );
+        } catch (error) {
+          if (!recoverableSupplementalError(error)) throw error;
+          if (batch.length > 1) {
+            const midpoint = Math.ceil(batch.length / 2);
+            await attachSupplementalBatch(batch.slice(0, midpoint));
+            await attachSupplementalBatch(batch.slice(midpoint));
+            return;
+          }
+          supplementalSupport.push(...shared.fallbackSupplementalSupport(batchInput));
+        }
+        progress({
+          phase: 'cross_figure_supplemental',
+          completedFigures: mainInput.mainFigureIds.length + supplementalSupport.length,
+          totalFigures: mainInput.mainFigureIds.length + analyzedSupplemental.length,
+          figureLabel: batch.map(figure => figure.figureLabel).join('、')
+        });
+      };
+      for (let index = 0; index < analyzedSupplemental.length; index += 4) {
+        await attachSupplementalBatch(analyzedSupplemental.slice(index, index + 4));
+      }
+      const crossFigureLogic = {
+        ...mainLogic,
+        supplementalSupport
+      };
       await cacheStore.setMany([{
         key,
         createdAt: Date.now(),
@@ -2300,8 +2403,8 @@
       }]);
       progress({
         phase: 'cross_figure_logic',
-        completedFigures: input.mainFigureIds.length,
-        totalFigures: input.mainFigureIds.length,
+        completedFigures: input.mainFigureIds.length + analyzedSupplemental.length,
+        totalFigures: input.mainFigureIds.length + analyzedSupplemental.length,
         figureLabel: 'Cross-figure domino chain'
       });
       return {
@@ -2515,7 +2618,10 @@
           figure.sourceImportedAt,
         sourceFingerprint: source.sourceFingerprint || draft.sourceFingerprint ||
           figure.sourceFingerprint,
-        caption: source.caption ?? draft.caption ?? figure.caption
+        caption: source.caption ?? draft.caption ?? figure.caption,
+        figureKind: source.figureKind || draft.figureKind || figure.figureKind,
+        figureLabel: source.figureLabel || draft.figureLabel || figure.figureLabel,
+        sourcePage: source.sourcePage ?? draft.sourcePage ?? figure.sourcePage
       };
       const normalizedSource = shared.normalizeSupplementalFigureSource(candidate);
       let transientImage = null;
@@ -2535,7 +2641,11 @@
         transientImage,
         title: String(draft.title || source.title || figure.sourceTitle || '').slice(0, 500),
         figureId: String(figure.figureId || '').slice(0, 200),
-        figureLabel: String(figure.figureLabel || source.figureLabel || '').slice(0, 240)
+        figureLabel: String(
+          normalizedSource.figureLabel || figure.figureLabel || source.figureLabel || ''
+        ).slice(0, 240),
+        figureKind: normalizedSource.figureKind,
+        sourcePage: normalizedSource.sourcePage
       };
     }
 
@@ -2559,6 +2669,133 @@
       }
     }
 
+    async function mirrorWorkspaceAssetToDirectory(workspace, asset, {
+      verify = false
+    } = {}) {
+      const stableJson = value => {
+        if (Array.isArray(value)) return value.map(stableJson);
+        if (!isPlainObject(value)) return value;
+        return Object.fromEntries(
+          Object.keys(value).sort().map(key => [key, stableJson(value[key])])
+        );
+      };
+      const result = {
+        queued: false,
+        directoryPersisted: false,
+        directoryPermission: 'unavailable',
+        directoryErrorCode: ''
+      };
+      if (typeof directorySync?.enqueueWorkspaceAsset !== 'function') return result;
+      try {
+        await directorySync.enqueueWorkspaceAsset(
+          workspace, asset.relativePath, asset.content, {
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            updatedAt: asset.updatedAt,
+            advanceFromDirectory: true,
+            workspaceGeneration: workspace.workspaceGeneration
+          }
+        );
+        result.queued = true;
+        if (!verify) {
+          scheduleDirectoryFlush();
+          return result;
+        }
+        if (typeof directorySync.flush !== 'function') return result;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const flushed = await directorySync.flush(importUserDataAsset);
+          result.directoryPermission = String(flushed?.permission || 'unavailable');
+          result.directoryErrorCode = String(
+            flushed?.errorCode || flushed?.code || ''
+          );
+          if (result.directoryPermission !== 'granted' || Number(flushed?.failed) > 0) {
+            return result;
+          }
+          if (typeof directorySync.readWorkspaceAsset === 'function') {
+            const disk = await directorySync.readWorkspaceAsset(
+              workspace, asset.relativePath
+            ).catch(() => null);
+            const envelope = disk?.value;
+            const contentHashMatches = asset.contentHash
+              ? String(envelope?.contentHash || '') === String(asset.contentHash)
+              : JSON.stringify(stableJson(envelope?.data)) ===
+                JSON.stringify(stableJson(asset.content));
+            if (disk?.found && contentHashMatches) {
+              result.directoryPersisted = true;
+              result.directoryErrorCode = '';
+              return result;
+            }
+          } else if (Number(flushed?.pendingCount) === 0) {
+            result.directoryPersisted = true;
+            result.directoryErrorCode = '';
+            return result;
+          }
+          if (attempt < 5) {
+            await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
+          }
+        }
+        result.directoryErrorCode ||= 'WORKSPACE_DIRECTORY_VERIFY_FAILED';
+        return result;
+      } catch (error) {
+        result.directoryErrorCode = String(
+          error?.code || error?.name || 'WORKSPACE_DIRECTORY_PERSIST_FAILED'
+        );
+        return result;
+      }
+    }
+
+    function decodeWorkspaceBinary(dataUrl) {
+      const match = String(dataUrl || '').match(
+        /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i
+      );
+      if (!match) {
+        const error = new Error('INVALID_BINARY_ASSET');
+        error.code = 'INVALID_BINARY_ASSET';
+        throw error;
+      }
+      let bytes;
+      if (typeof Buffer !== 'undefined') {
+        bytes = new Uint8Array(Buffer.from(match[2], 'base64'));
+      } else {
+        const binary = atob(match[2]);
+        bytes = Uint8Array.from(binary, value => value.charCodeAt(0));
+      }
+      if (!bytes.length || bytes.byteLength > 96 * 1024 * 1024) {
+        const error = new Error('INVALID_BINARY_ASSET');
+        error.code = 'INVALID_BINARY_ASSET';
+        throw error;
+      }
+      return { bytes, mimeType: match[1].toLowerCase() };
+    }
+
+    function encodeWorkspaceBinary(bytes, mimeType) {
+      const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+      let base64 = '';
+      if (typeof Buffer !== 'undefined') base64 = Buffer.from(view).toString('base64');
+      else {
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let index = 0; index < view.length; index += chunkSize) {
+          binary += String.fromCharCode(...view.subarray(index, index + chunkSize));
+        }
+        base64 = btoa(binary);
+      }
+      return `data:${mimeType};base64,${base64}`;
+    }
+
+    async function workspaceBinarySha256(bytes) {
+      let subtle = globalThis.crypto?.subtle;
+      if (!subtle && typeof require === 'function') {
+        try { subtle = require('node:crypto').webcrypto.subtle; } catch (_) {}
+      }
+      if (!subtle) throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+        code: 'WORKSPACE_BINARY_UNAVAILABLE'
+      });
+      const digest = await subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest), value =>
+        value.toString(16).padStart(2, '0')).join('');
+    }
+
     async function saveClosedTabSupplementalDraft(message) {
       requireArticleWorkspaceStore('getWorkspace');
       requireArticleWorkspaceStore('getAsset');
@@ -2580,12 +2817,29 @@
       const normalized = supplementalDraftSourceInput(message);
       const manualSource = ['image', 'caption'].includes(normalized.source.sourceMode);
       let asset;
+      let createdFigure = null;
       if (manualSource) {
+        const supplementalAssets = typeof articleWorkspaceStore.listAssets === 'function'
+          ? (await articleWorkspaceStore.listAssets(target.workspaceId))
+            .filter(item => String(item?.relativePath || '').startsWith(
+              shared.SUPPLEMENTAL_FIGURE_ASSET_PREFIX || 'figures/supplemental/'
+            ))
+          : [];
+        const assignedFigureLabel = normalized.figureKind === 'main'
+          ? normalized.figureLabel
+          : /^Figure S\d+$/i.test(normalized.figureLabel)
+            ? normalized.figureLabel
+            : typeof shared.nextSupplementalFigureLabel === 'function'
+              ? shared.nextSupplementalFigureLabel(supplementalAssets)
+              : `Figure S${supplementalAssets.length + 1}`;
         const created = await shared.createManualSupplementalDraft({
           ...normalized.source,
           title: normalized.title,
           figureId: normalized.figureId,
-          figureLabel: normalized.figureLabel,
+          figureLabel: assignedFigureLabel,
+          figureKind: normalized.figureKind,
+          sourcePage: normalized.sourcePage,
+          analysisStatus: 'awaiting_article_context',
           ...(normalized.transientImage
             ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
             : {})
@@ -2600,13 +2854,16 @@
             )
         });
         asset = created.persisted;
+        createdFigure = created.asset?.figures?.[0] || null;
       } else {
         const materialId = normalized.source.sourceMaterialId;
         const sourceDraft = shared.createSupplementalFigureImportDraft({
           ...normalized.source,
           title: normalized.title,
           figureId: normalized.figureId,
-          figureLabel: normalized.figureLabel
+          figureLabel: normalized.figureLabel,
+          figureKind: normalized.figureKind,
+          sourcePage: normalized.sourcePage
         });
         const draftContent = {
           ...sourceDraft,
@@ -2623,14 +2880,24 @@
           { expectedRevision: 0, createOnly: true }
         );
       }
+      const directory = await mirrorWorkspaceAssetToDirectory(workspace, asset, {
+        verify: true
+      });
       return {
         saved: true,
+        queued: directory.queued,
+        directoryPersisted: directory.directoryPersisted,
+        directoryPermission: directory.directoryPermission,
+        directoryErrorCode: directory.directoryErrorCode,
         asset: {
           relativePath: String(asset.relativePath || ''),
           revision: Number(asset.revision) || 0,
           contentHash: String(asset.contentHash || '')
         },
-        analysisStatus: 'awaiting_article_context'
+        analysisStatus: 'awaiting_article_context',
+        figureLabel: String(createdFigure?.figureLabel || ''),
+        panelHints: Array.isArray(createdFigure?.panelHints)
+          ? createdFigure.panelHints : []
       };
     }
 
@@ -2870,25 +3137,15 @@
             createOnly: message.createOnly === true
           }
         );
-        let queued = false;
-        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
-          try {
-            await directorySync.enqueueWorkspaceAsset(
-              workspace, asset.relativePath, asset.content, {
-                revision: asset.revision,
-                contentHash: asset.contentHash,
-                updatedAt: asset.updatedAt,
-                advanceFromDirectory: true,
-                workspaceGeneration: workspace.workspaceGeneration
-              }
-            );
-            queued = true;
-            scheduleDirectoryFlush();
-          } catch (_) {}
-        }
+        const directory = await mirrorWorkspaceAssetToDirectory(workspace, asset, {
+          verify: message.requireDirectoryPersistence === true
+        });
         return {
           saved: true,
-          queued,
+          queued: directory.queued,
+          directoryPersisted: directory.directoryPersisted,
+          directoryPermission: directory.directoryPermission,
+          directoryErrorCode: directory.directoryErrorCode,
           asset: {
             relativePath: asset.relativePath,
             revision: asset.revision,
@@ -3152,6 +3409,119 @@
               result.invalidChatAssets = Number(discovered.invalidAssets) || 0;
             } catch (_) {}
           }
+          if (typeof directorySync?.listWorkspaceSupplementalAssets === 'function') {
+            try {
+              const discovered = await directorySync.listWorkspaceSupplementalAssets(
+                selected.manifest
+              );
+              const loadedByPath = new Map(loadedAssets.map(asset => [
+                String(asset.relativePath || ''), asset
+              ]));
+              const manifestPaths = new Set((selected.manifest?.assets || [])
+                .map(asset => String(asset.path || '')));
+              let recoveredUnindexedSupplementalAssets = 0;
+              let recoveredGenerationMismatchSupplementalAssets = 0;
+              for (const asset of discovered.assets || []) {
+                const path = String(asset.relativePath || '');
+                if (!/^figures\/supplemental\/[^/]+\.json$/u.test(path)) continue;
+                const current = loadedByPath.get(path);
+                if (!current || Number(asset.revision || 0) >=
+                    Number(current.revision || 0)) {
+                  loadedByPath.set(path, asset);
+                }
+                if ((!manifestPaths.has(path) ||
+                    asset.recoveredGenerationMismatch === true) &&
+                    typeof directorySync.enqueueWorkspaceAsset === 'function') {
+                  await directorySync.enqueueWorkspaceAsset(
+                    selected.manifest, path, asset.content, {
+                      revision: Number(asset.revision) || 0,
+                      contentHash: String(asset.contentHash || ''),
+                      updatedAt: String(asset.updatedAt || ''),
+                      workspaceGeneration:
+                        Number(selected.manifest.workspaceGeneration) || 1
+                    }
+                  );
+                  if (!manifestPaths.has(path)) {
+                    recoveredUnindexedSupplementalAssets += 1;
+                  }
+                  if (asset.recoveredGenerationMismatch === true) {
+                    recoveredGenerationMismatchSupplementalAssets += 1;
+                  }
+                }
+              }
+              loadedAssets.splice(0, loadedAssets.length, ...loadedByPath.values());
+              if (recoveredUnindexedSupplementalAssets ||
+                  recoveredGenerationMismatchSupplementalAssets) {
+                scheduleDirectoryFlush();
+              }
+              result.recoveredUnindexedSupplementalAssets =
+                recoveredUnindexedSupplementalAssets;
+              result.recoveredGenerationMismatchSupplementalAssets =
+                recoveredGenerationMismatchSupplementalAssets;
+              result.invalidSupplementalAssets = Number(discovered.invalidAssets) || 0;
+            } catch (_) {}
+          }
+          if (selected.match === 'exact' &&
+              typeof articleWorkspaceStore?.getWorkspace === 'function' &&
+              typeof articleWorkspaceStore?.listAssets === 'function') {
+            try {
+              const localWorkspace = await articleWorkspaceStore.getWorkspace(
+                selected.manifest.workspaceId
+              );
+              const selectedGeneration = Number(
+                selected.manifest.workspaceGeneration
+              ) || 1;
+              const localGeneration = Number(localWorkspace?.workspaceGeneration) || 1;
+              if (localWorkspace && localGeneration === selectedGeneration) {
+                const loadedByPath = new Map(loadedAssets.map(asset => [
+                  String(asset.relativePath || ''), asset
+                ]));
+                const manifestUpdatedAt = Date.parse(
+                  String(selected.manifest.updatedAt || '')
+                ) || 0;
+                let recoveredBrowserLocalSupplementalAssets = 0;
+                const localAssets = await articleWorkspaceStore.listAssets(
+                  selected.manifest.workspaceId
+                );
+                for (const asset of localAssets || []) {
+                  const path = String(asset?.relativePath || '');
+                  const figures = asset?.content?.figures;
+                  const assetUpdatedAt = Date.parse(String(asset?.updatedAt || '')) || 0;
+                  if (!/^figures\/supplemental\/[^/]+\.json$/u.test(path) ||
+                      !Array.isArray(figures) || !figures.length ||
+                      loadedByPath.has(path) || assetUpdatedAt <= manifestUpdatedAt) {
+                    continue;
+                  }
+                  const recovered = {
+                    relativePath: path,
+                    content: cloneJsonLike(asset.content),
+                    revision: Number(asset.revision) || 0,
+                    contentHash: String(asset.contentHash || ''),
+                    updatedAt: String(asset.updatedAt || '')
+                  };
+                  loadedByPath.set(path, recovered);
+                  if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+                    await directorySync.enqueueWorkspaceAsset(
+                      selected.manifest, path, recovered.content, {
+                        revision: recovered.revision,
+                        contentHash: recovered.contentHash,
+                        updatedAt: recovered.updatedAt,
+                        advanceFromDirectory: true,
+                        workspaceGeneration: selectedGeneration
+                      }
+                    );
+                  }
+                  recoveredBrowserLocalSupplementalAssets += 1;
+                }
+                if (recoveredBrowserLocalSupplementalAssets) {
+                  loadedAssets.splice(0, loadedAssets.length, ...loadedByPath.values());
+                  result.recoveredBrowserLocalSupplementalAssets =
+                    recoveredBrowserLocalSupplementalAssets;
+                  scheduleDirectoryFlush();
+                }
+              }
+            } catch (_) {}
+          }
           const isTurnPath = value => /^chat\/turns\/[^/]+\.json$/u.test(
             String(value || '')
           );
@@ -3411,6 +3781,90 @@
         return { ...detail, tokenUsage };
       }
 
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_BINARY_ASSET') {
+        requireArticleWorkspaceStore('getWorkspace');
+        if (typeof directorySync?.enqueueWorkspaceBinary !== 'function') {
+          throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+            code: 'WORKSPACE_BINARY_UNAVAILABLE'
+          });
+        }
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          throw Object.assign(new Error('WORKSPACE_NOT_FOUND'), { code: 'WORKSPACE_NOT_FOUND' });
+        }
+        assertWorkspaceMutationGeneration(workspace, message);
+        const relativePath = shared.normalizeWorkspaceRelativePath(message.relativePath);
+        if (!/^pdf\/figures\/(?:main|supplemental)\/[^/]+\.(?:png|jpe?g|webp)$/iu
+          .test(relativePath)) {
+          throw Object.assign(new Error('INVALID_BINARY_ASSET'), {
+            code: 'INVALID_BINARY_ASSET'
+          });
+        }
+        const decoded = decodeWorkspaceBinary(message.dataUrl);
+        const expectedHash = String(message.sha256 || '').toLowerCase();
+        const actualHash = await workspaceBinarySha256(decoded.bytes);
+        if (!/^[a-f0-9]{64}$/u.test(expectedHash) || expectedHash !== actualHash) {
+          throw Object.assign(new Error('WORKSPACE_BINARY_HASH_MISMATCH'), {
+            code: 'WORKSPACE_BINARY_HASH_MISMATCH'
+          });
+        }
+        await directorySync.enqueueWorkspaceBinary(
+          workspace,
+          relativePath,
+          decoded.bytes,
+          {
+            revision: Math.max(0, Number(message.revision) || Date.now()),
+            contentHash: actualHash,
+            workspaceGeneration: workspace.workspaceGeneration
+          }
+        );
+        const flushed = typeof directorySync.flush === 'function'
+          ? await directorySync.flush(importUserDataAsset)
+          : { permission: 'unavailable', written: 0, pendingCount: 1 };
+        return {
+          saved: true,
+          relativePath,
+          mimeType: decoded.mimeType,
+          sha256: actualHash,
+          byteLength: decoded.bytes.byteLength,
+          directoryPersisted: flushed.permission === 'granted' &&
+            Number(flushed.failed) === 0 && Number(flushed.pendingCount) === 0,
+          directoryPermission: String(flushed.permission || 'unavailable'),
+          directoryErrorCode: String(flushed.errorCode || '')
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_GET_BINARY_ASSET') {
+        requireArticleWorkspaceStore('getWorkspace');
+        if (typeof directorySync?.readWorkspaceBinary !== 'function') {
+          throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+            code: 'WORKSPACE_BINARY_UNAVAILABLE'
+          });
+        }
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          throw Object.assign(new Error('WORKSPACE_NOT_FOUND'), { code: 'WORKSPACE_NOT_FOUND' });
+        }
+        const relativePath = shared.normalizeWorkspaceRelativePath(message.relativePath);
+        const result = await directorySync.readWorkspaceBinary(workspace, relativePath);
+        if (!result.found) return {
+          found: false,
+          relativePath,
+          directoryPermission: result.permission
+        };
+        const mimeType = /^image\/(?:png|jpeg|webp)$/i.test(String(message.mimeType || ''))
+          ? String(message.mimeType).toLowerCase() : 'image/png';
+        const sha256 = await workspaceBinarySha256(result.bytes);
+        return {
+          found: true,
+          relativePath,
+          directoryPermission: result.permission,
+          byteLength: result.bytes.byteLength,
+          sha256,
+          dataUrl: encodeWorkspaceBinary(result.bytes, mimeType)
+        };
+      }
+
       if (message.type === 'LLM_TOKEN_USAGE_LIST') {
         return {
           documents: typeof tokenUsageStore?.list === 'function'
@@ -3445,6 +3899,32 @@
             updatedAt: asset.updatedAt,
             content: asset.content
           } : null
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_LIST_ASSETS') {
+        requireArticleWorkspaceStore('listAssets');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const prefix = String(message.prefix || '').replace(/^\/+/, '').slice(0, 240);
+        const assets = (await articleWorkspaceStore.listAssets(workspace.workspaceId))
+          .filter(asset => !prefix || String(asset.relativePath || '').startsWith(prefix))
+          .map(asset => ({
+            relativePath: asset.relativePath,
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            byteSize: asset.byteSize,
+            updatedAt: asset.updatedAt,
+            content: cloneJsonLike(asset.content)
+          }));
+        return {
+          workspaceGeneration: Number(workspace.workspaceGeneration || 1),
+          assets
         };
       }
 
@@ -4579,6 +5059,122 @@
           message,
           context
         );
+      }
+
+      if (message.type === 'LLM_TRANSLATE_ABBREVIATIONS') {
+        const settings = await shared.loadSettings(storageArea);
+        requireLlmReady(settings);
+        const byKey = new Map();
+        (Array.isArray(message.entries) ? message.entries : [])
+          .slice(0, 500)
+          .forEach(item => {
+            const entry = shared.normalizeUserAbbreviationEntry(item);
+            const key = entry ? shared.abbreviationKey(entry.abbreviation) : '';
+            if (entry && key) byKey.set(key, entry);
+          });
+        const entries = [...byKey.values()];
+        if (!entries.length) throw invalidSettings(['entries']);
+        const summaryTask = createTaskAdapter(
+          settings,
+          'summary',
+          {},
+          context,
+          'batchSummary'
+        );
+        const translationsByKey = new Map();
+        const batchSize = 8;
+        const recoverableCodes = new Set(['INVALID_RESPONSE', 'OUTPUT_TRUNCATED']);
+        const rememberTranslations = values => {
+          values.forEach(item => {
+            translationsByKey.set(
+              shared.abbreviationKey(item.abbreviation),
+              item
+            );
+          });
+          context.onProgress?.({
+            phase: 'abbreviation_translation',
+            completedTerms: translationsByKey.size,
+            totalTerms: entries.length,
+            route: summaryTask.routePublic
+          });
+        };
+        const translateBatch = async (batch, repair = false) => {
+          if (!batch.length) return;
+          const prompt = shared.compileAbbreviationTranslationPrompt(batch, {
+            allowPartial: true,
+            repair
+          });
+          try {
+            const response = await summaryTask.adapter.generateJson({
+              ...prompt,
+              outputUnits: batch.length
+            });
+            const translated = shared.validateAbbreviationTranslationResult(
+              response,
+              batch,
+              { allowPartial: true }
+            );
+            rememberTranslations(translated);
+            const missing = batch.filter(item =>
+              !translationsByKey.has(shared.abbreviationKey(item.abbreviation))
+            );
+            if (missing.length) {
+              context.onProgress?.({
+                phase: 'abbreviation_translation_repair',
+                completedTerms: translationsByKey.size,
+                totalTerms: entries.length,
+                retryTerms: missing.length,
+                route: summaryTask.routePublic
+              });
+              await translateBatch(missing, true);
+            }
+          } catch (error) {
+            if (!recoverableCodes.has(error?.code)) throw error;
+            if (batch.length > 1) {
+              const midpoint = Math.ceil(batch.length / 2);
+              context.onProgress?.({
+                phase: 'abbreviation_translation_split_retry',
+                completedTerms: translationsByKey.size,
+                totalTerms: entries.length,
+                retryTerms: batch.length,
+                route: summaryTask.routePublic
+              });
+              await translateBatch(batch.slice(0, midpoint), true);
+              await translateBatch(batch.slice(midpoint), true);
+              return;
+            }
+            if (!repair) {
+              await translateBatch(batch, true);
+              return;
+            }
+            throw error;
+          }
+        };
+        for (let index = 0; index < entries.length; index += batchSize) {
+          const batch = entries.slice(index, index + batchSize);
+          context.onProgress?.({
+            phase: 'abbreviation_translation',
+            completedTerms: translationsByKey.size,
+            totalTerms: entries.length,
+            route: summaryTask.routePublic
+          });
+          await translateBatch(batch);
+        }
+        const translations = entries.map(item =>
+          translationsByKey.get(shared.abbreviationKey(item.abbreviation))
+        ).filter(Boolean);
+        context.onProgress?.({
+          phase: 'abbreviation_translation',
+          completedTerms: entries.length,
+          totalTerms: entries.length,
+          route: summaryTask.routePublic
+        });
+        return {
+          translations,
+          providerId: summaryTask.route.providerId,
+          model: summaryTask.route.model,
+          route: summaryTask.routePublic
+        };
       }
 
       if (message.type === 'LLM_ANALYZE_REVIEW_OUTLINE') {

@@ -115,6 +115,10 @@
     if (payload.schemaVersion !== 1) fail('PORTABLE_CONFIG_PAYLOAD_SCHEMA_VERSION_INVALID');
     if (!isPlainObject(payload.settings)) fail('PORTABLE_CONFIG_PAYLOAD_SETTINGS_INVALID');
     if (!isPlainObject(payload.globalAbbreviations)) fail('PORTABLE_CONFIG_PAYLOAD_GLOBAL_ABBREVIATIONS_INVALID');
+    if (payload.mineruPdfSettings !== undefined &&
+        !isPlainObject(payload.mineruPdfSettings)) {
+      fail('PORTABLE_CONFIG_PAYLOAD_MINERU_SETTINGS_INVALID');
+    }
     return payload;
   }
 

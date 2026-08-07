@@ -7,18 +7,21 @@ Codex App Server。插件不读取或保存明文登录令牌；App Server 把�
 ## Windows 安装
 
 1. 安装 Codex，确认 PowerShell 中的 `codex --version` 可以正常使用。
-2. 在扩展构建目录的 `native-host` 文件夹中运行：
+2. 打开 `edge://extensions/` 或 `chrome://extensions/`，在 Brevess 卡片中复制当前
+   显示的 32 位扩展 ID。
+3. 在扩展构建目录的 `native-host` 文件夹中运行，并把 `实际扩展ID` 替换为上一步
+   复制的值：
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 实际扩展ID
    ```
 
-3. 在 `edge://extensions` 或 `chrome://extensions` 中重新加载扩展。
-4. 打开插件设置，新建 Profile，Provider 选择“本机 Codex”，模型使用
+4. 在 `edge://extensions` 或 `chrome://extensions` 中重新加载扩展。
+5. 打开插件设置，新建 Profile，Provider 选择“本机 Codex”，模型使用
    `auto`。在“插件专用 Codex 会话”中点击“登录 / 重新登录”，完成网页授权。
-5. 登录状态显示“已登录”后，保存 Profile 并点击“测试连接”。测试会运行一次真实、
+6. 登录状态显示“已登录”后，保存 Profile 并点击“测试连接”。测试会运行一次真实、
    不保存线程的短模型回合。
-6. 在“全文问答”底部的模型下拉框中选择这个 Profile。
+7. 在“全文问答”底部的模型下拉框中选择这个 Profile。
 
 如果设置页无法打开登录页，可在 `native-host` 目录运行备用脚本：
 
@@ -29,8 +32,9 @@ powershell -ExecutionPolicy Bypass -File .\login.ps1
 不要直接用普通的 `codex login` 代替：普通命令默认登录的是 CLI 自己的
 `CODEX_HOME`，不是插件的隔离目录。
 
-扩展使用固定 ID `finhfnjbpidfakpmkghkfjlfcfpoandh`。如果开发构建使用了不同
-ID，请把实际 ID 传给安装脚本：
+Edge 商店安装版使用固定的商店 ID；GitHub Release 中的商店 ZIP 作为“解压扩展”加载时，
+浏览器可能根据文件夹路径生成另一个 ID。因此应始终以扩展管理页显示的实际 ID 为准，并
+把它传给安装脚本：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 实际扩展ID

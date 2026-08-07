@@ -38,11 +38,19 @@
     if (!raw) return '';
     try {
       const parsed = new URL(raw);
-      if (!/^https?:$/u.test(parsed.protocol)) fail('INVALID_WORKSPACE_URL');
+      if (!/^(?:https?|file):$/u.test(parsed.protocol)) fail('INVALID_WORKSPACE_URL');
       parsed.username = '';
       parsed.password = '';
       parsed.search = '';
       parsed.hash = '';
+      if (parsed.protocol === 'file:') {
+        // A local PDF has no HTTP canonical URL. Keep a normalized file URL as
+        // its stable article identity so reopening the same PDF restores the
+        // same workspace instead of falling back to the extension reader URL.
+        parsed.pathname = parsed.pathname.replace(/\/{2,}/gu, '/');
+        if (!parsed.pathname || parsed.pathname === '/') fail('INVALID_WORKSPACE_URL');
+        return `file://${parsed.host || ''}${parsed.pathname}`;
+      }
       parsed.hostname = parsed.hostname.toLocaleLowerCase('en-US');
       parsed.pathname = parsed.pathname.replace(/\/{2,}/gu, '/').replace(/\/+$/u, '') || '/';
       return `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`;

@@ -22,6 +22,7 @@ const OTHER_PASSPHRASE = 'another suitably long passphrase';
 const SETTINGS_KEY = 'settings-key';
 const REAL_SETTINGS_KEY = 'sciLlmSettingsV2';
 const ABBREVIATION_KEY = 'abbreviation-key';
+const MINERU_KEY = 'mineru-settings-key';
 const FIXED_SALT = new Uint8Array(16).fill(7);
 
 function clone(value) {
@@ -387,6 +388,62 @@ test('create writes revision 1 ciphertext that decrypts to complete normalized l
   assert.deepEqual(payload.globalAbbreviations, abbreviations);
   assert.equal(JSON.stringify(envelope).includes('sk-create-secret'), false);
   assert.ok(storageArea.data[PORTABLE_CONFIG_KEY_CACHE][envelope.backupId]);
+});
+
+test('portable encryption backs up and restores the complete MinerU PDF configuration', async () => {
+  const settings = { profiles: { p1: { config: { apiKey: 'sk-model' } } } };
+  const abbreviations = { schemaVersion: 1, entries: [] };
+  const mineru = {
+    mode: 'precise', token: 'mineru-secret-token', quotaUserId: 'quota-user',
+    language: 'en', isOcr: true, enableTable: true, enableFormula: false
+  };
+  const dependencies = {
+    mineruSettingsKey: MINERU_KEY,
+    normalizeMineruSettings: value => ({ ...value }),
+    loadMineruSettings: async area => (await area.get(MINERU_KEY))[MINERU_KEY]
+  };
+  const source = managerFixture({
+    storage: {
+      [SETTINGS_KEY]: settings,
+      [ABBREVIATION_KEY]: abbreviations,
+      [MINERU_KEY]: mineru
+    },
+    overrides: dependencies
+  });
+  await source.manager.create(PASSPHRASE);
+  assert.equal(JSON.stringify(source.directorySync.disk).includes(mineru.token), false);
+
+  const target = managerFixture({
+    disk: source.directorySync.disk,
+    storage: {
+      [SETTINGS_KEY]: { old: true },
+      [ABBREVIATION_KEY]: abbreviations,
+      [MINERU_KEY]: { mode: 'agent', token: '' }
+    },
+    overrides: dependencies
+  });
+  await target.manager.unlock(PASSPHRASE);
+  assert.deepEqual(target.storageArea.data[MINERU_KEY], mineru);
+});
+
+test('restoring a legacy portable payload does not erase an existing MinerU token', async () => {
+  const { envelope } = await encryptedFixture();
+  const existingMineru = { mode: 'precise', token: 'keep-existing-mineru-token' };
+  const { manager, storageArea } = managerFixture({
+    disk: envelope,
+    storage: {
+      [SETTINGS_KEY]: { old: true },
+      [ABBREVIATION_KEY]: { schemaVersion: 1, entries: [] },
+      [MINERU_KEY]: existingMineru
+    },
+    overrides: {
+      mineruSettingsKey: MINERU_KEY,
+      normalizeMineruSettings: value => ({ ...value }),
+      loadMineruSettings: async area => (await area.get(MINERU_KEY))[MINERU_KEY]
+    }
+  });
+  await manager.unlock(PASSPHRASE);
+  assert.deepEqual(storageArea.data[MINERU_KEY], existingMineru);
 });
 
 test('backupNow increments revision, changes IV, and encrypts the latest local values', async () => {

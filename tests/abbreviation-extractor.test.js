@@ -3,7 +3,19 @@ const assert = require('node:assert/strict');
 const {
   extractArticleAbbreviations,
   isCandidateAbbreviation,
-  expansionScore
+  expansionScore,
+  normalizeGlobalAbbreviationMemory,
+  mergeGlobalAbbreviationMemory,
+  createGlobalAbbreviationMemoryExport,
+  parseGlobalAbbreviationMemoryImport,
+  normalizeArticleAbbreviationState,
+  upsertArticleManualAbbreviation,
+  excludeArticleAbbreviation,
+  updateArticleAbbreviationTranslations,
+  inferSelectedAbbreviationDraft,
+  composeArticleAbbreviations,
+  compileAbbreviationTranslationPrompt,
+  validateAbbreviationTranslationResult
 } = require('../core/abbreviation-extractor.js');
 
 test('extracts explicit article abbreviation definitions locally and sorts them alphabetically', () => {
@@ -122,4 +134,162 @@ test('locates the first literal occurrence for source navigation', () => {
   );
   assert.equal(cdc2.sourceIndex, 2);
   assert.equal(cdc2.paragraphId, 'sec-methods-p-001');
+});
+
+test('rejects sentence fragments injected by bilingual translation extensions', () => {
+  const entries = extractArticleAbbreviations([
+    {
+      text: 'Gasdermins (GSDMs) are a family of pore-forming proteins. ' +
+        '有人建议将焦亡定义为由气体凝集素（GSDM）执行的细胞死亡。'
+    },
+    {
+      text: 'This function of GSDMs was initially identified from studies of ' +
+        'gasdermin D (GSDMD). 的这一功能最初来源于对气体孔蛋白 D（GSDMD）的研究。'
+    },
+    { text: 'Gasdermin E (GSDME) is also known as DFNA5. 亦称 DFNA5（GSDME）。' }
+  ]);
+
+  assert.equal(entries.find(entry => entry.abbreviation === 'GSDM'), undefined);
+  assert.equal(
+    entries.find(entry => entry.abbreviation === 'GSDMD').fullName,
+    'gasdermin D'
+  );
+  assert.equal(
+    entries.find(entry => entry.abbreviation === 'GSDME').fullName,
+    'Gasdermin E'
+  );
+});
+
+test('combines automatic, manual, global, excluded, and translated article entries', () => {
+  const paragraphs = [{
+    paragraphId: 'p-1',
+    sourceKey: 'source-1',
+    text: 'Tumor necrosis factor (TNF) and interleukin 6 (IL-6) were measured.'
+  }];
+  const memory = normalizeGlobalAbbreviationMemory({
+    entries: [{
+      abbreviation: 'TNF',
+      fullName: 'Tumor necrosis factor',
+      meaningZh: '肿瘤坏死因子'
+    }]
+  });
+  let articleState = upsertArticleManualAbbreviation({}, {
+    abbreviation: 'IL-6',
+    fullName: 'interleukin 6'
+  });
+  articleState = updateArticleAbbreviationTranslations(articleState, [{
+    abbreviation: 'IL-6',
+    fullName: 'interleukin 6',
+    meaningZh: '白细胞介素 6',
+    origin: 'manual'
+  }]);
+  let composed = composeArticleAbbreviations({
+    paragraphs,
+    globalMemory: memory,
+    articleState
+  });
+
+  assert.equal(composed.entries.find(item => item.abbreviation === 'TNF').meaningZh, '肿瘤坏死因子');
+  assert.equal(composed.entries.find(item => item.abbreviation === 'TNF').sourceType, 'automatic+global');
+  assert.equal(composed.entries.find(item => item.abbreviation === 'IL-6').meaningZh, '白细胞介素 6');
+  assert.equal(composed.entries.find(item => item.abbreviation === 'IL-6').sourceType, 'manual');
+  assert.equal(composed.translatedCount, 2);
+
+  articleState = excludeArticleAbbreviation(articleState, 'IL-6');
+  composed = composeArticleAbbreviations({ paragraphs, globalMemory: memory, articleState });
+  assert.deepEqual(composed.entries.map(item => item.abbreviation), ['TNF']);
+  assert.deepEqual(normalizeArticleAbbreviationState(articleState).translations, []);
+});
+
+test('global memory never injects entries that are absent from the current article', () => {
+  const paragraphs = [{
+    paragraphId: 'current-p-1',
+    sourceKey: 'current-source-1',
+    text: 'Gasdermins (GSDMs) execute pyroptosis in cancer cells.'
+  }];
+  const globalMemory = normalizeGlobalAbbreviationMemory({
+    entries: [
+      { abbreviation: 'CGRP', fullName: 'calcitonin gene-related peptide' },
+      { abbreviation: 'DRG', fullName: 'dorsal root ganglia' },
+      { abbreviation: 'GSDMs', fullName: 'Gasdermins' }
+    ]
+  });
+
+  const composed = composeArticleAbbreviations({ paragraphs, globalMemory });
+
+  assert.deepEqual(composed.entries.map(item => item.abbreviation), ['GSDMs']);
+  assert.equal(composed.entries[0].paragraphId, 'current-p-1');
+  assert.equal(composed.globalCount, 1);
+});
+
+test('global abbreviation memory export is shareable and omits article navigation metadata', () => {
+  const merged = mergeGlobalAbbreviationMemory({}, [{
+    abbreviation: 'AAV',
+    fullName: 'adeno-associated virus',
+    meaningZh: '腺相关病毒',
+    paragraphId: 'private-paragraph-id',
+    sourceKey: 'private-source-key'
+  }], { incrementSupport: true });
+  const exported = createGlobalAbbreviationMemoryExport(
+    merged.memory,
+    '2026-07-30T10:00:00.000Z'
+  );
+  const roundTrip = parseGlobalAbbreviationMemoryImport(exported);
+
+  assert.equal(exported.entryCount, 1);
+  assert.equal(exported.entries[0].meaningZh, '腺相关病毒');
+  assert.equal('paragraphId' in exported.entries[0], false);
+  assert.equal('sourceKey' in exported.entries[0], false);
+  assert.deepEqual(roundTrip.entries, merged.memory.entries);
+});
+
+test('validates complete Chinese translation batches for the paragraph-summary model', () => {
+  const entries = [
+    { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+    { abbreviation: 'AAV', fullName: 'adeno-associated virus' }
+  ];
+  const prompt = compileAbbreviationTranslationPrompt(entries);
+  const translated = validateAbbreviationTranslationResult({
+    translations: [
+      { abbreviation: 'TNF', meaning_zh: '肿瘤坏死因子' },
+      { abbreviation: 'AAV', meaning_zh: '腺相关病毒' }
+    ]
+  }, entries);
+
+  assert.equal(prompt.schemaName, 'abbreviation_chinese_meanings');
+  assert.deepEqual(translated.map(item => item.meaningZh), [
+    '肿瘤坏死因子', '腺相关病毒'
+  ]);
+  assert.throws(() => validateAbbreviationTranslationResult({
+    translations: [{ abbreviation: 'TNF', meaning_zh: 'tumor necrosis factor' }]
+  }, entries), error => error.code === 'INVALID_RESPONSE');
+});
+
+test('infers the text outside parentheses as the full name and the text inside as the abbreviation', () => {
+  assert.deepEqual(
+    inferSelectedAbbreviationDraft('nanoparticles (NPs)'),
+    { abbreviation: 'NPs', fullName: 'nanoparticles' }
+  );
+  assert.deepEqual(
+    inferSelectedAbbreviationDraft('single-cell RNA sequencing（scRNA-seq）'),
+    { abbreviation: 'scRNA-seq', fullName: 'single-cell RNA sequencing' }
+  );
+});
+
+test('accepts partial Chinese translation batches for automatic repair', () => {
+  const entries = [
+    { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+    { abbreviation: 'AAV', fullName: 'adeno-associated virus' }
+  ];
+  const prompt = compileAbbreviationTranslationPrompt(entries, {
+    allowPartial: true
+  });
+  const translated = validateAbbreviationTranslationResult({
+    translations: [
+      { abbreviation: 'AAV', meaning_zh: '腺相关病毒' }
+    ]
+  }, entries, { allowPartial: true });
+
+  assert.equal(prompt.responseSchema.properties.translations.minItems, 1);
+  assert.deepEqual(translated.map(item => item.abbreviation), ['AAV']);
 });

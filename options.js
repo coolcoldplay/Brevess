@@ -19,6 +19,7 @@ let analysisModeEditorModes = [];
 let selectedAnalysisModeId = '';
 const profileActionInFlight = Object.create(null);
 let profileMutationInFlight = false;
+let pdfMineruSettingsState = SciLLM.normalizeMineruPdfSettings();
 const categoryEditor = {
   categoryId: '',
   detail: null,
@@ -122,6 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
   activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
   await refreshSettings();
+  await loadPdfMineruSettings();
   await loadCategoryFromHash();
   await refreshCorpusStatus();
   updateDirectoryFeatureSupport();
@@ -129,6 +131,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshUserDataStatus();
   await refreshArticleWorkspaceOverview();
   await initializeOnboarding();
+  configurePdfReaderReturn();
+  if (location.hash === '#pdf-mineru') {
+    document.getElementById('pdfMineruSettings')
+      ?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
 });
 
 function bindEvents() {
@@ -203,6 +210,14 @@ function bindEvents() {
     document.getElementById(id).addEventListener('change', markCompatiblePresetCustom);
   });
   document.getElementById('saveSettings').addEventListener('click', () => persistForm(false));
+  document.getElementById('savePdfMineruSettings')
+    .addEventListener('click', () => savePdfMineruSettings());
+  document.getElementById('clearPdfMineruToken')
+    .addEventListener('click', () => savePdfMineruSettings({ clearToken: true }));
+  document.getElementById('returnToPdfReader')
+    .addEventListener('click', () => returnToPdfReader());
+  document.getElementById('pdfMineruMode')
+    .addEventListener('change', renderPdfMineruSettings);
   document.getElementById('analysisModeList').addEventListener('click', event => {
     const button = event.target.closest('[data-analysis-mode-id]');
     if (!button) return;
@@ -409,6 +424,43 @@ function bindEvents() {
   window.addEventListener('beforeunload', stopCodexAuthPolling);
 }
 
+function pdfReaderReturnTabId() {
+  const value = Number(new URLSearchParams(location.search).get('returnPdfTab'));
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function configurePdfReaderReturn() {
+  const button = document.getElementById('returnToPdfReader');
+  const visible = pdfReaderReturnTabId() !== null;
+  if (button) button.hidden = !visible;
+  document.body.classList.toggle('has-pdf-reader-return', visible);
+}
+
+async function returnToPdfReader() {
+  const tabId = pdfReaderReturnTabId();
+  if (tabId === null) return;
+  const button = document.getElementById('returnToPdfReader');
+  if (button) button.disabled = true;
+  try {
+    const target = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (Number.isInteger(target?.windowId) && chrome.windows?.update) {
+      await chrome.windows.update(target.windowId, { focused: true });
+    }
+    const current = await chrome.tabs.getCurrent().catch(() => null);
+    if (Number.isInteger(current?.id) && current.id !== tabId) {
+      await chrome.tabs.remove(current.id);
+    }
+  } catch (error) {
+    if (button) button.disabled = false;
+    const status = document.getElementById('pdfMineruStatus');
+    if (status) {
+      status.dataset.state = 'error';
+      status.textContent = `无法返回 PDF 解析结果：${friendlyError(error)}`;
+    }
+  }
+}
+
 function settingsPageFromHash() {
   if (location.hash === '#onboarding') return activeSettingsPage;
   const parameters = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -422,7 +474,8 @@ function settingsPageFromHash() {
     keyboardShortcuts: 'shortcuts',
     localData: 'data',
     openSource: 'about',
-    support: 'about'
+    support: 'about',
+    'pdf-mineru': 'models'
   };
   return legacyPages[legacy] || 'categories';
 }
@@ -705,8 +758,8 @@ function renderOnboarding() {
   document.getElementById('onboardingStepTitle').textContent = step === 'storage'
     ? '选择本地保存目录' : '配置 LLM API';
   document.getElementById('onboardingStepDescription').textContent = step === 'storage'
-    ? '插件会在你选择的位置建立 Brevess 文件夹，并为每篇网页保存独立工作区。跳过后仍使用浏览器 IndexedDB 自动保存。'
-    : '沿用下方命名 API Profile 表单，可配置 Provider、模型、密钥、服务地址并测试连接。现有配置不会被重置。';
+    ? '本地文件夹是可选项。暂时跳过后仍使用浏览器 IndexedDB 保存本机工作副本，也可正常使用导航、阅读与手动标注。'
+    : 'API 是问答、图解和智能高亮所需的可选项。暂时不配置也能直接使用导航、摘句、手动高亮与本地阅读，之后可随时回来设置。';
   document.getElementById('onboardingStepState').textContent =
     onboardingStateText(step, status);
   document.querySelectorAll('[data-onboarding-progress]').forEach(item => {
@@ -718,6 +771,7 @@ function renderOnboarding() {
   const next = document.getElementById('onboardingContinue');
   const finish = document.getElementById('onboardingFinish');
   const busy = onboardingUi.pending || userDataUi.pendingAction;
+  skip.textContent = step === 'storage' ? '暂不选择，继续' : '暂不配置，直接使用';
   back.hidden = step !== 'api';
   skip.hidden = status !== 'pending';
   next.hidden = step !== 'storage';
@@ -777,7 +831,12 @@ async function skipOnboardingStep() {
   const step = onboardingUi.step;
   try {
     await setOnboardingStepState(step, 'skipped');
-    if (step === 'storage') onboardingUi.step = 'api';
+    if (step === 'storage') {
+      onboardingUi.step = 'api';
+    } else {
+      await finishOnboarding();
+      return;
+    }
     renderOnboarding();
   } catch (error) {
     document.getElementById('onboardingStepState').textContent =
@@ -2720,6 +2779,84 @@ async function refreshSettings() {
     applyState(await callBackground({ type: 'LLM_GET_SETTINGS' }));
   } catch (error) {
     showStatus(`读取设置失败：${error.message}`, 'error');
+  }
+}
+
+function renderPdfMineruSettings() {
+  const mode = document.getElementById('pdfMineruMode')?.value || 'agent';
+  const tokenField = document.getElementById('pdfMineruTokenField');
+  const credential = document.getElementById('pdfMineruCredentialState');
+  const clear = document.getElementById('clearPdfMineruToken');
+  if (tokenField) tokenField.hidden = mode !== 'precise';
+  const configured = Boolean(pdfMineruSettingsState.token);
+  if (credential) {
+    credential.dataset.configured = String(configured);
+    credential.textContent = configured
+      ? 'MinerU Token 已保存在本机'
+      : mode === 'precise' ? '精准解析需要 Token' : '轻量解析无需 Token';
+  }
+  if (clear) clear.disabled = !configured;
+}
+
+async function loadPdfMineruSettings() {
+  const stored = await chrome.storage.local.get(SciLLM.PDF_MINERU_SETTINGS_KEY);
+  pdfMineruSettingsState = SciLLM.normalizeMineruPdfSettings(
+    stored?.[SciLLM.PDF_MINERU_SETTINGS_KEY]
+  );
+  document.getElementById('pdfMineruMode').value = pdfMineruSettingsState.mode;
+  document.getElementById('pdfMineruLanguage').value =
+    pdfMineruSettingsState.language;
+  document.getElementById('pdfMineruOcr').checked =
+    pdfMineruSettingsState.isOcr;
+  document.getElementById('pdfMineruToken').value = '';
+  renderPdfMineruSettings();
+}
+
+async function savePdfMineruSettings({ clearToken = false } = {}) {
+  const save = document.getElementById('savePdfMineruSettings');
+  const clear = document.getElementById('clearPdfMineruToken');
+  const status = document.getElementById('pdfMineruStatus');
+  const tokenInput = document.getElementById('pdfMineruToken');
+  const next = SciLLM.normalizeMineruPdfSettings({
+    mode: document.getElementById('pdfMineruMode').value,
+    token: clearToken
+      ? ''
+      : tokenInput.value.trim() || pdfMineruSettingsState.token,
+    quotaUserId: pdfMineruSettingsState.quotaUserId,
+    language: document.getElementById('pdfMineruLanguage').value,
+    isOcr: document.getElementById('pdfMineruOcr').checked,
+    enableTable: true,
+    enableFormula: true
+  });
+  save.disabled = true;
+  clear.disabled = true;
+  if (status) {
+    status.dataset.state = '';
+    status.textContent = clearToken
+      ? '正在清除 MinerU Token…'
+      : '正在保存 PDF 解析设置…';
+  }
+  try {
+    await chrome.storage.local.set({
+      [SciLLM.PDF_MINERU_SETTINGS_KEY]: next
+    });
+    pdfMineruSettingsState = next;
+    tokenInput.value = '';
+    renderPdfMineruSettings();
+    if (status) {
+      status.dataset.state = 'success';
+      status.textContent = clearToken
+        ? 'MinerU Token 已清除；PDF 仍可使用轻量解析。'
+        : 'PDF 解析设置已保存；下次激活 PDF 标签页会自动使用。';
+    }
+  } catch (error) {
+    if (status) {
+      status.dataset.state = 'error';
+      status.textContent = `PDF 解析设置保存失败：${friendlyError(error)}`;
+    }
+  } finally {
+    save.disabled = false;
+    renderPdfMineruSettings();
   }
 }
 

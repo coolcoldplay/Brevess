@@ -116,7 +116,9 @@
       for (let code = start; code <= end; code += 1) panels.add(String.fromCharCode(code));
     };
     for (const match of normalizeText(caption).matchAll(/\(([^)]{1,80})\)/g)) {
-      const content = match[1].toUpperCase();
+      const rawContent = match[1].trim();
+      if (/^[ivx]+$/.test(rawContent)) continue;
+      const content = rawContent.toUpperCase();
       if (!/^[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*$/i.test(content)) continue;
       for (const range of content.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
@@ -126,7 +128,7 @@
       }
     }
     const text = normalizeText(caption);
-    for (const match of text.matchAll(/\b(?:panels?|subpanels?)\s+([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*[,;&]\s*|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)/gi)) {
+    for (const match of text.matchAll(/\b(?:panels?|subpanels?)\s+([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*[,;&]\s*|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\b/gi)) {
       const group = match[1].toUpperCase();
       for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
@@ -143,13 +145,40 @@
     // as `n.c., necrotic core` and `T, T cells`, which otherwise look like
     // single-letter Panel markers after a period or semicolon.
     for (const match of text.matchAll(
-      /(?:^|[.;|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?!\.\s*[A-Z]\.)(?!,\s*\1\b)(?=[:,.])/gi
+      /(?:^|[.|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?!\.\s*[A-Z]\.)(?!,\s*\1\b)(?=[:,.])/gi
     )) {
       const group = match[1].toUpperCase();
+      if (/^\.[A-Z]$/i.test(match[0]) && text[match.index + match[0].length] === '.') {
+        continue;
+      }
       for (const range of group.matchAll(/\b([A-Z])\s*[-\u2010-\u2015\u2212]\s*([A-Z])\b/g)) {
         addRange(range[1], range[2]);
       }
       for (const label of group.matchAll(/\b([A-Z])\b/g)) addRange(label[1]);
+    }
+    const plainLegendGroups = [];
+    for (const match of text.matchAll(
+      /(?:^|[.!?;|]\s*)\(?([A-P](?:\s*[-\u2010-\u2015\u2212]\s*[A-P])?)\)?\s+(?=[A-Z0-9(])/g
+    )) {
+      plainLegendGroups.push(match[1].toUpperCase());
+    }
+    const plainLabels = new Set();
+    plainLegendGroups.forEach(group => {
+      const range = group.match(/^([A-P])\s*[-\u2010-\u2015\u2212]\s*([A-P])$/);
+      if (range) {
+        for (let code = range[1].charCodeAt(0); code <= range[2].charCodeAt(0); code += 1) {
+          plainLabels.add(String.fromCharCode(code));
+        }
+      } else {
+        plainLabels.add(group);
+      }
+    });
+    const orderedPlainLabels = [...plainLabels].sort();
+    const hasConsecutivePlainLabels = orderedPlainLabels.some((label, index) =>
+      index > 0 && label.charCodeAt(0) - orderedPlainLabels[index - 1].charCodeAt(0) === 1
+    );
+    if (orderedPlainLabels.length >= 2 && hasConsecutivePlainLabels) {
+      orderedPlainLabels.forEach(label => addRange(label));
     }
     return [...panels].sort((left, right) =>
       left.localeCompare(right, undefined, { numeric: true }));
@@ -157,6 +186,68 @@
 
   function parseLeadingFigureLabel(value) {
     return parseFigureLabel(normalizeText(value).slice(0, 240));
+  }
+
+  function escapePattern(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function cleanFigureTitle(value) {
+    return normalizeText(value)
+      .replace(/^(?:[:：.\-–—]\s*)+/, '')
+      .replace(/\s*(?:[:：.\-–—])+$/, '')
+      .trim()
+      .slice(0, 320);
+  }
+
+  function figureTitleBoundary(value) {
+    const source = String(value || '');
+    const matches = [
+      source.search(/\s+(?:show|hide)\s+full\s+caption\b/i),
+      source.search(/\s+(?:显示|隐藏)完整图注\b/),
+      source.search(/\s*[\(（][A-Z](?:\s*[-–—,、]\s*[A-Z])?[\)）]\s*/),
+      source.search(/\s+(?:figure\s+viewer|figure360)\b/i)
+    ].filter(index => index >= 0);
+    return matches.length ? Math.min(...matches) : source.length;
+  }
+
+  function extractFigureTitle(value, figureLabel = '') {
+    const caption = normalizeText(value);
+    const parsed = parseFigureLabel(figureLabel) || parseLeadingFigureLabel(caption);
+    if (!caption || !parsed) return { title: '', translatedTitle: '' };
+    const figureCode = `${parsed.isSupplemental ? 'S\\s*' : ''}${parsed.figureNumber}`;
+    const chineseMarker = new RegExp(
+      `(?:^|\\s)图\\s*${figureCode}(?!\\s*[A-Z])\\s*`,
+      'i'
+    );
+    const chineseMatch = chineseMarker.exec(caption);
+    let translatedTitle = '';
+    if (chineseMatch) {
+      const remainder = caption.slice(chineseMatch.index + chineseMatch[0].length);
+      translatedTitle = cleanFigureTitle(
+        remainder.slice(0, figureTitleBoundary(remainder))
+      );
+      if (!/[\u3400-\u9fff]/u.test(translatedTitle)) translatedTitle = '';
+    }
+
+    const labelPattern = new RegExp(
+      `(?:^|\\s)(?:fig(?:ure)?\\.?\\s*)${escapePattern(
+        parsed.isSupplemental ? `S${parsed.figureNumber}` : String(parsed.figureNumber)
+      ).replace(/^S/, 'S\\s*')}(?![A-Z0-9])\\s*`,
+      'i'
+    );
+    const labelMatch = labelPattern.exec(caption);
+    let title = '';
+    if (labelMatch) {
+      const remainder = caption.slice(labelMatch.index + labelMatch[0].length);
+      const chineseIndex = chineseMarker.exec(remainder)?.index ?? -1;
+      const boundary = figureTitleBoundary(remainder);
+      title = cleanFigureTitle(remainder.slice(
+        0,
+        chineseIndex >= 0 ? Math.min(boundary, chineseIndex) : boundary
+      ));
+    }
+    return { title, translatedTitle };
   }
 
   function collectFigureIdentities(element) {
@@ -398,7 +489,10 @@
       seen.add(source);
       images.push(image);
     }
-    return images.slice(0, 8);
+    // MinerU and some publisher readers expose one high-resolution image per
+    // Panel. Keep the entire Figure group instead of silently dropping Panel I+
+    // from large composite Figures.
+    return images.slice(0, 40);
   }
 
   function paragraphReferencesFigure(value, figureReference) {
@@ -477,6 +571,7 @@
     FIGURE_SELECTOR,
     CAPTION_SELECTOR,
     parseFigureLabel,
+    extractFigureTitle,
     extractPanelHints,
     expandCaptionPanelGroup,
     splitFigureCaptionByPanelGroups,

@@ -280,6 +280,38 @@
       .filter(([panelId]) => panelId));
   }
 
+  function isLowInformationPanelText(value) {
+    const source = text(value, 1800);
+    if (!source) return true;
+    const setupOnly = /比例尺|标尺|scale\s*bar|示意图|schematic|代表性(?:图像|图片)|representative\s+(?:image|micrograph)|注射(?:位点|位置)|injection\s+site|实验流程|workflow|protocol|装置|apparatus|为后续.*(?:基础|依据|框架|背景)|提供(?:实验|方法).*?(?:基础|依据|背景)|设计基础|实验设计(?:背景|框架|基础)|分组逻辑|实验布局|记录布局|实验配置|辅助理解|概述实验设计|操作的可视化/i.test(source);
+    const functionalOutcome = /增加|升高|增强|减少|降低|减弱|上调|下调|抑制|促进|恢复|挽救|相关|依赖|必要|充分|导致|介导|影响|效应|表型|显著|increase|decrease|reduce|enhance|inhibit|promote|rescue|associate|depend|necessary|sufficient|mediate|effect|phenotype|significant/i.test(source);
+    const validatedSetup = /验证|准确|特异|排除|可靠|有效性|一致性|validation|validated|specificity|accurate|reliable|exclude/i.test(source);
+    return setupOnly && !functionalOutcome && !validatedSetup;
+  }
+
+  function panelFunctionalEvidence(panel) {
+    const candidates = [
+      panel?.contribution,
+      panel?.localInference,
+      panel?.directObservation
+    ];
+    for (const candidate of candidates) {
+      const normalized = text(candidate, 1600);
+      if (normalized && !isLowInformationPanelText(normalized)) return normalized;
+    }
+    return '';
+  }
+
+  function informativeEvidenceGroup(group) {
+    const conclusion = text(group?.groupConclusion, 1600);
+    const points = Array.isArray(group?.evidencePoints) ? group.evidencePoints : [];
+    return Boolean(
+      (conclusion && !isLowInformationPanelText(conclusion)) ||
+      points.some(point => text(point?.observation, 1600) &&
+        !isLowInformationPanelText(point.observation))
+    );
+  }
+
   function evidenceGroupsFromResult(result, figureId) {
     const panelsById = mapPanelById(result);
     const groups = Array.isArray(result?.panelGroups) ? result.panelGroups : [];
@@ -289,10 +321,7 @@
         const panelRecords = panelIds.map(panelId => panelsById.get(panelId)).filter(Boolean);
         const explicitPoints = panelIds.map(panelId => {
           const panel = panelsById.get(panelId);
-          const observation = text(
-            panel?.directObservation || panel?.localInference || panel?.contribution,
-            1600
-          );
+          const observation = panelFunctionalEvidence(panel);
           if (!observation) return null;
           return {
             locator: { kind: 'panels', values: [panelId] },
@@ -325,7 +354,7 @@
           limitation: text(group?.limitation, 1200),
           evidencePoints
         };
-      });
+      }).filter(informativeEvidenceGroup);
     }
     const chain = Array.isArray(result?.argumentChain) ? result.argumentChain : [];
     if (chain.length) {
@@ -333,19 +362,13 @@
         const panelIds = list(step?.panels, 30);
         const panelRecords = panelIds.map(panelId => panelsById.get(panelId)).filter(Boolean);
         const hasIndividualObservations = panelIds.length > 0 && panelRecords.length === panelIds.length &&
-          panelRecords.every(panel => text(
-            panel?.directObservation || panel?.localInference || panel?.contribution,
-            1600
-          ));
+          panelRecords.every(panel => panelFunctionalEvidence(panel));
         const evidencePoints = hasIndividualObservations
           ? panelIds.map(panelId => {
               const panel = panelsById.get(panelId);
               return {
                 locator: { kind: 'panels', values: [panelId] },
-                observation: text(
-                  panel?.directObservation || panel?.localInference || panel?.contribution,
-                  1600
-                ),
+                observation: panelFunctionalEvidence(panel),
                 argumentRole: text(panel?.role || step?.evidenceLevel, 120),
                 limitation: text(panel?.limitation, 1200),
                 sourceRefs: [{ kind: 'panel', figureId: text(figureId, 120), panelId }]
@@ -370,7 +393,7 @@
           limitation: text(step?.limitation, 1200),
           evidencePoints
         };
-      });
+      }).filter(informativeEvidenceGroup);
     }
     return (Array.isArray(result?.panels) ? result.panels : []).slice(0, 30)
       .map((panel, index) => {
@@ -379,13 +402,11 @@
           groupId: `${safeId(figureId, 'figure')}-evidence-${index + 1}`,
           title: text(panel?.purpose || panelId, 320),
           method: text(panel?.methodCategory, 320),
-          groupConclusion: text(panel?.localInference || panel?.directObservation ||
-            panel?.contribution, 1600),
+          groupConclusion: panelFunctionalEvidence(panel),
           limitation: text(panel?.limitation, 1200),
           evidencePoints: [{
             locator: { kind: 'panels', values: panelId ? [panelId] : [] },
-            observation: text(panel?.directObservation || panel?.localInference ||
-              panel?.contribution, 1600),
+            observation: panelFunctionalEvidence(panel),
             argumentRole: text(panel?.role, 120),
             limitation: text(panel?.limitation, 1200),
             sourceRefs: panelId ? [{
@@ -393,7 +414,13 @@
             }] : []
           }]
         };
-      });
+      }).filter(informativeEvidenceGroup);
+  }
+
+  function supplementalContributionSummary(figure, result, attachment = {}) {
+    const candidate = attachment.conclusion || attachment.relationship ||
+      result?.paperArgumentRole || result?.coreConclusion || '';
+    return firstSentence(candidate, 140);
   }
 
   function supplementalByMainFigure(crossFigureLogic) {
@@ -655,6 +682,7 @@
         supplementalId,
         type: ['figure', 'video', 'table'].includes(item?.type) ? item.type : 'figure',
         label: text(item?.label || item?.figureLabel, 240),
+        summary: text(item?.summary, 320),
         proofItems: normalizeTextItems(
           Array.isArray(item?.proofItems) ? item.proofItems : item?.conclusion,
           `${supplementalId}-proof`
@@ -666,7 +694,7 @@
           )),
         connections: [],
         ...editedState(item, [
-          'type', 'label', 'proofItems', 'evidenceGroups', 'connections'
+          'type', 'label', 'summary', 'proofItems', 'evidenceGroups', 'connections'
         ])
       };
       material.connections = normalizeSupplementalConnections(
@@ -927,6 +955,7 @@
           supplementalId: safeId(item.figureId, 'supplemental'),
           type: 'figure',
           label: text(item.figureLabel || item.figureId, 240),
+          summary: supplementalContributionSummary(figure, result, item),
           proofItems: proof ? [{
             itemId: `${safeId(item.figureId, 'supplemental')}-proof-1`,
             text: proof
@@ -941,7 +970,9 @@
       }));
     return normalizeResearchLogicMap({
       schemaVersion: RESEARCH_LOGIC_MAP_SCHEMA_VERSION,
-      mapId: input.mapId || `figure-argument-${sourceHash}`,
+      // One canonical generated map per article. Source changes update this
+      // asset in place instead of accumulating indistinguishable history.
+      mapId: input.mapId || 'figure-argument-current',
       origin: 'figure-analysis',
       workspaceId: input.workspaceId,
       sourceHash,
@@ -951,7 +982,9 @@
         articleTitle: input.articleTitle,
         canonicalUrl: input.canonicalUrl,
         documentHash: input.documentHash,
-        backgroundItems: input.backgroundItems || [],
+        backgroundItems: Array.isArray(crossFigureLogic?.backgroundItems) &&
+          crossFigureLogic.backgroundItems.length
+          ? crossFigureLogic.backgroundItems : (input.backgroundItems || []),
         scientificQuestions: scientificQuestionText ? [{
           questionId: 'question-1', text: scientificQuestionText
         }] : [],
@@ -977,10 +1010,67 @@
       view: {
         zoom: 1,
         editorCollapsed: false,
-        collapsedStepIds: [],
-        collapsedSupplementalIds: []
+        collapsedStepIds: steps.map(step => step.stepId),
+        collapsedSupplementalIds: supplementalMaterials.map(item => item.supplementalId)
       }
     });
+  }
+
+  function mergeRegeneratedResearchLogicMap(generatedInput, savedInput) {
+    const generated = normalizeResearchLogicMap(generatedInput);
+    const saved = normalizeResearchLogicMap(savedInput);
+    if (generated.origin !== 'figure-analysis' ||
+        saved.origin !== 'figure-analysis' ||
+        generated.mapId !== saved.mapId) return generated;
+    const carryEdited = (next, previous, fields) => {
+      const edited = new Set(previous?.manuallyEditedFields || []);
+      fields.forEach(field => {
+        if (edited.has(field) && Object.hasOwn(previous, field)) {
+          next[field] = previous[field];
+        }
+      });
+      if (edited.size) {
+        next.manuallyEdited = true;
+        next.manuallyEditedFields = [...edited];
+      }
+      return next;
+    };
+    carryEdited(generated.meta, saved.meta, [
+      'title', 'backgroundItems', 'scientificQuestions', 'finalConclusions',
+      'mechanismEdges', 'claimBoundary'
+    ]);
+    const savedSteps = new Map(saved.steps.map(step => [step.figureId, step]));
+    generated.steps.forEach(step => {
+      const previous = savedSteps.get(step.figureId);
+      if (!previous) return;
+      carryEdited(step, previous, [
+        'figureLabel', 'questionItems', 'proofItems', 'role', 'evidenceLevel',
+        'evidenceGroups', 'notes'
+      ]);
+    });
+    const savedSupplements = new Map(saved.supplementalMaterials.map(item => [
+      item.supplementalId, item
+    ]));
+    generated.supplementalMaterials.forEach(item => {
+      const previous = savedSupplements.get(item.supplementalId);
+      if (!previous) return;
+      carryEdited(item, previous, [
+        'type', 'label', 'summary', 'proofItems', 'evidenceGroups', 'connections'
+      ]);
+    });
+    generated.view = {
+      ...generated.view,
+      zoom: saved.view.zoom,
+      editorCollapsed: saved.view.editorCollapsed,
+      collapsedStepIds: saved.view.collapsedStepIds.filter(stepId =>
+        generated.steps.some(step => step.stepId === stepId)
+      ),
+      collapsedSupplementalIds: saved.view.collapsedSupplementalIds.filter(id =>
+        generated.supplementalMaterials.some(item => item.supplementalId === id)
+      )
+    };
+    generated.userEditedAt = saved.userEditedAt;
+    return normalizeResearchLogicMap(generated);
   }
 
   function createBlankResearchLogicMap(input = {}) {
@@ -1122,7 +1212,12 @@
     return {
       schemaVersion: 1,
       activeMapId: normalizedMap.mapId,
-      maps: [entry, ...index.maps.filter(item => item.mapId !== normalizedMap.mapId)]
+      maps: [entry, ...index.maps.filter(item =>
+        item.mapId !== normalizedMap.mapId && !(
+          normalizedMap.origin === 'figure-analysis' &&
+          item.origin === 'figure-analysis'
+        )
+      )]
         .slice(0, 200)
     };
   }
@@ -1623,7 +1718,7 @@
     addBulletSection('科学问题', map.meta.scientificQuestions, '#eef7fb');
 
     if (map.meta.mechanismEdges.length) {
-      const rowHeight = 104;
+      const rowHeight = 116;
       const height = 62 + map.meta.mechanismEdges.length * rowHeight;
       parts.push(
         `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${height}" ` +
@@ -1633,7 +1728,7 @@
       map.meta.mechanismEdges.forEach((edge, index) => {
         const rowTop = y + 66 + index * rowHeight;
         const nodeY = rowTop + 10;
-        const nodeHeight = 52;
+        const nodeHeight = 66;
         const nodeWidth = 430;
         const sourceX = margin + 44;
         const targetX = margin + contentWidth - nodeWidth - 44;
@@ -1646,23 +1741,29 @@
         const relation = edge.effect === 'promote'
           ? '促进' : edge.effect === 'inhibit' ? '抑制' : '相关';
         const evidence = edge.evidence === 'strong' ? '强证据' : '弱证据';
+        const sourceLines = wrapSvgText(edge.sourceId, nodeWidth - 32, 18, 2);
+        const targetLines = wrapSvgText(edge.targetId, nodeWidth - 32, 18, 2);
         parts.push(
           `<rect class="mechanism-node-box" x="${sourceX}" y="${nodeY}" ` +
           `width="${nodeWidth}" height="${nodeHeight}" rx="12"/>`,
           `<rect class="mechanism-node-box" x="${targetX}" y="${nodeY}" ` +
           `width="${nodeWidth}" height="${nodeHeight}" rx="12"/>`,
-          `<text class="mechanism-node" text-anchor="middle" ` +
-          `x="${sourceX + nodeWidth / 2}" y="${nodeY + 33}">` +
-          `${escapeXml(firstSentence(edge.sourceId, 42))}</text>`,
-          `<text class="mechanism-node" text-anchor="middle" ` +
-          `x="${targetX + nodeWidth / 2}" y="${nodeY + 33}">` +
-          `${escapeXml(firstSentence(edge.targetId, 42))}</text>`,
           `<line class="mechanism-connector is-${edge.effect} ${evidenceClass}" ` +
           `x1="${connectorStartX}" y1="${connectorY}" ` +
           `x2="${connectorEndX}" y2="${connectorY}"${dashAttribute}` +
           `${edge.effect === 'inhibit'
             ? '' : ' marker-end="url(#mechanism-arrowhead)"'}/>`
         );
+        sourceLines.forEach((line, lineIndex) => parts.push(
+          `<text class="mechanism-node" text-anchor="middle" ` +
+          `x="${sourceX + nodeWidth / 2}" y="${nodeY + 27 + lineIndex * 22}">` +
+          `${escapeXml(line)}</text>`
+        ));
+        targetLines.forEach((line, lineIndex) => parts.push(
+          `<text class="mechanism-node" text-anchor="middle" ` +
+          `x="${targetX + nodeWidth / 2}" y="${nodeY + 27 + lineIndex * 22}">` +
+          `${escapeXml(line)}</text>`
+        ));
         if (edge.effect === 'inhibit') parts.push(
           `<line class="mechanism-inhibition-bar" x1="${connectorEndX}" ` +
           `y1="${connectorY - 13}" x2="${connectorEndX}" y2="${connectorY + 13}"/>`
@@ -1696,7 +1797,11 @@
             `${point.argumentRole ? ` · ${point.argumentRole}` : ''}` +
             `${point.limitation ? ` · 边界：${point.limitation}` : ''}`;
           return {
-            label: `${groupIndex + 1}. ${group.title}`,
+            labelLines: wrapSvgText(
+              `${groupIndex + 1}. ${group.title}`,
+              contentWidth - 150,
+              18
+            ),
             lines: wrapSvgText(value, contentWidth - 230, 18)
           };
         })
@@ -1708,10 +1813,12 @@
         (sum, lines) => sum + Math.max(30, lines.length * 29) + 6, 0
       );
       const evidenceHeight = pointLayouts.length
-        ? pointLayouts.reduce((sum, layout) =>
-          sum + Math.max(30, layout.lines.length * 26) + 12, 0) + 42
+        ? 34 + pointLayouts.reduce((sum, layout) =>
+          sum + Math.max(28, layout.labelLines.length * 25) +
+            Math.max(30, layout.lines.length * 26) + 16, 0)
         : 0;
-      const height = 94 + questionHeight + proofHeight + evidenceHeight;
+      const height = 88 + 32 + questionHeight + 32 + proofHeight +
+        evidenceHeight + 24;
       parts.push(
         `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${height}" ` +
         'rx="22" fill="#ffffff" stroke="#b9d3d1"/>',
@@ -1745,15 +1852,16 @@
         parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">证据组与证据点</text>`);
         rowY += 34;
         pointLayouts.forEach(layout => {
-          parts.push(
-            `<text class="group-index" x="${margin + 42}" y="${rowY}">` +
-            `${escapeXml(layout.label)}</text>`
-          );
+          layout.labelLines.forEach((line, lineIndex) => parts.push(
+            `<text class="group-index" x="${margin + 42}" ` +
+            `y="${rowY + lineIndex * 25}">${escapeXml(line)}</text>`
+          ));
+          rowY += Math.max(28, layout.labelLines.length * 25) + 2;
           layout.lines.forEach((line, lineIndex) => parts.push(
-            `<text class="evidence" x="${margin + 260}" y="${rowY + lineIndex * 26}">` +
+            `<text class="evidence" x="${margin + 64}" y="${rowY + lineIndex * 26}">` +
             `${escapeXml(line)}</text>`
           ));
-          rowY += Math.max(30, layout.lines.length * 26) + 12;
+          rowY += Math.max(30, layout.lines.length * 26) + 14;
         });
       }
       y += height;
@@ -1772,7 +1880,7 @@
 
     if (map.supplementalMaterials.length) {
       addBulletSection('补充材料', map.supplementalMaterials.map(item => ({
-        text: `${item.type} · ${item.label}`
+        text: `${item.label}${item.summary ? `：${item.summary}` : ''}`
       })), '#fffaf0');
     }
     addBulletSection('最终结论（对应科学问题）',
@@ -1825,6 +1933,7 @@
     normalizeMechanismEdges,
     normalizeResearchLogicMap,
     createResearchLogicMapFromFigures,
+    mergeRegeneratedResearchLogicMap,
     createBlankResearchLogicMap,
     updateScientificQuestion,
     updateFinalConclusion,

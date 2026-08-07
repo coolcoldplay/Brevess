@@ -87,6 +87,25 @@
     return false;
   }
 
+  function normalizeManualFigureKind(value, figure = {}) {
+    const candidate = String(value || '').trim().toLowerCase();
+    if (candidate === 'main' || candidate === 'supplemental') return candidate;
+    return figure?.isSupplemental === false ? 'main' : 'supplemental';
+  }
+
+  function canonicalManualFigureLabel(value, kind = 'supplemental', fallback = '') {
+    const figureKind = normalizeManualFigureKind(kind);
+    const label = text(value, 240);
+    const supplemental = label.match(
+      /^(?:fig(?:ure)?\.?\s*s|supplement(?:al|ary)\s+figure\s+)(\d+)$/i
+    );
+    if (figureKind === 'supplemental') {
+      return supplemental ? `Figure S${Number(supplemental[1])}` : (label || fallback || 'Figure S');
+    }
+    const main = label.match(/^(?:fig(?:ure)?\.?)\s*(\d+)$/i);
+    return main ? `Figure ${Number(main[1])}` : fallback;
+  }
+
   function normalizeSupplementalFigureSource(input = {}) {
     const sourceMode = String(input.sourceMode || '').trim().toLowerCase();
     if (!SUPPLEMENTAL_FIGURE_SOURCE_MODES.includes(sourceMode)) {
@@ -130,6 +149,16 @@
     if (!sourceImportedAt || !Number.isFinite(Date.parse(sourceImportedAt))) {
       throw supplementalError('SUPPLEMENTAL_SOURCE_TIME');
     }
+    const figureKind = normalizeManualFigureKind(input.figureKind, input);
+    const figureLabel = canonicalManualFigureLabel(input.figureLabel, figureKind, '');
+    if (figureKind === 'main' && !figureLabel) {
+      throw supplementalError('MANUAL_FIGURE_LABEL');
+    }
+    const sourcePageRaw = input.sourcePage === '' || input.sourcePage === undefined
+      ? 0 : Number(input.sourcePage);
+    if (!Number.isSafeInteger(sourcePageRaw) || sourcePageRaw < 0 || sourcePageRaw > 100000) {
+      throw supplementalError('MANUAL_FIGURE_PAGE');
+    }
     return {
       sourceMode,
       sourceMaterialId,
@@ -138,7 +167,10 @@
       sourceFileSize,
       sourceImportedAt,
       sourceFingerprint,
-      caption
+      caption,
+      figureKind,
+      figureLabel,
+      sourcePage: sourcePageRaw
     };
   }
 
@@ -444,10 +476,42 @@
     return legacyPdfSignals ? 'pdf' : '';
   }
 
+  function supplementalFigureSequence(value) {
+    const label = text(value?.figureLabel || value?.label || value, 240);
+    const match = label.match(
+      /^(?:figure\s*s|supplement(?:al|ary)\s+figure\s+)(\d+)$/i
+    );
+    return match ? Math.max(0, Number(match[1]) || 0) : 0;
+  }
+
+  function canonicalSupplementalFigureLabel(value, fallback = 'Figure S') {
+    const label = text(value, 240);
+    const sequence = supplementalFigureSequence(label);
+    return sequence ? `Figure S${sequence}` : (label || fallback);
+  }
+
+  function compareSupplementalFigures(left, right) {
+    const leftSequence = supplementalFigureSequence(left);
+    const rightSequence = supplementalFigureSequence(right);
+    if (leftSequence && rightSequence && leftSequence !== rightSequence) {
+      return leftSequence - rightSequence;
+    }
+    if (leftSequence !== rightSequence) return leftSequence ? -1 : 1;
+    return text(left?.figureLabel || left?.figureId, 240).localeCompare(
+      text(right?.figureLabel || right?.figureId, 240),
+      undefined,
+      { numeric: true, sensitivity: 'base' }
+    );
+  }
+
   function normalizeSupplementalFigure(figure = {}, asset = {}) {
     const originalFigureId = text(figure.originalFigureId || figure.figureId, 160);
-    const figureLabel = text(figure.figureLabel || figure.label ||
-      originalFigureId || 'Supplemental Figure', 240);
+    const figureKind = normalizeManualFigureKind(figure.figureKind, figure);
+    const figureLabel = canonicalManualFigureLabel(
+      figure.figureLabel || figure.label || originalFigureId,
+      figureKind,
+      figureKind === 'main' ? text(figure.figureLabel || figure.label, 240) : 'Figure S'
+    );
     const sourceMaterialId = safeId(
       figure.sourceMaterialId || asset.materialId || asset.sourceUrl || asset.title
     );
@@ -462,7 +526,8 @@
       'figure'
     );
     const existingFigureId = text(figure.figureId, 200).toLowerCase();
-    const expectedPrefix = `supp-${materialSegment}-`;
+    const expectedPrefix = figureKind === 'main'
+      ? `manual-main-${materialSegment}-` : `supp-${materialSegment}-`;
     const existingFigureSegment = existingFigureId.startsWith(expectedPrefix)
       ? existingFigureId.slice(expectedPrefix.length) : '';
     const figureId = existingFigureSegment &&
@@ -475,7 +540,8 @@
       figureId,
       originalFigureId,
       figureLabel,
-      isSupplemental: true,
+      figureKind,
+      isSupplemental: figureKind !== 'main',
       sourceMaterialId,
       sourceTitle: text(figure.sourceTitle || asset.title, 500),
       sourceUrl: normalizeSupplementalUrl(figure.sourceUrl || asset.sourceUrl),
@@ -501,11 +567,18 @@
       sourceMimeType: source.sourceMimeType,
       sourceFileSize: source.sourceFileSize,
       sourceImportedAt: source.sourceImportedAt,
-      sourceFingerprint: source.sourceFingerprint
+      sourceFingerprint: source.sourceFingerprint,
+      figureKind: source.figureKind,
+      figureLabel: source.figureLabel,
+      sourcePage: source.sourcePage
     };
     const figure = normalizeSupplementalFigure({
       figureId: input.figureId,
-      figureLabel: text(input.figureLabel || 'Supplemental Figure', 240),
+      figureKind: source.figureKind,
+      figureLabel: source.figureLabel || canonicalManualFigureLabel(
+        input.figureLabel, source.figureKind, 'Figure S'
+      ),
+      sourcePage: source.sourcePage,
       caption: source.caption,
       panelHints,
       captionBlocks,
@@ -523,6 +596,20 @@
       ...provenance,
       figures: [figure]
     };
+  }
+
+  function nextSupplementalFigureLabel(value = []) {
+    const assets = Array.isArray(value) ? value : [value];
+    const figures = assets.flatMap(item => {
+      const asset = item?.content && typeof item.content === 'object'
+        ? item.content : item;
+      return Array.isArray(asset?.figures) ? asset.figures : [];
+    });
+    let highest = 0;
+    figures.forEach(figure => {
+      highest = Math.max(highest, supplementalFigureSequence(figure));
+    });
+    return `Figure S${Math.max(highest, figures.length) + 1}`;
   }
 
   async function createManualSupplementalDraft(input = {}, deps = {}) {
@@ -543,6 +630,8 @@
     }
     const analysisImages = (rawAnalysisImages || []).map(image =>
       normalizeSupplementalTransientImage(image, source.sourceFingerprint));
+    const analysisStatus = input.analysisStatus === 'awaiting_article_context'
+      ? 'awaiting_article_context' : 'draft';
     const conflictedMaterialIds = new Set();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const materialId = await allocateSupplementalMaterialId({
@@ -559,14 +648,16 @@
         sourceMaterialId: materialId,
         title: input.title,
         figureId: input.figureId,
-        figureLabel: input.figureLabel
+        figureKind: input.figureKind || source.figureKind,
+        figureLabel: input.figureLabel || source.figureLabel,
+        sourcePage: input.sourcePage ?? source.sourcePage
       });
       const draftContent = {
         ...sourceDraft,
-        analysisStatus: 'awaiting_article_context',
+        analysisStatus,
         figures: sourceDraft.figures.map((figure, index) => ({
           ...figure,
-          analysisStatus: 'awaiting_article_context',
+          analysisStatus,
           ...(index === 0 && analysisImages.length
             ? { analysisImages }
             : {})
@@ -589,20 +680,32 @@
   }
 
   function mergeSupplementalFigureAssets(mainFigures = [], assets = []) {
-    const merged = [];
+    const mergedMain = [];
+    const mergedSupplemental = [];
     const seen = new Set();
     const append = figure => {
       const id = text(figure?.figureId, 200);
       if (!id || seen.has(id)) return;
       seen.add(id);
-      merged.push(figure);
+      if (figure?.isSupplemental === true) mergedSupplemental.push(figure);
+      else mergedMain.push(figure);
     };
-    (Array.isArray(mainFigures) ? mainFigures : []).forEach(append);
-    (Array.isArray(assets) ? assets : []).forEach(asset => {
-      (Array.isArray(asset?.figures) ? asset.figures : []).forEach(figure =>
-        append(normalizeSupplementalFigure(figure, asset)));
+    const imported = (Array.isArray(assets) ? assets : []).flatMap(asset =>
+      (Array.isArray(asset?.figures) ? asset.figures : [])
+        .map(figure => normalizeSupplementalFigure(figure, asset))
+    );
+    const manualMainByLabel = new Map(imported
+      .filter(figure => figure.isSupplemental !== true)
+      .map(figure => [compactText(figure.figureLabel).toLowerCase(), figure]));
+    (Array.isArray(mainFigures) ? mainFigures : []).forEach(figure => {
+      const key = compactText(figure?.figureLabel).toLowerCase();
+      const replacement = manualMainByLabel.get(key);
+      append(replacement || figure);
+      if (replacement) manualMainByLabel.delete(key);
     });
-    return merged;
+    manualMainByLabel.forEach(append);
+    imported.filter(figure => figure.isSupplemental === true).forEach(append);
+    return [...mergedMain, ...mergedSupplemental.sort(compareSupplementalFigures)];
   }
 
   function activeFigureResult(figure = {}) {
@@ -753,16 +856,22 @@
     SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE,
     normalizeSupplementalUrl,
     normalizeSupplementalFigureSource,
+    normalizeManualFigureKind,
+    canonicalManualFigureLabel,
     normalizeSupplementalTransientImage,
     allocateSupplementalMaterialId,
     createManualSupplementalDraft,
     createSupplementalFigureImportDraft,
+    nextSupplementalFigureLabel,
     supplementalMaterialKind,
     discoverSupplementalMaterials,
     collectReferencesFromText,
     extractSupplementalReferences,
     supplementalFigureKey,
     normalizeSupplementalFigure,
+    supplementalFigureSequence,
+    canonicalSupplementalFigureLabel,
+    compareSupplementalFigures,
     mergeSupplementalFigureAssets,
     buildSupplementalCoverage,
     supplementalFigureAssetPath,

@@ -25,6 +25,7 @@ function prepareExtension() {
   }
   for (const filename of [
     'background.js', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css',
+    'logic-map.html', 'logic-map.js', 'logic-map.css',
     'options.html', 'options.js', 'options.css', 'offscreen.html', 'offscreen.js',
     'offscreen-network-worker.js', 'manifest.json'
   ]) fs.copyFileSync(path.join(root, filename), path.join(extensionDir, filename));

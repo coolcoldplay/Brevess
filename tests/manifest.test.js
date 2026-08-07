@@ -41,7 +41,8 @@ test('manifest opens an action-activated native side panel and injects extractio
   assert.deepEqual(manifest.host_permissions, [
     'https://*/*',
     'http://localhost/*',
-    'http://127.0.0.1/*'
+    'http://127.0.0.1/*',
+    'file:///*'
   ]);
   assert.equal(manifest.optional_host_permissions, undefined);
   assert.ok(manifest.permissions.includes('offscreen'));
@@ -165,6 +166,9 @@ test('background worker keeps routed LLM operations alive until completion', () 
   );
   assert.match(background, /const activatedSidePanelTabIds = new Set\(\)/);
   assert.match(background, /message\?\.type === 'SIDE_PANEL_DOCUMENT_READY'/);
+  assert.match(background, /message\?\.type === 'SIDE_PANEL_ACTIVATE_CURRENT_TAB'/);
+  assert.match(background, /activateTabFromOpenSidePanel/);
+  assert.match(background, /activatePdfReaderAndOpenSidePanel\(tab, panelOpen\)/);
   assert.match(background, /shouldArmRestore: false/);
   assert.match(content, /window\.addEventListener\('pageshow', announceSidePanelDocumentReady, true\)/);
   assert.match(content, /type: 'SIDE_PANEL_DOCUMENT_READY'/);

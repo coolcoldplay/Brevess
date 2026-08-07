@@ -17,11 +17,85 @@ const {
   normalizeSupplementalTransientImage,
   allocateSupplementalMaterialId,
   createManualSupplementalDraft,
-  createSupplementalFigureImportDraft
+  createSupplementalFigureImportDraft,
+  nextSupplementalFigureLabel,
+  supplementalFigureSequence,
+  canonicalSupplementalFigureLabel,
+  normalizeManualFigureKind,
+  canonicalManualFigureLabel
 } = require('../core/supplemental-materials.js');
 
 const fingerprint = character => `sha256:${character.repeat(64)}`;
 const importedAt = '2026-08-03T00:00:00.000Z';
+
+test('assigns manual supplemental Figures the next stable sequential label', () => {
+  assert.equal(nextSupplementalFigureLabel([]), 'Figure S1');
+  assert.equal(nextSupplementalFigureLabel([
+    { figures: [{ sourceMode: 'caption', figureLabel: 'Supplemental Figure 1' }] },
+    { figures: [{ sourceMode: 'image', figureLabel: 'old custom label' }] },
+    { figures: [{ sourceMode: 'pdf', figureLabel: 'Supplemental Figure 12' }] }
+  ]), 'Figure S13');
+  assert.equal(nextSupplementalFigureLabel([
+    { content: { figures: [{
+      sourceMode: 'caption', figureLabel: 'Supplemental Figure 7'
+    }] } }
+  ]), 'Figure S8');
+  assert.equal(supplementalFigureSequence('Figure S16'), 16);
+  assert.equal(canonicalSupplementalFigureLabel('Supplemental Figure 6'), 'Figure S6');
+});
+
+test('sorts imported supplemental Figures as FS1 FS2 FS3 after main Figures', () => {
+  const merged = mergeSupplementalFigureAssets([
+    { figureId: 'figure-1', figureLabel: 'Figure 1' }
+  ], [{
+    materialId: 'manual-order',
+    figures: [
+      { figureId: 'figure-s3', figureLabel: 'Figure S3' },
+      { figureId: 'figure-s1', figureLabel: 'Figure S1' },
+      { figureId: 'figure-s2', figureLabel: 'Supplemental Figure 2' }
+    ]
+  }]);
+  assert.deepEqual(merged.map(figure => figure.figureLabel), [
+    'Figure 1', 'Figure S1', 'Figure S2', 'Figure S3'
+  ]);
+});
+
+test('manual main Figures keep their page marker and override a failed automatic Figure label', () => {
+  assert.equal(normalizeManualFigureKind('main'), 'main');
+  assert.equal(canonicalManualFigureLabel('Fig. 3', 'main'), 'Figure 3');
+  const draft = createSupplementalFigureImportDraft({
+    sourceMode: 'caption',
+    sourceMaterialId: 'manual-main-three',
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('f'),
+    caption: 'Figure 3. Manually corrected complete legend.',
+    figureKind: 'main',
+    figureLabel: 'Fig. 3',
+    sourcePage: 8
+  });
+  const manual = draft.figures[0];
+  assert.equal(manual.figureLabel, 'Figure 3');
+  assert.equal(manual.figureKind, 'main');
+  assert.equal(manual.isSupplemental, false);
+  assert.equal(manual.sourcePage, 8);
+  assert.match(manual.figureId, /^manual-main-/);
+  const merged = mergeSupplementalFigureAssets([
+    { figureId: 'automatic-2', figureLabel: 'Figure 2' },
+    { figureId: 'automatic-3', figureLabel: 'Figure 3' }
+  ], [draft]);
+  assert.deepEqual(merged.map(figure => figure.figureId), [
+    'automatic-2', manual.figureId
+  ]);
+  assert.throws(() => createSupplementalFigureImportDraft({
+    sourceMode: 'caption',
+    sourceMaterialId: 'manual-main-invalid',
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('e'),
+    caption: 'Missing a usable main Figure number.',
+    figureKind: 'main',
+    figureLabel: 'overview'
+  }), /MANUAL_FIGURE_LABEL/);
+});
 
 test('normalizes exactly pdf image and caption supplemental Figure sources', () => {
   assert.deepEqual([...SUPPLEMENTAL_FIGURE_SOURCE_MODES], ['pdf', 'image', 'caption']);
@@ -491,8 +565,8 @@ test('normalizes one manual analysis image inside the shared draft contract', as
 
   assert.equal(created.asset, savedDraft);
   assert.equal(created.persisted.revision, 1);
-  assert.equal(created.asset.analysisStatus, 'awaiting_article_context');
-  assert.equal(created.asset.figures[0].analysisStatus, 'awaiting_article_context');
+  assert.equal(created.asset.analysisStatus, 'draft');
+  assert.equal(created.asset.figures[0].analysisStatus, 'draft');
   assert.deepEqual(created.asset.figures[0].analysisImages, [{
     mediaType: 'image/png',
     dataUrl: 'data:image/png;base64,AAAA',
@@ -500,6 +574,22 @@ test('normalizes one manual analysis image inside the shared draft contract', as
     height: 1,
     sourceFingerprint
   }]);
+  const awaiting = await createManualSupplementalDraft({
+    sourceMode: 'caption',
+    sourceMaterialId: 'manual-caption-s5',
+    sourceImportedAt: importedAt,
+    sourceFingerprint: fingerprint('6'),
+    caption: 'Figure S5. Await article context.',
+    analysisStatus: 'awaiting_article_context'
+  }, {
+    exists: async () => false,
+    save: async (_relativePath, draft) => ({ content: draft })
+  });
+  assert.equal(awaiting.asset.analysisStatus, 'awaiting_article_context');
+  assert.equal(
+    awaiting.asset.figures[0].analysisStatus,
+    'awaiting_article_context'
+  );
   await assert.rejects(
     createManualSupplementalDraft({
       sourceMode: 'image',

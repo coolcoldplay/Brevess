@@ -19,17 +19,23 @@ user documents, and other credentials are not source and must not be committed.
 
 ## Build and verify
 
-Requirements: Node.js 18 or later, PowerShell, and Chrome or Edge for browser
-verification.
+Requirements: Node.js 18 or later, PowerShell, Git, and Chrome or Edge for
+browser verification. Building PDFFigures2 from source also requires a Java 8
+JDK; the release script separately downloads and verifies the pinned Temurin
+JRE used at runtime.
 
 ```powershell
 npm.cmd ci
 npm.cmd test
+npm.cmd run build:pdf-engine
+npm.cmd run prepare:pdf-runtime
 npm.cmd run build:unpacked -- -BuildName brevess-v1.0.0
 ```
 
-The unpacked extension is generated under `dist/`. Load that directory from
-the browser extension management page in developer mode.
+The unpacked extension and optional local companion are generated under
+`dist/`. Load only the extension directory from the browser extension
+management page. The local companion is installed separately through its
+signed installer or packaged installation script.
 
 ## Release checklist
 

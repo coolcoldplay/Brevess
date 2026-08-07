@@ -20,7 +20,7 @@ test('popup offers explicit regex and LLM modes plus a direct settings gear', ()
   assert.match(html, /id="llmDiagnostics"/);
 });
 
-test('popup routes LLM analysis and falls back to regex on failure', () => {
+test('popup preserves completed LLM chunks and retries only unfinished work', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   assert.match(html, /core\/tab-messenger\.js/);
@@ -31,7 +31,9 @@ test('popup routes LLM analysis and falls back to regex on failure', () => {
   assert.match(script, /options\.html#categoryWorkspace/);
   assert.match(script, /availableCategories/);
   assert.match(script, /LLM_PREPARE_DOCUMENT/);
-  assert.match(script, /回退.*正则|正则.*回退/);
+  assert.match(script, /已完成分块和高亮均已保留/);
+  assert.match(script, /再次点击只会重试未完成分块/);
+  assert.doesNotMatch(script, /LLM 分析失败，已回退到正则高亮/);
   assert.match(script, /getLlmDiagnostics/);
   assert.match(script, /refreshLlmDiagnostics/);
   assert.match(script, /unrecognizedTextBlocks/);
@@ -217,7 +219,7 @@ test('side panel follows the active tab without activating untouched papers', ()
   assert.match(script, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(script, /function synchronizeActiveTabContext/);
   assert.match(script, /isTabActivated/);
-  assert.match(script, /点击扩展图标激活/);
+  assert.match(script, /点击侧栏任意位置激活/);
   const bootStart = script.indexOf("document.addEventListener('DOMContentLoaded'");
   const bootEnd = script.indexOf('// 加载设置', bootStart);
   const boot = script.slice(bootStart, bootEnd);
@@ -257,7 +259,7 @@ test('popup exposes Figure LLM tools independently from the selected highlight e
   const script = read('popup.js');
   const css = read('popup.css');
   assert.match(html, /id="analyzeFigures"/);
-  assert.match(html, /逐图解读/);
+  assert.match(html, /全部解图/);
   assert.match(script, /function updateFigureButton/);
   assert.match(script, /function hasUsableLlm/);
   assert.match(script, /figureButton\.hidden\s*=\s*false/);
@@ -300,6 +302,30 @@ test('regex apply resolves current unified overrides without mixed revisions', (
   assert.doesNotMatch(script, /DEFAULT_CATEGORIES|sanitizeBuiltInRegexRules/);
 });
 
+test('highlight distribution exposes three independent fixed source toggles', () => {
+  const script = read('popup.js');
+  const css = read('popup.css');
+  assert.match(script, /HIGHLIGHT_SOURCE_FILTERS = Object\.freeze\(\['regex', 'llm', 'manual'\]\)/);
+  assert.match(script, /label: '正则'/);
+  assert.match(script, /label: 'LLM'/);
+  assert.match(script, /label: '手动'/);
+  assert.match(script, /dataset\.highlightSourceToggle = source/);
+  assert.match(script, /setAttribute\('aria-pressed'/);
+  assert.match(script, /action: 'setHighlightSourceVisibility'/);
+  assert.match(css, /workspace-distribution-legend-item\[aria-pressed="false"\]/);
+});
+
+test('transient LLM chunk notifications replace one progress row instead of flooding history', () => {
+  const script = read('popup.js');
+  const start = script.indexOf('function recordSidePanelNotification');
+  const end = script.indexOf('function setupSidePanelNotificationCenter', start);
+  const helper = script.slice(start, end);
+  assert.match(helper, /transientHighlightProgress/);
+  assert.match(helper, /当前段落已完成并保存/);
+  assert.match(helper, /newest\.message = normalizedMessage/);
+  assert.match(helper, /60000/);
+});
+
 function loadSupplementalFigureImportTools(overrides = {}) {
   const script = read('popup.js');
   const start = script.indexOf('function createSupplementalFigureImportTools');
@@ -322,15 +348,17 @@ function loadSupplementalFigureImportTools(overrides = {}) {
   });
 }
 
-test('new supplemental Figure dialog exposes exactly three accessible source panes', () => {
+test('new supplemental Figure dialog combines image and caption into one manual pane', () => {
   const html = read('popup.html');
   const css = read('popup.css');
+  const script = read('popup.js');
   assert.match(html, /id="openSupplementalFigureImport"/);
   assert.match(html, /id="supplementalFigureImportStatus"[^>]*aria-live="polite"/);
-  for (const mode of ['pdf', 'image', 'caption']) {
+  for (const mode of ['pdf', 'manual']) {
     assert.match(html, new RegExp(`name="supplementalFigureSourceMode"[^>]*value="${mode}"`));
     assert.match(html, new RegExp(`data-supplemental-source-pane="${mode}"`));
   }
+  assert.doesNotMatch(html, /name="supplementalFigureSourceMode"[^>]*value="caption"/);
   assert.match(
     html,
     /id="supplementalFigureImageFile"[^>]*accept="[^"]*(?:image\/png)[^"]*(?:image\/jpeg)[^"]*(?:image\/webp)[^"]*"/
@@ -343,7 +371,20 @@ test('new supplemental Figure dialog exposes exactly three accessible source pan
     html,
     /id="supplementalFigureImageCaption"[^>]*required/
   );
-  assert.match(html, /id="supplementalFigureCaption"[^>]*required[^>]*maxlength="8000"/);
+  assert.match(html, /id="supplementalFigurePasteTarget"[^>]*tabindex="0"/);
+  assert.match(html, /id="supplementalFigureKind"/);
+  assert.match(html, /<option value="main">主图<\/option>/);
+  assert.match(html, /<option value="supplemental" selected>补充图<\/option>/);
+  assert.match(html, /id="supplementalFigureLabel"/);
+  assert.match(html, /id="supplementalFigureSourcePage"[^>]*type="number"[^>]*min="1"/);
+  assert.match(html, /Ctrl\+V/);
+  assert.match(script, /function resetSupplementalFigureImportForm/);
+  assert.match(script, /form\?\.reset\?\.\(\)/);
+  assert.match(script, /clipboardImageFile/);
+  assert.match(script, /updateSupplementalFigureDraft/);
+  assert.match(script, /deleteSupplementalFigure/);
+  assert.match(script, /normalizeManualMetadata/);
+  assert.match(script, /PDF 第 \$\{Math\.floor\(Number\(figure\.sourcePage\)\)\} 页/);
   assert.ok(html.indexOf('core/supplemental-materials.js') < html.indexOf('popup.js'));
   assert.match(css, /\.supplemental-figure-import-dialog/);
   assert.match(css, /\[data-supplemental-source-pane\]\[hidden\]/);
@@ -351,8 +392,8 @@ test('new supplemental Figure dialog exposes exactly three accessible source pan
 
 test('supplemental Figure source mode keeps one pane visible without clearing retry input', () => {
   const tools = loadSupplementalFigureImportTools();
-  const radios = ['pdf', 'image', 'caption'].map(value => ({ value, checked: value === 'pdf' }));
-  const panes = ['pdf', 'image', 'caption'].map(value => ({
+  const radios = ['pdf', 'manual'].map(value => ({ value, checked: value === 'pdf' }));
+  const panes = ['pdf', 'manual'].map(value => ({
     dataset: { supplementalSourcePane: value },
     hidden: value !== 'pdf'
   }));
@@ -365,9 +406,9 @@ test('supplemental Figure source mode keeps one pane visible without clearing re
   };
   const retainedFile = { name: 'figure-s1.png' };
   const retainedCaption = 'Figure S1. Replication.';
-  tools.syncSourceMode(root, 'caption');
-  assert.deepEqual(panes.filter(pane => !pane.hidden).map(pane => pane.dataset.supplementalSourcePane), ['caption']);
-  assert.equal(radios.filter(radio => radio.checked)[0].value, 'caption');
+  tools.syncSourceMode(root, 'manual');
+  assert.deepEqual(panes.filter(pane => !pane.hidden).map(pane => pane.dataset.supplementalSourcePane), ['manual']);
+  assert.equal(radios.filter(radio => radio.checked)[0].value, 'manual');
   assert.equal(retainedFile.name, 'figure-s1.png');
   assert.equal(retainedCaption, 'Figure S1. Replication.');
 });
@@ -384,7 +425,15 @@ test('supplemental Figure import rejects mismatched files, empty captions, and z
   assert.throws(
     () => tools.normalizeCaption('   '),
     error => error?.code === 'SUPPLEMENTAL_CAPTION_EMPTY' &&
-      error.fieldId === 'supplementalFigureCaption'
+      error.fieldId === 'supplementalFigureImageCaption'
+  );
+  assert.throws(
+    () => tools.validateManualInput(null, '   '),
+    error => error?.code === 'SUPPLEMENTAL_MANUAL_INPUT_REQUIRED'
+  );
+  assert.deepEqual(
+    tools.validateManualInput(null, 'Figure S1. (A) control.'),
+    { file: null, caption: 'Figure S1. (A) control.' }
   );
   await assert.rejects(
     () => tools.prepareTransientImage({
@@ -397,6 +446,27 @@ test('supplemental Figure import rejects mismatched files, empty captions, and z
   );
 });
 
+test('supplemental Figure accepts a clipboard image as a normal upload file', () => {
+  const tools = loadSupplementalFigureImportTools();
+  class FakeFile {
+    constructor(parts, name, options) {
+      this.parts = parts;
+      this.name = name;
+      this.type = options.type;
+      this.size = 4;
+    }
+  }
+  const pasted = tools.clipboardImageFile({
+    items: [{
+      kind: 'file',
+      type: 'image/png',
+      getAsFile: () => ({ type: 'image/png', size: 4, name: '' })
+    }]
+  }, FakeFile);
+  assert.match(pasted.name, /^clipboard-\d+\.png$/);
+  assert.equal(pasted.type, 'image/png');
+});
+
 test('supplemental import targets normalize production bare document hashes', () => {
   const tools = loadSupplementalFigureImportTools();
   const target = tools.validateTarget({
@@ -407,6 +477,25 @@ test('supplemental import targets normalize production bare document hashes', ()
     documentHash: 'B'.repeat(64)
   });
   assert.equal(target.documentHash, `sha256:${'b'.repeat(64)}`);
+});
+
+test('supplemental import binds to the workspace identity instead of a prepared-document hash', () => {
+  const tools = loadSupplementalFigureImportTools();
+  const target = tools.buildTarget({
+    url: 'https://journal.example/visible-reader-url',
+    documentHash: 'c'.repeat(64),
+    localWorkspace: {
+      workspaceId: `workspace:${'a'.repeat(64)}`,
+      workspaceGeneration: 4,
+      canonicalUrl: 'https://journal.example/canonical-paper',
+      contentHash: 'b'.repeat(64)
+    }
+  }, 42, 'd'.repeat(64));
+
+  assert.equal(target.canonicalUrl, 'https://journal.example/canonical-paper');
+  assert.equal(target.documentHash, `sha256:${'b'.repeat(64)}`);
+  assert.equal(target.workspaceGeneration, 4);
+  assert.equal(target.targetArticleTabId, 42);
 });
 
 test('supplemental image import hashes the original file but sends only the bounded transient image shape', async () => {

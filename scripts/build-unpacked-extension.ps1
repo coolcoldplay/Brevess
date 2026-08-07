@@ -39,10 +39,18 @@ foreach ($file in @(
 Copy-Item -LiteralPath (
   Join-Path $projectRoot 'native-host\bin\brevess-codex-host.exe'
 ) -Destination $nativeBinTarget
+foreach ($directory in @('pdffigures2', 'runtime')) {
+  Copy-Item -LiteralPath (Join-Path $projectRoot "native-host\$directory") `
+    -Destination $nativeTarget -Recurse
+}
+Copy-Item -LiteralPath (Join-Path $projectRoot 'native-host\runtime-version.json') `
+  -Destination $nativeTarget
 
 foreach ($file in @(
   'manifest.json', 'background.js', 'content.js', 'content.css',
   'popup.html', 'popup.js', 'popup.css',
+  'logic-map.html', 'logic-map.js', 'logic-map.css',
+  'pdf-reader.html', 'pdf-reader.js', 'pdf-reader.css',
   'options.html', 'options.js', 'options.css',
   'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md',

@@ -72,6 +72,20 @@
     return Object.freeze(result);
   }
 
+  const PDF_WORKSPACE_ADAPTER = createAdapter({
+    id: 'brevess-pdf-workspace', family: 'pdf-workspace',
+    hostPatterns: [/$a/],
+    specificArticleRootSelectors: ['#pdfReaderArticle', '.pdf-reader-article'],
+    articleRootSelectors: ['#pdfReaderArticle', '.pdf-reader-article'],
+    headingSelectors: ['.pdf-reader-article h1', '.pdf-reader-article h2',
+      '.pdf-reader-article h3', '.pdf-reader-article h4'],
+    paragraphSelectors: ['.pdf-reader-article p', '.pdf-reader-article li',
+      '.pdf-reader-article blockquote'],
+    excludedSelectors: ['.pdf-reader-toolbar', '.pdf-reader-control',
+      '.pdf-original-viewer'],
+    stabilitySelectors: ['#pdfReaderArticle[data-brevess-pdf-article="true"]']
+  });
+
   const PUBLISHER_ADAPTERS = Object.freeze([
     createAdapter({
       id: 'elsevier-sciencedirect', family: 'elsevier',
@@ -101,11 +115,21 @@
         '.video-player',
         '.video-playback',
         '.video-player-modal',
+        '.video-content',
+        '.video-caption',
+        '.video-description',
+        '.supplementary-video',
+        '[class*="supplement"][class*="video"]',
+        '[class*="video"][class*="caption"]',
+        '[class*="video"][class*="description"]',
         '.keyboard-shortcuts-modal',
         '.download-options-modal',
         '.transcript-panel',
         '[data-aa-name*="accessibility" i]',
         '[data-aa-name*="download-options" i]',
+        '[data-aa-name*="supplementary-video" i]',
+        '[data-aa-name*="video-caption" i]',
+        '[data-aa-name*="video-description" i]',
         '[data-aa-name*="transcript" i]'
       ],
       stabilitySelectors: ['#body', '.Body', '.article__sections']
@@ -274,6 +298,8 @@
   });
 
   function selectPublisherAdapter(locationLike = {}) {
+    const pathname = String(locationLike?.pathname || '').trim();
+    if (/(?:^|\/)pdf-reader\.html$/i.test(pathname)) return PDF_WORKSPACE_ADAPTER;
     const hostname = String(locationLike?.hostname || '').trim().toLowerCase();
     return PUBLISHER_ADAPTERS.find(item =>
       item.hostPatterns.some(pattern => pattern.test(hostname))
@@ -283,6 +309,7 @@
   return {
     PUBLISHER_ADAPTER_VERSION,
     PUBLISHER_ADAPTERS,
+    PDF_WORKSPACE_ADAPTER,
     GENERIC_ADAPTER,
     selectPublisherAdapter
   };

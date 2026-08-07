@@ -53,12 +53,27 @@ function createFakeHandleStore(initialPermission = 'granted') {
           error.name = 'NotFoundError';
           throw error;
         }
-        return { async text() { return files.get(path); } };
+        return {
+          async text() {
+            const value = files.get(path);
+            return typeof value === 'string'
+              ? value : new TextDecoder().decode(value);
+          },
+          async arrayBuffer() {
+            const value = files.get(path);
+            const bytes = value instanceof Uint8Array
+              ? value : new TextEncoder().encode(String(value));
+            return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+          }
+        };
       },
       async createWritable() {
         let next = '';
         return {
-          async write(value) { next = String(value); },
+          async write(value) {
+            next = value instanceof Uint8Array
+              ? new Uint8Array(value) : String(value);
+          },
           async close() {
             if (failWrites > 0) {
               failWrites -= 1;
@@ -139,7 +154,14 @@ function createFakeHandleStore(initialPermission = 'granted') {
     pauseNextWrite(path) { pausePath = path; },
     async waitForPausedWrite() { await pausedEntered; },
     releasePausedWrite() { releasePausedWrite?.(); },
-    readText(path) { return files.get(path) || ''; },
+    readText(path) {
+      const value = files.get(path);
+      return typeof value === 'string' ? value : '';
+    },
+    readBytes(path) {
+      const value = files.get(path);
+      return value instanceof Uint8Array ? new Uint8Array(value) : null;
+    },
     has(path) { return files.has(path); },
     writeText(path, value) { files.set(path, String(value)); },
     fileEntries() { return [...files.entries()]; },
@@ -235,6 +257,33 @@ test('continues using a legacy workspace root when upgrading to Brevess', async 
   assert.equal(handles.has('Brevess/categories.json'), false);
 });
 
+test('writes and restores whole PDF Figure bytes as a workspace binary asset', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+  await sync.enqueueWorkspaceBinary(
+    workspace,
+    'pdf/figures/main/figure-1.png',
+    bytes,
+    { revision: 2, contentHash: 'a'.repeat(64) }
+  );
+  const flushed = await sync.flush();
+  assert.equal(flushed.failed, 0);
+  assert.equal(flushed.written, 1);
+  const fullPath = `Brevess/workspaces/${workspace.directoryName}/` +
+    'pdf/figures/main/figure-1.png';
+  assert.deepEqual(handles.readBytes(fullPath), bytes);
+  const restored = await sync.readWorkspaceBinary(
+    workspace, 'pdf/figures/main/figure-1.png'
+  );
+  assert.equal(restored.found, true);
+  assert.deepEqual(restored.bytes, bytes);
+});
+
 test('serializes concurrent workspace assets so the manifest retains every chat file', async () => {
   const handles = createFakeHandleStore();
   const sync = createDirectorySync({
@@ -301,6 +350,63 @@ test('discovers valid chat turn files omitted by an older workspace manifest', a
     'chat/index.json', relativePath
   ]);
   assert.equal(discovered.assets[1].content.turnId, 'turn-orphan');
+});
+
+test('discovers manual supplemental Figure image and caption files omitted by an older manifest', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  await sync.enqueueWorkspaceAsset(workspace, 'ui/state.json', { view: 'figures' }, {
+    revision: 1, workspaceGeneration: 1
+  });
+  await sync.flush();
+  const manifest = JSON.parse(handles.readText(
+    `Brevess/workspaces/${workspace.directoryName}/manifest.json`
+  ));
+  const relativePath = 'figures/supplemental/manual-image-s1.json';
+  const supplemental = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Durable caption.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  handles.writeText(
+    `Brevess/workspaces/${workspace.directoryName}/${relativePath}`,
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'sci-logic-highlighter-workspace-asset',
+      revision: 4,
+      updatedAt: '2026-08-04T00:00:00.000Z',
+      contentHash: 'manual-image-s1-hash',
+      sourceId: 'extension',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath,
+      data: supplemental
+    })
+  );
+
+  const discovered = await sync.listWorkspaceSupplementalAssets(manifest);
+
+  assert.equal(discovered.invalidAssets, 0);
+  assert.deepEqual(discovered.assets.map(asset => asset.relativePath), [relativePath]);
+  assert.equal(discovered.assets[0].content.figures[0].caption,
+    'Figure S1. Durable caption.');
+  assert.equal(discovered.assets[0].content.figures[0].analysisImages[0].dataUrl,
+    'data:image/png;base64,AQID');
 });
 
 test('recovers only post-manifest chat writes from an older workspace generation', async () => {
@@ -584,6 +690,49 @@ test('a post-restore workspace save advances beyond a newer disk envelope revisi
   assert.equal(result.pendingCount, 0);
   assert.equal(saved.revision, 5001);
   assert.equal(saved.data.totalTurns, 2);
+});
+
+test('a stale queued workspace asset cannot hide a newer disk revision during explicit save', async () => {
+  const handles = createFakeHandleStore('prompt');
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const workspace = workspaceFixture({ workspaceGeneration: 2 });
+  const relativePath = 'annotations/highlights.json';
+  const root = `Brevess/workspaces/${workspace.directoryName}`;
+
+  await sync.enqueueWorkspaceAsset(
+    workspace,
+    relativePath,
+    { highlights: [{ id: 'queued-old' }] },
+    { revision: 2, workspaceGeneration: 2, advanceFromDirectory: true }
+  );
+  handles.writeText(`${root}/${relativePath}`, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace-asset',
+    revision: 5000,
+    updatedAt: '2026-07-24T02:00:00.000Z',
+    contentHash: 'disk-hash',
+    sourceId: 'extension',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 2,
+    relativePath,
+    data: { highlights: [{ id: 'disk-newer' }] }
+  }));
+  handles.setPermission('granted');
+
+  const queued = await sync.enqueueWorkspaceAsset(
+    workspace,
+    relativePath,
+    { highlights: [{ id: 'current-safe-result' }] },
+    { revision: 3, workspaceGeneration: 2, advanceFromDirectory: true }
+  );
+  const result = await sync.flush();
+  const saved = JSON.parse(handles.readText(`${root}/${relativePath}`));
+
+  assert.equal(queued.revision, 5001);
+  assert.equal(result.failed, 0);
+  assert.equal(result.pendingCount, 0);
+  assert.deepEqual(saved.data.highlights, [{ id: 'current-safe-result' }]);
 });
 
 test('does not overwrite a malformed existing index during flush', async () => {

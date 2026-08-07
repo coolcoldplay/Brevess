@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_ANALYSIS_VERSION = '9-figure-context-open-methods';
+  const FIGURE_ANALYSIS_VERSION = '12-panel-specific-durable-results';
   const FIGURE_DEPTHS = new Set(['standard', 'deep']);
   const OBSERVATION_SOURCES = [
     'image_observation', 'caption_statement', 'body_statement', 'multi_source', 'inference'
@@ -30,6 +30,66 @@
     ['KEGG', ['kegg', 'kegg pathway enrichment', 'kegg pathway analysis', 'kegg enrichment']],
     ['GSEA', ['gsea', 'gene set enrichment analysis']]
   ];
+  const METHOD_LABELS_ZH = Object.freeze({
+    'schematic': '实验示意图',
+    'schematic diagram': '实验示意图',
+    'experimental schematic': '实验示意图',
+    'representative image': '代表性图像',
+    'representative images': '代表性图像',
+    'histological reconstruction': '组织学重建',
+    'electrophysiology': '电生理记录',
+    'electrophysiological recording': '电生理记录',
+    'patch-clamp electrophysiology': '膜片钳电生理记录',
+    'whole-cell patch clamp': '全细胞膜片钳记录',
+    'fiber photometry': '光纤记录',
+    'fiber photometry recording': '光纤记录',
+    'optical stimulation': '光刺激',
+    'optogenetic stimulation': '光遗传刺激',
+    'viral injection': '病毒注射',
+    'virus injection': '病毒注射',
+    'viral tracing': '病毒示踪',
+    'histology': '组织学验证',
+    'immunofluorescence': '免疫荧光染色',
+    'immunohistochemistry': '免疫组织化学染色',
+    'behavioral test': '行为学测试',
+    'behavioral tests': '行为学测试',
+    'behavioral assay': '行为学测试',
+    'quantification': '定量分析',
+    'heatmap': '热图',
+    'bar graph': '柱状图',
+    'line graph': '折线图',
+    'scatter plot': '散点图',
+    'action potential recording': '动作电位记录',
+    'action potential firing': '动作电位发放',
+    'histological reconstruction of cno microinjection sites': 'CNO微注射位点的组织学重建',
+    'chemogenetic activation with cno puff': 'CNO局部给药诱导的化学遗传学激活',
+    'electrophysiological recording of action potential firing': '动作电位发放的电生理记录',
+    'representative images of viral infection and cannula position': '病毒感染与套管位置的代表性图像',
+    'open field': '旷场实验',
+    'open field test': '旷场实验',
+    'of test': '旷场实验',
+    'elevated plus maze': '高架十字迷宫实验',
+    'elevated plus-maze': '高架十字迷宫实验',
+    'epm': '高架十字迷宫实验',
+    'tail suspension': '悬尾实验',
+    'tail suspension test': '悬尾实验',
+    'ts test': '悬尾实验',
+    'sucrose preference': '蔗糖偏好实验',
+    'sucrose preference test': '蔗糖偏好实验',
+    'sp test': '蔗糖偏好实验',
+    'von frey': 'von Frey机械痛阈测试',
+    'von frey test': 'von Frey机械痛阈测试',
+    'hplc': '高效液相色谱',
+    'high-performance liquid chromatography': '高效液相色谱',
+    'high performance liquid chromatography': '高效液相色谱',
+    'rnasecope': 'RNAscope原位杂交',
+    'in situ hybridization': '原位杂交',
+    'open arm entries': '高架十字迷宫开放臂进入次数',
+    'open arm time': '高架十字迷宫开放臂停留时间',
+    'freezing time': '冻结时间测定',
+    'sucrose preference percentage': '蔗糖偏好率测定',
+    'total distance': '总移动距离测定'
+  });
   const PANEL_ROLES = [
     'model_setup', 'manipulation_validation', 'phenotype', 'quantification', 'mechanism',
     'negative_control', 'specificity', 'necessity', 'sufficiency', 'rescue',
@@ -81,6 +141,7 @@
       figure_id: stringSchema(),
       analysis_depth: { type: 'string', enum: [analysisDepth] },
       basis: { type: 'string', enum: ['vision_text', 'caption_context'] },
+      figure_title_zh: stringSchema(),
       figure_question_zh: stringSchema(),
       panels: {
         type: 'array',
@@ -156,7 +217,7 @@
       claim_boundary_zh: stringSchema()
     };
     const required = [
-      'figure_id', 'analysis_depth', 'basis', 'figure_question_zh', 'panels',
+      'figure_id', 'analysis_depth', 'basis', 'figure_title_zh', 'figure_question_zh', 'panels',
       'panel_groups', 'logic_bridges', 'argument_chain', 'author_assembly_zh', 'core_conclusion_zh',
       'claim_boundary_zh'
     ];
@@ -212,6 +273,7 @@
       figure_id: stringSchema(),
       analysis_depth: { type: 'string', enum: [analysisDepth] },
       basis: { type: 'string', enum: ['vision_text', 'caption_context'] },
+      figure_title_zh: stringSchema(),
       figure_question_zh: stringSchema(),
       evidence_steps: {
         type: 'array',
@@ -234,7 +296,7 @@
       claim_boundary_zh: stringSchema()
     };
     const required = [
-      'figure_id', 'analysis_depth', 'basis', 'figure_question_zh',
+      'figure_id', 'analysis_depth', 'basis', 'figure_title_zh', 'figure_question_zh',
       'evidence_steps', 'author_assembly_zh', 'core_conclusion_zh',
       'claim_boundary_zh'
     ];
@@ -352,6 +414,46 @@
     return match ? match[0] : '';
   }
 
+  function localizeFigureMethodLabel(value) {
+    const text = cleanFigureField(value, 240);
+    if (!text || /[\u3400-\u9fff]/u.test(text)) return text;
+    const recognized = normalizeRecognizedMethod(text);
+    if (recognized) return recognized;
+    const key = methodAliasKey(text);
+    if (METHOD_LABELS_ZH[key]) return METHOD_LABELS_ZH[key];
+    const normalized = text
+      .replace(/\brepresentative images?\b/gi, '代表性图像')
+      .replace(/\bschematic(?: diagram)?\b/gi, '实验示意图')
+      .replace(/\bhistological reconstruction\b/gi, '组织学重建')
+      .replace(/\bwhole-cell patch[- ]clamp(?: recording)?\b/gi, '全细胞膜片钳记录')
+      .replace(/\bpatch[- ]clamp electrophysiology\b/gi, '膜片钳电生理记录')
+      .replace(/\belectrophysiological recording\b/gi, '电生理记录')
+      .replace(/\belectrophysiology\b/gi, '电生理记录')
+      .replace(/\bfiber photometry(?: recording)?\b/gi, '光纤记录')
+      .replace(/\boptogenetic (?:activation|stimulation)\b/gi, '光遗传激活')
+      .replace(/\bchemogenetic (?:activation|inhibition)\b/gi, match =>
+        /inhibition/i.test(match) ? '化学遗传抑制' : '化学遗传激活')
+      .replace(/\bviral? (?:infection|injection)\b/gi, match =>
+        /infection/i.test(match) ? '病毒感染' : '病毒注射')
+      .replace(/\bcannula position\b/gi, '套管位置')
+      .replace(/\bcno microinjection sites?\b/gi, 'CNO微注射位点')
+      .replace(/\baction potential firing\b/gi, '动作电位发放')
+      .replace(/\bbehavioral (?:test|tests|assay)\b/gi, '行为学测试')
+      .replace(/\bopen[- ]field(?: test)?\b|\bOF test\b/gi, '旷场实验')
+      .replace(/\belevated plus[- ]maze(?: test)?\b|\bEPM\b/gi, '高架十字迷宫实验')
+      .replace(/\btail suspension(?: test)?\b|\bTS test\b/gi, '悬尾实验')
+      .replace(/\bsucrose preference(?: test)?\b|\bSP test\b/gi, '蔗糖偏好实验')
+      .replace(/\bvon Frey(?: test)?\b/gi, 'von Frey机械痛阈测试')
+      .replace(/\bhigh[- ]performance liquid chromatography\b|\bHPLC\b/gi, '高效液相色谱')
+      .replace(/\bin situ hybridization\b/gi, '原位杂交')
+      .replace(/\bquantification\b/gi, '定量分析')
+      .replace(/\bheatmap\b/gi, '热图')
+      .replace(/,\s*/g, '、')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return normalized || text;
+  }
+
   function inferMethodFamily(value, fallback = 'other') {
     const text = methodAliasKey(value);
     if (!text) return fallback;
@@ -378,7 +480,8 @@
     for (const item of source.slice(0, 24)) {
       const methodText = cleanFigureField(item, 240);
       if (!methodText) continue;
-      const normalizedMethod = normalizeRecognizedMethod(methodText) || methodText;
+      const canonicalMethod = normalizeRecognizedMethod(methodText) || methodText;
+      const normalizedMethod = localizeFigureMethodLabel(canonicalMethod);
       const key = methodAliasKey(normalizedMethod);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -412,10 +515,16 @@
       '1. 实验设计：逐个 Panel 说明局部问题、实验目的、具体操作和比较对象。',
       '2. 结果观察：使用“XX比XX高/低”“XX区域变亮/变暗”“曲线在XX之后上升/下降”等直白比较。',
       '3. 结论推导：区分直接观察、局部推论和该 Panel 对整图论证的贡献。',
+      'local_inference_zh 与 contribution_zh 必须提炼该 Panel 在证据链中的功能：它支持、排除、验证或推进了什么判断；不得只是翻译图注。',
+      '比例尺、标尺数值、图片尺寸、单纯“示意图/代表性图像”、注射位置或实验流程本身不是证据结论；除非它们验证了操作有效性或排除了替代解释，否则不要把它们写进证据组结论或 argument_chain。',
       '4. 串联逻辑：先把同一实验的图像与定量 Panel 合并成证据组，再说明组间逻辑桥。',
       '为每个 Panel 标记 observation_source：image_observation、caption_statement、body_statement、multi_source 或 inference。',
       '观察只能陈述输入明确支持的事实；推论使用“支持、提示、与……一致”，证据不足时不得使用“证明、导致、介导”。',
       'Panel 标识必须来自输入，不得按连续字母自行补齐。',
+      '每个 Panel 必须一对一解读：先锁定该字母在图片中的区域、该字母对应的图注分句、标题和坐标轴，再填写这个 Panel 的记录。',
+      '不得把 A–D、E–H 等 Panel 组的实验清单复制到组内每个 Panel；组级共同作用只能写入 panel_groups。若输入只能支持组级信息而不能区分单个 Panel，应在单 Panel 字段中明确“现有证据无法单独区分”，不得猜测或复制整组信息。',
+      '不同的行为学读出必须区分：总移动距离通常是运动能力控制；开放臂进入/停留对应高架十字迷宫；冻结时间、蔗糖偏好率、机械痛阈分别是不同读出，不能互相替代。',
+      'figure_title_zh 只填写原 Figure 标题的直接中文翻译，不得改写成结果总结；输入没有独立 Figure 标题时填写空字符串。',
       '字段内容不要重复“实验设计：”“结果观察：”“结论推导：”“核心结论：”等界面标签。',
       '标准结果最多 30 个 Panel、6 个 Panel 组和 8 条逻辑桥。',
       '用中文输出严格 JSON，不要 Markdown。'
@@ -424,7 +533,7 @@
       'For every Panel, keep role, phenotype_name_zh, and methods separate: role is the evidence function, phenotype_name_zh is the concrete measured phenotype, and methods are the named assay or analysis.',
       'When role is "phenotype", phenotype_name_zh must be a concrete phenotype supported by the input; use "\u672a\u660e\u786e" when it is not stated. For every other role, phenotype_name_zh must be an empty string.',
       'Set method_category to wet_lab, imaging, bioinformatics, clinical, schematic, or other, and method_source to image, caption, body, or inference. In text-only mode, do not use image as method_source.',
-      'methods is an open list of method phrases explicitly supported by the image, caption, or body text. Copy the most specific method wording available; do not force it into a closed vocabulary and do not guess. Use an empty array when no method is supported. Known aliases and method families are normalized locally after the response.'
+        'methods is an open list of method phrases explicitly supported by the image, caption, or body text; do not force it into a closed vocabulary. Every descriptive method or chart-type phrase must be written in Chinese. Established molecular assay abbreviations and proper names such as WB, RNAscope, RNA-seq, GRAB-DA and CNO may remain, but behavioral assay abbreviations such as OF, EPM, TS and SP must be written as their Chinese experiment names. Do not return English phrases such as schematic, representative images, histological reconstruction, electrophysiology, model setup, or phenotype. Do not guess. Use an empty array when no method is supported. Known aliases and method families are normalized locally after the response.'
     );
     common.push(visualInput
       ? '你已获得该 Figure 的图片像素；看不清或图中未显示时必须明确说明，不能猜测。'
@@ -555,6 +664,9 @@
       systemPrompt: [
         compileFigureSystemPrompt({ visualInput, analysisDepth: 'standard' }),
         'PANEL_EXTRACTION_PASS: return only the requested Panel records.',
+        'Return exactly one record for every requested label and no record for any other label.',
+        'For each record, use only that label\'s image region, caption clause, heading, axes and body references. Never copy a multi-Panel assay list or group conclusion into every member.',
+        'If several labels form one experiment, keep their shared purpose concise but preserve the distinct readout, comparison and observation of each label. Put combined reasoning only in the later synthesis pass.',
         'Do not generate figure-level groups, bridges, argument chains, conclusions, or audit prose.',
         'Keep every string concise and evidence-grounded so all requested Panels fit in one JSON response.'
       ].join('\n'),
@@ -581,6 +693,7 @@
         'You synthesize a biomedical Figure argument from already extracted, evidence-grounded Panel records.',
         'Use only the supplied caption, related body context, and Panel evidence. Do not invent visual details.',
         'Build one coherent Figure-level question, evidence groups, logical bridges, ordered argument chain, conclusion, and claim boundary.',
+        'Evidence groups must express what the grouped Panels establish in the paper argument, not translate their legend. Exclude scale bars, image dimensions, and setup-only details unless they validate the manipulation or rule out an alternative explanation.',
         analysisDepth === 'deep'
           ? 'Also audit controls, evidence levels, alternative explanations, negative results, and the role of the Figure in the paper.'
           : 'Keep the synthesis concise and focused on the central evidence chain.',
@@ -990,7 +1103,8 @@
 
   function assertRawFigureAnalysis(value, analysisDepth) {
     const baseKeys = [
-      'figure_id', 'analysis_depth', 'basis', 'figure_question_zh', 'panels', 'panel_groups',
+      'figure_id', 'analysis_depth', 'basis', 'figure_title_zh', 'figure_question_zh',
+      'panels', 'panel_groups',
       'logic_bridges', 'argument_chain', 'author_assembly_zh', 'core_conclusion_zh',
       'claim_boundary_zh'
     ];
@@ -1001,7 +1115,8 @@
     ];
     const keys = analysisDepth === 'deep' ? [...baseKeys, ...deepKeys] : baseKeys;
     requireExactFigureKeys(value, keys, 'root');
-    ['figure_id', 'analysis_depth', 'basis', 'figure_question_zh', 'author_assembly_zh',
+    ['figure_id', 'analysis_depth', 'basis', 'figure_title_zh', 'figure_question_zh',
+      'author_assembly_zh',
       'core_conclusion_zh', 'claim_boundary_zh'].forEach(key => {
       requireFigureField(value, key, item => typeof item === 'string');
     });
@@ -1055,6 +1170,52 @@
     return result;
   }
 
+  function compactPanelSpecificityText(value) {
+    return cleanFigureField(value, 1800)
+      .toLowerCase()
+      .replace(/[\s，。；、：:;,.!?！？()（）\[\]【】_-]+/g, '');
+  }
+
+  function assertPanelSpecificity(panels) {
+    const source = Array.isArray(panels) ? panels : [];
+    if (source.length < 2) return;
+    const fullSignatures = new Map();
+    const methodSignatures = new Map();
+    for (const panel of source) {
+      const fullSignature = [
+        panel.role, panel.phenotypeName, ...(panel.methods || []), panel.purpose,
+        panel.design, panel.comparison, panel.directObservation,
+        panel.localInference, panel.contribution
+      ].map(compactPanelSpecificityText).filter(Boolean).join('|');
+      if (fullSignature.length >= 120) {
+        const labels = fullSignatures.get(fullSignature) || [];
+        labels.push(panel.panel);
+        fullSignatures.set(fullSignature, labels);
+      }
+      const behavioralMethods = (panel.methods || []).filter(method =>
+        /(旷场|高架十字迷宫|悬尾|蔗糖偏好|机械痛阈|冻结时间|运动距离)/.test(method)
+      );
+      if (behavioralMethods.length >= 3) {
+        const signature = [...behavioralMethods].sort().join('|');
+        const labels = methodSignatures.get(signature) || [];
+        labels.push(panel.panel);
+        methodSignatures.set(signature, labels);
+      }
+    }
+    const duplicatedFull = [...fullSignatures.values()].find(labels => labels.length >= 3);
+    if (duplicatedFull) {
+      throw invalidResponse(
+        `Figure response copied one group interpretation across Panels: ${duplicatedFull.join(', ')}`
+      );
+    }
+    const duplicatedAssays = [...methodSignatures.values()].find(labels => labels.length >= 2);
+    if (duplicatedAssays) {
+      throw invalidResponse(
+        `Figure response copied a multi-assay group list across Panels: ${duplicatedAssays.join(', ')}`
+      );
+    }
+  }
+
   function validateFigureAnalysis(value, input, options = {}) {
     if (!isPlainObject(value)) {
       throw invalidResponse('Figure analysis must be an object');
@@ -1071,6 +1232,7 @@
     }
     assertRawFigureAnalysis(value, analysisDepth);
     const visualInput = options.visualInput === true;
+    const allowPanelOnly = options.allowPanelOnly === true;
     const expectedPanels = normalizedPanelRefs(input?.panelHints);
     const seenPanels = new Set();
     const unexpectedPanels = [];
@@ -1141,10 +1303,29 @@
           ? raw.evidence_level : 'other'
       })).filter(item => item.panels.length || item.established || item.handoff);
     const returnedPanels = panels.map(item => item.panel);
+    const missingPanels = expectedPanels.filter(panel => !returnedPanels.includes(panel));
+    if (options.requireCompletePanels === true &&
+        expectedPanels.length && missingPanels.length) {
+      throw invalidResponse(
+        `Figure response did not cover every requested Panel: ${missingPanels.join(', ')}`
+      );
+    }
+    const emptyPanels = panels.filter(panel => !(
+      (Array.isArray(panel.methods) && panel.methods.length) ||
+      panel.purpose || panel.design || panel.comparison || panel.directObservation ||
+      panel.localInference || panel.contribution
+    )).map(panel => panel.panel);
+    if (emptyPanels.length) {
+      throw invalidResponse(
+        `Figure response returned empty Panel interpretations: ${emptyPanels.join(', ')}`
+      );
+    }
+    assertPanelSpecificity(panels);
     const base = {
       figureId: expectedId,
       analysisDepth,
       basis: visualInput && value.basis !== 'caption_context' ? 'vision_text' : 'caption_context',
+      figureTitleZh: cleanFigureField(value.figure_title_zh, 600),
       figureQuestion: cleanFigureField(value.figure_question_zh, 2400),
       panels,
       panelGroups,
@@ -1153,7 +1334,7 @@
       panelCoverage: {
         expectedPanels,
         returnedPanels,
-        missingPanels: expectedPanels.filter(panel => !returnedPanels.includes(panel)),
+        missingPanels,
         unexpectedPanels,
         ignoredUnexpectedPanelCount: unexpectedPanels.length
       },
@@ -1161,8 +1342,14 @@
       coreConclusion: cleanFigureField(value.core_conclusion_zh, 2400),
       claimBoundary: cleanFigureField(value.claim_boundary_zh, 2400)
     };
-    if (!base.panels.length && !base.figureQuestion && !base.coreConclusion) {
-      throw invalidResponse('Figure analysis did not contain usable content');
+    if (allowPanelOnly) {
+      if (!base.panels.length) {
+        throw invalidResponse('Figure Panel response did not contain usable content');
+      }
+    } else if (!base.figureQuestion || !base.coreConclusion) {
+      throw invalidResponse(
+        'Figure analysis must include a scientific question and a core conclusion'
+      );
     }
     if (analysisDepth === 'deep') {
       base.controlAnalysis = (Array.isArray(value.control_analysis)
@@ -1213,6 +1400,7 @@
 
   function emptyFigureFields(analysisDepth) {
     const fields = {
+      figure_title_zh: '',
       figure_question_zh: '',
       panel_groups: [],
       logic_bridges: [],
@@ -1250,7 +1438,12 @@
       basis: value.basis,
       panels: value.panels,
       ...emptyFigureFields(analysisDepth)
-    }, input, { ...options, ignoreUnexpectedPanels: true });
+    }, input, {
+      ...options,
+      ignoreUnexpectedPanels: true,
+      requireCompletePanels: true,
+      allowPanelOnly: true
+    });
   }
 
   function validateFigureSynthesis(value, input, panelEvidence, options = {}) {
@@ -1266,7 +1459,7 @@
     return validateFigureAnalysis({
       ...value,
       panels: (Array.isArray(panelEvidence) ? panelEvidence : []).map(panelToRaw)
-    }, input, options);
+    }, input, { ...options, requireCompletePanels: true });
   }
 
   function validateUnlabeledFigureOverview(value, input, options = {}) {
@@ -1305,6 +1498,7 @@
       analysisDepth,
       basis: visualInput && value.basis !== 'caption_context'
         ? 'vision_text' : 'caption_context',
+      figureTitleZh: cleanFigureField(value.figure_title_zh, 600),
       figureQuestion: cleanFigureField(value.figure_question_zh, 2400),
       panels: [],
       panelGroups: [],
@@ -1349,6 +1543,7 @@
       figure_id: value.figureId,
       analysis_depth: value.analysisDepth,
       basis: value.basis,
+      figure_title_zh: value.figureTitleZh || '',
       figure_question_zh: value.figureQuestion,
       panels: Array.isArray(value.panels) ? toRawPanels(value.panels) : value.panels,
       panel_groups: mapCachedList(value.panelGroups, group => ({
@@ -1398,7 +1593,8 @@
     const validated = validateFigureAnalysis(raw, input, {
       analysisDepth,
       visualInput: value.basis === 'vision_text',
-      repairResponse: false
+      repairResponse: false,
+      requireCompletePanels: true
     });
     if (value.unlabeledOverview === true) validated.unlabeledOverview = true;
     return validated;
@@ -1465,7 +1661,9 @@
       core_conclusion_zh: '',
       claim_boundary_zh: value.claim_boundary_zh
     }, { ...input, panelHints: [expectedPanel] }, {
-      analysisDepth: 'standard', visualInput: options.visualInput === true
+      analysisDepth: 'standard', visualInput: options.visualInput === true,
+      allowPanelOnly: true,
+      requireCompletePanels: true
     });
     return {
       ...normalized.panels[0],
@@ -1473,6 +1671,44 @@
       basis: normalized.basis,
       claimBoundary: normalized.claimBoundary
     };
+  }
+
+  // A committed Figure result remains readable even when a later DOM refresh or
+  // parser version discovers additional Panel labels. Coverage completeness is
+  // a re-analysis decision; it must never hide a previously durable result.
+  function isUsableFigureAnalysisResult(value, input = {}, options = {}) {
+    if (!value || typeof value !== 'object') return false;
+    const expectedFigureId = cleanText(input?.figureId || value.figureId, 80);
+    if (!expectedFigureId || cleanText(value.figureId, 80) !== expectedFigureId) return false;
+    const expectedDepth = options.analysisDepth === 'deep'
+      ? 'deep' : options.analysisDepth === 'standard' ? 'standard' : '';
+    if (expectedDepth && value.analysisDepth !== expectedDepth) return false;
+    if (!cleanFigureField(value.figureQuestion, 6000) ||
+        !cleanFigureField(value.coreConclusion, 6000)) return false;
+    const panels = Array.isArray(value.panels) ? value.panels : [];
+    if (!panels.length) {
+      // A Figure whose publisher DOM exposes no stable Panel labels is
+      // intentionally analyzed as one whole-Figure evidence overview. Its
+      // durable result has no synthetic Panel records; the ordered argument
+      // chain is the evidence payload that makes the result usable.
+      if (value.unlabeledOverview !== true) return false;
+      const chain = Array.isArray(value.argumentChain) ? value.argumentChain : [];
+      return chain.some(step =>
+        cleanFigureField(step?.established, 6000) ||
+        cleanFigureField(step?.handoff, 6000)
+      );
+    }
+    return panels.every(panel => Boolean(
+      canonicalPanelRef(panel?.panel) && (
+        (Array.isArray(panel?.methods) && panel.methods.some(Boolean)) ||
+        cleanFigureField(panel?.purpose, 6000) ||
+        cleanFigureField(panel?.design, 6000) ||
+        cleanFigureField(panel?.comparison, 6000) ||
+        cleanFigureField(panel?.directObservation, 6000) ||
+        cleanFigureField(panel?.localInference, 6000) ||
+        cleanFigureField(panel?.contribution, 6000)
+      )
+    ));
   }
 
   return {
@@ -1500,10 +1736,12 @@
     validateCachedFigureAnalysis,
     validateFigurePanelInterpretation,
     validatePanelFollowup,
+    isUsableFigureAnalysisResult,
     normalizePanelFollowupTopics,
     normalizePanelFollowupPrompts,
     normalizePanelCustomQuestion,
     buildFigureContext,
-    normalizeMethodEvidence
+    normalizeMethodEvidence,
+    localizeFigureMethodLabel
   };
 });

@@ -480,7 +480,7 @@
       card.appendChild(header);
       const summary = document.createElement('p');
       summary.className = 'supplemental-summary';
-      summary.textContent = fallback(textItems(item.proofItems).join('；'),
+      summary.textContent = fallback(item.summary || textItems(item.proofItems)[0],
         '待补充该材料证明或支持的内容');
       card.appendChild(summary);
       const groups = document.createElement('div');
@@ -635,60 +635,50 @@
       chain.appendChild(empty);
       return;
     }
-    const edgePairs = [];
     edges.forEach((edge, index) => {
-      let sourceNode = edgePairs.at(-1)?.targetNode;
-      if (!sourceNode || sourceNode.textContent !== edge.sourceId) {
-        sourceNode = document.createElement('span');
-        sourceNode.className = 'mechanism-node';
-        sourceNode.textContent = edge.sourceId;
-        chain.appendChild(sourceNode);
-      }
+      const row = document.createElement('div');
+      row.className = 'mechanism-edge-row';
+      const sourceNode = document.createElement('span');
+      sourceNode.className = 'mechanism-node';
+      sourceNode.textContent = edge.sourceId;
       const targetNode = document.createElement('span');
       targetNode.className = 'mechanism-node';
       targetNode.textContent = edge.targetId;
-      chain.appendChild(targetNode);
-      edgePairs.push({ edge, sourceNode, targetNode, index });
-    });
-    mechanismRenderFrame = requestAnimationFrame(() => {
-      mechanismRenderFrame = null;
-      if (!chain.isConnected) return;
+      const connector = document.createElement('span');
+      connector.className = 'mechanism-edge-track';
+      const dashed = edge.effect === 'associate' || edge.evidence !== 'strong';
+      const arrowId = `mechanism-promote-arrow-${index}`;
       const svg = svgElement('svg', {
-        class: 'mechanism-edge-svg', viewBox: `0 0 ${chain.scrollWidth} ${chain.scrollHeight}`,
-        width: chain.scrollWidth, height: chain.scrollHeight
+        class: 'mechanism-edge-svg', viewBox: '0 0 180 48',
+        preserveAspectRatio: 'none', 'aria-hidden': 'true'
       });
       const defs = svgElement('defs');
       const marker = svgElement('marker', {
-        id: 'mechanism-promote-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5,
+        id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5,
         markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse'
       });
       marker.appendChild(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#247d72' }));
       defs.appendChild(marker);
       svg.appendChild(defs);
-      edgePairs.forEach(({ edge, sourceNode, targetNode }) => {
-        const x1 = sourceNode.offsetLeft + sourceNode.offsetWidth;
-        const x2 = targetNode.offsetLeft;
-        const y = sourceNode.offsetTop + sourceNode.offsetHeight / 2;
-        const dashed = edge.effect === 'associate' || edge.evidence !== 'strong';
-        const line = svgElement('line', {
-          x1, y1: y, x2, y2: y, stroke: '#247d72', 'stroke-width': 2.4,
-          'stroke-dasharray': dashed ? '8 6' : '',
-          'marker-end': edge.effect === 'inhibit' ? '' : 'url(#mechanism-promote-arrow)'
-        });
-        svg.appendChild(line);
-        if (edge.effect === 'inhibit') {
-          svg.appendChild(svgElement('line', {
-            x1: x2, y1: y - 10, x2, y2: y + 10, stroke: '#247d72', 'stroke-width': 3
-          }));
-        }
-        const refs = document.createElement('small');
-        refs.className = 'mechanism-edge-meta';
-        refs.style.left = `${(x1 + x2) / 2}px`;
-        refs.textContent = Array.isArray(edge.supportPanels) && edge.supportPanels.length
-          ? edge.supportPanels.join('、') : '';
-        chain.appendChild(refs);
-      });
-      chain.prepend(svg);
+      svg.appendChild(svgElement('line', {
+        x1: 3, y1: 27, x2: 174, y2: 27,
+        stroke: '#247d72', 'stroke-width': 3,
+        'stroke-dasharray': dashed ? '10 7' : '',
+        'marker-end': edge.effect === 'inhibit' ? '' : `url(#${arrowId})`
+      }));
+      if (edge.effect === 'inhibit') {
+        svg.appendChild(svgElement('line', {
+          x1: 174, y1: 16, x2: 174, y2: 38,
+          stroke: '#247d72', 'stroke-width': 4
+        }));
+      }
+      const refs = document.createElement('small');
+      refs.className = 'mechanism-edge-meta';
+      refs.textContent = Array.isArray(edge.supportPanels) && edge.supportPanels.length
+        ? edge.supportPanels.join('、') : '';
+      connector.append(refs, svg);
+      row.append(sourceNode, connector, targetNode);
+      chain.appendChild(row);
     });
   }
 
@@ -1063,6 +1053,9 @@
         `${supplementalTypeLabel(item.type)} ${logicMap.supplementalMaterials.indexOf(item) + 1}`;
       markObjectEdited(item, 'label');
     }, { multiline: false, maxLength: 240 });
+    editorField(section, '折叠时显示的一句话功能', item.summary || '', value => {
+      item.summary = text(value, 320); markObjectEdited(item, 'summary');
+    }, { rows: 2, maxLength: 320 });
     editorList(section, item.proofItems, {
       addLabel: '添加该材料证明的结论',
       create: () => ({ itemId: uid(`${item.supplementalId}-proof`), text: '' }),
@@ -1317,12 +1310,12 @@
     const supplementalId = uid('supplemental');
     logicMap.supplementalMaterials.push({
       supplementalId, type, label: `${supplementalTypeLabel(type)} ${logicMap.supplementalMaterials.length + 1}`,
-      proofItems: [], evidenceGroups: [],
+      summary: '', proofItems: [], evidenceGroups: [],
       connections: logicMap.steps[0] ? [{
         connectionId: uid(`${supplementalId}-figure-link`), mode: 'figure',
         targetStepId: logicMap.steps[0].stepId, sourceGroupId: '', targetGroupId: ''
       }] : [],
-      manuallyEdited: true, manuallyEditedFields: ['type', 'label', 'connections']
+      manuallyEdited: true, manuallyEditedFields: ['type', 'label', 'summary', 'connections']
     });
     selection = { kind: 'supplemental', supplementalId };
     markObjectEdited(logicMap, 'supplementalMaterials'); markChanged(); render();

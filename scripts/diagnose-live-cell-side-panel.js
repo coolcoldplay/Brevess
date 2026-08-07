@@ -20,6 +20,7 @@ function prepareDiagnosticExtension() {
   }
   for (const filename of [
     'background.js', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css',
+    'logic-map.html', 'logic-map.js', 'logic-map.css',
     'options.html', 'options.js', 'options.css', 'offscreen.html', 'offscreen.js',
     'offscreen-network-worker.js'
   ]) {
@@ -150,10 +151,28 @@ async function sendTabMessageWithDeadline(worker, tabId, message, timeoutMs = 20
         articleTab.id,
         { action }
       );
+      const paragraphs = Array.isArray(response?.document?.paragraphs)
+        ? response.document.paragraphs : [];
       return {
         success: response?.success,
         error: response?.error || '',
-        paragraphCount: response?.document?.paragraphs?.length,
+        paragraphCount: paragraphs.length,
+        inlineReferenceFlyouts: paragraphs
+          .filter(item => /^\d{1,4}\s*[.)]?\s*[A-Z][A-Za-z'’\-]+\s*,\s*[A-Z]/u
+            .test(String(item?.text || '').trim()))
+          .slice(0, 12)
+          .map(item => ({
+            paragraphId: item.paragraphId,
+            sectionTitle: item.sectionTitle,
+            text: String(item.text || '').slice(0, 240)
+          })),
+        rawScientificTags: paragraphs
+          .filter(item => /<\/?(?:sup|sub)>/i.test(String(item?.displayText || '')))
+          .slice(0, 12)
+          .map(item => ({
+            paragraphId: item.paragraphId,
+            displayText: String(item.displayText || '').slice(0, 240)
+          })),
         headingCount: response?.snapshot?.diagnostics?.headingCount,
         documentId: response?.documentId || ''
       };

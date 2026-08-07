@@ -453,7 +453,7 @@ test('portable encrypted settings expose an accessible safe passphrase workflow'
   });
   assert.match(html, /autocomplete=["']current-password["']/);
   assert.match(html, /autocomplete=["']new-password["']/);
-  assert.match(html, /API Key、模型设置和全局缩略词表以加密形式存放在所选目录/);
+  assert.match(html, /API Key、模型设置、MinerU PDF 解析设置与 Token、全局缩略词表以加密形式存放在所选目录/);
   assert.match(html, /遗忘口令无法恢复密文凭据/);
   assert.match(script, /function openPortableConfigDialog\(mode\)/);
   assert.match(css, /\.portable-config-card\s*\{/);
@@ -1595,6 +1595,9 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(script, /chrome\.tabs\.getCurrent/);
   assert.match(script, /if \(result\.opened\)[\s\S]*chrome\.tabs\.remove\(settingsTabId\)/);
   assert.match(script, /chrome\.tabs\.remove\(settingsTabId\)\.catch\(\(\) => window\.close\(\)\)/);
+  assert.match(script, /step === ['"]storage['"]\s*\?\s*['"]暂不选择，继续['"]\s*:\s*['"]暂不配置，直接使用['"]/);
+  assert.match(script, /if \(step === ['"]storage['"]\)[\s\S]*onboardingUi\.step = ['"]api['"][\s\S]*else[\s\S]*await finishOnboarding\(\)/);
+  assert.match(script, /暂时不配置也能直接使用导航、摘句、手动高亮与本地阅读/);
   assert.match(script, /chooseUserDataDirectory/);
   assert.match(script, /addEventListener\(['"]click['"],\s*continueOnboarding\)/);
   assert.match(script, /persistForm/);
@@ -1608,6 +1611,21 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
   assert.match(css, /\.button:disabled\s*\{[^}]*cursor:\s*not-allowed/);
   assert.match(css, /\.button\[aria-busy=["']true["']\]:disabled\s*\{[^}]*cursor:\s*wait/);
+});
+
+test('model settings own the MinerU PDF parsing configuration', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const reader = read('pdf-reader.html');
+  [
+    'pdfMineruSettings', 'pdfMineruMode', 'pdfMineruToken',
+    'pdfMineruLanguage', 'pdfMineruOcr', 'savePdfMineruSettings'
+  ].forEach(id => assert.match(html, new RegExp(`id=["']${id}["']`)));
+  assert.match(html, /core\/pdf-workspace\.js/);
+  assert.match(script, /function loadPdfMineruSettings\(\)/);
+  assert.match(script, /function savePdfMineruSettings\(/);
+  assert.match(script, /options\.html#pdf-mineru|['"]pdf-mineru['"]:\s*['"]models['"]/);
+  assert.doesNotMatch(reader, /id=["']pdfMineruToken["']/);
 });
 
 test('onboarding reveals the real storage and API forms instead of only the guide card', () => {

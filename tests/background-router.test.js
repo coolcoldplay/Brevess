@@ -25,6 +25,7 @@ require('../core/article-chat-stream.js');
 require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
+require('../core/abbreviation-extractor.js');
 require('../core/cache-planner.js');
 require('../core/privacy-sanitizer.js');
 require('../core/article-workspace.js');
@@ -164,6 +165,11 @@ function createDirectorySyncDouble(options = {}) {
     },
     async listWorkspaceChatAssets(workspace) {
       return options.listWorkspaceChatAssets?.(workspace) || {
+        permission: 'granted', assets: [], invalidAssets: 0
+      };
+    },
+    async listWorkspaceSupplementalAssets(workspace) {
+      return options.listWorkspaceSupplementalAssets?.(workspace) || {
         permission: 'granted', assets: [], invalidAssets: 0
       };
     },
@@ -347,6 +353,7 @@ test('registers only the one-type study selection message in the service worker'
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   ['ARTICLE_WORKSPACE_ENSURE', 'ARTICLE_WORKSPACE_SAVE_ASSET',
     'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    'ARTICLE_WORKSPACE_LIST_ASSETS',
     'ARTICLE_WORKSPACE_SAVE_TURN', 'ARTICLE_WORKSPACE_PROBE',
     'ARTICLE_WORKSPACE_SCAN_RESTORE', 'ARTICLE_WORKSPACE_LIST',
     'ARTICLE_WORKSPACE_STATS', 'ARTICLE_WORKSPACE_EXPORT',
@@ -2901,7 +2908,13 @@ function crossFigureOutput(input) {
   const mainFigureIds = input.main_figure_ids || [];
   return {
     article_title: input.article_title,
+    known_background_zh: ['The pathway is implicated in the baseline phenotype.'],
     overall_thesis_zh: 'The first main Figure establishes the phenomenon and the next tests its mechanism.',
+    mechanism_chain: [{
+      from_zh: 'Observed phenotype',
+      to_zh: 'Candidate mechanism',
+      support_panel_refs: ['1A']
+    }],
     figure_nodes: mainFigureIds.map((figureId, index) => ({
       figure_id: figureId,
       role: index === 0 ? 'phenomenon' : 'mechanism',
@@ -3067,6 +3080,96 @@ test('builds and caches an ordered cross-figure domino chain', async () => {
   assert.equal(first.data.cacheHit, false);
   assert.equal(second.data.cacheHit, true);
   assert.equal(calls, 1);
+});
+
+test('splits invalid supplemental mappings without discarding the main Figure chain', async () => {
+  const storageArea = createMemoryStorage();
+  const batchSizes = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      if (!Array.isArray(input.supplemental_figures)) {
+        return jsonResponse({ output_text: JSON.stringify(crossFigureOutput(input)) });
+      }
+      batchSizes.push(input.supplemental_figures.length);
+      if (input.supplemental_figures.length > 1) {
+        return jsonResponse({ output_text: '{invalid supplemental mapping' });
+      }
+      const supplement = input.supplemental_figures[0];
+      return jsonResponse({
+        output_text: JSON.stringify({
+          supplemental_support: [{
+            figure_id: supplement.figure_id,
+            supports_figure_id: 'figure-1',
+            support_role: 'control',
+            attachment_basis: 'explicit_caption',
+            contribution_zh: supplement.conclusion_zh,
+            limitation_zh: '仅提供补充支持。'
+          }]
+        })
+      });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const message = {
+    type: 'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
+    document: { title: 'Mechanistic study' },
+    figures: [
+      { ...figureInput(1), analysis: { coreConclusion: 'Figure 1 establishes the phenotype.' } },
+      { ...figureInput(2), analysis: { coreConclusion: 'Figure 2 tests the mechanism.' } },
+      ...[1, 2].map(index => ({
+        ...figureInput(index + 2),
+        figureId: `figure-s${index}`,
+        figureLabel: `Figure S${index}`,
+        isSupplemental: true,
+        caption: `Figure S${index}, related to Figure 1.`,
+        analysis: { coreConclusion: `Supplement ${index} controls the experiment.` }
+      }))
+    ]
+  };
+
+  const first = await router.handle(message);
+  const second = await router.handle(message);
+
+  assert.equal(first.success, true);
+  assert.deepEqual(batchSizes, [2, 1, 1]);
+  assert.equal(first.data.crossFigureLogic.supplementalSupport.length, 2);
+  assert.deepEqual(
+    first.data.crossFigureLogic.supplementalSupport.map(item => item.figureId),
+    ['figure-s1', 'figure-s2']
+  );
+  assert.equal(second.data.cacheHit, true);
+  assert.equal(calls, 4);
+});
+
+test('repairs one invalid main cross-Figure response with a bounded retry', async () => {
+  const storageArea = createMemoryStorage();
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      if (calls === 1) return jsonResponse({ output_text: '{invalid main chain' });
+      return jsonResponse({ output_text: JSON.stringify(crossFigureOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
+    document: { title: 'Mechanistic study' },
+    figures: [
+      { ...figureInput(1), analysis: { coreConclusion: 'Phenotype.' } },
+      { ...figureInput(2), analysis: { coreConclusion: 'Mechanism.' } }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(calls, 2);
+  assert.equal(response.data.crossFigureLogic.nodes.length, 2);
 });
 
 test('analyzes Figures sequentially, checkpoints results and reuses identical cache', async () => {
@@ -3595,12 +3698,18 @@ test('closed-tab supplemental image draft persists only the normalized compresse
   assert.equal(response.success, true);
   assert.deepEqual(response.data, {
     saved: true,
+    queued: false,
+    directoryPersisted: false,
+    directoryPermission: 'unavailable',
+    directoryErrorCode: '',
     asset: {
       relativePath: calls[0].path,
       revision: 1,
       contentHash: 'stored-content-hash'
     },
-    analysisStatus: 'awaiting_article_context'
+    analysisStatus: 'awaiting_article_context',
+    figureLabel: 'Figure S1',
+    panelHints: []
   });
   assert.deepEqual(calls[0].conflict, { expectedRevision: 0, createOnly: true });
   assert.equal(calls[0].content.analysisStatus, 'awaiting_article_context');
@@ -3868,6 +3977,41 @@ test('persists Figure and chat provider route metadata through router storage an
     const envelope = JSON.parse(handleStore.readText(path));
     assert.deepEqual(envelope.data, asset.content);
   }
+  const supplementalPath = 'figures/supplemental/manual-image-s1.json';
+  const supplementalContent = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Caption persisted with the image.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  const supplementalSaved = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: supplementalPath,
+    content: supplementalContent,
+    requireDirectoryPersistence: true
+  });
+  assert.equal(supplementalSaved.success, true);
+  assert.equal(supplementalSaved.data.queued, true);
+  assert.equal(supplementalSaved.data.directoryPersisted, true);
+  const supplementalEnvelope = JSON.parse(handleStore.readText(
+    `Brevess/workspaces/${workspace.directoryName}/${supplementalPath}`
+  ));
+  assert.equal(supplementalEnvelope.data.figures[0].caption,
+    'Figure S1. Caption persisted with the image.');
+  assert.equal(supplementalEnvelope.data.figures[0].analysisImages[0].dataUrl,
+    'data:image/png;base64,AQID');
 });
 
 test('routes credential-free multi-file workspace save, scan, export, and crash-safe deletion', async () => {
@@ -3899,6 +4043,29 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
     workspaceGeneration: 1,
     relativePath: 'ui/state.json', content: { view: 'chat' }
   })).success, true);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: 'figures/supplemental/cell-support.json',
+    content: {
+      materialId: 'cell-support',
+      figures: [{ figureId: 'supp-cell-support-s1', figureLabel: 'Figure S1' }]
+    }
+  })).success, true);
+  const supplementalAssets = await router.handle({
+    type: 'ARTICLE_WORKSPACE_LIST_ASSETS',
+    workspaceId: workspace.workspaceId,
+    prefix: 'figures/supplemental/'
+  });
+  assert.equal(supplementalAssets.success, true);
+  assert.deepEqual(
+    supplementalAssets.data.assets.map(asset => asset.relativePath),
+    ['figures/supplemental/cell-support.json']
+  );
+  assert.equal(
+    supplementalAssets.data.assets[0].content.figures[0].figureLabel,
+    'Figure S1'
+  );
   assert.equal((await router.handle({
     type: 'ARTICLE_WORKSPACE_SAVE_TURN', workspaceId: workspace.workspaceId,
     workspaceGeneration: 1,
@@ -4031,6 +4198,151 @@ test('deletes browser-local workspace immediately when filesystem permission is 
   assert.equal(finalized.data.removedFromDisk, false);
   assert.equal(finalized.data.workspaceGeneration, 2);
   assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
+});
+
+test('scan restores an unindexed manual supplemental Figure with its image and caption', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace',
+    workspaceId: `workspace:${'7'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/manual-supplement-restore',
+    aliases: [],
+    title: 'Manual supplement restore',
+    directoryName: `Manual supplement restore--${'7'.repeat(16)}`,
+    revision: 2,
+    contentHash: '7'.repeat(64),
+    workspaceGeneration: 1,
+    createdAt: '2026-08-04T00:00:00.000Z',
+    updatedAt: '2026-08-04T00:00:00.000Z',
+    assets: []
+  };
+  const relativePath = 'figures/supplemental/manual-image-s1.json';
+  const content = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Restored caption.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted',
+      manifests: [workspace],
+      matches: [{ match: 'exact', manifest: workspace }]
+    }),
+    listWorkspaceSupplementalAssets: async () => ({
+      permission: 'granted',
+      invalidAssets: 0,
+      assets: [{
+        relativePath,
+        content,
+        revision: 4,
+        contentHash: 'manual-supplement-hash',
+        updatedAt: '2026-08-04T00:01:00.000Z'
+      }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const restored = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: workspace,
+    requestPermission: false
+  });
+
+  assert.equal(restored.success, true);
+  assert.equal(restored.data.recoveredUnindexedSupplementalAssets, 1);
+  assert.equal(restored.data.restore.assets.length, 1);
+  assert.equal(restored.data.restore.assets[0].content.figures[0].caption,
+    'Figure S1. Restored caption.');
+  assert.equal(restored.data.restore.assets[0].content.figures[0]
+    .analysisImages[0].dataUrl, 'data:image/png;base64,AQID');
+  assert.ok(directorySync.workspaceAssets.some(asset => asset.path === relativePath));
+  const localAssets = await workspaceStore.listAssets(workspace.workspaceId);
+  assert.equal(localAssets[0].content.figures[0].figureLabel, 'Figure S1');
+});
+
+test('scan backfills a newer browser-local supplemental Figure into the selected folder', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace',
+    workspaceId: `workspace:${'6'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/browser-local-supplement',
+    aliases: [],
+    title: 'Browser-local supplement',
+    directoryName: `Browser-local supplement--${'6'.repeat(16)}`,
+    revision: 3,
+    contentHash: '6'.repeat(64),
+    workspaceGeneration: 1,
+    createdAt: '2026-08-04T00:00:00.000Z',
+    updatedAt: '2026-08-04T00:00:00.000Z',
+    assets: []
+  };
+  const relativePath = 'figures/supplemental/manual-caption-s2.json';
+  const content = {
+    schemaVersion: 1,
+    materialId: 'manual-caption-s2',
+    sourceMode: 'caption',
+    figures: [{
+      figureId: 'supp-manual-caption-s2',
+      figureLabel: 'Figure S2',
+      caption: 'Figure S2. Browser-local caption recovered during upgrade.'
+    }]
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  await workspaceStore.ensureWorkspace(workspace);
+  await workspaceStore.putAsset(workspace.workspaceId, relativePath, content);
+  const listAssets = workspaceStore.listAssets.bind(workspaceStore);
+  workspaceStore.listAssets = async workspaceId => (await listAssets(workspaceId))
+    .map(asset => asset.relativePath === relativePath ? {
+      ...asset,
+      revision: 5,
+      contentHash: 'browser-local-supplement-hash',
+      updatedAt: '2026-08-04T00:02:00.000Z'
+    } : asset);
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted',
+      manifests: [workspace],
+      matches: [{ match: 'exact', manifest: workspace }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const restored = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: workspace,
+    requestPermission: false
+  });
+
+  assert.equal(restored.success, true);
+  assert.equal(restored.data.recoveredBrowserLocalSupplementalAssets, 1);
+  assert.equal(restored.data.restore.assets[0].content.figures[0].caption,
+    'Figure S2. Browser-local caption recovered during upgrade.');
+  assert.ok(directorySync.workspaceAssets.some(asset =>
+    asset.path === relativePath &&
+    asset.value.figures[0].figureLabel === 'Figure S2'
+  ));
 });
 
 test('scan restores validated workspace assets into IndexedDB before returning them', async () => {
@@ -5058,7 +5370,7 @@ test('keeps completed Figure checkpoints when a later Figure fails', async () =>
   assert.equal(resumed.success, true);
   assert.equal(resumed.data.cacheHits, 1);
   assert.equal(callsById['figure-1'], 1);
-  assert.equal(callsById['figure-2'], 3);
+  assert.equal(callsById['figure-2'], 4);
 });
 
 test('routes DeepSeek Figures directly through text evidence mode', async () => {
@@ -5230,6 +5542,102 @@ async function configuredReviewRouter(options = {}) {
   });
   return { router, requests, mapCallsByBatch };
 }
+
+test('translates abbreviation meanings through the summary task profile', async () => {
+  const storageArea = createMemoryStorage();
+  const requests = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, fetchOptions) => {
+      const body = JSON.parse(fetchOptions.body);
+      const payload = JSON.parse(body.input);
+      requests.push({
+        schemaName: body.text?.format?.name,
+        payload
+      });
+      return jsonResponse({ output_text: JSON.stringify({
+        translations: payload.terms.map(item => ({
+          abbreviation: item.abbreviation,
+          meaning_zh: item.abbreviation === 'TNF'
+            ? '肿瘤坏死因子' : '腺相关病毒'
+        }))
+      }) });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'openai',
+    config: { apiKey: 'key', model: 'gpt-5-mini' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'llm', providerId: 'openai', consentGranted: true }
+  });
+
+  const response = await router.handle({
+    type: 'LLM_TRANSLATE_ABBREVIATIONS',
+    entries: [
+      { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+      { abbreviation: 'AAV', fullName: 'adeno-associated virus' }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.route.taskType, 'summary');
+  assert.deepEqual(response.data.translations.map(item => item.meaningZh), [
+    '肿瘤坏死因子', '腺相关病毒'
+  ]);
+  assert.equal(requests[0].schemaName, 'abbreviation_chinese_meanings');
+});
+
+test('repairs malformed and incomplete abbreviation translation batches without losing terms', async () => {
+  const storageArea = createMemoryStorage();
+  const requestSizes = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, fetchOptions) => {
+      const body = JSON.parse(fetchOptions.body);
+      const payload = JSON.parse(body.input);
+      requestSizes.push(payload.terms.length);
+      if (requestSizes.length === 1) {
+        return jsonResponse({ output_text: 'not valid JSON' });
+      }
+      const returnedTerms = payload.terms.length === 2
+        ? payload.terms.slice(0, 1)
+        : payload.terms;
+      return jsonResponse({ output_text: JSON.stringify({
+        translations: returnedTerms.map(item => ({
+          abbreviation: item.abbreviation,
+          meaning_zh: `${item.abbreviation}中文释义`
+        }))
+      }) });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'openai',
+    config: { apiKey: 'key', model: 'gpt-5-mini' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'llm', providerId: 'openai', consentGranted: true }
+  });
+
+  const response = await router.handle({
+    type: 'LLM_TRANSLATE_ABBREVIATIONS',
+    entries: [
+      { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+      { abbreviation: 'AAV', fullName: 'adeno-associated virus' },
+      { abbreviation: 'NPs', fullName: 'nanoparticles' }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(requestSizes, [3, 2, 1, 1]);
+  assert.deepEqual(response.data.translations.map(item => item.abbreviation), [
+    'TNF', 'AAV', 'NPs'
+  ]);
+});
 
 test('routes a review outline through map reduce and returns subtype metadata', async () => {
   const fixture = await configuredReviewRouter({ reviewSubtype: 'systematic' });
@@ -5923,6 +6331,9 @@ test('portable storage change listener filters safely, preserves change identity
   }, { warn: (...args) => warnings.push(args) });
   const settingsChange = { sciLlmSettingsV2: { oldValue: {}, newValue: { apiKey: secret } } };
   const abbreviationChange = { sciGlobalAbbreviationMemoryV1: { oldValue: {}, newValue: {} } };
+  const mineruChange = { sciPdfMineruSettingsV1: {
+    oldValue: {}, newValue: { token: secret, mode: 'precise' }
+  } };
   const bothChanges = { ...settingsChange, ...abbreviationChange };
 
   listener(settingsChange, 'sync');
@@ -5931,6 +6342,9 @@ test('portable storage change listener filters safely, preserves change identity
   listener(bothChanges, 'local');
   assert.equal(calls.length, 1);
   assert.strictEqual(calls[0], bothChanges);
+  listener(mineruChange, 'local');
+  assert.equal(calls.length, 2);
+  assert.strictEqual(calls[1], mineruChange);
   assert.deepEqual(warnings, []);
 
   const syncWarnings = [];

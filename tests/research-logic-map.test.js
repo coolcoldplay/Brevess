@@ -134,6 +134,7 @@ function figureWorkspace() {
     ],
     crossFigureLogic: {
       result: {
+        backgroundItems: ['Neural signaling is implicated in tissue homeostasis.'],
         overallThesis: 'Neural signaling drives tissue ageing through a downstream pathway.',
         mechanismEdges: [
           { from: 'neural-signal', to: 'downstream-pathway', supportPanels: ['1A'] },
@@ -206,6 +207,9 @@ test('creates a schema v3 argument chain from analyzed Figures', () => {
     ['A', 'B']
   );
   assert.deepEqual(map.meta.scientificQuestions.map(item => item.questionId), ['question-1']);
+  assert.deepEqual(map.meta.backgroundItems.map(item => item.text), [
+    'Neural signaling is implicated in tissue homeostasis.'
+  ]);
   assert.deepEqual(map.meta.finalConclusions[0].questionIds, ['question-1']);
   assert.ok(Array.isArray(map.supplementalMaterials));
   assert.equal(map.view.mode, undefined);
@@ -448,6 +452,7 @@ test('normalizes v3 view and top-level supplemental placeholders', () => {
     supplementalId: 'supplement-1',
     type: 'video',
     label: 'Video S1',
+    summary: '',
     proofItems: [],
     evidenceGroups: [],
     connections: [],
@@ -461,6 +466,38 @@ test('normalizes v3 view and top-level supplemental placeholders', () => {
     collapsedStepIds: ['step-1'],
     collapsedSupplementalIds: ['supplement-1']
   });
+});
+
+test('evidence groups prefer panel argument function and omit setup-only legend details', () => {
+  const workspace = figureWorkspace();
+  workspace.figures[0].deep.panels = [
+    {
+      panel: 'A',
+      directObservation: '示意图及代表性图像，比例尺 200 μm。',
+      localInference: '示意图及代表性图像，比例尺 200 μm。',
+      contribution: '验证目标细胞群被准确标记，为后续功能比较提供操作有效性依据。'
+    },
+    {
+      panel: 'B',
+      directObservation: '处理组信号降低。',
+      localInference: '干预降低目标信号，支持该信号参与表型。',
+      contribution: '建立干预与表型变化之间的功能联系。'
+    }
+  ];
+  workspace.figures[0].deep.panelGroups = [{
+    panels: ['A', 'B'],
+    groupGoal: '验证操作并检验功能效应',
+    groupConclusion: '操作有效且干预改变表型。'
+  }];
+
+  const map = createResearchLogicMapFromFigures({
+    workspaceId: 'workspace-1',
+    figureWorkspace: workspace,
+    now: '2026-08-04T00:00:00.000Z'
+  });
+  const points = map.steps[0].evidenceGroups[0].evidencePoints;
+  assert.match(points[0].observation, /操作有效性依据/);
+  assert.doesNotMatch(JSON.stringify(points), /比例尺|200 μm/);
 });
 
 test('persists editable supplemental evidence and validates its two connection modes', () => {
@@ -598,6 +635,16 @@ test('exports pathway-standard long mechanism connectors', () => {
   assert.match(svg, /class="mechanism-inhibition-bar"/);
   assert.match(svg, /class="mechanism-connector is-associate is-weak"[^>]*stroke-dasharray=/);
   assert.match(svg, /class="mechanism-connector is-promote is-weak"[^>]*stroke-dasharray=/);
+});
+
+test('exports evidence-group titles above full-width evidence text without overlap', () => {
+  const fixture = v3Fixture();
+  fixture.steps[0].evidenceGroups[0].title =
+    'A very long evidence group title that must wrap before the observation starts';
+  const svg = buildResearchLogicMapSvg(normalizeResearchLogicMap(fixture));
+  assert.match(svg, /class="group-index" x="102"/);
+  assert.match(svg, /class="evidence" x="124"/);
+  assert.doesNotMatch(svg, /class="evidence" x="320"/);
 });
 
 test('normalizes editable maps, indexes them, and exports every v3 chain layer', () => {

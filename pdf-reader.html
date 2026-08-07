@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brevess PDF 阅读工作区</title>
+  <link rel="stylesheet" href="content.css">
+  <link rel="stylesheet" href="pdf-reader.css">
+</head>
+<body class="brevess-pdf-reader">
+  <header class="pdf-reader-toolbar">
+    <div class="pdf-reader-brand">
+      <span class="pdf-reader-mark" aria-hidden="true">B</span>
+      <div>
+        <strong>Brevess PDF 阅读工作区</strong>
+        <span id="pdfReaderSubtitle">正在准备文献 PDF…</span>
+      </div>
+    </div>
+    <div class="pdf-reader-toolbar-actions" data-sci-plugin-ui>
+      <div class="pdf-reader-zoom" role="group" aria-label="阅读缩放">
+        <button id="pdfReaderZoomOut" class="pdf-reader-icon-button" type="button"
+          aria-label="缩小">−</button>
+        <output id="pdfReaderZoomValue" aria-live="polite">100%</output>
+        <button id="pdfReaderZoomIn" class="pdf-reader-icon-button" type="button"
+          aria-label="放大">＋</button>
+        <button id="pdfReaderZoomReset" class="pdf-reader-icon-button is-wide" type="button"
+          aria-label="适合阅读宽度">适宽</button>
+      </div>
+      <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" hidden>返回上处</button>
+      <button id="pdfReaderReturnToArticle" class="pdf-reader-button" type="button"
+        aria-label="返回原论文正文" hidden>← 返回原论文正文</button>
+      <button id="pdfReaderViewToggle" class="pdf-reader-button is-primary" type="button"
+        aria-pressed="false" hidden>查看原始 PDF</button>
+      <button id="pdfReaderReparse" class="pdf-reader-button" type="button" hidden>
+        重新解析
+      </button>
+      <a id="pdfReaderOpenOriginalTab" class="pdf-reader-link" href="#" target="_blank"
+        rel="noreferrer">新标签打开 PDF</a>
+      <button id="pdfReaderSettingsToggle" class="pdf-reader-button" type="button"
+        >解析设置</button>
+    </div>
+  </header>
+
+  <p id="pdfMineruQuotaStatus" class="pdf-reader-quota" role="status"
+    aria-live="polite" hidden></p>
+  <p id="pdfFigureEngineStatus" class="pdf-reader-figure-engine-status" role="status"
+    aria-live="polite" hidden></p>
+
+  <section id="pdfReaderControl" class="pdf-reader-control" aria-labelledby="pdfReaderStatusTitle">
+    <div class="pdf-reader-status-copy">
+      <h1 id="pdfReaderStatusTitle">正在解析 PDF</h1>
+      <p id="pdfReaderStatus" role="status" aria-live="polite">
+        正在连接 MinerU；完成后全文问答和 Figure 解读会自动可用。
+      </p>
+      <div class="pdf-reader-progress" aria-hidden="true">
+        <span id="pdfReaderProgressBar"></span>
+      </div>
+    </div>
+    <div class="pdf-reader-status-actions">
+      <button id="pdfReaderRetry" class="pdf-reader-button is-primary" type="button" hidden>
+        重新解析
+      </button>
+      <button id="pdfReaderOpenSettings" class="pdf-reader-button" type="button" hidden>
+        打开 MinerU 设置
+      </button>
+    </div>
+    <div id="pdfLocalFileFallback" class="pdf-reader-local-fallback" hidden>
+      <strong>浏览器尚未允许扩展读取这个本地 PDF</strong>
+      <p>可在扩展管理页允许访问文件网址后重新解析；也可以只在这里重新选择当前文件。</p>
+      <label class="pdf-reader-file-field">
+        <span>选择当前本地 PDF</span>
+        <input id="pdfLocalFile" type="file" accept="application/pdf,.pdf">
+      </label>
+    </div>
+    <p class="pdf-reader-privacy">
+      PDF 会发送到 MinerU 进行版面解析；Token 与解析偏好统一在 Brevess 的“模型与分析”设置页管理。
+    </p>
+  </section>
+
+  <section id="pdfOriginalViewer" class="pdf-original-viewer" aria-label="原始 PDF" hidden>
+    <iframe id="pdfOriginalFrame" title="原始 PDF"></iframe>
+    <p>
+      若出版社禁止内嵌显示，请使用顶部“新标签打开 PDF”；返回本页后解析结果仍会保留。
+    </p>
+  </section>
+
+  <div id="pdfReaderWorkspace" class="pdf-reader-workspace">
+    <main id="pdfReaderPage" class="pdf-reader-page">
+      <article id="pdfReaderArticle" class="pdf-reader-article" aria-label="解析后的 PDF 正文"></article>
+    </main>
+  </div>
+
+  <script src="core/category-store.js"></script>
+  <script src="core/confidence-policy.js"></script>
+  <script src="core/result-validator.js"></script>
+  <script src="core/sentence-boundary.js"></script>
+  <script src="core/publisher-adapters.js"></script>
+  <script src="core/article-structure.js"></script>
+  <script src="core/article-extractor.js"></script>
+  <script src="core/abbreviation-extractor.js"></script>
+  <script src="core/article-chat-citations.js"></script>
+  <script src="core/publisher-diagnostics.js"></script>
+  <script src="core/highlight-distribution.js"></script>
+  <script src="core/supplemental-materials.js"></script>
+  <script src="core/figure-extractor.js"></script>
+  <script src="core/figure-viewer.js"></script>
+  <script src="core/figure-analysis.js"></script>
+  <script src="core/manual-annotations.js"></script>
+  <script src="core/cache-planner.js"></script>
+  <script src="core/review-outline.js"></script>
+  <script src="core/privacy-sanitizer.js"></script>
+  <script src="core/article-workspace.js"></script>
+  <script src="core/article-archive.js"></script>
+  <script src="core/export-bundle.js"></script>
+  <script src="core/pdf-workspace.js"></script>
+  <script src="core/pdf-figure-engine.js"></script>
+  <script src="core/pdf-figure-native-client.js"></script>
+  <script src="content.js"></script>
+  <script src="pdf-reader.js"></script>
+</body>
+</html>

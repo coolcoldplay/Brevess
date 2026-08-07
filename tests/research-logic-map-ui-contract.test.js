@@ -84,14 +84,16 @@ test('supplemental lane supports manual CRUD, collision-free flow and two center
 
 test('mechanism edges use pathway endpoints and evidence-sensitive stroke styles', () => {
   const js = read('logic-map.js');
+  const css = read('logic-map.css');
 
   assert.match(js, /edge\.effect === 'inhibit'/);
   assert.match(js, /mechanism-promote-arrow/);
   assert.match(js, /edge\.effect === 'associate' \|\| edge\.evidence !== 'strong'/);
-  assert.match(js, /'stroke-dasharray': dashed \? '8 6' : ''/);
-  assert.match(js, /y - 10/);
-  assert.match(js, /sourceNode\.offsetLeft \+ sourceNode\.offsetWidth/);
-  assert.doesNotMatch(js, /sourceNode\.getBoundingClientRect/);
+  assert.match(js, /'stroke-dasharray': dashed \? '10 7' : ''/);
+  assert.match(js, /x1: 174, y1: 16, x2: 174, y2: 38/);
+  assert.match(js, /row\.append\(sourceNode, connector, targetNode\)/);
+  assert.match(css, /\.mechanism-edge-row \{[^}]*grid-template-columns:/s);
+  assert.doesNotMatch(css, /\.logic-map-mechanism-chain \{[^}]*overflow-x:\s*auto/s);
   assert.match(js, /function synchronizeMechanismChain/);
   assert.match(js, /synchronizeMechanismChain\(\)/);
 });

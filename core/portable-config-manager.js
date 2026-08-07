@@ -23,6 +23,7 @@
       storageArea,
       settingsKey,
       abbreviationKey,
+      mineruSettingsKey = '',
       derivePortableConfigKey = shared.derivePortableConfigKey,
       encryptPortableConfig = shared.encryptPortableConfig,
       decryptPortableConfig = shared.decryptPortableConfig,
@@ -32,8 +33,14 @@
       fromBase64 = shared.fromBase64,
       normalizeSettings,
       normalizeAbbreviations,
+      normalizeMineruSettings = value => isPlainObject(value) ? { ...value } : {},
       loadSettings,
       loadGlobalAbbreviations,
+      loadMineruSettings = async storage => {
+        if (!mineruSettingsKey) return {};
+        const stored = await storage.get(mineruSettingsKey);
+        return stored?.[mineruSettingsKey] || {};
+      },
       extensionVersion = '',
       now = () => new Date().toISOString(),
       randomId = () => globalThis.crypto.randomUUID(),
@@ -167,7 +174,15 @@
       validatePortablePayload(payload);
       const settings = normalizeSettings(payload.settings);
       const globalAbbreviations = normalizeAbbreviations(payload.globalAbbreviations);
-      return { settings, globalAbbreviations };
+      const hasMineruPdfSettings = isPlainObject(payload.mineruPdfSettings);
+      const mineruPdfSettings = hasMineruPdfSettings
+        ? normalizeMineruSettings(payload.mineruPdfSettings) : {};
+      return {
+        settings,
+        globalAbbreviations,
+        mineruPdfSettings,
+        hasMineruPdfSettings
+      };
     }
 
     async function commitRestoredPayload(normalized, cache) {
@@ -175,6 +190,9 @@
         [settingsKey]: normalized.settings,
         [abbreviationKey]: normalized.globalAbbreviations
       };
+      if (mineruSettingsKey && normalized.hasMineruPdfSettings) {
+        values[mineruSettingsKey] = normalized.mineruPdfSettings;
+      }
       if (cache) values[PORTABLE_CONFIG_KEY_CACHE] = cache;
       await callStorage('set', values);
       suppressedRestoreSnapshot = normalized;
@@ -194,7 +212,10 @@
       if (!isPlainObject(changes)) return true;
       const relevant = [
         [settingsKey, suppressedRestoreSnapshot.settings],
-        [abbreviationKey, suppressedRestoreSnapshot.globalAbbreviations]
+        [abbreviationKey, suppressedRestoreSnapshot.globalAbbreviations],
+        ...(mineruSettingsKey && suppressedRestoreSnapshot.hasMineruPdfSettings ? [[
+          mineruSettingsKey, suppressedRestoreSnapshot.mineruPdfSettings
+        ]] : [])
       ].filter(([key]) => Object.prototype.hasOwnProperty.call(changes, key));
       if (!relevant.length) return false;
       return relevant.every(([key, restored]) =>
@@ -325,24 +346,31 @@
       return value instanceof Date ? value.toISOString() : String(value);
     }
 
-    function buildPayload(settings, globalAbbreviations, exportedAt = timestamp()) {
+    function buildPayload(
+      settings,
+      globalAbbreviations,
+      mineruPdfSettings = {},
+      exportedAt = timestamp()
+    ) {
       const payload = {
         kind: payloadKind,
         schemaVersion: 1,
         sourceVersion: String(extensionVersion || ''),
         exportedAt,
         settings: normalizeSettings(settings),
-        globalAbbreviations: normalizeAbbreviations(globalAbbreviations)
+        globalAbbreviations: normalizeAbbreviations(globalAbbreviations),
+        mineruPdfSettings: normalizeMineruSettings(mineruPdfSettings)
       };
       return validatePortablePayload(payload);
     }
 
     async function loadPayload(exportedAt = timestamp()) {
-      const [settings, globalAbbreviations] = await Promise.all([
+      const [settings, globalAbbreviations, mineruPdfSettings] = await Promise.all([
         loadSettings(storageArea),
-        loadGlobalAbbreviations(storageArea)
+        loadGlobalAbbreviations(storageArea),
+        loadMineruSettings(storageArea)
       ]);
-      return buildPayload(settings, globalAbbreviations, exportedAt);
+      return buildPayload(settings, globalAbbreviations, mineruPdfSettings, exportedAt);
     }
 
     async function writeEnvelope(envelope, { mode, expected } = {}) {
@@ -553,7 +581,10 @@
       }
       if (suppressedRestoreSnapshot && isPlainObject(changes)) {
         const hasRelevantChange = Object.prototype.hasOwnProperty.call(changes, settingsKey) ||
-          Object.prototype.hasOwnProperty.call(changes, abbreviationKey);
+          Object.prototype.hasOwnProperty.call(changes, abbreviationKey) ||
+          (mineruSettingsKey && Object.prototype.hasOwnProperty.call(
+            changes, mineruSettingsKey
+          ));
         if (!hasRelevantChange) return false;
         suppressedRestoreSnapshot = null;
       }
@@ -594,9 +625,13 @@
         });
         const normalized = normalizedPayload(decrypted.payload);
         const exportedAt = timestamp();
+        const mineruPdfSettings = normalized.hasMineruPdfSettings
+          ? normalized.mineruPdfSettings
+          : normalizeMineruSettings(await loadMineruSettings(storageArea));
         const payload = buildPayload(
           normalized.settings,
           normalized.globalAbbreviations,
+          mineruPdfSettings,
           exportedAt
         );
         const salt = randomSalt();

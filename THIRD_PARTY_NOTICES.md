@@ -19,6 +19,48 @@ Playwright is used only for automated browser verification and is not copied
 into the extension package. Its license is recorded by the npm dependency
 metadata and lockfile.
 
+## PDFFigures2 (optional local companion)
+
+The optional Windows local companion uses PDFFigures2 to extract complete
+Figure regions, identifiers, and captions from PDF files. It is not included
+in the Microsoft Edge extension ZIP.
+
+- Copyright (c) 2016 Allen Institute for Artificial Intelligence
+- Upstream version: `0.1.0`
+- Pinned commit: `3d7ad46753d4a315cccd1c2bcab398380e88c534`
+- License: Apache License 2.0
+- Upstream: <https://github.com/allenai/pdffigures2>
+- License copy: `native-host/pdffigures2/LICENSE.txt`
+
+## Eclipse Temurin JRE (optional local companion)
+
+The optional Windows local companion includes Eclipse Temurin JRE 8u492-b09
+so users do not need to install Java. It is not included in the Microsoft Edge
+extension ZIP.
+
+- OpenJDK version: `1.8.0_492-b09`
+- Platform: Windows x64, HotSpot JRE
+- License: GPL-2.0 with the Classpath Exception
+- Upstream release: <https://github.com/adoptium/temurin8-binaries/releases/tag/jdk8u492-b09>
+- The `LICENSE`, `ASSEMBLY_EXCEPTION`, `NOTICE`, and `THIRD_PARTY_README`
+  files are retained at the root of the packaged `runtime/` directory.
+
+## JAI Image I/O (optional local companion)
+
+The optional Windows local companion includes JAI Image I/O Core and its
+JPEG2000 plugin so PDFBox/PDFFigures2 can decode JPX images embedded by some
+publishers. These files are not included in the Microsoft Edge extension ZIP.
+
+- Components: `jai-imageio-core` 1.4.0 and `jai-imageio-jpeg2000` 1.4.0
+- Upstream: <https://github.com/jai-imageio/jai-imageio-core>
+- Binary source: Maven Central (`com.github.jai-imageio`)
+- License: BSD-style licenses retained from each binary JAR
+- License and notice copies:
+  - `native-host/pdffigures2/LICENSE-jai-imageio-core.txt`
+  - `native-host/pdffigures2/NOTICE-jai-imageio-core.txt`
+  - `native-host/pdffigures2/LICENSE-jai-imageio-jpeg2000.txt`
+  - `native-host/pdffigures2/NOTICE-jai-imageio-jpeg2000.txt`
+
 ## External-code provenance
 
 The following deterministic modules include code adapted from

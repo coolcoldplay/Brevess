@@ -56,10 +56,50 @@ New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 $installedExecutable = Join-Path $installRoot 'brevess-codex-host.exe'
 Copy-Item -LiteralPath $HostExecutable -Destination $installedExecutable -Force
 
+$components = @(
+  @{ Name = 'pdffigures2'; Required = $true },
+  @{ Name = 'runtime'; Required = $true }
+)
+foreach ($component in $components) {
+  $source = Join-Path $hostRoot $component.Name
+  if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+    if ($component.Required) {
+      throw "Local companion component is missing: $source"
+    }
+    continue
+  }
+  $target = Join-Path $installRoot $component.Name
+  $resolvedTarget = [System.IO.Path]::GetFullPath($target)
+  $resolvedInstall = [System.IO.Path]::GetFullPath($installRoot)
+  if (-not $resolvedTarget.StartsWith(
+      $resolvedInstall.TrimEnd('\') + '\',
+      [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw 'Local companion component target escaped the installation directory.'
+  }
+  if (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Recurse -Force
+  }
+  Copy-Item -LiteralPath $source -Destination $target -Recurse
+}
+$runtimeVersion = Join-Path $hostRoot 'runtime-version.json'
+if (Test-Path -LiteralPath $runtimeVersion -PathType Leaf) {
+  Copy-Item -LiteralPath $runtimeVersion -Destination $installRoot -Force
+}
+
+$installedJar = Join-Path $installRoot 'pdffigures2\pdffigures2.jar'
+$installedFallbackJar = Join-Path $installRoot 'pdffigures2\brevess-pdf-fallback.jar'
+$installedJava = Join-Path $installRoot 'runtime\bin\java.exe'
+if (-not (Test-Path -LiteralPath $installedJar -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $installedFallbackJar -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $installedJava -PathType Leaf)) {
+  throw 'The local PDF Figure engine was not installed completely.'
+}
+
 $manifestPath = Join-Path $installRoot "$hostName.json"
 $manifest = [ordered]@{
   name = $hostName
-  description = 'Local Codex bridge for Brevess'
+  description = 'Brevess local companion for PDF Figures and Local Codex'
   path = $installedExecutable
   type = 'stdio'
   allowed_origins = @($ExtensionIds | ForEach-Object { "chrome-extension://$_/" })
@@ -80,4 +120,5 @@ foreach ($registryPath in $registryRoots) {
 Write-Output "Installed $hostName"
 Write-Output "Allowed extension IDs: $($ExtensionIds -join ', ')"
 Write-Output "Host manifest: $manifestPath"
+Write-Output "PDF Figure engine: $installedJar"
 Write-Output "Restart Edge/Chrome or reload the extension before testing."
