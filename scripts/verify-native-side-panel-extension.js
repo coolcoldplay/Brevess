@@ -32,6 +32,7 @@ function prepareQaExtension() {
   }
   for (const filename of [
     'background.js', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css',
+    'logic-map.html', 'logic-map.js', 'logic-map.css',
     'options.html', 'options.js', 'options.css', 'offscreen.html', 'offscreen.js',
     'offscreen-network-worker.js'
   ]) {
@@ -84,13 +85,14 @@ function figureWorkspaceFixture() {
     figureId: `figure-${number}`,
     figureLabel: `Figure ${number}`,
     hasImage: false,
-    caption: '',
+    caption: `Figure ${number} A bounded pathway evidence step 图 ${number} 有边界的通路证据步骤 (A) Experimental design.`,
     isSupplemental: false,
     panelHints: panels.map(item => item.panel),
     activeDepth: 'standard',
     standard: {
       analysisDepth: 'standard',
       basis: 'caption_context',
+      figureTitleZh: '有边界的通路证据步骤',
       figureQuestion: `What does Figure ${number} establish?`,
       coreConclusion: `Figure ${number} establishes one bounded evidence step.`,
       claimBoundary: 'Only caption and supplied body context were available.',
@@ -122,7 +124,32 @@ function figureWorkspaceFixture() {
     ],
     totalFigures: 3,
     failedFigures: 0,
-    crossFigureLogic: { result: null, loading: false, error: '' }
+    supplemental: {
+      materials: [{
+        materialId: 'qa-supplement',
+        title: 'Supplemental information · Figures S1–S2',
+        url: 'https://example.org/qa-supplement.pdf',
+        kind: 'pdf'
+      }],
+      references: [
+        { kind: 'supplemental-figure', label: 'Figure S1', shortLabel: 'S1' },
+        { kind: 'supplemental-figure', label: 'Figure S2', shortLabel: 'S2' }
+      ],
+      coverage: {
+        status: 'partial',
+        expectedFigureCount: 2,
+        foundFigureCount: 1,
+        analyzedFigureCount: 1,
+        missingFigureLabels: ['Figure S2']
+      },
+      logicRefreshRequired: '补充图已更新，请重新运行主图串解以纳入补充证据'
+    },
+    crossFigureLogic: {
+      result: null,
+      loading: false,
+      error: '',
+      staleReason: '补充图已更新，请重新运行主图串解以纳入补充证据'
+    }
   };
 }
 
@@ -1963,6 +1990,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     SciLLM.validateCrossFigureLogic(raw, input), {
     raw: {
       article_title: 'QA semantic fallback',
+      known_background_zh: [
+        'A reproducible metabolic phenotype is established before receptor mechanism testing.'
+      ],
       overall_thesis_zh: '先建立表型，再解析受体信号机制。',
       figure_nodes: [
         {
@@ -1980,6 +2010,11 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         from_figure_id: 'figure-1', to_figure_id: 'figure-2', relation_type: 'other',
         established_zh: '前图建立现象。', transition_zh: '后图解析机制。',
         evidence_boundary_zh: '尚未证明充分性。'
+      }],
+      mechanism_chain: [{
+        from_zh: '代谢表型',
+        to_zh: '受体信号机制',
+        support_panel_refs: ['1A']
       }],
       supplemental_support: [],
       claim_boundary_zh: '仅限所给图注与逐图解读。'
@@ -2398,6 +2433,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     figure_id: figureId,
     analysis_depth: 'standard',
     basis: 'caption_context',
+    figure_title_zh: '',
     figure_question_zh: '该图如何建立处理与目标表型变化之间的证据联系？',
     evidence_steps: [{
       source_zh: '图注与相关 Results 正文',
@@ -2956,7 +2992,43 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'ISOLATED',
-      func: () => clearArticleChat()
+      func: () => {
+        if (!globalThis.__sciQaTurnPersistenceTrace) {
+          globalThis.__sciQaTurnPersistenceTrace = [];
+          const originalSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = async (...args) => {
+            const message = args[0] || {};
+            const traced = message.type === 'ARTICLE_WORKSPACE_SAVE_TURN' ||
+              message.type === 'ARTICLE_WORKSPACE_UPDATE_TURN' ||
+              (message.type === 'ARTICLE_WORKSPACE_SAVE_ASSET' &&
+                message.relativePath === 'chat/index.json');
+            const trace = traced ? {
+              phase: 'request',
+              type: message.type,
+              turnId: message.turnId || message.turn?.turnId || '',
+              status: message.turn?.status ||
+                message.content?.turns?.at?.(-1)?.status || '',
+              blocks: message.turn?.answerBlocks?.length ||
+                message.content?.turns?.at?.(-1)?.answerBlocks?.length || 0,
+              clientUpdatedAt: message.turn?.updatedAt || 0,
+              at: Date.now()
+            } : null;
+            if (trace) globalThis.__sciQaTurnPersistenceTrace.push(trace);
+            const response = await originalSendMessage(...args);
+            if (trace) globalThis.__sciQaTurnPersistenceTrace.push({
+              ...trace,
+              phase: 'response',
+              savedStatus: response?.data?.turn?.status || '',
+              savedBlocks: response?.data?.turn?.answerBlocks?.length || 0,
+              success: response?.success === true,
+              errorCode: response?.error?.code || '',
+              at: Date.now()
+            });
+            return response;
+          };
+        }
+        return clearArticleChat();
+      }
     });
     return result;
   }, fixtureTab.id);
@@ -3098,9 +3170,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     return result;
   }, fixtureTab.id);
   let streamingPersistedQa = false;
+  let streamingPersistedDetails = null;
   const streamingPersistStartedAt = Date.now();
-  while (!streamingPersistedQa && Date.now() - streamingPersistStartedAt < 5000) {
-    streamingPersistedQa = await worker.evaluate(async ({ workspaceId, tabId, turnId }) => {
+  while (!streamingPersistedQa && Date.now() - streamingPersistStartedAt < 15000) {
+    streamingPersistedDetails = await worker.evaluate(async ({ workspaceId, tabId, turnId }) => {
       const [{ result: response }] = await chrome.scripting.executeScript({
         target: { tabId }, world: 'ISOLATED',
         func: workspaceId => chrome.runtime.sendMessage({
@@ -3108,19 +3181,59 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         }),
         args: [workspaceId]
       });
-      if (!response?.success) return false;
+      if (!response?.success) return {
+        passed: false,
+        workspaceId,
+        turnId,
+        responseError: response?.error || null
+      };
       const stored = response.data.turns.find(turn => turn.turnId === turnId);
       const index = response.data.assets.find(asset =>
         asset.relativePath === 'chat/index.json');
       const indexed = index?.content?.turns?.find(turn => turn.turnId === turnId);
-      return stored?.status === 'completed' && stored.answerBlocks?.length === 2 &&
+      const passed = stored?.status === 'completed' && stored.answerBlocks?.length === 2 &&
         indexed?.status === 'completed' && indexed.answerBlocks?.length === 2;
+      return {
+        passed,
+        workspaceId,
+        turnId,
+        storedStatus: stored?.status || '',
+        storedBlocks: stored?.answerBlocks?.length || 0,
+        indexedStatus: indexed?.status || '',
+        indexedBlocks: indexed?.answerBlocks?.length || 0,
+        storedTurnIds: response.data.turns.map(turn => turn.turnId),
+        indexedTurnIds: Array.isArray(index?.content?.turns)
+          ? index.content.turns.map(turn => turn.turnId) : [],
+        assetPaths: response.data.assets.map(asset => asset.relativePath)
+      };
     }, {
       workspaceId: streamingMidStateQa.workspaceId,
       tabId: fixtureTab.id,
       turnId: streamingFinalStateQa.turnId
     });
+    streamingPersistedQa = streamingPersistedDetails?.passed === true;
     if (!streamingPersistedQa) await sidePanel.waitForTimeout(50);
+  }
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(outputDir, 'streaming-persistence-diagnostic.json'),
+    `${JSON.stringify({
+      streamingMidStateQa,
+      streamingFinalStateQa,
+      streamingPersistedQa,
+      streamingPersistedDetails,
+      persistenceTrace: await worker.evaluate(async tabId => {
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId }, world: 'ISOLATED',
+          func: () => globalThis.__sciQaTurnPersistenceTrace || []
+        });
+        return result;
+      }, fixtureTab.id)
+    }, null, 2)}\n`,
+    'utf8'
+  );
+  if (process.env.SCI_QA_STOP_AFTER_STREAMING === '1') {
+    throw new Error('QA_STOP_AFTER_STREAMING');
   }
   const panelCapacityResponse = await worker.evaluate(async tabId => {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -4866,11 +4979,26 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     globalThis.__qaMigrationDirectoryHandle = handle;
     userDataUi.directoryHandle = handle;
     userDataUi.handleLoaded = true;
+    const portableProbe = await callBackground({ type: 'PORTABLE_CONFIG_PROBE' });
+    let portableStatus = portableProbe;
+    if (portableProbe?.state === 'missing') {
+      portableStatus = await callBackground({
+        type: 'PORTABLE_CONFIG_CREATE',
+        passphrase: 'brevess migration directory qa'
+      });
+    } else if (portableProbe?.state !== 'ready' || portableProbe?.pending) {
+      throw new Error('QA_PORTABLE_CONFIG_UNEXPECTED_STATE');
+    }
+    if (portableStatus?.state !== 'ready' || portableStatus?.pending) {
+      throw new Error('QA_PORTABLE_CONFIG_NOT_READY');
+    }
     await callBackground({ type: 'USER_DATA_SYNC_NOW' });
     await refreshUserDataStatus();
     return {
       permission: await handle.queryPermission({ mode: 'readwrite' }),
       directoryName: handle.name,
+      portableState: portableStatus.state,
+      portablePending: portableStatus.pending,
       displayedDirectory:
         document.getElementById('userDataDirectory')?.textContent || ''
     };
@@ -5267,7 +5395,16 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     automaticLive: automaticTokenLiveQa,
     automaticReload: automaticTokenReloadQa
   };
-  await options.locator('#reopenOnboarding').click();
+  const onboardingAlreadyOpen = await options.evaluate(() =>
+    location.hash === '#onboarding' && onboardingUi.active === true &&
+    document.body.dataset.onboardingStep === 'storage'
+  );
+  if (!onboardingAlreadyOpen) {
+    // This long-running QA may leave the options document in a PDF-return or
+    // partially open onboarding state where the header control is intentionally
+    // hidden. Exercise the same handler directly instead of waiting on layout.
+    await options.evaluate(() => reopenOnboarding());
+  }
   await options.waitForFunction(() =>
     location.hash === '#onboarding' && onboardingUi.active === true &&
     document.body.dataset.onboardingStep === 'storage'
@@ -5477,6 +5614,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     streamingFinalUiQa,
     streamingFinalStateQa,
     streamingPersistedQa,
+    streamingPersistedDetails,
     panelCapacityQa,
     panelTruncationQa,
     unlabeledSingleFigureQa,
@@ -6118,6 +6256,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     supportEmail?.trim() === 'brevess0729@163.com' &&
     results.migrationDirectoryQa.permission === 'granted' &&
     results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
+    results.migrationDirectoryQa.portableState === 'ready' &&
+    !results.migrationDirectoryQa.portablePending &&
     results.migrationDirectoryQa.displayedDirectory === 'migration-directory-sentinel' &&
     results.directorySyncButtonQa.pendingReleased &&
     results.directorySyncButtonQa.syncEnabled &&
@@ -6319,6 +6459,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     }).filter(item => !item.passed);
   }
   results.qaPassed = passed;
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(outputDir, 'edge-native-side-panel-qa.json'),
+    `${JSON.stringify(results, null, 2)}\n`,
+    'utf8'
+  );
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
   await context.close();
   activeContext = null;

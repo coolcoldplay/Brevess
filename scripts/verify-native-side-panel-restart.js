@@ -20,6 +20,7 @@ function prepareQaExtension() {
   }
   for (const filename of [
     'background.js', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css',
+    'logic-map.html', 'logic-map.js', 'logic-map.css',
     'options.html', 'options.js', 'options.css', 'offscreen.html', 'offscreen.js',
     'offscreen-network-worker.js'
   ]) {
@@ -137,6 +138,11 @@ async function configureOpfsDirectory(context, extensionId) {
   await options.waitForFunction(() =>
     document.getElementById('chooseUserDataDirectory')?.disabled === false);
   await chooseButton.click();
+  const portableDialog = options.locator('#portableConfigDialog[open]');
+  await portableDialog.waitFor({ state: 'visible' });
+  await options.locator('#portableConfigPassphrase').fill('brevess restart qa');
+  await options.locator('#portableConfigPassphraseConfirm').fill('brevess restart qa');
+  await options.locator('#confirmPortableConfigDialog').click();
   await options.waitForFunction(() =>
     document.getElementById('userDataPermission')?.dataset.permission === 'granted' &&
     document.getElementById('chooseUserDataDirectory')?.disabled === false &&
@@ -204,8 +210,8 @@ async function ensureArticleWorkspace(worker, tabId) {
   return response.workspace;
 }
 
-async function saveRestartFixture(options, workspace) {
-  return options.evaluate(async currentWorkspace => {
+async function saveRestartFixture(options, workspace, tabId) {
+  return options.evaluate(async ({ currentWorkspace, tabId }) => {
     const now = Date.now();
     const turn = {
       turnId: 'restart-turn-1',
@@ -237,7 +243,9 @@ async function saveRestartFixture(options, workspace) {
         caption: 'Figure 1. (A) Treatment increased the target phenotype.',
         isSupplemental: false, panelHints: ['A'], activeDepth: 'standard',
         standard: {
+          figureId: 'figure-1',
           analysisDepth: 'standard', basis: 'caption_context',
+          figureTitleZh: '重启恢复测试图',
           figureQuestion: 'RESTART FIGURE QUESTION',
           coreConclusion: 'RESTART FIGURE CONCLUSION',
           claimBoundary: 'This Figure alone does not establish a molecular mechanism.',
@@ -304,14 +312,23 @@ async function saveRestartFixture(options, workspace) {
       workspaceGeneration: currentWorkspace.workspaceGeneration,
       turn
     });
+    const applied = await chrome.tabs.sendMessage(tabId, {
+      action: 'applyArticleWorkspaceAssets',
+      restore: {
+        match: 'exact',
+        assets: assets.map(([relativePath, content]) => ({ relativePath, content })),
+        turns: [turn]
+      }
+    });
     return {
-      success: savedAssets === assets.length && savedTurn.saved === true,
+      success: savedAssets === assets.length && savedTurn.saved === true &&
+        applied?.success === true,
       workspaceId: currentWorkspace.workspaceId,
       directoryName: currentWorkspace.directoryName,
       assetCount: savedAssets,
       turnCount: savedTurn.saved ? 1 : 0
     };
-  }, workspace);
+  }, { currentWorkspace: workspace, tabId });
 }
 
 async function seedBulkWorkspaceFixtures(options) {
@@ -617,7 +634,7 @@ async function clearBrowserWorkspaceStores(options) {
       '1.0.0-build1-store-release', null, { timeout: 10000 });
   const workspace = await ensureArticleWorkspace(firstWorker, firstTab.id);
   const saveUi = await saveWorkspaceThroughPanel(firstPanel);
-  const saved = await saveRestartFixture(firstOptions, workspace);
+  const saved = await saveRestartFixture(firstOptions, workspace, firstTab.id);
   const directory = await flushAndInspectDirectory(firstOptions);
   const generationDrift = await introduceWorkspaceGenerationDrift(
     firstOptions, saved.directoryName
@@ -828,9 +845,9 @@ async function clearBrowserWorkspaceStores(options) {
     results.saved.turnCount === 1 &&
     results.directory.sync.permission === 'granted' &&
     results.directory.sync.pendingCount === 0 &&
-    // The deliberately corrupted aggregate index is empty before restart;
-    // the independent turn file must still recover the one complete turn.
-    results.directory.inspection.chatTurnCount === 0 &&
+    // The aggregate index is intentionally empty, but directory inspection
+    // must reconstruct the one complete turn from its durable turn file.
+    results.directory.inspection.chatTurnCount === 1 &&
     results.directory.inspection.figureCount === 1 &&
     results.generationDrift.manifestGeneration === 2 &&
     results.generationDrift.chatIndexGeneration === 1 &&
@@ -863,7 +880,7 @@ async function clearBrowserWorkspaceStores(options) {
     results.restoredOverview.chatTurnCount === 1 &&
     results.restoredOverview.figureCount === 1 &&
     results.restoredOverview.panelCount === 1 &&
-    results.restoredOverview.assetCount === 7 &&
+    results.restoredOverview.assetCount === 10 &&
     results.restoredOverview.turnCount === 1 &&
     results.resavedUi.buttonRecovered &&
     results.resavedUi.busyReleased &&
@@ -885,7 +902,7 @@ async function clearBrowserWorkspaceStores(options) {
     results.clearedOverview.workspaceCount === 1 &&
     results.clearedOverview.chatTurnCount === 0 &&
     results.clearedOverview.turnCount === 0 &&
-    results.clearedOverview.assetCount === 7 &&
+    results.clearedOverview.assetCount === 10 &&
     results.clearedOverview.workspaceGeneration ===
       results.clearedContent.workspaceGeneration &&
     results.clearedDirectory.sync.permission === 'granted' &&

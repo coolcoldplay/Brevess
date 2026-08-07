@@ -4,12 +4,49 @@ const assert = require('node:assert/strict');
 const {
   FIGURE_SELECTOR,
   parseFigureLabel,
+  extractFigureTitle,
   extractPanelHints,
   splitFigureCaptionByPanelGroups,
   extractElementPanelHints,
   figureInventoryNeedsRefresh,
   extractArticleFigures
 } = require('../core/figure-extractor.js');
+
+test('Figure extraction keeps large MinerU Panel image groups intact', () => {
+  const source = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'core', 'figure-extractor.js'),
+    'utf8'
+  );
+  assert.match(source, /return images\.slice\(0, 40\)/);
+  assert.doesNotMatch(source, /return images\.slice\(0, 8\)/);
+});
+
+test('extracts the translated Figure title before controls and Panel legend text', () => {
+  const caption = [
+    'Figure 1 Aging-related Nefh is predominantly expressed in Vglut2+ skin-innervating neurons',
+    '图 1 与衰老相关的 Nefh 主要在 Vglut2+ 皮肤侵润神经元中表达',
+    'Show full caption 显示完整图注',
+    '(A) Single-cell analysis of aged skin.'
+  ].join(' ');
+
+  assert.deepEqual(extractFigureTitle(caption, 'Figure 1'), {
+    title: 'Aging-related Nefh is predominantly expressed in Vglut2+ skin-innervating neurons',
+    translatedTitle: '与衰老相关的 Nefh 主要在 Vglut2+ 皮肤侵润神经元中表达'
+  });
+});
+
+test('falls back to the original Figure title when no translation is present', () => {
+  assert.deepEqual(
+    extractFigureTitle(
+      'Figure 2 Nefh loss accelerates dermal aging (A) Experimental design.',
+      'Figure 2'
+    ),
+    {
+      title: 'Nefh loss accelerates dermal aging',
+      translatedTitle: ''
+    }
+  );
+});
 
 function image(src, width = 900, height = 600) {
   return {
@@ -193,6 +230,21 @@ test('recognizes lowercase Nature legend markers and ranges without an LLM', () 
   );
 });
 
+test('recognizes publisher legends that use bold-style bare letters after sentence boundaries', () => {
+  assert.deepEqual(
+    extractPanelHints(
+      'Fig. 6 | Systemic signaling. A Healthy-normalized CD69 intensity. ' +
+      'B Representative histograms. C Splenic T-cell counts. ' +
+      'D S1P1-positive cells. E Bone-marrow flow cytometry. F Cervical-node counts.'
+    ),
+    ['A', 'B', 'C', 'D', 'E', 'F']
+  );
+  assert.deepEqual(
+    extractPanelHints('Figure 1. A total of 20 animals were analyzed. A significant effect was observed.'),
+    []
+  );
+});
+
 test('recognizes the compact no-space Nature caption used by the glioblastoma article', () => {
   assert.deepEqual(extractPanelHints(
     'a,Schematic overview of the 10x chromium setup. Mice were analyzed (n = 3).' +
@@ -213,6 +265,18 @@ test('does not turn Nature Figure glossary abbreviations into Panels', () => {
     'cells; Mo, monocytes; n.c., necrotic core; PI B, plasma B cells; prol. TAM, ' +
     'proliferating TAMs; T, T cells; Treg, regulatory T cells.'
   ), ['A', 'B', 'C', 'D', 'E', 'F']);
+});
+
+test('does not turn units, injection abbreviations, orientation keys, or prose after panels into Panels', () => {
+  assert.deepEqual(extractPanelHints(
+    'Figure S12. (A) Sequence of i.p. injection. (B-F) Images and quantification. ' +
+    'Scale bars are shown in the right panels. Values are mean ± s.d. and reported ' +
+    'in a.u., arbitrary units; V, ventral. P values used a Mann-Whitney U test.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F']);
+  assert.deepEqual(extractPanelHints(
+    'Figure S14. (A) Workflow with (i) staining and (ii) outflow measurement. ' +
+    '(B-E) Adult results. (F) Aged workflow. (G-I) Aged results.'
+  ), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
 });
 
 test('prefers Nature structured bold markers over prose-like statistical initials', () => {

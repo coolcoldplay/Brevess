@@ -14,6 +14,10 @@
         <img class="brand-mark" src="icons/icon128.png" alt="">
         <span><strong>Brevess</strong><small>Brevity · Evidence · Essence</small></span>
       </a>
+      <button id="returnToPdfReader"
+        class="button primary compact-button pdf-reader-return" type="button" hidden>
+        返回 PDF 解析结果
+      </button>
       <nav class="page-nav" aria-label="设置页面导航">
         <button type="button" data-settings-nav="categories" aria-selected="true">类别规则</button>
         <button type="button" data-settings-nav="modes" aria-selected="false">分析模式</button>
@@ -52,12 +56,12 @@
           <span role="listitem" data-onboarding-progress="api"><b>2</b>API 配置</span>
         </div>
         <h1 id="onboardingStepTitle">选择本地保存目录</h1>
-        <p id="onboardingStepDescription" class="subtitle">插件会在你选择的位置建立 Brevess 文件夹，并为每篇论文保存独立工作区。</p>
+        <p id="onboardingStepDescription" class="subtitle">本地文件夹是可选项；暂时跳过也能立即使用导航、阅读与手动标注。</p>
         <p id="onboardingStepState" class="onboarding-step-state" role="status" aria-live="polite"></p>
       </div>
       <div class="onboarding-actions">
         <button id="onboardingBack" class="button quiet" type="button" hidden>上一步</button>
-        <button id="onboardingSkip" class="button quiet" type="button">暂时跳过</button>
+        <button id="onboardingSkip" class="button quiet" type="button">暂不选择，继续</button>
         <button id="onboardingContinue" class="button primary" type="button" disabled>继续配置 API</button>
         <button id="onboardingFinish" class="button primary" type="button" hidden disabled>完成并打开插件</button>
       </div>
@@ -379,6 +383,54 @@
           </div>
         </div>
       </div>
+      <div id="pdfMineruSettings" class="settings-section pdf-mineru-settings">
+        <div class="section-heading">
+          <div>
+            <h3>PDF 解析 · MinerU</h3>
+            <p>在浏览器中打开 PDF 后激活 Brevess，即会按这里的配置自动解析；无需在 PDF 页面再次选择文件或填写 Token。</p>
+          </div>
+          <span id="pdfMineruCredentialState" class="credential-state">轻量解析无需 Token</span>
+        </div>
+        <div class="form-grid two-columns">
+          <label class="field">
+            <span>解析模式</span>
+            <select id="pdfMineruMode">
+              <option value="agent">轻量解析 · 免 Token（适合不超过 20 页）</option>
+              <option value="precise">精准解析 · MinerU Token（长文献 / 复杂版式）</option>
+            </select>
+          </label>
+          <label id="pdfMineruTokenField" class="field">
+            <span>MinerU Token</span>
+            <input id="pdfMineruToken" type="password" autocomplete="new-password"
+              placeholder="精准解析时填写；Token 仅保存在本机">
+            <small>已保存的 Token 不会再次回显；输入新值会覆盖旧值。</small>
+          </label>
+          <label class="field">
+            <span>文献语言</span>
+            <select id="pdfMineruLanguage">
+              <option value="ch">中英文</option>
+              <option value="en">英文</option>
+              <option value="japan">日文</option>
+              <option value="korean">韩文</option>
+            </select>
+          </label>
+          <label class="check-field">
+            <input id="pdfMineruOcr" type="checkbox">
+            <span>扫描版 PDF 启用 OCR</span>
+          </label>
+        </div>
+        <div class="settings-actions compact-settings-actions">
+          <button id="savePdfMineruSettings" class="button secondary" type="button">
+            保存 PDF 解析设置
+          </button>
+          <button id="clearPdfMineruToken" class="button quiet" type="button">
+            清除 MinerU Token
+          </button>
+        </div>
+        <p id="pdfMineruStatus" class="support-message" role="status" aria-live="polite">
+          PDF 会发送到 MinerU 做版面解析；解析后的正文仍遵循下方的模型发送许可。
+        </p>
+      </div>
       <div class="settings-section task-routing-section">
         <div class="section-heading"><div><h3>全局默认与任务路由</h3><p>根据任务路由选择第三方模型服务；未单独指定时使用全局默认。</p></div></div>
         <div class="form-grid two-columns">
@@ -554,6 +606,26 @@
             <strong id="userDataDirectory">尚未选择目录</strong>
           </div>
           <p id="userDataSupportMessage" class="support-message" role="status" aria-live="polite" hidden></p>
+          <section class="portable-config-card" aria-labelledby="portableConfigHeading">
+            <div class="portable-config-heading">
+              <div>
+                <h4 id="portableConfigHeading">加密配置备份</h4>
+                <p>API Key、模型设置、MinerU PDF 解析设置与 Token、全局缩略词表以加密形式存放在所选目录；遗忘口令无法恢复密文凭据。</p>
+              </div>
+              <span id="portableConfigState" class="portable-config-state" data-state="disabled">未启用</span>
+            </div>
+            <dl class="portable-config-metrics" aria-label="加密配置备份状态">
+              <div><dt>修订版本</dt><dd id="portableConfigRevision">—</dd></div>
+              <div><dt>上次同步</dt><dd id="portableConfigUpdatedAt">—</dd></div>
+            </dl>
+            <p id="portableConfigNotice" class="portable-config-notice" role="status" aria-live="polite">加密配置备份未启用。</p>
+            <div class="portable-config-actions">
+              <button id="unlockPortableConfig" class="button secondary" type="button" hidden>解锁配置备份</button>
+              <button id="rotatePortableConfigPassphrase" class="button secondary" type="button" hidden>更换口令</button>
+              <button id="forgetPortableConfigKey" class="button quiet" type="button" hidden>遗忘本机密钥</button>
+              <button id="backupPortableConfigNow" class="button primary" type="button" hidden>立即备份配置</button>
+            </div>
+          </section>
           <dl class="sync-metrics" aria-label="目录同步状态">
             <div><dt>待同步</dt><dd id="userDataPendingCount">0</dd></div>
             <div><dt>冲突</dt><dd id="userDataConflictCount">0</dd></div>
@@ -675,11 +747,41 @@
       </div>
     </form>
   </dialog>
+  <dialog id="portableConfigDialog" class="confirm-dialog portable-config-dialog"
+    aria-labelledby="portableConfigDialogTitle" aria-describedby="portableConfigDialogDescription">
+    <form id="portableConfigForm" novalidate>
+      <p class="section-kicker">加密配置备份</p>
+      <h2 id="portableConfigDialogTitle">解锁配置备份</h2>
+      <p id="portableConfigDialogDescription">输入口令后，插件会从当前目录安全恢复加密设置。</p>
+      <label id="portableConfigCurrentPassphraseField" class="field" hidden>
+        <span>当前口令</span>
+        <input id="portableConfigCurrentPassphrase" type="password" minlength="10"
+          autocomplete="current-password">
+      </label>
+      <label class="field">
+        <span id="portableConfigPassphraseLabel">口令</span>
+        <input id="portableConfigPassphrase" type="password" minlength="10"
+          autocomplete="new-password" required>
+      </label>
+      <label id="portableConfigPassphraseConfirmField" class="field">
+        <span>确认新口令</span>
+        <input id="portableConfigPassphraseConfirm" type="password" minlength="10"
+          autocomplete="new-password">
+      </label>
+      <p id="portableConfigDialogError" class="portable-config-dialog-error" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="cancelPortableConfigDialog" class="button quiet" type="button">取消</button>
+        <button id="confirmPortableConfigDialog" class="button primary" type="submit">确认</button>
+      </div>
+    </form>
+  </dialog>
   <script src="core/migration-bundle.js"></script>
   <script src="core/keyboard-shortcuts.js"></script>
   <script src="core/i18n.js"></script>
   <script src="core/user-data-database.js"></script>
+  <script src="core/privacy-sanitizer.js"></script>
   <script src="core/directory-sync.js"></script>
+  <script src="core/pdf-workspace.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -1,6 +1,8 @@
 importScripts(
   'core/onboarding.js',
   'core/tab-activation.js',
+  'core/pdf-workspace.js',
+  'core/pdf-figure-engine.js',
   'core/tab-messenger.js',
   'core/category-store.js',
   'core/adaptive-catalog.js',
@@ -8,6 +10,7 @@ importScripts(
   'core/confidence-policy.js',
   'core/publisher-adapters.js',
   'core/article-structure.js',
+  'core/abbreviation-extractor.js',
   'providers/provider-utils.js',
   'core/codex-native-client.js',
   'core/prompt-compiler.js',
@@ -17,6 +20,8 @@ importScripts(
   'core/evidence-ledger.js',
   'core/figure-panel-planner.js',
   'core/figure-analysis.js',
+  'core/supplemental-materials.js',
+  'core/research-logic-map.js',
   'core/article-chat-tokenizer.js',
   'core/article-chat-index.js',
   'core/article-chat-retrieval.js',
@@ -29,6 +34,7 @@ importScripts(
   'core/review-outline.js',
   'core/zotero-connector.js',
   'core/cache-planner.js',
+  'core/privacy-sanitizer.js',
   'core/article-archive.js',
   'core/migration-bundle.js',
   'core/keyboard-shortcuts.js',
@@ -58,6 +64,8 @@ importScripts(
   'core/article-workspace-store.js',
   'core/token-usage-store.js',
   'core/document-store.js',
+  'core/portable-config.js',
+  'core/portable-config-manager.js',
   'core/directory-sync.js',
   'core/background-router.js'
 );
@@ -69,6 +77,33 @@ let onboardingSnapshot = null;
 onboardingController.get().then(state => {
   onboardingSnapshot = state;
 }).catch(() => {});
+
+let abbreviationMemoryMutationTail = Promise.resolve();
+
+async function loadGlobalAbbreviationMemory() {
+  const key = SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY;
+  const stored = await chrome.storage.local.get(key);
+  return SciLLM.normalizeGlobalAbbreviationMemory(stored?.[key]);
+}
+
+function mergeGlobalAbbreviationEntries(entries, options = {}) {
+  const operation = abbreviationMemoryMutationTail.then(async () => {
+    const current = await loadGlobalAbbreviationMemory();
+    const merged = SciLLM.mergeGlobalAbbreviationMemory(current, entries, {
+      incrementSupport: options.incrementSupport === true
+    });
+    await chrome.storage.local.set({
+      [SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY]: merged.memory
+    });
+    chrome.runtime.sendMessage({
+      type: 'ABBREVIATION_MEMORY_CHANGED',
+      memory: merged.memory
+    }).catch(() => {});
+    return merged;
+  });
+  abbreviationMemoryMutationTail = operation.catch(() => undefined);
+  return operation;
+}
 
 async function configureSidePanelAction() {
   if (!chrome.sidePanel?.setPanelBehavior) return;
@@ -244,6 +279,56 @@ async function activateTabAndOpenSidePanel(tab, panelOpen) {
     activation
   }).catch(() => {});
   chrome.tabs.sendMessage(tab.id, { action: 'disarmSidePanelRestore' }).catch(() => {});
+  return { activation, pdfReader: false };
+}
+
+async function activatePdfReaderAndOpenSidePanel(tab, panelOpen) {
+  if (!tab?.id || !tab?.windowId) return;
+  const attempt = panelOpen || beginToolbarSidePanelOpen(tab);
+  if (!attempt) return;
+  const readerUrl = SciLLM.createPdfReaderUrl(
+    chrome.runtime.getURL.bind(chrome.runtime),
+    tab.url || tab.pendingUrl,
+    tab.title
+  );
+  if (!readerUrl) {
+    await activateTabAndOpenSidePanel(tab, attempt);
+    return;
+  }
+  activatedSidePanelTabIds.add(tab.id);
+  const activationTab = {
+    ...tab,
+    url: readerUrl,
+    pendingUrl: readerUrl,
+    title: String(tab.title || '文献 PDF')
+  };
+  const navigationPromise = chrome.tabs.update(tab.id, { url: readerUrl });
+  const activationPromise = SciLLM.markTabActivated(
+    chrome.storage.session,
+    activationTab
+  );
+  const [, , , activation] = await Promise.all([
+    attempt.enablePromise,
+    attempt.openPromise,
+    navigationPromise,
+    activationPromise
+  ]);
+  chrome.runtime.sendMessage({
+    type: 'PANEL_TAB_ACTIVATED',
+    activation,
+    pdfReader: true
+  }).catch(() => {});
+  return { activation, pdfReader: true, readerUrl };
+}
+
+async function activateTabFromOpenSidePanel(tab) {
+  const panelOpen = {
+    enablePromise: ensureGlobalSidePanelAvailability(),
+    openPromise: Promise.resolve()
+  };
+  return SciLLM.isLikelyPdfUrl(tab?.url || tab?.pendingUrl, tab?.title)
+    ? activatePdfReaderAndOpenSidePanel(tab, panelOpen)
+    : activateTabAndOpenSidePanel(tab, panelOpen);
 }
 
 async function openOnboardingForTab(tab) {
@@ -268,6 +353,10 @@ async function handleToolbarAction(tab, panelOpen, knownOnboarding = null) {
       await Promise.allSettled([panelOpen.enablePromise, panelOpen.openPromise]);
     }
     await openOnboardingForTab(tab);
+    return;
+  }
+  if (SciLLM.isLikelyPdfUrl(tab?.url || tab?.pendingUrl, tab?.title)) {
+    await activatePdfReaderAndOpenSidePanel(tab, panelOpen);
     return;
   }
   await activateTabAndOpenSidePanel(tab, panelOpen);
@@ -369,6 +458,53 @@ const directorySync = SciLLM.createDirectorySync({
   queueStore: SciLLM.createIndexedDbSyncQueue(indexedDB),
   sourceId: 'extension'
 });
+const portableSettingsStorage = {
+  get(keys) {
+    return chrome.storage.local.get(keys);
+  }
+};
+const portableConfigManager = SciLLM.createPortableConfigManager({
+  directorySync,
+  storageArea: chrome.storage.local,
+  settingsKey: 'sciLlmSettingsV2',
+  abbreviationKey: SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY,
+  mineruSettingsKey: SciLLM.PDF_MINERU_SETTINGS_KEY,
+  derivePortableConfigKey: SciLLM.derivePortableConfigKey,
+  encryptPortableConfig: SciLLM.encryptPortableConfig,
+  decryptPortableConfig: SciLLM.decryptPortableConfig,
+  validatePortablePayload: SciLLM.validatePortablePayload,
+  validatePortableEnvelope: SciLLM.validatePortableEnvelope,
+  toBase64: SciLLM.toBase64,
+  fromBase64: SciLLM.fromBase64,
+  normalizeSettings: SciLLM.mergeSettings,
+  normalizeAbbreviations: SciLLM.normalizeGlobalAbbreviationMemory,
+  normalizeMineruSettings: SciLLM.normalizeMineruPdfSettings,
+  loadSettings: () => SciLLM.loadSettings(portableSettingsStorage),
+  loadGlobalAbbreviations: async storageArea => {
+    const key = SciLLM.GLOBAL_ABBREVIATION_MEMORY_KEY;
+    const stored = await storageArea.get(key);
+    return SciLLM.normalizeGlobalAbbreviationMemory(stored?.[key]);
+  },
+  loadMineruSettings: async storageArea => {
+    const key = SciLLM.PDF_MINERU_SETTINGS_KEY;
+    const stored = await storageArea.get(key);
+    return SciLLM.normalizeMineruPdfSettings(stored?.[key]);
+  },
+  extensionVersion: chrome.runtime.getManifest().version,
+  now: () => new Date().toISOString(),
+  randomId: () => crypto.randomUUID(),
+  cryptoRef: crypto,
+  iterations: SciLLM.PORTABLE_CONFIG_KDF_ITERATIONS,
+  path: SciLLM.PORTABLE_CONFIG_PATH,
+  payloadKind: SciLLM.PORTABLE_CONFIG_PAYLOAD_KIND
+});
+if ([
+  'probe', 'create', 'unlock', 'rotatePassphrase', 'forgetKey', 'backupNow',
+  'scheduleBackup', 'runWhenReady', 'publicStatus'
+].some(method => typeof portableConfigManager?.[method] !== 'function')) {
+  throw new Error('Portable configuration manager is unavailable');
+}
+portableConfigManager.probe().catch(() => {});
 const providerFetch = SciLLM.createOffscreenFetch(chrome);
 const codexNativeClient = SciLLM.createCodexNativeClient(chrome.runtime);
 const llmRouter = SciLLM.createBackgroundRouter({
@@ -381,8 +517,13 @@ const llmRouter = SciLLM.createBackgroundRouter({
   documentStore,
   articleWorkspaceStore,
   tokenUsageStore,
-  directorySync
+  directorySync,
+  portableConfigManager
 });
+const portableConfigStorageChangeListener = SciLLM.createPortableConfigStorageChangeListener(
+  portableConfigManager
+);
+chrome.storage.onChanged.addListener(portableConfigStorageChangeListener);
 
 const CODEX_REVERSE_CHANNEL_TASKS = new Map([
   ['LLM_ANALYZE_FIGURES', 'figure'],
@@ -494,6 +635,11 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'ARTICLE_ARCHIVE_LOAD',
   'ARTICLE_WORKSPACE_ENSURE',
   'ARTICLE_WORKSPACE_SAVE_ASSET',
+  'ARTICLE_WORKSPACE_SAVE_BINARY_ASSET',
+  'ARTICLE_WORKSPACE_GET_BINARY_ASSET',
+  'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+  'ARTICLE_WORKSPACE_GET_ASSET',
+  'ARTICLE_WORKSPACE_LIST_ASSETS',
   'ARTICLE_WORKSPACE_SAVE_TURN',
   'ARTICLE_WORKSPACE_UPDATE_TURN',
   'ARTICLE_WORKSPACE_DELETE_TURN',
@@ -516,12 +662,20 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_ASK_ARTICLE',
   'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
   'LLM_ANALYZE_REVIEW_OUTLINE',
+  'LLM_TRANSLATE_ABBREVIATIONS',
   'LLM_RECORD_FEEDBACK',
   'LLM_CORPUS_STATUS',
   'LLM_TOKEN_USAGE_LIST',
   'LLM_TOKEN_USAGE_CLEAR',
   'LLM_EXPORT_CORPUS',
   'LLM_DISTILL_RULES',
+  'PORTABLE_CONFIG_PROBE',
+  'PORTABLE_CONFIG_CREATE',
+  'PORTABLE_CONFIG_UNLOCK',
+  'PORTABLE_CONFIG_ROTATE_PASSPHRASE',
+  'PORTABLE_CONFIG_FORGET_KEY',
+  'PORTABLE_CONFIG_BACKUP_NOW',
+  'PORTABLE_CONFIG_STATUS',
   'USER_DATA_SYNC_STATUS',
   'USER_DATA_SYNC_NOW',
   'USER_DATA_REBUILD_INDEX',
@@ -531,6 +685,7 @@ const ROUTED_MESSAGE_TYPES = new Set([
 const TOKEN_USAGE_FEATURES = new Map([
   ['LLM_ANALYZE_DOCUMENT', ['highlight', '文段高亮（高亮匹配）']],
   ['LLM_ANALYZE_REVIEW_OUTLINE', ['paragraph_summary', '段落概述']],
+  ['LLM_TRANSLATE_ABBREVIATIONS', ['abbreviation_translation', '缩略词中文含义']],
   ['LLM_ANALYZE_FIGURES', ['figure_walkthrough', '逐图解读']],
   ['LLM_ANALYZE_FIGURE_PANEL', ['figure_panel', 'Panel 解读']],
   ['LLM_ASK_FIGURE_PANEL', ['panel_followup', 'Panel 追问']],
@@ -542,6 +697,15 @@ function recordTokenUsageProgress(message, sender, progress, reverseState) {
   if (progress?.phase !== 'provider_telemetry') return null;
   const feature = TOKEN_USAGE_FEATURES.get(message?.type);
   if (!feature) return null;
+  if (!Array.isArray(reverseState.tokenUsageEvents)) reverseState.tokenUsageEvents = [];
+  reverseState.tokenUsageEvents.push({
+    inputTokens: Math.max(0, Number(progress.inputTokens) || 0),
+    outputTokens: Math.max(0, Number(progress.outputTokens) || 0),
+    reasoningTokens: Math.max(0, Number(progress.reasoningTokens) || 0),
+    cacheHitTokens: Math.max(0, Number(progress.cacheHitTokens) || 0),
+    cacheMissTokens: Math.max(0, Number(progress.cacheMissTokens) || 0),
+    estimated: progress.estimated === true
+  });
   const document = message?.document || {};
   const promise = tokenUsageStore.record({
     canonicalUrl: document.canonicalUrl || document.url ||
@@ -565,6 +729,32 @@ function recordTokenUsageProgress(message, sender, progress, reverseState) {
   if (!Array.isArray(reverseState.tokenUsageWrites)) reverseState.tokenUsageWrites = [];
   reverseState.tokenUsageWrites.push(promise);
   return promise;
+}
+
+function aggregateNotificationTokenUsage(events = []) {
+  const rows = Array.isArray(events) ? events : [];
+  const usage = rows.reduce((total, item) => ({
+    requests: total.requests + 1,
+    inputTokens: total.inputTokens + Math.max(0, Number(item?.inputTokens) || 0),
+    outputTokens: total.outputTokens + Math.max(0, Number(item?.outputTokens) || 0),
+    reasoningTokens: total.reasoningTokens +
+      Math.max(0, Number(item?.reasoningTokens) || 0),
+    cacheHitTokens: total.cacheHitTokens +
+      Math.max(0, Number(item?.cacheHitTokens) || 0),
+    cacheMissTokens: total.cacheMissTokens +
+      Math.max(0, Number(item?.cacheMissTokens) || 0),
+    estimated: total.estimated || item?.estimated === true
+  }), {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheHitTokens: 0,
+    cacheMissTokens: 0,
+    estimated: false
+  });
+  usage.totalTokens = usage.inputTokens + usage.outputTokens;
+  return usage.requests > 0 ? usage : null;
 }
 
 async function coordinateOpenArticleWorkspaceTabs(action, workspaceId, workspaceGeneration = 1) {
@@ -592,10 +782,22 @@ async function coordinateOpenArticleWorkspaceTabs(action, workspaceId, workspace
 }
 
 async function handleRoutedMessage(message, sender, onProgress, reverseState = {}) {
-  const response = await llmRouter.handle(message, { onProgress });
+  let response = await llmRouter.handle(message, { onProgress });
   if (Array.isArray(reverseState.tokenUsageWrites) &&
       reverseState.tokenUsageWrites.length) {
     await Promise.allSettled(reverseState.tokenUsageWrites);
+  }
+  const notificationUsage = aggregateNotificationTokenUsage(
+    reverseState.tokenUsageEvents
+  );
+  if (response?.success && response.data && notificationUsage) {
+    response = {
+      ...response,
+      data: {
+        ...response.data,
+        notificationUsage
+      }
+    };
   }
   await publishCodexReverseEvent(
     response?.success ? 'result' : 'error',
@@ -880,6 +1082,129 @@ async function fetchExportImageResource(message = {}) {
   return { ...data, cacheHit: false };
 }
 
+async function relayPdfFromPublisherTab(message = {}, sender = {}) {
+  const senderUrl = String(sender?.url || '');
+  if (!SciLLM.isPdfReaderUrl(senderUrl)) {
+    throw Object.assign(new Error('PDF_RELAY_UNTRUSTED_SENDER'), {
+      code: 'PDF_RELAY_UNTRUSTED_SENDER'
+    });
+  }
+  const sourceTabId = Number(message.sourceTabId);
+  if (!Number.isInteger(sourceTabId) || sourceTabId < 0) {
+    throw Object.assign(new Error('PDF_RELAY_SOURCE_TAB_REQUIRED'), {
+      code: 'PDF_RELAY_SOURCE_TAB_REQUIRED'
+    });
+  }
+  let sourceUrl;
+  let uploadUrl;
+  try {
+    sourceUrl = new URL(String(message.sourceUrl || ''));
+    uploadUrl = new URL(String(message.uploadUrl || ''));
+  } catch (_) {
+    throw Object.assign(new Error('PDF_RELAY_INVALID_URL'), {
+      code: 'PDF_RELAY_INVALID_URL'
+    });
+  }
+  if (sourceUrl.protocol !== 'https:' || uploadUrl.protocol !== 'https:') {
+    throw Object.assign(new Error('PDF_RELAY_HTTPS_REQUIRED'), {
+      code: 'PDF_RELAY_HTTPS_REQUIRED'
+    });
+  }
+  const sourceTab = await chrome.tabs.get(sourceTabId);
+  const sourceTabUrl = new URL(String(sourceTab?.url || sourceTab?.pendingUrl || ''));
+  if (sourceTabUrl.origin !== sourceUrl.origin) {
+    throw Object.assign(new Error('PDF_RELAY_SOURCE_ORIGIN_MISMATCH'), {
+      code: 'PDF_RELAY_SOURCE_ORIGIN_MISMATCH'
+    });
+  }
+  const expectedParentUrl = SciLLM.normalizeTabDocumentUrl(message.expectedParentUrl);
+  if (expectedParentUrl) {
+    let expectedParent;
+    try {
+      expectedParent = new URL(expectedParentUrl);
+    } catch (_) {
+      expectedParent = null;
+    }
+    if (!expectedParent || expectedParent.origin !== sourceTabUrl.origin ||
+        expectedParent.pathname !== sourceTabUrl.pathname) {
+      throw Object.assign(new Error('PDF_RELAY_SOURCE_TAB_CHANGED'), {
+        code: 'PDF_RELAY_SOURCE_TAB_CHANGED'
+      });
+    }
+  }
+  const maxBytes = Math.min(
+    SciLLM.PDF_MINERU_MAX_FILE_BYTES,
+    Math.max(1, Math.floor(Number(message.maxBytes) || SciLLM.PDF_MINERU_MAX_FILE_BYTES))
+  );
+  const [{ result } = {}] = await chrome.scripting.executeScript({
+    target: { tabId: sourceTabId },
+    world: 'ISOLATED',
+    func: async (publisherPdfUrl, signedUploadUrl, byteLimit) => {
+      function fail(code, details = {}) {
+        return { success: false, code, ...details };
+      }
+      try {
+        const sourceResponse = await fetch(publisherPdfUrl, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+          redirect: 'follow'
+        });
+        if (!sourceResponse.ok) {
+          return fail('PDF_RELAY_SOURCE_HTTP', { status: sourceResponse.status });
+        }
+        const announcedSize = Number(sourceResponse.headers.get('content-length')) || 0;
+        if (announcedSize > byteLimit) {
+          return fail('PDF_RELAY_FILE_TOO_LARGE', { size: announcedSize });
+        }
+        const bytes = await sourceResponse.arrayBuffer();
+        if (!bytes.byteLength || bytes.byteLength > byteLimit) {
+          return fail(
+            bytes.byteLength ? 'PDF_RELAY_FILE_TOO_LARGE' : 'PDF_RELAY_EMPTY_FILE',
+            { size: bytes.byteLength }
+          );
+        }
+        const signature = new Uint8Array(bytes, 0, Math.min(5, bytes.byteLength));
+        if (signature.length < 5 || signature[0] !== 0x25 || signature[1] !== 0x50 ||
+            signature[2] !== 0x44 || signature[3] !== 0x46 || signature[4] !== 0x2d) {
+          return fail('PDF_RELAY_NOT_PDF', {
+            contentType: String(sourceResponse.headers.get('content-type') || '')
+          });
+        }
+        const uploadResponse = await fetch(signedUploadUrl, {
+          method: 'PUT',
+          body: bytes
+        });
+        if (!uploadResponse.ok) {
+          return fail('PDF_RELAY_UPLOAD_HTTP', { status: uploadResponse.status });
+        }
+        return {
+          success: true,
+          size: bytes.byteLength,
+          sourceStatus: sourceResponse.status,
+          uploadStatus: uploadResponse.status
+        };
+      } catch (error) {
+        return fail('PDF_RELAY_NETWORK_FAILED', {
+          message: String(error?.message || error || 'PDF_RELAY_NETWORK_FAILED')
+        });
+      }
+    },
+    args: [sourceUrl.href, uploadUrl.href, maxBytes]
+  });
+  if (!result?.success) {
+    const error = new Error(String(result?.message || result?.code || 'PDF_RELAY_FAILED'));
+    error.code = String(result?.code || 'PDF_RELAY_FAILED');
+    error.details = result || null;
+    throw error;
+  }
+  return {
+    byteLength: Math.max(0, Number(result.size) || 0),
+    sourceTabId,
+    sourceUrl: sourceUrl.href
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'LLM_FOUNDATION_STATUS') {
     sendResponse({
@@ -1013,6 +1338,84 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'SIDE_PANEL_ACTIVATE_CURRENT_TAB') {
+    const tabId = Number(message.tabId);
+    chrome.tabs.get(tabId).then(async tab => {
+      let currentUrl = SciLLM.normalizeTabDocumentUrl(tab?.url || tab?.pendingUrl);
+      const expectedUrl = SciLLM.normalizeTabDocumentUrl(message.url);
+      if (!currentUrl) {
+        const state = await chrome.tabs.sendMessage(tabId, {
+          action: 'getPdfWorkspaceState'
+        }).catch(() => null);
+        const readerUrl = SciLLM.normalizeTabDocumentUrl(state?.readerUrl);
+        if (state?.pdfMode === true && SciLLM.isPdfReaderUrl(readerUrl)) {
+          tab = {
+            ...tab,
+            url: readerUrl,
+            pendingUrl: readerUrl,
+            title: String(tab?.title || '文献 PDF')
+          };
+          currentUrl = readerUrl;
+        }
+      }
+      if (!tab?.id || (expectedUrl && expectedUrl !== currentUrl)) {
+        const error = new Error('SIDE_PANEL_TAB_CHANGED');
+        error.code = 'SIDE_PANEL_TAB_CHANGED';
+        throw error;
+      }
+      const extensionPage = currentUrl.startsWith(chrome.runtime.getURL(''));
+      if (extensionPage && !SciLLM.isPdfReaderUrl(currentUrl)) {
+        const error = new Error('SIDE_PANEL_UNSUPPORTED_TAB');
+        error.code = 'SIDE_PANEL_UNSUPPORTED_TAB';
+        throw error;
+      }
+      return activateTabFromOpenSidePanel(tab);
+    }).then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({
+        success: false,
+        error: {
+          code: String(error?.code || 'SIDE_PANEL_ACTIVATION_FAILED'),
+          message: String(error?.message || 'SIDE_PANEL_ACTIVATION_FAILED')
+        }
+      }));
+    return true;
+  }
+
+  if (message?.type === 'PDF_BROWSER_SESSION_UPLOAD') {
+    SciLLM.keepAliveUntil(relayPdfFromPublisherTab(message, sender), chrome)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({
+        success: false,
+        error: {
+          code: String(error?.code || 'PDF_RELAY_FAILED'),
+          message: String(error?.message || 'PDF_RELAY_FAILED'),
+          details: error?.details || null
+        }
+      }));
+    return true;
+  }
+
+  if (message?.type === 'ABBREVIATION_MEMORY_GET') {
+    loadGlobalAbbreviationMemory()
+      .then(memory => sendResponse({ success: true, data: { memory } }))
+      .catch(error => sendResponse({
+        success: false,
+        error: { code: 'ABBREVIATION_MEMORY_GET_FAILED', message: error.message }
+      }));
+    return true;
+  }
+
+  if (message?.type === 'ABBREVIATION_MEMORY_MERGE') {
+    mergeGlobalAbbreviationEntries(message.entries, {
+      incrementSupport: message.incrementSupport === true
+    }).then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({
+        success: false,
+        error: { code: 'ABBREVIATION_MEMORY_MERGE_FAILED', message: error.message }
+      }));
+    return true;
+  }
+
   if (message?.type === 'EXPORT_FETCH_IMAGE_RESOURCE') {
     SciLLM.keepAliveUntil(fetchExportImageResource(message), chrome)
       .then(data => sendResponse({ success: true, data }))
@@ -1055,7 +1458,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (ROUTED_MESSAGE_TYPES.has(message?.type)) {
-    const reverseState = { localCodex: false, tokenUsageWrites: [] };
+    const reverseState = {
+      localCodex: false,
+      tokenUsageWrites: [],
+      tokenUsageEvents: []
+    };
     const onProgress = progress => Promise.allSettled([
         recordTokenUsageProgress(message, sender, progress, reverseState),
         sender.tab?.id

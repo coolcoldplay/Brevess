@@ -52,6 +52,8 @@ foreach ($directory in @('core', 'providers', 'vendor', 'icons', '_locales')) {
 foreach ($file in @(
   'manifest.json', 'background.js', 'content.js', 'content.css',
   'popup.html', 'popup.js', 'popup.css',
+  'logic-map.html', 'logic-map.js', 'logic-map.css',
+  'pdf-reader.html', 'pdf-reader.js', 'pdf-reader.css',
   'options.html', 'options.js', 'options.css',
   'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md'
@@ -91,10 +93,17 @@ if (-not (Test-Path -LiteralPath $hostExecutable -PathType Leaf)) {
 $bridgeBin = Join-Path $bridgeStage 'bin'
 New-Item -ItemType Directory -Path $bridgeBin -Force | Out-Null
 Copy-Item -LiteralPath $hostExecutable -Destination $bridgeBin
+foreach ($directory in @('pdffigures2', 'runtime')) {
+  $source = Join-Path $projectRoot "native-host\$directory"
+  if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+    throw "Local companion component is missing: $source"
+  }
+  Copy-Item -LiteralPath $source -Destination $bridgeStage -Recurse
+}
 foreach ($file in @(
   'install.ps1', 'login.ps1', 'uninstall.ps1',
   'Install-Brevess-Codex-Bridge.cmd', 'Uninstall-Brevess-Codex-Bridge.cmd',
-  'README-STORE.md'
+  'README-STORE.md', 'runtime-version.json'
 )) {
   Copy-Item -LiteralPath (Join-Path $projectRoot "native-host\$file") `
     -Destination $bridgeStage
@@ -168,6 +177,12 @@ $releaseMetadata = [ordered]@{
   version = $version
   builtAt = (Get-Date).ToUniversalTime().ToString('o')
   catalogExtensionIds = $catalogIds
+  localCompanion = [ordered]@{
+    nativeHostId = 'com.sci_reader.codex_bridge'
+    pdffigures2Version = '0.1.0'
+    pdffigures2Commit = '3d7ad46753d4a315cccd1c2bcab398380e88c534'
+    temurinVersion = '8u492-b09'
+  }
   artifacts = $artifacts
 }
 $releaseJson = $releaseMetadata | ConvertTo-Json -Depth 5

@@ -1,7 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { webcrypto } = require('node:crypto');
 
 require('../core/user-data-database.js');
+const {
+  PORTABLE_CONFIG_PATH,
+  PORTABLE_CONFIG_KDF_ITERATIONS,
+  derivePortableConfigKey,
+  encryptPortableConfig,
+  decryptPortableConfig,
+  toBase64
+} = require('../core/portable-config.js');
 const {
   createWorkspaceManifest,
   createWorkspaceIndex,
@@ -44,12 +53,27 @@ function createFakeHandleStore(initialPermission = 'granted') {
           error.name = 'NotFoundError';
           throw error;
         }
-        return { async text() { return files.get(path); } };
+        return {
+          async text() {
+            const value = files.get(path);
+            return typeof value === 'string'
+              ? value : new TextDecoder().decode(value);
+          },
+          async arrayBuffer() {
+            const value = files.get(path);
+            const bytes = value instanceof Uint8Array
+              ? value : new TextEncoder().encode(String(value));
+            return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+          }
+        };
       },
       async createWritable() {
         let next = '';
         return {
-          async write(value) { next = String(value); },
+          async write(value) {
+            next = value instanceof Uint8Array
+              ? new Uint8Array(value) : String(value);
+          },
           async close() {
             if (failWrites > 0) {
               failWrites -= 1;
@@ -130,9 +154,17 @@ function createFakeHandleStore(initialPermission = 'granted') {
     pauseNextWrite(path) { pausePath = path; },
     async waitForPausedWrite() { await pausedEntered; },
     releasePausedWrite() { releasePausedWrite?.(); },
-    readText(path) { return files.get(path) || ''; },
+    readText(path) {
+      const value = files.get(path);
+      return typeof value === 'string' ? value : '';
+    },
+    readBytes(path) {
+      const value = files.get(path);
+      return value instanceof Uint8Array ? new Uint8Array(value) : null;
+    },
     has(path) { return files.has(path); },
     writeText(path, value) { files.set(path, String(value)); },
+    fileEntries() { return [...files.entries()]; },
     writes,
     reads
   };
@@ -225,6 +257,33 @@ test('continues using a legacy workspace root when upgrading to Brevess', async 
   assert.equal(handles.has('Brevess/categories.json'), false);
 });
 
+test('writes and restores whole PDF Figure bytes as a workspace binary asset', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+  await sync.enqueueWorkspaceBinary(
+    workspace,
+    'pdf/figures/main/figure-1.png',
+    bytes,
+    { revision: 2, contentHash: 'a'.repeat(64) }
+  );
+  const flushed = await sync.flush();
+  assert.equal(flushed.failed, 0);
+  assert.equal(flushed.written, 1);
+  const fullPath = `Brevess/workspaces/${workspace.directoryName}/` +
+    'pdf/figures/main/figure-1.png';
+  assert.deepEqual(handles.readBytes(fullPath), bytes);
+  const restored = await sync.readWorkspaceBinary(
+    workspace, 'pdf/figures/main/figure-1.png'
+  );
+  assert.equal(restored.found, true);
+  assert.deepEqual(restored.bytes, bytes);
+});
+
 test('serializes concurrent workspace assets so the manifest retains every chat file', async () => {
   const handles = createFakeHandleStore();
   const sync = createDirectorySync({
@@ -291,6 +350,63 @@ test('discovers valid chat turn files omitted by an older workspace manifest', a
     'chat/index.json', relativePath
   ]);
   assert.equal(discovered.assets[1].content.turnId, 'turn-orphan');
+});
+
+test('discovers manual supplemental Figure image and caption files omitted by an older manifest', async () => {
+  const handles = createFakeHandleStore();
+  const sync = createDirectorySync({
+    handleStore: handles,
+    queueStore: createMemorySyncQueue()
+  });
+  const workspace = workspaceFixture();
+  await sync.enqueueWorkspaceAsset(workspace, 'ui/state.json', { view: 'figures' }, {
+    revision: 1, workspaceGeneration: 1
+  });
+  await sync.flush();
+  const manifest = JSON.parse(handles.readText(
+    `Brevess/workspaces/${workspace.directoryName}/manifest.json`
+  ));
+  const relativePath = 'figures/supplemental/manual-image-s1.json';
+  const supplemental = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Durable caption.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  handles.writeText(
+    `Brevess/workspaces/${workspace.directoryName}/${relativePath}`,
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'sci-logic-highlighter-workspace-asset',
+      revision: 4,
+      updatedAt: '2026-08-04T00:00:00.000Z',
+      contentHash: 'manual-image-s1-hash',
+      sourceId: 'extension',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath,
+      data: supplemental
+    })
+  );
+
+  const discovered = await sync.listWorkspaceSupplementalAssets(manifest);
+
+  assert.equal(discovered.invalidAssets, 0);
+  assert.deepEqual(discovered.assets.map(asset => asset.relativePath), [relativePath]);
+  assert.equal(discovered.assets[0].content.figures[0].caption,
+    'Figure S1. Durable caption.');
+  assert.equal(discovered.assets[0].content.figures[0].analysisImages[0].dataUrl,
+    'data:image/png;base64,AQID');
 });
 
 test('recovers only post-manifest chat writes from an older workspace generation', async () => {
@@ -574,6 +690,49 @@ test('a post-restore workspace save advances beyond a newer disk envelope revisi
   assert.equal(result.pendingCount, 0);
   assert.equal(saved.revision, 5001);
   assert.equal(saved.data.totalTurns, 2);
+});
+
+test('a stale queued workspace asset cannot hide a newer disk revision during explicit save', async () => {
+  const handles = createFakeHandleStore('prompt');
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const workspace = workspaceFixture({ workspaceGeneration: 2 });
+  const relativePath = 'annotations/highlights.json';
+  const root = `Brevess/workspaces/${workspace.directoryName}`;
+
+  await sync.enqueueWorkspaceAsset(
+    workspace,
+    relativePath,
+    { highlights: [{ id: 'queued-old' }] },
+    { revision: 2, workspaceGeneration: 2, advanceFromDirectory: true }
+  );
+  handles.writeText(`${root}/${relativePath}`, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace-asset',
+    revision: 5000,
+    updatedAt: '2026-07-24T02:00:00.000Z',
+    contentHash: 'disk-hash',
+    sourceId: 'extension',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 2,
+    relativePath,
+    data: { highlights: [{ id: 'disk-newer' }] }
+  }));
+  handles.setPermission('granted');
+
+  const queued = await sync.enqueueWorkspaceAsset(
+    workspace,
+    relativePath,
+    { highlights: [{ id: 'current-safe-result' }] },
+    { revision: 3, workspaceGeneration: 2, advanceFromDirectory: true }
+  );
+  const result = await sync.flush();
+  const saved = JSON.parse(handles.readText(`${root}/${relativePath}`));
+
+  assert.equal(queued.revision, 5001);
+  assert.equal(result.failed, 0);
+  assert.equal(result.pendingCount, 0);
+  assert.deepEqual(saved.data.highlights, [{ id: 'current-safe-result' }]);
 });
 
 test('does not overwrite a malformed existing index during flush', async () => {
@@ -1064,4 +1223,420 @@ test('workspace deletion removes its active, backup, and conflict trees without 
   assert.equal(handles.has(secondConflict), true);
   assert.equal(removed.removedConflicts, 1);
   assert.equal((await sync.status()).conflictCount, 0);
+});
+
+function portableEnvelope(revision, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'brevess-encrypted-portable-config',
+    backupId: 'backup-cas-test-0001',
+    revision,
+    updatedAt: `2026-08-03T00:00:${String(revision).padStart(2, '0')}.000Z`,
+    encryption: {
+      algorithm: 'AES-GCM',
+      keyLength: 256,
+      kdf: 'PBKDF2-SHA-256',
+      iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+      salt: toBase64(new Uint8Array(16).fill(7)),
+      iv: toBase64(new Uint8Array(12).fill(revision % 255))
+    },
+    ciphertext: toBase64(new Uint8Array([revision + 1, 2, 3, 4])),
+    ...overrides
+  };
+}
+
+test('portable CAS requires granted permission and never queues or writes when unavailable', async () => {
+  for (const permission of ['prompt', 'denied']) {
+    const handles = createFakeHandleStore(permission);
+    const queue = createMemorySyncQueue();
+    const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+
+    await assert.rejects(
+      () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1), {
+        mode: 'create'
+      }),
+      error => error.code === 'DIRECTORY_PERMISSION_REQUIRED' &&
+        error.permission === permission
+    );
+    assert.equal(handles.writes.length, 0);
+    assert.deepEqual(await queue.getAll(), []);
+  }
+});
+
+test('portable CAS creates only a genuinely missing encrypted file without queue/index writes', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const envelope = portableEnvelope(1);
+
+  const result = await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, envelope, {
+    mode: 'create'
+  });
+
+  assert.deepEqual(result, {
+    committed: true,
+    permission: 'granted',
+    mode: 'create',
+    revision: 1,
+    previousRevision: null
+  });
+  assert.deepEqual(
+    JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)),
+    envelope
+  );
+  assert.deepEqual(await queue.getAll(), []);
+  assert.equal(handles.has('Brevess/index.json'), false);
+});
+
+test('portable CAS rejects unauthenticated metadata that could smuggle plaintext credentials', async () => {
+  const secret = 'sk-portable-metadata-secret-123';
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1, {
+      sourceId: `apiKey=${secret}`
+    }), { mode: 'create' }),
+    error => error.code === 'PORTABLE_CONFIG_ENVELOPE_UNSAFE'
+  );
+
+  assert.equal(handles.writes.length, 0);
+  assert.deepEqual(await queue.getAll(), []);
+  assert.doesNotMatch(JSON.stringify(await sync.status()), new RegExp(secret));
+});
+
+test('portable settings primary, backup, conflicts, queue metadata, and index stay ciphertext-only', async () => {
+  const secret = 'sk-portable-folder-secret-123';
+  const headerSecret = 'portable-authorization-secret';
+  const abbreviationSecret = 'tumor necrosis factor';
+  const salt = new Uint8Array(16).fill(13);
+  const keyBytes = await derivePortableConfigKey('portable-test-password', {
+    salt,
+    iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+    cryptoRef: webcrypto
+  });
+  const payload = {
+    kind: 'brevess-portable-user-config',
+    schemaVersion: 1,
+    settings: {
+      profiles: {
+        private: {
+          providerId: 'openai-compatible',
+          config: {
+            apiKey: secret,
+            model: 'private-model',
+            customHeaders: { Authorization: `Bearer ${headerSecret}` }
+          }
+        }
+      }
+    },
+    globalAbbreviations: {
+      schemaVersion: 1,
+      entries: [{ abbreviation: 'TNF', fullName: abbreviationSecret }]
+    }
+  };
+  const encryptRevision = revision => encryptPortableConfig(payload, {
+    keyBytes,
+    salt,
+    backupId: 'backup-ciphertext-regression',
+    revision,
+    now: `2026-08-03T00:01:${String(revision).padStart(2, '0')}.000Z`,
+    cryptoRef: webcrypto
+  });
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = await encryptRevision(1);
+  const second = await encryptRevision(2);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+    mode: 'update', expected: first
+  });
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+      mode: 'update', expected: first
+    }),
+    error => error.code === 'DIRECTORY_CAS_CONFLICT'
+  );
+
+  const portableFiles = handles.fileEntries().filter(([path]) =>
+    path.includes('portable-config')
+  );
+  assert.deepEqual(portableFiles.map(([path]) => path).sort(), [
+    'Brevess/backups/settings/portable-config.enc.previous.json',
+    `Brevess/${PORTABLE_CONFIG_PATH}`
+  ]);
+  for (const [, content] of portableFiles) {
+    assert.doesNotMatch(content, new RegExp(secret));
+    assert.doesNotMatch(content, new RegExp(headerSecret));
+    assert.doesNotMatch(content, new RegExp(abbreviationSecret));
+    assert.doesNotMatch(content, /"apiKey"|"customHeaders"|Authorization/u);
+    assert.equal(JSON.parse(content).kind, 'brevess-encrypted-portable-config');
+  }
+  assert.deepEqual(await queue.getAll(), []);
+  assert.equal(handles.has('Brevess/index.json'), false);
+  assert.equal(handles.fileEntries().some(([path]) => path.includes('/conflicts/')), false);
+  assert.doesNotMatch(
+    JSON.stringify(await sync.status()),
+    new RegExp(`${secret}|${headerSecret}|${abbreviationSecret}`)
+  );
+});
+
+test('normal export removes the complete credential/provider family without over-removing scientific fields', async () => {
+  const sync = createDirectorySync({
+    handleStore: createFakeHandleStore(),
+    queueStore: createMemorySyncQueue()
+  });
+  const bundle = await sync.exportBundle({
+    schemaVersion: 1,
+    nested: {
+      apiKey: 'secret-api-key',
+      customHeaders: { Authorization: 'secret-authorization' },
+      token: 'secret-generic-token',
+      providerToken: 'secret-provider-token',
+      providerId: 'secret-provider-id',
+      provider: 'secret-provider',
+      password: 'secret-password',
+      bearer: 'secret-bearer',
+      authToken: 'secret-auth-token',
+      accessToken: 'secret-access-token',
+      refreshToken: 'secret-refresh-token',
+      credential: 'secret-credential',
+      secret: 'secret-secret',
+      apiToken: 'secret-api-token',
+      githubToken: 'secret-github-token',
+      privateToken: 'secret-private-token',
+      personalAccessToken: 'secret-personal-access-token',
+      webhookSecret: 'secret-webhook-secret',
+      privateSecret: 'secret-private-secret',
+      clientSecret: 'secret-client-secret',
+      privateKey: 'secret-private-key',
+      activeProvider: 'secret-active-provider',
+      authorizationHeader: 'secret-authorization-header',
+      authHeader: 'secret-auth-header',
+      bearerToken: 'secret-bearer-token',
+      databasePassword: 'secret-database-password',
+      accessTokens: 'secret-access-tokens',
+      experimentalProtocol: 'retain protocol',
+      secretoryPathway: 'retain secretory biology',
+      secretome: 'retain secretome biology',
+      tokenizationMethod: 'retain scientific tokenization',
+      tokenUsage: { input: 12, output: 4 },
+      tokenCount: 16,
+      inputTokenCount: 12,
+      inputTokens: 12,
+      outputTokens: 4,
+      cacheHitTokens: 8,
+      totalTokens: 16,
+      maxOutputTokens: 4096,
+      headerTitle: 'retain section header',
+      proteinAccess: 'retain assay access'
+    }
+  });
+
+  assert.deepEqual(bundle.nested, {
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  });
+});
+
+test('portable previous backup canonicalizes validated JSON before writing it', async () => {
+  const smuggled = 'apiKey=sk-duplicate-ciphertext-smuggle';
+  const salt = new Uint8Array(16).fill(19);
+  const keyBytes = await derivePortableConfigKey('portable-canonical-password', {
+    salt,
+    iterations: PORTABLE_CONFIG_KDF_ITERATIONS,
+    cryptoRef: webcrypto
+  });
+  const payload = {
+    kind: 'brevess-portable-user-config',
+    schemaVersion: 1,
+    settings: { profiles: { safe: { config: { apiKey: 'encrypted-only' } } } },
+    globalAbbreviations: { schemaVersion: 1, entries: [] }
+  };
+  const encryptRevision = revision => encryptPortableConfig(payload, {
+    keyBytes,
+    salt,
+    backupId: 'backup-canonical-regression',
+    revision,
+    now: `2026-08-03T00:02:${String(revision).padStart(2, '0')}.000Z`,
+    cryptoRef: webcrypto
+  });
+  const first = await encryptRevision(1);
+  const second = await encryptRevision(2);
+  const canonicalFirst = JSON.stringify(first);
+  const rawFirst = `  ${canonicalFirst.replace(
+    `"ciphertext":"${first.ciphertext}"`,
+    `"ciphertext":"${smuggled}","ciphertext":"${first.ciphertext}"`
+  )}  \n`;
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  handles.writeText(`Brevess/${PORTABLE_CONFIG_PATH}`, rawFirst);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, second, {
+    mode: 'update', expected: first
+  });
+
+  const previousPath = 'Brevess/backups/settings/portable-config.enc.previous.json';
+  const previousText = handles.readText(previousPath);
+  const previous = JSON.parse(previousText);
+  assert.doesNotMatch(previousText, new RegExp(smuggled));
+  assert.equal(previousText, `${JSON.stringify(previous, null, 2)}\n`);
+  assert.deepEqual(Object.keys(previous).sort(), [
+    'backupId', 'ciphertext', 'encryption', 'kind', 'revision',
+    'schemaVersion', 'updatedAt'
+  ]);
+  assert.deepEqual(
+    (await decryptPortableConfig(previous, { keyBytes, cryptoRef: webcrypto })).payload,
+    payload
+  );
+});
+
+test('portable CAS update mismatch performs zero writes and preserves the primary', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = portableEnvelope(1);
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  const writesBefore = handles.writes.length;
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(3), {
+      mode: 'update',
+      expected: portableEnvelope(2)
+    }),
+    error => error.code === 'DIRECTORY_CAS_CONFLICT'
+  );
+  assert.equal(handles.writes.length, writesBefore);
+  assert.deepEqual(JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)), first);
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('failed portable CAS leaves no replayable item for a later ordinary flush', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  handles.failNextWrites();
+
+  await assert.rejects(
+    () => sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, portableEnvelope(1), {
+      mode: 'create'
+    })
+  );
+  assert.deepEqual(await queue.getAll(), []);
+  await sync.flush();
+  assert.equal(handles.has(`Brevess/${PORTABLE_CONFIG_PATH}`), false);
+});
+
+test('concurrent portable CAS updates with one expected revision commit exactly once', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const first = portableEnvelope(1);
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, first, { mode: 'create' });
+  const secondA = portableEnvelope(2, { ciphertext: toBase64(new Uint8Array([8, 8, 8])) });
+  const secondB = portableEnvelope(2, { ciphertext: toBase64(new Uint8Array([9, 9, 9])) });
+
+  const results = await Promise.allSettled([
+    sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, secondA, {
+      mode: 'update', expected: first
+    }),
+    sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, secondB, {
+      mode: 'update', expected: first
+    })
+  ]);
+
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter(result =>
+    result.status === 'rejected' && result.reason?.code === 'DIRECTORY_CAS_CONFLICT'
+  ).length, 1);
+  assert.equal(JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)).revision, 2);
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('ordinary JSON and text queues reject the reserved portable config path', async () => {
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({
+    handleStore: createFakeHandleStore(),
+    queueStore: queue
+  });
+
+  await assert.rejects(
+    () => sync.enqueueJson(PORTABLE_CONFIG_PATH, portableEnvelope(1)),
+    error => error.code === 'PORTABLE_CONFIG_REQUIRES_CAS'
+  );
+  await assert.rejects(
+    () => sync.enqueueText(PORTABLE_CONFIG_PATH, 'legacy portable config'),
+    error => error.code === 'PORTABLE_CONFIG_REQUIRES_CAS'
+  );
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('flush discards a legacy portable queue item and continues ordinary assets', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const legacy = portableEnvelope(1);
+  await queue.put({
+    relativePath: PORTABLE_CONFIG_PATH,
+    type: 'json',
+    content: `${JSON.stringify(legacy, null, 2)}\n`,
+    revision: legacy.revision,
+    sourceId: 'legacy-portable-queue',
+    contentHash: 'legacy-portable-queue'
+  });
+  await sync.enqueueJson('categories.json', json(1, { value: 'ordinary' }));
+
+  const result = await sync.flush();
+
+  assert.equal(result.failed, 0);
+  assert.equal(result.written, 1);
+  assert.equal(result.pendingCount, 0);
+  assert.equal(handles.has(`Brevess/${PORTABLE_CONFIG_PATH}`), false);
+  assert.equal(JSON.parse(handles.readText('Brevess/categories.json')).value, 'ordinary');
+  assert.deepEqual(await queue.getAll(), []);
+});
+
+test('portable CAS clears a legacy queue item so a later flush cannot replay it', async () => {
+  const handles = createFakeHandleStore();
+  const queue = createMemorySyncQueue();
+  const sync = createDirectorySync({ handleStore: handles, queueStore: queue });
+  const legacy = portableEnvelope(1, {
+    backupId: 'legacy-portable-queue',
+    ciphertext: toBase64(new Uint8Array([9, 9, 9]))
+  });
+  await queue.put({
+    relativePath: PORTABLE_CONFIG_PATH,
+    type: 'json',
+    content: `${JSON.stringify(legacy, null, 2)}\n`,
+    revision: legacy.revision,
+    sourceId: 'legacy-portable-queue',
+    contentHash: 'legacy-portable-queue'
+  });
+  const committed = portableEnvelope(1);
+
+  await sync.compareAndSwapJson(PORTABLE_CONFIG_PATH, committed, { mode: 'create' });
+  assert.deepEqual(await queue.getAll(), []);
+  await sync.flush();
+
+  assert.deepEqual(
+    JSON.parse(handles.readText(`Brevess/${PORTABLE_CONFIG_PATH}`)),
+    committed
+  );
+  assert.deepEqual(await queue.getAll(), []);
 });

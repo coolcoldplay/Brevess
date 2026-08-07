@@ -81,6 +81,8 @@ test('outline-scoped chat commands include sections whose paragraphs live in des
   assert.match(helper, /node\?\.analysisSectionIds/);
   assert.match(helper, /sectionIds\.includes\(String\(paragraph\?\.sectionId/);
   assert.doesNotMatch(helper, /node\?\.paragraphCount\s*>\s*0/);
+  assert.doesNotMatch(helper, /&&\s*paragraphCount\s*>\s*0/);
+  assert.doesNotMatch(helper, /slice\(0,\s*120\)/);
 });
 
 test('content sends canonical workspace paragraphs and persists only public chat state', () => {
@@ -99,6 +101,14 @@ test('content sends canonical workspace paragraphs and persists only public chat
   assert.match(chat, /history/);
   assert.doesNotMatch(chat, /apiKey|customHeaders|authorization/i);
   assert.match(content, /chat:\s*getPublicArticleChatState\(\{ limit: chatLimit \}\)/);
+  const publicPlanStart = content.indexOf('function publicArticleChatPlan');
+  const publicPlanEnd = content.indexOf(
+    'function normalizeArticleChatContextScope', publicPlanStart
+  );
+  const publicPlan = content.slice(publicPlanStart, publicPlanEnd);
+  assert.match(publicPlan, /contextWindowTokenCount/);
+  assert.match(publicPlan, /inputBudgetTokenCount/);
+  assert.doesNotMatch(publicPlan, /\n\s*contextWindowTokens\s*:/);
   assert.match(content, /function articleChatFailureMessage/);
   assert.match(content, /OUTPUT_TRUNCATED:\s*'模型连续达到输出上限/);
   assert.match(content, /'completed', 'truncated', 'incomplete'/);
@@ -137,6 +147,9 @@ test('full-text chat renders a scrollable multi-turn Markdown stream with paragr
   assert.match(popup, /inlineCitationCount/);
   assert.match(popup, /citationNumberOffset/);
   assert.match(popup, /dataset\.citationNumber/);
+  assert.match(popup, /articleChatOrderedListItemCount/);
+  assert.match(popup, /dataset\.orderedListStart/);
+  assert.match(popup, /list\.start = start/);
   assert.match(popup, /\\d\{1,3\}/);
   assert.match(css, /\.article-chat-inline-citation/);
   assert.match(popup, /!event\.shiftKey && !event\.isComposing/);
@@ -158,6 +171,13 @@ test('article chat citations are verified, inline, and expose visible jump failu
   assert.match(citationWorkflow, /documentRevision/);
   assert.match(citationWorkflow, /citationResult/);
   assert.match(citationWorkflow, /applyArticleChatCitationState/);
+  assert.match(
+    citationWorkflow,
+    /paragraphId:\s*verification\.target\.paragraphId\s*\|\|\s*item\?\.paragraphId/
+  );
+  const content = read('content.js');
+  assert.match(content, /data-sci-llm-paragraph-id/);
+  assert.match(content, /paragraphId:\s*verification\.target\.paragraphId/);
   assert.match(popup, /appendChild\(createArticleChatInlineCitation[\s\S]*citationIndexes\?\.add/);
   assert.match(popup, /findIndex\(item => String\(item\?\.marker/);
   assert.doesNotMatch(popup, /missingEvidence[\s\S]*createArticleChatInlineCitation/);
@@ -217,6 +237,11 @@ test('side panel can explicitly save all current workspace artifacts to the loca
   assert.match(popup, /type:\s*'USER_DATA_SYNC_NOW'/);
   assert.match(popup, /drain:\s*true/);
   assert.match(popup, /directorySyncFailureMessage\(syncResult\)/);
+  assert.match(popup, /let saved = null;/);
+  assert.match(
+    popup,
+    /本次结果已安全保存在浏览器，并保留在待同步队列；[\s\S]{0,160}可以放心关闭页面/
+  );
   assert.match(content, /request\.action === 'saveArticleWorkspaceNow'/);
   assert.match(content, /persistArticleWorkspaceArtifacts\(\{ force: true \}\)/);
   assert.match(content, /persistWorkspaceTurnCheckpoint\(turn, \{[\s\S]{0,100}append: false,[\s\S]{0,100}force: true/);
@@ -248,6 +273,10 @@ test('workspace autosave checkpoints complete chat blocks and keeps interrupted 
   assert.match(content, /phase === 'chat_answer_block'[\s\S]{0,900}persistArticleChatCheckpoint/);
   assert.match(content,
     /async function persistArticleChatCheckpoint[\s\S]{0,700}chat\/index\.json/);
+  assert.match(content,
+    /await persistArticleChatCheckpoint\(turn, \{ force: true \}\)/);
+  assert.match(content,
+    /phase === 'chat_completed'[\s\S]{0,800}pendingTerminalStatus/);
   assert.match(content, /status:\s*turn\.status === 'generating'\s*\?\s*'interrupted'/);
   const restoreStart = content.indexOf('async function applyArticleWorkspaceAssets');
   assert.ok(restoreStart >= 0);

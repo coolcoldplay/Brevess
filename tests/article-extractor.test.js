@@ -7,9 +7,12 @@ const {
   buildParagraphRecords,
   normalizeTextWithOffsets,
   scientificInlineText,
+  bilingualHeadingDisplayText,
   collectContentElements,
   isReviewUtilitySectionTitle,
   isReviewUtilityParagraphText,
+  isSupplementalMediaParagraphText,
+  isLikelyInlineReferenceFlyoutText,
   selectContentRoot,
   diagnoseArticleExtraction,
   extractArticle,
@@ -17,6 +20,25 @@ const {
   prepareReviewOutlineParagraphs,
   summarizeArticleRecords
 } = require('../core/article-extractor.js');
+
+test('filters numbered inline citation flyouts without dropping the References section', () => {
+  const flyout =
+    '21. Schaum, N. · Lehallier, B. · Hahn, O. et al. Ageing hallmarks exhibit organ-specific temporal signatures.';
+  assert.equal(isLikelyInlineReferenceFlyoutText(flyout), true);
+
+  const records = buildParagraphRecords([
+    { kind: 'heading', text: 'Results' },
+    { kind: 'paragraph', text: 'Cutaneous denervation reduced collagen abundance in aged skin.' },
+    { kind: 'paragraph', text: flyout },
+    { kind: 'heading', text: 'References' },
+    { kind: 'paragraph', text: flyout }
+  ]);
+  assert.deepEqual(records.map(record => record.text), [
+    'Cutaneous denervation reduced collagen abundance in aged skin.',
+    flyout
+  ]);
+  assert.equal(records[1].sectionKind, 'reference');
+});
 
 test('preserves scientific superscript and subscript semantics in display text', () => {
   const textNode = value => ({ nodeType: 3, nodeValue: value });
@@ -31,6 +53,38 @@ test('preserves scientific superscript and subscript semantics in display text',
   );
 
   assert.equal(scientificInlineText(root), 'Ca<sup>2+</sup> and H<sub>2</sub>O');
+});
+
+test('keeps immersive translation out of canonical text but renders heading translation on a new line', () => {
+  const textNode = value => ({ nodeType: 3, nodeValue: value });
+  const translation = {
+    nodeType: 1,
+    tagName: 'SPAN',
+    textContent: '焦亡与抗肿瘤免疫',
+    childNodes: [textNode('焦亡与抗肿瘤免疫')],
+    matches: selector => selector.includes('immersive-translate-target-wrapper'),
+    contains: () => false
+  };
+  const heading = {
+    nodeType: 1,
+    tagName: 'H2',
+    childNodes: [
+      textNode('Pyroptosis and antitumour immunity'),
+      translation
+    ],
+    matches: () => false,
+    querySelectorAll: selector =>
+      selector.includes('immersive-translate-target-wrapper') ? [translation] : []
+  };
+
+  assert.equal(
+    scientificInlineText(heading),
+    'Pyroptosis and antitumour immunity'
+  );
+  assert.equal(
+    bilingualHeadingDisplayText(heading),
+    'Pyroptosis and antitumour immunity\n焦亡与抗肿瘤免疫'
+  );
 });
 
 test('keeps Nature Main as a navigable body boundary while dropping access notices', () => {
@@ -365,6 +419,55 @@ test('excludes Cell video modals and transcript panels by DOM ancestry', () => {
   );
 });
 
+test('keeps Cell Results prose while excluding inline supplemental video cards', () => {
+  const blocks = [
+    { kind: 'heading', level: 2, text: 'Results' },
+    {
+      kind: 'heading',
+      level: 3,
+      text: 'Features of the olfactory dural lymphatic plexus'
+    },
+    {
+      kind: 'paragraph',
+      text: 'Examination of thick sagittal sections revealed that the olfactory dural lymphatic network extended across the cribriform plate.'
+    },
+    {
+      kind: 'paragraph',
+      text: 'Video S1. 3D rendering of a thick mid-sagittal section showing lymphatics in the olfactory dural network, related to Figure 1'
+    },
+    {
+      kind: 'paragraph',
+      text: 'This video shows the four lymphatic plexuses illustrated in Figure S1 and the paths that cross the cribriform plate.'
+    },
+    {
+      kind: 'paragraph',
+      text: 'Video S2. 3D rendering of a thick oblique-coronal section showing the olfactory dural lymphatic network at the cribriform plate, related to Figure 1'
+    },
+    {
+      kind: 'paragraph',
+      text: 'This video shows Prox1-GFP fluorescence of the midline olfactory dural lymphatic network and its branches.'
+    },
+    {
+      kind: 'paragraph',
+      text: 'Together, findings from both planes of section demonstrated that the olfactory dural lymphatic network consisted of connected midline lymphatic plexuses (Figures 1 and S2A; Videos S1 and S2).'
+    }
+  ];
+
+  assert.equal(isSupplementalMediaParagraphText(blocks[2].text), false);
+  assert.equal(isSupplementalMediaParagraphText(blocks[3].text), true);
+  assert.equal(isSupplementalMediaParagraphText(blocks[4].text), true);
+  assert.equal(isSupplementalMediaParagraphText(blocks[7].text), false);
+
+  const records = buildParagraphRecords(blocks);
+  assert.deepEqual(records.map(record => record.text), [
+    blocks[2].text,
+    blocks[7].text
+  ]);
+  assert.ok(records.every(record =>
+    record.sectionTitle === 'Features of the olfactory dural lymphatic plexus'
+  ));
+});
+
 test('assigns stable ids and preserves navigable end matter after references', () => {
   const records = buildParagraphRecords([
     { kind: 'heading', text: 'Results' },
@@ -504,7 +607,7 @@ test('reports privacy-safe extraction diagnostics for the selected content root'
 
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.equal(diagnostics.version, '2.1.0-extractor-r16');
+  assert.equal(diagnostics.version, '2.1.0-extractor-r17');
   assert.equal(diagnostics.candidateCount, 2);
   assert.equal(diagnostics.selectedRoot, 'MAIN#paper.article-main.content');
   assert.deepEqual(diagnostics.selected, {

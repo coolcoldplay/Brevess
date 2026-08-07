@@ -1,6 +1,6 @@
 # Brevess Privacy Policy / 隐私政策
 
-**Effective date / 生效日期：2026-07-28**
+**Effective date / 生效日期：2026-08-03**
 **Applies to / 适用产品：Brevess Microsoft Edge 扩展**
 
 Brevess helps users read and analyze scientific article pages in Microsoft Edge.
@@ -41,8 +41,9 @@ Brevess 仅为提供用户主动使用的功能而处理以下数据：
   才开始提取。
 - **用户创建的内容：**分析模式、类别规则、高亮、备注、问题、问答历史、Panel 追问、
   反馈示例及导出偏好。
-- **配置与鉴权数据：**用户填写的模型服务配置和 API Key。API Key 保存在扩展本地存储中，
-  仅作为鉴权信息发送给用户选择的服务地址；Brevess 不运营接收这些 Key 的开发者服务器。
+- **配置与鉴权数据：**用户填写的模型服务配置和 API Key。默认保存在扩展本地存储中；
+  用户启用便携配置备份时，也会按下述方式写入用户所选目录的认证密文文件。API Key 仅作为
+  鉴权信息发送给用户选择的服务地址；Brevess 不运营接收这些 Key 的开发者服务器。
 - **本地使用记录：**按论文、功能和模型统计的 Token、任务状态、缓存元数据和诊断错误。
   除非用户主动导出，否则这些记录留在本机。
 - **可选本地集成：**用户选择的本地文件夹、回环地址上的 Zotero Connector，以及另行安装
@@ -61,12 +62,31 @@ extension. Files explicitly exported or saved to a user-selected folder can
 remain after uninstallation. Optional Local Codex bridge data under
 `%LOCALAPPDATA%\BrevessCodexBridge` remains until the user removes it.
 
+If the user enables portable configuration backup, Brevess stores model/API
+settings (including API credentials) and the global abbreviation table in the
+selected folder at the primary path `Brevess/settings/portable-config.enc.json`.
+After a successful update, Brevess retains at most one rolling encrypted previous
+copy at `Brevess/backups/settings/portable-config.enc.previous.json`. Both files are
+authenticated-encrypted with AES-GCM using a key derived from the user's backup
+password by PBKDF2. The password is never written to the folder or included in
+an export. The derived key is cached only on the local device and can be cleared
+with **Forget backup unlock / 忘记备份解锁**. If the password is forgotten, the
+encrypted copy cannot be recovered. Normal article exports, diagnostics, logs,
+and token reports continue to exclude API credentials.
+
 设置和论文工作区保存在 Microsoft Edge 扩展本地存储、IndexedDB，以及用户主动选择的
 本地文件夹中。Brevess 不会把副本上传到开发者运营的云端。
 
 数据会保留到用户删除相应论文工作区、清除扩展数据、删除所选目录文件或卸载扩展为止。
 用户明确导出或写入自选目录的文件可能在卸载扩展后继续存在。可选本机 Codex 桥位于
 `%LOCALAPPDATA%\BrevessCodexBridge` 的数据会保留到用户自行删除。
+
+如果用户启用便携配置备份，Brevess 会把模型/API 设置（包括 API 凭据）和全局缩略词表写入
+所选文件夹的主文件 `Brevess/settings/portable-config.enc.json`；成功更新后，最多保留一个同样
+加密的滚动旧版副本 `Brevess/backups/settings/portable-config.enc.previous.json`。两个文件都只以 AES-GCM 认证密文保存；
+加密密钥由 PBKDF2 从用户的备份口令派生。口令不会写入目录或任何导出文件，派生密钥仅
+缓存在本机，可通过“忘记备份解锁”清除。忘记口令后无法恢复该密文副本。普通论文导出、
+诊断、日志和 Token 报告仍排除 API 凭据。
 
 ## 3. Data transmission and third parties / 数据传输与第三方
 
@@ -136,14 +156,15 @@ SDK，也不会向开发者发送产品分析或浏览遥测。
 ## 6. Security / 安全
 
 Remote model requests use HTTPS, except for explicit loopback services on the
-user's own device. API keys are kept in local extension storage, masked in the
-interface after saving, and excluded from normal article exports and token
-reports. No storage system can be guaranteed absolutely secure; users should
+user's own device. API keys are kept in local extension storage by default and,
+when portable backup is enabled, in the authenticated ciphertext files described
+above. They are masked in the interface after saving and excluded from normal
+article exports and token reports. No storage system can be guaranteed absolutely secure; users should
 protect their Edge profile, API credentials, exported files, and selected local
 folders.
 
-远程模型请求使用 HTTPS，本机回环服务除外。API Key 保存在扩展本地存储中，保存后在界面
-中隐藏，并从常规论文导出和 Token 报告中排除。任何存储方式都不能保证绝对安全，用户应
+远程模型请求使用 HTTPS，本机回环服务除外。API Key 默认保存在扩展本地存储中；启用便携
+备份时，也会进入上述认证密文文件。保存后在界面中隐藏，并从常规论文导出和 Token 报告中排除。任何存储方式都不能保证绝对安全，用户应
 保护自己的 Edge 配置文件、API 凭据、导出文件和所选本地文件夹。
 
 ## 7. Sensitive information and intended use / 敏感信息与用途

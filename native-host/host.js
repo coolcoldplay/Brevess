@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
+const http = require('node:http');
 const { spawn, spawnSync } = require('node:child_process');
 
 const HOST_VERSION = '1.0.0';
@@ -16,6 +17,14 @@ const MAX_TURN_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024;
 const MAX_TURN_IMAGES = 8;
 const MAX_READER_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_READER_EVENT_LOG_BYTES = 16 * 1024 * 1024;
+const MAX_PDF_FIGURE_BYTES = 200 * 1024 * 1024;
+const MAX_PDF_FIGURE_CHUNK_BYTES = 512 * 1024;
+const MAX_PDF_FIGURE_IMAGE_BYTES = 96 * 1024 * 1024;
+const MAX_PDF_FIGURE_PROCESS_LOG_BYTES = 1024 * 1024;
+const DEFAULT_PDF_FIGURE_DPI = 200;
+const DEFAULT_PDF_FIGURE_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_PDF_TRANSLATION_HTML_BYTES = 48 * 1024 * 1024;
+const DEFAULT_PDF_TRANSLATION_TTL_MS = 6 * 60 * 60 * 1000;
 
 function stateDirectory() {
   const root = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
@@ -32,6 +41,10 @@ function readerEventDirectory() {
 
 function turnImageDirectory() {
   return path.join(stateDirectory(), 'turn-images');
+}
+
+function pdfFigureTaskDirectory() {
+  return path.join(stateDirectory(), 'pdf-figure-tasks');
 }
 
 function sanitizeLogText(value) {
@@ -686,6 +699,826 @@ function publicError(error) {
   return result;
 }
 
+function sha256File(filePath) {
+  const hash = crypto.createHash('sha256');
+  const descriptor = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return hash.digest('hex');
+}
+
+function mimeTypeForFigureFile(filePath) {
+  const extension = path.extname(String(filePath || '')).toLowerCase();
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  return 'image/png';
+}
+
+function pdffigures2FileKey(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function matchPdffigures2Images(figures = [], imageFiles = []) {
+  const available = imageFiles
+    .map(filePath => path.resolve(String(filePath || '')))
+    .filter(filePath => fs.existsSync(filePath) && fs.statSync(filePath).isFile())
+    .sort((left, right) => path.basename(left).localeCompare(
+      path.basename(right), undefined, { numeric: true, sensitivity: 'base' }
+    ));
+  const used = new Set();
+  return (Array.isArray(figures) ? figures : []).map(figure => {
+    const type = String(figure?.figType || 'Figure').trim() || 'Figure';
+    const name = String(figure?.name || '').trim();
+    const expectedKey = pdffigures2FileKey(`${type}${name}`);
+    const renderBase = path.basename(String(figure?.renderURL || ''));
+    let imagePath = available.find(candidate =>
+      !used.has(candidate) && path.basename(candidate) === renderBase
+    );
+    if (!imagePath) {
+      imagePath = available.find(candidate => {
+        if (used.has(candidate)) return false;
+        const match = path.basename(candidate).match(/-(Figure|Table)(.+)-(\d+)\.[^.]+$/i);
+        return match && pdffigures2FileKey(`${match[1]}${match[2]}`) === expectedKey;
+      });
+    }
+    if (imagePath) used.add(imagePath);
+    return { ...(figure || {}), imagePath: imagePath || '' };
+  });
+}
+
+function pdffigures2Label(figure = {}) {
+  const caption = String(figure.caption || '').normalize('NFKC').trim();
+  const name = String(figure.name || '').normalize('NFKC').trim();
+  const match = caption.match(
+    /^(?:Figure|Fig\.?)\s*(S?\s*\d+)([A-Za-z]?)(?=\b|\s|[.:,)])/i
+  ) || name.match(/^(S?\s*\d+)([A-Za-z]?)$/i);
+  if (!match) return '';
+  const compact = match[1].replace(/\s+/g, '').toUpperCase();
+  const supplemental = compact.startsWith('S');
+  const digits = compact.replace(/^S/, '');
+  if (!/^\d+$/.test(digits)) return '';
+  return `Figure ${supplemental ? 'S' : ''}${Number(digits)}${String(match[2] || '').toUpperCase()}`;
+}
+
+function median(values = [], fallback = -1) {
+  const sorted = values.map(Number).filter(Number.isFinite).sort((left, right) => left - right);
+  if (!sorted.length) return fallback;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function figureBoundaryValues(figure = {}) {
+  const box = figure.regionBoundary || figure.figureBox || {};
+  const x1 = Number(box.x1 ?? box.x ?? box.left);
+  const y1 = Number(box.y1 ?? box.y ?? box.top);
+  const x2 = Number(box.x2 ?? box.right ?? (Number.isFinite(x1) ? x1 + Number(box.width) : NaN));
+  const y2 = Number(box.y2 ?? box.bottom ?? (Number.isFinite(y1) ? y1 + Number(box.height) : NaN));
+  return { x1, y1, width: x2 - x1, height: y2 - y1 };
+}
+
+function degeneratePdffigures2Figure(figure = {}) {
+  const box = figureBoundaryValues(figure);
+  const imageText = (Array.isArray(figure.imageText) ? figure.imageText : [])
+    .join(' ').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const footerOnly = /^(?:(?:nat\.?\s+neurosci|author\s+manuscript|available\s+in\s+pmc|page\s+\d+)[ .;:]*)+$/i
+    .test(imageText);
+  return box.width < 72 || box.height < 64 || footerOnly;
+}
+
+function captionRichness(value) {
+  const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const panels = text.match(/\([A-Z](?:\s*[-\u2010-\u2015]\s*[A-Z])?\)/g) || [];
+  return panels.length * 10000 + Math.min(text.length, 9000);
+}
+
+function runPdffigures2Process(javaPath, args, options = {}) {
+  const signal = options.signal;
+  const timeoutMs = Math.max(10000,
+    Number(options.timeoutMs) || DEFAULT_PDF_FIGURE_TIMEOUT_MS);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    let timeout;
+    const child = spawn(javaPath, args, {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const append = (current, chunk) =>
+      (current + String(chunk || '')).slice(-MAX_PDF_FIGURE_PROCESS_LOG_BYTES);
+    child.stdout.on('data', chunk => { stdout = append(stdout, chunk); });
+    child.stderr.on('data', chunk => { stderr = append(stderr, chunk); });
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener?.('abort', abort);
+      if (error) reject(error); else resolve(value);
+    };
+    const stop = () => {
+      try { child.kill(); } catch (_) { /* process already stopped */ }
+    };
+    const abort = () => {
+      stop();
+      finish(codedError('PDF_FIGURE_CANCELLED', 'PDF Figure extraction was cancelled'));
+    };
+    if (signal?.aborted) return abort();
+    signal?.addEventListener?.('abort', abort, { once: true });
+    timeout = setTimeout(() => {
+      stop();
+      finish(codedError(
+        'PDF_FIGURE_EXTRACTION_TIMEOUT',
+        'PDFFigures2 did not finish within the allowed time',
+        true
+      ));
+    }, timeoutMs);
+    child.on('error', error => finish(codedError(
+      'PDF_FIGURE_ENGINE_START_FAILED',
+      `Unable to start the local PDF Figure engine: ${error.message}`
+    )));
+    child.on('close', code => finish(null, { code, stdout, stderr }));
+  });
+}
+
+class Pdffigures2Runner {
+  constructor(options = {}) {
+    this.jarPath = String(options.jarPath || process.env.BREVESS_PDFFIGURES2_JAR || '');
+    this.javaPath = String(options.javaPath || '');
+    this.extractorVersion = String(options.extractorVersion || '0.2.0-cross-page');
+    this.dpi = Math.max(72, Math.min(400,
+      Number(options.dpi) || DEFAULT_PDF_FIGURE_DPI));
+    this.timeoutMs = Math.max(10000,
+      Number(options.timeoutMs) || DEFAULT_PDF_FIGURE_TIMEOUT_MS);
+  }
+
+  bundledJarCandidates() {
+    return [
+      this.jarPath,
+      path.join(path.dirname(process.execPath), 'pdffigures2', 'pdffigures2.jar'),
+      path.join(path.dirname(process.execPath), '..', 'pdffigures2', 'pdffigures2.jar'),
+      path.join(__dirname, 'pdffigures2', 'pdffigures2.jar')
+    ].filter(Boolean);
+  }
+
+  bundledFallbackJarCandidates() {
+    return [
+      path.join(path.dirname(process.execPath), 'pdffigures2', 'brevess-pdf-fallback.jar'),
+      path.join(path.dirname(process.execPath), '..', 'pdffigures2', 'brevess-pdf-fallback.jar'),
+      path.join(__dirname, 'pdffigures2', 'brevess-pdf-fallback.jar')
+    ];
+  }
+
+  bundledImageIoDirectories() {
+    return [
+      path.join(path.dirname(process.execPath), 'pdffigures2'),
+      path.join(path.dirname(process.execPath), '..', 'pdffigures2'),
+      path.join(__dirname, 'pdffigures2')
+    ];
+  }
+
+  resolveImageIoJars() {
+    const names = [
+      'jai-imageio-core-1.4.0.jar',
+      'jai-imageio-jpeg2000-1.4.0.jar'
+    ];
+    return names.map(name => this.bundledImageIoDirectories()
+      .map(directory => path.join(directory, name))
+      .find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || ''
+    ).filter(Boolean);
+  }
+
+  bundledJavaCandidates() {
+    const environmentHome = process.env.BREVESS_JAVA_HOME || process.env.JAVA_HOME || '';
+    return [
+      this.javaPath,
+      path.join(path.dirname(process.execPath), 'runtime', 'bin', 'java.exe'),
+      path.join(path.dirname(process.execPath), '..', 'runtime', 'bin', 'java.exe'),
+      path.join(__dirname, 'runtime', 'bin', 'java.exe'),
+      environmentHome ? path.join(environmentHome, 'bin', 'java.exe') : ''
+    ].filter(Boolean);
+  }
+
+  resolveJar() {
+    return this.bundledJarCandidates().find(candidate =>
+      fs.existsSync(candidate) && fs.statSync(candidate).isFile()
+    ) || '';
+  }
+
+  resolveFallbackJar() {
+    return this.bundledFallbackJarCandidates().find(candidate =>
+      fs.existsSync(candidate) && fs.statSync(candidate).isFile()
+    ) || '';
+  }
+
+  resolveJava() {
+    const bundled = this.bundledJavaCandidates().find(candidate =>
+      fs.existsSync(candidate) && fs.statSync(candidate).isFile()
+    );
+    if (bundled) return bundled;
+    const lookup = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', ['java'], {
+      encoding: 'utf8', windowsHide: true, timeout: 5000
+    });
+    return lookup.status === 0
+      ? String(lookup.stdout || '').split(/\r?\n/).map(value => value.trim())
+        .find(Boolean) || ''
+      : '';
+  }
+
+  async health() {
+    const jarPath = this.resolveJar();
+    const javaPath = this.resolveJava();
+    let javaVersion = '';
+    if (javaPath) {
+      const version = spawnSync(javaPath, ['-version'], {
+        encoding: 'utf8', windowsHide: true, timeout: 10000
+      });
+      javaVersion = String(version.stderr || version.stdout || '')
+        .split(/\r?\n/)[0].trim();
+    }
+    return {
+      available: Boolean(jarPath && javaPath),
+      crossPageRecoveryAvailable: Boolean(this.resolveFallbackJar() && javaPath),
+      jpeg2000Available: this.resolveImageIoJars().length === 2,
+      extractorVersion: this.extractorVersion,
+      javaVersion,
+      reason: !jarPath ? 'PDF_FIGURE_JAR_MISSING'
+        : !javaPath ? 'PDF_FIGURE_JAVA_MISSING' : ''
+    };
+  }
+
+  async extract(input = {}) {
+    const jarPath = this.resolveJar();
+    const javaPath = this.resolveJava();
+    if (!jarPath) throw codedError(
+      'PDF_FIGURE_JAR_MISSING',
+      'The local PDFFigures2 engine is not installed'
+    );
+    if (!javaPath) throw codedError(
+      'PDF_FIGURE_JAVA_MISSING',
+      'The bundled Java runtime for PDF Figure extraction is not installed'
+    );
+    const pdfPath = path.resolve(String(input.pdfPath || ''));
+    const outputDirectory = path.resolve(String(input.outputDirectory || ''));
+    if (!fs.existsSync(pdfPath) || !fs.statSync(pdfPath).isFile()) {
+      throw codedError('PDF_FIGURE_INPUT_INVALID', 'The PDF input file is missing');
+    }
+    fs.mkdirSync(outputDirectory, { recursive: true });
+    const imagePrefix = path.join(outputDirectory, 'figure-');
+    const dataPrefix = path.join(outputDirectory, 'metadata-');
+    input.onProgress?.({ phase: 'starting', progress: 15, completedFigures: 0 });
+    const imageIoJars = this.resolveImageIoJars();
+    const launcher = imageIoJars.length === 2
+      ? ['-cp', [jarPath, ...imageIoJars].join(path.delimiter),
+        'org.allenai.pdffigures2.FigureExtractorBatchCli']
+      : ['-jar', jarPath];
+    const args = [
+      '-Dsun.java2d.cmm=sun.java2d.cmm.kcms.KcmsServiceProvider',
+      ...launcher,
+      pdfPath,
+      '-q',
+      '-i', String(this.dpi),
+      '-m', imagePrefix,
+      '-d', dataPrefix
+    ];
+    input.onProgress?.({ phase: 'rendering', progress: 25, completedFigures: 0 });
+    const result = await runPdffigures2Process(javaPath, args, {
+      cwd: outputDirectory,
+      signal: input.signal,
+      timeoutMs: this.timeoutMs
+    });
+    if (result.code !== 0) {
+      const diagnostic = sanitizeLogText(result.stderr || result.stdout || '')
+        .replace(/\s+/g, ' ').trim().slice(0, 700);
+      throw codedError(
+        'PDF_FIGURE_EXTRACTION_FAILED',
+        diagnostic
+          ? `PDFFigures2 could not extract this PDF: ${diagnostic}`
+          : `PDFFigures2 exited with code ${result.code}`,
+        true
+      );
+    }
+    input.onProgress?.({ phase: 'reading', progress: 85, completedFigures: 0 });
+    const files = fs.readdirSync(outputDirectory, { withFileTypes: true })
+      .filter(entry => entry.isFile())
+      .map(entry => path.join(outputDirectory, entry.name));
+    const jsonFiles = files.filter(filePath => path.extname(filePath).toLowerCase() === '.json');
+    if (jsonFiles.length !== 1) {
+      throw codedError(
+        'PDF_FIGURE_METADATA_MISSING',
+        'PDFFigures2 did not produce one Figure metadata file'
+      );
+    }
+    let figures;
+    try {
+      figures = JSON.parse(fs.readFileSync(jsonFiles[0], 'utf8'));
+    } catch (error) {
+      throw codedError(
+        'PDF_FIGURE_METADATA_INVALID',
+        `PDFFigures2 returned invalid Figure metadata: ${error.message}`
+      );
+    }
+    if (!Array.isArray(figures)) {
+      throw codedError('PDF_FIGURE_METADATA_INVALID', 'PDFFigures2 metadata is not a Figure list');
+    }
+    const imageFiles = files.filter(filePath =>
+      ['.png', '.jpg', '.jpeg', '.webp'].includes(path.extname(filePath).toLowerCase())
+    );
+    const figureMetadata = matchPdffigures2Images(figures, imageFiles)
+      .filter(figure => String(figure?.figType || '').toLowerCase() === 'figure');
+    const unusableMetadataLabels = figureMetadata
+      .filter(figure => !figure.imagePath || degeneratePdffigures2Figure(figure))
+      .map(pdffigures2Label).filter(Boolean);
+    let matched = figureMetadata.filter(figure =>
+      figure.imagePath && !degeneratePdffigures2Figure(figure)
+    );
+    const warnings = [];
+    const fallbackJar = this.resolveFallbackJar();
+    if (fallbackJar) {
+      try {
+        const boxes = matched.map(figureBoundaryValues);
+        // A single detected Figure is not representative enough to crop every
+        // recovered plate. Sparse extraction is exactly where the fallback
+        // needs generous, page-aware bounds instead of inheriting one narrow box.
+        const preferred = boxes.length >= 3 ? [
+          median(boxes.map(box => box.x1)),
+          median(boxes.map(box => box.y1)),
+          median(boxes.map(box => box.width)),
+          median(boxes.map(box => box.height))
+        ] : [-1, -1, -1, -1];
+        const labels = matched.map(pdffigures2Label).filter(Boolean);
+        const classPath = [fallbackJar, jarPath, ...imageIoJars].join(path.delimiter);
+        const recoveredProcess = await runPdffigures2Process(javaPath, [
+          '-cp', classPath, 'BrevessPdfFallback', pdfPath, outputDirectory,
+          String(this.dpi), labels.join(','), ...preferred.map(String)
+        ], {
+          cwd: outputDirectory,
+          signal: input.signal,
+          timeoutMs: this.timeoutMs
+        });
+        if (recoveredProcess.code === 0) {
+          const recoveredOutput = String(recoveredProcess.stdout || '');
+          const recoveredJsonStart = recoveredOutput.indexOf('{"captions"');
+          const recovered = JSON.parse(recoveredJsonStart >= 0
+            ? recoveredOutput.slice(recoveredJsonStart) : recoveredOutput || '{}');
+          const captionsByLabel = new Map((Array.isArray(recovered.captions)
+            ? recovered.captions : []).map(item => [
+              String(item?.label || '').toLowerCase(), String(item?.caption || '')
+            ]));
+          matched = matched.map(figure => {
+            const recoveredCaption = captionsByLabel.get(
+              pdffigures2Label(figure).toLowerCase()
+            ) || '';
+            return captionRichness(recoveredCaption) > captionRichness(figure.caption)
+              ? { ...figure, caption: recoveredCaption, captionRecovered: true }
+              : figure;
+          });
+          const existing = new Set(matched.map(figure =>
+            pdffigures2Label(figure).toLowerCase()
+          ));
+          (Array.isArray(recovered.figures) ? recovered.figures : []).forEach(figure => {
+            const label = pdffigures2Label(figure).toLowerCase();
+            const imagePath = path.resolve(outputDirectory, String(figure.imageFile || ''));
+            if (!label || existing.has(label) ||
+                !imagePath.startsWith(`${outputDirectory}${path.sep}`) ||
+                !fs.existsSync(imagePath)) return;
+            matched.push({ ...figure, imagePath, recoveredBy: 'pdfbox-cross-page' });
+            existing.add(label);
+          });
+        } else {
+          warnings.push('PDF_FIGURE_CROSS_PAGE_RECOVERY_FAILED');
+        }
+      } catch (error) {
+        appendLog(`PDF cross-page recovery skipped: ${error.stack || error}`);
+        warnings.push('PDF_FIGURE_CROSS_PAGE_RECOVERY_FAILED');
+      }
+    } else {
+      warnings.push('PDF_FIGURE_CROSS_PAGE_RECOVERY_UNAVAILABLE');
+    }
+    if (unusableMetadataLabels.length) {
+      const recoveredLabels = new Set(matched.map(pdffigures2Label));
+      const stillMissing = unusableMetadataLabels.filter(label => !recoveredLabels.has(label));
+      warnings.push(stillMissing.length
+        ? 'PDF_FIGURE_PDFFIGURES2_IMAGE_MISSING'
+        : 'PDF_FIGURE_PDFFIGURES2_IMAGE_RECOVERED');
+    }
+    return {
+      extractorVersion: this.extractorVersion,
+      figures: matched,
+      warnings: matched.length ? warnings : ['PDF_FIGURE_NONE_FOUND', ...warnings]
+    };
+  }
+}
+
+class PdfFigureTaskStore {
+  constructor(options = {}) {
+    this.root = path.resolve(options.root || pdfFigureTaskDirectory());
+    this.runner = options.runner || new Pdffigures2Runner(options);
+    this.leaseMs = Math.max(60000, Number(options.leaseMs) || 60 * 60 * 1000);
+    this.tasks = new Map();
+  }
+
+  taskDirectory(taskId) {
+    const id = String(taskId || '');
+    if (!/^[a-zA-Z0-9._-]{3,160}$/.test(id)) {
+      throw codedError('PDF_FIGURE_TASK_INVALID', 'Invalid PDF Figure task ID');
+    }
+    const key = crypto.createHash('sha256').update(id).digest('hex').slice(0, 32);
+    return safeChildPath(this.root, path.join(this.root, key));
+  }
+
+  cleanupStale(now = Date.now()) {
+    let entries = [];
+    try { entries = fs.readdirSync(this.root, { withFileTypes: true }); } catch (_) { return; }
+    entries.filter(entry => entry.isDirectory()).forEach(entry => {
+      const directory = safeChildPath(this.root, path.join(this.root, entry.name));
+      try {
+        if (fs.statSync(directory).mtimeMs < now - this.leaseMs) {
+          fs.rmSync(directory, { recursive: true, force: true });
+        }
+      } catch (_) {
+        // A concurrently running native host may own this directory.
+      }
+    });
+  }
+
+  async health() {
+    return this.runner.health?.() || {
+      available: false,
+      reason: 'PDF_FIGURE_ENGINE_UNAVAILABLE'
+    };
+  }
+
+  begin(input = {}) {
+    fs.mkdirSync(this.root, { recursive: true });
+    this.cleanupStale();
+    const taskId = String(input.taskId || '');
+    const totalBytes = Number(input.totalBytes);
+    const fingerprint = String(input.documentFingerprint || '').toLowerCase();
+    if (!Number.isInteger(totalBytes) || totalBytes < 5 || totalBytes > MAX_PDF_FIGURE_BYTES) {
+      throw codedError('PDF_FIGURE_INPUT_TOO_LARGE', 'Invalid PDF byte length');
+    }
+    if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+      throw codedError('PDF_FIGURE_FINGERPRINT_INVALID', 'Invalid PDF fingerprint');
+    }
+    this.release(taskId);
+    const directory = this.taskDirectory(taskId);
+    const outputDirectory = safeChildPath(directory, path.join(directory, 'output'));
+    fs.mkdirSync(outputDirectory, { recursive: true });
+    const pdfPath = safeChildPath(directory, path.join(directory, 'input.pdf'));
+    fs.writeFileSync(pdfPath, Buffer.alloc(0), { flag: 'wx' });
+    const task = {
+      taskId,
+      directory,
+      outputDirectory,
+      pdfPath,
+      totalBytes,
+      fingerprint,
+      fileName: path.basename(String(input.fileName || 'article.pdf')).slice(0, 180),
+      kind: input.kind === 'supplemental' ? 'supplemental' : 'main',
+      receivedBytes: 0,
+      uploadHash: crypto.createHash('sha256'),
+      controller: new AbortController(),
+      images: new Map(),
+      status: 'uploading',
+      createdAt: Date.now()
+    };
+    this.tasks.set(taskId, task);
+    return { taskId, nextOffset: 0 };
+  }
+
+  appendChunk(input = {}) {
+    const task = this.tasks.get(String(input.taskId || ''));
+    if (!task || task.status !== 'uploading') {
+      throw codedError('PDF_FIGURE_TASK_MISSING', 'PDF Figure upload task is missing');
+    }
+    const offset = Number(input.offset);
+    if (!Number.isInteger(offset) || offset !== task.receivedBytes) {
+      throw codedError('PDF_FIGURE_UPLOAD_OFFSET', 'Unexpected PDF upload offset');
+    }
+    const encoded = String(input.data || '').replace(/\s+/g, '');
+    if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+      throw codedError('PDF_FIGURE_UPLOAD_CHUNK_INVALID', 'Invalid PDF upload chunk');
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (!bytes.length || bytes.length > MAX_PDF_FIGURE_CHUNK_BYTES ||
+        task.receivedBytes + bytes.length > task.totalBytes) {
+      throw codedError('PDF_FIGURE_UPLOAD_CHUNK_INVALID', 'PDF upload chunk exceeded its limit');
+    }
+    fs.appendFileSync(task.pdfPath, bytes);
+    task.uploadHash.update(bytes);
+    task.receivedBytes += bytes.length;
+    return { taskId: task.taskId, nextOffset: task.receivedBytes };
+  }
+
+  figureResult(task, raw, index) {
+    const imagePath = safeChildPath(
+      task.outputDirectory,
+      path.resolve(String(raw?.imagePath || raw?.imageFile || ''))
+    );
+    if (!fs.existsSync(imagePath) || !fs.statSync(imagePath).isFile()) {
+      throw codedError('PDF_FIGURE_IMAGE_MISSING', 'PDFFigures2 did not render a Figure image');
+    }
+    const byteLength = fs.statSync(imagePath).size;
+    if (!byteLength || byteLength > MAX_PDF_FIGURE_IMAGE_BYTES) {
+      throw codedError('PDF_FIGURE_IMAGE_TOO_LARGE', 'A rendered Figure exceeded its limit');
+    }
+    const imageHash = sha256File(imagePath);
+    const imageId = `figure-${index + 1}-${imageHash.slice(0, 12)}`;
+    task.images.set(imageId, { path: imagePath, byteLength, sha256: imageHash });
+    const result = { ...(raw || {}) };
+    delete result.imagePath;
+    delete result.imageFile;
+    return {
+      ...result,
+      imageId,
+      byteLength,
+      sha256: imageHash,
+      mimeType: mimeTypeForFigureFile(imagePath)
+    };
+  }
+
+  async commit(taskId, onProgress = () => {}) {
+    const task = this.tasks.get(String(taskId || ''));
+    if (!task || task.status !== 'uploading') {
+      throw codedError('PDF_FIGURE_TASK_MISSING', 'PDF Figure task is missing');
+    }
+    if (task.receivedBytes !== task.totalBytes) {
+      throw codedError('PDF_FIGURE_UPLOAD_INCOMPLETE', 'PDF upload is incomplete');
+    }
+    const actualHash = task.uploadHash.digest('hex');
+    if (actualHash !== task.fingerprint) {
+      throw codedError('PDF_FIGURE_FINGERPRINT_MISMATCH', 'PDF upload failed integrity verification');
+    }
+    const signature = Buffer.alloc(5);
+    const descriptor = fs.openSync(task.pdfPath, 'r');
+    try { fs.readSync(descriptor, signature, 0, 5, 0); } finally { fs.closeSync(descriptor); }
+    if (signature.toString('ascii') !== '%PDF-') {
+      throw codedError('PDF_FIGURE_INPUT_INVALID', 'Uploaded bytes are not a PDF');
+    }
+    task.status = 'extracting';
+    onProgress({ phase: 'extracting', progress: 10, completedFigures: 0 });
+    try {
+      const extracted = await this.runner.extract({
+        pdfPath: task.pdfPath,
+        outputDirectory: task.outputDirectory,
+        fileName: task.fileName,
+        kind: task.kind,
+        signal: task.controller.signal,
+        onProgress
+      });
+      if (task.controller.signal.aborted) {
+        throw codedError('PDF_FIGURE_CANCELLED', 'PDF Figure extraction was cancelled');
+      }
+      const rawFigures = Array.isArray(extracted?.figures) ? extracted.figures : [];
+      const figures = rawFigures.map((figure, index) =>
+        this.figureResult(task, figure, index)
+      );
+      task.status = 'ready';
+      task.expiresAt = Date.now() + this.leaseMs;
+      onProgress({
+        phase: 'ready', progress: 100, completedFigures: figures.length
+      });
+      return {
+        taskId: task.taskId,
+        extractorVersion: String(extracted?.extractorVersion || ''),
+        figures,
+        warnings: Array.isArray(extracted?.warnings) ? extracted.warnings : []
+      };
+    } catch (error) {
+      const cancelled = task.controller.signal.aborted ||
+        error?.code === 'PDF_FIGURE_CANCELLED';
+      this.release(task.taskId);
+      if (cancelled) throw codedError(
+        'PDF_FIGURE_CANCELLED',
+        'PDF Figure extraction was cancelled'
+      );
+      throw error;
+    } finally {
+      try { fs.rmSync(task.pdfPath, { force: true }); } catch (_) { /* already removed */ }
+    }
+  }
+
+  readImage(input = {}) {
+    const task = this.tasks.get(String(input.taskId || ''));
+    const image = task?.images.get(String(input.imageId || ''));
+    if (!task || task.status !== 'ready' || !image) {
+      throw codedError('PDF_FIGURE_IMAGE_MISSING', 'PDF Figure image lease is missing');
+    }
+    const offset = Number(input.offset);
+    const length = Math.min(MAX_PDF_FIGURE_CHUNK_BYTES, Number(input.length));
+    if (!Number.isInteger(offset) || offset < 0 || offset >= image.byteLength ||
+        !Number.isInteger(length) || length <= 0) {
+      throw codedError('PDF_FIGURE_IMAGE_RANGE_INVALID', 'Invalid Figure image byte range');
+    }
+    const bytesToRead = Math.min(length, image.byteLength - offset);
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    const descriptor = fs.openSync(image.path, 'r');
+    let bytesRead;
+    try { bytesRead = fs.readSync(descriptor, buffer, 0, bytesToRead, offset); }
+    finally { fs.closeSync(descriptor); }
+    if (bytesRead !== bytesToRead) {
+      throw codedError('PDF_FIGURE_IMAGE_READ_FAILED', 'Figure image read ended early', true);
+    }
+    return {
+      taskId: task.taskId,
+      imageId: String(input.imageId || ''),
+      offset,
+      nextOffset: offset + bytesRead,
+      eof: offset + bytesRead >= image.byteLength,
+      data: buffer.toString('base64')
+    };
+  }
+
+  cancel(taskId) {
+    const task = this.tasks.get(String(taskId || ''));
+    if (!task) return false;
+    task.controller.abort();
+    this.release(task.taskId);
+    return true;
+  }
+
+  release(taskId) {
+    const id = String(taskId || '');
+    let directory;
+    try { directory = this.taskDirectory(id); } catch (_) { return false; }
+    const task = this.tasks.get(id);
+    task?.controller?.abort();
+    this.tasks.delete(id);
+    try { fs.rmSync(directory, { recursive: true, force: true }); } catch (_) { return false; }
+    return true;
+  }
+
+  close() {
+    [...this.tasks.keys()].forEach(taskId => this.release(taskId));
+  }
+}
+
+class PdfTranslationPageServer {
+  constructor(options = {}) {
+    this.server = null;
+    this.port = 0;
+    this.pages = new Map();
+    this.ttlMs = Math.max(5 * 60 * 1000,
+      Number(options.ttlMs) || DEFAULT_PDF_TRANSLATION_TTL_MS);
+    this.expiryTimer = null;
+  }
+
+  escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
+  }
+
+  documentHtml(title, articleHtml, sourceUrl, nonce) {
+    const safeTitle = this.escapeHtml(title);
+    const safeSourceUrl = this.escapeHtml(sourceUrl);
+    const sourceLink = safeSourceUrl
+      ? `<a href="${safeSourceUrl}" target="_blank" rel="noreferrer">查看原始 PDF</a>`
+      : '';
+    return `<!doctype html><html lang="en" data-brevess-pdf-source-url="${safeSourceUrl}">` +
+      `<head><meta charset="utf-8">` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<meta name="brevess-pdf-source-url" content="${safeSourceUrl}">` +
+      `<title>${safeTitle}</title><style>` +
+      `:root{color-scheme:light}*{box-sizing:border-box}html{scroll-behavior:smooth}` +
+      `body{margin:0;background:#eef3f6;color:#17324d;font:17px/1.78 Georgia,` +
+      `"Times New Roman","Noto Serif SC",serif}` +
+      `header{position:sticky;z-index:20;top:0;display:flex;min-height:62px;align-items:center;` +
+      `justify-content:space-between;gap:18px;padding:9px max(18px,calc((100% - 1100px)/2));` +
+      `border-bottom:1px solid #d4e0e8;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);` +
+      `font:600 13px/1.3 "Segoe UI","Noto Sans SC",sans-serif}` +
+      `header>div{display:flex;min-width:0;align-items:center;gap:8px}` +
+      `header strong{max-width:min(58vw,720px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+      `header button,header a{display:inline-flex;min-height:34px;align-items:center;justify-content:center;` +
+      `padding:0 11px;border:1px solid #b7ccda;border-radius:8px;color:#174d70;background:#fff;` +
+      `font:650 12px/1 "Segoe UI","Noto Sans SC",sans-serif;text-decoration:none;cursor:pointer}` +
+      `#brevessPdfZoomValue{min-width:44px;text-align:center;color:#47677a}` +
+      `main{width:min(calc(980px * var(--brevess-reader-zoom,1)),calc(100% - 32px));` +
+      `margin:28px auto;padding:clamp(24px,5vw,64px);background:#fff;border-radius:18px;` +
+      `box-shadow:0 16px 44px rgba(35,64,85,.12)}h1,h2,h3,h4{font-family:"Segoe UI",` +
+      `"Noto Sans SC",sans-serif;color:#0f4d73;line-height:1.28;scroll-margin-top:24px}` +
+      `h1 .immersive-translate-target-wrapper,h2 .immersive-translate-target-wrapper,` +
+      `h3 .immersive-translate-target-wrapper,h4 .immersive-translate-target-wrapper,` +
+      `h1 [data-immersive-translate-translation-element-mark],` +
+      `h2 [data-immersive-translate-translation-element-mark],` +
+      `h3 [data-immersive-translate-translation-element-mark],` +
+      `h4 [data-immersive-translate-translation-element-mark]{display:block;margin-top:.24em;` +
+      `color:#3e718d;font-size:.84em;font-weight:600}` +
+      `h1{font-size:2rem}h2{margin-top:2.2em;border-bottom:1px solid #d7e2eb;padding-bottom:.35em}` +
+      `h3{margin-top:1.7em}p{margin:1em 0}figure{margin:2.4em 0;padding:16px;border:1px solid #d7e2eb;` +
+      `border-radius:14px;background:#fbfdfe}figure img{display:block;max-width:100%;height:auto;margin:auto}` +
+      `figcaption{margin-top:14px;color:#365a70;font:14px/1.65 "Segoe UI","Noto Sans SC",sans-serif}` +
+      `table{width:100%;border-collapse:collapse;overflow-wrap:anywhere}th,td{padding:8px;border:1px solid #cbdbe5}` +
+      `a{color:#075f96}@media(max-width:720px){header{padding:8px 10px}header strong{max-width:34vw}` +
+      `main{width:100%;margin:0;border-radius:0;padding:22px 16px}}` +
+      `</style></head><body><header data-sci-plugin-ui><strong>${safeTitle}</strong><div>` +
+      `<button id="brevessPdfZoomOut" type="button" aria-label="缩小">−</button>` +
+      `<span id="brevessPdfZoomValue">100%</span>` +
+      `<button id="brevessPdfZoomIn" type="button" aria-label="放大">＋</button>` +
+      `<button id="brevessPdfZoomReset" type="button">适宽</button>${sourceLink}</div></header>` +
+      `<main data-brevess-translation-page="true">${articleHtml}</main>` +
+      `<script nonce="${nonce}">(()=>{let z=1;const r=document.documentElement,v=document.getElementById(` +
+      `'brevessPdfZoomValue');const set=n=>{z=Math.max(.75,Math.min(1.6,Math.round(n*20)/20));` +
+      `r.style.setProperty('--brevess-reader-zoom',String(z));r.style.fontSize=(17*z)+'px';` +
+      `v.textContent=Math.round(z*100)+'%'};document.getElementById('brevessPdfZoomOut').onclick=()=>set(z-.1);` +
+      `document.getElementById('brevessPdfZoomIn').onclick=()=>set(z+.1);` +
+      `document.getElementById('brevessPdfZoomReset').onclick=()=>set(1);` +
+      `addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey))return;if(e.key==='+'||e.key==='='){` +
+      `e.preventDefault();set(z+.1)}else if(e.key==='-'){e.preventDefault();set(z-.1)}else if(e.key==='0'){` +
+      `e.preventDefault();set(1)}})})()</script></body></html>`;
+  }
+
+  async start() {
+    if (this.server) return this.port;
+    this.server = http.createServer((request, response) => {
+      const url = new URL(request.url || '/', 'http://127.0.0.1');
+      const match = url.pathname.match(/^\/brevess-pdf\/([a-f0-9]{48})$/);
+      const page = match ? this.pages.get(match[1]) : null;
+      if (request.method !== 'GET' || !page) {
+        response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Not found');
+        return;
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, max-age=0',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; " +
+          `font-src data:; script-src 'nonce-${page.nonce}'`
+      });
+      response.end(page.html);
+    });
+    await new Promise((resolve, reject) => {
+      const onError = error => reject(error);
+      this.server.once('error', onError);
+      this.server.listen(0, '127.0.0.1', () => {
+        this.server?.off('error', onError);
+        resolve();
+      });
+    });
+    this.port = Number(this.server.address()?.port) || 0;
+    return this.port;
+  }
+
+  async publish(input = {}) {
+    const articleHtml = String(input.articleHtml || '');
+    const bytes = Buffer.byteLength(articleHtml, 'utf8');
+    if (!articleHtml || bytes > MAX_PDF_TRANSLATION_HTML_BYTES) {
+      throw codedError(
+        bytes > MAX_PDF_TRANSLATION_HTML_BYTES
+          ? 'PDF_TRANSLATION_PAGE_TOO_LARGE' : 'PDF_TRANSLATION_PAGE_EMPTY',
+        bytes > MAX_PDF_TRANSLATION_HTML_BYTES
+          ? 'The translation-compatible PDF page exceeded the local limit'
+          : 'The parsed PDF page is empty'
+      );
+    }
+    await this.start();
+    const token = crypto.randomBytes(24).toString('hex');
+    const nonce = crypto.randomBytes(18).toString('base64');
+    const sourceUrl = String(input.sourceUrl || '').slice(0, 8000);
+    this.pages.clear();
+    this.pages.set(token, {
+      html: this.documentHtml(
+        String(input.title || 'Parsed PDF'), articleHtml, sourceUrl, nonce
+      ),
+      nonce,
+      createdAt: Date.now()
+    });
+    clearTimeout(this.expiryTimer);
+    this.expiryTimer = setTimeout(() => this.close(), this.ttlMs);
+    return {
+      url: `http://127.0.0.1:${this.port}/brevess-pdf/${token}`,
+      expiresInMs: this.ttlMs
+    };
+  }
+
+  hasPublishedPage() {
+    return this.pages.size > 0 && Boolean(this.server);
+  }
+
+  close() {
+    clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    this.pages.clear();
+    try { this.server?.close(); } catch (_) { /* already closed */ }
+    this.server = null;
+    this.port = 0;
+  }
+}
+
 class CodexBridgeHost {
   constructor(options = {}) {
     this.server = options.server || new CodexAppServer(options);
@@ -694,6 +1527,12 @@ class CodexBridgeHost {
       new TurnImageStore(options.turnImageRoot || turnImageDirectory());
     this.eventStore = options.eventStore ||
       new ReaderEventStore(options.readerEventRoot || readerEventDirectory());
+    this.pdfFigureStore = options.pdfFigureStore || new PdfFigureTaskStore({
+      root: options.pdfFigureTaskRoot || pdfFigureTaskDirectory(),
+      runner: options.pdfFigureRunner
+    });
+    this.pdfTranslationPages = options.pdfTranslationPages ||
+      new PdfTranslationPageServer(options.pdfTranslationPageOptions);
     this.send = options.send || (() => {});
     this.active = new Map();
     this.pendingCancellations = new Set();
@@ -1049,8 +1888,96 @@ class CodexBridgeHost {
     }
   }
 
+  async handlePdfFigure(message = {}) {
+    const type = String(message.type || '');
+    const requestId = String(message.requestId || '');
+    const taskId = String(message.taskId || '');
+    try {
+      if (type === 'pdf.figure.health') {
+        const health = await this.pdfFigureStore.health();
+        this.send({
+          type: 'pdf.figure.health.result',
+          requestId,
+          available: health?.available === true,
+          crossPageRecoveryAvailable: health?.crossPageRecoveryAvailable === true,
+          extractorVersion: String(health?.extractorVersion || ''),
+          javaVersion: String(health?.javaVersion || ''),
+          reason: String(health?.reason || ''),
+          hostVersion: HOST_VERSION
+        });
+        return;
+      }
+      if (type === 'pdf.figure.extract.begin') {
+        const result = this.pdfFigureStore.begin(message);
+        this.send({ type: 'pdf.figure.upload.ready', requestId, ...result });
+        return;
+      }
+      if (type === 'pdf.figure.extract.chunk') {
+        const result = this.pdfFigureStore.appendChunk(message);
+        this.send({ type: 'pdf.figure.upload.ack', requestId, ...result });
+        return;
+      }
+      if (type === 'pdf.figure.extract.commit') {
+        const result = await this.pdfFigureStore.commit(taskId, progress => {
+          this.send({
+            type: 'pdf.figure.extract.progress',
+            requestId,
+            taskId,
+            phase: String(progress?.phase || 'extracting'),
+            progress: Math.max(0, Math.min(100, Number(progress?.progress) || 0)),
+            completedFigures: Math.max(0, Number(progress?.completedFigures) || 0)
+          });
+        });
+        this.send({ type: 'pdf.figure.extract.result', requestId, ...result });
+        return;
+      }
+      if (type === 'pdf.figure.image.read') {
+        const result = this.pdfFigureStore.readImage(message);
+        this.send({ type: 'pdf.figure.image.chunk', requestId, ...result });
+        return;
+      }
+      if (type === 'pdf.figure.extract.cancel') {
+        this.pdfFigureStore.cancel(taskId);
+        this.send({ type: 'pdf.figure.extract.cancelled', requestId, taskId });
+        return;
+      }
+      if (type === 'pdf.figure.extract.release') {
+        this.pdfFigureStore.release(taskId);
+        this.send({ type: 'pdf.figure.extract.released', requestId, taskId });
+        return;
+      }
+      throw codedError('INVALID_SETTINGS', 'Unknown PDF Figure bridge request');
+    } catch (error) {
+      if (error?.code === 'PDF_FIGURE_CANCELLED') {
+        this.send({ type: 'pdf.figure.extract.cancelled', requestId, taskId });
+        return;
+      }
+      this.send({
+        type: 'pdf.figure.extract.error',
+        requestId,
+        taskId,
+        error: publicError(error)
+      });
+    }
+  }
+
+  async handlePdfTranslation(message = {}) {
+    const requestId = String(message.requestId || '');
+    try {
+      if (message.type !== 'pdf.translation.publish') {
+        throw codedError('INVALID_SETTINGS', 'Unknown PDF translation request');
+      }
+      const result = await this.pdfTranslationPages.publish(message);
+      this.send({ type: 'pdf.translation.published', requestId, ...result });
+    } catch (error) {
+      this.send({ type: 'pdf.translation.error', requestId, error: publicError(error) });
+    }
+  }
+
   async handle(message = {}) {
     const type = String(message.type || '');
+    if (type.startsWith('pdf.figure.')) return this.handlePdfFigure(message);
+    if (type.startsWith('pdf.translation.')) return this.handlePdfTranslation(message);
     if (type === 'health.check') return this.health(String(message.requestId || ''));
     if (type === 'auth.login.start') {
       return this.startLogin(
@@ -1074,12 +2001,14 @@ class CodexBridgeHost {
     });
   }
 
-  close() {
+  close(options = {}) {
     this.unsubscribe?.();
     for (const context of this.active.values()) {
       this.imageStore.cleanup(context.imageLease);
     }
     this.active.clear();
+    this.pdfFigureStore.close();
+    if (options.keepTranslation !== true) this.pdfTranslationPages.close();
     this.server.close();
   }
 }
@@ -1136,7 +2065,9 @@ function runNativeHost() {
     Promise.resolve(host.handle(message)).catch(error => appendLog(error.stack || error));
   });
   process.stdin.on('data', parse);
-  process.stdin.on('end', () => host.close());
+  process.stdin.on('end', () => host.close({
+    keepTranslation: host.pdfTranslationPages.hasPublishedPage()
+  }));
   process.stdin.on('error', error => {
     appendLog(error.stack || error);
     host.close();
@@ -1151,6 +2082,13 @@ module.exports = {
   CodexBridgeHost,
   TurnImageStore,
   ReaderEventStore,
+  PdfFigureTaskStore,
+  PdfTranslationPageServer,
+  Pdffigures2Runner,
+  matchPdffigures2Images,
+  degeneratePdffigures2Figure,
+  pdffigures2Label,
+  runPdffigures2Process,
   ThreadMap,
   createNativeMessageParser,
   encodeNativeMessage,
@@ -1161,5 +2099,6 @@ module.exports = {
   codexHomeDirectory,
   readerEventDirectory,
   turnImageDirectory,
+  pdfFigureTaskDirectory,
   stateDirectory
 };

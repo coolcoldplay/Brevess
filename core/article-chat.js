@@ -255,6 +255,7 @@
         'Return newline-delimited JSON (NDJSON) only. Do not wrap lines in Markdown fences and do not emit a JSON array.',
         'Emit one complete answer_block line per complete Markdown paragraph, list, heading section, code block, or table.',
         'For a numbered or stepwise answer, emit one answer_block per fully explained numbered step. Never place the whole chain in one answer_block.',
+        'Number ordered steps continuously across answer_block records (1, 2, 3...). Never restart each answer_block at 1.',
         'Every answer_block must be substantive and self-contained. Never emit a heading or numbered label as a block by itself; include that section\'s explanation and citations in the same block.',
         'Use at most one introductory overview and one concluding synthesis. Emit the conclusion only after every promised numbered step or section is complete.',
         'Use as many answer_block records as the question needs. Split a long answer at natural Markdown boundaries so completed portions can be shown progressively; do not shorten the substance merely to reduce the number of blocks.',

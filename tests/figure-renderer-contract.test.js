@@ -26,6 +26,69 @@ test('content script defines bounded Figure image preparation', () => {
   assert.match(script, /signal:\s*controller\.signal/);
 });
 
+test('Figure input hashes use compact image identity and invalidate replaced supplemental sources', () => {
+  const script = read('content.js');
+  const source = functionBody(script, 'buildFigureInputHash', 'getFigureWorkspaceInventory');
+  const buildFigureInputHash = new Function(
+    'FIGURE_IMAGE_LIMIT',
+    `${source}\nreturn buildFigureInputHash;`
+  )(4);
+  const figure = {
+    figureId: 'supp-manual-s1-s1',
+    caption: 'Figure S1. Replication.',
+    panelHints: ['A'],
+    contextParagraphs: [],
+    sourceFingerprint: `sha256:${'a'.repeat(64)}`
+  };
+  const firstImage = [{
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AAAA',
+    width: 1,
+    height: 1,
+    sourceFingerprint: `sha256:${'b'.repeat(64)}`,
+    sourceUrl: 'https://journal.example/figure-s1.png'
+  }];
+  const replacementWithSameLength = [{
+    ...firstImage[0],
+    dataUrl: 'data:image/png;base64,AAAB'
+  }];
+
+  const first = buildFigureInputHash(figure, firstImage);
+  assert.equal(buildFigureInputHash(structuredClone(figure), structuredClone(firstImage)), first);
+  assert.notEqual(buildFigureInputHash(figure, replacementWithSameLength), first);
+  assert.notEqual(buildFigureInputHash({
+    ...figure,
+    sourceFingerprint: `sha256:${'c'.repeat(64)}`
+  }, firstImage), first);
+  const strippedPreparedImage = [{
+    mediaType: firstImage[0].mediaType,
+    dataUrl: firstImage[0].dataUrl
+  }];
+  const persisted = buildFigureInputHash({
+    ...figure,
+    analysisImages: firstImage
+  }, strippedPreparedImage);
+  assert.notEqual(buildFigureInputHash({
+    ...figure,
+    analysisImages: [{
+      ...firstImage[0],
+      persistedFingerprint: `sha256:${'d'.repeat(64)}`,
+      sourceUrl: 'https://journal.example/replaced-figure-s1.png'
+    }]
+  }, strippedPreparedImage), persisted);
+  assert.equal(
+    buildFigureInputHash(figure, []),
+    buildFigureInputHash(structuredClone(figure), [])
+  );
+
+  assert.match(source, /sourceFingerprint/);
+  assert.match(source, /encodedLength/);
+  assert.match(source, /decodedLength/);
+  assert.match(source, /dataFingerprint/);
+  assert.doesNotMatch(source, /images:\s*images/);
+  assert.doesNotMatch(source, /dataUrl:\s*(?:dataUrl|image\??\.)/);
+});
+
 test('active Figure workflows never inject walkthrough cards beside webpage captions', () => {
   const script = read('content.js');
   const css = read('content.css');
@@ -50,6 +113,8 @@ test('Figure side panel omits raw caption and uses snapshot-driven per-Figure st
   assert.doesNotMatch(popup, /singleFigureRunningIds/);
   assert.match(renderer, /progress\?\.running === true/);
   assert.match(popup, /解图中/);
+  assert.match(popup, /compactFigureResultConclusion/);
+  assert.match(renderer, /workspace-figure-summary-conclusion/);
 });
 
 test('Figure panel cards use a compact role, phenotype, and method header while retaining evidence', () => {
@@ -69,6 +134,12 @@ test('Figure panel cards use a compact role, phenotype, and method header while 
   assert.match(renderer, /workspace-panel-description/);
   assert.match(css, /\.workspace-panel-id\s*\{[^}]*font-weight:\s*800/);
   assert.match(css, /\.workspace-panel-description\s*\{[^}]*font-weight:\s*450/);
+  assert.match(popup, /function figurePanelEvidenceGroup/);
+  assert.match(popup, /result\?\.panelGroups/);
+  assert.match(popup, /result\?\.argumentChain/);
+  assert.match(popup, /dataset\.evidenceGroup/);
+  assert.match(css, /\.workspace-panel-id\[data-evidence-group="1"\]/);
+  assert.match(css, /\.workspace-panel-id\[data-evidence-group="6"\]/);
 });
 
 test('Figure deep cards expose every evidence relation and retain a compact no-panel state', () => {
@@ -116,6 +187,30 @@ test('Figure argument chain, evidence groups, and logic bridges are independentl
   assert.match(renderer, /'panel-groups'/);
   assert.match(renderer, /'logic-bridges'/);
   assert.match(css, /\.workspace-figure-result-section/);
+});
+
+test('Figure results can be edited without overwriting the retained model result', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  const content = read('content.js');
+  const css = read('popup.css');
+  assert.match(html, /id="figureResultEditorDialog"/);
+  assert.match(html, /id="figureResultEditorBody"/);
+  assert.match(html, /id="restoreFigureModelResult"/);
+  assert.match(popup, /function openFigureResultEditor/);
+  assert.match(popup, /action:\s*'updateFigureAnalysisResult'/);
+  assert.match(popup, /action:\s*'restoreFigureAnalysisResult'/);
+  assert.match(popup, /manuallyEdited \? '继续编辑' : '编辑结果'/);
+  assert.match(content, /function createUserFigureResultEdits/);
+  assert.match(content, /function applyUserFigureResultEdits/);
+  assert.match(content, /modelStandard/);
+  assert.match(content, /modelDeep/);
+  assert.match(content, /manualEdits/);
+  assert.match(content, /persistArticleWorkspaceArtifacts\(\{[\s\S]*assets:/);
+  assert.match(content, /request\.action === 'updateFigureAnalysisResult'/);
+  assert.match(content, /request\.action === 'restoreFigureAnalysisResult'/);
+  assert.match(css, /\.figure-result-editor-dialog/);
+  assert.match(css, /\.workspace-figure-edit-action\.is-edited/);
 });
 
 test('quick navigation exclusively expands the requested Figure', () => {
@@ -169,6 +264,10 @@ test('Figure original viewer stays in the webpage and never opens a new tab', ()
   assert.match(content, /FIGURE_ORIGINAL_VIEWER_STATE_CHANGED/);
   assert.match(popup, /FIGURE_ORIGINAL_VIEWER_STATE_CHANGED/);
   assert.match(popup, /followFigureOriginalViewerInSidebar/);
+  assert.match(content, /navigationMode:\s*requestedFigureNumber > 0 \? 'number' : 'direction'/);
+  assert.match(popup, /function shouldPreserveCrossFigureSidebar/);
+  assert.match(popup, /navigationMode === 'direction'/);
+  assert.match(popup, /!preserveCrossFigureSidebar/);
   assert.match(popup, /collapsePanels:\s*true/);
   assert.doesNotMatch(popup, /window\.open\(/);
   assert.match(css, /#sci-figure-image-viewer\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/s);
@@ -335,9 +434,13 @@ test('Figure progress UI uses the content snapshot and never invents a current P
   assert.match(popup, /token_limit_retry/);
   assert.match(popup, /output_compact_retry/);
   assert.match(renderer, /figureProgress/);
-  assert.match(renderer, /renderFigureProgress\(details, progress\)/);
+  assert.match(renderer, /renderFigureProgress\(details, progress, result, figure\)/);
   assert.match(popup, /workspace-figure-progress/);
+  assert.match(popup, /compactFigureResultConclusion/);
+  assert.match(popup, /workspace-figure-completion-check/);
+  assert.match(popup, /aria-label', 'Figure 解读已完成'/);
   assert.match(css, /\.workspace-figure-progress\s*\{/);
+  assert.match(css, /\.workspace-figure-progress-conclusion\s*\{/);
   assert.doesNotMatch(renderer, /当前\s*Panel|current\s*Panel/i);
 });
 
@@ -541,11 +644,18 @@ test('Figure header actions are one compact row and cross-Figure action is conci
   assert.match(popup, /loading \? '解图中…' : '解图'/);
   assert.match(
     css,
-    /\.workspace-figure-actions\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s
+    /\.workspace-figure-actions\s*\{[^}]*grid-template-columns:\s*repeat\(4,/s
   );
   assert.match(css, /\.workspace-figure-analyze-action\s*\{\s*grid-column:\s*auto/);
-  assert.match(html, />主图串解<\/button>/);
-  assert.match(popup, /'主图串解'/);
+  assert.match(html, />全部解图<\/button>/);
+  assert.match(html, />整合分析<\/button>/);
+  assert.match(html, />\s*添加补图\s*<\/button>/);
+  assert.match(html, />手动梳理<\/button>/);
+  assert.match(popup, /'整合分析'/);
+  assert.match(
+    css,
+    /\.figure-workspace-toolbar\s*\{[^}]*grid-template-columns:\s*repeat\(4,/s
+  );
 });
 
 test('Figure quick navigator opens and closes promptly with Panels in one ordered column', () => {
@@ -653,6 +763,551 @@ test('Figure workspace provides a one-click cross-main-Figure domino chain with 
   assert.match(html, /id="analyzeCrossFigureLogic"/);
   assert.match(css, /workspace-cross-figure-card/);
   assert.match(popup, /crossFigureButton\.hidden = false/);
+});
+
+test('supplemental Figures expose coverage, parent-workspace sync, and invalidate stale cross-Figure logic', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const html = read('popup.html');
+  const css = read('popup.css');
+  const background = read('background.js');
+  const messenger = read('core/tab-messenger.js');
+
+  assert.match(messenger, /core\/supplemental-materials\.js/);
+  assert.match(background, /ARTICLE_WORKSPACE_LIST_ASSETS/);
+  assert.match(html, /<details id="supplementalFigureCoverage"/);
+  assert.match(
+    html,
+    /id="figureWorkspace"[\s\S]*id="supplementalFigureCoverage"/
+  );
+  assert.match(html, /id="supplementalFigureCoverageBody"/);
+  assert.match(popup, /function renderSupplementalFigureCoverage/);
+  assert.match(popup, /supplementalFigureCoverageSummary/);
+  assert.match(popup, /createSupplementalPdfReaderUrl/);
+  assert.match(popup, /下载后选择 PDF/);
+  assert.match(popup, /插件不会自动下载或代传期刊附件/);
+  assert.match(popup, /选择本地补充 PDF/);
+  assert.match(content, /function refreshSupplementalFigureAssets/);
+  assert.match(content, /figures\/supplemental\//);
+  assert.match(content, /persistSupplementalFiguresToParentWorkspace/);
+  assert.match(content, /supplementalFigureAssetsFingerprint/);
+  assert.match(content, /补充图已更新，请重新运行主图串解以纳入补充证据/);
+  assert.match(popup, /supplemental\.logicRefreshRequired/);
+  assert.match(css, /\.supplemental-coverage-hint\.is-action/);
+  assert.match(css, /\.supplemental-figure-coverage\[open\]/);
+});
+
+test('supplemental PDF parent reads and writes carry one verified target and retained provenance', () => {
+  const content = read('content.js');
+  const sync = functionBody(
+    content,
+    'persistSupplementalFiguresToParentWorkspace',
+    'syncParsedSupplementalInventoryToParent'
+  );
+  assert.match(content, /function supplementalParentWorkspaceTarget\(/);
+  assert.match(content, /function supplementalParentWorkspaceProvenance\(/);
+  assert.match(sync, /const target = supplementalParentWorkspaceTarget\(supplementalPdfBinding\)/);
+  assert.equal((sync.match(/\btarget\b/g) || []).length >= 3, true);
+  assert.match(sync, /type:\s*'ARTICLE_WORKSPACE_GET_ASSET',[\s\S]*?target/);
+  assert.match(sync, /type:\s*'ARTICLE_WORKSPACE_SAVE_ASSET',[\s\S]*?target/);
+  assert.match(sync, /const parentProvenance = supplementalParentWorkspaceProvenance/);
+  assert.equal((sync.match(/\.\.\.parentProvenance/g) || []).length >= 3, true);
+  assert.match(content, /if \(binding\.parentDocumentHash\)/);
+  assert.match(content, /target\.documentHash\s*=\s*binding\.parentDocumentHash/);
+  assert.match(content, /if \(target\.documentHash\) provenance\.parentDocumentHash/);
+});
+
+test('live supplemental imports save a sequentially named Panel inventory without auto-analysis', async () => {
+  const content = read('content.js');
+  const importStart = content.indexOf(
+    'async function importSupplementalFigureDraft'
+  );
+  const importEnd = content.indexOf(
+    'function cloneUserEditedFigureValue',
+    importStart
+  );
+  const source = content.slice(importStart, importEnd);
+  const calls = [];
+  let persistedResult = {
+    saved: true,
+    directoryPersisted: true,
+    asset: { revision: 1 }
+  };
+  let analysisCalls = 0;
+  let targetAccepted = true;
+  let durableCheckpoint = null;
+  const figure = {
+    figureId: 'supp-manual-image-a-s1',
+    figureLabel: 'Figure S1',
+    panelHints: ['A', 'B']
+  };
+  const asset = { materialId: 'manual-image-a', figures: [figure] };
+  const SciLLM = {
+    supplementalFigureAssetPath: materialId => `figures/supplemental/${materialId}.json`,
+    normalizeSupplementalTransientImage: image => ({ ...image }),
+    nextSupplementalFigureLabel: () => 'Figure S1',
+    async createManualSupplementalDraft(input, deps) {
+      calls.push('create');
+      assert.equal(await deps.exists('manual-image-a'), false);
+      const persisted = await deps.save(
+        'figures/supplemental/manual-image-a.json',
+        asset,
+        { expectedRevision: 0, createOnly: true }
+      );
+      return {
+        relativePath: 'figures/supplemental/manual-image-a.json',
+        asset,
+        persisted,
+        input
+      };
+    }
+  };
+  const factory = new Function(
+    'SciLLM',
+    'assertCurrentSupplementalImportTarget',
+    'getWorkspaceAssetCheckpoint',
+    'persistWorkspaceAssetCheckpoint',
+    'invalidateCrossFigureLogic',
+    'refreshSupplementalFigureAssets',
+    'notifyFigureWorkspaceStateChanged',
+    'analyzeSingleFigureWithLLM',
+    'supplementalAssetFigureMatch',
+    `${source}\nlet supplementalFigureAssets = [];\n` +
+      `let supplementalFigureAssetsFingerprint = 'old';\n` +
+      'return importSupplementalFigureDraft;'
+  );
+  const importer = factory(
+    SciLLM,
+    () => {
+      if (!targetAccepted) {
+        throw Object.assign(new Error('SUPPLEMENTAL_TARGET_MISMATCH'), {
+          code: 'SUPPLEMENTAL_TARGET_MISMATCH'
+        });
+      }
+      return { workspace: { workspaceId: `workspace:${'a'.repeat(64)}` } };
+    },
+    async () => durableCheckpoint,
+    async (_path, _content, options) => {
+      calls.push('save');
+      assert.deepEqual(options, {
+        force: true,
+        requireDirectoryPersistence: true,
+        expectedRevision: 0,
+        createOnly: true
+      });
+      return persistedResult;
+    },
+    () => calls.push('invalidate'),
+    async () => calls.push('refresh'),
+    () => calls.push('notify'),
+    async () => {
+      analysisCalls += 1;
+      calls.push('analyze');
+      return { success: true };
+    },
+    (left, right) => left?.figureId === right?.figureId
+  );
+  const request = {
+    target: { workspaceId: `workspace:${'a'.repeat(64)}` },
+    draft: {
+      sourceMode: 'image',
+      materialId: 'manual-image-a',
+      sourceImportedAt: '2026-08-03T00:00:00.000Z',
+      sourceFingerprint: `sha256:${'b'.repeat(64)}`,
+      sourceFileName: 's1.png',
+      sourceMimeType: 'image/png',
+      sourceFileSize: 4,
+      figures: [{ ...figure, caption: 'Figure S1.' }]
+    },
+    transientImage: {
+      mediaType: 'image/png', dataUrl: 'data:image/png;base64,AAAA',
+      width: 1, height: 1, sourceFingerprint: `sha256:${'b'.repeat(64)}`
+    }
+  };
+  const result = await importer(request);
+  assert.equal(result.analysisStatus, 'draft');
+  assert.equal(result.figureLabel, 'Figure S1');
+  assert.equal(result.directoryPersisted, true);
+  assert.deepEqual(result.panelHints, ['A', 'B']);
+  assert.equal(analysisCalls, 0);
+  assert.equal(calls.includes('analyze'), false);
+
+  persistedResult = { saved: false, stale: true };
+  calls.length = 0;
+  analysisCalls = 0;
+  await assert.rejects(
+    importer(request),
+    error => error?.code === 'SUPPLEMENTAL_DRAFT_NOT_DURABLE'
+  );
+  assert.equal(analysisCalls, 0);
+  assert.equal(calls.includes('analyze'), false);
+
+  targetAccepted = false;
+  persistedResult = {
+    saved: true,
+    directoryPersisted: true,
+    asset: { revision: 1 }
+  };
+  calls.length = 0;
+  await assert.rejects(
+    importer(request),
+    error => error?.code === 'SUPPLEMENTAL_TARGET_MISMATCH'
+  );
+  assert.equal(calls.includes('create'), false);
+  assert.equal(calls.includes('save'), false);
+
+  assert.match(source, /analysisStatus:\s*'draft'/);
+  assert.doesNotMatch(source, /analyzeSingleFigureWithLLM/);
+  assert.match(source, /nextSupplementalFigureLabel/);
+  assert.match(source, /panelHints/);
+  assert.match(content, /analysisStatus:\s*'complete'/);
+  assert.match(content, /analysisStatus:\s*'error'/);
+  assert.match(content, /const persistedComplete = await persistImportedSupplementalFigureState/);
+  assert.match(content, /persistedComplete\?\.saved !== true/);
+  assert.match(content, /SUPPLEMENTAL_COMPLETE_NOT_DURABLE/);
+  assert.match(content, /request\.action === 'importSupplementalFigureDraft'/);
+  assert.match(content, /async function updateImportedSupplementalFigureDraft/);
+  assert.match(content, /async function deleteImportedSupplementalFigure/);
+  assert.match(content, /request\.action === 'updateSupplementalFigureDraft'/);
+  assert.match(content, /request\.action === 'deleteSupplementalFigure'/);
+  const popup = read('popup.js');
+  assert.match(popup, /'编辑手动图'/);
+  assert.match(popup, /deleteSupplementalFigureFromWorkspace/);
+  assert.match(popup, /deliverUpdate/);
+  assert.match(popup, /deliverDelete/);
+});
+
+test('supplemental analysis state re-reads, merges and CAS-saves the durable draft', async () => {
+  const content = read('content.js');
+  const start = content.indexOf(
+    'async function persistImportedSupplementalFigureState'
+  );
+  const end = content.indexOf(
+    'async function importSupplementalFigureDraft',
+    start
+  );
+  const source = content.slice(start, end);
+  const cached = {
+    materialId: 'manual-image-a',
+    figures: [{ figureId: 'supp-a-s1' }]
+  };
+  const latestVersions = [
+    {
+      revision: 4,
+      contentHash: 'hash-4',
+      content: {
+        materialId: 'manual-image-a',
+        userLabel: 'keep latest asset field',
+        figures: [
+          {
+            figureId: 'supp-a-s1',
+            caption: 'keep caption',
+            panelHints: ['A', 'B'],
+            userField: 'keep latest Figure field',
+            manualEdits: { standard: { editedAt: 4, coreConclusion: 'latest edit' } },
+            panelFollowups: { A: { answer: 'latest follow-up' } },
+            analysisImages: [{ dataUrl: 'data:image/png;base64,LATEST4' }]
+          },
+          { figureId: 'supp-a-s2', caption: 'keep sibling Figure' }
+        ]
+      }
+    },
+    {
+      revision: 5,
+      contentHash: 'hash-5',
+      content: {
+        materialId: 'manual-image-a',
+        userLabel: 'keep newest concurrent edit',
+        figures: [
+          {
+            figureId: 'supp-a-s1',
+            caption: 'keep caption after conflict',
+            panelHints: ['A', 'B'],
+            userField: 'keep newest Figure field',
+            manualEdits: { standard: { editedAt: 5, coreConclusion: 'newest edit' } },
+            panelFollowups: { A: { answer: 'newest follow-up' } },
+            analysisImages: [{ dataUrl: 'data:image/png;base64,LATEST5' }]
+          },
+          { figureId: 'supp-a-s2', caption: 'keep sibling Figure' }
+        ]
+      }
+    }
+  ];
+  let readIndex = 0;
+  const saveCalls = [];
+  const persistState = new Function(
+    'SciLLM',
+    'supplementalAssetFigureMatch',
+    'getWorkspaceAssetCheckpoint',
+    'persistWorkspaceAssetCheckpoint',
+    'initialAssets',
+    `let supplementalFigureAssets = initialAssets;\n${source}\n` +
+      'return persistImportedSupplementalFigureState;'
+  )(
+    {
+      supplementalFigureAssetPath: materialId =>
+        `figures/supplemental/${materialId}.json`
+    },
+    (left, right) => left?.figureId === right?.figureId,
+    async () => structuredClone(latestVersions[Math.min(
+      readIndex++, latestVersions.length - 1
+    )]),
+    async (_path, next, options) => {
+      saveCalls.push({ next: structuredClone(next), options });
+      if (saveCalls.length === 1) {
+        throw Object.assign(new Error('conflict'), {
+          code: 'ASSET_REVISION_CONFLICT'
+        });
+      }
+      return { saved: true, asset: { revision: 6 } };
+    },
+    [cached]
+  );
+
+  const result = await persistState(
+    {
+      figureId: 'supp-a-s1',
+      sourceMaterialId: 'manual-image-a',
+      isSupplemental: true,
+      sourceExternal: true,
+      analysisImages: [{ dataUrl: 'data:image/png;base64,AAAA' }]
+    },
+    {
+      figureInputHash: 'input-hash',
+      activeDepth: 'standard',
+      standard: { coreConclusion: 'model result' },
+      standardError: '',
+      manualEdits: {},
+      panelFollowups: {}
+    },
+    {
+      analysisStatus: 'complete',
+      stateFields: [
+        'figureInputHash', 'standard', 'standardError', 'activeDepth'
+      ]
+    }
+  );
+
+  assert.equal(result.saved, true);
+  assert.equal(saveCalls.length, 2);
+  assert.deepEqual(saveCalls[0].options, {
+    force: true,
+    requireDirectoryPersistence: true,
+    expectedRevision: 4,
+    expectedContentHash: 'hash-4'
+  });
+  assert.deepEqual(saveCalls[1].options, {
+    force: true,
+    requireDirectoryPersistence: true,
+    expectedRevision: 5,
+    expectedContentHash: 'hash-5'
+  });
+  assert.equal(saveCalls[1].next.userLabel, 'keep newest concurrent edit');
+  assert.equal(saveCalls[1].next.figures[0].caption, 'keep caption after conflict');
+  assert.equal(saveCalls[1].next.figures[0].userField, 'keep newest Figure field');
+  assert.equal(
+    saveCalls[1].next.figures[0].manualEdits.standard.coreConclusion,
+    'newest edit'
+  );
+  assert.equal(
+    saveCalls[1].next.figures[0].panelFollowups.A.answer,
+    'newest follow-up'
+  );
+  assert.equal(
+    saveCalls[1].next.figures[0].analysisImages[0].dataUrl,
+    'data:image/png;base64,LATEST5'
+  );
+  assert.equal(saveCalls[1].next.figures[1].caption, 'keep sibling Figure');
+  assert.equal(saveCalls[1].next.figures[0].analysisStatus, 'complete');
+  assert.equal(saveCalls[1].next.figures[0].standard.coreConclusion, 'model result');
+  assert.equal(saveCalls[1].next.analysisStatus, 'partial');
+
+  latestVersions.push({
+    revision: 6,
+    contentHash: 'hash-6',
+    content: {
+      ...structuredClone(saveCalls[1].next),
+      figures: saveCalls[1].next.figures.map((item, index) => index ? item : ({
+        ...structuredClone(item),
+        manualEdits: {
+          standard: { editedAt: 6, coreConclusion: 'concurrent latest edit' }
+        }
+      }))
+    }
+  });
+  await persistState(
+    {
+      figureId: 'supp-a-s1',
+      sourceMaterialId: 'manual-image-a',
+      isSupplemental: true,
+      sourceExternal: true
+    },
+    {
+      activeDepth: 'standard',
+      manualEdits: {
+        standard: { editedAt: 5, coreConclusion: 'newest edit' },
+        deep: { editedAt: 7, coreConclusion: 'local deep edit' }
+      }
+    },
+    { stateFields: ['manualEdits'] }
+  );
+  const manualMerge = saveCalls.at(-1).next.figures[0].manualEdits;
+  assert.equal(manualMerge.standard.coreConclusion, 'concurrent latest edit');
+  assert.equal(manualMerge.deep.coreConclusion, 'local deep edit');
+});
+
+test('imported supplemental Figures can be re-edited and deleted durably', async () => {
+  const content = read('content.js');
+  const start = content.indexOf('function clearImportedSupplementalAnalysis');
+  const end = content.indexOf('const USER_EDITABLE_FIGURE_FIELDS', start);
+  const source = content.slice(start, end);
+  let checkpoint = {
+    revision: 3,
+    contentHash: 'hash-3',
+    content: {
+      materialId: 'manual-caption-a',
+      analysisStatus: 'complete',
+      figures: [{
+        figureId: 'supp-manual-caption-a-s1',
+        figureLabel: 'Supplemental Figure 1',
+        sourceMode: 'caption',
+        caption: 'Old caption (A).',
+        panelHints: ['A'],
+        standard: { coreConclusion: 'stale result' },
+        modelStandard: { coreConclusion: 'stale result' },
+        analysisStatus: 'complete'
+      }]
+    }
+  };
+  const saved = [];
+  const invalidations = [];
+  const notifications = [];
+  const factory = new Function(
+    'SciLLM',
+    'assertCurrentSupplementalImportTarget',
+    'refreshSupplementalFigureAssets',
+    'supplementalAssetFigureMatch',
+    'getWorkspaceAssetCheckpoint',
+    'persistWorkspaceAssetCheckpoint',
+    'invalidateCrossFigureLogic',
+    'getImportedSupplementalFigureInventory',
+    'notifyFigureWorkspaceStateChanged',
+    'initialCheckpoint',
+    `${source}\n` +
+      `let supplementalFigureAssets = [structuredClone(initialCheckpoint.content)];\n` +
+      `let supplementalFigureAssetsFingerprint = 'old';\n` +
+      `const figureWalkthroughState = new Map();\n` +
+      `const figureProgressById = new Map();\n` +
+      `return { updateImportedSupplementalFigureDraft, deleteImportedSupplementalFigure };`
+  );
+  const SciLLM = {
+    supplementalFigureAssetPath: materialId => `figures/supplemental/${materialId}.json`,
+    extractPanelHints: caption => caption.includes('(B)') ? ['A', 'B'] : ['A'],
+    splitFigureCaptionByPanelGroups: caption => [{ panels: ['A', 'B'], text: caption }],
+    canonicalSupplementalFigureLabel: () => 'Figure S1',
+    normalizeSupplementalTransientImage: image => ({ ...image })
+  };
+  const functions = factory(
+    SciLLM,
+    () => ({ workspace: { workspaceId: `workspace:${'a'.repeat(64)}` } }),
+    async () => undefined,
+    (left, right) => String(left?.figureId) === String(right?.figureId),
+    async () => structuredClone(checkpoint),
+    async (_path, next, options) => {
+      saved.push({ next: structuredClone(next), options });
+      checkpoint = {
+        revision: checkpoint.revision + 1,
+        contentHash: `hash-${checkpoint.revision + 1}`,
+        content: structuredClone(next)
+      };
+      return { saved: true };
+    },
+    reason => invalidations.push(reason),
+    () => structuredClone(checkpoint.content.figures),
+    (event, figure) => notifications.push({ event, figure: structuredClone(figure) }),
+    checkpoint
+  );
+  {
+    const updated = await functions.updateImportedSupplementalFigureDraft({
+      target: {},
+      figureId: 'supp-manual-caption-a-s1',
+      caption: 'New caption (A) setup. (B) result.'
+    });
+    assert.equal(updated.figureLabel, 'Figure S1');
+    assert.deepEqual(updated.panelHints, ['A', 'B']);
+    assert.equal(checkpoint.content.figures[0].standard, undefined);
+    assert.equal(checkpoint.content.figures[0].modelStandard, undefined);
+    assert.equal(checkpoint.content.figures[0].analysisStatus, 'draft');
+    assert.equal(saved[0].options.expectedRevision, 3);
+
+    const deleted = await functions.deleteImportedSupplementalFigure({
+      target: {},
+      figureId: 'supp-manual-caption-a-s1'
+    });
+    assert.equal(deleted.deleted, true);
+    assert.deepEqual(checkpoint.content.figures, []);
+    assert.equal(checkpoint.content.analysisStatus, 'empty');
+    assert.equal(invalidations.length, 2);
+    assert.deepEqual(notifications.map(item => item.event), [
+      'supplemental_figure_updated', 'supplemental_figure_deleted'
+    ]);
+  }
+});
+
+test('workspace checkpoint maps the old hash to the router CAS field', async () => {
+  const content = read('content.js');
+  const start = content.indexOf('function persistWorkspaceAssetCheckpoint');
+  const end = content.indexOf('function persistWorkspaceTurnCheckpoint', start);
+  const source = content.slice(start, end);
+  const sent = [];
+  const persist = new Function(
+    'chrome',
+    'ensureCurrentArticleWorkspace',
+    'assertCurrentArticleWorkspaceLifecycle',
+    'articleWorkspaceAssetFingerprint',
+    `let articleWorkspaceSaveFrozen = false;\n` +
+      `let articleWorkspaceLifecycleGeneration = 1;\n` +
+      `let articleWorkspaceMutationTail = Promise.resolve();\n` +
+      `const articleWorkspaceAssetFingerprints = new Map();\n` +
+      `${source}\nreturn persistWorkspaceAssetCheckpoint;`
+  )(
+    { runtime: { sendMessage: async message => {
+      sent.push(message);
+      return { success: true, data: { saved: true } };
+    } } },
+    async () => ({ workspaceId: 'workspace-1', workspaceGeneration: 3 }),
+    () => undefined,
+    () => 'new-fingerprint'
+  );
+
+  await persist('figures/supplemental/a.json', { value: 1 }, {
+    force: true,
+    expectedRevision: 7,
+    expectedContentHash: 'old-content-hash'
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].expectedRevision, 7);
+  assert.equal(sent[0].expectedContentHash, 'old-content-hash');
+  assert.equal(Object.hasOwn(sent[0], 'contentHash'), false);
+});
+
+test('batch and single supplemental Figure analysis stay on the parent article and persist results', () => {
+  const content = read('content.js');
+  const popup = read('popup.js');
+  const batch = functionBody(content, 'analyzeFiguresWithLLM', 'maybeAutoAnalyzeWithLLM');
+  const external = functionBody(
+    popup,
+    'runExternalSupplementalFigureAnalysis',
+    'runFigureAnalysis'
+  );
+  assert.match(batch, /refreshSupplementalFigureAssets\(workspace\)/);
+  assert.match(batch, /getImportedSupplementalFigureInventory\(\)/);
+  assert.match(batch, /figures\s*=\s*\[\.\.\.visibleMainFigures,\s*\.\.\.supplementalFigures\]/);
+  assert.match(batch, /manualMainLabels/);
+  assert.match(batch, /persistImportedSupplementalFigureState\(figure, state, \{/);
+  assert.doesNotMatch(batch, /state\.standard\s*=\s*null/);
+  assert.match(external, /runSingleFigureAnalysis/);
+  assert.doesNotMatch(external, /resolveSupplementalReaderTab|chrome\.tabs\.update|sendTabMessageWithRecovery/);
 });
 
 test('navigation tree exposes hierarchy depth and separate global controls', () => {

@@ -15,7 +15,10 @@
     highlight: 3,
     summary: 2,
     chat: 1,
-    figure: 3,
+    // Figure requests are large multimodal calls. A single ordered worker avoids
+    // provider throttling and prevents late responses from interleaving state
+    // checkpoints while still preserving per-Figure retry/resume behavior.
+    figure: 1,
     crossFigure: 1
   });
   const PREFERENCE_KEYS = new Set([
@@ -26,6 +29,34 @@
     'analysisModes', 'figurePanelFollowupPrompts', 'figurePanelFollowupPresets',
     'articleChatQuickPrompts',
     'keyboardShortcuts'
+  ]);
+  const PORTABLE_CONFIG_ERROR_CODES = new Set([
+    'PORTABLE_CONFIG_FAILED',
+    'PORTABLE_CONFIG_ALREADY_EXISTS', 'PORTABLE_CONFIG_BACKUP_AUTH_FAILED',
+    'PORTABLE_CONFIG_BACKUP_DIVERGED', 'PORTABLE_CONFIG_BACKUP_FAILED',
+    'PORTABLE_CONFIG_BACKUP_SOURCE_MISSING', 'PORTABLE_CONFIG_CACHED_KEY_INVALID',
+    'PORTABLE_CONFIG_CACHED_KEY_REJECTED', 'PORTABLE_CONFIG_CREATE_FAILED',
+    'PORTABLE_CONFIG_CREATED_KEY_CACHE_FAILED', 'PORTABLE_CONFIG_CRYPTO_UNAVAILABLE',
+    'PORTABLE_CONFIG_DECRYPT_FAILED', 'PORTABLE_CONFIG_DIRECTORY_CONFLICT',
+    'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE', 'PORTABLE_CONFIG_DIRECTORY_WRITE_FAILED',
+    'PORTABLE_CONFIG_ENVELOPE_BACKUP_ID_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_CIPHERTEXT_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_ENCRYPTION_INVALID', 'PORTABLE_CONFIG_ENVELOPE_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_KIND_INVALID', 'PORTABLE_CONFIG_ENVELOPE_REVISION_INVALID',
+    'PORTABLE_CONFIG_ENVELOPE_SCHEMA_VERSION_INVALID', 'PORTABLE_CONFIG_ENVELOPE_UNSAFE',
+    'PORTABLE_CONFIG_ENVELOPE_UPDATED_AT_INVALID', 'PORTABLE_CONFIG_INVALID_BASE64',
+    'PORTABLE_CONFIG_INVALID_BINARY', 'PORTABLE_CONFIG_KDF_ITERATIONS',
+    'PORTABLE_CONFIG_KDF_SALT_INVALID', 'PORTABLE_CONFIG_KEY_INVALID',
+    'PORTABLE_CONFIG_LOCKED', 'PORTABLE_CONFIG_MANAGER_DISPOSED',
+    'PORTABLE_CONFIG_MANAGER_INVALID_DEPENDENCIES', 'PORTABLE_CONFIG_MISSING',
+    'PORTABLE_CONFIG_NOT_READY', 'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT',
+    'PORTABLE_CONFIG_PAYLOAD_GLOBAL_ABBREVIATIONS_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_INVALID', 'PORTABLE_CONFIG_PAYLOAD_KIND_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_SCHEMA_VERSION_INVALID',
+    'PORTABLE_CONFIG_PAYLOAD_SETTINGS_INVALID', 'PORTABLE_CONFIG_PROBE_FAILED',
+    'PORTABLE_CONFIG_REQUIRES_CAS', 'PORTABLE_CONFIG_RESTORE_FAILED',
+    'PORTABLE_CONFIG_ROTATE_FAILED', 'PORTABLE_CONFIG_SCHEMA_UNAVAILABLE',
+    'PORTABLE_CONFIG_STORAGE_FAILED', 'PORTABLE_CONFIG_UNLOCK_FAILED'
   ]);
 
   function invalidSettings(fields) {
@@ -75,9 +106,23 @@
       'ARTICLE_ARCHIVE_TOO_LARGE', 'ARTICLE_ARCHIVE_NOT_FOUND',
       'INVALID_JSON_ASSET', 'DIRECTORY_SYNC_UNAVAILABLE',
       'WORKSPACE_STORE_UNAVAILABLE', 'WORKSPACE_NOT_FOUND',
+      'ASSET_REVISION_CONFLICT', 'ASSET_HASH_CONFLICT',
+      'INVALID_BINARY_ASSET', 'INVALID_BINARY_HASH',
+      'WORKSPACE_BINARY_UNAVAILABLE', 'WORKSPACE_BINARY_HASH_MISMATCH',
       'WORKSPACE_REVISION_CONFLICT', 'WORKSPACE_HASH_CONFLICT',
       'WORKSPACE_GENERATION_CONFLICT', 'WORKSPACE_DELETION_CONFLICT',
       'WORKSPACE_DELETION_PENDING', 'INVALID_WORKSPACE_GENERATION',
+      'SUPPLEMENTAL_TARGET_INVALID', 'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH',
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH', 'SUPPLEMENTAL_DRAFT_INVALID',
+      'SUPPLEMENTAL_SOURCE_MODE', 'SUPPLEMENTAL_CAPTION_TOO_LONG',
+      'SUPPLEMENTAL_CAPTION_EMPTY', 'SUPPLEMENTAL_MATERIAL_ID',
+      'SUPPLEMENTAL_MATERIAL_ID_BOUNDS', 'SUPPLEMENTAL_IMAGE_INVALID',
+      'SUPPLEMENTAL_PDF_INVALID', 'SUPPLEMENTAL_SOURCE_FINGERPRINT',
+      'SUPPLEMENTAL_SOURCE_TIME', 'SUPPLEMENTAL_TRANSIENT_IMAGE',
+      'SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE',
+      'SUPPLEMENTAL_TRANSIENT_FINGERPRINT', 'SUPPLEMENTAL_EXISTS_REQUIRED',
+      'SUPPLEMENTAL_RANDOM_UNAVAILABLE', 'SUPPLEMENTAL_RANDOM_INVALID',
+      'SUPPLEMENTAL_MATERIAL_ID_COLLISION',
       'TURN_NOT_FOUND', 'TURN_ALREADY_EXISTS',
       'INVALID_WORKSPACE', 'INVALID_WORKSPACE_PATH', 'INVALID_WORKSPACE_MANIFEST',
       'INVALID_WORKSPACE_INDEX', 'WORKSPACE_CONTAINS_CREDENTIALS',
@@ -87,7 +132,13 @@
       'CODEX_NOT_INSTALLED', 'CODEX_NOT_AUTHENTICATED',
       'CODEX_BRIDGE_UNAVAILABLE', 'CODEX_PROVIDER_REJECTED'
     ]);
-    const code = allowedCodes.has(error?.code) ? error.code : 'INTERNAL_ERROR';
+    const rawCode = typeof error?.code === 'string' ? error.code : '';
+    const portableConfigCode = PORTABLE_CONFIG_ERROR_CODES.has(rawCode)
+      ? rawCode
+      : rawCode.startsWith('PORTABLE_CONFIG_') ? 'PORTABLE_CONFIG_FAILED' : '';
+    const code = allowedCodes.has(error?.code)
+      ? error.code
+      : portableConfigCode || 'INTERNAL_ERROR';
     const messages = {
       INVALID_SETTINGS: 'Provider settings are incomplete or invalid',
       AUTH_INVALID: 'API authentication failed',
@@ -122,12 +173,39 @@
       DIRECTORY_SYNC_UNAVAILABLE: 'A local archive directory has not been configured.',
       WORKSPACE_STORE_UNAVAILABLE: 'Local article workspaces are unavailable.',
       WORKSPACE_NOT_FOUND: 'The local article workspace was not found.',
+      ASSET_REVISION_CONFLICT: 'This saved item changed before the save completed.',
+      ASSET_HASH_CONFLICT: 'This saved item no longer matches the version being edited.',
       WORKSPACE_REVISION_CONFLICT: 'The article workspace changed before this save completed.',
       WORKSPACE_HASH_CONFLICT: 'The article workspace content hash no longer matches.',
       WORKSPACE_GENERATION_CONFLICT: 'This save belongs to an older cleared workspace.',
       WORKSPACE_DELETION_CONFLICT: 'The article workspace deletion state changed.',
       WORKSPACE_DELETION_PENDING: 'The article workspace is being deleted.',
       INVALID_WORKSPACE_GENERATION: 'The article workspace generation is invalid.',
+      SUPPLEMENTAL_TARGET_INVALID: 'The target article workspace is invalid.',
+      SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH:
+        'The target article URL no longer matches the saved workspace.',
+      SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH:
+        'The target article content no longer matches the saved workspace.',
+      SUPPLEMENTAL_DRAFT_INVALID: 'The supplemental Figure draft is invalid.',
+      SUPPLEMENTAL_SOURCE_MODE: 'The supplemental Figure source type is invalid.',
+      SUPPLEMENTAL_CAPTION_TOO_LONG: 'The supplemental Figure caption is too long.',
+      SUPPLEMENTAL_CAPTION_EMPTY: 'The supplemental Figure caption is empty.',
+      SUPPLEMENTAL_MATERIAL_ID: 'The supplemental Figure identifier is invalid.',
+      SUPPLEMENTAL_MATERIAL_ID_BOUNDS: 'The supplemental Figure identifier is too long.',
+      SUPPLEMENTAL_IMAGE_INVALID: 'The supplemental Figure image is invalid.',
+      SUPPLEMENTAL_PDF_INVALID: 'The supplemental Figure PDF is invalid.',
+      SUPPLEMENTAL_SOURCE_FINGERPRINT: 'The supplemental Figure fingerprint is invalid.',
+      SUPPLEMENTAL_SOURCE_TIME: 'The supplemental Figure import time is invalid.',
+      SUPPLEMENTAL_TRANSIENT_IMAGE: 'The supplemental Figure image payload is invalid.',
+      SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE:
+        'The supplemental Figure image payload is too large.',
+      SUPPLEMENTAL_TRANSIENT_FINGERPRINT:
+        'The supplemental Figure image no longer matches its source.',
+      SUPPLEMENTAL_EXISTS_REQUIRED: 'Supplemental Figure collision checking is unavailable.',
+      SUPPLEMENTAL_RANDOM_UNAVAILABLE: 'Secure supplemental Figure identifiers are unavailable.',
+      SUPPLEMENTAL_RANDOM_INVALID: 'The supplemental Figure identifier is invalid.',
+      SUPPLEMENTAL_MATERIAL_ID_COLLISION:
+        'A unique supplemental Figure identifier could not be allocated.',
       TURN_NOT_FOUND: 'The saved chat turn is missing and must be recreated.',
       TURN_ALREADY_EXISTS: 'The saved chat turn already exists.',
       INVALID_WORKSPACE: 'The article workspace is invalid.',
@@ -140,8 +218,10 @@
       INVALID_MIGRATION_DOCUMENTS: 'The migration document records are invalid.',
       INVALID_MIGRATION_FEEDBACK: 'The migration feedback records are invalid.',
       MIGRATION_BUNDLE_TOO_LARGE: 'The migration file is too large.',
+      PORTABLE_CONFIG_FAILED: 'Portable configuration request failed.',
       INTERNAL_ERROR: 'Unable to complete the request'
     };
+    if (portableConfigCode) messages[portableConfigCode] = messages.PORTABLE_CONFIG_FAILED;
     const result = {
       code,
       message: messages[code],
@@ -179,6 +259,37 @@
       result.diagnosticMessage = diagnosticMessage;
     }
     return result;
+  }
+
+  function safePortableConfigError(error) {
+    const code = typeof error?.code === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(error.code)
+      ? error.code : 'PORTABLE_CONFIG_FAILED';
+    return Object.assign(new Error(code), {
+      code,
+      retryable: error?.retryable === true
+    });
+  }
+
+  function createPortableConfigStorageChangeListener(manager, {
+    warn = console.warn
+  } = {}) {
+    const warnSchedulingFailure = () => {
+      try {
+        warn('Brevess: portable configuration backup scheduling failed');
+      } catch (_) {}
+    };
+    return (changes, areaName) => {
+      if (areaName !== 'local' || !changes || (
+        !Object.prototype.hasOwnProperty.call(changes, 'sciLlmSettingsV2') &&
+        !Object.prototype.hasOwnProperty.call(changes, 'sciGlobalAbbreviationMemoryV1') &&
+        !Object.prototype.hasOwnProperty.call(changes, 'sciPdfMineruSettingsV1')
+      )) return;
+      try {
+        Promise.resolve(manager.scheduleBackup(changes)).catch(warnSchedulingFailure);
+      } catch (_) {
+        warnSchedulingFailure();
+      }
+    };
   }
 
   async function testAdapterWithRetry(adapter, request, maxAttempts = 2) {
@@ -230,6 +341,51 @@
     return normalized;
   }
 
+  function portableConfigStatus(value) {
+    const status = isPlainObject(value) ? value : {};
+    const state = status.state;
+    const revision = status.revision;
+    const updatedAtValue = status.updatedAt;
+    const pending = status.pending;
+    const lastError = status.lastError;
+    const allowedStates = new Set([
+      'unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled'
+    ]);
+    const updatedAt = typeof updatedAtValue === 'string' && updatedAtValue.length <= 80 &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(updatedAtValue) &&
+      Number.isFinite(Date.parse(updatedAtValue))
+      ? new Date(updatedAtValue).toISOString()
+      : '';
+    return {
+      state: typeof state === 'string' && allowedStates.has(state) ? state : 'unknown',
+      revision: Number.isSafeInteger(revision) && revision >= 0 ? revision : 0,
+      updatedAt,
+      pending: pending === true,
+      lastError: typeof lastError === 'string' && PORTABLE_CONFIG_ERROR_CODES.has(lastError)
+        ? lastError : lastError ? 'PORTABLE_CONFIG_FAILED' : ''
+    };
+  }
+
+  function createDisabledPortableConfigManager() {
+    const status = () => portableConfigStatus({ state: 'disabled' });
+    const rejectNotReady = async () => {
+      throw Object.assign(new Error('PORTABLE_CONFIG_NOT_READY'), {
+        code: 'PORTABLE_CONFIG_NOT_READY'
+      });
+    };
+    return Object.freeze({
+      probe: status,
+      create: status,
+      unlock: status,
+      rotatePassphrase: status,
+      forgetKey: status,
+      backupNow: status,
+      runWhenReady: rejectNotReady,
+      status,
+      publicStatus: status
+    });
+  }
+
   function createBackgroundRouter({
     storageArea,
     sessionStorageArea,
@@ -241,12 +397,35 @@
     articleWorkspaceStore = null,
     tokenUsageStore = null,
     directorySync = null,
+    portableConfigManager = createDisabledPortableConfigManager(),
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay))
   }) {
     let memorySessionCategories = [];
     const documentIdsByHash = new Map();
     let documentMutationTail = Promise.resolve();
     const operationRegistry = shared.createOperationRegistry?.();
+
+    async function currentPortableConfigStatus() {
+      try {
+        const status = typeof portableConfigManager?.publicStatus === 'function'
+          ? await portableConfigManager.publicStatus()
+          : await portableConfigManager?.status?.();
+        return portableConfigStatus(status);
+      } catch (error) {
+        throw safePortableConfigError(error);
+      }
+    }
+
+    async function runWithPortableConfigReady(operation) {
+      try {
+        return await portableConfigManager.runWhenReady(operation);
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_NOT_READY') {
+          throw safePortableConfigError(error);
+        }
+        throw error;
+      }
+    }
 
     function operationFor(message) {
       return operationRegistry?.getOrCreate(message?.operationId) || null;
@@ -945,11 +1124,19 @@
       };
     }
 
+    function validFigureAnalysisId(value) {
+      const figureId = String(value || '');
+      return /^figure-(?:s)?\d{1,3}$/.test(figureId) ||
+        /^supp-[a-z0-9](?:[a-z0-9-]{0,47})-[a-z0-9](?:[a-z0-9-]{0,23})$/
+          .test(figureId);
+    }
+
     function normalizeFigureInput(value, articleTitle) {
-      const figureId = String(value?.figureId || '').trim().slice(0, 80);
+      const figureId = String(value?.figureId || '').trim();
       const caption = String(value?.caption || '').normalize('NFKC')
         .replace(/\s+/g, ' ').trim().slice(0, 8000);
-      if (!/^figure-(?:s)?\d{1,3}$/.test(figureId) || !caption) {
+      const images = shared.normalizeImageInputs(value?.images);
+      if (!validFigureAnalysisId(figureId) || (!caption && !images.length)) {
         throw invalidSettings(['figures']);
       }
       const imageVariants = (Array.isArray(value?.imageVariants) ? value.imageVariants : [])
@@ -987,7 +1174,7 @@
           text: String(item?.text || '').normalize('NFKC')
             .replace(/\s+/g, ' ').trim().slice(0, 1200)
         })),
-        images: shared.normalizeImageInputs(value?.images),
+        images,
         imageVariants
       };
     }
@@ -1009,15 +1196,15 @@
         }
         return raw;
       };
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
           return await requestOnce(request);
         } catch (error) {
           if (operation?.controller?.signal?.aborted) throw shared.operationError();
-          if (!error?.retryable || attempt >= 2) throw error;
+          if (!error?.retryable || attempt >= 3) throw error;
           const waitMs = Math.max(
             Number(error?.retryAfterMs) || 0,
-            attempt === 1 ? 1500 : 4000
+            attempt === 1 ? 1500 : 5000
           );
           context.onProgress?.({
             phase: 'figure_retry',
@@ -1037,7 +1224,9 @@
       if (!panels.length) return [[]];
       // Deep analysis contains many required fields per panel.  Small batches keep
       // its structured response below the output limit of economical models.
-      const batchSize = analysisDepth === 'deep' ? 2 : 4;
+      // Keep paired readouts together, but never ask a model to distribute a
+      // whole behavioral battery across four labels in one response.
+      const batchSize = 2;
       const batches = [];
       for (let index = 0; index < panels.length; index += batchSize) {
         batches.push(panels.slice(index, index + batchSize));
@@ -1083,6 +1272,7 @@
           unexpectedPanels,
           ignoredUnexpectedPanelCount: unexpectedPanels.length
         },
+        figureTitleZh: firstText('figureTitleZh'),
         figureQuestion: firstText('figureQuestion'),
         authorAssembly: firstText('authorAssembly'),
         coreConclusion: firstText('coreConclusion'),
@@ -1130,7 +1320,8 @@
       analysisDepth,
       progress,
       progressBase,
-      operation
+      operation,
+      panelConcurrency = TASK_CONCURRENCY.figure
     }) {
       const panelBatches = splitFigurePanelBatches(figure, analysisDepth);
       let visionFallback = route.capabilityMode === 'caption_text_only';
@@ -1273,7 +1464,11 @@
           return requestValidated({
             prompt, request, progressDetails: batchBase,
             validate: raw => shared.validateFigureAnalysis(
-              raw, batchFigure, { visualInput, analysisDepth }
+              raw, batchFigure, {
+                visualInput,
+                analysisDepth,
+                requireCompletePanels: true
+              }
             )
           });
         };
@@ -1372,7 +1567,7 @@
         let completedCount = 0;
         return mapWithConcurrency(
           panelBatches,
-          TASK_CONCURRENCY.figure,
+          panelConcurrency,
           async (panelHints, batchIndex) => {
             const batchFigure = { ...figure, panelHints };
             const batchBase = {
@@ -1593,7 +1788,9 @@
             analysisDepth,
             progress,
             progressBase,
-            operation
+            operation,
+            panelConcurrency: message?.parallelBatch === true
+              ? 1 : TASK_CONCURRENCY.figure
           });
           result = {
             ...analyzed.result,
@@ -2060,6 +2257,7 @@
       requireLlmReady(settings);
       const input = shared.normalizeCrossFigureLogicInput({
         articleTitle: message?.document?.title || '',
+        backgroundItems: message?.document?.backgroundItems,
         figures: message?.figures
       });
       if (input.mainFigureIds.length < 2) throw invalidSettings(['figures']);
@@ -2103,16 +2301,101 @@
         totalFigures: input.mainFigureIds.length,
         figureLabel: 'Cross-figure domino chain'
       });
-      const prompt = shared.compileCrossFigureLogicPrompt(input);
-      const raw = await requestFigureJson(adapter, {
-        ...prompt,
-        outputUnits: input.mainFigureIds.length
-      }, { onProgress: progress }, {
-        completedFigures: 0,
-        totalFigures: input.mainFigureIds.length,
-        figureLabel: 'Cross-figure domino chain'
+      const mainInput = shared.normalizeCrossFigureLogicInput({
+        articleTitle: input.articleTitle,
+        backgroundItems: input.backgroundItems,
+        figures: input.figures.filter(figure => !figure.isSupplemental)
       });
-      const crossFigureLogic = shared.validateCrossFigureLogic(raw, input);
+      const prompt = shared.compileCrossFigureLogicPrompt(mainInput);
+      const mainRequest = {
+        ...prompt,
+        outputUnits: mainInput.mainFigureIds.length
+      };
+      const mainProgress = {
+        completedFigures: 0,
+        totalFigures: mainInput.mainFigureIds.length,
+        figureLabel: 'Cross-figure domino chain'
+      };
+      let raw;
+      try {
+        raw = await requestFigureJson(
+          adapter, mainRequest, { onProgress: progress }, mainProgress
+        );
+      } catch (error) {
+        const recoverable = [
+          'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'SCHEMA_VALIDATION_FAILED',
+          'JSON_PARSE_ERROR'
+        ].includes(String(error?.code || '').toUpperCase()) ||
+          /invalid response|invalid json|truncat|schema/i.test(String(error?.message || ''));
+        if (!recoverable) throw error;
+        progress({
+          phase: 'cross_figure_repair',
+          ...mainProgress,
+          errorCode: String(error?.code || 'INVALID_RESPONSE')
+        });
+        raw = await requestFigureJson(adapter, {
+          ...mainRequest,
+          systemPrompt: `${mainRequest.systemPrompt}\n` +
+            'REPAIR RETRY: keep every explanatory field concise, preserve all required main Figure ids, and return one complete valid JSON object.'
+        }, { onProgress: progress }, mainProgress);
+      }
+      const mainLogic = shared.validateCrossFigureLogic(raw, mainInput);
+      const analyzedSupplemental = input.figures.filter(figure =>
+        figure.isSupplemental && figure.analysis?.coreConclusion
+      );
+      const supplementalSupport = [];
+      const recoverableSupplementalError = error => [
+        'INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'SCHEMA_VALIDATION_FAILED',
+        'JSON_PARSE_ERROR'
+      ].includes(String(error?.code || '').toUpperCase()) ||
+        /invalid response|invalid json|truncat|schema/i.test(String(error?.message || ''));
+      const attachSupplementalBatch = async batch => {
+        if (!batch.length) return;
+        const batchInput = shared.normalizeCrossFigureLogicInput({
+          articleTitle: input.articleTitle,
+          backgroundItems: input.backgroundItems,
+          figures: [...mainInput.figures, ...batch]
+        });
+        try {
+          const supportPrompt = shared.compileSupplementalSupportPrompt(
+            batchInput,
+            mainLogic
+          );
+          const supportRaw = await requestFigureJson(adapter, {
+            ...supportPrompt,
+            outputUnits: Math.max(1, batch.length)
+          }, { onProgress: progress }, {
+            completedFigures: mainInput.mainFigureIds.length + supplementalSupport.length,
+            totalFigures: mainInput.mainFigureIds.length + analyzedSupplemental.length,
+            figureLabel: batch.map(figure => figure.figureLabel).join('、')
+          });
+          supplementalSupport.push(
+            ...shared.validateSupplementalSupport(supportRaw, batchInput)
+          );
+        } catch (error) {
+          if (!recoverableSupplementalError(error)) throw error;
+          if (batch.length > 1) {
+            const midpoint = Math.ceil(batch.length / 2);
+            await attachSupplementalBatch(batch.slice(0, midpoint));
+            await attachSupplementalBatch(batch.slice(midpoint));
+            return;
+          }
+          supplementalSupport.push(...shared.fallbackSupplementalSupport(batchInput));
+        }
+        progress({
+          phase: 'cross_figure_supplemental',
+          completedFigures: mainInput.mainFigureIds.length + supplementalSupport.length,
+          totalFigures: mainInput.mainFigureIds.length + analyzedSupplemental.length,
+          figureLabel: batch.map(figure => figure.figureLabel).join('、')
+        });
+      };
+      for (let index = 0; index < analyzedSupplemental.length; index += 4) {
+        await attachSupplementalBatch(analyzedSupplemental.slice(index, index + 4));
+      }
+      const crossFigureLogic = {
+        ...mainLogic,
+        supplementalSupport
+      };
       await cacheStore.setMany([{
         key,
         createdAt: Date.now(),
@@ -2120,8 +2403,8 @@
       }]);
       progress({
         phase: 'cross_figure_logic',
-        completedFigures: input.mainFigureIds.length,
-        totalFigures: input.mainFigureIds.length,
+        completedFigures: input.mainFigureIds.length + analyzedSupplemental.length,
+        totalFigures: input.mainFigureIds.length + analyzedSupplemental.length,
         figureLabel: 'Cross-figure domino chain'
       });
       return {
@@ -2263,6 +2546,359 @@
       error.expectedGeneration = expected;
       error.currentGeneration = current;
       throw error;
+    }
+
+    function supplementalRouteError(code) {
+      const error = new Error(code);
+      error.code = code;
+      return error;
+    }
+
+    function normalizeSupplementalDraftTarget(input) {
+      if (!isPlainObject(input)) throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      const workspaceId = String(input.workspaceId || '').trim().toLowerCase();
+      const workspaceGeneration = input.workspaceGeneration;
+      const targetArticleTabId = input.targetArticleTabId;
+      if (!/^workspace:[a-f0-9]{64}$/.test(workspaceId) ||
+          !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
+          !Number.isSafeInteger(targetArticleTabId) || targetArticleTabId < 0 ||
+          typeof input.canonicalUrl !== 'string') {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      let canonicalUrl = '';
+      try {
+        canonicalUrl = shared.normalizeWorkspaceCanonicalUrl(input.canonicalUrl);
+      } catch (_) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      if (!canonicalUrl) throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      const hasDocumentHash = Object.prototype.hasOwnProperty.call(input, 'documentHash');
+      const rawDocumentHash = hasDocumentHash
+        ? String(input.documentHash || '').trim().toLowerCase() : '';
+      const documentHash = rawDocumentHash.replace(/^sha256:/, '');
+      if (hasDocumentHash && !/^[a-f0-9]{64}$/.test(documentHash)) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      return {
+        workspaceId,
+        workspaceGeneration,
+        targetArticleTabId,
+        canonicalUrl,
+        documentHash
+      };
+    }
+
+    function supplementalAssetWorkspaceTarget(message = {}) {
+      if (message.target === undefined) return null;
+      const target = normalizeSupplementalDraftTarget(message.target);
+      const workspaceId = String(message.workspaceId || '').trim().toLowerCase();
+      if (workspaceId !== target.workspaceId) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_INVALID');
+      }
+      return target;
+    }
+
+    function supplementalDraftSourceInput(message = {}) {
+      const draft = message.draft;
+      if (!isPlainObject(draft)) throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
+      const source = isPlainObject(message.source) ? message.source : {};
+      const figure = Array.isArray(draft.figures) && isPlainObject(draft.figures[0])
+        ? draft.figures[0] : {};
+      const candidate = {
+        sourceMode: source.sourceMode || draft.sourceMode || figure.sourceMode,
+        sourceMaterialId: source.sourceMaterialId || draft.sourceMaterialId ||
+          draft.materialId || figure.sourceMaterialId,
+        sourceFileName: source.sourceFileName ?? draft.sourceFileName ??
+          figure.sourceFileName,
+        sourceMimeType: source.sourceMimeType ?? draft.sourceMimeType ??
+          figure.sourceMimeType,
+        sourceFileSize: source.sourceFileSize ?? draft.sourceFileSize ??
+          figure.sourceFileSize,
+        sourceImportedAt: source.sourceImportedAt || draft.sourceImportedAt ||
+          figure.sourceImportedAt,
+        sourceFingerprint: source.sourceFingerprint || draft.sourceFingerprint ||
+          figure.sourceFingerprint,
+        caption: source.caption ?? draft.caption ?? figure.caption,
+        figureKind: source.figureKind || draft.figureKind || figure.figureKind,
+        figureLabel: source.figureLabel || draft.figureLabel || figure.figureLabel,
+        sourcePage: source.sourcePage ?? draft.sourcePage ?? figure.sourcePage
+      };
+      const normalizedSource = shared.normalizeSupplementalFigureSource(candidate);
+      let transientImage = null;
+      if (normalizedSource.sourceMode === 'image') {
+        if (message.transientImage === undefined) {
+          throw supplementalRouteError('SUPPLEMENTAL_TRANSIENT_IMAGE');
+        }
+        transientImage = shared.normalizeSupplementalTransientImage(
+          message.transientImage,
+          normalizedSource.sourceFingerprint
+        );
+      } else if (message.transientImage !== undefined) {
+        throw supplementalRouteError('SUPPLEMENTAL_TRANSIENT_IMAGE');
+      }
+      return {
+        source: normalizedSource,
+        transientImage,
+        title: String(draft.title || source.title || figure.sourceTitle || '').slice(0, 500),
+        figureId: String(figure.figureId || '').slice(0, 200),
+        figureLabel: String(
+          normalizedSource.figureLabel || figure.figureLabel || source.figureLabel || ''
+        ).slice(0, 240),
+        figureKind: normalizedSource.figureKind,
+        sourcePage: normalizedSource.sourcePage
+      };
+    }
+
+    function assertSupplementalDraftWorkspaceTarget(workspace, target) {
+      assertWorkspaceMutationGeneration(workspace, target);
+      let canonicalUrl = '';
+      try {
+        canonicalUrl = shared.normalizeWorkspaceCanonicalUrl(workspace.canonicalUrl);
+      } catch (_) {}
+      if (!canonicalUrl || canonicalUrl !== target.canonicalUrl) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH');
+      }
+      const workspaceDocumentHash = String(
+        workspace.contentHash || workspace.revision || ''
+      ).replace(/^sha256:/i, '').toLowerCase();
+      const workspaceHasDocumentHash = /^[a-f0-9]{64}$/.test(workspaceDocumentHash);
+      if ((workspaceHasDocumentHash && !target.documentHash) ||
+          (target.documentHash && (!workspaceHasDocumentHash ||
+            workspaceDocumentHash !== target.documentHash))) {
+        throw supplementalRouteError('SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH');
+      }
+    }
+
+    async function mirrorWorkspaceAssetToDirectory(workspace, asset, {
+      verify = false
+    } = {}) {
+      const stableJson = value => {
+        if (Array.isArray(value)) return value.map(stableJson);
+        if (!isPlainObject(value)) return value;
+        return Object.fromEntries(
+          Object.keys(value).sort().map(key => [key, stableJson(value[key])])
+        );
+      };
+      const result = {
+        queued: false,
+        directoryPersisted: false,
+        directoryPermission: 'unavailable',
+        directoryErrorCode: ''
+      };
+      if (typeof directorySync?.enqueueWorkspaceAsset !== 'function') return result;
+      try {
+        await directorySync.enqueueWorkspaceAsset(
+          workspace, asset.relativePath, asset.content, {
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            updatedAt: asset.updatedAt,
+            advanceFromDirectory: true,
+            workspaceGeneration: workspace.workspaceGeneration
+          }
+        );
+        result.queued = true;
+        if (!verify) {
+          scheduleDirectoryFlush();
+          return result;
+        }
+        if (typeof directorySync.flush !== 'function') return result;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const flushed = await directorySync.flush(importUserDataAsset);
+          result.directoryPermission = String(flushed?.permission || 'unavailable');
+          result.directoryErrorCode = String(
+            flushed?.errorCode || flushed?.code || ''
+          );
+          if (result.directoryPermission !== 'granted' || Number(flushed?.failed) > 0) {
+            return result;
+          }
+          if (typeof directorySync.readWorkspaceAsset === 'function') {
+            const disk = await directorySync.readWorkspaceAsset(
+              workspace, asset.relativePath
+            ).catch(() => null);
+            const envelope = disk?.value;
+            const contentHashMatches = asset.contentHash
+              ? String(envelope?.contentHash || '') === String(asset.contentHash)
+              : JSON.stringify(stableJson(envelope?.data)) ===
+                JSON.stringify(stableJson(asset.content));
+            if (disk?.found && contentHashMatches) {
+              result.directoryPersisted = true;
+              result.directoryErrorCode = '';
+              return result;
+            }
+          } else if (Number(flushed?.pendingCount) === 0) {
+            result.directoryPersisted = true;
+            result.directoryErrorCode = '';
+            return result;
+          }
+          if (attempt < 5) {
+            await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
+          }
+        }
+        result.directoryErrorCode ||= 'WORKSPACE_DIRECTORY_VERIFY_FAILED';
+        return result;
+      } catch (error) {
+        result.directoryErrorCode = String(
+          error?.code || error?.name || 'WORKSPACE_DIRECTORY_PERSIST_FAILED'
+        );
+        return result;
+      }
+    }
+
+    function decodeWorkspaceBinary(dataUrl) {
+      const match = String(dataUrl || '').match(
+        /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i
+      );
+      if (!match) {
+        const error = new Error('INVALID_BINARY_ASSET');
+        error.code = 'INVALID_BINARY_ASSET';
+        throw error;
+      }
+      let bytes;
+      if (typeof Buffer !== 'undefined') {
+        bytes = new Uint8Array(Buffer.from(match[2], 'base64'));
+      } else {
+        const binary = atob(match[2]);
+        bytes = Uint8Array.from(binary, value => value.charCodeAt(0));
+      }
+      if (!bytes.length || bytes.byteLength > 96 * 1024 * 1024) {
+        const error = new Error('INVALID_BINARY_ASSET');
+        error.code = 'INVALID_BINARY_ASSET';
+        throw error;
+      }
+      return { bytes, mimeType: match[1].toLowerCase() };
+    }
+
+    function encodeWorkspaceBinary(bytes, mimeType) {
+      const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+      let base64 = '';
+      if (typeof Buffer !== 'undefined') base64 = Buffer.from(view).toString('base64');
+      else {
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let index = 0; index < view.length; index += chunkSize) {
+          binary += String.fromCharCode(...view.subarray(index, index + chunkSize));
+        }
+        base64 = btoa(binary);
+      }
+      return `data:${mimeType};base64,${base64}`;
+    }
+
+    async function workspaceBinarySha256(bytes) {
+      let subtle = globalThis.crypto?.subtle;
+      if (!subtle && typeof require === 'function') {
+        try { subtle = require('node:crypto').webcrypto.subtle; } catch (_) {}
+      }
+      if (!subtle) throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+        code: 'WORKSPACE_BINARY_UNAVAILABLE'
+      });
+      const digest = await subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest), value =>
+        value.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function saveClosedTabSupplementalDraft(message) {
+      requireArticleWorkspaceStore('getWorkspace');
+      requireArticleWorkspaceStore('getAsset');
+      requireArticleWorkspaceStore('putAsset');
+      if (typeof shared.normalizeWorkspaceCanonicalUrl !== 'function' ||
+          typeof shared.normalizeSupplementalFigureSource !== 'function' ||
+          typeof shared.normalizeSupplementalTransientImage !== 'function' ||
+          typeof shared.createManualSupplementalDraft !== 'function' ||
+          typeof shared.createSupplementalFigureImportDraft !== 'function' ||
+          typeof shared.supplementalFigureAssetPath !== 'function') {
+        throw supplementalRouteError('SUPPLEMENTAL_DRAFT_INVALID');
+      }
+      const target = normalizeSupplementalDraftTarget(message.target);
+      const workspace = await articleWorkspaceStore.getWorkspace(target.workspaceId);
+      if (!workspace || workspace.deletionPending) {
+        throw supplementalRouteError('WORKSPACE_NOT_FOUND');
+      }
+      assertSupplementalDraftWorkspaceTarget(workspace, target);
+      const normalized = supplementalDraftSourceInput(message);
+      const manualSource = ['image', 'caption'].includes(normalized.source.sourceMode);
+      let asset;
+      let createdFigure = null;
+      if (manualSource) {
+        const supplementalAssets = typeof articleWorkspaceStore.listAssets === 'function'
+          ? (await articleWorkspaceStore.listAssets(target.workspaceId))
+            .filter(item => String(item?.relativePath || '').startsWith(
+              shared.SUPPLEMENTAL_FIGURE_ASSET_PREFIX || 'figures/supplemental/'
+            ))
+          : [];
+        const assignedFigureLabel = normalized.figureKind === 'main'
+          ? normalized.figureLabel
+          : /^Figure S\d+$/i.test(normalized.figureLabel)
+            ? normalized.figureLabel
+            : typeof shared.nextSupplementalFigureLabel === 'function'
+              ? shared.nextSupplementalFigureLabel(supplementalAssets)
+              : `Figure S${supplementalAssets.length + 1}`;
+        const created = await shared.createManualSupplementalDraft({
+          ...normalized.source,
+          title: normalized.title,
+          figureId: normalized.figureId,
+          figureLabel: assignedFigureLabel,
+          figureKind: normalized.figureKind,
+          sourcePage: normalized.sourcePage,
+          analysisStatus: 'awaiting_article_context',
+          ...(normalized.transientImage
+            ? { analysisImages: [cloneJsonLike(normalized.transientImage)] }
+            : {})
+        }, {
+          exists: async candidate => Boolean(await articleWorkspaceStore.getAsset(
+            target.workspaceId,
+            shared.supplementalFigureAssetPath(candidate)
+          )),
+          save: (relativePath, draftContent, conflict) =>
+            articleWorkspaceStore.putAsset(
+              target.workspaceId, relativePath, draftContent, conflict
+            )
+        });
+        asset = created.persisted;
+        createdFigure = created.asset?.figures?.[0] || null;
+      } else {
+        const materialId = normalized.source.sourceMaterialId;
+        const sourceDraft = shared.createSupplementalFigureImportDraft({
+          ...normalized.source,
+          title: normalized.title,
+          figureId: normalized.figureId,
+          figureLabel: normalized.figureLabel,
+          figureKind: normalized.figureKind,
+          sourcePage: normalized.sourcePage
+        });
+        const draftContent = {
+          ...sourceDraft,
+          analysisStatus: 'awaiting_article_context',
+          figures: sourceDraft.figures.map(figure => ({
+            ...figure,
+            analysisStatus: 'awaiting_article_context'
+          }))
+        };
+        asset = await articleWorkspaceStore.putAsset(
+          target.workspaceId,
+          shared.supplementalFigureAssetPath(materialId),
+          draftContent,
+          { expectedRevision: 0, createOnly: true }
+        );
+      }
+      const directory = await mirrorWorkspaceAssetToDirectory(workspace, asset, {
+        verify: true
+      });
+      return {
+        saved: true,
+        queued: directory.queued,
+        directoryPersisted: directory.directoryPersisted,
+        directoryPermission: directory.directoryPermission,
+        directoryErrorCode: directory.directoryErrorCode,
+        asset: {
+          relativePath: String(asset.relativePath || ''),
+          revision: Number(asset.revision) || 0,
+          contentHash: String(asset.contentHash || '')
+        },
+        analysisStatus: 'awaiting_article_context',
+        figureLabel: String(createdFigure?.figureLabel || ''),
+        panelHints: Array.isArray(createdFigure?.panelHints)
+          ? createdFigure.panelHints : []
+      };
     }
 
     function publicStoredArticleChatTurn(turn = {}) {
@@ -2467,16 +3103,24 @@
         return { workspace: publicWorkspace(workspace) };
       }
 
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT') {
+        return saveClosedTabSupplementalDraft(message);
+      }
+
       if (message.type === 'ARTICLE_WORKSPACE_SAVE_ASSET') {
         requireArticleWorkspaceStore('putAsset');
         requireArticleWorkspaceStore('getWorkspace');
-        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        const target = supplementalAssetWorkspaceTarget(message);
+        const workspace = await articleWorkspaceStore.getWorkspace(
+          target?.workspaceId || message.workspaceId
+        );
         if (!workspace || workspace.deletionPending) {
           const error = new Error('WORKSPACE_NOT_FOUND');
           error.code = 'WORKSPACE_NOT_FOUND';
           throw error;
         }
         assertWorkspaceMutationGeneration(workspace, message);
+        if (target) assertSupplementalDraftWorkspaceTarget(workspace, target);
         let content = message.content;
         if (String(message.relativePath || '') === 'chat/index.json' &&
             typeof articleWorkspaceStore?.pageTurns === 'function') {
@@ -2489,28 +3133,19 @@
           workspace.workspaceId, message.relativePath, content, {
             expectedRevision: message.expectedRevision,
             expectedContentHash: message.expectedContentHash,
-            contentHash: message.contentHash
+            contentHash: message.contentHash,
+            createOnly: message.createOnly === true
           }
         );
-        let queued = false;
-        if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
-          try {
-            await directorySync.enqueueWorkspaceAsset(
-              workspace, asset.relativePath, asset.content, {
-                revision: asset.revision,
-                contentHash: asset.contentHash,
-                updatedAt: asset.updatedAt,
-                advanceFromDirectory: true,
-                workspaceGeneration: workspace.workspaceGeneration
-              }
-            );
-            queued = true;
-            scheduleDirectoryFlush();
-          } catch (_) {}
-        }
+        const directory = await mirrorWorkspaceAssetToDirectory(workspace, asset, {
+          verify: message.requireDirectoryPersistence === true
+        });
         return {
           saved: true,
-          queued,
+          queued: directory.queued,
+          directoryPersisted: directory.directoryPersisted,
+          directoryPermission: directory.directoryPermission,
+          directoryErrorCode: directory.directoryErrorCode,
           asset: {
             relativePath: asset.relativePath,
             revision: asset.revision,
@@ -2774,6 +3409,119 @@
               result.invalidChatAssets = Number(discovered.invalidAssets) || 0;
             } catch (_) {}
           }
+          if (typeof directorySync?.listWorkspaceSupplementalAssets === 'function') {
+            try {
+              const discovered = await directorySync.listWorkspaceSupplementalAssets(
+                selected.manifest
+              );
+              const loadedByPath = new Map(loadedAssets.map(asset => [
+                String(asset.relativePath || ''), asset
+              ]));
+              const manifestPaths = new Set((selected.manifest?.assets || [])
+                .map(asset => String(asset.path || '')));
+              let recoveredUnindexedSupplementalAssets = 0;
+              let recoveredGenerationMismatchSupplementalAssets = 0;
+              for (const asset of discovered.assets || []) {
+                const path = String(asset.relativePath || '');
+                if (!/^figures\/supplemental\/[^/]+\.json$/u.test(path)) continue;
+                const current = loadedByPath.get(path);
+                if (!current || Number(asset.revision || 0) >=
+                    Number(current.revision || 0)) {
+                  loadedByPath.set(path, asset);
+                }
+                if ((!manifestPaths.has(path) ||
+                    asset.recoveredGenerationMismatch === true) &&
+                    typeof directorySync.enqueueWorkspaceAsset === 'function') {
+                  await directorySync.enqueueWorkspaceAsset(
+                    selected.manifest, path, asset.content, {
+                      revision: Number(asset.revision) || 0,
+                      contentHash: String(asset.contentHash || ''),
+                      updatedAt: String(asset.updatedAt || ''),
+                      workspaceGeneration:
+                        Number(selected.manifest.workspaceGeneration) || 1
+                    }
+                  );
+                  if (!manifestPaths.has(path)) {
+                    recoveredUnindexedSupplementalAssets += 1;
+                  }
+                  if (asset.recoveredGenerationMismatch === true) {
+                    recoveredGenerationMismatchSupplementalAssets += 1;
+                  }
+                }
+              }
+              loadedAssets.splice(0, loadedAssets.length, ...loadedByPath.values());
+              if (recoveredUnindexedSupplementalAssets ||
+                  recoveredGenerationMismatchSupplementalAssets) {
+                scheduleDirectoryFlush();
+              }
+              result.recoveredUnindexedSupplementalAssets =
+                recoveredUnindexedSupplementalAssets;
+              result.recoveredGenerationMismatchSupplementalAssets =
+                recoveredGenerationMismatchSupplementalAssets;
+              result.invalidSupplementalAssets = Number(discovered.invalidAssets) || 0;
+            } catch (_) {}
+          }
+          if (selected.match === 'exact' &&
+              typeof articleWorkspaceStore?.getWorkspace === 'function' &&
+              typeof articleWorkspaceStore?.listAssets === 'function') {
+            try {
+              const localWorkspace = await articleWorkspaceStore.getWorkspace(
+                selected.manifest.workspaceId
+              );
+              const selectedGeneration = Number(
+                selected.manifest.workspaceGeneration
+              ) || 1;
+              const localGeneration = Number(localWorkspace?.workspaceGeneration) || 1;
+              if (localWorkspace && localGeneration === selectedGeneration) {
+                const loadedByPath = new Map(loadedAssets.map(asset => [
+                  String(asset.relativePath || ''), asset
+                ]));
+                const manifestUpdatedAt = Date.parse(
+                  String(selected.manifest.updatedAt || '')
+                ) || 0;
+                let recoveredBrowserLocalSupplementalAssets = 0;
+                const localAssets = await articleWorkspaceStore.listAssets(
+                  selected.manifest.workspaceId
+                );
+                for (const asset of localAssets || []) {
+                  const path = String(asset?.relativePath || '');
+                  const figures = asset?.content?.figures;
+                  const assetUpdatedAt = Date.parse(String(asset?.updatedAt || '')) || 0;
+                  if (!/^figures\/supplemental\/[^/]+\.json$/u.test(path) ||
+                      !Array.isArray(figures) || !figures.length ||
+                      loadedByPath.has(path) || assetUpdatedAt <= manifestUpdatedAt) {
+                    continue;
+                  }
+                  const recovered = {
+                    relativePath: path,
+                    content: cloneJsonLike(asset.content),
+                    revision: Number(asset.revision) || 0,
+                    contentHash: String(asset.contentHash || ''),
+                    updatedAt: String(asset.updatedAt || '')
+                  };
+                  loadedByPath.set(path, recovered);
+                  if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
+                    await directorySync.enqueueWorkspaceAsset(
+                      selected.manifest, path, recovered.content, {
+                        revision: recovered.revision,
+                        contentHash: recovered.contentHash,
+                        updatedAt: recovered.updatedAt,
+                        advanceFromDirectory: true,
+                        workspaceGeneration: selectedGeneration
+                      }
+                    );
+                  }
+                  recoveredBrowserLocalSupplementalAssets += 1;
+                }
+                if (recoveredBrowserLocalSupplementalAssets) {
+                  loadedAssets.splice(0, loadedAssets.length, ...loadedByPath.values());
+                  result.recoveredBrowserLocalSupplementalAssets =
+                    recoveredBrowserLocalSupplementalAssets;
+                  scheduleDirectoryFlush();
+                }
+              }
+            } catch (_) {}
+          }
           const isTurnPath = value => /^chat\/turns\/[^/]+\.json$/u.test(
             String(value || '')
           );
@@ -3033,10 +3781,150 @@
         return { ...detail, tokenUsage };
       }
 
+      if (message.type === 'ARTICLE_WORKSPACE_SAVE_BINARY_ASSET') {
+        requireArticleWorkspaceStore('getWorkspace');
+        if (typeof directorySync?.enqueueWorkspaceBinary !== 'function') {
+          throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+            code: 'WORKSPACE_BINARY_UNAVAILABLE'
+          });
+        }
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          throw Object.assign(new Error('WORKSPACE_NOT_FOUND'), { code: 'WORKSPACE_NOT_FOUND' });
+        }
+        assertWorkspaceMutationGeneration(workspace, message);
+        const relativePath = shared.normalizeWorkspaceRelativePath(message.relativePath);
+        if (!/^pdf\/figures\/(?:main|supplemental)\/[^/]+\.(?:png|jpe?g|webp)$/iu
+          .test(relativePath)) {
+          throw Object.assign(new Error('INVALID_BINARY_ASSET'), {
+            code: 'INVALID_BINARY_ASSET'
+          });
+        }
+        const decoded = decodeWorkspaceBinary(message.dataUrl);
+        const expectedHash = String(message.sha256 || '').toLowerCase();
+        const actualHash = await workspaceBinarySha256(decoded.bytes);
+        if (!/^[a-f0-9]{64}$/u.test(expectedHash) || expectedHash !== actualHash) {
+          throw Object.assign(new Error('WORKSPACE_BINARY_HASH_MISMATCH'), {
+            code: 'WORKSPACE_BINARY_HASH_MISMATCH'
+          });
+        }
+        await directorySync.enqueueWorkspaceBinary(
+          workspace,
+          relativePath,
+          decoded.bytes,
+          {
+            revision: Math.max(0, Number(message.revision) || Date.now()),
+            contentHash: actualHash,
+            workspaceGeneration: workspace.workspaceGeneration
+          }
+        );
+        const flushed = typeof directorySync.flush === 'function'
+          ? await directorySync.flush(importUserDataAsset)
+          : { permission: 'unavailable', written: 0, pendingCount: 1 };
+        return {
+          saved: true,
+          relativePath,
+          mimeType: decoded.mimeType,
+          sha256: actualHash,
+          byteLength: decoded.bytes.byteLength,
+          directoryPersisted: flushed.permission === 'granted' &&
+            Number(flushed.failed) === 0 && Number(flushed.pendingCount) === 0,
+          directoryPermission: String(flushed.permission || 'unavailable'),
+          directoryErrorCode: String(flushed.errorCode || '')
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_GET_BINARY_ASSET') {
+        requireArticleWorkspaceStore('getWorkspace');
+        if (typeof directorySync?.readWorkspaceBinary !== 'function') {
+          throw Object.assign(new Error('WORKSPACE_BINARY_UNAVAILABLE'), {
+            code: 'WORKSPACE_BINARY_UNAVAILABLE'
+          });
+        }
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          throw Object.assign(new Error('WORKSPACE_NOT_FOUND'), { code: 'WORKSPACE_NOT_FOUND' });
+        }
+        const relativePath = shared.normalizeWorkspaceRelativePath(message.relativePath);
+        const result = await directorySync.readWorkspaceBinary(workspace, relativePath);
+        if (!result.found) return {
+          found: false,
+          relativePath,
+          directoryPermission: result.permission
+        };
+        const mimeType = /^image\/(?:png|jpeg|webp)$/i.test(String(message.mimeType || ''))
+          ? String(message.mimeType).toLowerCase() : 'image/png';
+        const sha256 = await workspaceBinarySha256(result.bytes);
+        return {
+          found: true,
+          relativePath,
+          directoryPermission: result.permission,
+          byteLength: result.bytes.byteLength,
+          sha256,
+          dataUrl: encodeWorkspaceBinary(result.bytes, mimeType)
+        };
+      }
+
       if (message.type === 'LLM_TOKEN_USAGE_LIST') {
         return {
           documents: typeof tokenUsageStore?.list === 'function'
             ? await tokenUsageStore.list() : []
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_GET_ASSET') {
+        requireArticleWorkspaceStore('getAsset');
+        requireArticleWorkspaceStore('getWorkspace');
+        const target = supplementalAssetWorkspaceTarget(message);
+        const workspace = await articleWorkspaceStore.getWorkspace(
+          target?.workspaceId || message.workspaceId
+        );
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        if (target) assertSupplementalDraftWorkspaceTarget(workspace, target);
+        const asset = await articleWorkspaceStore.getAsset(
+          workspace.workspaceId, message.relativePath
+        );
+        return {
+          found: Boolean(asset),
+          workspaceGeneration: Number(workspace.workspaceGeneration || 1),
+          asset: asset ? {
+            relativePath: asset.relativePath,
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            byteSize: asset.byteSize,
+            updatedAt: asset.updatedAt,
+            content: asset.content
+          } : null
+        };
+      }
+
+      if (message.type === 'ARTICLE_WORKSPACE_LIST_ASSETS') {
+        requireArticleWorkspaceStore('listAssets');
+        requireArticleWorkspaceStore('getWorkspace');
+        const workspace = await articleWorkspaceStore.getWorkspace(message.workspaceId);
+        if (!workspace || workspace.deletionPending) {
+          const error = new Error('WORKSPACE_NOT_FOUND');
+          error.code = 'WORKSPACE_NOT_FOUND';
+          throw error;
+        }
+        const prefix = String(message.prefix || '').replace(/^\/+/, '').slice(0, 240);
+        const assets = (await articleWorkspaceStore.listAssets(workspace.workspaceId))
+          .filter(asset => !prefix || String(asset.relativePath || '').startsWith(prefix))
+          .map(asset => ({
+            relativePath: asset.relativePath,
+            revision: asset.revision,
+            contentHash: asset.contentHash,
+            byteSize: asset.byteSize,
+            updatedAt: asset.updatedAt,
+            content: cloneJsonLike(asset.content)
+          }));
+        return {
+          workspaceGeneration: Number(workspace.workspaceGeneration || 1),
+          assets
         };
       }
 
@@ -3242,30 +4130,70 @@
         return { archive, applied, permission: result.permission, relativePath };
       }
 
+      if (message.type === 'PORTABLE_CONFIG_PROBE') {
+        return portableConfigStatus(await portableConfigManager.probe());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_CREATE') {
+        return portableConfigStatus(await portableConfigManager.create(
+          String(message.passphrase ?? '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_UNLOCK') {
+        return portableConfigStatus(await portableConfigManager.unlock(
+          String(message.passphrase ?? '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_ROTATE_PASSPHRASE') {
+        return portableConfigStatus(await portableConfigManager.rotatePassphrase(
+          String(message.currentPassphrase ?? ''),
+          String(message.newPassphrase ?? '')
+        ));
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_FORGET_KEY') {
+        return portableConfigStatus(await portableConfigManager.forgetKey());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_BACKUP_NOW') {
+        return portableConfigStatus(await portableConfigManager.backupNow());
+      }
+
+      if (message.type === 'PORTABLE_CONFIG_STATUS') {
+        return currentPortableConfigStatus();
+      }
+
       if (message.type === 'USER_DATA_SYNC_STATUS') {
         requireDirectorySync('status');
-        return directorySync.status();
+        const [directoryStatus, portableConfig] = await Promise.all([
+          directorySync.status(), currentPortableConfigStatus()
+        ]);
+        return { ...directoryStatus, portableConfig };
       }
 
       if (message.type === 'USER_DATA_SYNC_NOW') {
         requireDirectorySync('flush');
-        let result = await directorySync.flush(importUserDataAsset);
-        if (message.drain === true) {
-          for (let attempt = 0; attempt < 5 &&
-              result?.permission === 'granted' &&
-              !Number(result?.failed) &&
-              Number(result?.pendingCount) > 0; attempt += 1) {
-            await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
-            result = await directorySync.flush(importUserDataAsset);
+        return runWithPortableConfigReady(async () => {
+          let result = await directorySync.flush(importUserDataAsset);
+          if (message.drain === true) {
+            for (let attempt = 0; attempt < 5 &&
+                result?.permission === 'granted' &&
+                !Number(result?.failed) &&
+                Number(result?.pendingCount) > 0; attempt += 1) {
+              await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
+              result = await directorySync.flush(importUserDataAsset);
+            }
           }
-        }
-        return result;
+          return result;
+        });
       }
 
       if (message.type === 'USER_DATA_REBUILD_INDEX') {
         requireDirectorySync('rebuildIndex');
-        return serializeAllMutations(() =>
-          directorySync.rebuildIndex(importUserDataAsset)
+        return runWithPortableConfigReady(() =>
+          serializeAllMutations(() => directorySync.rebuildIndex(importUserDataAsset))
         );
       }
 
@@ -4133,6 +5061,122 @@
         );
       }
 
+      if (message.type === 'LLM_TRANSLATE_ABBREVIATIONS') {
+        const settings = await shared.loadSettings(storageArea);
+        requireLlmReady(settings);
+        const byKey = new Map();
+        (Array.isArray(message.entries) ? message.entries : [])
+          .slice(0, 500)
+          .forEach(item => {
+            const entry = shared.normalizeUserAbbreviationEntry(item);
+            const key = entry ? shared.abbreviationKey(entry.abbreviation) : '';
+            if (entry && key) byKey.set(key, entry);
+          });
+        const entries = [...byKey.values()];
+        if (!entries.length) throw invalidSettings(['entries']);
+        const summaryTask = createTaskAdapter(
+          settings,
+          'summary',
+          {},
+          context,
+          'batchSummary'
+        );
+        const translationsByKey = new Map();
+        const batchSize = 8;
+        const recoverableCodes = new Set(['INVALID_RESPONSE', 'OUTPUT_TRUNCATED']);
+        const rememberTranslations = values => {
+          values.forEach(item => {
+            translationsByKey.set(
+              shared.abbreviationKey(item.abbreviation),
+              item
+            );
+          });
+          context.onProgress?.({
+            phase: 'abbreviation_translation',
+            completedTerms: translationsByKey.size,
+            totalTerms: entries.length,
+            route: summaryTask.routePublic
+          });
+        };
+        const translateBatch = async (batch, repair = false) => {
+          if (!batch.length) return;
+          const prompt = shared.compileAbbreviationTranslationPrompt(batch, {
+            allowPartial: true,
+            repair
+          });
+          try {
+            const response = await summaryTask.adapter.generateJson({
+              ...prompt,
+              outputUnits: batch.length
+            });
+            const translated = shared.validateAbbreviationTranslationResult(
+              response,
+              batch,
+              { allowPartial: true }
+            );
+            rememberTranslations(translated);
+            const missing = batch.filter(item =>
+              !translationsByKey.has(shared.abbreviationKey(item.abbreviation))
+            );
+            if (missing.length) {
+              context.onProgress?.({
+                phase: 'abbreviation_translation_repair',
+                completedTerms: translationsByKey.size,
+                totalTerms: entries.length,
+                retryTerms: missing.length,
+                route: summaryTask.routePublic
+              });
+              await translateBatch(missing, true);
+            }
+          } catch (error) {
+            if (!recoverableCodes.has(error?.code)) throw error;
+            if (batch.length > 1) {
+              const midpoint = Math.ceil(batch.length / 2);
+              context.onProgress?.({
+                phase: 'abbreviation_translation_split_retry',
+                completedTerms: translationsByKey.size,
+                totalTerms: entries.length,
+                retryTerms: batch.length,
+                route: summaryTask.routePublic
+              });
+              await translateBatch(batch.slice(0, midpoint), true);
+              await translateBatch(batch.slice(midpoint), true);
+              return;
+            }
+            if (!repair) {
+              await translateBatch(batch, true);
+              return;
+            }
+            throw error;
+          }
+        };
+        for (let index = 0; index < entries.length; index += batchSize) {
+          const batch = entries.slice(index, index + batchSize);
+          context.onProgress?.({
+            phase: 'abbreviation_translation',
+            completedTerms: translationsByKey.size,
+            totalTerms: entries.length,
+            route: summaryTask.routePublic
+          });
+          await translateBatch(batch);
+        }
+        const translations = entries.map(item =>
+          translationsByKey.get(shared.abbreviationKey(item.abbreviation))
+        ).filter(Boolean);
+        context.onProgress?.({
+          phase: 'abbreviation_translation',
+          completedTerms: entries.length,
+          totalTerms: entries.length,
+          route: summaryTask.routePublic
+        });
+        return {
+          translations,
+          providerId: summaryTask.route.providerId,
+          model: summaryTask.route.model,
+          route: summaryTask.routePublic
+        };
+      }
+
       if (message.type === 'LLM_ANALYZE_REVIEW_OUTLINE') {
         const settings = await shared.loadSettings(storageArea);
         const requestedParagraphIds = new Set(
@@ -4293,12 +5337,15 @@
       try {
         return { success: true, data: await handleUnsafe(message || {}, context) };
       } catch (error) {
-        return { success: false, error: safeError(error) };
+        const safe = String(message?.type || '').startsWith('PORTABLE_CONFIG_')
+          ? safePortableConfigError(error)
+          : error;
+        return { success: false, error: safeError(safe) };
       }
     }
 
     return { handle };
   }
 
-  return { createBackgroundRouter };
+  return { createBackgroundRouter, createPortableConfigStorageChangeListener };
 });

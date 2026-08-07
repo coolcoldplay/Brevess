@@ -1,5 +1,6 @@
 param(
-  [switch]$Force
+  [switch]$Force,
+  [switch]$SkipPdfEngine
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,15 @@ $blobPath = Join-Path $binRoot 'brevess-codex-host.blob'
 $executablePath = Join-Path $binRoot 'brevess-codex-host.exe'
 
 New-Item -ItemType Directory -Path $binRoot -Force | Out-Null
+
+if (-not $SkipPdfEngine) {
+  & (Join-Path $PSScriptRoot 'build-pdffigures2.ps1') -Force:$Force
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the PDFFigures2 engine.' }
+  & (Join-Path $PSScriptRoot 'build-pdf-figure-fallback.ps1') -Force:$Force
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the PDF Figure fallback helper.' }
+  & (Join-Path $PSScriptRoot 'prepare-temurin-runtime.ps1') -Force:$Force
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the bundled Java runtime.' }
+}
 
 Push-Location $projectRoot
 try {

@@ -669,6 +669,17 @@ test('side panel keeps one compact paper header, a direct gear, and one diagnost
   assert.match(css, /\.compact-paper-header\s*\{[^}]*position:\s*relative/s);
 });
 
+test('an inactive side panel activates the current tab from any click', () => {
+  const popup = read('popup.js');
+  assert.match(popup, /function setupInactiveTabClickActivation\(\)/);
+  assert.match(popup, /SIDE_PANEL_ACTIVATE_CURRENT_TAB/);
+  assert.match(popup, /点击侧栏任意位置即可激活/);
+  assert.match(
+    popup,
+    /setupActiveTabSynchronization\(\);\s*setupInactiveTabClickActivation\(\);/
+  );
+});
+
 test('side panel exposes one toolbar adapter diagnostic export', () => {
   const html = read('popup.html');
   const script = read('popup.js');
@@ -1149,17 +1160,71 @@ test('navigation exposes a local high-precision abbreviation table', () => {
     /side-panel-tool-letter[\s\S]*>A<\/span>/
   );
   assert.match(html, /id="articleAbbreviationDialog"/);
-  assert.match(html, /<th scope="col">缩写<\/th><th scope="col">全称<\/th>/);
+  assert.match(html, /id="articleAbbreviationAlphabetNav"/);
+  assert.match(html, /<th scope="col">缩写<\/th>/);
+  assert.match(html, /<th scope="col">英文全称<\/th>/);
+  assert.match(html, /<span>中文含义<\/span>/);
+  assert.match(html, /id="translateArticleAbbreviations"/);
+  assert.match(html, /id="importArticleAbbreviationsToGlobal"/);
+  assert.match(html, /id="importGlobalAbbreviationMemoryButton"/);
+  assert.match(html, /id="exportGlobalAbbreviationMemory"/);
   assert.match(html, /core\/abbreviation-extractor\.js/);
   assert.match(script, /function showArticleAbbreviationTable/);
-  assert.match(script, /SciLLM\.extractArticleAbbreviations/);
+  assert.match(script, /action: 'getArticleAbbreviations'/);
+  assert.match(script, /action: 'removeArticleAbbreviation'/);
+  assert.match(script, /action: 'updateArticleAbbreviationTranslations'/);
+  assert.match(script, /LLM_TRANSLATE_ABBREVIATIONS/);
+  assert.match(script, /ABBREVIATION_MEMORY_MERGE/);
+  assert.match(script, /createGlobalAbbreviationMemoryExport/);
+  assert.match(script, /parseGlobalAbbreviationMemoryImport/);
   assert.match(script, /未调用 LLM/);
   assert.match(script, /function jumpToArticleAbbreviationSource/);
+  assert.match(script, /function renderArticleAbbreviationAlphabetNav/);
+  assert.match(script, /\[\.\.\.'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'\]/);
+  assert.match(script, /dataset\.abbreviationInitial/);
   assert.match(script, /kind: 'paragraph'/);
   assert.match(script, /paragraphId: String\(entry\?\.paragraphId/);
   assert.match(script, /navigationRevision: Math\.max\(0, Number\(entry\?\.navigationRevision/);
   assert.match(script, /正文中的首次出现位置/);
   assert.match(styles, /\.abbreviation-table-jump/);
+  assert.match(styles, /\.abbreviation-alphabet-nav/);
+  assert.match(styles, /\.abbreviation-alphabet-button/);
+  assert.match(styles, /\.abbreviation-meaning-editor/);
+  assert.match(styles, /\.abbreviation-source-badge/);
+});
+
+test('navigation renders immersive heading translations as a secondary line', () => {
+  const popup = read('popup.js');
+  const popupStyles = read('popup.css');
+  const extractor = read('core/article-extractor.js');
+  const structure = read('core/article-structure.js');
+  assert.match(extractor, /INJECTED_TRANSLATION_SELECTOR/);
+  assert.match(extractor, /function bilingualHeadingDisplayText/);
+  assert.match(extractor, /join\('\\n'\)/);
+  assert.match(structure, /function normalizeDisplay/);
+  assert.match(popup, /function renderWorkspaceBilingualTitle/);
+  assert.match(popup, /workspace-tree-title-translation/);
+  assert.match(popupStyles, /\.workspace-tree-title-translation/);
+});
+
+test('manual selection toolbar can add an abbreviation to the article workspace', () => {
+  const content = read('content.js');
+  const styles = read('content.css');
+  assert.match(content, /function appendManualAbbreviationEditor/);
+  assert.match(content, /加入缩略词表/);
+  assert.doesNotMatch(
+    content,
+    /if \(!currentManualRebindId\) \{\s*const abbreviationPanel = appendManualAbbreviationEditor/
+  );
+  assert.match(content, /加入缩略词表：\$\{abbreviationDraft\.abbreviation\}/);
+  assert.match(content, /addCurrentArticleAbbreviation/);
+  assert.match(
+    content,
+    /function handleManualSelectionChange\(\)[\s\S]*manualClosest\(document\.activeElement, MANUAL_UI_SELECTOR\)/
+  );
+  assert.match(content, /annotations\/abbreviations\.json/);
+  assert.match(styles, /\.sci-manual-abbreviation-panel/);
+  assert.match(styles, /\.sci-manual-abbreviation-fields/);
 });
 
 test('analysis modes remain selectable in regex mode and preserve mode-specific highlights', () => {

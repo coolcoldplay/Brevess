@@ -7,7 +7,15 @@
   const WORKSPACE_MANIFEST_KIND = 'sci-logic-highlighter-workspace';
   const WORKSPACE_INDEX_KIND = 'sci-logic-highlighter-workspace-index';
   const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
-  const CREDENTIAL_KEY = /(?:api.?key|authorization|credential|secret|access.?token|refresh.?token|password|bearer|custom.?headers?)/iu;
+  let privacy = shared;
+  if (typeof privacy.isCredentialKey !== 'function' && typeof require === 'function') {
+    try { privacy = require('./privacy-sanitizer.js'); } catch (_) {}
+  }
+  if (typeof privacy.isCredentialKey !== 'function') {
+    const error = new Error('PRIVACY_SANITIZER_UNAVAILABLE');
+    error.code = 'PRIVACY_SANITIZER_UNAVAILABLE';
+    throw error;
+  }
 
   function fail(code) {
     const error = new Error(code);
@@ -30,11 +38,19 @@
     if (!raw) return '';
     try {
       const parsed = new URL(raw);
-      if (!/^https?:$/u.test(parsed.protocol)) fail('INVALID_WORKSPACE_URL');
+      if (!/^(?:https?|file):$/u.test(parsed.protocol)) fail('INVALID_WORKSPACE_URL');
       parsed.username = '';
       parsed.password = '';
       parsed.search = '';
       parsed.hash = '';
+      if (parsed.protocol === 'file:') {
+        // A local PDF has no HTTP canonical URL. Keep a normalized file URL as
+        // its stable article identity so reopening the same PDF restores the
+        // same workspace instead of falling back to the extension reader URL.
+        parsed.pathname = parsed.pathname.replace(/\/{2,}/gu, '/');
+        if (!parsed.pathname || parsed.pathname === '/') fail('INVALID_WORKSPACE_URL');
+        return `file://${parsed.host || ''}${parsed.pathname}`;
+      }
       parsed.hostname = parsed.hostname.toLocaleLowerCase('en-US');
       parsed.pathname = parsed.pathname.replace(/\/{2,}/gu, '/').replace(/\/+$/u, '') || '/';
       return `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`;
@@ -72,7 +88,7 @@
       value.forEach(item => assertWorkspaceSafeValue(item, depth + 1, seen));
     } else {
       for (const [key, item] of Object.entries(value)) {
-        if (CREDENTIAL_KEY.test(key.replace(/[^a-z0-9]/giu, ''))) {
+        if (privacy.isCredentialKey(key)) {
           fail('WORKSPACE_CONTAINS_CREDENTIALS');
         }
         assertWorkspaceSafeValue(item, depth + 1, seen);

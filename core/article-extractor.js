@@ -16,13 +16,23 @@
     `${SEMANTIC_HEADING_SELECTOR},${SUPPLEMENTAL_HEADING_SELECTOR},p,li,caption,[role="paragraph"]`;
   const STRUCTURAL_TEXT_SELECTOR = `${CONTENT_BLOCK_SELECTOR},figcaption`;
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
-  const EXTRACTOR_VERSION = '2.1.0-extractor-r16';
+  const EXTRACTOR_VERSION = '2.1.0-extractor-r17';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
+  const INJECTED_TRANSLATION_SELECTOR = [
+    '.immersive-translate-target-wrapper',
+    '[class*="immersive-translate-target-translation" i]',
+    '[data-immersive-translate-translation-element-mark]'
+  ].join(',');
   const EXCLUDED_ANCESTOR_SELECTOR =
     'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],' +
     '.citation,.citation-content,.advertisement,.related-articles,' +
     '.recommended,.comments,.social-share,.article-outline,.outline-panel,.table-of-contents,' +
     '.article-tools,.article-header-actions,' +
+    `${INJECTED_TRANSLATION_SELECTOR},` +
+    '[role="tooltip"],[data-aa-name*="citation" i],' +
+    '[class*="citation" i],[class*="cite-preview" i],[class*="ref-preview" i],' +
+    '[class*="reference-preview" i],[class*="reference-popover" i],' +
+    '[class*="reference-tooltip" i],[class*="tooltip" i],[class*="popover" i],' +
     '[class*="related-content" i],[class*="recommendation" i]';
 
   const REVIEW_UTILITY_SECTION = /^(?:article|outline|table of contents|tables?(?:\s+(?:\(\d+\)|\d+)(?:\..*)?)?|fig(?:ure)?s?(?:\s+(?:\(\d+\)|\d+)(?:\b.*)?)?|extras?(?:\s*\(\d+\))?|keywords?|graphical abstract|highlights?|recommended articles?|related info links?|related content|similar content(?:\s+being viewed by others)?|you may also like|recommended for you|cited by(?:\s*\(\d+\))?|article metrics?|author information|information\s*&\s*authors|information|info|accessibility(?:\s*&\s*keyboard shortcuts)?|metrics\s*&\s*citations|view options|publication history|license summary\*?|subjects|article views|altmetric|citations|media|share|download(?:s| files?|\s+options)?|transcript|show full outline|skip to\b.*)$/i;
@@ -146,6 +156,37 @@
     );
   }
 
+  function isSupplementalMediaParagraphText(value) {
+    const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (!text) return false;
+    if (/^(?:video|movie)\s*\([^)]*\b(?:kb|mb|gb)\b[^)]*\)\s*$/i.test(text)) {
+      return true;
+    }
+    if (/^(?:video|movie)\s+(?:s|supplement(?:al|ary)\s*)?\d+[a-z]?(?:\s*[.:\-–—]|\b)/i
+      .test(text)) {
+      return true;
+    }
+    return /^(?:this|the)\s+(?:supplement(?:al|ary)\s+)?(?:video|movie)\s+(?:shows?|demonstrates?|illustrates?|depicts?|presents?|documents?|provides?)\b/i
+      .test(text);
+  }
+
+  function isLikelyInlineReferenceFlyoutText(value) {
+    const text = String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (text.length < 28 || text.length > 1600) return false;
+    const numberedAuthor = text.match(
+      /^(\d{1,4})\s*[.)]?\s*([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’\-]{1,48})\s*,\s*([A-Z](?:\.[A-Z]?)?)/u
+    );
+    if (!numberedAuthor) return false;
+    const authorSignals = (text.match(
+      /(?:\s[·•]\s|\bet\s+al\.|[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’\-]{1,48}\s*,\s*[A-Z]\.)/gu
+    ) || []).length;
+    const publicationSignals = (text.match(
+      /\b(?:doi|vol(?:ume)?|journal|cell|nature|science|press|20\d{2}|19\d{2})\b/gi
+    ) || []).length;
+    return authorSignals >= 2 || publicationSignals >= 1 ||
+      (/^\d{1,4}\./.test(text) && text.length >= 55);
+  }
+
   function normalizeTextWithOffsets(value) {
     const raw = String(value || '');
     const output = [];
@@ -181,8 +222,12 @@
     const visit = node => {
       if (!node) return '';
       if (node.nodeType === 3) return String(node.nodeValue || '');
+      if (node.matches?.(INJECTED_TRANSLATION_SELECTOR)) return '';
       const tagName = String(node.tagName || '').toUpperCase();
-      const content = [...(node.childNodes || [])].map(visit).join('');
+      const childNodes = [...(node.childNodes || [])];
+      const content = childNodes.length
+        ? childNodes.map(visit).join('')
+        : String(node.textContent || '');
       if (tagName === 'SUP' || tagName === 'SUB') {
         const normalized = content.replace(/\s+/g, ' ').trim();
         return normalized ? `<${tagName.toLowerCase()}>${normalized}</${tagName.toLowerCase()}>` : '';
@@ -191,6 +236,43 @@
       return content;
     };
     return visit(element).replace(/\s+/g, ' ').trim();
+  }
+
+  function canonicalContentText(element) {
+    return scientificInlineText(element)
+      .replace(/<\/?(?:sup|sub)>/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function immersiveTranslationTexts(element) {
+    if (!element) return [];
+    const candidates = [];
+    if (element.matches?.(INJECTED_TRANSLATION_SELECTOR)) candidates.push(element);
+    if (element.querySelectorAll) {
+      candidates.push(...element.querySelectorAll(INJECTED_TRANSLATION_SELECTOR));
+    }
+    const seen = new Set();
+    return candidates
+      .filter(node => !candidates.some(parent =>
+        parent !== node && parent.contains?.(node)))
+      .map(node => String(node.textContent || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim())
+      .filter(text => {
+        const key = text.toLocaleLowerCase();
+        if (!text || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  function bilingualHeadingDisplayText(element, fallback = '') {
+    const primary = canonicalContentText(element) ||
+      String(fallback || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    const primaryKey = primary.toLocaleLowerCase();
+    const translations = immersiveTranslationTexts(element)
+      .filter(text => text.toLocaleLowerCase() !== primaryKey);
+    return [primary, ...translations].filter(Boolean).join('\n');
   }
 
   function hashNormalizedText(value) {
@@ -291,6 +373,9 @@
       }
       if (excluded || utilityExcludedLevel !== null) return;
       if (block.kind === 'paragraph' && isReviewUtilityParagraphText(text)) return;
+      if (block.kind === 'paragraph' && isSupplementalMediaParagraphText(text)) return;
+      if (block.kind === 'paragraph' && sectionKind !== 'reference' &&
+          isLikelyInlineReferenceFlyoutText(text)) return;
       const textHash = hashNormalizedText(text);
       const recordType = recordTypeForBlock(block.kind);
       const explicitSourceIdentity = String(
@@ -366,12 +451,15 @@
         element.tagName !== 'FIGCAPTION' &&
         !element.querySelector?.(SEMANTIC_HEADING_SELECTOR);
       const heading = isHeadingElement(element) || adapterHeading;
-      if (heading) return !isEphemeralHeadingTitle(element.textContent);
+      if (heading) return !isEphemeralHeadingTitle(canonicalContentText(element));
       if (element.tagName === 'LI' &&
           element.querySelector?.('p,li,[role="paragraph"]')) return false;
-      if (PRIMARY_CONTENT_TAGS.has(element.tagName)) return true;
+      if (PRIMARY_CONTENT_TAGS.has(element.tagName)) {
+        return !isSupplementalMediaParagraphText(canonicalContentText(element));
+      }
       return adapterParagraphs.has(element) &&
-        !element.querySelector?.(STRUCTURAL_TEXT_SELECTOR);
+        !element.querySelector?.(STRUCTURAL_TEXT_SELECTOR) &&
+        !isSupplementalMediaParagraphText(canonicalContentText(element));
     });
     const supplementalCandidates = allElements.filter(element => {
       const role = element.getAttribute?.('role');
@@ -379,7 +467,8 @@
       if (!isTextContainer && role !== 'paragraph') return false;
       if (isExcludedContentElement(element, adapter)) return false;
       if (element.querySelector?.(STRUCTURAL_TEXT_SELECTOR)) return false;
-      const text = normalizeTextWithOffsets(element.textContent).text;
+      const text = normalizeTextWithOffsets(canonicalContentText(element)).text;
+      if (isSupplementalMediaParagraphText(text)) return false;
       if (text.length < 40 || text.length > 1800) return false;
       const wordCount = (text.match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
       const hasSentencePunctuation = /[.!?。！？]/.test(text);
@@ -411,7 +500,7 @@
     const elements = collectContentElements(root, adapter);
     let score = 0;
     elements.forEach(element => {
-      const text = normalizeTextWithOffsets(element.textContent).text;
+      const text = normalizeTextWithOffsets(canonicalContentText(element)).text;
       const length = text.length;
       const kind = getBlockKind(element);
       if (kind === 'heading') {
@@ -525,8 +614,10 @@
     const blocks = elements.map((element, sourceIndex) => ({
       kind: getBlockKind(element),
       level: isHeadingElement(element) ? getHeadingLevel(element) : 0,
-      text: element.textContent,
-      displayText: scientificInlineText(element),
+      text: canonicalContentText(element),
+      displayText: isHeadingElement(element)
+        ? bilingualHeadingDisplayText(element)
+        : scientificInlineText(element),
       sourceIndex,
       domId: String(element.id || ''),
       dataSelector: element.dataset?.sciLlmParagraphId
@@ -640,7 +731,7 @@
       const targetId = outlineTargetId(link);
       const target = targetId ? documentRef.getElementById(targetId) : null;
       if (!target || seenTargets.has(target)) return;
-      const title = normalizeTextWithOffsets(link.textContent).text;
+      const title = normalizeTextWithOffsets(canonicalContentText(link)).text;
       if (!title || title.length > 500) return;
       if (isNonSectionOutlineEntry(targetId, title)) return;
       const root = outlineContentRoot(target);
@@ -652,7 +743,7 @@
         root,
         link,
         title,
-        displayTitle: scientificInlineText(link) || title
+        displayTitle: bilingualHeadingDisplayText(link, title) || title
       });
     });
     return entries;
@@ -683,7 +774,7 @@
       const linkKey = normalizedHeadingKey(entry.title);
       const matchingHeading = (isHeadingElement(entry.target) ? entry.target : null) ||
         ownHeadings.find(element => {
-        const headingKey = normalizedHeadingKey(element.textContent);
+        const headingKey = normalizedHeadingKey(canonicalContentText(element));
         return headingKey === linkKey || headingKey.includes(linkKey) || linkKey.includes(headingKey);
       });
       if (!isSectionLikeOutlineTarget(entry, matchingHeading)) return;
@@ -721,7 +812,8 @@
         kind: 'heading',
         level,
         text: entry.title,
-        displayText: scientificInlineText(matchingHeading) || entry.displayTitle || entry.title,
+        displayText: bilingualHeadingDisplayText(matchingHeading, entry.displayTitle) ||
+          entry.displayTitle || entry.title,
         domId: String(matchingHeading?.id || entry.target?.id || entry.targetId || ''),
         dataSelector: headingDataSelector,
         blockFingerprint: String(entry.targetId || matchingHeading?.id || '')
@@ -731,8 +823,8 @@
           blocks.push({
             kind: 'heading',
             level: getHeadingLevel(element),
-            text: element.textContent,
-            displayText: scientificInlineText(element),
+            text: canonicalContentText(element),
+            displayText: bilingualHeadingDisplayText(element),
             domId: String(element.id || ''),
             blockFingerprint: String(element.id || '')
           });
@@ -745,7 +837,7 @@
         blocks.push({
           kind,
           level: 0,
-          text: element.textContent,
+          text: canonicalContentText(element),
           displayText: scientificInlineText(element),
           sourceIndex,
           domId: String(element.id || ''),
@@ -1258,11 +1350,15 @@
     getHeadingLevel,
     isReviewUtilitySectionTitle,
     isReviewUtilityParagraphText,
+    isSupplementalMediaParagraphText,
+    isLikelyInlineReferenceFlyoutText,
     buildParagraphRecords,
     hashNormalizedText,
     summarizeArticleRecords,
     normalizeTextWithOffsets,
     scientificInlineText,
+    immersiveTranslationTexts,
+    bilingualHeadingDisplayText,
     collectContentElements,
     scoreContentRoot,
     selectContentRoot,

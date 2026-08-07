@@ -15,6 +15,7 @@ require('../core/result-validator.js');
 require('../core/evidence-ledger.js');
 require('../core/figure-analysis.js');
 require('../core/figure-panel-planner.js');
+require('../core/supplemental-materials.js');
 require('../core/article-chat-tokenizer.js');
 require('../core/article-chat-index.js');
 require('../core/article-chat-retrieval.js');
@@ -24,12 +25,18 @@ require('../core/article-chat-stream.js');
 require('../core/article-chat.js');
 require('../core/cross-figure-logic.js');
 require('../core/review-outline.js');
+require('../core/abbreviation-extractor.js');
 require('../core/cache-planner.js');
+require('../core/privacy-sanitizer.js');
 require('../core/article-workspace.js');
 const {
   articleArchiveRelativePath,
   createArticleArchive
 } = require('../core/article-archive.js');
+const {
+  createMemorySyncQueue,
+  createDirectorySync
+} = require('../core/directory-sync.js');
 require('../core/migration-bundle.js');
 require('../core/analysis-pipeline.js');
 require('../core/analysis-cache.js');
@@ -49,7 +56,10 @@ require('../core/task-profile-router.js');
 require('../core/token-budget.js');
 require('../core/article-chat-context-planner.js');
 require('../core/operation-control.js');
-const { createBackgroundRouter } = require('../core/background-router.js');
+const {
+  createBackgroundRouter,
+  createPortableConfigStorageChangeListener
+} = require('../core/background-router.js');
 const { validBlueprint } = require('./helpers/adaptive-fixtures.js');
 
 function createMemoryStorage() {
@@ -78,6 +88,13 @@ function createDelayedCloneStorage() {
         callback();
       }, 5);
     }
+  };
+}
+
+function createReadyPortableConfigManagerDouble() {
+  return {
+    publicStatus: () => ({ state: 'ready', pending: false }),
+    runWhenReady: operation => operation()
   };
 }
 
@@ -151,6 +168,11 @@ function createDirectorySyncDouble(options = {}) {
         permission: 'granted', assets: [], invalidAssets: 0
       };
     },
+    async listWorkspaceSupplementalAssets(workspace) {
+      return options.listWorkspaceSupplementalAssets?.(workspace) || {
+        permission: 'granted', assets: [], invalidAssets: 0
+      };
+    },
     async listWorkspaceManifests(identity) {
       return options.listWorkspaceManifests?.(identity) || {
         permission: 'granted', manifests: [], matches: []
@@ -167,6 +189,55 @@ function createDirectorySyncDouble(options = {}) {
     async removeWorkspaceTree(workspace) {
       return options.removeWorkspaceTree?.(workspace) || { permission: 'granted', removed: true };
     }
+  };
+}
+
+function createWritableDirectoryHandleStore(initialPermission = 'granted') {
+  let permission = initialPermission;
+  const files = new Map();
+
+  function fileHandle(path) {
+    return {
+      name: path.split('/').at(-1),
+      kind: 'file',
+      async getFile() {
+        if (!files.has(path)) {
+          const error = new Error(`Missing file ${path}`);
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        return { async text() { return files.get(path); } };
+      },
+      async createWritable() {
+        let content = '';
+        return {
+          async write(value) { content = String(value); },
+          async close() { files.set(path, content); }
+        };
+      }
+    };
+  }
+
+  function directoryHandle(prefix, name) {
+    return {
+      name,
+      kind: 'directory',
+      async queryPermission() { return permission; },
+      async getDirectoryHandle(child) {
+        return directoryHandle(`${prefix}${child}/`, child);
+      },
+      async getFileHandle(child) {
+        return fileHandle(`${prefix}${child}`);
+      }
+    };
+  }
+
+  const root = directoryHandle('', 'chosen-folder');
+  return {
+    async load() { return root; },
+    async save() {},
+    setPermission(value) { permission = value; },
+    readText(path) { return files.get(path) || ''; }
   };
 }
 
@@ -281,12 +352,17 @@ test('registers only the one-type study selection message in the service worker'
   ['ARTICLE_ARCHIVE_PROBE', 'ARTICLE_ARCHIVE_SAVE', 'ARTICLE_ARCHIVE_LOAD']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
   ['ARTICLE_WORKSPACE_ENSURE', 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    'ARTICLE_WORKSPACE_LIST_ASSETS',
     'ARTICLE_WORKSPACE_SAVE_TURN', 'ARTICLE_WORKSPACE_PROBE',
     'ARTICLE_WORKSPACE_SCAN_RESTORE', 'ARTICLE_WORKSPACE_LIST',
     'ARTICLE_WORKSPACE_STATS', 'ARTICLE_WORKSPACE_EXPORT',
     'ARTICLE_WORKSPACE_BEGIN_DELETE', 'ARTICLE_WORKSPACE_FINALIZE_DELETE',
     'ARTICLE_WORKSPACE_REBUILD_INDEX']
     .forEach(type => assert.match(source, new RegExp(`'${type}'`)));
+  assert.equal((source.match(/chrome\.runtime\.onMessage\.addListener\(/g) || []).length, 1);
+  assert.ok(source.indexOf('core/supplemental-materials.js') <
+    source.indexOf('core/background-router.js'));
   assert.match(source, /'LLM_ASK_ARTICLE'/);
   assert.match(source, /'LLM_ANALYZE_FIGURE_PANEL'/);
   assert.match(source, /'LLM_TOKEN_USAGE_LIST'/);
@@ -352,7 +428,14 @@ function portableArchive(documentId = `sha256:${'c'.repeat(64)}`) {
       revision: 3,
       updatedAt: '2026-07-17T08:00:00.000Z'
     },
-    workspace: { ledger: [{ categoryId: 'key_result', quote: 'A result' }] }
+    workspace: {
+      ledger: [{ categoryId: 'key_result', quote: 'A result' }],
+      modelRuntime: {
+        providerId: 'openai-compatible',
+        apiKey: 'sk-archive-secret',
+        customHeaders: { Authorization: 'Bearer archive-secret' }
+      }
+    }
   });
 }
 
@@ -388,6 +471,10 @@ test('probes, saves, and applies one per-article archive through the background 
   assert.equal(saved.success, true);
   assert.equal(saved.data.relativePath, expectedPath);
   assert.equal(directorySync.json.at(-1).path, expectedPath);
+  assert.doesNotMatch(
+    JSON.stringify(directorySync.json.at(-1)),
+    /sk-archive-secret|archive-secret|apiKey|customHeaders|Authorization/u
+  );
 
   const loaded = await router.handle({
     type: 'ARTICLE_ARCHIVE_LOAD',
@@ -399,6 +486,79 @@ test('probes, saves, and applies one per-article archive through the background 
   assert.equal(loaded.data.archive.workspace.ledger[0].quote, 'A result');
   assert.equal(loaded.data.applied, true);
   assert.equal((await documentStore.getDocument(archive.documentId)).title, 'Archived paper');
+});
+
+test('raw article archives are credential-free after router save and real directory flush', async () => {
+  const archive = portableArchive();
+  archive.workspace.privacyAudit = {
+    apiKey: 'sk-raw-api-key',
+    customHeaders: { Authorization: 'Bearer raw-authorization' },
+    token: 'raw-generic-token',
+    providerToken: 'raw-provider-token',
+    providerId: 'raw-provider-id',
+    password: 'raw-password',
+    bearer: 'raw-bearer',
+    authToken: 'raw-auth-token',
+    accessToken: 'raw-access-token',
+    refreshToken: 'raw-refresh-token',
+    credential: 'raw-credential',
+    secret: 'raw-secret',
+    apiToken: 'raw-api-token',
+    githubToken: 'raw-github-token',
+    privateToken: 'raw-private-token',
+    personalAccessToken: 'raw-personal-access-token',
+    webhookSecret: 'raw-webhook-secret',
+    privateSecret: 'raw-private-secret',
+    clientSecret: 'raw-client-secret',
+    privateKey: 'raw-private-key',
+    activeProvider: 'raw-active-provider',
+    authorizationHeader: 'raw-authorization-header',
+    authHeader: 'raw-auth-header',
+    bearerToken: 'raw-bearer-token',
+    databasePassword: 'raw-database-password',
+    experimentalProtocol: 'kept-protocol',
+    secretoryPathway: 'kept-secretory-pathway',
+    secretome: 'kept-secretome',
+    tokenizationMethod: 'kept-tokenization-method',
+    tokenUsage: 42,
+    tokenCount: 42,
+    inputTokenCount: 40,
+    headerTitle: 'kept-header-title',
+    proteinAccess: 'kept-protein-access'
+  };
+  const handleStore = createWritableDirectoryHandleStore();
+  const directorySync = createDirectorySync({
+    handleStore,
+    queueStore: createMemorySyncQueue(),
+    sourceId: 'background-router-privacy-test'
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
+    fetchImpl: async () => { throw new Error('archive operations must stay local'); }
+  });
+
+  const saved = await router.handle({ type: 'ARTICLE_ARCHIVE_SAVE', archive });
+  assert.equal(saved.success, true);
+  await directorySync.flush();
+
+  const diskText = handleStore.readText(`Brevess/${saved.data.relativePath}`);
+  assert.ok(diskText, 'the archive should reach the selected directory');
+  assert.doesNotMatch(diskText,
+    /sk-raw-api-key|raw-authorization|raw-generic-token|raw-provider-token|raw-provider-id|raw-password|raw-bearer|raw-auth-token|raw-access-token|raw-refresh-token|raw-credential|raw-secret|raw-api-token|raw-github-token|raw-private-token|raw-personal-access-token|raw-webhook-secret|raw-private-secret|raw-client-secret|raw-private-key|raw-active-provider|raw-authorization-header|raw-auth-header|raw-bearer-token|raw-database-password/u);
+  const diskArchive = JSON.parse(diskText);
+  assert.deepEqual(diskArchive.workspace.privacyAudit, {
+    experimentalProtocol: 'kept-protocol',
+    headerTitle: 'kept-header-title',
+    inputTokenCount: 40,
+    proteinAccess: 'kept-protein-access',
+    secretome: 'kept-secretome',
+    secretoryPathway: 'kept-secretory-pathway',
+    tokenCount: 42,
+    tokenUsage: 42,
+    tokenizationMethod: 'kept-tokenization-method'
+  });
 });
 
 test('exports and imports a complete migration bundle including provider credentials', async () => {
@@ -2748,7 +2908,13 @@ function crossFigureOutput(input) {
   const mainFigureIds = input.main_figure_ids || [];
   return {
     article_title: input.article_title,
+    known_background_zh: ['The pathway is implicated in the baseline phenotype.'],
     overall_thesis_zh: 'The first main Figure establishes the phenomenon and the next tests its mechanism.',
+    mechanism_chain: [{
+      from_zh: 'Observed phenotype',
+      to_zh: 'Candidate mechanism',
+      support_panel_refs: ['1A']
+    }],
     figure_nodes: mainFigureIds.map((figureId, index) => ({
       figure_id: figureId,
       role: index === 0 ? 'phenomenon' : 'mechanism',
@@ -2822,6 +2988,68 @@ async function configuredFigureRouter(providerId, config) {
   return { router, bodies };
 }
 
+test('analyzes a bounded supplemental Figure id with direct vision input and no caption', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const figureId = 'supp-manual-s1-s1';
+  const response = await router.handle(figureMessage([{
+    figureId,
+    figureLabel: 'Figure S1',
+    caption: '',
+    images: [{ dataUrl: 'data:image/png;base64,AA==' }]
+  }], { analysisDepth: 'standard' }));
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.figureResults[0].figureId, figureId);
+  assert.equal(openAIInputPayload(bodies[0]).analysis_basis, 'vision_text');
+  assert.ok(bodies[0].input[0].content.some(item => item.type === 'input_image'));
+});
+
+test('analyzes a bounded caption-only supplemental Figure without fabricating vision input', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const figureId = 'supp-caption-s2-s2';
+  const response = await router.handle(figureMessage([{
+    figureId,
+    figureLabel: 'Figure S2',
+    caption: 'Figure S2. (A) Replication and (B) rescue support the main result.',
+    panelHints: ['A', 'B'],
+    images: []
+  }], { analysisDepth: 'standard' }));
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.figureResults[0].figureId, figureId);
+  assert.equal(openAIInputPayload(bodies[0]).analysis_basis, 'caption_context');
+  assert.doesNotMatch(JSON.stringify(bodies[0]), /input_image|data:image\//);
+});
+
+test('rejects malformed or overlong supplemental Figure ids before any provider request', async () => {
+  const { router, bodies } = await configuredFigureRouter('openai', {
+    model: 'gpt-5-mini'
+  });
+  const invalidIds = [
+    'supp-../escape-s1',
+    `supp-${'a'.repeat(49)}-s1`,
+    `supp-valid-material-${'b'.repeat(25)}`,
+    'supp-UPPER-s1',
+    'custom-any-id'
+  ];
+  for (const figureId of invalidIds) {
+    const response = await router.handle(figureMessage([{
+      figureId,
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Supplemental evidence.',
+      images: []
+    }], { forceRefresh: true }));
+    assert.equal(response.success, false, figureId);
+    assert.equal(response.error.code, 'INVALID_SETTINGS', figureId);
+    assert.deepEqual(response.error.fields, ['figures'], figureId);
+  }
+  assert.equal(bodies.length, 0);
+});
+
 test('builds and caches an ordered cross-figure domino chain', async () => {
   const storageArea = createMemoryStorage();
   let calls = 0;
@@ -2852,6 +3080,96 @@ test('builds and caches an ordered cross-figure domino chain', async () => {
   assert.equal(first.data.cacheHit, false);
   assert.equal(second.data.cacheHit, true);
   assert.equal(calls, 1);
+});
+
+test('splits invalid supplemental mappings without discarding the main Figure chain', async () => {
+  const storageArea = createMemoryStorage();
+  const batchSizes = [];
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      if (!Array.isArray(input.supplemental_figures)) {
+        return jsonResponse({ output_text: JSON.stringify(crossFigureOutput(input)) });
+      }
+      batchSizes.push(input.supplemental_figures.length);
+      if (input.supplemental_figures.length > 1) {
+        return jsonResponse({ output_text: '{invalid supplemental mapping' });
+      }
+      const supplement = input.supplemental_figures[0];
+      return jsonResponse({
+        output_text: JSON.stringify({
+          supplemental_support: [{
+            figure_id: supplement.figure_id,
+            supports_figure_id: 'figure-1',
+            support_role: 'control',
+            attachment_basis: 'explicit_caption',
+            contribution_zh: supplement.conclusion_zh,
+            limitation_zh: '仅提供补充支持。'
+          }]
+        })
+      });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const message = {
+    type: 'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
+    document: { title: 'Mechanistic study' },
+    figures: [
+      { ...figureInput(1), analysis: { coreConclusion: 'Figure 1 establishes the phenotype.' } },
+      { ...figureInput(2), analysis: { coreConclusion: 'Figure 2 tests the mechanism.' } },
+      ...[1, 2].map(index => ({
+        ...figureInput(index + 2),
+        figureId: `figure-s${index}`,
+        figureLabel: `Figure S${index}`,
+        isSupplemental: true,
+        caption: `Figure S${index}, related to Figure 1.`,
+        analysis: { coreConclusion: `Supplement ${index} controls the experiment.` }
+      }))
+    ]
+  };
+
+  const first = await router.handle(message);
+  const second = await router.handle(message);
+
+  assert.equal(first.success, true);
+  assert.deepEqual(batchSizes, [2, 1, 1]);
+  assert.equal(first.data.crossFigureLogic.supplementalSupport.length, 2);
+  assert.deepEqual(
+    first.data.crossFigureLogic.supplementalSupport.map(item => item.figureId),
+    ['figure-s1', 'figure-s2']
+  );
+  assert.equal(second.data.cacheHit, true);
+  assert.equal(calls, 4);
+});
+
+test('repairs one invalid main cross-Figure response with a bounded retry', async () => {
+  const storageArea = createMemoryStorage();
+  let calls = 0;
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      const input = openAIInputPayload(JSON.parse(options.body));
+      if (calls === 1) return jsonResponse({ output_text: '{invalid main chain' });
+      return jsonResponse({ output_text: JSON.stringify(crossFigureOutput(input)) });
+    }
+  });
+  await configureOpenAIRouter(router);
+  const response = await router.handle({
+    type: 'LLM_ANALYZE_CROSS_FIGURE_LOGIC',
+    document: { title: 'Mechanistic study' },
+    figures: [
+      { ...figureInput(1), analysis: { coreConclusion: 'Phenotype.' } },
+      { ...figureInput(2), analysis: { coreConclusion: 'Mechanism.' } }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(calls, 2);
+  assert.equal(response.data.crossFigureLogic.nodes.length, 2);
 });
 
 test('analyzes Figures sequentially, checkpoints results and reuses identical cache', async () => {
@@ -3170,6 +3488,532 @@ test('repairs one structurally invalid targeted Panel follow-up response', async
   assert.ok(progress.some(event => event.phase === 'figure_panel_schema_retry'));
 });
 
+function closedTabSupplementalWorkspace(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'8'.repeat(64)}`,
+    canonicalUrl: 'https://journal.example/article',
+    aliases: [],
+    title: 'Closed article tab',
+    directoryName: `Closed article tab--${'8'.repeat(16)}`,
+    revision: '7'.repeat(64),
+    contentHash: '7'.repeat(64),
+    workspaceGeneration: 4,
+    ...overrides
+  };
+}
+
+function closedTabSupplementalTarget(workspace, overrides = {}) {
+  return {
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: workspace.workspaceGeneration,
+    targetArticleTabId: 91,
+    canonicalUrl: `${workspace.canonicalUrl}?ignored=1#section`,
+    documentHash: `sha256:${workspace.contentHash}`,
+    ...overrides
+  };
+}
+
+function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}) {
+  const sourceFingerprint = `sha256:${fingerprint.repeat(64)}`;
+  return globalThis.SciLLM.createSupplementalFigureImportDraft({
+    sourceMode: mode,
+    sourceMaterialId: `manual-${mode}-${fingerprint.repeat(10)}`,
+    sourceFileName: mode === 'image' ? 'figure-s1.png' : '',
+    sourceMimeType: mode === 'image' ? 'image/png' : '',
+    sourceFileSize: mode === 'image' ? 4 : 0,
+    sourceImportedAt: '2026-08-03T03:04:05.000Z',
+    sourceFingerprint,
+    caption: 'A, treatment increases signal. B, matched control remains stable.',
+    figureLabel: 'Supplemental Figure S1'
+  });
+}
+
+test('closed-tab manual drafts use the shared positional save and image contract', () => {
+  const source = readFileSync(join(__dirname, '..', 'core', 'background-router.js'), 'utf8');
+  const start = source.indexOf('async function saveClosedTabSupplementalDraft');
+  const end = source.indexOf('function publicStoredArticleChatTurn', start);
+  const route = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(route, /decorateDraft/);
+  assert.match(route, /analysisImages:\s*\[cloneJsonLike\(normalized\.transientImage\)\]/);
+  assert.match(route, /save:\s*\(relativePath, draftContent, conflict\)/);
+  assert.match(route, /asset\s*=\s*created\.persisted/);
+});
+
+test('bound supplemental asset routes validate the parent identity before any asset access', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let assetReads = 0;
+  let assetWrites = 0;
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset() {
+      assetReads += 1;
+      return { relativePath: 'figures/supplemental/s1.json', content: { marker: 'existing' } };
+    },
+    async putAsset(id, relativePath, content) {
+      assetWrites += 1;
+      return { workspaceId: id, relativePath, content, revision: 1, contentHash: 'saved' };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('provider must not be called');
+    }
+  });
+  const validTarget = closedTabSupplementalTarget(workspace);
+  const withoutDocumentHash = { ...validTarget };
+  delete withoutDocumentHash.documentHash;
+  const cases = [
+    [{ ...validTarget, workspaceId: `workspace:${'b'.repeat(64)}` },
+      'SUPPLEMENTAL_TARGET_INVALID'],
+    [{ ...validTarget, workspaceGeneration: workspace.workspaceGeneration + 1 },
+      'WORKSPACE_GENERATION_CONFLICT'],
+    [{ ...validTarget, canonicalUrl: 'https://journal.example/other' },
+      'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH'],
+    [withoutDocumentHash, 'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH'],
+    [{ ...validTarget, documentHash: '5'.repeat(64) },
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH']
+  ];
+
+  for (const type of ['ARTICLE_WORKSPACE_GET_ASSET', 'ARTICLE_WORKSPACE_SAVE_ASSET']) {
+    for (const [target, expectedCode] of cases) {
+      const response = await router.handle({
+        type,
+        workspaceId: workspace.workspaceId,
+        workspaceGeneration: workspace.workspaceGeneration,
+        relativePath: 'figures/supplemental/s1.json',
+        content: { marker: 'replacement' },
+        target
+      });
+      assert.equal(response.success, false, `${type}:${expectedCode}`);
+      assert.equal(response.error.code, expectedCode, type);
+    }
+  }
+
+  assert.equal(assetReads, 0);
+  assert.equal(assetWrites, 0);
+  assert.equal(providerCalls, 0);
+});
+
+test('bound supplemental asset routes accept a normalized bare parent hash', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const calls = [];
+  const store = {
+    async getWorkspace() { return structuredClone(workspace); },
+    async getAsset(id, relativePath) {
+      calls.push(['get', id, relativePath]);
+      return { relativePath, content: { marker: 'existing' }, revision: 1 };
+    },
+    async putAsset(id, relativePath, content) {
+      calls.push(['put', id, relativePath]);
+      return { workspaceId: id, relativePath, content, revision: 2, contentHash: 'saved' };
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const target = {
+    ...closedTabSupplementalTarget(workspace),
+    documentHash: workspace.contentHash
+  };
+  const getResponse = await router.handle({
+    type: 'ARTICLE_WORKSPACE_GET_ASSET',
+    workspaceId: workspace.workspaceId,
+    relativePath: 'figures/supplemental/s1.json',
+    target
+  });
+  const saveResponse = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: workspace.workspaceGeneration,
+    relativePath: 'figures/supplemental/s1.json',
+    content: { marker: 'replacement' },
+    target
+  });
+
+  assert.equal(getResponse.success, true);
+  assert.equal(saveResponse.success, true);
+  assert.deepEqual(calls.map(call => call[0]), ['get', 'put']);
+});
+
+test('closed-tab supplemental image draft persists only the normalized compressed analysis image', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const assets = new Map();
+  const calls = [];
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset(id, path) {
+      return structuredClone(assets.get(`${id}:${path}`) || null);
+    },
+    async putAsset(id, path, content, conflict) {
+      calls.push({ id, path, content: structuredClone(content), conflict: { ...conflict } });
+      const saved = {
+        workspaceId: id,
+        relativePath: path,
+        content: structuredClone(content),
+        revision: 1,
+        contentHash: 'stored-content-hash'
+      };
+      assets.set(`${id}:${path}`, saved);
+      return structuredClone(saved);
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('provider must not be called');
+    }
+  });
+  const draft = closedTabSupplementalDraft({ mode: 'image' });
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: { ...draft, dataUrl: 'data:image/png;base64,U0VDUkVU' },
+    transientImage: {
+      mediaType: 'image/png',
+      dataUrl: 'data:image/png;base64,AQID',
+      width: 1,
+      height: 1,
+      sourceFingerprint: draft.sourceFingerprint
+    },
+    expectedRevision: 999,
+    createOnly: false
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data, {
+    saved: true,
+    queued: false,
+    directoryPersisted: false,
+    directoryPermission: 'unavailable',
+    directoryErrorCode: '',
+    asset: {
+      relativePath: calls[0].path,
+      revision: 1,
+      contentHash: 'stored-content-hash'
+    },
+    analysisStatus: 'awaiting_article_context',
+    figureLabel: 'Figure S1',
+    panelHints: []
+  });
+  assert.deepEqual(calls[0].conflict, { expectedRevision: 0, createOnly: true });
+  assert.equal(calls[0].content.analysisStatus, 'awaiting_article_context');
+  assert.equal(calls[0].content.figures[0].analysisStatus, 'awaiting_article_context');
+  assert.deepEqual(calls[0].content.figures[0].analysisImages, [{
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AQID',
+    width: 1,
+    height: 1,
+    sourceFingerprint: draft.sourceFingerprint
+  }]);
+  assert.equal(Object.hasOwn(calls[0].content, 'dataUrl'), false);
+  assert.doesNotMatch(JSON.stringify(calls[0].content), /U0VDUkVU/);
+  assert.equal(providerCalls, 0);
+});
+
+test('closed-tab supplemental image draft requires a normalized transient image', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let writes = 0;
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: {
+      async getWorkspace() { return structuredClone(workspace); },
+      async getAsset() { return null; },
+      async putAsset() { writes += 1; throw new Error('must not write'); }
+    },
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft({ mode: 'image' })
+  });
+
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'SUPPLEMENTAL_TRANSIENT_IMAGE');
+  assert.equal(writes, 0);
+});
+
+test('closed-tab supplemental draft rejects stale or mismatched targets before any write', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let writes = 0;
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset() { return null; },
+    async putAsset() { writes += 1; throw new Error('must not write'); }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+  const draft = closedTabSupplementalDraft();
+  const cases = [
+    [{ ...closedTabSupplementalTarget(workspace), workspaceGeneration: 5 },
+      'WORKSPACE_GENERATION_CONFLICT'],
+    [{ ...closedTabSupplementalTarget(workspace), canonicalUrl: 'https://journal.example/other' },
+      'SUPPLEMENTAL_TARGET_CANONICAL_MISMATCH'],
+    [{ ...closedTabSupplementalTarget(workspace), documentHash: 'not-a-hash' },
+      'SUPPLEMENTAL_TARGET_INVALID'],
+    [{ ...closedTabSupplementalTarget(workspace), documentHash: '5'.repeat(64) },
+      'SUPPLEMENTAL_TARGET_DOCUMENT_MISMATCH'],
+    [{ ...closedTabSupplementalTarget(workspace), targetArticleTabId: -1 },
+      'SUPPLEMENTAL_TARGET_INVALID']
+  ];
+
+  for (const [target, expectedCode] of cases) {
+    const response = await router.handle({
+      type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT', target, draft
+    });
+    assert.equal(response.success, false);
+    assert.equal(response.error.code, expectedCode);
+  }
+  assert.equal(writes, 0);
+  assert.equal(providerCalls, 0);
+});
+
+test('concurrent closed-tab supplemental drafts resolve create-only collisions to distinct paths', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  const assets = new Map();
+  const successfulWrites = [];
+  let providerCalls = 0;
+  const store = {
+    async getWorkspace(id) {
+      return id === workspace.workspaceId ? structuredClone(workspace) : null;
+    },
+    async getAsset(id, path) {
+      await Promise.resolve();
+      return structuredClone(assets.get(`${id}:${path}`) || null);
+    },
+    async putAsset(id, path, content, conflict) {
+      assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+      await Promise.resolve();
+      const key = `${id}:${path}`;
+      if (assets.has(key)) {
+        const error = new Error('ASSET_REVISION_CONFLICT');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+      const saved = {
+        workspaceId: id,
+        relativePath: path,
+        content: structuredClone(content),
+        revision: 1,
+        contentHash: `hash-${successfulWrites.length + 1}`
+      };
+      assets.set(key, saved);
+      successfulWrites.push(path);
+      return structuredClone(saved);
+    }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+  const message = {
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft()
+  };
+  const responses = await Promise.all([
+    router.handle(structuredClone(message)),
+    router.handle(structuredClone(message))
+  ]);
+
+  assert.ok(responses.every(response => response.success));
+  assert.equal(new Set(responses.map(response => response.data.asset.relativePath)).size, 2);
+  assert.equal(new Set(successfulWrites).size, 2);
+  assert.equal(assets.size, 2);
+  assert.equal(providerCalls, 0);
+});
+
+test('closed-tab supplemental draft maps eight create-only conflicts to one safe collision error', async () => {
+  const workspace = closedTabSupplementalWorkspace();
+  let putCalls = 0;
+  let providerCalls = 0;
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: {
+      async getWorkspace() { return structuredClone(workspace); },
+      async getAsset() { return null; },
+      async putAsset(_id, _path, _content, conflict) {
+        putCalls += 1;
+        assert.deepEqual(conflict, { expectedRevision: 0, createOnly: true });
+        const error = new Error('raw conflict details must not escape');
+        error.code = 'ASSET_REVISION_CONFLICT';
+        throw error;
+      }
+    },
+    fetchImpl: async () => { providerCalls += 1; throw new Error('must not call provider'); }
+  });
+
+  const response = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+    target: closedTabSupplementalTarget(workspace),
+    draft: closedTabSupplementalDraft()
+  });
+
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'SUPPLEMENTAL_MATERIAL_ID_COLLISION');
+  assert.doesNotMatch(JSON.stringify(response), /raw conflict details/);
+  assert.equal(putCalls, 8);
+  assert.equal(providerCalls, 0);
+});
+
+test('persists Figure and chat provider route metadata through router storage and directory flush', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    workspaceId: `workspace:${'9'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/provider-route-paper',
+    aliases: [],
+    title: 'Provider route paper',
+    directoryName: `Provider route paper--${'9'.repeat(16)}`,
+    revision: '9'.repeat(64),
+    contentHash: '9'.repeat(64),
+    workspaceGeneration: 1
+  };
+  const handleStore = createWritableDirectoryHandleStore('prompt');
+  const queueStore = createMemorySyncQueue();
+  const directorySync = createDirectorySync({
+    handleStore,
+    queueStore,
+    sourceId: 'background-router-workspace-provider-test'
+  });
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const putAsset = workspaceStore.putAsset.bind(workspaceStore);
+  workspaceStore.putAsset = async (workspaceId, path, content) => {
+    globalThis.SciLLM.assertWorkspaceSafeValue(content);
+    return putAsset(workspaceId, path, content);
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('workspace operations must stay local'); }
+  });
+
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_ENSURE', workspace
+  })).success, true);
+  const usage = {
+    inputTokens: 120,
+    outputTokens: 40,
+    cacheHitTokens: 80,
+    totalTokens: 160,
+    maxOutputTokens: 4096
+  };
+  const assets = [
+    {
+      path: 'figures/figure-1/analysis.json',
+      content: {
+        figureId: 'figure-1',
+        route: { providerId: 'vision-main', provider: 'openai', model: 'gpt-4.1' },
+        usage
+      }
+    },
+    {
+      path: 'chat/turns/turn-1-analysis.json',
+      content: {
+        turnId: 'turn-1',
+        route: { providerId: 'chat-main', provider: 'deepseek', model: 'deepseek-chat' },
+        usage
+      }
+    }
+  ];
+  for (const asset of assets) {
+    const response = await router.handle({
+      type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+      workspaceId: workspace.workspaceId,
+      workspaceGeneration: 1,
+      relativePath: asset.path,
+      content: asset.content
+    });
+    assert.equal(response.success, true, asset.path);
+    assert.equal(response.data.queued, true, asset.path);
+  }
+  const rejected = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: 'figures/figure-1/credential-leak.json',
+    content: { apiKey: 'sk-must-not-persist', providerToken: 'must-not-persist' }
+  });
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.error.code, 'WORKSPACE_CONTAINS_CREDENTIALS');
+
+  const queuedPaths = (await queueStore.getAll()).map(item => item.relativePath);
+  for (const asset of assets) {
+    assert.ok(queuedPaths.includes(`workspaces/${workspace.directoryName}/${asset.path}`));
+  }
+  assert.ok(!queuedPaths.some(path => path.includes('credential-leak')));
+
+  handleStore.setPermission('granted');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const flushed = await directorySync.flush();
+  assert.equal(flushed.failed, 0);
+  assert.equal(flushed.pendingCount, 0);
+  for (const asset of assets) {
+    const path = `Brevess/workspaces/${workspace.directoryName}/${asset.path}`;
+    const envelope = JSON.parse(handleStore.readText(path));
+    assert.deepEqual(envelope.data, asset.content);
+  }
+  const supplementalPath = 'figures/supplemental/manual-image-s1.json';
+  const supplementalContent = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Caption persisted with the image.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  const supplementalSaved = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: supplementalPath,
+    content: supplementalContent,
+    requireDirectoryPersistence: true
+  });
+  assert.equal(supplementalSaved.success, true);
+  assert.equal(supplementalSaved.data.queued, true);
+  assert.equal(supplementalSaved.data.directoryPersisted, true);
+  const supplementalEnvelope = JSON.parse(handleStore.readText(
+    `Brevess/workspaces/${workspace.directoryName}/${supplementalPath}`
+  ));
+  assert.equal(supplementalEnvelope.data.figures[0].caption,
+    'Figure S1. Caption persisted with the image.');
+  assert.equal(supplementalEnvelope.data.figures[0].analysisImages[0].dataUrl,
+    'data:image/png;base64,AQID');
+});
+
 test('routes credential-free multi-file workspace save, scan, export, and crash-safe deletion', async () => {
   const workspace = {
     schemaVersion: 1,
@@ -3199,6 +4043,29 @@ test('routes credential-free multi-file workspace save, scan, export, and crash-
     workspaceGeneration: 1,
     relativePath: 'ui/state.json', content: { view: 'chat' }
   })).success, true);
+  assert.equal((await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId: workspace.workspaceId,
+    workspaceGeneration: 1,
+    relativePath: 'figures/supplemental/cell-support.json',
+    content: {
+      materialId: 'cell-support',
+      figures: [{ figureId: 'supp-cell-support-s1', figureLabel: 'Figure S1' }]
+    }
+  })).success, true);
+  const supplementalAssets = await router.handle({
+    type: 'ARTICLE_WORKSPACE_LIST_ASSETS',
+    workspaceId: workspace.workspaceId,
+    prefix: 'figures/supplemental/'
+  });
+  assert.equal(supplementalAssets.success, true);
+  assert.deepEqual(
+    supplementalAssets.data.assets.map(asset => asset.relativePath),
+    ['figures/supplemental/cell-support.json']
+  );
+  assert.equal(
+    supplementalAssets.data.assets[0].content.figures[0].figureLabel,
+    'Figure S1'
+  );
   assert.equal((await router.handle({
     type: 'ARTICLE_WORKSPACE_SAVE_TURN', workspaceId: workspace.workspaceId,
     workspaceGeneration: 1,
@@ -3331,6 +4198,151 @@ test('deletes browser-local workspace immediately when filesystem permission is 
   assert.equal(finalized.data.removedFromDisk, false);
   assert.equal(finalized.data.workspaceGeneration, 2);
   assert.equal(await workspaceStore.getWorkspace(workspace.workspaceId), null);
+});
+
+test('scan restores an unindexed manual supplemental Figure with its image and caption', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace',
+    workspaceId: `workspace:${'7'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/manual-supplement-restore',
+    aliases: [],
+    title: 'Manual supplement restore',
+    directoryName: `Manual supplement restore--${'7'.repeat(16)}`,
+    revision: 2,
+    contentHash: '7'.repeat(64),
+    workspaceGeneration: 1,
+    createdAt: '2026-08-04T00:00:00.000Z',
+    updatedAt: '2026-08-04T00:00:00.000Z',
+    assets: []
+  };
+  const relativePath = 'figures/supplemental/manual-image-s1.json';
+  const content = {
+    schemaVersion: 1,
+    materialId: 'manual-image-s1',
+    sourceMode: 'image',
+    figures: [{
+      figureId: 'supp-manual-image-s1',
+      figureLabel: 'Figure S1',
+      caption: 'Figure S1. Restored caption.',
+      analysisImages: [{
+        mediaType: 'image/png',
+        dataUrl: 'data:image/png;base64,AQID',
+        width: 1,
+        height: 1
+      }]
+    }]
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted',
+      manifests: [workspace],
+      matches: [{ match: 'exact', manifest: workspace }]
+    }),
+    listWorkspaceSupplementalAssets: async () => ({
+      permission: 'granted',
+      invalidAssets: 0,
+      assets: [{
+        relativePath,
+        content,
+        revision: 4,
+        contentHash: 'manual-supplement-hash',
+        updatedAt: '2026-08-04T00:01:00.000Z'
+      }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const restored = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: workspace,
+    requestPermission: false
+  });
+
+  assert.equal(restored.success, true);
+  assert.equal(restored.data.recoveredUnindexedSupplementalAssets, 1);
+  assert.equal(restored.data.restore.assets.length, 1);
+  assert.equal(restored.data.restore.assets[0].content.figures[0].caption,
+    'Figure S1. Restored caption.');
+  assert.equal(restored.data.restore.assets[0].content.figures[0]
+    .analysisImages[0].dataUrl, 'data:image/png;base64,AQID');
+  assert.ok(directorySync.workspaceAssets.some(asset => asset.path === relativePath));
+  const localAssets = await workspaceStore.listAssets(workspace.workspaceId);
+  assert.equal(localAssets[0].content.figures[0].figureLabel, 'Figure S1');
+});
+
+test('scan backfills a newer browser-local supplemental Figure into the selected folder', async () => {
+  const workspace = {
+    schemaVersion: 1,
+    kind: 'sci-logic-highlighter-workspace',
+    workspaceId: `workspace:${'6'.repeat(64)}`,
+    canonicalUrl: 'https://example.org/browser-local-supplement',
+    aliases: [],
+    title: 'Browser-local supplement',
+    directoryName: `Browser-local supplement--${'6'.repeat(16)}`,
+    revision: 3,
+    contentHash: '6'.repeat(64),
+    workspaceGeneration: 1,
+    createdAt: '2026-08-04T00:00:00.000Z',
+    updatedAt: '2026-08-04T00:00:00.000Z',
+    assets: []
+  };
+  const relativePath = 'figures/supplemental/manual-caption-s2.json';
+  const content = {
+    schemaVersion: 1,
+    materialId: 'manual-caption-s2',
+    sourceMode: 'caption',
+    figures: [{
+      figureId: 'supp-manual-caption-s2',
+      figureLabel: 'Figure S2',
+      caption: 'Figure S2. Browser-local caption recovered during upgrade.'
+    }]
+  };
+  const workspaceStore = createArticleWorkspaceStoreDouble();
+  await workspaceStore.ensureWorkspace(workspace);
+  await workspaceStore.putAsset(workspace.workspaceId, relativePath, content);
+  const listAssets = workspaceStore.listAssets.bind(workspaceStore);
+  workspaceStore.listAssets = async workspaceId => (await listAssets(workspaceId))
+    .map(asset => asset.relativePath === relativePath ? {
+      ...asset,
+      revision: 5,
+      contentHash: 'browser-local-supplement-hash',
+      updatedAt: '2026-08-04T00:02:00.000Z'
+    } : asset);
+  const directorySync = createDirectorySyncDouble({
+    listWorkspaceManifests: async () => ({
+      permission: 'granted',
+      manifests: [workspace],
+      matches: [{ match: 'exact', manifest: workspace }]
+    })
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync,
+    articleWorkspaceStore: workspaceStore,
+    fetchImpl: async () => { throw new Error('restore must stay local'); }
+  });
+
+  const restored = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
+    identity: workspace,
+    requestPermission: false
+  });
+
+  assert.equal(restored.success, true);
+  assert.equal(restored.data.recoveredBrowserLocalSupplementalAssets, 1);
+  assert.equal(restored.data.restore.assets[0].content.figures[0].caption,
+    'Figure S2. Browser-local caption recovered during upgrade.');
+  assert.ok(directorySync.workspaceAssets.some(asset =>
+    asset.path === relativePath &&
+    asset.value.figures[0].figureLabel === 'Figure S2'
+  ));
 });
 
 test('scan restores validated workspace assets into IndexedDB before returning them', async () => {
@@ -4358,7 +5370,7 @@ test('keeps completed Figure checkpoints when a later Figure fails', async () =>
   assert.equal(resumed.success, true);
   assert.equal(resumed.data.cacheHits, 1);
   assert.equal(callsById['figure-1'], 1);
-  assert.equal(callsById['figure-2'], 3);
+  assert.equal(callsById['figure-2'], 4);
 });
 
 test('routes DeepSeek Figures directly through text evidence mode', async () => {
@@ -4530,6 +5542,102 @@ async function configuredReviewRouter(options = {}) {
   });
   return { router, requests, mapCallsByBatch };
 }
+
+test('translates abbreviation meanings through the summary task profile', async () => {
+  const storageArea = createMemoryStorage();
+  const requests = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, fetchOptions) => {
+      const body = JSON.parse(fetchOptions.body);
+      const payload = JSON.parse(body.input);
+      requests.push({
+        schemaName: body.text?.format?.name,
+        payload
+      });
+      return jsonResponse({ output_text: JSON.stringify({
+        translations: payload.terms.map(item => ({
+          abbreviation: item.abbreviation,
+          meaning_zh: item.abbreviation === 'TNF'
+            ? '肿瘤坏死因子' : '腺相关病毒'
+        }))
+      }) });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'openai',
+    config: { apiKey: 'key', model: 'gpt-5-mini' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'llm', providerId: 'openai', consentGranted: true }
+  });
+
+  const response = await router.handle({
+    type: 'LLM_TRANSLATE_ABBREVIATIONS',
+    entries: [
+      { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+      { abbreviation: 'AAV', fullName: 'adeno-associated virus' }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(response.data.route.taskType, 'summary');
+  assert.deepEqual(response.data.translations.map(item => item.meaningZh), [
+    '肿瘤坏死因子', '腺相关病毒'
+  ]);
+  assert.equal(requests[0].schemaName, 'abbreviation_chinese_meanings');
+});
+
+test('repairs malformed and incomplete abbreviation translation batches without losing terms', async () => {
+  const storageArea = createMemoryStorage();
+  const requestSizes = [];
+  const router = createBackgroundRouter({
+    storageArea,
+    fetchImpl: async (url, fetchOptions) => {
+      const body = JSON.parse(fetchOptions.body);
+      const payload = JSON.parse(body.input);
+      requestSizes.push(payload.terms.length);
+      if (requestSizes.length === 1) {
+        return jsonResponse({ output_text: 'not valid JSON' });
+      }
+      const returnedTerms = payload.terms.length === 2
+        ? payload.terms.slice(0, 1)
+        : payload.terms;
+      return jsonResponse({ output_text: JSON.stringify({
+        translations: returnedTerms.map(item => ({
+          abbreviation: item.abbreviation,
+          meaning_zh: `${item.abbreviation}中文释义`
+        }))
+      }) });
+    }
+  });
+  await router.handle({
+    type: 'LLM_SAVE_PROVIDER',
+    providerId: 'openai',
+    config: { apiKey: 'key', model: 'gpt-5-mini' }
+  });
+  await router.handle({
+    type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'llm', providerId: 'openai', consentGranted: true }
+  });
+
+  const response = await router.handle({
+    type: 'LLM_TRANSLATE_ABBREVIATIONS',
+    entries: [
+      { abbreviation: 'TNF', fullName: 'tumor necrosis factor' },
+      { abbreviation: 'AAV', fullName: 'adeno-associated virus' },
+      { abbreviation: 'NPs', fullName: 'nanoparticles' }
+    ]
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(requestSizes, [3, 2, 1, 1]);
+  assert.deepEqual(response.data.translations.map(item => item.abbreviation), [
+    'TNF', 'AAV', 'NPs'
+  ]);
+});
 
 test('routes a review outline through map reduce and returns subtype metadata', async () => {
   const fixture = await configuredReviewRouter({ reviewSubtype: 'systematic' });
@@ -4816,7 +5924,14 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   const storageArea = createMemoryStorage();
   const settings = globalThis.SciLLM.createDefaultSettings();
   settings.profiles.profile_default_openai.config.apiKey = 'sk-bundle-secret';
+  settings.profiles.profile_default_openai.config.customHeaders = {
+    Authorization: 'Bearer bundle-header-secret'
+  };
   storageArea.values.sciLlmSettingsV2 = settings;
+  storageArea.values.sciGlobalAbbreviationMemoryV1 = {
+    schemaVersion: 1,
+    entries: [{ abbreviation: 'TNF', fullName: 'bundle-abbreviation-private-value' }]
+  };
   const documentStore = createMemoryDocumentStore();
   await documentStore.prepareDocument({
     schemaVersion: 1, documentId: 'sha256:local', title: 'Local', canonicalUrl: '',
@@ -4849,6 +5964,7 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   });
   const router = createBackgroundRouter({
     storageArea, documentStore, directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
 
@@ -4872,8 +5988,383 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   assert.deepEqual(bundle.data.categories.deletedBuiltInCategoryIds, ['objective']);
   assert.doesNotMatch(
     JSON.stringify(bundle.data),
-    /sk-bundle-secret|apiKey|providers|authorization|analysisCache|directoryHandle|syncQueue/i
+    /sk-bundle-secret|bundle-header-secret|bundle-abbreviation-private-value|apiKey|customHeaders|providers|authorization|analysisCache|directoryHandle|syncQueue/i
   );
+});
+
+test('manual directory actions use the authoritative portable gate before touching disk', async () => {
+  for (const authoritativeStatus of [
+    { state: 'locked', pending: false },
+    { state: 'ready', pending: true },
+    { state: 'unavailable', pending: false },
+    { state: 'error', pending: false }
+  ]) {
+    const directorySync = createDirectorySyncDouble();
+    let rebuildCalls = 0;
+    directorySync.rebuildIndex = async () => {
+      rebuildCalls += 1;
+      return { imported: 0 };
+    };
+    const portableConfigManager = {
+      publicStatus: () => ({ state: 'ready', pending: false }),
+      async runWhenReady(operation) {
+        if (authoritativeStatus.state !== 'ready' || authoritativeStatus.pending) {
+          throw Object.assign(new Error('private-state-detail'), {
+            code: 'PORTABLE_CONFIG_NOT_READY'
+          });
+        }
+        return operation();
+      }
+    };
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(), directorySync, portableConfigManager,
+      fetchImpl: async () => jsonResponse({})
+    });
+
+    const synced = await router.handle({ type: 'USER_DATA_SYNC_NOW' });
+    const rebuilt = await router.handle({ type: 'USER_DATA_REBUILD_INDEX' });
+
+    assert.equal(synced.success, false, authoritativeStatus.state);
+    assert.equal(synced.error.code, 'PORTABLE_CONFIG_NOT_READY');
+    assert.equal(rebuilt.success, false, authoritativeStatus.state);
+    assert.equal(rebuilt.error.code, 'PORTABLE_CONFIG_NOT_READY');
+    assert.equal(directorySync.flushCalls, 0);
+    assert.equal(rebuildCalls, 0);
+    assert.doesNotMatch(JSON.stringify([synced, rebuilt]), /private-state-detail/);
+  }
+});
+
+test('ready portable gate preserves directory operation error codes', async () => {
+  const secret = 'directory-operation-secret';
+  for (const type of ['USER_DATA_SYNC_NOW', 'USER_DATA_REBUILD_INDEX']) {
+    const directorySync = createDirectorySyncDouble({
+      flush: () => {
+        throw Object.assign(new Error(secret), { code: 'DIRECTORY_SYNC_UNAVAILABLE' });
+      }
+    });
+    let rebuildCalls = 0;
+    directorySync.rebuildIndex = async () => {
+      rebuildCalls += 1;
+      throw Object.assign(new Error(secret), { code: 'DIRECTORY_SYNC_UNAVAILABLE' });
+    };
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(), directorySync,
+      portableConfigManager: createReadyPortableConfigManagerDouble(),
+      fetchImpl: async () => jsonResponse({})
+    });
+
+    const response = await router.handle({ type });
+
+    assert.equal(response.success, false, type);
+    assert.equal(response.error.code, 'DIRECTORY_SYNC_UNAVAILABLE', type);
+    assert.equal(directorySync.flushCalls, type === 'USER_DATA_SYNC_NOW' ? 1 : 0);
+    assert.equal(rebuildCalls, type === 'USER_DATA_REBUILD_INDEX' ? 1 : 0);
+    assert.doesNotMatch(JSON.stringify(response), new RegExp(secret));
+  }
+});
+
+test('routes portable configuration commands once, maps passphrases, and exposes only public status', async () => {
+  const calls = [];
+  const publicStatus = {
+    state: 'ready', revision: 7, updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: false, lastError: '', backupId: 'must-not-leak', salt: 'must-not-leak'
+  };
+  const portableConfigManager = {
+    probe: async () => { calls.push(['probe']); return publicStatus; },
+    create: async passphrase => { calls.push(['create', passphrase]); return publicStatus; },
+    unlock: async passphrase => { calls.push(['unlock', passphrase]); return publicStatus; },
+    rotatePassphrase: async (current, next) => {
+      calls.push(['rotatePassphrase', current, next]);
+      return publicStatus;
+    },
+    forgetKey: async () => { calls.push(['forgetKey']); return publicStatus; },
+    backupNow: async () => { calls.push(['backupNow']); return publicStatus; },
+    publicStatus: () => { calls.push(['publicStatus']); return publicStatus; }
+  };
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager,
+    fetchImpl: async () => jsonResponse({})
+  });
+  const commands = [
+    [{ type: 'PORTABLE_CONFIG_PROBE' }, ['probe']],
+    [{ type: 'PORTABLE_CONFIG_CREATE', passphrase: 0 }, ['create', '0']],
+    [{ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: false }, ['unlock', 'false']],
+    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: 0, newPassphrase: false }, ['rotatePassphrase', '0', 'false']],
+    [{ type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE', currentPassphrase: null }, ['rotatePassphrase', '', '']],
+    [{ type: 'PORTABLE_CONFIG_FORGET_KEY' }, ['forgetKey']],
+    [{ type: 'PORTABLE_CONFIG_BACKUP_NOW' }, ['backupNow']],
+    [{ type: 'PORTABLE_CONFIG_STATUS' }, ['publicStatus']]
+  ];
+
+  for (const [message, expectedCall] of commands) {
+    const response = await router.handle(message);
+    assert.equal(response.success, true, message.type);
+    assert.deepEqual(response.data, {
+      state: 'ready', revision: 7, updatedAt: '2026-08-03T00:00:00.000Z',
+      pending: false, lastError: ''
+    });
+    assert.deepEqual(calls.at(-1), expectedCall);
+  }
+  assert.equal(commands.length, 8);
+  assert.equal(calls.length, commands.length);
+  assert.deepEqual(calls, commands.map(([, expectedCall]) => expectedCall));
+  assert.deepEqual(
+    Object.fromEntries([...new Set(calls.map(([method]) => method))].map(method => [
+      method, calls.filter(([calledMethod]) => calledMethod === method).length
+    ])),
+    {
+      probe: 1,
+      create: 1,
+      unlock: 1,
+      rotatePassphrase: 2,
+      forgetKey: 1,
+      backupNow: 1,
+      publicStatus: 1
+    }
+  );
+});
+
+test('portable configuration command failures never echo a passphrase and disabled routers are explicit', async () => {
+  const secret = 'portable-route-passphrase-secret';
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    portableConfigManager: {
+      unlock: async () => { throw new Error(`unlock failed: ${secret}`); },
+      probe: async () => ({}), create: async () => ({}), rotatePassphrase: async () => ({}),
+      forgetKey: async () => ({}), backupNow: async () => ({}), publicStatus: () => ({})
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  const failed = await router.handle({ type: 'PORTABLE_CONFIG_UNLOCK', passphrase: secret });
+  assert.equal(failed.success, false);
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret));
+
+  const disabled = createBackgroundRouter({
+    storageArea: createMemoryStorage(), fetchImpl: async () => jsonResponse({})
+  });
+  const response = await disabled.handle({ type: 'PORTABLE_CONFIG_BACKUP_NOW' });
+  assert.deepEqual(response, {
+    success: true,
+    data: { state: 'disabled', revision: 0, updatedAt: '', pending: false, lastError: '' }
+  });
+});
+
+test('user-data status includes a strict portable configuration status whitelist', async () => {
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager: {
+      publicStatus: () => ({
+        state: 'locked', revision: 4, updatedAt: '2026-08-03T00:00:00.000Z',
+        pending: true, lastError: 'PORTABLE_CONFIG_LOCKED', backupId: 'private',
+        salt: 'private', iterations: 999, keyBytes: 'private', payload: 'private',
+        passphrase: 'private', ciphertext: 'private'
+      })
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  const response = await router.handle({ type: 'USER_DATA_SYNC_STATUS' });
+  assert.equal(response.success, true);
+  assert.deepEqual(response.data.portableConfig, {
+    state: 'locked', revision: 4, updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: true, lastError: 'PORTABLE_CONFIG_LOCKED'
+  });
+  assert.doesNotMatch(JSON.stringify(response.data), /private|iterations|keyBytes|payload|passphrase|ciphertext/);
+});
+
+test('portable status commands sanitize malicious manager status fields and unknown portable codes', async () => {
+  const secret = 'portable-status-manager-secret';
+  const hostileStatuses = [
+    {
+      state: { secret }, revision: Infinity, updatedAt: { secret }, pending: 'true',
+      lastError: secret, ciphertext: secret
+    },
+    {
+      state: secret, revision: 1.5, updatedAt: 'x'.repeat(81), pending: false,
+      lastError: 'PORTABLE_CONFIG_EVIL_SECRET', payload: secret
+    },
+    {
+      state: 'ready', revision: Number.MAX_SAFE_INTEGER + 1, updatedAt: 'not-an-iso-date',
+      pending: true, lastError: 'PORTABLE_CONFIG_EVIL_SECRET', keyBytes: secret
+    },
+    {
+      state: 'locked', revision: -1, updatedAt: '2026-08-03T00:00:00.000Z',
+      pending: true, lastError: 'PORTABLE_CONFIG_LOCKED', backupId: secret
+    }
+  ];
+  for (const hostileStatus of hostileStatuses) {
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      directorySync: createDirectorySyncDouble(),
+      portableConfigManager: { publicStatus: () => hostileStatus },
+      fetchImpl: async () => jsonResponse({})
+    });
+    const direct = await router.handle({ type: 'PORTABLE_CONFIG_STATUS' });
+    const bundled = await router.handle({ type: 'USER_DATA_SYNC_STATUS' });
+    for (const response of [direct, { ...bundled, data: bundled.data.portableConfig }]) {
+      assert.equal(response.success, true);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret));
+      assert.deepEqual(Object.keys(response.data).sort(), [
+        'lastError', 'pending', 'revision', 'state', 'updatedAt'
+      ]);
+      assert.ok(Number.isSafeInteger(response.data.revision));
+      assert.ok(response.data.revision >= 0);
+      assert.ok(['unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled']
+        .includes(response.data.state));
+      assert.ok(response.data.updatedAt === '' || (
+        response.data.updatedAt.length <= 80 &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(response.data.updatedAt)
+      ));
+      assert.notEqual(response.data.lastError, 'PORTABLE_CONFIG_EVIL_SECRET');
+    }
+  }
+});
+
+test('portable status reads never echo manager failures, whether synchronous or asynchronous', async () => {
+  const secret = 'portable-status-error-secret';
+  for (const publicStatus of [
+    () => { throw new Error(secret); },
+    async () => { throw Object.assign(new Error(secret), { code: 'PORTABLE_CONFIG_EVIL_SECRET' }); }
+  ]) {
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      directorySync: createDirectorySyncDouble(),
+      portableConfigManager: { publicStatus },
+      fetchImpl: async () => jsonResponse({})
+    });
+    for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+      const response = await router.handle({ type });
+      assert.equal(response.success, false, type);
+      assert.equal(response.error.code, 'PORTABLE_CONFIG_FAILED', type);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+      assert.doesNotMatch(JSON.stringify(response), /PORTABLE_CONFIG_EVIL_SECRET/, type);
+    }
+  }
+});
+
+test('portable status snapshots accessor fields once before sanitizing them', async () => {
+  const secret = 'portable-status-accessor-secret';
+  const validStatus = {
+    state: 'locked',
+    revision: 7,
+    updatedAt: '2026-08-03T00:00:00.000Z',
+    pending: true,
+    lastError: 'PORTABLE_CONFIG_LOCKED'
+  };
+  const fallbackStatus = {
+    state: 'unknown', revision: 0, updatedAt: '', pending: false,
+    lastError: 'PORTABLE_CONFIG_FAILED'
+  };
+  for (const firstValues of [validStatus, {
+    state: secret, revision: secret, updatedAt: secret, pending: secret, lastError: secret
+  }]) {
+    for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+      const counts = Object.fromEntries(Object.keys(validStatus).map(key => [key, 0]));
+      const status = new Proxy({}, {
+        get(target, property) {
+          if (!(property in counts)) return undefined;
+          counts[property] += 1;
+          return counts[property] === 1 ? firstValues[property] : secret;
+        }
+      });
+      const router = createBackgroundRouter({
+        storageArea: createMemoryStorage(),
+        directorySync: createDirectorySyncDouble(),
+        portableConfigManager: { publicStatus: () => status },
+        fetchImpl: async () => jsonResponse({})
+      });
+      const response = await router.handle({ type });
+      const publicStatus = type === 'PORTABLE_CONFIG_STATUS'
+        ? response.data : response.data.portableConfig;
+      assert.equal(response.success, true, type);
+      assert.deepEqual(publicStatus, firstValues === validStatus ? validStatus : fallbackStatus, type);
+      assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+      assert.deepEqual(counts, {
+        state: 1, revision: 1, updatedAt: 1, pending: 1, lastError: 1
+      });
+    }
+  }
+});
+
+test('portable status getter failures are converted to fixed safe errors', async () => {
+  const secret = 'portable-status-getter-secret';
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    directorySync: createDirectorySyncDouble(),
+    portableConfigManager: {
+      publicStatus: () => new Proxy({}, {
+        get() { throw new Error(secret); }
+      })
+    },
+    fetchImpl: async () => jsonResponse({})
+  });
+  for (const type of ['PORTABLE_CONFIG_STATUS', 'USER_DATA_SYNC_STATUS']) {
+    const response = await router.handle({ type });
+    assert.equal(response.success, false, type);
+    assert.equal(response.error.code, 'PORTABLE_CONFIG_FAILED', type);
+    assert.doesNotMatch(JSON.stringify(response), new RegExp(secret), type);
+  }
+});
+
+test('background wires portable manager before its router and schedules only local portable keys', () => {
+  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  for (const type of [
+    'PORTABLE_CONFIG_PROBE', 'PORTABLE_CONFIG_CREATE', 'PORTABLE_CONFIG_UNLOCK',
+    'PORTABLE_CONFIG_ROTATE_PASSPHRASE', 'PORTABLE_CONFIG_FORGET_KEY',
+    'PORTABLE_CONFIG_BACKUP_NOW', 'PORTABLE_CONFIG_STATUS'
+  ]) assert.match(source, new RegExp(`'${type}'`));
+  assert.ok(source.indexOf('const portableConfigManager =') < source.indexOf('const llmRouter ='));
+  assert.match(source, /portableConfigManager\s*\n?\s*\}/);
+  assert.match(source, /createPortableConfigStorageChangeListener\(\s*portableConfigManager\s*\)/);
+  assert.equal((source.match(/chrome\.storage\.onChanged\.addListener/g) || []).length, 1);
+  assert.doesNotMatch(source, /console\.(?:log|warn|error)\([^\n]*(?:passphrase|apiKey|changes)/i);
+});
+
+test('portable storage change listener filters safely, preserves change identity, and warns once without secrets', async () => {
+  const secret = 'portable-storage-listener-secret';
+  const calls = [];
+  const warnings = [];
+  const listener = createPortableConfigStorageChangeListener({
+    scheduleBackup(changes) { calls.push(changes); return { state: 'ready' }; }
+  }, { warn: (...args) => warnings.push(args) });
+  const settingsChange = { sciLlmSettingsV2: { oldValue: {}, newValue: { apiKey: secret } } };
+  const abbreviationChange = { sciGlobalAbbreviationMemoryV1: { oldValue: {}, newValue: {} } };
+  const mineruChange = { sciPdfMineruSettingsV1: {
+    oldValue: {}, newValue: { token: secret, mode: 'precise' }
+  } };
+  const bothChanges = { ...settingsChange, ...abbreviationChange };
+
+  listener(settingsChange, 'sync');
+  listener({ ignored: { newValue: secret } }, 'local');
+  assert.equal(calls.length, 0);
+  listener(bothChanges, 'local');
+  assert.equal(calls.length, 1);
+  assert.strictEqual(calls[0], bothChanges);
+  listener(mineruChange, 'local');
+  assert.equal(calls.length, 2);
+  assert.strictEqual(calls[1], mineruChange);
+  assert.deepEqual(warnings, []);
+
+  const syncWarnings = [];
+  createPortableConfigStorageChangeListener({
+    scheduleBackup() { throw new Error(secret); }
+  }, { warn: (...args) => syncWarnings.push(args) })(settingsChange, 'local');
+  assert.deepEqual(syncWarnings, [[
+    'Brevess: portable configuration backup scheduling failed'
+  ]]);
+  assert.doesNotMatch(JSON.stringify(syncWarnings), new RegExp(secret));
+
+  const asyncWarnings = [];
+  createPortableConfigStorageChangeListener({
+    scheduleBackup() { return Promise.reject(new Error(secret)); }
+  }, { warn: (...args) => asyncWarnings.push(args) })(abbreviationChange, 'local');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(asyncWarnings, [[
+    'Brevess: portable configuration backup scheduling failed'
+  ]]);
+  assert.doesNotMatch(JSON.stringify(asyncWarnings), new RegExp(secret));
 });
 
 test('explicit sync drain waits for a concurrently queued directory rerun', async () => {
@@ -4891,6 +6382,7 @@ test('explicit sync drain waits for a concurrently queued directory rerun', asyn
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(),
     directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
 
@@ -4921,6 +6413,7 @@ test('rebuild shares the document mutation queue so concurrent annotations are p
   };
   const router = createBackgroundRouter({
     storageArea: createMemoryStorage(), documentStore, directorySync,
+    portableConfigManager: createReadyPortableConfigManagerDouble(),
     fetchImpl: async () => jsonResponse({})
   });
   await documentStore.prepareDocument({

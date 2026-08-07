@@ -102,6 +102,7 @@ test('prepares one indexed token-aware request and a stable-prefix NDJSON prompt
   assert.match(first.systemPrompt, /NDJSON/);
   assert.match(first.systemPrompt, /answer_block/);
   assert.match(first.systemPrompt, /one answer_block per fully explained numbered step/i);
+  assert.match(first.systemPrompt, /Number ordered steps continuously across answer_block records/i);
   assert.match(first.systemPrompt, /Use your judgment to match the depth/i);
   assert.match(first.systemPrompt, /Use as many answer_block records as the question needs/i);
   assert.match(first.systemPrompt, /Never emit a heading or numbered label as a block by itself/i);

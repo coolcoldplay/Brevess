@@ -444,8 +444,16 @@ let figureCaptionSidebarState = {
     visible: false,
     figureId: ''
 };
+let figureResultEditorState = {
+    figureId: '',
+    analysisDepth: 'standard',
+    result: null,
+    saving: false
+};
 const SIDE_PANEL_NOTIFICATION_HISTORY_LIMIT = 40;
 let sidePanelNotificationHistory = [];
+const HIGHLIGHT_SOURCE_FILTERS = Object.freeze(['regex', 'llm', 'manual']);
+let visibleHighlightSources = new Set(HIGHLIGHT_SOURCE_FILTERS);
 const METHOD_CATEGORY_LABELS = Object.freeze({
     wet_lab: '\u6e7f\u5b9e\u9a8c',
     imaging: '\u6210\u50cf',
@@ -453,6 +461,21 @@ const METHOD_CATEGORY_LABELS = Object.freeze({
     clinical: '\u4e34\u5e8a',
     schematic: '\u793a\u610f\u56fe',
     other: '\u5176\u4ed6'
+});
+const PANEL_ROLE_LABELS = Object.freeze({
+    model_setup: '模型建立',
+    manipulation_validation: '操作验证',
+    phenotype: '表型证据',
+    quantification: '定量证据',
+    mechanism: '机制证据',
+    negative_control: '阴性对照',
+    specificity: '特异性验证',
+    necessity: '必要性检验',
+    sufficiency: '充分性检验',
+    rescue: '挽救实验',
+    functional_outcome: '功能结局',
+    external_validation: '外部验证',
+    other: '其他证据'
 });
 const CROSS_FIGURE_ROLE_LABELS = Object.freeze({
     problem_setup: '提出问题/建立模型', phenomenon: '建立现象', association: '建立关联',
@@ -483,6 +506,17 @@ let activeWorkspaceView = 'analysis';
 let workspaceGeneration = 1;
 let workspaceUiSaveTimer = null;
 let currentWorkspaceSnapshot = null;
+let currentArticleAbbreviationSnapshot = {
+    entries: [],
+    automaticCount: 0,
+    manualCount: 0,
+    globalCount: 0,
+    excludedCount: 0,
+    translatedCount: 0
+};
+let globalAbbreviationMemoryEntryCount = 0;
+let abbreviationTranslationPending = false;
+let abbreviationDialogRequestSequence = 0;
 let articleChatSelectedProfileId = '';
 const articleChatTurnElements = new Map();
 const articleChatHistoryPageSize = 30;
@@ -495,6 +529,7 @@ let articleChatCommandItems = [];
 let articleChatCommandActiveIndex = -1;
 let articleChatCommandTrigger = null;
 const workspaceParagraphSummaryState = new Map();
+let paragraphNoteEditorTarget = null;
 let reviewOutlineTaskGeneration = 0;
 let paragraphSummaryTaskGeneration = 0;
 let workspaceRefreshSequence = 0;
@@ -509,16 +544,44 @@ let activePanelTabContext = {
     url: '',
     key: '',
     activated: false,
+    pdfMode: false,
     tabContextSequence: 0
 };
 let panelUiReady = false;
 let tabContextSequence = 0;
 let tabContextRequestSequence = 0;
 let tabContextSyncTimer = null;
+let inactiveTabActivationPromise = null;
 
 async function queryPanelTargetTab() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tab || null;
+    if (!tab?.id || tab.url || tab.pendingUrl) return tab || null;
+
+    // Browsers may omit url/title for the extension-owned PDF reader even
+    // though it is the active tab. Recover only a previously activated reader
+    // URL and verify that the live tab still hosts the PDF workspace before
+    // using it, so a stale activation cannot be applied to another extension
+    // page in the same tab.
+    const activation = await SciLLM.readTabActivation(
+        chrome.storage.session,
+        tab.id
+    ).catch(() => null);
+    const readerUrl = SciLLM.isPdfReaderUrl?.(activation?.url)
+        ? activation.url
+        : '';
+    if (!readerUrl) return tab;
+    const pdfWorkspace = await SciLLM.sendTabMessageIfPresent(
+        chrome,
+        tab.id,
+        { action: 'getPdfWorkspaceState' }
+    ).catch(() => null);
+    if (!pdfWorkspace?.success || pdfWorkspace.pdfMode !== true) return tab;
+    return {
+        ...tab,
+        url: readerUrl,
+        pendingUrl: readerUrl,
+        title: String(activation?.title || '文献 PDF')
+    };
 }
 
 async function publishSidePanelShortcutScope(
@@ -543,7 +606,11 @@ async function publishSidePanelShortcutScope(
 }
 
 function capturePanelContext(taskToken = 0) {
-    return SciLLM.capturePanelContext(activePanelTabContext, taskToken);
+    return {
+        ...SciLLM.capturePanelContext(activePanelTabContext, taskToken),
+        url: activePanelTabContext.url,
+        pdfMode: activePanelTabContext.pdfMode === true
+    };
 }
 
 function isCurrentPanelContext(panelContext) {
@@ -666,8 +733,16 @@ function recordSidePanelNotification(message, type = 'info', timestamp = Date.no
         : type === 'success' ? 'success' : 'info';
     const normalizedTimestamp = Math.max(0, Number(timestamp) || 0) || Date.now();
     const newest = sidePanelNotificationHistory[0];
-    if (newest?.message === normalizedMessage &&
-        normalizedTimestamp - newest.timestamp < 1500) {
+    const transientHighlightProgress = value => /(?:当前段落已完成并保存|当前小块结果已渲染|LLM 正在分析(?:正文)?|正在使用 LLM 分析)/u
+        .test(String(value || ''));
+    if ((newest?.message === normalizedMessage &&
+        normalizedTimestamp - newest.timestamp < 1500) ||
+        (transientHighlightProgress(newest?.message) &&
+            transientHighlightProgress(normalizedMessage) &&
+            normalizedTimestamp - newest.timestamp < 60000)) {
+        // 分块进度是一个持续更新的状态，不应让 0 条候选等中间消息
+        // 挤满通知历史。保留最近状态，最终完成/失败消息仍单独入列。
+        newest.message = normalizedMessage;
         newest.timestamp = normalizedTimestamp;
         newest.type = normalizedType;
     } else {
@@ -715,6 +790,7 @@ function cacheCurrentPanelTabState() {
         articleChatVisibleTurnCount,
         currentArticleArchiveProbe,
         sidePanelNotificationHistory: sidePanelNotificationHistory.map(item => ({ ...item })),
+        visibleHighlightSources: [...visibleHighlightSources],
         figureAnalysisState: { ...figureAnalysisState },
         reviewOutlineState: { ...reviewOutlineState }
     });
@@ -765,6 +841,7 @@ function resetPanelArticleState() {
     figureTaskGeneration += 1;
     reviewOutlineTaskGeneration += 1;
     paragraphSummaryTaskGeneration += 1;
+    abbreviationDialogRequestSequence += 1;
     figureAnalysisState = {
         running: false, phase: 'idle', currentFigure: 0, totalFigures: 0,
         completedFigures: 0, failedFigures: 0, figureLabel: '', message: '', figureProgress: []
@@ -794,8 +871,21 @@ function resetPanelArticleState() {
     clearTimeout(workspaceUiSaveTimer);
     workspaceUiSaveTimer = null;
     currentWorkspaceSnapshot = null;
+    currentArticleAbbreviationSnapshot = {
+        entries: [],
+        automaticCount: 0,
+        manualCount: 0,
+        globalCount: 0,
+        excludedCount: 0,
+        translatedCount: 0,
+        documentKey: '',
+        tabId: null
+    };
+    const abbreviationDialog = document.getElementById('articleAbbreviationDialog');
+    if (abbreviationDialog?.open) abbreviationDialog.close();
     currentArticleArchiveProbe = null;
     sidePanelNotificationHistory = [];
+    visibleHighlightSources = new Set(HIGHLIGHT_SOURCE_FILTERS);
     renderSidePanelNotificationHistory();
     lastArticlePreparationError = null;
     setArticleArchivePrompt(null);
@@ -823,11 +913,56 @@ function renderInactiveTabState(tab = null) {
     const navigationStatus = document.getElementById('articleNavigationStatus');
     const retry = document.getElementById('retryArticlePreparation');
     if (title) title.textContent = tab?.title || '当前页面';
-    if (statusText) statusText.textContent = '此标签页尚未激活，请点击扩展图标激活';
-    if (navigationStatus) navigationStatus.textContent = '点击扩展图标后读取当前论文结构';
+    if (statusText) statusText.textContent = '此标签页尚未激活，点击侧栏任意位置即可激活';
+    if (navigationStatus) navigationStatus.textContent = '点击侧栏后读取当前论文结构';
     status?.classList.remove('is-error', 'is-ready');
     status?.classList.add('is-idle');
     if (retry) retry.hidden = true;
+}
+
+async function activateCurrentTabFromSidePanel() {
+    if (activePanelTabContext.activated) return true;
+    if (inactiveTabActivationPromise) return inactiveTabActivationPromise;
+    inactiveTabActivationPromise = (async () => {
+        const tab = await queryPanelTargetTab();
+        if (!tab?.id) throw new Error('无法获取当前标签页');
+        const statusText = document.getElementById('sidePanelDocumentStatusText');
+        if (statusText) {
+            statusText.textContent = SciLLM.isLikelyPdfUrl?.(
+                tab.url || tab.pendingUrl,
+                tab.title
+            )
+                ? '正在激活并准备解析当前 PDF…'
+                : '正在激活当前标签页…';
+        }
+        const response = await chrome.runtime.sendMessage({
+            type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+            tabId: tab.id,
+            url: SciLLM.normalizeTabDocumentUrl(tab.url || tab.pendingUrl)
+        });
+        if (!response?.success) {
+            throw new Error(response?.error?.message || '激活当前标签页失败');
+        }
+        await synchronizeActiveTabContext({ force: true });
+        return true;
+    })().catch(error => {
+        renderInactiveTabState();
+        showStatus(`激活当前标签页失败：${error.message}`, 'error');
+        return false;
+    }).finally(() => {
+        inactiveTabActivationPromise = null;
+    });
+    return inactiveTabActivationPromise;
+}
+
+function setupInactiveTabClickActivation() {
+    document.addEventListener('click', event => {
+        if (!panelUiReady || activePanelTabContext.activated ||
+            inactiveTabActivationPromise) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void activateCurrentTabFromSidePanel();
+    }, true);
 }
 
 function restorePanelTabState(cached) {
@@ -847,6 +982,11 @@ function restorePanelTabState(cached) {
     currentArticleArchiveProbe = cached.currentArticleArchiveProbe || null;
     sidePanelNotificationHistory = (Array.isArray(cached.sidePanelNotificationHistory)
         ? cached.sidePanelNotificationHistory : []).map(item => ({ ...item }));
+    visibleHighlightSources = new Set(
+        (Array.isArray(cached.visibleHighlightSources)
+            ? cached.visibleHighlightSources : HIGHLIGHT_SOURCE_FILTERS)
+            .filter(source => HIGHLIGHT_SOURCE_FILTERS.includes(source))
+    );
     renderSidePanelNotificationHistory();
     reviewOutlineState = { ...reviewOutlineState, ...cached.reviewOutlineState };
     document.getElementById('sidePanelApp')?.classList.remove('is-tab-inactive');
@@ -884,6 +1024,7 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         url: SciLLM.normalizeTabDocumentUrl(tab?.url || tab?.pendingUrl),
         key,
         activated,
+        pdfMode: SciLLM.isPdfReaderUrl?.(tab?.url || tab?.pendingUrl) === true,
         tabContextSequence
     };
     if (previousActivated && Number(previousTabId) !== Number(tab?.id)) {
@@ -898,6 +1039,23 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     }
 
     document.getElementById('sidePanelApp')?.classList.remove('is-tab-inactive');
+    if (activePanelTabContext.pdfMode) {
+        const pdfWorkspace = await sendTabMessage(tab.id, {
+            action: 'getPdfWorkspaceState'
+        }).catch(() => null);
+        if (requestId !== tabContextRequestSequence) return null;
+        if (!pdfWorkspace?.ready) {
+            const failed = pdfWorkspace?.state === 'error';
+            renderArticleConnectionStage(
+                failed
+                    ? 'PDF 尚未解析完成，请在左侧检查 MinerU 设置后重试'
+                    : '正在把 PDF 转为可导航正文；完成后会自动连接…',
+                tab?.title || '文献 PDF'
+            );
+            updateApplyButton();
+            return activePanelTabContext;
+        }
+    }
     const cached = !force ? panelTabStateCache.get(key) : null;
     if (cached) {
         panelTabStateCache.delete(key);
@@ -928,7 +1086,7 @@ function setupActiveTabSynchronization() {
         if (changeInfo.url) {
             scheduleActiveTabContextSync();
         } else if (changeInfo.status === 'complete' &&
-            tabId === activePanelTabContext.tabId && activePanelTabContext.activated) {
+            tabId === activePanelTabContext.tabId) {
             scheduleActiveTabContextSync({ force: true });
         }
     });
@@ -942,6 +1100,35 @@ function setupActiveTabSynchronization() {
         if (message?.type === 'PANEL_TAB_ACTIVATED') {
             scheduleActiveTabContextSync();
         }
+        if (message?.type === 'PDF_WORKSPACE_READY' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            showStatus(
+                `PDF 已准备完成：${Number(message.paragraphCount) || 0} 个段落、` +
+                    `${Number(message.figureCount) || 0} 张 Figure；全文问答和图解现在可用` +
+                    (message.mineruQuotaText ? `。${message.mineruQuotaText}` : ''),
+                'success'
+            );
+            scheduleActiveTabContextSync({ force: true });
+        }
+        if (message?.type === 'PDF_WORKSPACE_INDEXED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            showStatus(
+                `PDF 已建立统一索引：${Number(message.paragraphCount) || 0} 个段落、` +
+                    `${Number(message.figureCount) || 0} 张完整 Figure；五个模块现在共用同一份正文`,
+                'success'
+            );
+            scheduleActiveTabContextSync({ force: true });
+        }
+        if (message?.type === 'PDF_WORKSPACE_ERROR' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId)) {
+            showStatus(
+                'PDF 解析尚未完成，请在文献页检查 MinerU 解析设置' +
+                    (message.mineruQuotaText ? `。${message.mineruQuotaText}` : ''),
+                'error'
+            );
+        }
         if (message?.type === 'SIDE_PANEL_GLOBAL_SHORTCUT' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
@@ -951,6 +1138,21 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             void refreshArticleWorkspace();
+        }
+        if (message?.type === 'ABBREVIATION_MEMORY_CHANGED') {
+            const dialog = document.getElementById('articleAbbreviationDialog');
+            void refreshGlobalAbbreviationMemoryCount()
+                .then(() => {
+                    if (dialog?.open) return showArticleAbbreviationTable();
+                    return null;
+                })
+                .catch(() => {});
+        }
+        if (message?.type === 'ARTICLE_ABBREVIATIONS_CHANGED' &&
+            Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
+            activePanelTabContext.activated) {
+            const dialog = document.getElementById('articleAbbreviationDialog');
+            if (dialog?.open) void showArticleAbbreviationTable();
         }
         if (message?.type === 'ARTICLE_CHAT_STATE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
@@ -966,6 +1168,8 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
+            const preserveCrossFigureSidebar =
+                shouldPreserveCrossFigureSidebar(message.navigationMode);
             figureOriginalViewerState = {
                 open: message.open === true,
                 tabId: sender.tab.id,
@@ -978,7 +1182,8 @@ function setupActiveTabSynchronization() {
                 showFigureCaptionSidebar(String(message.figureId));
             } else if (previousCaptionVisible) {
                 hideFigureCaptionSidebar(String(message.figureId || ''));
-            } else if (message.open === true && message.figureId) {
+            } else if (message.open === true && message.figureId &&
+                !preserveCrossFigureSidebar) {
                 followFigureOriginalViewerInSidebar(String(message.figureId));
             }
         }
@@ -1111,24 +1316,124 @@ async function jumpToArticleAbbreviationSource(entry, dialog) {
     return true;
 }
 
-async function showArticleAbbreviationTable() {
+function articleAbbreviationInitial(value) {
+    const normalized = String(value || '').normalize('NFKC').trim().toUpperCase();
+    const latin = normalized.match(/[A-Z]/);
+    return latin ? latin[0] : '#';
+}
+
+function renderArticleAbbreviationAlphabetNav(entries = []) {
+    const nav = document.getElementById('articleAbbreviationAlphabetNav');
+    const wrap = document.getElementById('articleAbbreviationTableWrap');
+    if (!nav || !wrap) return;
+    const initials = new Set((Array.isArray(entries) ? entries : [])
+        .map(entry => articleAbbreviationInitial(entry?.abbreviation)));
+    nav.replaceChildren();
+    [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'].forEach(letter => {
+        const button = createWorkspaceElement(
+            'button', 'abbreviation-alphabet-button', letter
+        );
+        button.type = 'button';
+        button.disabled = !initials.has(letter);
+        button.setAttribute('aria-label', button.disabled
+            ? `没有以 ${letter} 开头的缩写`
+            : `跳转到以 ${letter} 开头的缩写`);
+        button.addEventListener('click', () => {
+            const row = Array.from(
+                document.querySelectorAll('#articleAbbreviationTableBody tr')
+            ).find(item => item.dataset.abbreviationInitial === letter);
+            if (!row) return;
+            wrap.scrollTo({
+                top: Math.max(0, row.offsetTop - 36),
+                behavior: 'smooth'
+            });
+            document.querySelectorAll('.abbreviation-table-row.is-alphabet-target')
+                .forEach(item => item.classList.remove('is-alphabet-target'));
+            row.classList.add('is-alphabet-target');
+            row.querySelector('.abbreviation-table-jump')?.focus({ preventScroll: true });
+            setTimeout(() => row.classList.remove('is-alphabet-target'), 1200);
+        });
+        nav.appendChild(button);
+    });
+    nav.hidden = entries.length === 0;
+}
+
+async function loadArticleAbbreviationSnapshot({ forceRefresh = false } = {}) {
+    const tab = await queryPanelTargetTab();
+    if (!tab?.id) throw new Error('无法获取当前论文页面');
+    const requestedDocumentKey = panelTabDocumentKey(tab);
+    const response = await sendTabMessage(tab.id, {
+        action: 'getArticleAbbreviations',
+        forceRefresh
+    });
+    if (!response?.success || !response.abbreviations) {
+        throw new Error(response?.error || '无法读取本文缩略词表');
+    }
+    const currentTab = await queryPanelTargetTab();
+    if (!requestedDocumentKey ||
+        panelTabDocumentKey(currentTab) !== requestedDocumentKey) {
+        const error = new Error('当前查看的论文已切换，请重新打开缩略词表');
+        error.code = 'ABBREVIATION_TAB_CHANGED';
+        throw error;
+    }
+    currentArticleAbbreviationSnapshot = {
+        ...response.abbreviations,
+        documentKey: requestedDocumentKey,
+        tabId: Number(tab.id)
+    };
+    return currentArticleAbbreviationSnapshot;
+}
+
+function abbreviationSourceLabel(sourceType) {
+    return ({
+        automatic: '自动',
+        manual: '手动',
+        global: '全局',
+        'automatic+global': '自动+全局'
+    })[sourceType] || '自动';
+}
+
+function renderArticleAbbreviationStatus(snapshot) {
+    const status = document.getElementById('articleAbbreviationStatus');
+    if (!status) return;
+    const entries = Array.isArray(snapshot?.entries) ? snapshot.entries : [];
+    if (!entries.length) {
+        status.textContent = '未调用 LLM；仅保留正文中有明确全称关系或全局记忆命中的缩写。';
+        return;
+    }
+    status.textContent =
+        `共 ${entries.length} 项 · 自动 ${Number(snapshot.automaticCount) || 0}` +
+        ` · 手动 ${Number(snapshot.manualCount) || 0}` +
+        ` · 全局命中 ${Number(snapshot.globalCount) || 0}` +
+        ` · 中文 ${Number(snapshot.translatedCount) || 0}/${entries.length}` +
+        ` · 全局词库 ${globalAbbreviationMemoryEntryCount} 项`;
+}
+
+async function persistArticleAbbreviationTranslations(translations) {
+    const tab = await queryPanelTargetTab();
+    if (!tab?.id) throw new Error('无法获取当前论文页面');
+    const response = await sendTabMessage(tab.id, {
+        action: 'updateArticleAbbreviationTranslations',
+        translations
+    });
+    if (!response?.success || !response.abbreviations) {
+        throw new Error(response?.error || '中文含义保存失败');
+    }
+    currentArticleAbbreviationSnapshot = response.abbreviations;
+    return response.abbreviations;
+}
+
+function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSnapshot) {
     const dialog = document.getElementById('articleAbbreviationDialog');
     const body = document.getElementById('articleAbbreviationTableBody');
-    const status = document.getElementById('articleAbbreviationStatus');
     const empty = document.getElementById('articleAbbreviationEmpty');
-    if (!dialog || !body || !status || !empty) return;
-    let snapshot = currentWorkspaceSnapshot;
-    if (!Array.isArray(snapshot?.paragraphs) || !snapshot.paragraphs.length) {
-        snapshot = await refreshArticleWorkspace();
-    }
-    const abbreviationParagraphs = (Array.isArray(snapshot?.paragraphs)
-        ? snapshot.paragraphs : []).filter(paragraph =>
-        String(paragraph?.sectionKind || '').toLowerCase() !== 'reference');
-    const entries = SciLLM.extractArticleAbbreviations?.(abbreviationParagraphs) || [];
+    if (!dialog || !body || !empty) return;
+    const entries = Array.isArray(snapshot?.entries) ? snapshot.entries : [];
     body.replaceChildren();
     entries.forEach(entry => {
         const row = document.createElement('tr');
         row.className = 'abbreviation-table-row';
+        row.dataset.abbreviationInitial = articleAbbreviationInitial(entry.abbreviation);
         row.title = `跳转到 ${entry.abbreviation} 在正文中首次出现的位置`;
         const createJumpCell = (text, label) => {
             const cell = document.createElement('td');
@@ -1154,14 +1459,310 @@ async function showArticleAbbreviationTable() {
             entry.fullName,
             `${entry.abbreviation} 的全称 ${entry.fullName}`
         );
-        row.append(abbreviation, fullName);
+        const meaningCell = document.createElement('td');
+        const meaningEditor = document.createElement('div');
+        meaningEditor.className = 'abbreviation-meaning-editor';
+        const meaningInput = document.createElement('input');
+        meaningInput.type = 'text';
+        meaningInput.className = 'abbreviation-meaning-input';
+        meaningInput.maxLength = 240;
+        meaningInput.value = String(entry.meaningZh || '');
+        meaningInput.placeholder = '可手动填写中文';
+        meaningInput.dataset.origin = String(entry.meaningSource || '');
+        meaningInput.setAttribute(
+            'aria-label',
+            `${entry.abbreviation} 的中文含义`
+        );
+        const saveMeaning = createWorkspaceElement(
+            'button', 'abbreviation-meaning-save', '保存'
+        );
+        saveMeaning.type = 'button';
+        saveMeaning.hidden = true;
+        saveMeaning.setAttribute('aria-label', `保存 ${entry.abbreviation} 的中文含义`);
+        const originalMeaning = meaningInput.value;
+        const updateDirtyState = () => {
+            saveMeaning.hidden = meaningInput.value.trim() === originalMeaning.trim();
+        };
+        meaningInput.addEventListener('input', updateDirtyState);
+        meaningInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !saveMeaning.hidden) {
+                event.preventDefault();
+                saveMeaning.click();
+            } else if (event.key === 'Escape') {
+                meaningInput.value = originalMeaning;
+                updateDirtyState();
+            }
+        });
+        saveMeaning.addEventListener('click', async () => {
+            const meaningZh = meaningInput.value.trim();
+            if (meaningZh && !/[\u3400-\u9fff]/u.test(meaningZh)) {
+                showStatus('中文含义至少应包含一个中文字符。', 'error');
+                meaningInput.focus();
+                return;
+            }
+            saveMeaning.disabled = true;
+            meaningInput.disabled = true;
+            try {
+                const next = await persistArticleAbbreviationTranslations([{
+                    abbreviation: entry.abbreviation,
+                    fullName: entry.fullName,
+                    meaningZh,
+                    origin: 'manual'
+                }]);
+                renderArticleAbbreviationTable(next);
+                showStatus(
+                    meaningZh
+                        ? `已保存 ${entry.abbreviation} 的中文含义`
+                        : `已清空 ${entry.abbreviation} 的中文含义`,
+                    'success'
+                );
+            } catch (error) {
+                saveMeaning.disabled = false;
+                meaningInput.disabled = false;
+                showStatus(`中文含义保存失败：${error.message}`, 'error');
+            }
+        });
+        meaningEditor.append(meaningInput, saveMeaning);
+        meaningCell.appendChild(meaningEditor);
+
+        const sourceCell = document.createElement('td');
+        sourceCell.className = 'abbreviation-source-cell';
+        const sourceBadge = createWorkspaceElement(
+            'span',
+            'abbreviation-source-badge',
+            abbreviationSourceLabel(entry.sourceType)
+        );
+        sourceBadge.dataset.source = String(entry.sourceType || 'automatic');
+        sourceCell.appendChild(sourceBadge);
+
+        const deleteCell = document.createElement('td');
+        deleteCell.className = 'abbreviation-delete-cell';
+        const remove = createWorkspaceElement(
+            'button', 'abbreviation-row-delete', '×'
+        );
+        remove.type = 'button';
+        remove.title = '从本文缩略词表移除';
+        remove.setAttribute('aria-label', `从本文缩略词表移除 ${entry.abbreviation}`);
+        remove.addEventListener('click', async () => {
+            if (!confirm(`从本文缩略词表移除 ${entry.abbreviation}？`)) return;
+            remove.disabled = true;
+            try {
+                const tab = await queryPanelTargetTab();
+                if (!tab?.id) throw new Error('无法获取当前论文页面');
+                const response = await sendTabMessage(tab.id, {
+                    action: 'removeArticleAbbreviation',
+                    abbreviation: entry.abbreviation
+                });
+                if (!response?.success || !response.abbreviations) {
+                    throw new Error(response?.error || '移除失败');
+                }
+                currentArticleAbbreviationSnapshot = response.abbreviations;
+                renderArticleAbbreviationTable(response.abbreviations);
+                showStatus(`已从本文缩略词表移除 ${entry.abbreviation}`, 'success');
+            } catch (error) {
+                remove.disabled = false;
+                showStatus(`移除缩略词失败：${error.message}`, 'error');
+            }
+        });
+        deleteCell.appendChild(remove);
+        row.append(abbreviation, fullName, meaningCell, sourceCell, deleteCell);
         body.appendChild(row);
     });
+    renderArticleAbbreviationAlphabetNav(entries);
     empty.hidden = entries.length > 0;
-    status.textContent = entries.length
-        ? `本地提取 ${entries.length} 项 · 未调用 LLM · 已按缩写字母顺序排列`
-        : '未调用 LLM；仅保留正文中有明确全称对应关系的缩写。';
+    renderArticleAbbreviationStatus(snapshot);
+}
+
+async function refreshGlobalAbbreviationMemoryCount() {
+    const response = await chrome.runtime.sendMessage({
+        type: 'ABBREVIATION_MEMORY_GET'
+    });
+    if (!response?.success) {
+        throw new Error(response?.error?.message || '无法读取全局缩略词库');
+    }
+    const memory = SciLLM.normalizeGlobalAbbreviationMemory(response.data?.memory);
+    globalAbbreviationMemoryEntryCount = memory.entries.length;
+    return memory;
+}
+
+async function showArticleAbbreviationTable({ forceRefresh = false } = {}) {
+    const dialog = document.getElementById('articleAbbreviationDialog');
+    if (!dialog) return;
+    const requestSequence = ++abbreviationDialogRequestSequence;
+    try {
+        const [snapshot] = await Promise.all([
+            loadArticleAbbreviationSnapshot({ forceRefresh }),
+            refreshGlobalAbbreviationMemoryCount().catch(() => null)
+        ]);
+        if (requestSequence !== abbreviationDialogRequestSequence) return;
+        renderArticleAbbreviationTable(snapshot);
+    } catch (error) {
+        if (requestSequence !== abbreviationDialogRequestSequence) return;
+        renderArticleAbbreviationTable({
+            entries: [],
+            automaticCount: 0,
+            manualCount: 0,
+            globalCount: 0,
+            translatedCount: 0
+        });
+        const status = document.getElementById('articleAbbreviationStatus');
+        if (status) status.textContent = `缩略词表读取失败：${error.message}`;
+    }
     if (!dialog.open) dialog.showModal();
+}
+
+async function mergeIntoGlobalAbbreviationMemory(entries, {
+    incrementSupport = false
+} = {}) {
+    const response = await chrome.runtime.sendMessage({
+        type: 'ABBREVIATION_MEMORY_MERGE',
+        entries,
+        incrementSupport
+    });
+    if (!response?.success) {
+        throw new Error(response?.error?.message || '全局缩略词库更新失败');
+    }
+    globalAbbreviationMemoryEntryCount =
+        Number(response.data?.memory?.entries?.length) || 0;
+    return response.data;
+}
+
+async function importCurrentArticleAbbreviationsToGlobal() {
+    const button = document.getElementById('importArticleAbbreviationsToGlobal');
+    const entries = Array.isArray(currentArticleAbbreviationSnapshot?.entries)
+        ? currentArticleAbbreviationSnapshot.entries : [];
+    if (!entries.length) {
+        showStatus('本文缩略词表为空，没有可导入的项目。', 'error');
+        return;
+    }
+    if (button) {
+        button.disabled = true;
+        button.textContent = '正在导入…';
+    }
+    try {
+        const result = await mergeIntoGlobalAbbreviationMemory(entries, {
+            incrementSupport: true
+        });
+        renderArticleAbbreviationStatus(currentArticleAbbreviationSnapshot);
+        showStatus(
+            `已导入全局记忆：新增 ${result.stats?.added || 0}、` +
+            `更新 ${result.stats?.updated || 0}、已有 ${result.stats?.skipped || 0} 项`,
+            'success'
+        );
+    } catch (error) {
+        showStatus(`导入全局记忆失败：${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '本文导入全局记忆';
+        }
+    }
+}
+
+async function exportGlobalAbbreviationMemoryFile() {
+    const button = document.getElementById('exportGlobalAbbreviationMemory');
+    if (button) {
+        button.disabled = true;
+        button.textContent = '正在导出…';
+    }
+    try {
+        const memory = await refreshGlobalAbbreviationMemoryCount();
+        const payload = SciLLM.createGlobalAbbreviationMemoryExport(memory);
+        const date = new Date().toISOString().slice(0, 10);
+        downloadBlob(
+            new Blob([JSON.stringify(payload, null, 2)], {
+                type: 'application/json;charset=utf-8'
+            }),
+            `brevess-global-abbreviations-${date}.json`
+        );
+        renderArticleAbbreviationStatus(currentArticleAbbreviationSnapshot);
+        showStatus(`已导出 ${payload.entryCount} 项全局缩略词，可直接分享 JSON 文件。`, 'success');
+    } catch (error) {
+        showStatus(`全局词库导出失败：${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '导出词库';
+        }
+    }
+}
+
+async function importGlobalAbbreviationMemoryFile(file) {
+    if (!file) return;
+    const button = document.getElementById('importGlobalAbbreviationMemoryButton');
+    if (button) {
+        button.disabled = true;
+        button.textContent = '正在导入…';
+    }
+    try {
+        if (file.size > 5 * 1024 * 1024) {
+            throw new Error('词库文件超过 5 MB');
+        }
+        const parsed = JSON.parse(await file.text());
+        const imported = SciLLM.parseGlobalAbbreviationMemoryImport(parsed);
+        const result = await mergeIntoGlobalAbbreviationMemory(imported.entries);
+        renderArticleAbbreviationStatus(currentArticleAbbreviationSnapshot);
+        showStatus(
+            `词库导入完成：新增 ${result.stats?.added || 0}、` +
+            `更新 ${result.stats?.updated || 0}、跳过 ${result.stats?.skipped || 0} 项`,
+            'success'
+        );
+    } catch (error) {
+        const message = error?.code === 'INVALID_ABBREVIATION_MEMORY_IMPORT'
+            ? '文件不是有效的 Brevess 全局缩略词库'
+            : error.message;
+        showStatus(`词库导入失败：${message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '导入词库';
+        }
+    }
+}
+
+async function translateArticleAbbreviationsWithSummaryModel() {
+    if (abbreviationTranslationPending) return;
+    if (!requireUsableLlm('缩略词中文含义')) return;
+    const entries = (Array.isArray(currentArticleAbbreviationSnapshot?.entries)
+        ? currentArticleAbbreviationSnapshot.entries : [])
+        .filter(entry => !String(entry.meaningZh || '').trim());
+    if (!entries.length) {
+        showStatus('当前缩略词都已有中文含义；手动内容不会被自动覆盖。', 'success');
+        return;
+    }
+    const button = document.getElementById('translateArticleAbbreviations');
+    abbreviationTranslationPending = true;
+    if (button) {
+        button.disabled = true;
+        button.textContent = `获取中 0/${entries.length}`;
+    }
+    try {
+        const response = await sendLlmMessage({
+            type: 'LLM_TRANSLATE_ABBREVIATIONS',
+            entries: entries.map(entry => ({
+                abbreviation: entry.abbreviation,
+                fullName: entry.fullName
+            }))
+        });
+        if (button) button.textContent = `保存中 ${entries.length}/${entries.length}`;
+        const next = await persistArticleAbbreviationTranslations(
+            response.translations || []
+        );
+        renderArticleAbbreviationTable(next);
+        showStatus(
+            `已补齐 ${response.translations?.length || 0} 项中文含义`,
+            'success',
+            response.notificationUsage
+        );
+    } catch (error) {
+        showStatus(`中文含义生成失败：${error.message}`, 'error');
+    } finally {
+        abbreviationTranslationPending = false;
+        if (button) {
+            button.disabled = false;
+            button.textContent = '一键获取';
+        }
+    }
 }
 
 function setupWorkspaceNavigation() {
@@ -1176,6 +1777,29 @@ function setupWorkspaceNavigation() {
     document.getElementById('showArticleAbbreviations')?.addEventListener('click', () => {
         void showArticleAbbreviationTable();
     });
+    document.getElementById('importArticleAbbreviationsToGlobal')
+        ?.addEventListener('click', () => {
+            void importCurrentArticleAbbreviationsToGlobal();
+        });
+    document.getElementById('exportGlobalAbbreviationMemory')
+        ?.addEventListener('click', () => {
+            void exportGlobalAbbreviationMemoryFile();
+        });
+    document.getElementById('importGlobalAbbreviationMemoryButton')
+        ?.addEventListener('click', () => {
+            document.getElementById('importGlobalAbbreviationMemoryFile')?.click();
+        });
+    document.getElementById('importGlobalAbbreviationMemoryFile')
+        ?.addEventListener('change', event => {
+            const input = event.currentTarget;
+            const file = input.files?.[0] || null;
+            input.value = '';
+            void importGlobalAbbreviationMemoryFile(file);
+        });
+    document.getElementById('translateArticleAbbreviations')
+        ?.addEventListener('click', () => {
+            void translateArticleAbbreviationsWithSummaryModel();
+        });
     document.getElementById('expandAllOutlineLevels')?.addEventListener('click', () => {
         setAllOutlineLevelsExpanded(true);
     });
@@ -1196,6 +1820,7 @@ function setupWorkspaceNavigation() {
             forceRefresh: Boolean(currentWorkspaceSnapshot?.reviewOutline)
         });
     });
+    setupFigureResultEditor();
     setupFigureKeyboardNavigation();
     setupGlobalKeyboardShortcuts();
     switchWorkspaceView(activeWorkspaceView);
@@ -1291,6 +1916,32 @@ function workspaceParagraphsForNode(snapshot, node) {
             String(paragraph.sectionId || '') === String(node.sectionId || ''));
 }
 
+function renderWorkspaceBilingualTitle(button, node = {}) {
+    const primary = String(node.title || '未命名章节')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim();
+    const display = String(node.displayTitle || primary)
+        .normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+    let lines = display.split(/\n+/)
+        .map(line => line.replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+    if (lines.length === 1 && primary &&
+        lines[0].toLocaleLowerCase().startsWith(primary.toLocaleLowerCase())) {
+        const remainder = lines[0].slice(primary.length).trim();
+        lines = [primary, ...(remainder ? [remainder] : [])];
+    }
+    const translations = lines.filter(line =>
+        line.toLocaleLowerCase() !== primary.toLocaleLowerCase());
+    const primaryLine = createWorkspaceElement(
+        'span', 'workspace-tree-title-primary', primary || lines[0] || '未命名章节'
+    );
+    button.replaceChildren(primaryLine);
+    translations.forEach(translation => {
+        button.appendChild(createWorkspaceElement(
+            'span', 'workspace-tree-title-translation', translation
+        ));
+    });
+}
+
 async function runSingleParagraphSummary(
     paragraph,
     panelContext = capturePanelContext(paragraphSummaryTaskGeneration)
@@ -1319,6 +1970,7 @@ async function runSingleParagraphSummary(
         workspaceParagraphSummaryState.delete(paragraphId);
         await refreshArticleWorkspace({ panelContext });
         if (!isCurrentParagraphSummaryTask(panelContext)) return;
+        showStatus('段落概述已生成', 'success', response.usage);
     } catch (error) {
         if (!isCurrentParagraphSummaryTask(panelContext)) return;
         if (error?.code === 'PARAGRAPH_STALE') {
@@ -1337,6 +1989,90 @@ async function runSingleParagraphSummary(
         });
         renderArticleNavigationTree(currentWorkspaceSnapshot);
         showStatus('单段摘要生成失败：' + error.message, 'error');
+    }
+}
+
+function paragraphNoteFor(snapshot, paragraphId) {
+    return (Array.isArray(snapshot?.paragraphNotes) ? snapshot.paragraphNotes : [])
+        .find(item => String(item?.paragraphId || '') === String(paragraphId || '')) || null;
+}
+
+function closeParagraphNoteEditor() {
+    paragraphNoteEditorTarget = null;
+    const dialog = document.getElementById('paragraphNoteDialog');
+    if (dialog?.open) dialog.close();
+}
+
+function openParagraphNoteEditor(paragraph, snapshot = currentWorkspaceSnapshot) {
+    const paragraphId = String(paragraph?.paragraphId || '');
+    if (!paragraphId) return;
+    const existing = paragraphNoteFor(snapshot, paragraphId);
+    paragraphNoteEditorTarget = {
+        paragraphId,
+        sourceKey: String(paragraph?.sourceKey || ''),
+        navigationRevision: Number(paragraph?.navigationRevision || snapshot?.revision || 0)
+    };
+    const quote = document.getElementById('paragraphNoteQuote');
+    const input = document.getElementById('paragraphNoteText');
+    const status = document.getElementById('paragraphNoteStatus');
+    const remove = document.getElementById('deleteParagraphNote');
+    if (quote) quote.textContent = String(
+        paragraph?.displayText || paragraph?.text || existing?.quote || ''
+    ).slice(0, 480);
+    if (input) input.value = String(existing?.note || '');
+    if (status) status.textContent = existing?.updatedAt
+        ? `上次保存：${new Date(existing.updatedAt).toLocaleString()}` : '';
+    if (remove) remove.hidden = !existing?.note;
+    const dialog = document.getElementById('paragraphNoteDialog');
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    requestAnimationFrame(() => input?.focus());
+}
+
+async function saveParagraphNoteValue(note) {
+    if (!paragraphNoteEditorTarget) return;
+    const status = document.getElementById('paragraphNoteStatus');
+    const save = document.getElementById('saveParagraphNote');
+    const remove = document.getElementById('deleteParagraphNote');
+    if (save) save.disabled = true;
+    if (remove) remove.disabled = true;
+    if (status) {
+        status.classList.remove('is-error');
+        status.textContent = '正在保存到本文工作区…';
+    }
+    try {
+        const panelContext = capturePanelContext();
+        const response = await sendTabMessage(panelContext.tabId, {
+            action: 'updateArticleParagraphNote',
+            ...paragraphNoteEditorTarget,
+            note: String(note || '')
+        });
+        if (!isCurrentPanelContext(panelContext)) return;
+        if (!response?.success) {
+            const error = new Error(response?.error || 'PARAGRAPH_NOTE_SAVE_FAILED');
+            error.code = response?.code;
+            throw error;
+        }
+        const nextSnapshot = response.snapshot ? {
+            ...response.snapshot,
+            localWorkspace: currentWorkspaceSnapshot?.localWorkspace
+        } : {
+            ...(currentWorkspaceSnapshot || {}),
+            paragraphNotes: response.paragraphNotes || []
+        };
+        renderArticleWorkspaceSnapshot(nextSnapshot);
+        showStatus(note ? '段落笔记已保存' : '段落笔记已删除', 'success');
+        closeParagraphNoteEditor();
+    } catch (error) {
+        if (status) {
+            status.classList.add('is-error');
+            status.textContent = error?.code === 'PARAGRAPH_STALE'
+                ? '原文段落已变化，请刷新导航后重新打开笔记。'
+                : `保存失败：${error.message}`;
+        }
+    } finally {
+        if (save) save.disabled = false;
+        if (remove) remove.disabled = false;
     }
 }
 
@@ -1359,6 +2095,11 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
     const summaryIndex = buildOutlineSummaryIndex(
         snapshot?.reviewOutline,
         snapshot?.paragraphSummaries
+    );
+    const paragraphNotes = new Map(
+        (Array.isArray(snapshot?.paragraphNotes) ? snapshot.paragraphNotes : [])
+            .map(item => [String(item?.paragraphId || ''), item])
+            .filter(([paragraphId]) => Boolean(paragraphId))
     );
 
     function appendNode(node, parent, depth = 0) {
@@ -1433,8 +2174,9 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         updateToggle();
         const jump = createWorkspaceElement(
             'button', 'workspace-tree-jump',
-            node.displayTitle || node.title || '未命名章节'
+            ''
         );
+        renderWorkspaceBilingualTitle(jump, node);
         jump.type = 'button';
         jump.addEventListener('click', event => {
             event.preventDefault();
@@ -1470,7 +2212,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                     ? `第 ${index + 1} 段 · ${saved.summary}`
                     : `第 ${index + 1} 段 · ${String(
                         paragraph.displayText || paragraph.text || ''
-                    ).slice(0, 96)}`;
+                    ).replace(/<\/?(?:sup|sub)>/gi, '').slice(0, 96)}`;
                 className = 'workspace-paragraph-jump' +
                     (task.loading ? ' is-loading' : '') +
                     (task.error ? ' is-error' : '');
@@ -1536,8 +2278,23 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                     const panelContext = capturePanelContext(paragraphSummaryTaskGeneration);
                     void runSingleParagraphSummary(paragraph, panelContext);
                 });
+                const note = createWorkspaceElement(
+                    'button',
+                    'workspace-paragraph-note-action' +
+                        (paragraphNotes.get(paragraphId)?.note ? ' has-note' : ''),
+                    paragraphNotes.get(paragraphId)?.note ? '已记' : '笔记'
+                );
+                note.type = 'button';
+                note.title = paragraphNotes.get(paragraphId)?.note
+                    ? `编辑笔记：${paragraphNotes.get(paragraphId).note}`
+                    : '添加不消耗 token 的手动点评';
+                note.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openParagraphNoteEditor(paragraph, snapshot);
+                });
                 const row = createWorkspaceElement('div', 'workspace-paragraph-row');
-                row.append(button, summarize);
+                row.append(button, summarize, note);
                 list.appendChild(row);
             });
             details.appendChild(list);
@@ -1589,28 +2346,44 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
     const container = document.getElementById('highlightDistribution');
     if (!container) return;
     container.replaceChildren(createWorkspaceElement('h3', '', '高亮分布'));
-    const distribution = snapshot?.highlightDistribution;
-    if (!distribution?.totalHighlights) {
-        container.appendChild(createWorkspaceElement('div', 'workspace-empty', '当前页面还没有可归类的高亮。'));
-        return;
-    }
+    const distribution = snapshot?.highlightDistribution || {
+        sourceCounts: {}, categories: [], rows: [], totalHighlights: 0
+    };
     const sourceMeta = {
-        semantic: { label: '智能检索', className: 'is-semantic' },
-        manual: { label: '手动标注', className: 'is-manual' },
-        llm: { label: 'AI 自动', className: 'is-llm' },
-        regex: { label: '规则自动', className: 'is-regex' },
-        other: { label: '其他来源', className: 'is-other' }
+        regex: { label: '正则', className: 'is-regex', members: ['regex'] },
+        llm: { label: 'LLM', className: 'is-llm', members: ['llm'] },
+        // 智能检索和其他用户触发的标注也跟随“手动”视图开关，避免产生
+        // 第四种无法单独控制的页面高亮。
+        manual: {
+            label: '手动', className: 'is-manual',
+            members: ['manual', 'semantic', 'other']
+        }
     };
     const legend = createWorkspaceElement('div', 'workspace-distribution-legend');
     Object.entries(sourceMeta).forEach(([source, meta]) => {
-        const count = Number(distribution.sourceCounts?.[source]) || 0;
-        if (!count) return;
-        legend.appendChild(createWorkspaceElement(
-            'span', `workspace-distribution-legend-item ${meta.className}`,
+        const count = meta.members.reduce((total, member) =>
+            total + (Number(distribution.sourceCounts?.[member]) || 0), 0);
+        const button = createWorkspaceElement(
+            'button', `workspace-distribution-legend-item ${meta.className}`,
             `${meta.label} ${count}`
-        ));
+        );
+        button.type = 'button';
+        button.dataset.highlightSourceToggle = source;
+        button.setAttribute('aria-pressed', String(visibleHighlightSources.has(source)));
+        button.title = `${visibleHighlightSources.has(source) ? '隐藏' : '显示'}${meta.label}高亮`;
+        button.addEventListener('click', () => {
+            if (visibleHighlightSources.has(source)) visibleHighlightSources.delete(source);
+            else visibleHighlightSources.add(source);
+            renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);
+            void sendTabMessage(activePanelTabContext.tabId, {
+                action: 'setHighlightSourceVisibility',
+                visibleSources: [...visibleHighlightSources]
+            }).catch(() => undefined);
+        });
+        legend.appendChild(button);
     });
-    if (legend.childElementCount) container.appendChild(legend);
+    container.appendChild(legend);
+    let visibleRowCount = 0;
     (distribution.rows || []).forEach(row => {
         const block = createWorkspaceElement('section', 'workspace-distribution-row');
         const title = createWorkspaceElement('button', 'workspace-distribution-title', row.title);
@@ -1633,8 +2406,15 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
                     }
                 ]));
             Object.entries(sourceMeta).forEach(([source, meta]) => {
-                const sourceValue = sourceGroups[source];
-                if (!sourceValue?.count) return;
+                if (!visibleHighlightSources.has(source)) return;
+                const memberValues = meta.members
+                    .map(member => sourceGroups[member])
+                    .filter(value => value?.count);
+                const sourceValue = {
+                    count: memberValues.reduce((total, value) => total + value.count, 0),
+                    items: memberValues.flatMap(value => value.items || [])
+                };
+                if (!sourceValue.count) return;
                 const button = createWorkspaceElement(
                     'button', `workspace-distribution-cell ${meta.className}`,
                     `${meta.label} · ${category.name} ${sourceValue.count}`
@@ -1653,9 +2433,25 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
                 cells.appendChild(button);
             });
         });
+        if (!cells.childElementCount) return;
         block.appendChild(cells);
         container.appendChild(block);
+        visibleRowCount += 1;
     });
+    if (!visibleRowCount) {
+        container.appendChild(createWorkspaceElement(
+            'div', 'workspace-empty',
+            visibleHighlightSources.size
+                ? '当前筛选类型在正文中没有高亮。'
+                : '三类高亮均已隐藏；可点击上方按钮重新显示。'
+        ));
+    }
+    if (activePanelTabContext.tabId) {
+        void sendTabMessage(activePanelTabContext.tabId, {
+            action: 'setHighlightSourceVisibility',
+            visibleSources: [...visibleHighlightSources]
+        }).catch(() => undefined);
+    }
 }
 
 function appendFigureWorkspaceField(parent, label, value) {
@@ -1668,17 +2464,391 @@ function appendFigureWorkspaceField(parent, label, value) {
     parent.appendChild(row);
 }
 
+const FIGURE_RESULT_EDITOR_OVERVIEW_FIELDS = Object.freeze([
+    ['figureQuestion', '本图问题'],
+    ['coreConclusion', '核心结论'],
+    ['claimBoundary', '证据边界'],
+    ['authorAssembly', '组图思想']
+]);
+const FIGURE_RESULT_EDITOR_PANEL_FIELDS = Object.freeze([
+    ['phenotypeName', '表型名称'],
+    ['methods', '方法（每行一项）', 'list'],
+    ['purpose', '目的'],
+    ['design', '设计'],
+    ['comparison', '比较'],
+    ['directObservation', '直接观察'],
+    ['localInference', '局部推论'],
+    ['contribution', '对论证链的贡献']
+]);
+const FIGURE_RESULT_EDITOR_DEEP_FIELDS = Object.freeze([
+    ['qualitativeQuantitativeLink', '定性与定量互证'],
+    ['negativeResultValue', '阴性结果的价值'],
+    ['paperArgumentRole', '全文论证角色'],
+    ['deepAuthorStrategy', '深层组图策略'],
+    ['alternativeExplanations', '替代解释（每行一项）', 'list'],
+    ['missingLinksIfPanelRemoved', '删除 Panel 后缺失的论证（每行一项）', 'list']
+]);
+
+function cloneFigureResultForEditor(value) {
+    if (!value || typeof value !== 'object') return null;
+    try {
+        return typeof structuredClone === 'function'
+            ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+    } catch (_) {
+        return JSON.parse(JSON.stringify(value));
+    }
+}
+
+function setFigureResultEditorPath(target, path, value) {
+    let cursor = target;
+    path.slice(0, -1).forEach((part, index) => {
+        if (cursor?.[part] === undefined || cursor?.[part] === null) {
+            cursor[part] = typeof path[index + 1] === 'number' ? [] : {};
+        }
+        cursor = cursor[part];
+    });
+    if (cursor) cursor[path.at(-1)] = value;
+}
+
+function appendFigureResultEditorField(parent, label, value, path, {
+    valueType = 'text',
+    help = ''
+} = {}) {
+    const field = createWorkspaceElement('label', 'figure-result-editor-field');
+    field.appendChild(createWorkspaceElement('span', '', label));
+    const input = document.createElement('textarea');
+    input.rows = valueType === 'list' ? 3 : 4;
+    input.maxLength = valueType === 'list' ? 12000 : 6000;
+    input.value = valueType === 'list'
+        ? (Array.isArray(value) ? value.join('\n') : '')
+        : String(value || '');
+    input.dataset.figureEditPath = JSON.stringify(path);
+    input.dataset.figureEditValueType = valueType;
+    input.setAttribute('aria-label', label);
+    field.appendChild(input);
+    if (help) field.appendChild(createWorkspaceElement('small', '', help));
+    parent.appendChild(field);
+    return input;
+}
+
+function createFigureResultEditorSection(title, description = '') {
+    const section = createWorkspaceElement('section', 'figure-result-editor-section');
+    section.appendChild(createWorkspaceElement('h3', '', title));
+    if (description) section.appendChild(createWorkspaceElement('p', '', description));
+    return section;
+}
+
+function createFigureResultEditorSubsection(title, { open = false } = {}) {
+    const details = createWorkspaceElement('details', 'figure-result-editor-subsection');
+    details.open = open;
+    details.appendChild(createWorkspaceElement('summary', '', title));
+    const fields = createWorkspaceElement('div', 'figure-result-editor-subsection-fields');
+    details.appendChild(fields);
+    return { details, fields };
+}
+
+function renderFigureResultEditor(result) {
+    const body = document.getElementById('figureResultEditorBody');
+    if (!body) return;
+    body.replaceChildren();
+
+    const overview = createFigureResultEditorSection(
+        '整图结论',
+        '这里的修改会同步影响完成态的一句话结论和后续主图串解输入。'
+    );
+    FIGURE_RESULT_EDITOR_OVERVIEW_FIELDS.forEach(([key, label]) => {
+        appendFigureResultEditorField(overview, label, result?.[key], [key]);
+    });
+    body.appendChild(overview);
+
+    const panels = Array.isArray(result?.panels) ? result.panels : [];
+    if (panels.length) {
+        const panelSection = createFigureResultEditorSection(
+            `Panel 解读 · ${panels.length}`,
+            'Panel 编号、证据类型等结构字段保持不变；可修订所有面向读者的解释文字。'
+        );
+        panels.forEach((panel, index) => {
+            const panelId = String(panel?.panel || index + 1).toUpperCase();
+            const subsection = createFigureResultEditorSubsection(
+                `Panel ${panelId}`,
+                { open: index === 0 }
+            );
+            FIGURE_RESULT_EDITOR_PANEL_FIELDS.forEach(([key, label, type]) => {
+                appendFigureResultEditorField(
+                    subsection.fields,
+                    label,
+                    panel?.[key],
+                    ['panels', index, key],
+                    { valueType: type === 'list' ? 'list' : 'text' }
+                );
+            });
+            panelSection.appendChild(subsection.details);
+        });
+        body.appendChild(panelSection);
+    }
+
+    const chain = Array.isArray(result?.argumentChain) ? result.argumentChain : [];
+    if (chain.length) {
+        const chainSection = createFigureResultEditorSection('多米诺论证链');
+        chain.forEach((step, index) => {
+            const refs = (step?.panels || []).join('、') || '整图';
+            const subsection = createFigureResultEditorSubsection(
+                `步骤 ${index + 1} · ${refs}`
+            );
+            appendFigureResultEditorField(
+                subsection.fields, '确立了什么', step?.established,
+                ['argumentChain', index, 'established']
+            );
+            appendFigureResultEditorField(
+                subsection.fields, '为什么进入下一步', step?.handoff,
+                ['argumentChain', index, 'handoff']
+            );
+            chainSection.appendChild(subsection.details);
+        });
+        body.appendChild(chainSection);
+    }
+
+    const groups = Array.isArray(result?.panelGroups) ? result.panelGroups : [];
+    if (groups.length) {
+        const groupSection = createFigureResultEditorSection('证据组织');
+        groups.forEach((group, index) => {
+            const refs = (group?.panels || []).join('、') || `证据组 ${index + 1}`;
+            const subsection = createFigureResultEditorSubsection(`Panel ${refs}`);
+            appendFigureResultEditorField(
+                subsection.fields, '共同目标', group?.groupGoal,
+                ['panelGroups', index, 'groupGoal']
+            );
+            appendFigureResultEditorField(
+                subsection.fields, '组小结', group?.groupConclusion,
+                ['panelGroups', index, 'groupConclusion']
+            );
+            groupSection.appendChild(subsection.details);
+        });
+        body.appendChild(groupSection);
+    }
+
+    const bridges = Array.isArray(result?.logicBridges) ? result.logicBridges : [];
+    if (bridges.length) {
+        const bridgeSection = createFigureResultEditorSection('组间逻辑连接');
+        bridges.forEach((bridge, index) => {
+            const relation = [bridge?.fromGroup, bridge?.toGroup]
+                .filter(Boolean).join(' ⇒ ') || `连接 ${index + 1}`;
+            const subsection = createFigureResultEditorSubsection(relation);
+            appendFigureResultEditorField(
+                subsection.fields, '下一步必要性', bridge?.bridge,
+                ['logicBridges', index, 'bridge']
+            );
+            bridgeSection.appendChild(subsection.details);
+        });
+        body.appendChild(bridgeSection);
+    }
+
+    if (result?.analysisDepth === 'deep') {
+        const deepSection = createFigureResultEditorSection('深度证据审查');
+        FIGURE_RESULT_EDITOR_DEEP_FIELDS.forEach(([key, label, type]) => {
+            appendFigureResultEditorField(
+                deepSection, label, result?.[key], [key],
+                { valueType: type === 'list' ? 'list' : 'text' }
+            );
+        });
+        body.appendChild(deepSection);
+    }
+}
+
+function collectFigureResultEditorResult() {
+    const result = cloneFigureResultForEditor(figureResultEditorState.result);
+    if (!result) return null;
+    document.querySelectorAll('#figureResultEditorBody [data-figure-edit-path]')
+        .forEach(input => {
+            let path = [];
+            try {
+                path = JSON.parse(input.dataset.figureEditPath || '[]');
+            } catch (_) {
+                return;
+            }
+            if (!Array.isArray(path) || !path.length) return;
+            const raw = String(input.value || '').normalize('NFKC')
+                .replace(/\r\n?/g, '\n').trim();
+            const value = input.dataset.figureEditValueType === 'list'
+                ? raw.split(/\n+/).map(item => item.trim()).filter(Boolean)
+                : raw;
+            setFigureResultEditorPath(result, path, value);
+        });
+    return result;
+}
+
+function setFigureResultEditorPending(pending, message = '', error = false) {
+    figureResultEditorState.saving = pending === true;
+    const status = document.getElementById('figureResultEditorStatus');
+    if (status) {
+        status.textContent = message;
+        status.classList.toggle('is-error', error);
+    }
+    ['saveFigureResultEditor', 'restoreFigureModelResult', 'cancelFigureResultEditor',
+        'closeFigureResultEditor'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = pending === true;
+    });
+}
+
+function closeFigureResultEditor() {
+    const dialog = document.getElementById('figureResultEditorDialog');
+    if (dialog?.open) dialog.close();
+    figureResultEditorState = {
+        figureId: '',
+        analysisDepth: 'standard',
+        result: null,
+        saving: false
+    };
+}
+
+function openFigureResultEditor(figure, result) {
+    const dialog = document.getElementById('figureResultEditorDialog');
+    if (!dialog || !figure?.figureId || !result) return;
+    const analysisDepth = result.analysisDepth === 'deep' ? 'deep' : 'standard';
+    figureResultEditorState = {
+        figureId: String(figure.figureId),
+        analysisDepth,
+        result: cloneFigureResultForEditor(result),
+        saving: false
+    };
+    const title = document.getElementById('figureResultEditorTitle');
+    if (title) {
+        title.textContent = `编辑 ${figure.figureLabel || figure.figureId} 解读`;
+    }
+    const hasManualEdit = Boolean(figure?.manualEdits?.[analysisDepth]);
+    const restore = document.getElementById('restoreFigureModelResult');
+    if (restore) {
+        restore.hidden = !hasManualEdit;
+        restore.dataset.confirmRestore = 'false';
+        restore.textContent = '恢复模型原文';
+    }
+    renderFigureResultEditor(figureResultEditorState.result);
+    setFigureResultEditorPending(
+        false,
+        hasManualEdit ? '当前显示的是人工修订版。' : '尚未保存人工修订。'
+    );
+    if (!dialog.open) dialog.showModal();
+    requestAnimationFrame(() =>
+        dialog.querySelector('textarea')?.focus({ preventScroll: true }));
+}
+
+async function saveFigureResultEditor() {
+    if (figureResultEditorState.saving) return;
+    const result = collectFigureResultEditorResult();
+    if (!result) return;
+    if (![result.figureQuestion, result.coreConclusion, result.authorAssembly]
+        .some(value => String(value || '').trim())) {
+        setFigureResultEditorPending(
+            false, '本图问题、核心结论和组图思想不能同时为空。', true
+        );
+        return;
+    }
+    const panelContext = capturePanelContext();
+    setFigureResultEditorPending(true, '正在保存人工修订…');
+    try {
+        const response = await sendTabMessage(panelContext.tabId, {
+            action: 'updateFigureAnalysisResult',
+            figureId: figureResultEditorState.figureId,
+            analysisDepth: figureResultEditorState.analysisDepth,
+            result
+        });
+        if (!response?.success) {
+            throw new Error(response?.error || 'FIGURE_RESULT_EDIT_SAVE_FAILED');
+        }
+        if (!isCurrentPanelContext(panelContext)) return;
+        const figureId = figureResultEditorState.figureId;
+        closeFigureResultEditor();
+        figureExpansionState.set(figureId, true);
+        await refreshArticleWorkspace();
+        showStatus(`${figureId} 的人工修订已保存`, 'success');
+    } catch (error) {
+        if (isCurrentPanelContext(panelContext)) {
+            setFigureResultEditorPending(
+                false, `保存失败：${error.message}`, true
+            );
+        }
+    }
+}
+
+async function restoreFigureModelResult() {
+    if (figureResultEditorState.saving) return;
+    const restore = document.getElementById('restoreFigureModelResult');
+    if (restore?.dataset.confirmRestore !== 'true') {
+        if (restore) {
+            restore.dataset.confirmRestore = 'true';
+            restore.textContent = '再次点击确认恢复';
+        }
+        setFigureResultEditorPending(
+            false, '再次点击将删除本层级的人工修订，并恢复模型原文。'
+        );
+        return;
+    }
+    const panelContext = capturePanelContext();
+    setFigureResultEditorPending(true, '正在恢复模型原文…');
+    try {
+        const response = await sendTabMessage(panelContext.tabId, {
+            action: 'restoreFigureAnalysisResult',
+            figureId: figureResultEditorState.figureId,
+            analysisDepth: figureResultEditorState.analysisDepth
+        });
+        if (!response?.success) {
+            throw new Error(response?.error || 'FIGURE_RESULT_EDIT_RESTORE_FAILED');
+        }
+        if (!isCurrentPanelContext(panelContext)) return;
+        const figureId = figureResultEditorState.figureId;
+        closeFigureResultEditor();
+        figureExpansionState.set(figureId, true);
+        await refreshArticleWorkspace();
+        showStatus(`${figureId} 已恢复模型原文`, 'success');
+    } catch (error) {
+        if (isCurrentPanelContext(panelContext)) {
+            setFigureResultEditorPending(
+                false, `恢复失败：${error.message}`, true
+            );
+        }
+    }
+}
+
+function setupFigureResultEditor() {
+    const form = document.getElementById('figureResultEditorForm');
+    const dialog = document.getElementById('figureResultEditorDialog');
+    form?.addEventListener('submit', event => {
+        event.preventDefault();
+        void saveFigureResultEditor();
+    });
+    document.getElementById('cancelFigureResultEditor')
+        ?.addEventListener('click', closeFigureResultEditor);
+    document.getElementById('closeFigureResultEditor')
+        ?.addEventListener('click', closeFigureResultEditor);
+    document.getElementById('restoreFigureModelResult')
+        ?.addEventListener('click', () => void restoreFigureModelResult());
+    dialog?.addEventListener('close', () => {
+        if (!figureResultEditorState.saving) {
+            figureResultEditorState = {
+                figureId: '',
+                analysisDepth: 'standard',
+                result: null,
+                saving: false
+            };
+        }
+    });
+}
+
 function formatFigurePanelHeader(panel) {
     const safePanel = panel || {};
     const parts = [
         `Panel ${safePanel.panel || '?'}`,
-        safePanel.role || '\u8bc1\u636e\u5355\u5143'
+        PANEL_ROLE_LABELS[safePanel.role] || '\u8bc1\u636e\u5355\u5143'
     ];
     if (safePanel.role === 'phenotype') {
         parts.push(safePanel.phenotypeName || '\u672a\u660e\u786e');
     }
     const methods = Array.isArray(safePanel.methods)
-        ? safePanel.methods.filter(Boolean) : [];
+        ? safePanel.methods.filter(Boolean).map(method =>
+            typeof SciLLM.localizeFigureMethodLabel === 'function'
+                ? SciLLM.localizeFigureMethodLabel(method) : String(method)
+        ) : [];
     parts.push(methods.length
         ? methods.join('\u3001')
         : (METHOD_CATEGORY_LABELS[safePanel.methodCategory] || METHOD_CATEGORY_LABELS.other));
@@ -1689,12 +2859,20 @@ function appendFigurePanelSummary(summary, panel, {
     panelId = '',
     loading = false,
     analyzed = false,
-    formattedHeader = ''
+    formattedHeader = '',
+    evidenceGroupIndex = 0,
+    evidenceGroupLabel = ''
 } = {}) {
     const normalizedPanelId = String(panel?.panel || panelId || '?').toUpperCase();
     const label = createWorkspaceElement(
         'span', 'workspace-panel-id', `Panel ${normalizedPanelId}`
     );
+    if (analyzed && evidenceGroupIndex > 0) {
+        label.dataset.evidenceGroup = String(evidenceGroupIndex);
+        label.title = evidenceGroupLabel
+            ? `同色 Panel 属于同一证据功能组：${evidenceGroupLabel}`
+            : '同色 Panel 属于同一证据功能组';
+    }
     let detail = loading ? '正在解读' : '待解读';
     if (analyzed) {
         detail = String(formattedHeader || formatFigurePanelHeader(panel))
@@ -1940,6 +3118,44 @@ function figureCatalogPanelIds(figure, result) {
             !seen.has(value) && Boolean(seen.add(value)));
 }
 
+function figurePanelReferenceMatches(values, panelId) {
+    const target = String(panelId || '').trim().toUpperCase();
+    return (Array.isArray(values) ? values : [])
+        .some(value => String(value || '').trim().toUpperCase() === target);
+}
+
+function figurePanelEvidenceGroup(result, panel, panelId) {
+    const panelGroups = Array.isArray(result?.panelGroups) ? result.panelGroups : [];
+    const groupIndex = panelGroups.findIndex(group =>
+        figurePanelReferenceMatches(group?.panels, panelId)
+    );
+    if (groupIndex >= 0) {
+        const group = panelGroups[groupIndex];
+        return {
+            key: `panel-group:${groupIndex}`,
+            label: String(group?.groupGoal || group?.groupConclusion || `证据组 ${groupIndex + 1}`)
+        };
+    }
+    const argumentChain = Array.isArray(result?.argumentChain) ? result.argumentChain : [];
+    const chainIndex = argumentChain.findIndex(step =>
+        figurePanelReferenceMatches(step?.panels, panelId)
+    );
+    if (chainIndex >= 0) {
+        return {
+            key: `argument-step:${chainIndex}`,
+            label: String(argumentChain[chainIndex]?.established || `论证步骤 ${chainIndex + 1}`)
+        };
+    }
+    const role = String(panel?.role || 'evidence');
+    const method = String(panel?.methodCategory || 'other');
+    const phenotype = String(panel?.phenotypeName || '').normalize('NFKC').trim().toLowerCase();
+    return {
+        key: `fallback:${role}:${method}:${phenotype}`,
+        label: [panel?.role, METHOD_CATEGORY_LABELS[panel?.methodCategory], panel?.phenotypeName]
+            .filter(Boolean).join(' · ') || '证据单元'
+    };
+}
+
 function appendFigurePanelCatalog(parent, figure, result) {
     const panelIds = figureCatalogPanelIds(figure, result);
     parent.appendChild(createWorkspaceElement(
@@ -1953,12 +3169,19 @@ function appendFigurePanelCatalog(parent, figure, result) {
         return;
     }
     const resultPanels = Array.isArray(result?.panels) ? result.panels : [];
+    const evidenceGroupIndexes = new Map();
     panelIds.forEach(panelId => {
         const panel = resultPanels.find(item =>
             String(item?.panel || '').toUpperCase() === panelId) ||
             figure?.panelAnalyses?.[panelId] || { panel: panelId };
         const analyzed = Boolean(panel?.purpose || panel?.directObservation || panel?.contribution);
         const loading = figure?.panelAnalysisLoading?.[panelId] === true;
+        const evidenceGroup = analyzed
+            ? figurePanelEvidenceGroup(result, panel, panelId)
+            : null;
+        if (evidenceGroup && !evidenceGroupIndexes.has(evidenceGroup.key)) {
+            evidenceGroupIndexes.set(evidenceGroup.key, evidenceGroupIndexes.size + 1);
+        }
         const panelDetails = createWorkspaceElement('details', 'workspace-figure-panel-card');
         const panelKey = panelWorkspaceKey(figure.figureId, panelId);
         panelDetails.id = `panel-anchor-${workspaceAnchorToken(figure.figureId)}-${workspaceAnchorToken(panelId)}`;
@@ -1975,7 +3198,11 @@ function appendFigurePanelCatalog(parent, figure, result) {
                 panelId,
                 loading,
                 analyzed,
-                formattedHeader: analyzed ? formatFigurePanelHeader(panel) : ''
+                formattedHeader: analyzed ? formatFigurePanelHeader(panel) : '',
+                evidenceGroupIndex: evidenceGroup
+                    ? ((evidenceGroupIndexes.get(evidenceGroup.key) - 1) % 6) + 1
+                    : 0,
+                evidenceGroupLabel: evidenceGroup?.label || ''
             }
         ));
         const actions = createWorkspaceElement('div', 'workspace-panel-actions');
@@ -2007,7 +3234,10 @@ function appendFigurePanelCatalog(parent, figure, result) {
             [
                 ['表型', panel.phenotypeName],
                 ['方法类别', METHOD_CATEGORY_LABELS[panel.methodCategory]],
-                ['方法', (panel.methods || []).join('、')],
+                ['方法', (panel.methods || []).map(method =>
+                    typeof SciLLM.localizeFigureMethodLabel === 'function'
+                        ? SciLLM.localizeFigureMethodLabel(method) : String(method)
+                ).join('、')],
                 ['方法来源', panel.methodSource],
                 ['目的', panel.purpose], ['设计', panel.design],
                 ['比较', panel.comparison], ['直接观察', panel.directObservation],
@@ -2072,7 +3302,9 @@ function renderCrossFigureLogicSnapshot(container, crossFigureLogic) {
     const logic = crossFigureLogic.result;
     if (!logic && !crossFigureLogic.loading && !crossFigureLogic.error) return;
     const details = createWorkspaceElement('details', 'workspace-cross-figure-card');
-    details.open = Boolean(logic) || crossFigureLogic.loading === true;
+    // Completed integrated analyses start as an overview. Users expand only
+    // the Figure whose evidence chain they want to inspect.
+    details.open = crossFigureLogic.loading === true;
     details.appendChild(createWorkspaceElement(
         'summary', 'workspace-cross-figure-summary',
         crossFigureLogic.loading
@@ -2102,8 +3334,29 @@ function renderCrossFigureLogicSnapshot(container, crossFigureLogic) {
             'p', 'workspace-figure-coverage',
             `主图证据输入：${analyzedCount}/${mainCount} 张已有逐图解读；其余按图注谨慎串联。`
         ));
+        const dominoChain = Array.isArray(logic.dominoChain) ? logic.dominoChain : [];
+        const linkByFigure = new Map(dominoChain.map(link => [
+            String(link?.fromFigureId || ''), link
+        ]));
+        const supportByMainFigure = new Map();
+        (Array.isArray(logic.supplementalSupport) ? logic.supplementalSupport : [])
+            .forEach(item => {
+                const mainFigureId = String(
+                    item?.supportsFigureId || item?.mainFigureId || item?.targetFigureId || ''
+                );
+                if (!mainFigureId) return;
+                const items = supportByMainFigure.get(mainFigureId) || [];
+                items.push(item);
+                supportByMainFigure.set(mainFigureId, items);
+            });
+        const splitPoints = value => String(value || '').normalize('NFKC')
+            .split(/(?:\n+|(?<=[。！？；.!?;])\s*)/)
+            .map(item => item.replace(/^[\s•·\-–—]+/, '').trim())
+            .filter(Boolean).slice(0, 8);
         (Array.isArray(logic.nodes) ? logic.nodes : []).forEach((node, index) => {
-            const block = createWorkspaceElement('section', 'workspace-cross-figure-node');
+            const block = createWorkspaceElement('details', 'workspace-cross-figure-node');
+            block.open = false;
+            const summary = createWorkspaceElement('summary', 'workspace-cross-figure-node-summary');
             const jump = createWorkspaceElement(
                 'button', '', `${index + 1}. ${node.figureLabel || node.figureId}`
             );
@@ -2111,54 +3364,69 @@ function renderCrossFigureLogicSnapshot(container, crossFigureLogic) {
             jump.addEventListener('click', () => void focusWorkspaceSource({
                 kind: 'figure', figureId: node.figureId
             }));
-            block.appendChild(jump);
-            appendFigureWorkspaceField(
-                block, '本图任务', CROSS_FIGURE_ROLE_LABELS[node.role] || node.role
+            const overview = createWorkspaceElement(
+                'span', 'workspace-cross-figure-node-overview', node.established || '待补充本图结论'
             );
-            appendFigureWorkspaceField(block, '本图确立', node.established);
-            appendFigureWorkspaceField(block, '为何进入下一图', node.transition);
+            summary.append(jump, overview);
+            block.appendChild(summary);
+            const body = createWorkspaceElement('div', 'workspace-cross-figure-node-body');
             appendFigureWorkspaceField(
-                block, '证据等级',
+                body, '本图任务', CROSS_FIGURE_ROLE_LABELS[node.role] || node.role
+            );
+            appendFigureWorkspaceField(body, '本图确立', node.established);
+            appendFigureWorkspaceField(
+                body, '证据等级',
                 CROSS_FIGURE_EVIDENCE_LABELS[node.evidenceLevel] || node.evidenceLevel
             );
+            const link = linkByFigure.get(String(node.figureId || '')) || {};
+            const nextQuestion = link.transition || node.transition;
+            if (nextQuestion) {
+                const handoff = createWorkspaceElement(
+                    'section', 'workspace-cross-figure-handoff'
+                );
+                appendFigureWorkspaceField(handoff, '下一图要解决的问题', nextQuestion);
+                appendFigureWorkspaceField(handoff, '当前证据边界', link.evidenceBoundary);
+                body.appendChild(handoff);
+            }
+            const support = supportByMainFigure.get(String(node.figureId || '')) || [];
+            if (support.length) {
+                const supplementWrap = createWorkspaceElement(
+                    'section', 'workspace-cross-figure-supplements'
+                );
+                supplementWrap.appendChild(createWorkspaceElement(
+                    'h4', 'workspace-figure-section-title', '紧跟本图的补充证据'
+                ));
+                support.forEach(item => {
+                    const supplement = createWorkspaceElement(
+                        'article', 'workspace-cross-figure-support'
+                    );
+                    const supplementJump = createWorkspaceElement(
+                        'button', '', item.figureLabel || item.figureId || '补充材料'
+                    );
+                    supplementJump.type = 'button';
+                    supplementJump.addEventListener('click', () => void focusWorkspaceSource({
+                        kind: 'figure', figureId: item.figureId
+                    }));
+                    supplement.appendChild(supplementJump);
+                    const points = [
+                        ...splitPoints(item.contribution),
+                        ...splitPoints(item.established),
+                        ...splitPoints(item.limitation).map(text => `边界：${text}`)
+                    ].filter((text, pointIndex, all) => all.indexOf(text) === pointIndex);
+                    if (points.length) {
+                        const list = document.createElement('ul');
+                        points.forEach(text => list.appendChild(
+                            createWorkspaceElement('li', '', text)
+                        ));
+                        supplement.appendChild(list);
+                    }
+                    supplementWrap.appendChild(supplement);
+                });
+                body.appendChild(supplementWrap);
+            }
+            block.appendChild(body);
             details.appendChild(block);
         });
-        const dominoChain = Array.isArray(logic.dominoChain) ? logic.dominoChain : [];
-        if (dominoChain.length) {
-            details.appendChild(createWorkspaceElement(
-                'h4', 'workspace-figure-section-title', '跨图多米诺连接'
-            ));
-            dominoChain.forEach((link, index) => {
-                const block = createWorkspaceElement('section', 'workspace-cross-figure-transition');
-                appendFigureWorkspaceField(
-                    block, `连接 ${index + 1}`,
-                    `${link.fromFigureLabel || link.fromFigureId} → ${link.toFigureLabel || link.toFigureId}`
-                );
-                appendFigureWorkspaceField(block, '前图已确立', link.established);
-                appendFigureWorkspaceField(block, '下一图的必要性', link.transition);
-                appendFigureWorkspaceField(block, '证据边界', link.evidenceBoundary);
-                details.appendChild(block);
-            });
-        }
-        const support = Array.isArray(logic.supplementalSupport) ? logic.supplementalSupport : [];
-        if (support.length) {
-            details.appendChild(createWorkspaceElement(
-                'h4', 'workspace-figure-section-title', '补图如何支撑主图'
-            ));
-            support.forEach(item => {
-                const block = createWorkspaceElement('section', 'workspace-cross-figure-support');
-                const jump = createWorkspaceElement(
-                    'button', '', `${item.figureLabel || item.figureId} → ${item.supportsFigureLabel || item.supportsFigureId}`
-                );
-                jump.type = 'button';
-                jump.addEventListener('click', () => void focusWorkspaceSource({
-                    kind: 'figure', figureId: item.figureId
-                }));
-                block.appendChild(jump);
-                appendFigureWorkspaceField(block, '支撑作用', item.contribution);
-                details.appendChild(block);
-            });
-        }
         appendFigureWorkspaceField(details, '全链边界', logic.claimBoundary);
         if (Array.isArray(logic.missingFigureIds) && logic.missingFigureIds.length) {
             details.appendChild(createWorkspaceElement(
@@ -2247,7 +3515,7 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
         figure_panel_complete: 'Panel 解读已完成',
         figure_compact_fallback: '整图返回不稳定，已切换为 Panel 提取后再综合',
         provider_telemetry: '模型已返回，正在读取用量与完成状态',
-        figure: progress.cacheHit ? '已从本地缓存恢复解读' : 'Figure 解读已完成',
+        figure: '✓',
         failed: 'Figure 解读失败',
         figure_fallback: '视觉输入被拒绝，正在改用图注与正文',
         figure_retry: '请求暂时失败，正在等待自动重试',
@@ -2309,15 +3577,71 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
     return { phaseText, details };
 }
 
-function renderFigureProgress(details, progress) {
+function compactFigureResultConclusion(result, figure) {
+    const title = typeof SciLLM.extractFigureTitle === 'function'
+        ? SciLLM.extractFigureTitle(figure?.caption || '', figure?.figureLabel || figure?.figureId)
+        : { title: '', translatedTitle: '' };
+    const figureTitle = String(
+        title?.translatedTitle ||
+        result?.figureTitleZh ||
+        title?.title ||
+        ''
+    ).normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (figureTitle) return figureTitle;
+    const value = String(
+        result?.coreConclusion ||
+        result?.authorAssembly ||
+        result?.figureQuestion ||
+        figure?.caption ||
+        ''
+    ).normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (!value) return '整图证据链已完成，展开查看结果。';
+    const firstSentence = value.match(/^.*?[。！？.!?](?:\s|$)/u)?.[0]?.trim() || value;
+    return firstSentence.length > 150
+        ? `${firstSentence.slice(0, 147).trimEnd()}…`
+        : firstSentence;
+}
+
+function renderFigureProgress(details, progress, result = null, figure = null) {
     if (!progress) return;
     const display = formatFigureProgress(progress);
+    const completed = progress.completed === true || String(progress.phase || '') === 'figure';
+    if (completed && result) return;
     const block = createWorkspaceElement(
         'section',
-        `workspace-figure-progress${progress.failed ? ' is-error' : ''}${progress.running ? ' is-running' : ''}`
+        `workspace-figure-progress${progress.failed ? ' is-error' : ''}` +
+        `${progress.running ? ' is-running' : ''}${completed ? ' is-complete' : ''}`
     );
     block.dataset.figureId = String(progress.figureId || '');
-    block.appendChild(createWorkspaceElement('p', 'workspace-figure-progress-phase', display.phaseText));
+    if (completed) {
+        if (!result) {
+            block.classList.remove('is-complete');
+            block.classList.add('is-running');
+            block.appendChild(createWorkspaceElement(
+                'p', 'workspace-figure-progress-phase',
+                '模型结果已返回，正在完成校验与保存…'
+            ));
+            details.appendChild(block);
+            return;
+        }
+        const completion = createWorkspaceElement('div', 'workspace-figure-completion');
+        const check = createWorkspaceElement('span', 'workspace-figure-completion-check', '✓');
+        check.setAttribute('role', 'img');
+        check.setAttribute('aria-label', 'Figure 解读已完成');
+        completion.append(
+            check,
+            createWorkspaceElement(
+                'p', 'workspace-figure-progress-conclusion',
+                compactFigureResultConclusion(result, figure)
+            )
+        );
+        block.appendChild(completion);
+        details.appendChild(block);
+        return;
+    }
+    block.appendChild(createWorkspaceElement(
+        'p', 'workspace-figure-progress-phase', display.phaseText
+    ));
     display.details.forEach(detail => {
         const line = createWorkspaceElement('p', 'workspace-figure-progress-detail', detail);
         if (detail.startsWith('已用时 ')) line.dataset.figureElapsed = 'true';
@@ -2425,6 +3749,21 @@ function followFigureOriginalViewerInSidebar(figureId) {
     if (!figureId) return;
     switchWorkspaceView('figures');
     navigateFigureQuickAnchor(figureId, '', { collapsePanels: true });
+}
+
+function isCrossFigureLogicCurrentlyVisible() {
+    if (figureCaptionSidebarState.visible) return false;
+    const view = document.querySelector('.workspace-view[data-workspace-view="figures"]');
+    const card = view?.querySelector('.workspace-cross-figure-card[open]');
+    if (!view || view.hidden || !card) return false;
+    const viewRect = view.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    return cardRect.bottom > viewRect.top + 16 &&
+        cardRect.top < viewRect.bottom - 16;
+}
+
+function shouldPreserveCrossFigureSidebar(navigationMode) {
+    return navigationMode === 'direction' && isCrossFigureLogicCurrentlyVisible();
 }
 
 function figureCaptionPanelLabel(block, blockCount) {
@@ -2889,6 +4228,8 @@ async function forwardFigureOriginalViewerKey(key) {
     const figureNumber = /^[0-9]$/.test(key)
         ? (key === '0' ? 10 : Number(key)) : 0;
     const isNavigation = Boolean(direction || figureNumber);
+    const preserveCrossFigureSidebar =
+        shouldPreserveCrossFigureSidebar(direction ? 'direction' : 'number');
     if (key === 'Escape') {
         const previousCaptionVisible = figureOriginalViewerState.captionVisible === true;
         figureOriginalViewerState = {
@@ -2920,7 +4261,7 @@ async function forwardFigureOriginalViewerKey(key) {
             if (response.figureId) {
                 if (response.captionVisible === true) {
                     showFigureCaptionSidebar(String(response.figureId));
-                } else {
+                } else if (!preserveCrossFigureSidebar) {
                     followFigureOriginalViewerInSidebar(String(response.figureId));
                 }
             }
@@ -3001,6 +4342,8 @@ function renderFigureQuickNav(figures) {
     items.forEach(figure => {
         const item = createWorkspaceElement('div', 'figure-quick-nav-item');
         item.dataset.figureId = figure.figureId;
+        item.dataset.figureKind = figure.isSupplemental === true ? 'supplemental' : 'main';
+        item.classList.toggle('is-supplemental', figure.isSupplemental === true);
         const marker = createWorkspaceElement('button', 'figure-quick-nav-marker');
         marker.type = 'button';
         marker.setAttribute('aria-label', `跳转到 ${figure.figureLabel || figure.figureId}`);
@@ -3095,6 +4438,64 @@ function renderFigureQuickNav(figures) {
     nav.hidden = false;
 }
 
+async function openResearchLogicMapEditor({
+    workspaceId,
+    mapId,
+    sourceTabId = activePanelTabContext.tabId
+} = {}) {
+    if (!workspaceId || !mapId) throw new Error('LOGIC_MAP_TARGET_REQUIRED');
+    const query = new URLSearchParams({
+        workspaceId: String(workspaceId),
+        mapId: String(mapId),
+        sourceTabId: String(Number(sourceTabId) || '')
+    });
+    await chrome.tabs.create({
+        url: chrome.runtime.getURL(`logic-map.html?${query.toString()}`)
+    });
+}
+
+function renderResearchLogicMapSnapshot(container, snapshot) {
+    const index = SciLLM.normalizeResearchLogicMapIndex?.(snapshot?.logicMaps) ||
+        snapshot?.logicMaps;
+    const maps = Array.isArray(index?.maps) ? index.maps : [];
+    if (!maps.length) return;
+    const card = createWorkspaceElement('section', 'workspace-logic-map-card');
+    const header = createWorkspaceElement('div', 'workspace-logic-map-card-header');
+    const copy = createWorkspaceElement('div');
+    copy.append(
+        createWorkspaceElement('h3', '', '论文论证阶梯'),
+        createWorkspaceElement(
+            'p', '',
+            '逐图展示“要回答—证明—关键证据—下一步问题”，可继续人工修订。'
+        )
+    );
+    header.append(copy, createWorkspaceElement(
+        'span', 'workspace-logic-map-count', `${maps.length} 张`
+    ));
+    const list = createWorkspaceElement('div', 'workspace-logic-map-list');
+    maps.slice(0, 4).forEach(item => {
+        const button = createWorkspaceElement('button', 'workspace-logic-map-open');
+        button.type = 'button';
+        button.append(
+            createWorkspaceElement('strong', '', item.title || '论文论证阶梯'),
+            createWorkspaceElement(
+                'span', '',
+                `${Number(item.stepCount) || 0} 图 · ` +
+                (item.origin === 'manual' ? '手动' : '图解生成')
+            )
+        );
+        button.addEventListener('click', () => {
+            void openResearchLogicMapEditor({
+                workspaceId: snapshot?.localWorkspace?.workspaceId,
+                mapId: item.mapId
+            }).catch(error => showStatus(`打开论证阶梯失败：${error.message}`, 'error'));
+        });
+        list.appendChild(button);
+    });
+    card.append(header, list);
+    container.appendChild(card);
+}
+
 function syncFigureQuickNavFromScroll() {
     const view = document.querySelector('.workspace-view[data-workspace-view="figures"]');
     if (!view || view.hidden) return;
@@ -3112,6 +4513,140 @@ function syncFigureQuickNavFromScroll() {
         const owner = marker.closest('.figure-quick-nav-item');
         marker.setAttribute('aria-current', String(owner?.dataset.figureId === figureId));
     });
+}
+
+function renderSupplementalFigureCoverage(snapshot = currentWorkspaceSnapshot) {
+    const container = document.getElementById('supplementalFigureCoverage');
+    const body = document.getElementById('supplementalFigureCoverageBody');
+    const toggleSummary = document.getElementById('supplementalFigureCoverageSummary');
+    if (!container || !body || !toggleSummary) return;
+    let importTarget = null;
+    try {
+        importTarget = supplementalFigureImportTools.buildTarget(
+            snapshot,
+            activePanelTabContext.tabId,
+            preparedDocumentState?.documentHash || manualAnnotationState.documentHash
+        );
+    } catch (_) {}
+    const supplemental = snapshot?.figures?.supplemental || {};
+    const coverage = supplemental.coverage || null;
+    const materials = Array.isArray(supplemental.materials)
+        ? supplemental.materials : [];
+    const references = Array.isArray(supplemental.references)
+        ? supplemental.references : [];
+    const shouldShow = Boolean(
+        supplemental.binding || materials.length || references.length ||
+        Number(coverage?.foundFigureCount) > 0
+    );
+    container.hidden = !shouldShow;
+    body.replaceChildren();
+    if (!shouldShow) return;
+
+    const status = String(coverage?.status || 'unparsed');
+    const statusLabels = {
+        complete: '覆盖完整',
+        found: '已找到，待补全解读',
+        partial: '仍有缺失',
+        unparsed: '等待解析',
+        none: '未发现引用'
+    };
+    const missingCount = Array.isArray(coverage?.missingFigureLabels)
+        ? coverage.missingFigureLabels.length : 0;
+    toggleSummary.textContent = supplemental.binding
+        ? (statusLabels[status] || '等待解析')
+        : `${statusLabels[status] || '等待解析'}${missingCount ? ` · 缺 ${missingCount} 张` : ''}`;
+    const badge = createWorkspaceElement(
+        'span',
+        `supplemental-coverage-badge is-${status}`,
+        statusLabels[status] || '等待解析'
+    );
+    const expandedStatus = createWorkspaceElement('div', 'supplemental-coverage-header');
+    expandedStatus.appendChild(badge);
+    body.appendChild(expandedStatus);
+
+    if (supplemental.binding) {
+        const sync = supplemental.parentSync || {};
+        body.appendChild(createWorkspaceElement(
+            'p',
+            `supplemental-coverage-summary${sync.status === 'error' ? ' is-error' : ''}`,
+            sync.status === 'synced'
+                ? '补充图目录已同步回原论文；后续解图结果也会持续更新。'
+                : sync.status === 'error'
+                    ? `同步回原论文失败：${sync.error || '请重试保存'}`
+                    : 'PDF 解析完成后，补充图会自动同步回原论文工作区。'
+        ));
+        return;
+    }
+
+    const expected = Number(coverage?.expectedFigureCount) || 0;
+    const found = Number(coverage?.foundFigureCount) || 0;
+    const analyzed = Number(coverage?.analyzedFigureCount) || 0;
+    body.appendChild(createWorkspaceElement(
+        'p',
+        'supplemental-coverage-summary',
+        `正文提及 ${expected} 张补充图；已纳入 ${found} 张，其中 ${analyzed} 张已解读。`
+    ));
+    if (Array.isArray(coverage?.missingFigureLabels) &&
+        coverage.missingFigureLabels.length) {
+        body.appendChild(createWorkspaceElement(
+            'p',
+            'supplemental-coverage-missing',
+            `尚缺：${coverage.missingFigureLabels.join('、')}`
+        ));
+    }
+    if (supplemental.logicRefreshRequired) {
+        body.appendChild(createWorkspaceElement(
+            'p',
+            'supplemental-coverage-hint is-action',
+            supplemental.logicRefreshRequired
+        ));
+    }
+
+    const pdfMaterials = materials.filter(material =>
+        ['pdf', 'attachment'].includes(material?.kind) && material?.url
+    );
+    if (pdfMaterials.length) {
+        const list = createWorkspaceElement('div', 'supplemental-material-list');
+        pdfMaterials.slice(0, 12).forEach(material => {
+            const row = createWorkspaceElement('div', 'supplemental-material-row');
+            const label = createWorkspaceElement(
+                'span', 'supplemental-material-label',
+                material.title || '补充材料 PDF'
+            );
+            const action = createWorkspaceElement(
+                'button', 'btn btn-secondary supplemental-material-action',
+                '下载后选择 PDF'
+            );
+            action.type = 'button';
+            action.addEventListener('click', () =>
+                void openSupplementalMaterialPdf(material, importTarget)
+                    .catch(error => showStatus(error.message, 'error'))
+            );
+            row.append(label, action);
+            list.appendChild(row);
+        });
+        body.appendChild(list);
+    } else if (expected > found) {
+        body.appendChild(createWorkspaceElement(
+            'p',
+            'supplemental-coverage-hint',
+            '请先手动下载补充材料，再选择本地 PDF；插件不会自动下载或代传期刊附件。'
+        ));
+        const localAction = createWorkspaceElement(
+            'button',
+            'btn btn-secondary supplemental-material-local-action',
+            '选择本地补充 PDF'
+        );
+        localAction.type = 'button';
+        localAction.addEventListener('click', () =>
+            void openSupplementalMaterialPdf({
+                materialId: `manual-supplement-${Date.now()}`,
+                title: '本地补充材料 PDF',
+                url: ''
+            }, importTarget).catch(error => showStatus(error.message, 'error'))
+        );
+        body.appendChild(localAction);
+    }
 }
 
 function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
@@ -3140,6 +4675,8 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
             ? `\u5df2\u53d1\u73b0 ${figures.length} \u5f20\u56fe\uff08${supplemental} \u5f20\u8865\u5145\u56fe\uff09`
             : '\u6b63\u5728\u8bfb\u53d6\u8bba\u6587\u56fe\u7247\u76ee\u5f55\u2026';
     }
+    renderSupplementalFigureCoverage(snapshot);
+    renderResearchLogicMapSnapshot(container, snapshot);
     if (!figures.length) {
         container.appendChild(createWorkspaceElement(
             'div', 'workspace-empty', '\u6682\u672a\u8bc6\u522b\u5230\u56fe\uff1b\u8bf7\u5237\u65b0\u8bba\u6587\u5de5\u4f5c\u533a\u540e\u91cd\u8bd5\u3002'
@@ -3148,12 +4685,51 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
         return;
     }
     renderCrossFigureLogicSnapshot(container, snapshot?.figures?.crossFigureLogic || null);
-    figures.forEach(figure => {
+    const crossLogic = snapshot?.figures?.crossFigureLogic?.result || {};
+    const figureById = new Map(figures.map(figure => [String(figure.figureId || ''), figure]));
+    const supplementalIdsByMain = new Map();
+    (Array.isArray(crossLogic.supplementalSupport) ? crossLogic.supplementalSupport : [])
+        .forEach(item => {
+            const mainId = String(
+                item?.supportsFigureId || item?.mainFigureId || item?.targetFigureId || ''
+            );
+            const supplementalId = String(item?.figureId || item?.supplementalFigureId || '');
+            if (!mainId || !supplementalId) return;
+            const ids = supplementalIdsByMain.get(mainId) || [];
+            if (!ids.includes(supplementalId)) ids.push(supplementalId);
+            supplementalIdsByMain.set(mainId, ids);
+        });
+    const placedFigureIds = new Set();
+    const displayFigures = [];
+    figures.filter(figure => figure.isSupplemental !== true).forEach(figure => {
+        displayFigures.push(figure);
+        placedFigureIds.add(String(figure.figureId || ''));
+        (supplementalIdsByMain.get(String(figure.figureId || '')) || [])
+            .map(figureId => figureById.get(figureId))
+            .filter(Boolean)
+            .sort((left, right) => String(left.figureLabel || '').localeCompare(
+                String(right.figureLabel || ''), undefined, { numeric: true }
+            ))
+            .forEach(supplementalFigure => {
+                if (placedFigureIds.has(String(supplementalFigure.figureId || ''))) return;
+                displayFigures.push(supplementalFigure);
+                placedFigureIds.add(String(supplementalFigure.figureId || ''));
+            });
+    });
+    figures.filter(figure => !placedFigureIds.has(String(figure.figureId || '')))
+        .sort((left, right) => String(left.figureLabel || '').localeCompare(
+            String(right.figureLabel || ''), undefined, { numeric: true }
+        ))
+        .forEach(figure => displayFigures.push(figure));
+    displayFigures.forEach(figure => {
         const result = figure.activeDepth === 'standard' ? figure.standard : (figure.deep || figure.standard);
+        const resultDepth = result?.analysisDepth === 'deep' ? 'deep' : 'standard';
+        const manuallyEdited = Boolean(figure?.manualEdits?.[resultDepth]);
         const progress = figureProgress.get(figure.figureId) || null;
         const progressDisplay = progress ? formatFigureProgress(progress) : null;
         const loading = figure.deepLoading === true || progress?.running === true;
         const details = createWorkspaceElement('details', 'workspace-figure-card');
+        details.classList.toggle('is-supplemental', figure.isSupplemental === true);
         details.id = `figure-anchor-${workspaceAnchorToken(figure.figureId)}`;
         details.dataset.figureId = figure.figureId;
         details.open = figureExpansionState.has(figure.figureId)
@@ -3162,24 +4738,48 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
             figureExpansionState.set(figure.figureId, details.open);
             if (details.open) {
                 figureQuickNavActiveId = figure.figureId;
-                renderFigureQuickNav(figures);
+                renderFigureQuickNav(displayFigures);
             }
         });
-        const status = progressDisplay?.phaseText || (loading ? '\u6b63\u5728\u7cbe\u8bfb' : result
-            ? (result.analysisDepth === 'deep' ? '\u6df1\u5ea6\u5df2\u5b8c\u6210' : '\u6807\u51c6\u5df2\u5b8c\u6210')
-            : '\u5f85\u89e3\u8bfb');
-        const summary = createWorkspaceElement(
-            'summary', 'workspace-figure-summary', `${figure.figureLabel || figure.figureId || 'Figure'} \u00b7 ${status}`
+        const status = progress?.failed
+            ? (result ? '重试失败，原结果已保留' : '解读失败')
+            : progress?.running === true
+                ? (progressDisplay?.phaseText || '正在精读')
+                : progress?.completed === true && !result
+                    ? '正在校验与保存'
+                    : result
+                        ? '✓'
+                        : figure.sourceExternal ? '补充证据待解读' : '待解读';
+        const summary = createWorkspaceElement('summary', 'workspace-figure-summary');
+        const summaryHeading = createWorkspaceElement(
+            'span',
+            'workspace-figure-summary-heading',
+            `${figure.figureLabel || figure.figureId || 'Figure'} · ${status}`
         );
+        summary.appendChild(summaryHeading);
+        if (result) {
+            summary.appendChild(createWorkspaceElement(
+                'span',
+                'workspace-figure-summary-conclusion',
+                compactFigureResultConclusion(result, figure)
+            ));
+        }
         details.appendChild(summary);
         const actions = createWorkspaceElement('div', 'workspace-figure-actions');
         const jump = createWorkspaceElement(
-            'button', 'btn btn-secondary workspace-figure-action', '图注'
+            'button', 'btn btn-secondary workspace-figure-action',
+            figure.sourceExternal && Number(figure.sourcePage) > 0
+                ? `PDF 第 ${Math.floor(Number(figure.sourcePage))} 页`
+                : figure.sourceExternal ? '来源' : '图注'
         );
         jump.type = 'button';
-        jump.addEventListener('click', () => void focusWorkspaceSource({
-            kind: 'figure', figureId: figure.figureId
-        }));
+        jump.addEventListener('click', () => {
+            if (figure.sourceExternal && figure.sourceUrl) {
+                void chrome.tabs.create({ url: figure.sourceUrl });
+                return;
+            }
+            void focusWorkspaceSource({ kind: 'figure', figureId: figure.figureId });
+        });
         const original = createWorkspaceElement(
             'button', 'btn btn-secondary workspace-figure-action', '原图'
         );
@@ -3197,13 +4797,65 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
         analyze.classList.add('workspace-figure-analyze-action');
         analyze.disabled = loading;
         analyze.title = hasUsableLlm()
-            ? '解读此 Figure'
+            ? (figure.sourceExternal
+                ? '使用已导入原论文工作区的补充图、图注和 Panel 直接解读，不切换页面'
+                : '解读此 Figure')
             : llmUnavailableMessage('Figure 解读');
-        analyze.addEventListener('click', () => void runSingleFigureAnalysis(figure.figureId));
-        actions.append(jump, original, analyze);
+        analyze.addEventListener('click', () => {
+            if (figure.sourceExternal) {
+                void runExternalSupplementalFigureAnalysis(figure);
+                return;
+            }
+            void runSingleFigureAnalysis(figure.figureId);
+        });
+        const edit = createWorkspaceElement(
+            'button',
+            `btn btn-secondary workspace-figure-action workspace-figure-edit-action` +
+                `${manuallyEdited ? ' is-edited' : ''}`,
+            manuallyEdited ? '继续编辑' : '编辑结果'
+        );
+        edit.type = 'button';
+        edit.disabled = !result || loading;
+        edit.title = result
+            ? '编辑本图解读；模型原文会保留'
+            : '请先完成本图解读';
+        edit.addEventListener('click', () => openFigureResultEditor(figure, result));
+        actions.append(jump, original, analyze, edit);
+        if (figure.sourceExternal) {
+            const editSupplemental = createWorkspaceElement(
+                'button',
+                'btn btn-secondary workspace-figure-action workspace-figure-source-edit-action',
+                '编辑手动图'
+            );
+            editSupplemental.type = 'button';
+            editSupplemental.disabled = loading;
+            editSupplemental.title = '修改 Figure 编号、PDF 页码、图注，或替换上传图片';
+            editSupplemental.addEventListener('click', () =>
+                openSupplementalFigureEditDialog(figure)
+            );
+            const deleteSupplemental = createWorkspaceElement(
+                'button',
+                'btn workspace-figure-action workspace-figure-delete-action',
+                '删除'
+            );
+            deleteSupplemental.type = 'button';
+            deleteSupplemental.disabled = loading;
+            deleteSupplemental.addEventListener('click', () => {
+                void deleteSupplementalFigureFromWorkspace(figure).catch(error =>
+                    showStatus(`删除失败：${error.message}`, 'error')
+                );
+            });
+            actions.append(editSupplemental, deleteSupplemental);
+        }
         details.appendChild(actions);
-        renderFigureProgress(details, progress);
+        renderFigureProgress(details, progress, result, figure);
         if (result) {
+            if (manuallyEdited) {
+                details.appendChild(createWorkspaceElement(
+                    'p', 'workspace-figure-edited-note',
+                    '当前显示人工修订版；模型原文仍可恢复'
+                ));
+            }
             [
                 ['\u672c\u56fe\u95ee\u9898', result.figureQuestion],
                 ['\u6838\u5fc3\u7ed3\u8bba', result.coreConclusion],
@@ -3320,7 +4972,7 @@ function renderFigureWorkspaceSnapshot(snapshot = currentWorkspaceSnapshot) {
         }
         container.appendChild(details);
     });
-    renderFigureQuickNav(figures);
+    renderFigureQuickNav(displayFigures);
 }
 
 function renderArticleWorkspaceSnapshot(snapshot) {
@@ -3450,24 +5102,29 @@ function syncArticleChatHighlightColor() {
 function articleChatOutlineScopes(snapshot = currentWorkspaceSnapshot) {
     const results = [];
     const seen = new Set();
+    const paragraphs = Array.isArray(snapshot?.paragraphs) ? snapshot.paragraphs : [];
     const visit = (nodes, depth = 0) => {
         (Array.isArray(nodes) ? nodes : []).forEach(node => {
             const sectionId = String(node?.sectionId || '');
             const title = String(node?.displayTitle || node?.title || '').trim();
-            const sectionIds = (Array.isArray(node?.analysisSectionIds)
+            // Keep the @ scope catalog aligned with the navigation tree. Empty
+            // outline leaves are still selectable, while parent nodes retain
+            // every descendant section that the navigation analysis toggle uses.
+            const sectionIds = (Array.isArray(node?.analysisSectionIds) &&
+                node.analysisSectionIds.length
                 ? node.analysisSectionIds : [sectionId])
                 .map(value => String(value || '')).filter(Boolean);
-            const paragraphCount = (Array.isArray(snapshot?.paragraphs)
-                ? snapshot.paragraphs : []).filter(paragraph =>
+            const paragraphCount = paragraphs.filter(paragraph =>
                 sectionIds.includes(String(paragraph?.sectionId || ''))
             ).length;
-            if (sectionId && title && sectionIds.length && !seen.has(sectionId) &&
-                paragraphCount > 0) {
+            if (sectionId && title && sectionIds.length && !seen.has(sectionId)) {
                 seen.add(sectionId);
                 results.push({
                     id: sectionId,
                     name: title,
-                    detail: `${String(node?.sectionKind || '章节')} · ${paragraphCount} 段`,
+                    detail: paragraphCount > 0
+                        ? `${String(node?.sectionKind || '章节')} · ${paragraphCount} 段`
+                        : `${String(node?.sectionKind || '章节')} · 目录标题`,
                     sectionIds,
                     depth: Math.max(0, depth)
                 });
@@ -3476,7 +5133,7 @@ function articleChatOutlineScopes(snapshot = currentWorkspaceSnapshot) {
         });
     };
     visit(snapshot?.nodes);
-    return results.slice(0, 120);
+    return results;
 }
 
 function selectedWorkspaceAnalysisSectionIds(snapshot = currentWorkspaceSnapshot) {
@@ -3592,11 +5249,14 @@ function updateArticleChatCommandMenu() {
     const source = trigger.symbol === '@'
         ? articleChatOutlineScopes()
         : articleChatQuickPrompts();
-    const items = source.filter(item => {
+    const filteredItems = source.filter(item => {
         if (!trigger.query) return true;
         return `${item.name} ${item.detail}`.normalize('NFKC').toLowerCase()
             .includes(trigger.query);
-    }).slice(0, 12);
+    });
+    const items = trigger.symbol === '@'
+        ? filteredItems
+        : filteredItems.slice(0, 20);
     if (!items.length) {
         closeArticleChatCommandMenu();
         return;
@@ -3681,11 +5341,13 @@ async function focusArticleChatCitation(item, snapshot, button = null) {
     const target = {
         kind: 'article-chat-citation',
         evidence: {
-            paragraphId: item?.paragraphId || verification.target.paragraphId,
-            sourceKey: item?.sourceKey || verification.target.sourceKey,
-            textHash: item?.textHash || verification.target.textHash,
-            sectionTitle: item?.sectionTitle || verification.target.sectionTitle,
-            sectionPath: item?.sectionPath || verification.target.sectionPath,
+            // Always jump with the verifier's canonical target. The original
+            // evidence fields can be stale after a publisher page reflows.
+            paragraphId: verification.target.paragraphId || item?.paragraphId,
+            sourceKey: verification.target.sourceKey || item?.sourceKey,
+            textHash: verification.target.textHash || item?.textHash,
+            sectionTitle: verification.target.sectionTitle || item?.sectionTitle,
+            sectionPath: verification.target.sectionPath || item?.sectionPath,
             quote: item?.quote || '',
             support: item?.support || ''
         },
@@ -3797,11 +5459,17 @@ function isArticleChatMarkdownBlockStart(line) {
     return /^(?:#{1,4}\s+|>\s?|```|[-*+]\s+|\d+[.)]\s+)/.test(line);
 }
 
+function articleChatOrderedListItemCount(value) {
+    return normalizeArticleChatMarkdown(value).split('\n')
+        .filter(line => /^\s*\d+[.)]\s+/.test(line)).length;
+}
+
 function renderArticleChatMarkdown(value, context = {}) {
     const root = createWorkspaceElement('div', 'article-chat-message-content');
     const renderContext = { ...context, citationIndexes: new Set() };
     const lines = normalizeArticleChatMarkdown(value).split('\n');
     let index = 0;
+    let orderedItemsRendered = 0;
     while (index < lines.length) {
         const line = lines[index].trim();
         if (!line) {
@@ -3836,14 +5504,26 @@ function renderArticleChatMarkdown(value, context = {}) {
         if (listMatch) {
             const ordered = /^\d/.test(listMatch[1]);
             const list = createWorkspaceElement(ordered ? 'ol' : 'ul');
+            if (ordered) {
+                const explicitStart = Number.parseInt(listMatch[1], 10);
+                const continuedStart = Math.max(
+                    1,
+                    (Number(context.orderedListStart) || 1) + orderedItemsRendered
+                );
+                const start = Math.max(explicitStart || 1, continuedStart);
+                if (start > 1) list.start = start;
+            }
+            let listItemCount = 0;
             while (index < lines.length) {
                 const itemMatch = lines[index].trim().match(/^([-*+]|\d+[.)])\s+(.+)$/);
                 if (!itemMatch || /^\d/.test(itemMatch[1]) !== ordered) break;
                 const item = createWorkspaceElement('li');
                 appendArticleChatInlineMarkdown(item, itemMatch[2], renderContext);
                 list.appendChild(item);
+                listItemCount += 1;
                 index += 1;
             }
+            if (ordered) orderedItemsRendered += listItemCount;
             root.appendChild(list);
             continue;
         }
@@ -3918,14 +5598,22 @@ function articleChatStatusText(turn = {}) {
     return '';
 }
 
-function renderArticleChatBlock(block, turn, snapshot, citationNumberOffset = 0) {
+function renderArticleChatBlock(
+    block,
+    turn,
+    snapshot,
+    citationNumberOffset = 0,
+    orderedListStart = 1
+) {
     const element = createWorkspaceElement('section', 'article-chat-answer-block');
     element.dataset.blockId = String(block.blockId || '');
     element.dataset.citationNumberOffset = String(citationNumberOffset);
+    element.dataset.orderedListStart = String(orderedListStart);
     const markdown = renderArticleChatMarkdown(block.markdown || '', {
         evidence: block.evidence,
         snapshot,
-        citationNumberOffset
+        citationNumberOffset,
+        orderedListStart
     });
     element.appendChild(markdown);
     appendArticleChatEvidence(
@@ -3988,24 +5676,29 @@ function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
         if (!expectedBlockIds.has(node.dataset.blockId)) node.remove();
     });
     let citationNumberOffset = 0;
+    let orderedListStart = 1;
     blocks.forEach(block => {
         const blockId = String(block.blockId || '');
         const blockEvidenceCount = Array.isArray(block?.evidence) ? block.evidence.length : 0;
+        const orderedListItemCount = articleChatOrderedListItemCount(block?.markdown || '');
         if (!blockId) {
             citationNumberOffset += blockEvidenceCount;
+            orderedListStart += orderedListItemCount;
             return;
         }
         const existing = blockContainer.querySelector(`[data-block-id="${blockId}"]`);
         if (!existing) {
             blockContainer.appendChild(renderArticleChatBlock(
-                block, turn, snapshot, citationNumberOffset
+                block, turn, snapshot, citationNumberOffset, orderedListStart
             ));
-        } else if (Number(existing.dataset.citationNumberOffset) !== citationNumberOffset) {
+        } else if (Number(existing.dataset.citationNumberOffset) !== citationNumberOffset ||
+            Number(existing.dataset.orderedListStart) !== orderedListStart) {
             existing.replaceWith(renderArticleChatBlock(
-                block, turn, snapshot, citationNumberOffset
+                block, turn, snapshot, citationNumberOffset, orderedListStart
             ));
         }
         citationNumberOffset += blockEvidenceCount;
+        orderedListStart += orderedListItemCount;
     });
 
     const status = element.querySelector('.article-chat-turn-status');
@@ -4510,6 +6203,7 @@ async function refreshArticleWorkspace({
     try {
         let figureRefreshResult = null;
         if ((announce || !currentWorkspaceSnapshot) &&
+            panelContext.pdfMode !== true &&
             typeof SciLLM.refreshFigureExtractorInTab === 'function') {
             figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(
                 chrome,
@@ -4778,6 +6472,7 @@ function exportCurrentArticleArchive() {
             button.disabled = true;
             button.setAttribute('aria-busy', 'true');
         }
+        let saved = null;
         try {
             const { archive } = await getCurrentArticleArchiveFromTab();
             downloadArticleArchive(archive);
@@ -4970,6 +6665,7 @@ async function saveCurrentArticleWorkspace() {
     return articleWorkspaceSaveGuard.run(async () => {
         const button = document.getElementById('saveCurrentArticleWorkspace');
         const panelContext = capturePanelContext();
+        let saved = null;
         if (!isCurrentPanelContext(panelContext)) return;
         if (button) {
             button.disabled = true;
@@ -5001,7 +6697,7 @@ async function saveCurrentArticleWorkspace() {
                     ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
                     : '未获得本地文件夹读写权限，请再次点击并允许访问');
             }
-            const saved = await sendTabMessage(panelContext.tabId, {
+            saved = await sendTabMessage(panelContext.tabId, {
                 action: 'saveArticleWorkspaceNow'
             });
             if (!saved?.success) {
@@ -5021,7 +6717,15 @@ async function saveCurrentArticleWorkspace() {
                 'success'
             );
         } catch (error) {
-            showStatus(`保存到本地文件夹失败：${error.message}`, 'error');
+            if (saved?.success) {
+                showStatus(
+                    '本次结果已安全保存在浏览器，并保留在待同步队列；' +
+                    '文件夹同步将自动重试，可以放心关闭页面。',
+                    'warning'
+                );
+            } else {
+                showStatus(`保存到本地文件夹失败：${error.message}`, 'error');
+            }
         } finally {
             if (button) {
                 button.disabled = false;
@@ -5392,10 +7096,12 @@ async function initializeCurrentArticle({ retry = false } = {}) {
 document.addEventListener('DOMContentLoaded', async () => {
     setupSidePanelNotificationCenter();
     setupWorkspaceNavigation();
+    setupSupplementalFigureImport();
     setupSidePanelSettingsShortcut();
     setupArticleArchiveControls();
     setupAdapterDiagnosticControls();
     setupActiveTabSynchronization();
+    setupInactiveTabClickActivation();
     try {
         // 设置读取也受同一截止时间保护，避免侧栏永久停在“正在连接”。
         await withPreparationDeadline(
@@ -5590,6 +7296,7 @@ function updateApplyButton() {
     const applyButton = document.getElementById('applyHighlight');
     delete applyButton.dataset.settingsCta;
     updateHighlightTaskControls();
+    applyButton.removeAttribute('title');
     if (regexApplyPending) {
         applyButton.textContent = analysisMode === 'llm'
             ? '正在分析全文' : '正在应用高亮';
@@ -5747,25 +7454,25 @@ function updateFigureButton() {
         crossFigureButton.hidden = false;
         crossFigureButton.disabled = running || crossFigureLogicRunning;
         crossFigureButton.title = ready
-            ? '串联主图证据'
-            : llmUnavailableMessage('主图串解');
+            ? '整合主图和补图证据'
+            : llmUnavailableMessage('整合分析');
         crossFigureButton.textContent = crossFigureLogicRunning
-            ? '主图串解中…'
-            : '主图串解';
+            ? '正在整合…'
+            : '整合分析';
     }
     figureButton.hidden = false;
     figureButton.disabled = running;
     figureButton.title = ready
-        ? '逐图解读'
-        : llmUnavailableMessage('逐图解读');
+        ? '依次解读全部 Figure'
+        : llmUnavailableMessage('全部解图');
     if (!running) {
-        figureButton.textContent = '逐图解读';
+        figureButton.textContent = '全部解图';
     } else if (figureAnalysisState.totalFigures > 0 && figureAnalysisState.currentFigure > 0) {
         const label = String(figureAnalysisState.figureLabel || '').slice(0, 24);
         figureButton.textContent = `第 ${figureAnalysisState.currentFigure}/${figureAnalysisState.totalFigures} 张` +
             (label ? `：${label}` : '');
     } else {
-        figureButton.textContent = '正在读取 Figure';
+        figureButton.textContent = '正在读取';
     }
     updateFigureTaskControls();
 }
@@ -6884,14 +8591,990 @@ async function applyRegexOnTab(tabId) {
     });
 }
 
+function createSupplementalFigureImportTools(dependencies = {}) {
+    const shared = dependencies.shared || {};
+    const chromeApi = dependencies.chromeApi || globalThis.chrome;
+    const cryptoApi = dependencies.cryptoApi || globalThis.crypto;
+    const createImageBitmapImpl = dependencies.createImageBitmapImpl ||
+        globalThis.createImageBitmap;
+    const ImageImpl = dependencies.ImageImpl || globalThis.Image;
+    const urlApi = dependencies.urlApi || globalThis.URL;
+    const createCanvas = dependencies.createCanvas ||
+        (() => globalThis.document?.createElement('canvas'));
+    const btoaImpl = dependencies.btoaImpl || globalThis.btoa;
+    const now = dependencies.now || (() => new Date().toISOString());
+    const sendTabMessageWithRecovery = dependencies.sendTabMessageWithRecovery ||
+        shared.sendTabMessageWithRecovery;
+    const imageMaxSourceBytes = 20 * 1024 * 1024;
+    const imageMaxBytes = Number(shared.SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES) ||
+        1572864;
+    const imageMaxEdge = Number(shared.SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_EDGE) || 1600;
+    const imageMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+    const extensionMimeTypes = Object.freeze({
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp'
+    });
+
+    function importError(code, message, fieldId = '') {
+        const error = new Error(message || code);
+        error.code = code;
+        error.fieldId = fieldId;
+        return error;
+    }
+
+    function syncSourceMode(root, requestedMode) {
+        const modes = ['pdf', 'manual'];
+        const mode = modes.includes(String(requestedMode)) ? String(requestedMode) : 'pdf';
+        const radios = [...(root?.querySelectorAll?.(
+            'input[name="supplementalFigureSourceMode"]'
+        ) || [])];
+        const panes = [...(root?.querySelectorAll?.(
+            '[data-supplemental-source-pane]'
+        ) || [])];
+        radios.forEach(radio => {
+            radio.checked = radio.value === mode;
+        });
+        panes.forEach(pane => {
+            pane.hidden = pane.dataset?.supplementalSourcePane !== mode;
+        });
+        return mode;
+    }
+
+    function validateTarget(input = {}) {
+        const workspaceId = String(input.workspaceId || '').trim().toLowerCase();
+        const workspaceGeneration = Number(input.workspaceGeneration);
+        const targetArticleTabId = Number(input.targetArticleTabId);
+        const rawCanonicalUrl = String(input.canonicalUrl || '').trim();
+        const canonicalUrl = typeof shared.normalizeSupplementalUrl === 'function'
+            ? shared.normalizeSupplementalUrl(rawCanonicalUrl)
+            : rawCanonicalUrl;
+        const rawDocumentHash = String(input.documentHash || '').trim().toLowerCase();
+        const documentHashHex = rawDocumentHash.replace(/^sha256:/, '');
+        const documentHash = /^[a-f0-9]{64}$/.test(documentHashHex)
+            ? `sha256:${documentHashHex}` : '';
+        if (!/^workspace:[a-f0-9]{64}$/.test(workspaceId) ||
+            !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
+            !Number.isSafeInteger(targetArticleTabId) || targetArticleTabId < 0 ||
+            !canonicalUrl ||
+            (rawDocumentHash && !documentHash)) {
+            throw importError(
+                'SUPPLEMENTAL_TARGET_INVALID',
+                '当前论文工作区尚未准备完成，请刷新后重试'
+            );
+        }
+        const target = {
+            workspaceId,
+            workspaceGeneration,
+            targetArticleTabId,
+            canonicalUrl
+        };
+        if (documentHash) target.documentHash = documentHash;
+        return Object.freeze(target);
+    }
+
+    function buildTarget(snapshot, targetArticleTabId, documentHash = '') {
+        const workspace = snapshot?.localWorkspace || {};
+        return validateTarget({
+            workspaceId: workspace.workspaceId,
+            workspaceGeneration: workspace.workspaceGeneration,
+            targetArticleTabId,
+            // The article tab validates against its persisted workspace
+            // identity. Prepared-document hashes and the visible page URL may
+            // legitimately differ from that identity, so they are fallbacks
+            // only when the workspace has not published the field yet.
+            canonicalUrl: workspace.canonicalUrl || snapshot?.url,
+            documentHash: workspace.contentHash || workspace.revision ||
+                workspace.documentHash || snapshot?.documentHash || documentHash
+        });
+    }
+
+    function validateImageFile(file) {
+        const name = String(file?.name || '').trim();
+        const mediaType = String(file?.type || '').trim().toLowerCase();
+        const size = Number(file?.size);
+        const extension = name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() || '';
+        if (!file || !imageMimeTypes.has(mediaType) ||
+            extensionMimeTypes[extension] !== mediaType ||
+            !Number.isSafeInteger(size) || size <= 0 || size > imageMaxSourceBytes ||
+            typeof file.arrayBuffer !== 'function') {
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_INVALID',
+                '请选择不超过 20 MiB 的 PNG、JPEG 或 WebP 图片，且扩展名与文件类型一致',
+                'supplementalFigureImageFile'
+            );
+        }
+        return file;
+    }
+
+    function normalizeCaption(value) {
+        const caption = String(value || '').trim();
+        if (!caption) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_EMPTY', '请粘贴完整图注',
+                'supplementalFigureImageCaption'
+            );
+        }
+        if (caption.length > 8000) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_TOO_LONG', '图注不能超过 8000 个字符',
+                'supplementalFigureImageCaption'
+            );
+        }
+        return caption;
+    }
+
+    function normalizeOptionalCaption(value) {
+        const caption = String(value || '').trim();
+        if (caption.length > 8000) {
+            throw importError(
+                'SUPPLEMENTAL_CAPTION_TOO_LONG', '图注不能超过 8000 个字符',
+                'supplementalFigureImageCaption'
+            );
+        }
+        return caption;
+    }
+
+    async function sha256Fingerprint(value) {
+        if (!cryptoApi?.subtle?.digest) {
+            throw importError('SUPPLEMENTAL_CRYPTO_UNAVAILABLE', '当前环境无法计算文件指纹');
+        }
+        const bytes = typeof value === 'string'
+            ? new TextEncoder().encode(value)
+            : value instanceof ArrayBuffer
+                ? new Uint8Array(value)
+                : new Uint8Array(value?.buffer || value || []);
+        const digest = new Uint8Array(await cryptoApi.subtle.digest('SHA-256', bytes));
+        return `sha256:${[...digest]
+            .map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
+    }
+
+    async function decodeImageFile(file) {
+        let bitmapError = null;
+        if (typeof createImageBitmapImpl === 'function') {
+            try {
+                const bitmap = await createImageBitmapImpl(file);
+                return {
+                    source: bitmap,
+                    width: Number(bitmap?.width),
+                    height: Number(bitmap?.height),
+                    dispose: () => bitmap?.close?.()
+                };
+            } catch (error) {
+                bitmapError = error;
+            }
+        }
+        if (typeof ImageImpl === 'function' && urlApi?.createObjectURL) {
+            const objectUrl = urlApi.createObjectURL(file);
+            try {
+                const image = new ImageImpl();
+                await new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(bitmapError ||
+                        importError('SUPPLEMENTAL_IMAGE_DECODE', '图片无法解码'));
+                    image.src = objectUrl;
+                });
+                return {
+                    source: image,
+                    width: Number(image.naturalWidth || image.width),
+                    height: Number(image.naturalHeight || image.height),
+                    dispose: () => urlApi.revokeObjectURL?.(objectUrl)
+                };
+            } catch (error) {
+                urlApi.revokeObjectURL?.(objectUrl);
+                throw error;
+            }
+        }
+        if (bitmapError) throw bitmapError;
+        throw importError('SUPPLEMENTAL_IMAGE_DECODE', '图片无法解码');
+    }
+
+    function canvasToBlob(canvas, mediaType, quality) {
+        return new Promise((resolve, reject) => {
+            try {
+                canvas.toBlob(blob => {
+                    if (blob) resolve(blob);
+                    else reject(importError('SUPPLEMENTAL_IMAGE_ENCODE', '图片压缩失败'));
+                }, mediaType, quality);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    async function blobToDataUrl(blob, mediaType) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (let index = 0; index < bytes.length; index += 32768) {
+            binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+        }
+        return `data:${mediaType};base64,${btoaImpl(binary)}`;
+    }
+
+    async function prepareTransientImage(file) {
+        validateImageFile(file);
+        const sourceBytes = await file.arrayBuffer();
+        const sourceFingerprint = await sha256Fingerprint(sourceBytes);
+        let decoded;
+        try {
+            decoded = await decodeImageFile(file);
+        } catch (_) {
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_DECODE', '无法解码这张图片，请重新导出后再试',
+                'supplementalFigureImageFile'
+            );
+        }
+        const sourceWidth = Number(decoded?.width);
+        const sourceHeight = Number(decoded?.height);
+        if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) ||
+            sourceWidth <= 0 || sourceHeight <= 0) {
+            decoded?.dispose?.();
+            throw importError(
+                'SUPPLEMENTAL_IMAGE_DECODE', '图片宽高无效，请重新选择',
+                'supplementalFigureImageFile'
+            );
+        }
+        const canvas = createCanvas();
+        const context = canvas?.getContext?.('2d', { alpha: true });
+        if (!canvas || !context || typeof canvas.toBlob !== 'function') {
+            decoded?.dispose?.();
+            throw importError('SUPPLEMENTAL_IMAGE_ENCODE', '当前环境无法处理图片');
+        }
+        let longestEdge = Math.min(imageMaxEdge, Math.max(sourceWidth, sourceHeight));
+        let encoded = null;
+        let outputWidth = 0;
+        let outputHeight = 0;
+        const qualities = file.type === 'image/png'
+            ? [undefined]
+            : [0.92, 0.84, 0.76, 0.68, 0.58];
+        try {
+            while (longestEdge >= 1 && !encoded) {
+                const scale = Math.min(1, longestEdge / Math.max(sourceWidth, sourceHeight));
+                outputWidth = Math.max(1, Math.round(sourceWidth * scale));
+                outputHeight = Math.max(1, Math.round(sourceHeight * scale));
+                canvas.width = outputWidth;
+                canvas.height = outputHeight;
+                context.drawImage(decoded.source, 0, 0, outputWidth, outputHeight);
+                for (const quality of qualities) {
+                    const candidate = await canvasToBlob(canvas, file.type, quality);
+                    if (candidate.size > 0 && candidate.size <= imageMaxBytes) {
+                        encoded = candidate;
+                        break;
+                    }
+                }
+                if (!encoded) {
+                    if (longestEdge === 1) break;
+                    longestEdge = Math.max(1, Math.floor(longestEdge * 0.82));
+                }
+            }
+        } finally {
+            decoded.dispose?.();
+        }
+        if (!encoded) {
+            throw importError(
+                'SUPPLEMENTAL_TRANSIENT_IMAGE_TOO_LARGE',
+                '图片压缩后仍超过 1.5 MiB，请裁剪后重试',
+                'supplementalFigureImageFile'
+            );
+        }
+        const mediaType = imageMimeTypes.has(String(encoded.type).toLowerCase())
+            ? String(encoded.type).toLowerCase() : file.type;
+        const transient = {
+            mediaType,
+            dataUrl: await blobToDataUrl(encoded, mediaType),
+            width: outputWidth,
+            height: outputHeight,
+            sourceFingerprint
+        };
+        return typeof shared.normalizeSupplementalTransientImage === 'function'
+            ? shared.normalizeSupplementalTransientImage(transient, sourceFingerprint)
+            : transient;
+    }
+
+    function sourceMaterialId(mode, sourceFingerprint) {
+        return `manual-${mode}-${String(sourceFingerprint || '')
+            .replace(/^sha256:/, '').slice(0, 16)}`;
+    }
+
+    function normalizeManualMetadata(input = {}) {
+        const figureKind = String(input.figureKind || '').toLowerCase() === 'main'
+            ? 'main' : 'supplemental';
+        const figureLabel = typeof shared.canonicalManualFigureLabel === 'function'
+            ? shared.canonicalManualFigureLabel(input.figureLabel, figureKind, '')
+            : String(input.figureLabel || '').trim();
+        if (figureKind === 'main' && !figureLabel) {
+            throw importError(
+                'MANUAL_FIGURE_LABEL',
+                '主图需要填写 Figure 编号，例如 Figure 3',
+                'supplementalFigureLabel'
+            );
+        }
+        const rawPage = String(input.sourcePage ?? '').trim();
+        const sourcePage = rawPage ? Number(rawPage) : 0;
+        if (!Number.isSafeInteger(sourcePage) || sourcePage < 0 || sourcePage > 100000) {
+            throw importError(
+                'MANUAL_FIGURE_PAGE',
+                'PDF 页码必须是正整数',
+                'supplementalFigureSourcePage'
+            );
+        }
+        return { figureKind, figureLabel, sourcePage };
+    }
+
+    function createImageImport(file, transientImage, caption = '', metadata = {}) {
+        validateImageFile(file);
+        const manualMetadata = normalizeManualMetadata(metadata);
+        const sourceFingerprint = String(transientImage?.sourceFingerprint || '');
+        const draftInput = {
+            sourceMode: 'image',
+            sourceMaterialId: sourceMaterialId('image', sourceFingerprint),
+            sourceFileName: file.name,
+            sourceMimeType: file.type,
+            sourceFileSize: file.size,
+            sourceImportedAt: now(),
+            sourceFingerprint,
+            caption: normalizeOptionalCaption(caption),
+            ...manualMetadata
+        };
+        const draft = shared.createSupplementalFigureImportDraft(draftInput);
+        return { draft, transientImage };
+    }
+
+    async function createCaptionImport(value, metadata = {}) {
+        const caption = normalizeCaption(value);
+        const manualMetadata = normalizeManualMetadata(metadata);
+        const sourceFingerprint = await sha256Fingerprint(caption);
+        const draft = shared.createSupplementalFigureImportDraft({
+            sourceMode: 'caption',
+            sourceMaterialId: sourceMaterialId('caption', sourceFingerprint),
+            sourceImportedAt: now(),
+            sourceFingerprint,
+            caption,
+            ...manualMetadata
+        });
+        return { draft };
+    }
+
+    function validateManualInput(file, caption, { hasExistingImage = false } = {}) {
+        const normalizedCaption = normalizeOptionalCaption(caption);
+        if (file) validateImageFile(file);
+        if (!file && !normalizedCaption && !hasExistingImage) {
+            throw importError(
+                'SUPPLEMENTAL_MANUAL_INPUT_REQUIRED',
+                '请上传或粘贴一张图片，或者填写图注',
+                'supplementalFigureImageFile'
+            );
+        }
+        return { file: file || null, caption: normalizedCaption };
+    }
+
+    function clipboardImageFile(clipboardData, FileImpl = globalThis.File) {
+        const items = [...(clipboardData?.items || [])];
+        const item = items.find(candidate =>
+            candidate?.kind === 'file' && /^image\/(?:png|jpeg|webp)$/i.test(
+                String(candidate?.type || '')
+            )
+        );
+        const blob = item?.getAsFile?.();
+        if (!blob) return null;
+        const mediaType = String(blob.type || item.type || '').toLowerCase();
+        const extension = mediaType === 'image/jpeg' ? 'jpg'
+            : mediaType === 'image/webp' ? 'webp' : 'png';
+        const currentName = String(blob.name || '');
+        if (/\.(?:png|jpe?g|webp)$/i.test(currentName)) return blob;
+        if (typeof FileImpl === 'function') {
+            return new FileImpl([blob], `clipboard-${Date.now()}.${extension}`, {
+                type: mediaType,
+                lastModified: Date.now()
+            });
+        }
+        try {
+            Object.defineProperty(blob, 'name', {
+                configurable: true,
+                value: `clipboard-${Date.now()}.${extension}`
+            });
+        } catch (_) {}
+        return blob;
+    }
+
+    function isClosedTabError(error) {
+        const code = String(error?.code || '').trim().toUpperCase();
+        if ([
+            'TAB_NOT_FOUND',
+            'NO_TAB',
+            'INVALID_TAB_ID',
+            'TAB_CLOSED',
+            'TARGET_TAB_CLOSED'
+        ].includes(code)) return true;
+        return /No tab with id|Invalid tab ID|tab (?:was )?closed|tab not found/i
+            .test(String(error?.message || error || ''));
+    }
+
+    function responseError(response, fallbackCode, fallbackMessage) {
+        const structured = response?.error && typeof response.error === 'object'
+            ? response.error : null;
+        return importError(
+            response?.code || structured?.code || fallbackCode,
+            structured?.message || response?.error || fallbackMessage
+        );
+    }
+
+    async function deliverImport(targetInput, request = {}) {
+        const target = validateTarget(targetInput);
+        const draft = request?.draft;
+        if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+            throw importError('SUPPLEMENTAL_DRAFT_INVALID', '补充 Figure 草稿无效');
+        }
+        const message = {
+            action: 'importSupplementalFigureDraft',
+            target,
+            draft
+        };
+        if (request.transientImage) {
+            const transientImage = shared.normalizeSupplementalTransientImage(
+                request.transientImage,
+                request.transientImage.sourceFingerprint
+            );
+            message.transientImage = {
+                mediaType: transientImage.mediaType,
+                dataUrl: transientImage.dataUrl,
+                width: transientImage.width,
+                height: transientImage.height,
+                sourceFingerprint: transientImage.sourceFingerprint
+            };
+        }
+        try {
+            const response = await sendTabMessageWithRecovery(
+                chromeApi, target.targetArticleTabId, message
+            );
+            if (response?.success === false) {
+                throw responseError(
+                    response,
+                    'SUPPLEMENTAL_IMPORT_FAILED',
+                    '无法导入补充 Figure 草稿'
+                );
+            }
+            return response;
+        } catch (error) {
+            if (!isClosedTabError(error)) throw error;
+            const fallback = await chromeApi.runtime.sendMessage({
+                type: 'ARTICLE_WORKSPACE_SAVE_SUPPLEMENTAL_DRAFT',
+                target,
+                draft,
+                ...(message.transientImage
+                    ? { transientImage: message.transientImage }
+                    : {})
+            });
+            if (fallback?.success === false) {
+                throw responseError(
+                    fallback,
+                    'SUPPLEMENTAL_DRAFT_SAVE_FAILED',
+                    '无法保存补充 Figure 草稿'
+                );
+            }
+            return { ...(fallback?.data || fallback || {}), savedAsDraft: true };
+        }
+    }
+
+    async function deliverUpdate(targetInput, request = {}) {
+        const target = validateTarget(targetInput);
+        const figureId = String(request.figureId || '').trim();
+        if (!figureId) {
+            throw importError('SUPPLEMENTAL_FIGURE_NOT_FOUND', '没有找到要编辑的补充图');
+        }
+        const message = {
+            action: 'updateSupplementalFigureDraft',
+            target,
+            figureId,
+            caption: normalizeOptionalCaption(request.caption),
+            figureLabel: String(request.figureLabel || '').trim(),
+            sourcePage: String(request.sourcePage ?? '').trim()
+        };
+        if (request.transientImage) {
+            const transientImage = shared.normalizeSupplementalTransientImage(
+                request.transientImage,
+                request.transientImage.sourceFingerprint
+            );
+            Object.assign(message, {
+                transientImage: {
+                    mediaType: transientImage.mediaType,
+                    dataUrl: transientImage.dataUrl,
+                    width: transientImage.width,
+                    height: transientImage.height,
+                    sourceFingerprint: transientImage.sourceFingerprint
+                },
+                sourceFingerprint: transientImage.sourceFingerprint,
+                sourceFileName: String(request.sourceFileName || '').slice(0, 500),
+                sourceMimeType: String(request.sourceMimeType || '').slice(0, 100),
+                sourceFileSize: Math.max(0, Number(request.sourceFileSize) || 0)
+            });
+        }
+        const response = await sendTabMessageWithRecovery(
+            chromeApi, target.targetArticleTabId, message
+        );
+        if (response?.success === false) {
+            throw responseError(response, 'SUPPLEMENTAL_UPDATE_FAILED', '补充图修改失败');
+        }
+        return response;
+    }
+
+    async function deliverDelete(targetInput, figureId) {
+        const target = validateTarget(targetInput);
+        const normalizedFigureId = String(figureId || '').trim();
+        if (!normalizedFigureId) {
+            throw importError('SUPPLEMENTAL_FIGURE_NOT_FOUND', '没有找到要删除的补充图');
+        }
+        const response = await sendTabMessageWithRecovery(
+            chromeApi,
+            target.targetArticleTabId,
+            { action: 'deleteSupplementalFigure', target, figureId: normalizedFigureId }
+        );
+        if (response?.success === false) {
+            throw responseError(response, 'SUPPLEMENTAL_DELETE_FAILED', '补充图删除失败');
+        }
+        return response;
+    }
+
+    return {
+        syncSourceMode,
+        validateTarget,
+        buildTarget,
+        validateImageFile,
+        normalizeCaption,
+        normalizeOptionalCaption,
+        normalizeManualMetadata,
+        validateManualInput,
+        clipboardImageFile,
+        prepareTransientImage,
+        createImageImport,
+        createCaptionImport,
+        deliverImport,
+        deliverUpdate,
+        deliverDelete
+    };
+}
+
+const supplementalFigureImportTools = createSupplementalFigureImportTools({
+    shared: SciLLM,
+    chromeApi: chrome
+});
+
+async function openSupplementalMaterialPdf(material, target) {
+    target = supplementalFigureImportTools.validateTarget(target);
+    const readerUrl = SciLLM.createSupplementalPdfReaderUrl?.(
+        chrome.runtime.getURL.bind(chrome.runtime),
+        {
+            sourceUrl: material?.url,
+            title: material?.title,
+            materialId: material?.materialId,
+            parentWorkspaceId: target.workspaceId,
+            parentWorkspaceGeneration: target.workspaceGeneration,
+            parentCanonicalUrl: target.canonicalUrl,
+            parentDocumentHash: target.documentHash,
+            parentTabId: target.targetArticleTabId
+        }
+    );
+    if (!readerUrl) {
+        showStatus('这个补充材料不是可直接解析的 PDF 链接', 'error');
+        return;
+    }
+    const tab = await chrome.tabs.create({ url: readerUrl, active: true });
+    await SciLLM.markTabActivated?.(chrome.storage.session, {
+        ...tab,
+        url: readerUrl,
+        pendingUrl: readerUrl,
+        title: material?.title || '补充材料 PDF'
+    });
+    showStatus('已在新标签页打开补充 PDF 工作区；请选择本地 PDF，解析结果会自动纳入原论文', 'success');
+}
+
+let supplementalFigureImportTarget = null;
+let supplementalFigureImportSession = {
+    action: 'create',
+    figure: null,
+    clipboardFile: null
+};
+
+function supplementalFigureImportMode(form = document.getElementById(
+    'supplementalFigureImportForm'
+)) {
+    return form?.querySelector?.(
+        'input[name="supplementalFigureSourceMode"]:checked'
+    )?.value || 'pdf';
+}
+
+function setSupplementalFigureImportStatus(message = '', { error = false } = {}) {
+    const status = document.getElementById('supplementalFigureImportStatus');
+    if (!status) return;
+    status.textContent = String(message || '');
+    status.classList.toggle('is-error', error);
+}
+
+function focusSupplementalFigureImportError(error) {
+    const field = error?.fieldId ? document.getElementById(error.fieldId) : null;
+    if (field) {
+        field.setAttribute('aria-invalid', 'true');
+        field.focus();
+    } else {
+        document.getElementById('supplementalFigureImportStatus')?.focus?.();
+    }
+}
+
+function updateSupplementalFigureSelectedImage(file = null, { existing = false } = {}) {
+    const label = document.getElementById('supplementalFigureSelectedImage');
+    const pasteTarget = document.getElementById('supplementalFigurePasteTarget');
+    if (!label) return;
+    const hasImage = Boolean(file || existing);
+    label.textContent = file
+        ? `已选择：${file.name}（${Math.max(1, Math.ceil(file.size / 1024))} KiB）`
+        : existing ? '已保留当前图片；选择或粘贴新图片可替换。'
+            : '未选择图片；也可以只填写图注。';
+    label.classList.toggle('has-image', hasImage);
+    pasteTarget?.classList.toggle('is-ready', hasImage);
+}
+
+function setSupplementalFigureClipboardFile(file) {
+    supplementalFigureImportSession.clipboardFile = file || null;
+    const input = document.getElementById('supplementalFigureImageFile');
+    if (input && file && typeof DataTransfer === 'function') {
+        try {
+            const transfer = new DataTransfer();
+            transfer.items.add(file);
+            input.files = transfer.files;
+        } catch (_) {}
+    }
+    updateSupplementalFigureSelectedImage(file, {
+        existing: supplementalFigureImportSession.figure?.hasImage === true
+    });
+}
+
+function resetSupplementalFigureImportForm({ editingFigure = null } = {}) {
+    const form = document.getElementById('supplementalFigureImportForm');
+    form?.reset?.();
+    const fileInput = document.getElementById('supplementalFigureImageFile');
+    const captionInput = document.getElementById('supplementalFigureImageCaption');
+    const kindInput = document.getElementById('supplementalFigureKind');
+    const labelInput = document.getElementById('supplementalFigureLabel');
+    const pageInput = document.getElementById('supplementalFigureSourcePage');
+    if (fileInput) fileInput.value = '';
+    if (captionInput) captionInput.value = editingFigure?.caption || '';
+    if (kindInput) {
+        kindInput.value = editingFigure?.isSupplemental === false ? 'main' : 'supplemental';
+        kindInput.disabled = Boolean(editingFigure);
+    }
+    if (labelInput) {
+        labelInput.value = editingFigure?.figureLabel || '';
+        labelInput.placeholder = kindInput?.value === 'main'
+            ? '例如 Figure 3' : '例如 Figure S2（留空则自动编号）';
+    }
+    if (pageInput) pageInput.value = Number(editingFigure?.sourcePage) > 0
+        ? String(Math.floor(Number(editingFigure.sourcePage))) : '';
+    form?.querySelectorAll('[aria-invalid="true"]').forEach(field =>
+        field.removeAttribute('aria-invalid')
+    );
+    supplementalFigureImportSession = {
+        action: editingFigure ? 'edit' : 'create',
+        figure: editingFigure || null,
+        clipboardFile: null
+    };
+    document.querySelectorAll('[data-supplemental-create-only]').forEach(element => {
+        element.hidden = Boolean(editingFigure);
+    });
+    const title = document.getElementById('supplementalFigureImportTitle');
+    const description = document.getElementById('supplementalFigureImportDescription');
+    const submit = document.getElementById('submitSupplementalFigureImport');
+    if (title) title.textContent = editingFigure
+        ? `编辑 ${editingFigure.figureLabel || '手动 Figure'}` : '手动补全 Figure';
+    if (description) description.textContent = editingFigure
+        ? '可修改图注，或上传、粘贴新图片替换当前图片。保存后需要重新解图。'
+        : '可上传主图或补充图原图、图注，并标注它在原 PDF 中的页码。';
+    if (submit) submit.textContent = editingFigure ? '保存修改' : '继续';
+    supplementalFigureImportTools.syncSourceMode(
+        form,
+        'manual'
+    );
+    updateSupplementalFigureSelectedImage(null, {
+        existing: editingFigure?.hasImage === true
+    });
+    setSupplementalFigureImportStatus('');
+}
+
+function openSupplementalFigureImportDialog() {
+    const dialog = document.getElementById('supplementalFigureImportDialog');
+    try {
+        supplementalFigureImportTarget = supplementalFigureImportTools.buildTarget(
+            currentWorkspaceSnapshot,
+            activePanelTabContext.tabId,
+            preparedDocumentState?.documentHash || manualAnnotationState.documentHash
+        );
+    } catch (error) {
+        showStatus(error.message, 'error');
+        return;
+    }
+    resetSupplementalFigureImportForm();
+    dialog?.showModal();
+}
+
+function openSupplementalFigureEditDialog(figure) {
+    const dialog = document.getElementById('supplementalFigureImportDialog');
+    try {
+        supplementalFigureImportTarget = supplementalFigureImportTools.buildTarget(
+            currentWorkspaceSnapshot,
+            activePanelTabContext.tabId,
+            preparedDocumentState?.documentHash || manualAnnotationState.documentHash
+        );
+    } catch (error) {
+        showStatus(error.message, 'error');
+        return;
+    }
+    resetSupplementalFigureImportForm({ editingFigure: figure });
+    dialog?.showModal();
+    document.getElementById('supplementalFigureImageCaption')?.focus?.();
+}
+
+async function deleteSupplementalFigureFromWorkspace(figure) {
+    const label = String(figure?.figureLabel || '这张补充图');
+    if (!globalThis.confirm?.(`确定删除 ${label}？\n\n这会同时移除其解图结果和串解关系。`)) {
+        return;
+    }
+    const target = supplementalFigureImportTools.buildTarget(
+        currentWorkspaceSnapshot,
+        activePanelTabContext.tabId,
+        preparedDocumentState?.documentHash || manualAnnotationState.documentHash
+    );
+    await supplementalFigureImportTools.deliverDelete(target, figure?.figureId);
+    showStatus(`${label} 已删除`, 'success');
+    await refreshArticleWorkspace();
+}
+
+function closeSupplementalFigureImportDialog() {
+    document.getElementById('supplementalFigureImportDialog')?.close();
+}
+
+async function submitSupplementalFigureImport(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = document.getElementById('submitSupplementalFigureImport');
+    const mode = supplementalFigureImportMode(form);
+    form.querySelectorAll('[aria-invalid="true"]').forEach(field =>
+        field.removeAttribute('aria-invalid')
+    );
+    if (submit?.disabled) return;
+    if (submit) submit.disabled = true;
+    setSupplementalFigureImportStatus('正在保存并识别 Panel…');
+    try {
+        const target = supplementalFigureImportTools.validateTarget(
+            supplementalFigureImportTarget
+        );
+        let importResult = null;
+        if (mode === 'pdf' && supplementalFigureImportSession.action === 'create') {
+            await openSupplementalMaterialPdf({
+                materialId: `manual-supplement-${Date.now()}`,
+                title: '本地补充材料 PDF',
+                url: ''
+            }, target);
+        } else {
+            const fileInput = document.getElementById('supplementalFigureImageFile');
+            const file = supplementalFigureImportSession.clipboardFile ||
+                fileInput?.files?.[0] || null;
+            const captionValue = document.getElementById(
+                'supplementalFigureImageCaption'
+            )?.value;
+            const manual = supplementalFigureImportTools.validateManualInput(
+                file,
+                captionValue,
+                { hasExistingImage: supplementalFigureImportSession.figure?.hasImage === true }
+            );
+            const metadata = supplementalFigureImportTools.normalizeManualMetadata({
+                figureKind: document.getElementById('supplementalFigureKind')?.value,
+                figureLabel: document.getElementById('supplementalFigureLabel')?.value,
+                sourcePage: document.getElementById('supplementalFigureSourcePage')?.value
+            });
+            let transientImage = null;
+            if (manual.file) {
+                setSupplementalFigureImportStatus('正在本地校验、缩放并压缩图片…');
+                transientImage = await supplementalFigureImportTools
+                    .prepareTransientImage(manual.file);
+            }
+            if (supplementalFigureImportSession.action === 'edit') {
+                const editingFigure = supplementalFigureImportSession.figure;
+                importResult = await supplementalFigureImportTools.deliverUpdate(target, {
+                    figureId: editingFigure?.figureId,
+                    caption: manual.caption,
+                    figureLabel: metadata.figureLabel,
+                    sourcePage: metadata.sourcePage,
+                    ...(transientImage ? {
+                        transientImage,
+                        sourceFileName: manual.file.name,
+                        sourceMimeType: manual.file.type,
+                        sourceFileSize: manual.file.size
+                    } : {})
+                });
+            } else if (manual.file) {
+                const request = supplementalFigureImportTools.createImageImport(
+                    manual.file, transientImage, manual.caption, metadata
+                );
+                importResult = await supplementalFigureImportTools.deliverImport(target, request);
+            } else {
+                const request = await supplementalFigureImportTools.createCaptionImport(
+                    manual.caption, metadata
+                );
+                importResult = await supplementalFigureImportTools.deliverImport(target, request);
+            }
+        }
+        const importedLabel = String(importResult?.figureLabel || '补充 Figure');
+        const panelHints = Array.isArray(importResult?.panelHints)
+            ? importResult.panelHints : [];
+        const importedMessage = `${importedLabel} ${
+            supplementalFigureImportSession.action === 'edit' ? '已更新' : '已新建'
+        }` +
+            (panelHints.length ? `；已识别 Panel ${panelHints.join('、')}` : '；暂未识别到 Panel');
+        const directoryMessage = mode === 'pdf' ? ''
+            : importResult?.directoryPersisted === true
+                ? '；图片和图注已写入所选文件夹'
+                : '；已保存在浏览器，但所选文件夹尚未完成写入，请重新授权文件夹后点击“保存全部”';
+        const persistedMessage = `${importedMessage}${directoryMessage}`;
+        setSupplementalFigureImportStatus(
+            mode === 'pdf' ? '已在新标签页打开 PDF 工作区' : persistedMessage
+        );
+        closeSupplementalFigureImportDialog();
+        showStatus(
+            mode === 'pdf'
+                ? '已在新标签页打开补充 PDF 工作区'
+                : persistedMessage,
+            mode !== 'pdf' && importResult?.directoryPersisted !== true
+                ? 'error' : 'success'
+        );
+        await refreshArticleWorkspace();
+    } catch (error) {
+        setSupplementalFigureImportStatus(error.message, { error: true });
+        focusSupplementalFigureImportError(error);
+    } finally {
+        if (submit) submit.disabled = false;
+    }
+}
+
+function setupSupplementalFigureImport() {
+    const dialog = document.getElementById('supplementalFigureImportDialog');
+    const form = document.getElementById('supplementalFigureImportForm');
+    document.getElementById('openSupplementalFigureImport')?.addEventListener(
+        'click', openSupplementalFigureImportDialog
+    );
+    document.getElementById('closeSupplementalFigureImport')?.addEventListener(
+        'click', closeSupplementalFigureImportDialog
+    );
+    document.getElementById('cancelSupplementalFigureImport')?.addEventListener(
+        'click', closeSupplementalFigureImportDialog
+    );
+    form?.addEventListener('change', event => {
+        if (event.target?.name === 'supplementalFigureSourceMode') {
+            supplementalFigureImportTools.syncSourceMode(dialog, event.target.value);
+            setSupplementalFigureImportStatus('');
+            return;
+        }
+        if (event.target?.id === 'supplementalFigureImageFile') {
+            supplementalFigureImportSession.clipboardFile = null;
+            updateSupplementalFigureSelectedImage(event.target.files?.[0] || null, {
+                existing: supplementalFigureImportSession.figure?.hasImage === true
+            });
+        } else if (event.target?.id === 'supplementalFigureKind') {
+            const label = document.getElementById('supplementalFigureLabel');
+            if (label) label.placeholder = event.target.value === 'main'
+                ? '例如 Figure 3' : '例如 Figure S2（留空则自动编号）';
+        }
+    });
+    document.getElementById('supplementalFigurePasteTarget')?.addEventListener(
+        'click', event => event.currentTarget?.focus?.()
+    );
+    dialog?.addEventListener('paste', event => {
+        const file = supplementalFigureImportTools.clipboardImageFile(
+            event.clipboardData
+        );
+        if (!file) return;
+        event.preventDefault();
+        supplementalFigureImportTools.syncSourceMode(dialog, 'manual');
+        setSupplementalFigureClipboardFile(file);
+        setSupplementalFigureImportStatus('已从剪贴板导入图片');
+    });
+    form?.addEventListener('submit', event => {
+        void submitSupplementalFigureImport(event);
+    });
+}
+
 async function sendTabMessage(tabId, message) {
     if (!activePanelTabContext.activated ||
         Number(tabId) !== Number(activePanelTabContext.tabId)) {
-        const error = new Error('当前标签页尚未激活，请先点击扩展图标');
+        const error = new Error('当前标签页尚未激活，请点击侧栏任意位置激活');
         error.code = 'PANEL_TAB_NOT_ACTIVATED';
         throw error;
     }
     return SciLLM.sendTabMessageWithRecovery(chrome, tabId, message);
+}
+
+async function resolveSupplementalReaderTab(figure = {}) {
+    const readerUrl = String(figure.sourceReaderUrl || '').trim();
+    const storedTabId = Number(figure.sourceReaderTabId);
+    let tab = null;
+    if (Number.isInteger(storedTabId) && storedTabId >= 0) {
+        tab = await chrome.tabs.get(storedTabId).catch(() => null);
+        if (tab && !SciLLM.isPdfReaderUrl?.(tab.url || tab.pendingUrl)) tab = null;
+    }
+    if (!tab && readerUrl) {
+        const tabs = await chrome.tabs.query({});
+        tab = tabs.find(candidate => candidate.url === readerUrl ||
+            candidate.pendingUrl === readerUrl) || null;
+    }
+    if (!tab && readerUrl) {
+        const currentTabId = Number(activePanelTabContext.tabId);
+        tab = Number.isInteger(currentTabId) && currentTabId >= 0
+            ? await chrome.tabs.update(currentTabId, { url: readerUrl, active: true })
+            : await chrome.tabs.create({ url: readerUrl, active: true });
+        await SciLLM.markTabActivated?.(chrome.storage.session, {
+            ...tab,
+            url: readerUrl,
+            pendingUrl: readerUrl,
+            title: figure.sourceTitle || '补充材料 PDF'
+        });
+    } else if (tab?.id) {
+        await chrome.tabs.update(tab.id, { active: true });
+    }
+    if (!tab?.id) throw new Error('补充 PDF 工作区已关闭，且无法恢复解析页面');
+    if (Number.isInteger(tab.windowId)) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    return tab;
+}
+
+async function waitForSupplementalReaderFigure(tabId, figure = {}) {
+    const parsedLabel = SciLLM.parseFigureLabel?.(figure.figureLabel);
+    const sourceFigureId = String(
+        figure.originalFigureId || parsedLabel?.figureId || figure.figureId || ''
+    );
+    const deadline = Date.now() + 180000;
+    let lastError = null;
+    while (Date.now() < deadline) {
+        try {
+            const response = await SciLLM.sendTabMessageIfPresent(chrome, tabId, {
+                action: 'getFigureWorkspaceSnapshot'
+            });
+            const figures = Array.isArray(response?.snapshot?.figures)
+                ? response.snapshot.figures : [];
+            const match = figures.find(item =>
+                item.figureId === sourceFigureId ||
+                item.figureLabel === figure.figureLabel
+            );
+            if (match) return match.figureId;
+        } catch (error) {
+            lastError = error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 750));
+    }
+    throw lastError || new Error('补充 PDF 尚未完成解析，请稍后重试');
+}
+
+async function runExternalSupplementalFigureAnalysis(figure = {}) {
+    return runSingleFigureAnalysis(String(figure?.figureId || ''));
 }
 
 async function runFigureAnalysis() {
@@ -6935,28 +9618,31 @@ async function runFigureAnalysis() {
         const failedCount = Number(response.failedCount) || 0;
         const analyzedCount = Number(response.analyzedCount) || 0;
         const totalCount = Number(response.totalCount) || analyzedCount + failedCount;
-        const routeStatus = response.route
-            ? formatEffectiveRoute('逐图解读完成', response.route) : '';
         const details = [];
         if (response.cacheHits) details.push(response.cacheHits + ' 张来自缓存');
         if (response.visionFallbacks) {
             details.push(response.visionFallbacks + ' 张仅使用图注与正文');
         }
         if (failedCount > 0) {
-            showStatus(
+            showStatus(formatEffectiveRoute(
                 `逐图解读完成 ${analyzedCount}/${totalCount} 张，${failedCount} 张失败；` +
                 '成功结果已保留，重试时会复用缓存' +
                 (details.length ? '（' + details.join('，') + '）' : ''),
-                'error'
+                response.route
+            ),
+                'error',
+                response.usage
             );
         } else {
-            showStatus(
+            showStatus(formatEffectiveRoute(
                 '逐图解读完成：' + analyzedCount + ' 张 Figure' +
                 (details.length ? '（' + details.join('，') + '）' : ''),
-                'success'
+                response.route
+            ),
+                'success',
+                response.usage
             );
         }
-        if (routeStatus) showStatus(routeStatus, failedCount > 0 ? 'error' : 'success');
         figureAnalysisState = {
             ...figureAnalysisState,
             running: false,
@@ -7089,7 +9775,11 @@ async function runFigurePanelFollowup(
             }, 280);
         });
     });
-    showStatus(`已完成 ${figureId} · Panel ${panelId} 的定向追问`, 'success');
+    showStatus(
+        `已完成 ${figureId} · Panel ${panelId} 的定向追问`,
+        'success',
+        response.usage
+    );
     return response;
 }
 
@@ -7112,7 +9802,11 @@ async function runSingleFigureAnalysis(figureId) {
             error.code = response?.code;
             throw error;
         }
-        showStatus(`\u5df2\u5b8c\u6210 ${figureId} \u7684\u5355\u56fe\u7cbe\u8bfb`, 'success');
+        showStatus(
+            `\u5df2\u5b8c\u6210 ${figureId} \u7684\u5355\u56fe\u7cbe\u8bfb`,
+            'success',
+            response.usage
+        );
     } catch (error) {
         if (!isCurrentFigureTask(taskToken, tab?.id)) return;
         showStatus(error?.code === 'CANCELLED'
@@ -7157,7 +9851,7 @@ async function runSingleFigurePanelAnalysis(figureId, panelId) {
         }
         showStatus(formatEffectiveRoute(
             `${figureId} · Panel ${panelId} 解读完成`, response.route
-        ), 'success');
+        ), 'success', response.usage);
     } catch (error) {
         if (!isCurrentFigureTask(taskToken, tab?.id)) return;
         showStatus(error?.code === 'CANCELLED'
@@ -7199,10 +9893,15 @@ async function runCrossFigureLogic() {
         const result = response.result || {};
         const nodes = Array.isArray(result.nodes) ? result.nodes.length : 0;
         const links = Array.isArray(result.dominoChain) ? result.dominoChain.length : 0;
+        const logicMapStatus = response.logicMap
+            ? (response.logicMap.reused ? '；论证阶梯已同步' : '；论证阶梯已自动生成')
+            : (response.logicMapError ? '；论证阶梯自动生成失败，可稍后重试主图串解' : '');
         showStatus(
             `主图多米诺总链已生成：${nodes} 个主图节点、${links} 条跨图连接` +
-            (result.cacheHit ? '（已复用缓存）' : ''),
-            'success'
+                logicMapStatus +
+                (result.cacheHit ? '（已复用缓存）' : ''),
+            'success',
+            response.usage
         );
         switchWorkspaceView('figures');
     } catch (error) {
@@ -7214,6 +9913,57 @@ async function runCrossFigureLogic() {
         updateFigureButton();
         await refreshArticleWorkspace();
         await persistCurrentArticleArchive().catch(() => null);
+    }
+}
+
+async function runCreateResearchLogicMap({ blank = false } = {}) {
+    let tab = null;
+    const button = document.getElementById(
+        blank ? 'createBlankResearchLogicMap' : 'createResearchLogicMap'
+    );
+    const originalHtml = button?.innerHTML || '';
+    try {
+        tab = await queryPanelTargetTab();
+        if (!tab?.id) throw new Error('ACTIVE_TAB_NOT_FOUND');
+        if (button) {
+            button.disabled = true;
+            button.textContent = blank ? '正在新建…' : '正在整理…';
+        }
+        showStatus(
+            blank ? '正在创建空白论文论证阶梯…' : '正在复用已有解图结果整理论证阶梯…',
+            'success'
+        );
+        const response = await sendTabMessage(tab.id, {
+            action: 'createArticleLogicMap',
+            blank
+        });
+        if (!response?.success) {
+            const error = new Error(response?.error || 'RESEARCH_LOGIC_MAP_CREATE_FAILED');
+            error.code = response?.code;
+            throw error;
+        }
+        await openResearchLogicMapEditor({
+            workspaceId: response.workspaceId,
+            mapId: response.mapId,
+            sourceTabId: tab.id
+        });
+        showStatus(
+            response.reused
+                ? '已打开这组解图结果对应的论证阶梯。'
+                : (blank ? '空白论证阶梯已创建。' : '论证阶梯已生成；未额外调用模型。'),
+            'success'
+        );
+        await refreshArticleWorkspace();
+    } catch (error) {
+        const message = error?.code === 'RESEARCH_LOGIC_MAP_REQUIRES_FIGURE_ANALYSIS'
+            ? '请先完成至少一张主图的逐图解读，再生成论证阶梯。'
+            : `创建论证阶梯失败：${error.message}`;
+        showStatus(message, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
     }
 }
 
@@ -7285,12 +10035,8 @@ async function runReviewOutlineAnalysis({ forceRefresh = false } = {}) {
             `综述大纲已生成：${reviewOutlineState.completedParagraphs} 段` +
                 notice + synthesisNotice,
             response.nonReviewNotice || response.outline?.globalSynthesisAvailable === false
-                ? 'error' : 'success'
-        );
-        if (response.route) showStatus(
-            formatEffectiveRoute('综述大纲已生成', response.route),
-            response.nonReviewNotice || response.outline?.globalSynthesisAvailable === false
-                ? 'error' : 'success'
+                ? 'error' : 'success',
+            response.usage
         );
     } catch (error) {
         if (!isCurrentReviewOutlineTask(panelContext)) return;
@@ -7512,6 +10258,26 @@ function setupEventListeners() {
     });
     document.getElementById('analyzeFiguresFromFigures')?.addEventListener('click', runFigureAnalysis);
     document.getElementById('analyzeCrossFigureLogic')?.addEventListener('click', runCrossFigureLogic);
+    document.getElementById('createBlankResearchLogicMap')?.addEventListener('click', () => {
+        void runCreateResearchLogicMap({ blank: true });
+    });
+    document.getElementById('paragraphNoteForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        void saveParagraphNoteValue(document.getElementById('paragraphNoteText')?.value || '');
+    });
+    document.getElementById('closeParagraphNoteDialog')?.addEventListener(
+        'click', closeParagraphNoteEditor
+    );
+    document.getElementById('cancelParagraphNote')?.addEventListener(
+        'click', closeParagraphNoteEditor
+    );
+    document.getElementById('deleteParagraphNote')?.addEventListener('click', () => {
+        if (!paragraphNoteEditorTarget) return;
+        void saveParagraphNoteValue('');
+    });
+    document.getElementById('paragraphNoteDialog')?.addEventListener('close', () => {
+        paragraphNoteEditorTarget = null;
+    });
     document.getElementById('articleChatProfile')?.addEventListener('change', event => {
         articleChatSelectedProfileId = event.target.value;
         renderArticleChatSnapshot(currentWorkspaceSnapshot);
@@ -7748,7 +10514,7 @@ function setupEventListeners() {
                 await persistCurrentArticleArchive().catch(() => null);
                 showStatus(formatEffectiveRoute(
                     `LLM 已高亮 ${response.highlightedCount || 0} 处`, response.analysis?.route
-                ), 'success');
+                ), 'success', response.usage);
             } catch (error) {
                 prepareState = 'prepared';
                 updateApplyButton();
@@ -7757,14 +10523,13 @@ function setupEventListeners() {
                     await refreshArticleWorkspace();
                     return;
                 }
-                try {
-                    const fallback = await applyRegexOnTab(tab.id);
-                    matchCounts = fallback?.counts || {};
-                    await queueAnalysisModeMutation('regex');
-                    showStatus('LLM 分析失败，已回退到正则高亮', 'error');
-                } catch {
-                    showStatus('LLM 与正则回退均失败，请刷新页面后重试', 'error');
-                }
+                await refreshLlmDiagnostics().catch(() => undefined);
+                await refreshArticleWorkspace();
+                await persistCurrentArticleArchive().catch(() => null);
+                showStatus(
+                    'LLM 分析未全部完成；已完成分块和高亮均已保留。再次点击只会重试未完成分块。',
+                    'error'
+                );
             }
                 return;
             }
@@ -7801,11 +10566,47 @@ function setupEventListeners() {
 // 显示状态消息
 let statusMessageTimer = null;
 
-function showStatus(message, type) {
+function normalizedNotificationTokenUsage(value) {
+    if (!value || typeof value !== 'object') return null;
+    const inputTokens = Math.max(0, Number(value.inputTokens) || 0);
+    const outputTokens = Math.max(0, Number(value.outputTokens) || 0);
+    const totalTokens = Math.max(
+        0,
+        Number(value.totalTokens) || inputTokens + outputTokens
+    );
+    const requests = Math.max(0, Number(value.requests) || 0);
+    if (!inputTokens && !outputTokens && !totalTokens && !requests) return null;
+    return {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        requests,
+        estimated: value.estimated === true
+    };
+}
+
+function formatNotificationTokenUsage(value) {
+    const usage = normalizedNotificationTokenUsage(value);
+    if (!usage) return '';
+    const number = token => Math.round(token).toLocaleString('zh-CN');
+    return `${usage.estimated ? '估算 ' : ''}Token：输入 ${number(usage.inputTokens)}` +
+        ` · 输出 ${number(usage.outputTokens)} · 总计 ${number(usage.totalTokens)}` +
+        (usage.requests > 1 ? ` · ${usage.requests} 次调用` : '');
+}
+
+function appendNotificationTokenUsage(message, usage) {
+    const text = String(message || '').trim();
+    const usageText = formatNotificationTokenUsage(usage);
+    if (!usageText || /Token：输入\s/i.test(text)) return text;
+    return `${text} · ${usageText}`;
+}
+
+function showStatus(message, type, usage = null) {
+    const announcedMessage = appendNotificationTokenUsage(message, usage);
     const statusEl = document.getElementById('statusMessage');
-    recordSidePanelNotification(message, type);
+    recordSidePanelNotification(announcedMessage, type);
     if (!statusEl) return;
-    statusEl.textContent = message;
+    statusEl.textContent = announcedMessage;
     statusEl.className = `status-message side-panel-global-status ${type} show`;
 
     if (statusMessageTimer !== null) clearTimeout(statusMessageTimer);

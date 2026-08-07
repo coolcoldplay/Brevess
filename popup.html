@@ -209,12 +209,8 @@
 
       <section class="workspace-view" data-workspace-view="highlights" hidden>
         <div class="workspace-view-heading">
-          <div><h2>高亮与证据</h2><p>查看不同类型高亮的章节分布、证据台账与手动备注。</p></div>
+          <div><h2>摘句与高亮</h2><p>查看不同类型高亮的章节分布与手动备注。</p></div>
         </div>
-        <section id="evidenceLedger" class="side-panel-result-card" aria-label="论文证据台账">
-          <h3>论文证据台账</h3>
-          <div class="workspace-empty">完成 AI 分析后，核心证据与审读提醒会显示在这里。</div>
-        </section>
         <section id="highlightDistribution" class="side-panel-result-card" aria-label="高亮分布">
           <h3>高亮分布</h3>
           <div class="workspace-empty">当前页面还没有可归类的高亮。</div>
@@ -234,8 +230,14 @@
           <span id="figureWorkspaceSummary" aria-live="polite"></span>
         </div>
         <div class="figure-workspace-toolbar">
-          <button id="analyzeFiguresFromFigures" class="btn btn-figure" type="button">逐图解读</button>
-          <button id="analyzeCrossFigureLogic" class="btn btn-cross-figure" type="button">主图串解</button>
+          <button id="analyzeFiguresFromFigures" class="btn btn-figure" type="button">全部解图</button>
+          <button id="analyzeCrossFigureLogic" class="btn btn-cross-figure" type="button">整合分析</button>
+          <button id="openSupplementalFigureImport"
+            class="btn btn-secondary supplemental-figure-import-open" type="button">
+            添加补图
+          </button>
+          <button id="createBlankResearchLogicMap" class="btn btn-secondary btn-logic-map-blank"
+            type="button">手动梳理</button>
           <div id="figureTaskControls" class="analysis-task-controls" hidden>
             <button id="pauseFigureAnalysis" class="btn btn-secondary" type="button">暂停图解</button>
             <button id="cancelFigureAnalysis" class="btn btn-danger-outline" type="button">取消图解</button>
@@ -244,6 +246,14 @@
         <div id="figureWorkspace" class="figure-workspace">
           <div class="workspace-empty">正在从网页结构读取 Figure 与 Panel 目录…</div>
         </div>
+        <details id="supplementalFigureCoverage" class="supplemental-figure-coverage" hidden>
+          <summary class="supplemental-coverage-toggle">
+            <span class="supplemental-coverage-title">补充材料覆盖</span>
+            <span id="supplementalFigureCoverageSummary" class="supplemental-coverage-toggle-summary"
+              aria-live="polite">等待解析</span>
+          </summary>
+          <div id="supplementalFigureCoverageBody" class="supplemental-coverage-body"></div>
+        </details>
         <nav id="figureQuickNav" class="figure-quick-nav" aria-label="Figure 与 Panel 快速跳转" hidden></nav>
       </section>
 
@@ -320,15 +330,182 @@
           <button class="abbreviation-dialog-close" type="submit"
             aria-label="关闭缩写表" title="关闭">×</button>
         </header>
-        <div class="abbreviation-table-wrap">
-          <table class="abbreviation-table">
-            <thead><tr><th scope="col">缩写</th><th scope="col">全称</th></tr></thead>
-            <tbody id="articleAbbreviationTableBody"></tbody>
-          </table>
-          <div id="articleAbbreviationEmpty" class="workspace-empty" hidden>
-            正文中暂未发现“全称（缩写）”或“缩写（全称）”形式的可靠定义。
-          </div>
+        <div class="abbreviation-dialog-actions" aria-label="缩略词表操作">
+          <button id="importArticleAbbreviationsToGlobal" type="button">
+            本文导入全局记忆
+          </button>
+          <button id="importGlobalAbbreviationMemoryButton" type="button">
+            导入词库
+          </button>
+          <button id="exportGlobalAbbreviationMemory" type="button">
+            导出词库
+          </button>
+          <input id="importGlobalAbbreviationMemoryFile" type="file"
+            accept=".json,application/json" hidden>
         </div>
+        <div class="abbreviation-table-shell">
+          <div id="articleAbbreviationTableWrap" class="abbreviation-table-wrap">
+            <table class="abbreviation-table">
+              <thead>
+                <tr>
+                  <th scope="col">缩写</th>
+                  <th scope="col">英文全称</th>
+                  <th scope="col">
+                    <span class="abbreviation-meaning-heading">
+                      <span>中文含义</span>
+                      <button id="translateArticleAbbreviations" type="button"
+                        title="使用“段落概述”对应的 LLM 模型补齐空白中文含义">
+                        一键获取
+                      </button>
+                    </span>
+                  </th>
+                  <th scope="col">来源</th>
+                  <th scope="col"><span class="visually-hidden">操作</span></th>
+                </tr>
+              </thead>
+              <tbody id="articleAbbreviationTableBody"></tbody>
+            </table>
+            <div id="articleAbbreviationEmpty" class="workspace-empty" hidden>
+              正文中暂未发现“全称（缩写）”或“缩写（全称）”形式的可靠定义。
+            </div>
+          </div>
+          <nav id="articleAbbreviationAlphabetNav" class="abbreviation-alphabet-nav"
+            aria-label="按缩写首字母快速跳转"></nav>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="figureResultEditorDialog" class="figure-result-editor-dialog"
+      aria-labelledby="figureResultEditorTitle">
+      <form id="figureResultEditorForm" class="figure-result-editor-content">
+        <header class="figure-result-editor-header">
+          <div>
+            <p class="figure-result-editor-kicker">人工修订</p>
+            <h2 id="figureResultEditorTitle">编辑 Figure 解读</h2>
+            <p id="figureResultEditorDescription">
+              模型原文会保留；保存后显示人工修订版，并同步写入当前论文工作区。
+            </p>
+          </div>
+          <button id="closeFigureResultEditor" class="figure-result-editor-close"
+            type="button" aria-label="关闭 Figure 解读编辑器" title="关闭">×</button>
+        </header>
+        <div id="figureResultEditorBody" class="figure-result-editor-body"></div>
+        <footer class="figure-result-editor-footer">
+          <button id="restoreFigureModelResult" class="btn btn-danger-outline"
+            type="button" hidden>恢复模型原文</button>
+          <span id="figureResultEditorStatus" class="figure-result-editor-status"
+            role="status" aria-live="polite"></span>
+          <button id="cancelFigureResultEditor" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="saveFigureResultEditor" class="btn btn-primary"
+            type="submit">保存人工修订</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="paragraphNoteDialog" class="paragraph-note-dialog"
+      aria-labelledby="paragraphNoteTitle">
+      <form id="paragraphNoteForm" class="paragraph-note-dialog-content">
+        <header class="paragraph-note-dialog-header">
+          <div>
+            <p class="paragraph-note-kicker">手动点评 · 不消耗 token</p>
+            <h2 id="paragraphNoteTitle">段落笔记</h2>
+          </div>
+          <button id="closeParagraphNoteDialog" class="paragraph-note-dialog-close"
+            type="button" aria-label="关闭段落笔记" title="关闭">×</button>
+        </header>
+        <div class="paragraph-note-dialog-body">
+          <blockquote id="paragraphNoteQuote"></blockquote>
+          <label for="paragraphNoteText">我的点评</label>
+          <textarea id="paragraphNoteText" maxlength="4000" rows="9"
+            placeholder="写下判断、疑问、实验启发或后续要核查的线索"></textarea>
+          <p id="paragraphNoteStatus" role="status" aria-live="polite"></p>
+        </div>
+        <footer class="paragraph-note-dialog-footer">
+          <button id="deleteParagraphNote" class="btn btn-danger-outline"
+            type="button">删除笔记</button>
+          <span></span>
+          <button id="cancelParagraphNote" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="saveParagraphNote" class="btn btn-primary"
+            type="submit">保存笔记</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="supplementalFigureImportDialog" class="supplemental-figure-import-dialog"
+      aria-labelledby="supplementalFigureImportTitle">
+      <form id="supplementalFigureImportForm" class="supplemental-figure-import-content"
+        novalidate>
+        <header class="supplemental-figure-import-header">
+          <div>
+            <p class="supplemental-figure-import-kicker">手动补全证据</p>
+            <h2 id="supplementalFigureImportTitle">新建补充 Figure</h2>
+            <p id="supplementalFigureImportDescription">可解析补充 PDF，或用图片、图注创建单张补充图。</p>
+          </div>
+          <button id="closeSupplementalFigureImport"
+            class="supplemental-figure-import-close" type="button"
+            aria-label="关闭新建补充 Figure" title="关闭">×</button>
+        </header>
+
+        <fieldset class="supplemental-figure-source-modes">
+          <legend>选择来源</legend>
+          <label data-supplemental-create-only>
+            <input type="radio" name="supplementalFigureSourceMode" value="pdf">
+            <span>PDF 解析</span>
+          </label>
+          <label>
+            <input type="radio" name="supplementalFigureSourceMode" value="manual" checked>
+            <span>图片 / 图注</span>
+          </label>
+        </fieldset>
+
+        <div class="supplemental-figure-source-panes">
+          <section data-supplemental-source-pane="pdf" aria-label="PDF 来源">
+            <strong>用 MinerU 解析补充 PDF</strong>
+            <p>将在绑定当前论文的 PDF 工作区中，由你选择已下载的补充材料。</p>
+          </section>
+          <section data-supplemental-source-pane="manual" aria-label="Figure 图片或图注来源" hidden>
+            <div class="supplemental-figure-metadata-grid">
+              <label for="supplementalFigureKind">Figure 类型
+                <select id="supplementalFigureKind">
+                  <option value="main">主图</option>
+                  <option value="supplemental" selected>补充图</option>
+                </select>
+              </label>
+              <label for="supplementalFigureLabel">Figure 编号
+                <input id="supplementalFigureLabel" type="text" maxlength="40"
+                  placeholder="例如 Figure S2">
+              </label>
+              <label for="supplementalFigureSourcePage">原 PDF 页码（可选）
+                <input id="supplementalFigureSourcePage" type="number" min="1" max="100000"
+                  inputmode="numeric" placeholder="例如 8">
+              </label>
+            </div>
+            <p>页码按 PDF 阅读器显示的页数填写；图解卡片可据此跳回原 PDF 页面。</p>
+            <label for="supplementalFigureImageFile">选择 Figure 图片</label>
+            <input id="supplementalFigureImageFile" type="file"
+              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+            <div id="supplementalFigurePasteTarget" class="supplemental-figure-paste-target"
+              tabindex="0">点击此处后按 Ctrl+V，可直接粘贴剪贴板图片</div>
+            <p id="supplementalFigureSelectedImage" class="supplemental-figure-selected-image">
+              未选择图片；也可以只填写图注。
+            </p>
+            <label for="supplementalFigureImageCaption">图注（可选）</label>
+            <textarea id="supplementalFigureImageCaption" rows="8" maxlength="8000"
+              placeholder="例如：Figure 3. (A) ... (B) ..."></textarea>
+            <p>图片和图注至少提供一种；图片支持 PNG、JPEG、WebP，最大 20 MiB。</p>
+          </section>
+        </div>
+
+        <p id="supplementalFigureImportStatus" class="supplemental-figure-import-status"
+          role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+        <footer class="supplemental-figure-import-footer">
+          <button id="cancelSupplementalFigureImport" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="submitSupplementalFigureImport" class="btn btn-primary"
+            type="submit">继续</button>
+        </footer>
       </form>
     </dialog>
 
@@ -345,15 +522,20 @@
     </dialog>
 
     <script src="core/cache-planner.js"></script>
+    <script src="core/privacy-sanitizer.js"></script>
     <script src="core/article-archive.js"></script>
     <script src="core/article-chat-citations.js"></script>
     <script src="core/abbreviation-extractor.js"></script>
+    <script src="core/research-logic-map.js"></script>
     <script src="core/panel-context-guard.js"></script>
     <script src="core/tab-activation.js"></script>
+    <script src="core/pdf-workspace.js"></script>
+    <script src="core/supplemental-materials.js"></script>
     <script src="core/tab-messenger.js"></script>
     <script src="core/keyboard-shortcuts.js"></script>
     <script src="core/i18n.js"></script>
     <script src="core/figure-extractor.js"></script>
+    <script src="core/figure-analysis.js"></script>
     <script src="core/user-data-database.js"></script>
     <script src="core/directory-sync.js"></script>
     <script src="popup.js"></script>

@@ -5,8 +5,11 @@ require('../providers/provider-utils.js');
 const {
   CROSS_FIGURE_LOGIC_VERSION,
   compileCrossFigureLogicPrompt,
+  compileSupplementalSupportPrompt,
   normalizeCrossFigureLogicInput,
-  validateCrossFigureLogic
+  validateCrossFigureLogic,
+  validateSupplementalSupport,
+  fallbackSupplementalSupport
 } = require('../core/cross-figure-logic.js');
 
 const input = {
@@ -36,7 +39,13 @@ const input = {
 function validOutput() {
   return {
     article_title: input.articleTitle,
+    known_background_zh: ['热暴露能够影响代谢稳态。'],
     overall_thesis_zh: '热暴露先建立代谢表型，再由神经中介解释其持续性。',
+    mechanism_chain: [{
+      from_zh: '热暴露',
+      to_zh: '代谢改变',
+      support_panel_refs: ['1A']
+    }],
     figure_nodes: [
       {
         figure_id: 'figure-1', role: 'phenomenon',
@@ -64,7 +73,9 @@ function validOutput() {
     }],
     supplemental_support: [{
       figure_id: 'figure-s1', supports_figure_id: 'figure-1',
-      contribution_zh: 'It supports the exposure-model interpretation.'
+      support_role: 'control', attachment_basis: 'explicit_caption',
+      contribution_zh: 'It supports the exposure-model interpretation.',
+      limitation_zh: 'It does not independently establish the downstream mediator.'
     }],
     claim_boundary_zh: 'The supplied figures do not by themselves establish every downstream causal link.'
   };
@@ -73,7 +84,7 @@ function validOutput() {
 test('compiles a strict cross-figure domino request with ordered main figures', () => {
   const prompt = compileCrossFigureLogicPrompt(input);
   const payload = JSON.parse(prompt.userPrompt);
-  assert.equal(CROSS_FIGURE_LOGIC_VERSION, '3');
+  assert.equal(CROSS_FIGURE_LOGIC_VERSION, '9');
   assert.equal(prompt.schemaName, 'cross_figure_domino_logic');
   assert.deepEqual(payload.main_figure_ids, ['figure-1', 'figure-2']);
   assert.match(prompt.systemPrompt, /exact document order/);
@@ -81,6 +92,14 @@ test('compiles a strict cross-figure domino request with ordered main figures', 
   assert.match(prompt.systemPrompt, /do not let its transition_zh/);
   assert.ok(prompt.responseSchema.required.includes('domino_chain'));
   assert.ok(prompt.responseSchema.required.includes('supplemental_support'));
+  assert.ok(prompt.responseSchema.required.includes('mechanism_chain'));
+  assert.ok(prompt.responseSchema.required.includes('known_background_zh'));
+  assert.match(prompt.systemPrompt, /known_background_zh/);
+  assert.match(prompt.systemPrompt, /one connected paper-level mechanism chain/);
+  assert.match(prompt.systemPrompt, /exact supporting Panels/);
+  assert.match(prompt.systemPrompt, /must appear exactly once in supplemental_support/);
+  assert.match(prompt.systemPrompt, /never extra domino steps/);
+  assert.match(prompt.systemPrompt, /related to Figure N/);
   assert.deepEqual(
     prompt.responseSchema.properties.figure_nodes.items.properties.role.enum,
     ['problem_setup', 'phenomenon', 'association', 'mechanism', 'causal_test', 'necessity', 'sufficiency', 'rescue', 'functional_outcome', 'translation', 'other']
@@ -141,8 +160,48 @@ test('normalizes only supplied Figure ids and preserves the main-figure order', 
   assert.equal(normalized.dominoChain.length, 1);
   assert.equal(normalized.dominoChain[0].relationType, 'phenomenon_to_mechanism');
   assert.equal(normalized.supplementalSupport[0].figureId, 'figure-s1');
+  assert.equal(normalized.supplementalSupport[0].supportRole, 'control');
+  assert.equal(normalized.supplementalSupport[0].attachmentBasis, 'explicit_caption');
+  assert.match(normalized.supplementalSupport[0].limitation, /does not independently/);
   assert.deepEqual(normalized.missingFigureIds, []);
   assert.deepEqual(normalized.analyzedMainFigureIds, ['figure-1', 'figure-2']);
+  assert.deepEqual(normalized.mechanismEdges, [{
+    from: '热暴露',
+    to: '代谢改变',
+    supportPanels: ['1A']
+  }]);
+  assert.deepEqual(normalized.backgroundItems, ['热暴露能够影响代谢稳态。']);
+  assert.equal(normalized.mechanismChain, '热暴露 → 代谢改变');
+});
+
+test('maps analyzed supplemental Figures in a compact independently validated batch', () => {
+  const prompt = compileSupplementalSupportPrompt(input, {
+    overallThesis: '先确认表型，再解释机制。'
+  });
+  const payload = JSON.parse(prompt.userPrompt);
+  assert.equal(prompt.schemaName, 'supplemental_figure_support');
+  assert.deepEqual(
+    payload.supplemental_figures.map(figure => figure.figure_id),
+    ['figure-s1']
+  );
+  const mapped = validateSupplementalSupport({
+    supplemental_support: validOutput().supplemental_support
+  }, input);
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].figureId, 'figure-s1');
+  assert.equal(mapped[0].supportsFigureId, 'figure-1');
+  assert.throws(
+    () => validateSupplementalSupport({ supplemental_support: [] }, input),
+    error => error?.code === 'INVALID_RESPONSE'
+  );
+  const fallback = fallbackSupplementalSupport({
+    ...input,
+    figures: input.figures.map(figure => figure.figureId === 'figure-s1'
+      ? { ...figure, caption: 'Figure S1, related to Figure 1.' }
+      : figure)
+  });
+  assert.equal(fallback[0].supportsFigureId, 'figure-1');
+  assert.equal(fallback[0].attachmentBasis, 'explicit_caption');
 });
 
 test('requires at least two main figures and strips unsafe figure input', () => {
@@ -153,4 +212,36 @@ test('requires at least two main figures and strips unsafe figure input', () => 
     figures: [{ figureId: 'figure-1', caption: '<script>ignore()</script>caption' }]
   });
   assert.equal(normalized.figures[0].caption, 'caption');
+});
+
+test('accepts imported supplemental ids and requires every analyzed supplement exactly once', () => {
+  const importedInput = structuredClone(input);
+  importedInput.figures[1].figureId =
+    'supp-cell-supporting-information-pdf-s1';
+  const output = validOutput();
+  output.supplemental_support[0].figure_id =
+    'supp-cell-supporting-information-pdf-s1';
+
+  const normalized = validateCrossFigureLogic(output, importedInput);
+  assert.equal(
+    normalized.supplementalSupport[0].figureId,
+    'supp-cell-supporting-information-pdf-s1'
+  );
+
+  const omitted = structuredClone(output);
+  omitted.supplemental_support = [];
+  assert.throws(
+    () => validateCrossFigureLogic(omitted, importedInput),
+    /omitted analyzed supplemental Figures/
+  );
+
+  const duplicated = structuredClone(output);
+  duplicated.supplemental_support.push({
+    ...duplicated.supplemental_support[0],
+    supports_figure_id: 'figure-2'
+  });
+  assert.throws(
+    () => validateCrossFigureLogic(duplicated, importedInput),
+    /mapped supplemental Figure more than once/
+  );
 });

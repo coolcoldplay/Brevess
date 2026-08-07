@@ -12,7 +12,12 @@
   }
 
   function normalizeDisplay(value, fallback = '') {
-    return String(value || fallback || '').replace(/\s+/gu, ' ').trim();
+    return String(value || fallback || '')
+      .replace(/\r\n?/g, '\n')
+      .split(/\n+/)
+      .map(line => line.replace(/[^\S\n]+/gu, ' ').trim())
+      .filter(Boolean)
+      .join('\n');
   }
 
   function hash(value) {
@@ -295,7 +300,8 @@
     return hash({
       adapterId: structure?.adapterId,
       nodes: flattenStructureNodes(structure?.nodes).map(node => [
-        node.sectionId, node.parentSectionId, node.title, node.level, node.order
+        node.sectionId, node.parentSectionId, node.title, node.displayTitle,
+        node.level, node.order
       ]),
       typedRecords: (structure?.typedRecords || structure?.paragraphs || []).map(item => [
         item.paragraphId, item.sectionId, item.recordType || 'body',

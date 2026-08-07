@@ -52,8 +52,9 @@ test('content script exposes full-document LLM analysis and local highlighting',
   assert.match(script, /analyzeArticleWithLLM/);
   assert.match(script, /LLM_ANALYZE_DOCUMENT/);
   assert.match(script, /applyLlmHighlights/);
-  assert.match(script, /applyStoredRegexFallback/);
-  assert.match(script, /LLM 分析失败.*自动回退.*正则/);
+  assert.doesNotMatch(script, /applyStoredRegexFallback/);
+  assert.match(script, /LLM 分析未全部完成/);
+  assert.match(script, /已完成分块会保留，重试时只处理未完成部分/);
   assert.match(script, /LLM_RECORD_FEEDBACK/);
   assert.match(script, /showHighlightContextPopover/);
   assert.match(script, /sciLlmParagraphId/);
@@ -63,6 +64,22 @@ test('content script exposes full-document LLM analysis and local highlighting',
   assert.match(script, /timestamp:\s*Date\.now\(\)/);
   assert.doesNotMatch(css, /#sci-llm-status/);
   assert.match(css, /#sci-llm-feedback/);
+});
+
+test('content toggles regex, LLM, and manual decorations without hiding article text', () => {
+  const script = read('content.js');
+  assert.match(script, /function setHighlightSourceVisibility/);
+  assert.match(script, /data-sci-show-regex/);
+  assert.match(script, /data-sci-show-llm/);
+  assert.match(script, /data-sci-show-manual/);
+  assert.match(script, /background: transparent !important/);
+  assert.doesNotMatch(
+    script.slice(
+      script.indexOf('function ensureHighlightSourceVisibilityStyle'),
+      script.indexOf('function setHighlightSourceVisibility')
+    ),
+    /display:\s*none|visibility:\s*hidden/
+  );
 });
 
 test('content script forwards the popup-prepared document identity after re-extraction', () => {

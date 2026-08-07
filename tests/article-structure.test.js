@@ -57,6 +57,19 @@ test('uses parent source keys when publisher headings share one HTML level', () 
   assert.equal(structure.nodes[0].children[0].level, 3);
 });
 
+test('preserves bilingual heading line breaks without changing the canonical title', () => {
+  const structure = buildArticleStructure(input([{
+    sourceKey: 'h-results',
+    title: 'Results',
+    displayTitle: 'Results\n结果',
+    level: 2,
+    order: 1
+  }]));
+
+  assert.equal(structure.nodes[0].title, 'Results');
+  assert.equal(structure.nodes[0].displayTitle, 'Results\n结果');
+});
+
 test('keeps navigable front and end matter while excluding page utility headings', () => {
   const structure = buildArticleStructure(input([
     { sourceKey: 'h-abstract', title: 'Abstract', level: 2, order: 1 },
@@ -106,6 +119,20 @@ test('does not increment revision for an unchanged structure', () => {
     { sourceKey: 'h-abstract', title: 'Abstract', level: 2, order: 1 }
   ]));
   assert.equal(reconcileArticleStructure(first, same).revision, first.revision);
+});
+
+test('increments revision when Immersive Translate adds a bilingual heading line', () => {
+  const first = buildArticleStructure(input([{
+    sourceKey: 'h-results', title: 'Results', displayTitle: 'Results', level: 2, order: 1
+  }]));
+  const translated = buildArticleStructure(input([{
+    sourceKey: 'h-results', title: 'Results', displayTitle: 'Results\n结果', level: 2, order: 1
+  }]));
+  const reconciled = reconcileArticleStructure(first, translated);
+
+  assert.equal(reconciled.revision, first.revision + 1);
+  assert.equal(reconciled.nodes[0].displayTitle, 'Results\n结果');
+  assert.notEqual(structureSignature(first), structureSignature(reconciled));
 });
 
 test('preserves paragraph identity across harmless DOM source-key and selector changes', () => {

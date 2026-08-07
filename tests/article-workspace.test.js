@@ -43,6 +43,10 @@ test('workspace identity uses normalized canonical URL, aliases, and content has
 
 test('workspace paths reject traversal, absolute, reserved, control, and credential-shaped data', () => {
   assert.equal(normalizeWorkspaceCanonicalUrl('https://example.org/a/?x=1#b'), 'https://example.org/a');
+  assert.equal(
+    normalizeWorkspaceCanonicalUrl('file:///D:/papers/Article.pdf?ignored=1#page=4'),
+    'file:///D:/papers/Article.pdf'
+  );
   assert.equal(normalizeWorkspaceRelativePath('chat/turns.jsonl'), 'chat/turns.jsonl');
   for (const path of ['../secret', '/absolute', 'C:/secret', 'chat/../../secret', 'CON/file.json',
     'chat/bad\u0000name.json']) {
@@ -54,6 +58,53 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
     /WORKSPACE_CONTAINS_CREDENTIALS/);
   assert.throws(() => assertWorkspaceSafeValue({ Authorization: 'Bearer secret' }),
     /WORKSPACE_CONTAINS_CREDENTIALS/);
+  for (const key of [
+    'token', 'providerToken', 'password', 'bearer', 'authToken',
+    'accessToken', 'refreshToken', 'credential', 'secret', 'apiToken',
+    'githubToken', 'privateToken', 'personalAccessToken', 'webhookSecret',
+    'privateSecret', 'clientSecret', 'privateKey',
+    'authorizationHeader', 'authHeader', 'bearerToken', 'databasePassword',
+    'accessTokens'
+  ]) {
+    assert.throws(
+      () => assertWorkspaceSafeValue({ [key]: 'must-not-persist' }),
+      /WORKSPACE_CONTAINS_CREDENTIALS/,
+      key
+    );
+  }
+  assert.deepEqual(assertWorkspaceSafeValue({
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
+    activeProvider: 'vision-route',
+    route: { providerId: 'vision-route', provider: 'openai', model: 'gpt-4.1' },
+    headerTitle: 'retain section header'
+  }), {
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    inputTokens: 12,
+    outputTokens: 4,
+    cacheHitTokens: 8,
+    totalTokens: 16,
+    maxOutputTokens: 4096,
+    activeProvider: 'vision-route',
+    route: { providerId: 'vision-route', provider: 'openai', model: 'gpt-4.1' },
+    headerTitle: 'retain section header'
+  });
 });
 
 test('workspace manifests expose only relative assets and exact identity matching ignores titles', async () => {

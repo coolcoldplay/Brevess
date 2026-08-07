@@ -86,6 +86,66 @@ test('creates a complete portable article archive while stripping secrets and pa
   assert.deepEqual(validateArticleArchive(JSON.parse(serialized)), archive);
 });
 
+test('article archives remove the complete credential and provider key family', () => {
+  const input = sampleArchiveInput();
+  input.workspace.privacyAudit = {
+    apiKey: 'secret-api-key',
+    customHeaders: { Authorization: 'secret-authorization' },
+    token: 'secret-generic-token',
+    providerToken: 'secret-provider-token',
+    providerId: 'secret-provider-id',
+    provider: 'secret-provider',
+    password: 'secret-password',
+    bearer: 'secret-bearer',
+    authToken: 'secret-auth-token',
+    accessToken: 'secret-access-token',
+    refreshToken: 'secret-refresh-token',
+    credential: 'secret-credential',
+    secret: 'secret-secret',
+    apiToken: 'secret-api-token',
+    githubToken: 'secret-github-token',
+    privateToken: 'secret-private-token',
+    personalAccessToken: 'secret-personal-access-token',
+    webhookSecret: 'secret-webhook-secret',
+    privateSecret: 'secret-private-secret',
+    clientSecret: 'secret-client-secret',
+    privateKey: 'secret-private-key',
+    activeProvider: 'secret-active-provider',
+    authorizationHeader: 'secret-authorization-header',
+    authHeader: 'secret-auth-header',
+    bearerToken: 'secret-bearer-token',
+    databasePassword: 'secret-database-password',
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  };
+
+  const archive = createArticleArchive(input);
+  const audit = archive.workspace.privacyAudit;
+  const serialized = JSON.stringify(archive);
+  assert.doesNotMatch(
+    serialized,
+    /secret-api-key|secret-authorization|secret-generic-token|secret-provider-token|secret-provider-id|secret-provider|secret-password|secret-bearer|secret-auth-token|secret-access-token|secret-refresh-token|secret-credential|secret-secret|secret-api-token|secret-github-token|secret-private-token|secret-personal-access-token|secret-webhook-secret|secret-private-secret|secret-client-secret|secret-private-key|secret-active-provider|secret-authorization-header|secret-auth-header|secret-bearer-token|secret-database-password/u
+  );
+  assert.deepEqual(audit, {
+    experimentalProtocol: 'retain protocol',
+    secretoryPathway: 'retain secretory biology',
+    secretome: 'retain secretome biology',
+    tokenizationMethod: 'retain scientific tokenization',
+    tokenUsage: { input: 12, output: 4 },
+    tokenCount: 16,
+    inputTokenCount: 12,
+    headerTitle: 'retain section header',
+    proteinAccess: 'retain assay access'
+  });
+});
+
 test('rejects mismatched identities, unsupported schemas, and oversized archives', () => {
   const mismatched = sampleArchiveInput();
   mismatched.documentRecord.documentId = `sha256:${'b'.repeat(64)}`;

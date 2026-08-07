@@ -14,20 +14,33 @@
   const LEGACY_ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
   const WORKSPACE_INDEX_PATH = 'workspace-index.json';
   const WORKSPACE_ROOT_PATH = 'workspaces';
+  const PORTABLE_CONFIG_PATH = shared.PORTABLE_CONFIG_PATH ||
+    'settings/portable-config.enc.json';
   const HANDLE_KEY = 'selected-directory';
   const META_KEY = 'meta';
   const MAX_ERROR_LENGTH = 240;
   const MAX_CONFLICTS = 50;
+  let privacy = shared;
+  if (typeof privacy.isExportSensitiveKey !== 'function' && typeof require === 'function') {
+    try { privacy = require('./privacy-sanitizer.js'); } catch (_) {}
+  }
+  if (typeof privacy.isExportSensitiveKey !== 'function') {
+    const error = new Error('PRIVACY_SANITIZER_UNAVAILABLE');
+    error.code = 'PRIVACY_SANITIZER_UNAVAILABLE';
+    throw error;
+  }
   const FORBIDDEN_EXPORT_KEYS = new Set([
-    'apikey', 'authorization', 'headers', 'providers', 'analysiscache',
-    'directoryhandle', 'directoryhandles', 'syncqueue', 'cachestore', 'handlestore'
+    'analysiscache', 'directoryhandle', 'directoryhandles', 'syncqueue',
+    'cachestore', 'handlestore'
   ]);
 
   function forbiddenExportKey(value) {
     const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return FORBIDDEN_EXPORT_KEYS.has(key) ||
-      /(apikey|authorization|credential|secret|token|header|provider|cache|handle|syncqueue)/u
-        .test(key);
+    return privacy.isExportSensitiveKey(value) ||
+      FORBIDDEN_EXPORT_KEYS.has(key) ||
+      key.endsWith('cache') || key.endsWith('caches') ||
+      key.endsWith('handle') || key.endsWith('handles') ||
+      key.includes('syncqueue');
   }
 
   function fail(code) {
@@ -98,6 +111,13 @@
       normalized.startsWith('conflicts/')
     )) fail('INVALID_RELATIVE_PATH');
     return normalized;
+  }
+
+  function assertOrdinaryQueuePath(relativePath) {
+    if (relativePath === PORTABLE_CONFIG_PATH) {
+      fail('PORTABLE_CONFIG_REQUIRES_CAS');
+    }
+    return relativePath;
   }
 
   function validateRevision(value) {
@@ -405,10 +425,10 @@
   async function writeText(root, relativePath, content) {
     const retryableNames = new Set([
       'AbortError', 'InvalidStateError', 'NoModificationAllowedError',
-      'OperationError', 'UnknownError'
+      'OperationError', 'UnknownError', 'NotFoundError', 'NotReadableError'
     ]);
     let lastError = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       let writable = null;
       try {
         const handle = await getFileHandle(root, relativePath, true);
@@ -419,13 +439,61 @@
       } catch (error) {
         lastError = error;
         await writable?.abort?.().catch?.(() => undefined);
-        if (!retryableNames.has(String(error?.name || '')) || attempt >= 2) {
+        if (!retryableNames.has(String(error?.name || '')) || attempt >= 4) {
           throw error;
         }
-        await new Promise(resolve => setTimeout(resolve, 40 * (attempt + 1)));
+        await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)));
       }
     }
     throw lastError || new Error('DIRECTORY_WRITE_FAILED');
+  }
+
+  function binaryBytes(value) {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    fail('INVALID_BINARY_ASSET');
+  }
+
+  async function readBinary(root, relativePath) {
+    try {
+      const handle = await getFileHandle(root, relativePath, false);
+      const file = await handle.getFile();
+      return new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      if (error?.name === 'NotFoundError') return null;
+      throw error;
+    }
+  }
+
+  async function writeBinary(root, relativePath, value) {
+    const bytes = binaryBytes(value);
+    if (!bytes.length || bytes.byteLength > 96 * 1024 * 1024) {
+      fail('INVALID_BINARY_ASSET');
+    }
+    const retryableNames = new Set([
+      'AbortError', 'InvalidStateError', 'NoModificationAllowedError',
+      'OperationError', 'UnknownError', 'NotFoundError', 'NotReadableError'
+    ]);
+    let lastError = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      let writable = null;
+      try {
+        const handle = await getFileHandle(root, relativePath, true);
+        writable = await handle.createWritable();
+        await writable.write(bytes);
+        await writable.close();
+        return;
+      } catch (error) {
+        lastError = error;
+        await writable?.abort?.().catch?.(() => undefined);
+        if (!retryableNames.has(String(error?.name || '')) || attempt >= 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)));
+      }
+    }
+    throw lastError || new Error('DIRECTORY_BINARY_WRITE_FAILED');
   }
 
   function workspaceManifest(input, assets) {
@@ -524,7 +592,8 @@
         assets.push({
           path,
           revision: validateRevision(asset.revision),
-          type: asset.type === 'text' ? 'text' : 'json',
+          type: asset.type === 'binary' ? 'binary' :
+            (asset.type === 'text' ? 'text' : 'json'),
           sourceId: String(asset.sourceId || ''),
           contentHash: String(asset.contentHash || '')
         });
@@ -547,11 +616,132 @@
     let rerunRequested = false;
     let rerunImporter = null;
     let workspaceMutationTail = Promise.resolve();
+    const directJsonMutationTails = new Map();
 
     function serializeWorkspaceMutation(operation) {
       const result = workspaceMutationTail.then(operation, operation);
       workspaceMutationTail = result.catch(() => undefined);
       return result;
+    }
+
+    function serializeDirectJsonMutation(relativePath, operation) {
+      const previous = directJsonMutationTails.get(relativePath) || Promise.resolve();
+      const result = previous.then(operation, operation);
+      const settled = result.catch(() => undefined);
+      directJsonMutationTails.set(relativePath, settled);
+      settled.then(() => {
+        if (directJsonMutationTails.get(relativePath) === settled) {
+          directJsonMutationTails.delete(relativePath);
+        }
+      });
+      return result;
+    }
+
+    function directoryError(code, details = {}) {
+      const error = new Error(code);
+      error.code = code;
+      Object.assign(error, details);
+      return error;
+    }
+
+    async function discardQueuedPortableConfig() {
+      while (true) {
+        const queued = await queueStore.get(PORTABLE_CONFIG_PATH);
+        if (!queued) return false;
+        if (await queueStore.remove(PORTABLE_CONFIG_PATH, queued.queueRevision)) {
+          return true;
+        }
+      }
+    }
+
+    function validatePortableCasEnvelope(input) {
+      if (typeof shared.validatePortableEnvelope !== 'function') {
+        fail('PORTABLE_CONFIG_SCHEMA_UNAVAILABLE');
+      }
+      try {
+        return shared.validatePortableEnvelope(cloneJsonLike(input));
+      } catch (error) {
+        if (error?.code === 'PORTABLE_CONFIG_ENVELOPE_FIELDS_INVALID') {
+          fail('PORTABLE_CONFIG_ENVELOPE_UNSAFE');
+        }
+        throw error;
+      }
+    }
+
+    async function compareAndSwapJson(relativePath, input, options = {}) {
+      const normalizedPath = normalizeRelativePath(relativePath);
+      if (normalizedPath !== PORTABLE_CONFIG_PATH) {
+        fail('DIRECTORY_CAS_PATH_UNSUPPORTED');
+      }
+      const mode = options.mode === 'create' ? 'create' :
+        (options.mode === 'update' ? 'update' : '');
+      if (!mode) fail('DIRECTORY_CAS_MODE_INVALID');
+      const incoming = validatePortableCasEnvelope(input);
+      const expected = mode === 'update'
+        ? validatePortableCasEnvelope(options.expected) : null;
+      if (mode === 'update' && (
+        incoming.backupId !== expected.backupId ||
+        incoming.revision !== expected.revision + 1
+      )) fail('DIRECTORY_CAS_UPDATE_INVALID');
+
+      return serializeDirectJsonMutation(normalizedPath, async () => {
+        await discardQueuedPortableConfig();
+        const handle = await handleStore.load();
+        const permission = await permissionState(handle);
+        if (!handle || permission !== 'granted') {
+          throw directoryError('DIRECTORY_PERMISSION_REQUIRED', { permission });
+        }
+        let root = null;
+        try {
+          root = await getRootDirectory(handle, mode === 'create');
+        } catch (error) {
+          if (error?.name !== 'NotFoundError') throw error;
+        }
+        let content = null;
+        if (root) content = await readText(root, normalizedPath);
+
+        if (mode === 'create') {
+          if (content !== null) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode, expectedRevision: null, actualRevision: null
+            });
+          }
+          if (!root) root = await getRootDirectory(handle, true);
+        } else {
+          if (content === null) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode, expectedRevision: expected.revision, actualRevision: null
+            });
+          }
+          let current;
+          try {
+            current = validatePortableCasEnvelope(JSON.parse(content));
+          } catch (_) {
+            throw directoryError('DIRECTORY_CAS_CURRENT_INVALID', {
+              mode, expectedRevision: expected.revision
+            });
+          }
+          if (stableStringify(current) !== stableStringify(expected)) {
+            throw directoryError('DIRECTORY_CAS_CONFLICT', {
+              mode,
+              expectedRevision: expected.revision,
+              actualRevision: current.revision
+            });
+          }
+          await writeText(root, backupRelativePath(normalizedPath),
+            `${JSON.stringify(stableValue(current), null, 2)}\n`);
+        }
+
+        await writeText(root, normalizedPath,
+          `${JSON.stringify(stableValue(incoming), null, 2)}\n`);
+        return {
+          committed: true,
+          permission: 'granted',
+          mode,
+          revision: incoming.revision,
+          previousRevision: expected ? expected.revision : null
+        };
+      });
     }
 
     async function permissionState(handle) {
@@ -588,7 +778,7 @@
     }
 
     async function enqueueJson(relativePath, input) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       const sanitized = sanitizeValue(cloneJsonLike(input));
       validateJsonAsset(sanitized);
       if (!sanitized.sourceId) sanitized.sourceId = sourceId;
@@ -604,7 +794,7 @@
     }
 
     async function enqueueText(relativePath, value) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       const previous = await queueStore.get(path);
       const revision = Math.max(Date.now(), Number(previous?.revision || 0) + 1);
       const content = String(value ?? '');
@@ -619,7 +809,7 @@
     }
 
     async function enqueueWorkspaceJson(relativePath, input) {
-      const path = normalizeRelativePath(relativePath);
+      const path = assertOrdinaryQueuePath(normalizeRelativePath(relativePath));
       if (typeof shared.assertWorkspaceSafeValue !== 'function') {
         fail('WORKSPACE_SCHEMA_UNAVAILABLE');
       }
@@ -637,11 +827,52 @@
       });
     }
 
-    async function readQueuedOrDiskJson(relativePath) {
+    async function readQueuedJson(relativePath) {
       const queued = await queueStore.get(relativePath);
       if (queued?.content) {
         try { return JSON.parse(queued.content); } catch (_) { fail('INVALID_JSON_ASSET'); }
       }
+      return null;
+    }
+
+    async function enqueueWorkspaceBinary(workspaceInput, relativePath, input, metadata = {}) {
+      const location = workspaceAssetPath(workspaceInput, relativePath);
+      const bytes = binaryBytes(input);
+      if (!bytes.length || bytes.byteLength > 96 * 1024 * 1024) {
+        fail('INVALID_BINARY_ASSET');
+      }
+      const revision = validateRevision(metadata.revision ?? Date.now());
+      const declaredHash = String(metadata.contentHash || '').toLowerCase();
+      if (!/^[a-f0-9]{64}$/u.test(declaredHash)) fail('INVALID_BINARY_HASH');
+      return queueStore.put({
+        relativePath: location.fullPath,
+        type: 'binary',
+        content: new Uint8Array(bytes),
+        revision,
+        sourceId: String(metadata.sourceId || sourceId),
+        contentHash: declaredHash
+      });
+    }
+
+    async function readWorkspaceBinary(workspaceInput, relativePath) {
+      const location = workspaceAssetPath(workspaceInput, relativePath);
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, found: false, bytes: null };
+      }
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          return { permission, found: false, bytes: null };
+        }
+        throw error;
+      }
+      const bytes = await readBinary(root, location.fullPath);
+      return { permission, found: Boolean(bytes?.length), bytes };
+    }
+
+    async function readDiskJson(relativePath) {
       const handle = await handleStore.load();
       if (!handle || await permissionState(handle) !== 'granted') return null;
       let root;
@@ -652,6 +883,17 @@
       const content = await readText(root, relativePath);
       if (content === null) return null;
       try { return JSON.parse(content); } catch (_) { fail('INVALID_JSON_ASSET'); }
+    }
+
+    async function readQueuedAndDiskJson(relativePath) {
+      const queued = await readQueuedJson(relativePath);
+      const disk = await readDiskJson(relativePath);
+      return { queued, disk };
+    }
+
+    async function readQueuedOrDiskJson(relativePath) {
+      const queued = await readQueuedJson(relativePath);
+      return queued || readDiskJson(relativePath);
     }
 
     async function enqueueWorkspaceAssetNow(workspaceInput, relativePath, input, metadata = {}) {
@@ -665,26 +907,31 @@
       shared.assertWorkspaceSafeValue(input);
       const data = cloneJsonLike(input);
       const requestedRevision = validateRevision(metadata.revision ?? Date.now());
-      const existingAsset = await readQueuedOrDiskJson(location.fullPath);
-      const existingAssetMatches = existingAsset &&
-        existingAsset.kind === 'sci-logic-highlighter-workspace-asset' &&
-        existingAsset.workspaceId === baseManifest.workspaceId &&
-        existingAsset.relativePath === location.assetPath;
-      const existingGenerationMatches = existingAssetMatches &&
-        Number(existingAsset.workspaceGeneration) ===
-          Number(baseManifest.workspaceGeneration);
-      const existingDataMatches = existingAssetMatches &&
+      const existingAssetCandidates = await readQueuedAndDiskJson(location.fullPath);
+      const matchingAssets = [
+        existingAssetCandidates.queued,
+        existingAssetCandidates.disk
+      ].filter(existing =>
+        existing &&
+        existing.kind === 'sci-logic-highlighter-workspace-asset' &&
+        existing.workspaceId === baseManifest.workspaceId &&
+        existing.relativePath === location.assetPath &&
+        Number(existing.workspaceGeneration) ===
+          Number(baseManifest.workspaceGeneration)
+      ).sort((left, right) =>
+        validateRevision(right.revision) - validateRevision(left.revision)
+      );
+      const existingAsset = matchingAssets[0] || null;
+      const existingDataMatches = existingAsset &&
         stableStringify(existingAsset.data) === stableStringify(data);
-      const reuseExistingEnvelope = existingGenerationMatches && existingDataMatches;
+      const reuseExistingEnvelope = Boolean(existingDataMatches);
       const advanceFromDirectory = metadata.advanceFromDirectory === true;
       // A directory restore may import content without preserving the envelope
-      // revision in IndexedDB. Any subsequent real local mutation must advance
-      // beyond the newest queued/disk envelope; otherwise flush sees a newer
-      // primary and leaves the save permanently stuck as
-      // DIRECTORY_VERSION_NEWER.
+      // revision in IndexedDB. Compare both the pending queue and the primary
+      // file: an older queued item must never hide a newer disk envelope.
       const revision = reuseExistingEnvelope
         ? validateRevision(existingAsset.revision)
-        : existingAssetMatches && advanceFromDirectory
+        : existingAsset && advanceFromDirectory
         ? Math.max(requestedRevision, validateRevision(existingAsset.revision) + 1)
         : requestedRevision;
       const timestamp = String(reuseExistingEnvelope
@@ -710,14 +957,29 @@
       const assetQueued = await enqueueWorkspaceJson(location.fullPath, envelope);
 
       let existingManifest = null;
-      const manifestValue = await readQueuedOrDiskJson(location.manifestPath);
-      if (manifestValue) existingManifest = shared.validateWorkspaceManifest(manifestValue);
-      if (existingManifest && (existingManifest.workspaceId !== baseManifest.workspaceId ||
-          existingManifest.workspaceGeneration !== baseManifest.workspaceGeneration)) {
-        fail('WORKSPACE_MANIFEST_CONFLICT');
-      }
-      const assets = (existingManifest?.assets || baseManifest.assets)
-        .filter(asset => asset.path !== location.assetPath);
+      const manifestCandidates = await readQueuedAndDiskJson(location.manifestPath);
+      const validManifests = [
+        manifestCandidates.queued,
+        manifestCandidates.disk
+      ].filter(Boolean).map(value => shared.validateWorkspaceManifest(value));
+      if (validManifests.some(manifest =>
+        manifest.workspaceId !== baseManifest.workspaceId ||
+        manifest.workspaceGeneration !== baseManifest.workspaceGeneration
+      )) fail('WORKSPACE_MANIFEST_CONFLICT');
+      existingManifest = validManifests.slice().sort((left, right) =>
+        Number(right.revision || 0) - Number(left.revision || 0)
+      )[0] || null;
+      const assetsByPath = new Map();
+      [baseManifest, ...validManifests].forEach(manifest => {
+        (manifest?.assets || []).forEach(asset => {
+          const current = assetsByPath.get(asset.path);
+          if (!current || Number(asset.revision || 0) >= Number(current.revision || 0)) {
+            assetsByPath.set(asset.path, asset);
+          }
+        });
+      });
+      assetsByPath.delete(location.assetPath);
+      const assets = [...assetsByPath.values()];
       assets.push({
         path: location.assetPath,
         type: 'json',
@@ -726,7 +988,7 @@
         updatedAt: timestamp
       });
       const manifestRevision = Math.max(
-        Number(existingManifest?.revision || 0) + 1,
+        ...validManifests.map(manifest => Number(manifest.revision || 0) + 1),
         Number(baseManifest.revision || 0), revision
       );
       const manifest = shared.createWorkspaceManifest({
@@ -866,6 +1128,95 @@
           } catch (_) {
             invalidAssets += 1;
           }
+        }
+      }
+      assets.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+      return { permission, assets, invalidAssets, recoveredGenerationMismatches };
+    }
+
+    async function listWorkspaceSupplementalAssets(workspaceInput) {
+      const location = workspaceDirectory(workspaceInput);
+      const handle = await handleStore.load();
+      const permission = await permissionState(handle);
+      if (!handle || permission !== 'granted') {
+        return { permission, assets: [], invalidAssets: 0 };
+      }
+      let root;
+      try {
+        root = await getRootDirectory(handle, false);
+      } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          return { permission, assets: [], invalidAssets: 0 };
+        }
+        throw error;
+      }
+      const assets = [];
+      let invalidAssets = 0;
+      let recoveredGenerationMismatches = 0;
+      const manifestGeneration = Number(location.manifest.workspaceGeneration) || 1;
+      const timestamp = value => {
+        if (Number.isFinite(Number(value)) && Number(value) > 1_000_000_000_000) {
+          return Number(value);
+        }
+        const parsed = Date.parse(String(value || ''));
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const manifestUpdatedAt = timestamp(location.manifest.updatedAt);
+      let directory;
+      try {
+        directory = await getDirectoryAtPath(
+          root, `${location.rootPath}/figures/supplemental`
+        );
+      } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          return { permission, assets, invalidAssets, recoveredGenerationMismatches };
+        }
+        throw error;
+      }
+      if (typeof directory?.entries !== 'function') {
+        return { permission, assets, invalidAssets, recoveredGenerationMismatches };
+      }
+      for await (const [filename, entry] of directory.entries()) {
+        if (assets.length >= 10_000) break;
+        if (entry?.kind && entry.kind !== 'file') continue;
+        if (!/^[^/\\]{1,180}\.json$/iu.test(String(filename || ''))) {
+          invalidAssets += 1;
+          continue;
+        }
+        const relativePath = `figures/supplemental/${filename}`;
+        try {
+          const content = await readText(root, `${location.rootPath}/${relativePath}`);
+          const envelope = JSON.parse(content || '');
+          const envelopeGeneration = Number(envelope?.workspaceGeneration) || 1;
+          const envelopeUpdatedAt = Math.max(
+            timestamp(envelope?.updatedAt),
+            timestamp(envelope?.data?.updatedAt)
+          );
+          const generationMatches = envelopeGeneration === manifestGeneration;
+          const recoverableGenerationLag = envelopeGeneration < manifestGeneration &&
+            envelopeUpdatedAt > manifestUpdatedAt;
+          if (!isPlainObject(envelope) ||
+              envelope.kind !== 'sci-logic-highlighter-workspace-asset' ||
+              envelope.workspaceId !== location.manifest.workspaceId ||
+              (!generationMatches && !recoverableGenerationLag) ||
+              envelope.relativePath !== relativePath ||
+              !isPlainObject(envelope.data) ||
+              !Array.isArray(envelope.data.figures)) {
+            fail('WORKSPACE_ASSET_IDENTITY_MISMATCH');
+          }
+          shared.assertWorkspaceSafeValue?.(envelope.data);
+          if (recoverableGenerationLag) recoveredGenerationMismatches += 1;
+          assets.push({
+            relativePath,
+            content: cloneJsonLike(envelope.data),
+            revision: Number(envelope.revision) || 0,
+            contentHash: String(envelope.contentHash || ''),
+            updatedAt: String(envelope.updatedAt || ''),
+            sourceWorkspaceGeneration: envelopeGeneration,
+            recoveredGenerationMismatch: recoverableGenerationLag
+          });
+        } catch (_) {
+          invalidAssets += 1;
         }
       }
       assets.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
@@ -1036,6 +1387,7 @@
         failedPath: '',
         requiresReauthorization: false, requiresReselection: false
       };
+      await discardQueuedPortableConfig();
       const handle = await handleStore.load();
       result.permission = await permissionState(handle);
       if (!handle || result.permission !== 'granted') {
@@ -1067,8 +1419,26 @@
       const items = await queueStore.getAll();
       for (const item of items) {
         try {
+          if (item.relativePath === PORTABLE_CONFIG_PATH) {
+            await queueStore.remove(item.relativePath, item.queueRevision);
+            continue;
+          }
           const latestQueued = await queueStore.get(item.relativePath);
           if (!latestQueued || latestQueued.queueRevision !== item.queueRevision) continue;
+          if (item.type === 'binary') {
+            const incoming = binaryBytes(item.content);
+            const existing = await readBinary(root, item.relativePath);
+            const identical = existing?.byteLength === incoming.byteLength &&
+              existing.every((value, index) => value === incoming[index]);
+            if (!identical) {
+              await writeBinary(root, item.relativePath, incoming);
+              result.written += 1;
+            }
+            index = indexWithAsset(index, item);
+            await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+            await queueStore.remove(item.relativePath, item.queueRevision);
+            continue;
+          }
           const existingContent = await readText(root, item.relativePath);
           if (item.type === 'json' && existingContent) {
             const existing = parseValidJson(existingContent);
@@ -1242,6 +1612,7 @@
         restoredBackups: 0, invalidAssets: index.invalidAssets
       };
       for (const asset of index.assets) {
+        if (asset.type === 'binary') continue;
         let content = await readText(root, asset.path);
         let value;
         let restoredBackup = false;
@@ -1449,12 +1820,16 @@
       requestDirectoryPermission,
       enqueueJson,
       enqueueText,
+      compareAndSwapJson,
       flush,
       status,
       readJson,
       enqueueWorkspaceAsset,
+      enqueueWorkspaceBinary,
       readWorkspaceAsset,
+      readWorkspaceBinary,
       listWorkspaceChatAssets,
+      listWorkspaceSupplementalAssets,
       listWorkspaceManifests,
       rebuildIndex,
       rebuildWorkspaceIndex,

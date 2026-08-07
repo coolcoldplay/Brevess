@@ -19,6 +19,7 @@ let analysisModeEditorModes = [];
 let selectedAnalysisModeId = '';
 const profileActionInFlight = Object.create(null);
 let profileMutationInFlight = false;
+let pdfMineruSettingsState = SciLLM.normalizeMineruPdfSettings();
 const categoryEditor = {
   categoryId: '',
   detail: null,
@@ -38,8 +39,16 @@ const userDataUi = {
   statusRequestSequence: 0,
   activeStatusToken: 0,
   lastStatus: null,
+  portableConfigStatus: null,
   directoryHandle: null,
   handleLoaded: false
+};
+const portableConfigUi = {
+  mode: '',
+  submitting: false,
+  dialogPromise: null,
+  resolveDialog: null,
+  pendingResult: null
 };
 const ARTICLE_WORKSPACE_PAGE_SIZE = 20;
 const articleWorkspaceOverviewUi = {
@@ -104,7 +113,9 @@ let activeSettingsPage = 'categories';
 const USER_DATA_ACTION_IDS = [
   'chooseUserDataDirectory', 'reauthorizeUserDataDirectory',
   'syncUserDataNow', 'rebuildUserDataIndex', 'exportUserDataBundle',
-  'exportMigrationBundle'
+  'exportMigrationBundle', 'unlockPortableConfig',
+  'rotatePortableConfigPassphrase', 'forgetPortableConfigKey',
+  'backupPortableConfigNow'
 ];
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -112,6 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
   activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
   await refreshSettings();
+  await loadPdfMineruSettings();
   await loadCategoryFromHash();
   await refreshCorpusStatus();
   updateDirectoryFeatureSupport();
@@ -119,6 +131,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshUserDataStatus();
   await refreshArticleWorkspaceOverview();
   await initializeOnboarding();
+  configurePdfReaderReturn();
+  if (location.hash === '#pdf-mineru') {
+    document.getElementById('pdfMineruSettings')
+      ?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
 });
 
 function bindEvents() {
@@ -193,6 +210,14 @@ function bindEvents() {
     document.getElementById(id).addEventListener('change', markCompatiblePresetCustom);
   });
   document.getElementById('saveSettings').addEventListener('click', () => persistForm(false));
+  document.getElementById('savePdfMineruSettings')
+    .addEventListener('click', () => savePdfMineruSettings());
+  document.getElementById('clearPdfMineruToken')
+    .addEventListener('click', () => savePdfMineruSettings({ clearToken: true }));
+  document.getElementById('returnToPdfReader')
+    .addEventListener('click', () => returnToPdfReader());
+  document.getElementById('pdfMineruMode')
+    .addEventListener('change', renderPdfMineruSettings);
   document.getElementById('analysisModeList').addEventListener('click', event => {
     const button = event.target.closest('[data-analysis-mode-id]');
     if (!button) return;
@@ -281,6 +306,14 @@ function bindEvents() {
   document.getElementById('chooseUserDataDirectory').addEventListener('click', chooseUserDataDirectory);
   document.getElementById('reauthorizeUserDataDirectory').addEventListener('click', reauthorizeUserDataDirectory);
   document.getElementById('syncUserDataNow').addEventListener('click', syncUserDataNow);
+  document.getElementById('unlockPortableConfig').addEventListener('click', unlockPortableConfig);
+  document.getElementById('rotatePortableConfigPassphrase').addEventListener('click', rotatePortableConfigPassphrase);
+  document.getElementById('forgetPortableConfigKey').addEventListener('click', forgetPortableConfigKey);
+  document.getElementById('backupPortableConfigNow').addEventListener('click', backupPortableConfigNow);
+  document.getElementById('portableConfigForm').addEventListener('submit', submitPortableConfigDialog);
+  document.getElementById('cancelPortableConfigDialog').addEventListener('click', cancelPortableConfigDialog);
+  document.getElementById('portableConfigDialog').addEventListener('cancel', cancelPortableConfigDialog);
+  document.getElementById('portableConfigDialog').addEventListener('close', settlePortableConfigDialog);
   document.getElementById('rebuildUserDataIndex').addEventListener('click', openRebuildUserDataDialog);
   document.getElementById('exportUserDataBundle').addEventListener('click', exportUserDataBundle);
   document.getElementById('exportMigrationBundle').addEventListener('click', exportMigrationBundle);
@@ -391,6 +424,43 @@ function bindEvents() {
   window.addEventListener('beforeunload', stopCodexAuthPolling);
 }
 
+function pdfReaderReturnTabId() {
+  const value = Number(new URLSearchParams(location.search).get('returnPdfTab'));
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function configurePdfReaderReturn() {
+  const button = document.getElementById('returnToPdfReader');
+  const visible = pdfReaderReturnTabId() !== null;
+  if (button) button.hidden = !visible;
+  document.body.classList.toggle('has-pdf-reader-return', visible);
+}
+
+async function returnToPdfReader() {
+  const tabId = pdfReaderReturnTabId();
+  if (tabId === null) return;
+  const button = document.getElementById('returnToPdfReader');
+  if (button) button.disabled = true;
+  try {
+    const target = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (Number.isInteger(target?.windowId) && chrome.windows?.update) {
+      await chrome.windows.update(target.windowId, { focused: true });
+    }
+    const current = await chrome.tabs.getCurrent().catch(() => null);
+    if (Number.isInteger(current?.id) && current.id !== tabId) {
+      await chrome.tabs.remove(current.id);
+    }
+  } catch (error) {
+    if (button) button.disabled = false;
+    const status = document.getElementById('pdfMineruStatus');
+    if (status) {
+      status.dataset.state = 'error';
+      status.textContent = `无法返回 PDF 解析结果：${friendlyError(error)}`;
+    }
+  }
+}
+
 function settingsPageFromHash() {
   if (location.hash === '#onboarding') return activeSettingsPage;
   const parameters = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -404,7 +474,8 @@ function settingsPageFromHash() {
     keyboardShortcuts: 'shortcuts',
     localData: 'data',
     openSource: 'about',
-    support: 'about'
+    support: 'about',
+    'pdf-mineru': 'models'
   };
   return legacyPages[legacy] || 'categories';
 }
@@ -687,8 +758,8 @@ function renderOnboarding() {
   document.getElementById('onboardingStepTitle').textContent = step === 'storage'
     ? '选择本地保存目录' : '配置 LLM API';
   document.getElementById('onboardingStepDescription').textContent = step === 'storage'
-    ? '插件会在你选择的位置建立 Brevess 文件夹，并为每篇网页保存独立工作区。跳过后仍使用浏览器 IndexedDB 自动保存。'
-    : '沿用下方命名 API Profile 表单，可配置 Provider、模型、密钥、服务地址并测试连接。现有配置不会被重置。';
+    ? '本地文件夹是可选项。暂时跳过后仍使用浏览器 IndexedDB 保存本机工作副本，也可正常使用导航、阅读与手动标注。'
+    : 'API 是问答、图解和智能高亮所需的可选项。暂时不配置也能直接使用导航、摘句、手动高亮与本地阅读，之后可随时回来设置。';
   document.getElementById('onboardingStepState').textContent =
     onboardingStateText(step, status);
   document.querySelectorAll('[data-onboarding-progress]').forEach(item => {
@@ -700,6 +771,7 @@ function renderOnboarding() {
   const next = document.getElementById('onboardingContinue');
   const finish = document.getElementById('onboardingFinish');
   const busy = onboardingUi.pending || userDataUi.pendingAction;
+  skip.textContent = step === 'storage' ? '暂不选择，继续' : '暂不配置，直接使用';
   back.hidden = step !== 'api';
   skip.hidden = status !== 'pending';
   next.hidden = step !== 'storage';
@@ -759,7 +831,12 @@ async function skipOnboardingStep() {
   const step = onboardingUi.step;
   try {
     await setOnboardingStepState(step, 'skipped');
-    if (step === 'storage') onboardingUi.step = 'api';
+    if (step === 'storage') {
+      onboardingUi.step = 'api';
+    } else {
+      await finishOnboarding();
+      return;
+    }
     renderOnboarding();
   } catch (error) {
     document.getElementById('onboardingStepState').textContent =
@@ -880,20 +957,373 @@ function formatLastSync(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : '尚未同步';
 }
 
+// Portable config dialog helpers: start.
+function validatePortableConfigPassphrases(
+  mode, currentPassphrase, passphrase, confirmation
+) {
+  if (mode === 'rotate' && currentPassphrase.length < 10) {
+    return '当前口令至少需要 10 个字符。';
+  }
+  if (passphrase.length < 10) return '口令至少需要 10 个字符。';
+  if ((mode === 'create' || mode === 'rotate') && passphrase !== confirmation) {
+    return '两次输入的口令不一致。';
+  }
+  return '';
+}
+
+function portableConfigRequestForMode(mode, currentPassphrase, passphrase) {
+  if (mode === 'create') {
+    return { type: 'PORTABLE_CONFIG_CREATE', passphrase };
+  }
+  if (mode === 'unlock') {
+    return { type: 'PORTABLE_CONFIG_UNLOCK', passphrase };
+  }
+  if (mode === 'rotate') {
+    return {
+      type: 'PORTABLE_CONFIG_ROTATE_PASSPHRASE',
+      currentPassphrase,
+      newPassphrase: passphrase
+    };
+  }
+  throw new Error('Unsupported portable config dialog mode');
+}
+
+function portableConfigErrorText(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code === 'PORTABLE_CONFIG_NOT_READY') {
+    return '加密配置尚未就绪，请先创建或解锁配置备份。';
+  }
+  if (code === 'PORTABLE_CONFIG_PASSPHRASE_TOO_SHORT') {
+    return '口令至少需要 10 个字符。';
+  }
+  if (new Set([
+    'PORTABLE_CONFIG_UNLOCK_FAILED', 'PORTABLE_CONFIG_DECRYPT_FAILED',
+    'PORTABLE_CONFIG_BACKUP_AUTH_FAILED', 'PORTABLE_CONFIG_CACHED_KEY_INVALID',
+    'PORTABLE_CONFIG_CACHED_KEY_REJECTED'
+  ]).has(code)) {
+    return '口令不正确或备份无法解密。';
+  }
+  if (code === 'PORTABLE_CONFIG_ALREADY_EXISTS' ||
+      code === 'PORTABLE_CONFIG_DIRECTORY_CONFLICT') {
+    return '所选目录已有配置备份，请改为解锁后再继续。';
+  }
+  if (code === 'PORTABLE_CONFIG_DIRECTORY_UNAVAILABLE' ||
+      code === 'DIRECTORY_SYNC_UNAVAILABLE') {
+    return '当前目录不可用，请恢复目录授权后重试。';
+  }
+  if (code === 'PORTABLE_CONFIG_CRYPTO_UNAVAILABLE') {
+    return '当前浏览器无法使用安全加密功能。';
+  }
+  if (code.includes('ENVELOPE') || code.includes('PAYLOAD') ||
+      code === 'PORTABLE_CONFIG_INVALID_BASE64' ||
+      code === 'PORTABLE_CONFIG_INVALID_BINARY') {
+    return '配置备份已损坏或版本不兼容，已停止同步。';
+  }
+  return '无法完成加密配置操作，请稍后重试。';
+}
+// Portable config dialog helpers: end.
+
+// Portable config status renderer: start.
+const PORTABLE_CONFIG_PUBLIC_STATES = new Set([
+  'unknown', 'missing', 'locked', 'ready', 'error', 'unavailable', 'disabled'
+]);
+
+function normalizePortableConfigStatus(status) {
+  if (!status || typeof status !== 'object') {
+    return { state: 'disabled', revision: null, updatedAt: '', pending: false, lastError: '' };
+  }
+  const stateValue = status.state;
+  const revisionValue = status.revision;
+  const updatedAtValue = status.updatedAt;
+  const pendingValue = status.pending;
+  const lastErrorValue = status.lastError;
+  const state = typeof stateValue === 'string' && PORTABLE_CONFIG_PUBLIC_STATES.has(stateValue)
+    ? stateValue : 'unknown';
+  const revision = Number.isSafeInteger(revisionValue) && revisionValue >= 0
+    ? revisionValue : null;
+  const timestamp = typeof updatedAtValue === 'string' && updatedAtValue.length <= 80
+    ? Date.parse(updatedAtValue) : NaN;
+  const updatedAt = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : '';
+  const lastError = typeof lastErrorValue === 'string' &&
+    /^PORTABLE_CONFIG_[A-Z0-9_]+$/.test(lastErrorValue)
+    ? lastErrorValue : '';
+  return {
+    state, revision, updatedAt,
+    pending: pendingValue === true,
+    lastError
+  };
+}
+
+function renderPortableConfigStatus(status) {
+  const safeStatus = normalizePortableConfigStatus(status);
+  userDataUi.portableConfigStatus = safeStatus;
+  const effectiveState = safeStatus.pending ? 'pending' : safeStatus.state;
+  const stateText = {
+    ready: '已加密',
+    missing: '待创建',
+    locked: '待解锁',
+    pending: '正在同步',
+    unavailable: '目录不可用',
+    error: '同步失败',
+    unknown: '未启用',
+    disabled: '未启用'
+  }[effectiveState] || '未启用';
+  const noticeText = {
+    ready: '配置凭据已加密保存，可在受信任设备上用口令恢复。',
+    missing: '配置备份待创建；创建完成前不会同步当前默认配置。',
+    locked: '配置备份待解锁；解锁完成前不会同步当前默认配置。',
+    pending: '正在安全处理加密配置，请稍候。',
+    unavailable: '目录不可用，已停止配置同步。',
+    error: '配置备份同步失败，已安全停止。',
+    unknown: '暂时无法确认加密配置状态。',
+    disabled: '加密配置备份未启用。'
+  }[effectiveState] || '加密配置备份未启用。';
+  const stateElement = document.getElementById('portableConfigState');
+  stateElement.textContent = stateText;
+  stateElement.dataset.state = effectiveState;
+  document.getElementById('portableConfigRevision').textContent =
+    safeStatus.revision === null ? '—' : String(safeStatus.revision);
+  document.getElementById('portableConfigUpdatedAt').textContent = safeStatus.updatedAt
+    ? new Date(safeStatus.updatedAt).toLocaleString() : '—';
+  document.getElementById('portableConfigNotice').textContent = safeStatus.lastError
+    ? `${noticeText} 请检查目录状态后重试。` : noticeText;
+
+  const actionPending = userDataUi.pendingAction;
+  const readyActionPending = actionPending || safeStatus.pending;
+  const unlock = document.getElementById('unlockPortableConfig');
+  const rotate = document.getElementById('rotatePortableConfigPassphrase');
+  const forget = document.getElementById('forgetPortableConfigKey');
+  const backup = document.getElementById('backupPortableConfigNow');
+  unlock.hidden = safeStatus.state !== 'locked' && safeStatus.state !== 'missing';
+  unlock.textContent = safeStatus.state === 'missing' ? '创建加密备份' : '解锁配置备份';
+  rotate.hidden = safeStatus.state !== 'ready';
+  forget.hidden = safeStatus.state !== 'ready';
+  backup.hidden = safeStatus.state !== 'ready';
+  unlock.disabled = actionPending;
+  [rotate, forget, backup].forEach(button => { button.disabled = readyActionPending; });
+}
+// Portable config status renderer: end.
+
+// Portable config dialog controller: start.
+function clearPortableConfigDialogInputErrors() {
+  ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+    'portableConfigPassphraseConfirm'].forEach(id => {
+    const input = document.getElementById(id);
+    input?.removeAttribute('aria-invalid');
+    input?.removeAttribute('aria-describedby');
+  });
+}
+
+function showPortableConfigDialogError(message, inputId) {
+  const error = document.getElementById('portableConfigDialogError');
+  if (error) error.textContent = message;
+  clearPortableConfigDialogInputErrors();
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.setAttribute('aria-invalid', 'true');
+  input.setAttribute('aria-describedby', 'portableConfigDialogError');
+  input.focus({ preventScroll: true });
+}
+
+function portableConfigValidationInputId(mode, currentPassphrase, passphrase, confirmation) {
+  if (mode === 'rotate' && currentPassphrase.length < 10) {
+    return 'portableConfigCurrentPassphrase';
+  }
+  if (passphrase.length < 10) return 'portableConfigPassphrase';
+  if (mode !== 'unlock' && passphrase !== confirmation) {
+    return 'portableConfigPassphraseConfirm';
+  }
+  return 'portableConfigPassphrase';
+}
+
+function clearPortableConfigDialogSecrets() {
+  ['portableConfigCurrentPassphrase', 'portableConfigPassphrase',
+    'portableConfigPassphraseConfirm'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  });
+  const error = document.getElementById('portableConfigDialogError');
+  if (error) error.textContent = '';
+  clearPortableConfigDialogInputErrors();
+  const dialog = document.getElementById('portableConfigDialog');
+  dialog?.querySelectorAll('input, button').forEach(control => {
+    control.disabled = false;
+  });
+  dialog?.removeAttribute('aria-busy');
+}
+
+function settlePortableConfigDialog() {
+  const result = portableConfigUi.pendingResult || { cancelled: true };
+  const resolve = portableConfigUi.resolveDialog;
+  clearPortableConfigDialogSecrets();
+  portableConfigUi.mode = '';
+  portableConfigUi.submitting = false;
+  portableConfigUi.pendingResult = null;
+  portableConfigUi.resolveDialog = null;
+  portableConfigUi.dialogPromise = null;
+  if (resolve) resolve(result);
+}
+
+function completePortableConfigDialog(result) {
+  portableConfigUi.pendingResult = result;
+  const dialog = document.getElementById('portableConfigDialog');
+  if (dialog.open) dialog.close('confirmed');
+}
+
+function cancelPortableConfigDialog(event) {
+  event?.preventDefault?.();
+  if (portableConfigUi.submitting) return;
+  portableConfigUi.pendingResult = { cancelled: true };
+  const dialog = document.getElementById('portableConfigDialog');
+  if (dialog.open) dialog.close('cancelled');
+}
+
+function openPortableConfigDialog(mode) {
+  if (portableConfigUi.dialogPromise) return portableConfigUi.dialogPromise;
+  if (!['create', 'unlock', 'rotate'].includes(mode)) {
+    return Promise.resolve({ cancelled: true });
+  }
+  const copy = {
+    create: {
+      title: '创建加密配置备份',
+      description: '设置一个至少 10 个字符的口令。遗忘口令后无法恢复密文凭据。',
+      label: '新口令', confirm: '创建并继续'
+    },
+    unlock: {
+      title: '解锁配置备份',
+      description: '输入该目录的口令。解锁成功后会先恢复设置，再继续目录同步。',
+      label: '口令', confirm: '解锁并恢复'
+    },
+    rotate: {
+      title: '更换配置备份口令',
+      description: '输入当前口令与新口令。新口令至少需要 10 个字符。',
+      label: '新口令', confirm: '更换口令'
+    }
+  }[mode];
+  clearPortableConfigDialogSecrets();
+  portableConfigUi.mode = mode;
+  portableConfigUi.pendingResult = null;
+  document.getElementById('portableConfigDialogTitle').textContent = copy.title;
+  document.getElementById('portableConfigDialogDescription').textContent = copy.description;
+  document.getElementById('portableConfigPassphraseLabel').textContent = copy.label;
+  document.getElementById('confirmPortableConfigDialog').textContent = copy.confirm;
+  document.getElementById('portableConfigCurrentPassphraseField').hidden = mode !== 'rotate';
+  document.getElementById('portableConfigPassphraseConfirmField').hidden = mode === 'unlock';
+  const passphraseInput = document.getElementById('portableConfigPassphrase');
+  passphraseInput.autocomplete = mode === 'unlock' ? 'current-password' : 'new-password';
+  portableConfigUi.dialogPromise = new Promise(resolve => {
+    portableConfigUi.resolveDialog = resolve;
+  });
+  const dialog = document.getElementById('portableConfigDialog');
+  dialog.showModal();
+  passphraseInput.focus({ preventScroll: true });
+  return portableConfigUi.dialogPromise;
+}
+
+async function submitPortableConfigDialog(event) {
+  event.preventDefault();
+  if (portableConfigUi.submitting) return;
+  const mode = portableConfigUi.mode;
+  let currentPassphrase = document.getElementById('portableConfigCurrentPassphrase').value;
+  let passphrase = document.getElementById('portableConfigPassphrase').value;
+  let confirmation = document.getElementById('portableConfigPassphraseConfirm').value;
+  const errorElement = document.getElementById('portableConfigDialogError');
+  const validationError = validatePortableConfigPassphrases(
+    mode, currentPassphrase, passphrase, confirmation
+  );
+  if (validationError) {
+    showPortableConfigDialogError(
+      validationError,
+      portableConfigValidationInputId(mode, currentPassphrase, passphrase, confirmation)
+    );
+    return;
+  }
+  portableConfigUi.submitting = true;
+  errorElement.textContent = '';
+  clearPortableConfigDialogInputErrors();
+  const dialog = document.getElementById('portableConfigDialog');
+  const controls = [...dialog.querySelectorAll('input, button')];
+  controls.forEach(control => { control.disabled = true; });
+  dialog.setAttribute('aria-busy', 'true');
+  let completed = false;
+  let failure = null;
+  try {
+    const status = normalizePortableConfigStatus(
+      await callBackground(portableConfigRequestForMode(
+        mode, currentPassphrase, passphrase
+      ))
+    );
+    renderPortableConfigStatus(status);
+    completePortableConfigDialog(status);
+    completed = true;
+  } catch (error) {
+    failure = {
+      message: portableConfigErrorText(error),
+      inputId: mode === 'rotate'
+        ? 'portableConfigCurrentPassphrase'
+        : 'portableConfigPassphrase'
+    };
+  } finally {
+    currentPassphrase = '';
+    passphrase = '';
+    confirmation = '';
+    if (!completed) {
+      portableConfigUi.submitting = false;
+      controls.forEach(control => { control.disabled = false; });
+      dialog.removeAttribute('aria-busy');
+      if (failure) showPortableConfigDialogError(failure.message, failure.inputId);
+    }
+  }
+}
+// Portable config dialog controller: end.
+
+function portableConfigAllowsManualDirectoryAction(status) {
+  return status?.state === 'ready' && status.pending !== true;
+}
+
+function rejectBlockedManualDirectoryAction() {
+  if (portableConfigAllowsManualDirectoryAction(userDataUi.portableConfigStatus)) {
+    return false;
+  }
+  showUserDataStatus('请先完成加密配置备份，再同步或重建目录。', 'error');
+  return true;
+}
+
+function portableConfigNotReadyError(value) {
+  const candidate = value?.error && typeof value.error === 'object'
+    ? value.error : value;
+  return candidate?.code === 'PORTABLE_CONFIG_NOT_READY' ? candidate : null;
+}
+
+async function refreshAfterPortableConfigNotReady(value, actionLabel) {
+  const error = portableConfigNotReadyError(value);
+  if (!error) return false;
+  renderPortableConfigStatus({
+    state: 'unknown', pending: true, lastError: 'PORTABLE_CONFIG_NOT_READY'
+  });
+  await refreshUserDataStatus();
+  showUserDataStatus(`${actionLabel}：${portableConfigErrorText(error)}`, 'error');
+  return true;
+}
+
 function updateUserDataActionButtons() {
   const current = userDataUi.lastStatus || {};
   const configured = Boolean(current.directoryName);
   const permission = current.permission || 'unconfigured';
+  const portableAllowsSync = portableConfigAllowsManualDirectoryAction(
+    userDataUi.portableConfigStatus
+  );
   const pickerSupported = typeof window.showDirectoryPicker === 'function';
   const pending = userDataUi.pendingAction;
   document.getElementById('chooseUserDataDirectory').disabled = pending || !pickerSupported;
   document.getElementById('reauthorizeUserDataDirectory').disabled =
     pending || !configured || !userDataUi.directoryHandle || permission === 'granted';
   document.getElementById('syncUserDataNow').disabled =
-    pending || !configured || permission !== 'granted';
+    pending || !configured || permission !== 'granted' || !portableAllowsSync;
   document.getElementById('rebuildUserDataIndex').disabled =
-    pending || !configured || permission !== 'granted';
+    pending || !configured || permission !== 'granted' || !portableAllowsSync;
   document.getElementById('exportUserDataBundle').disabled = pending;
+  renderPortableConfigStatus(userDataUi.portableConfigStatus);
 }
 
 function setUserDataActionPending(pending) {
@@ -931,21 +1361,119 @@ function renderUserDataStatus(status) {
     String(Math.max(0, Number(safeStatus.conflictCount) || 0));
   document.getElementById('userDataLastSync').textContent =
     formatLastSync(safeStatus.lastSyncAt);
+  renderPortableConfigStatus(safeStatus.portableConfig);
   renderDirectorySupportMessage();
   updateUserDataActionButtons();
 }
 
-async function refreshUserDataStatus() {
+async function refreshUserDataStatus({ rethrow = false } = {}) {
   const requestToken = startUserDataStatusRequest();
   try {
     const status = await callBackground({ type: 'USER_DATA_SYNC_STATUS' });
-    if (!isCurrentUserDataStatus(requestToken)) return;
+    if (!isCurrentUserDataStatus(requestToken)) return false;
     renderUserDataStatus(status);
-    if (status.lastError) showUserDataStatus(`上次同步未完成：${status.lastError}`, 'error');
+    if (status?.lastError) showUserDataStatus(`上次同步未完成：${status.lastError}`, 'error');
+    return true;
   } catch (error) {
-    if (!isCurrentUserDataStatus(requestToken)) return;
-    showUserDataStatus(`读取本地数据状态失败：${friendlyError(error)}`, 'error');
+    if (!isCurrentUserDataStatus(requestToken)) return false;
+    showUserDataStatus('读取本地数据状态失败，请稍后重试。', 'error');
+    if (rethrow) throw error;
+    return false;
   }
+}
+
+async function refreshPortableSettings() {
+  const settings = await callBackground({ type: 'LLM_GET_SETTINGS' });
+  applyState(settings);
+}
+
+// Portable config activation: start.
+async function completePortableConfigActivation({ restored = false,
+  call = callBackground, reloadSettings = refreshPortableSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed')
+} = {}) {
+  if (restored) await reloadSettings();
+  await call({ type: 'USER_DATA_SYNC_NOW', drain: true });
+  const refreshed = await refreshStatus();
+  if (refreshed === false) {
+    const error = new Error('Portable configuration status refresh failed');
+    error.code = 'PORTABLE_CONFIG_FAILED';
+    throw error;
+  }
+  if (isOnboardingActive()) await markStorageCompleted();
+}
+
+async function activatePortableConfigFromStatusCard({
+  currentState = userDataUi.portableConfigStatus?.state,
+  openDialog = openPortableConfigDialog,
+  finishActivation = completePortableConfigActivation,
+  call = callBackground,
+  reloadSettings = refreshPortableSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
+  renderStatus = renderPortableConfigStatus,
+  showStatus = showUserDataStatus,
+  errorText = portableConfigErrorText
+} = {}) {
+  const mode = currentState === 'missing' ? 'create' : 'unlock';
+  try {
+    const result = await openDialog(mode);
+    if (result?.cancelled) {
+      showStatus(mode === 'create' ? '配置备份待创建。' : '配置备份待解锁。', 'info');
+      return { completed: false, cancelled: true, mode };
+    }
+    renderStatus(result);
+    if (result?.state !== 'ready') {
+      showStatus('加密配置尚未就绪，已停止后续操作。', 'error');
+      return { completed: false, mode };
+    }
+    await finishActivation({
+      restored: true, call, reloadSettings, refreshStatus,
+      isOnboardingActive, markStorageCompleted
+    });
+    showStatus(
+      mode === 'create'
+        ? '加密配置备份已创建并完成目录同步。'
+        : '配置备份已解锁、恢复设置并完成目录同步。',
+      'success'
+    );
+    return { completed: true, mode };
+  } catch (error) {
+    showStatus(errorText(error), 'error');
+    return { completed: false, failed: true, mode };
+  }
+}
+// Portable config activation: end.
+
+async function preparePortableConfigForDirectory({ call = callBackground,
+  openDialog = openPortableConfigDialog, reloadSettings = refreshPortableSettings,
+  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
+  isOnboardingActive = () => onboardingUi.active,
+  markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
+  finishActivation = completePortableConfigActivation,
+  renderStatus = renderPortableConfigStatus } = {}) {
+  let status = await call({ type: 'PORTABLE_CONFIG_PROBE' });
+  renderStatus(status);
+  let mode = '';
+  if (status?.state === 'missing' || status?.state === 'locked') {
+    mode = status.state === 'missing' ? 'create' : 'unlock';
+    const dialogResult = await openDialog(mode);
+    if (dialogResult?.cancelled === true) {
+      return { ready: false, cancelled: true, status };
+    }
+    status = dialogResult;
+    renderStatus(status);
+    if (status?.state !== 'ready') return { ready: false, status };
+  }
+  if (status?.state !== 'ready') return { ready: false, status };
+  await finishActivation({
+    restored: true, call, reloadSettings, refreshStatus,
+    isOnboardingActive, markStorageCompleted
+  });
+  return { ready: true, status };
 }
 
 async function chooseUserDataDirectory() {
@@ -956,23 +1484,116 @@ async function chooseUserDataDirectory() {
   }
   setUserDataActionPending(true);
   showUserDataStatus('正在等待你选择本地目录…', 'info');
+  let handleSaved = false;
   try {
     const handle = await window.showDirectoryPicker({
       id: 'sci-highlighter-user-data', mode: 'readwrite', startIn: 'documents'
     });
     await SciLLM.saveDirectoryHandle(indexedDB, handle);
+    handleSaved = true;
     userDataUi.directoryHandle = handle;
     userDataUi.handleLoaded = true;
-    await callBackground({ type: 'USER_DATA_SYNC_NOW' });
-    await refreshUserDataStatus();
-    if (onboardingUi.active) await setOnboardingStepState('storage', 'completed');
-    showUserDataStatus('目录已保存，本地数据同步完成。', 'success');
+    const prepared = await preparePortableConfigForDirectory();
+    if (!prepared.ready) {
+      await refreshUserDataStatus();
+      if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
+        const pendingState = prepared.status.state === 'missing' ? '创建' : '解锁';
+        showUserDataStatus(`目录已保存，配置备份待${pendingState}；完成前不会同步。`, 'info');
+      } else {
+        showUserDataStatus('目录已保存，但加密配置状态异常；已安全停止同步。', 'error');
+      }
+      return;
+    }
+    showUserDataStatus('目录已保存，加密配置已就绪并完成本地数据同步。', 'success');
   } catch (error) {
-    if (error?.name === 'AbortError') {
+    if (handleSaved) await refreshUserDataStatus();
+    if (error?.name === 'AbortError' && !handleSaved) {
       showUserDataStatus('已取消选择，现有目录设置没有改变。', 'info');
     } else {
-      showUserDataStatus(`选择目录失败：${friendlyError(error)}`, 'error');
+      showUserDataStatus(`选择目录失败：${portableConfigErrorText(error)}`, 'error');
     }
+  } finally {
+    setUserDataActionPending(false);
+  }
+}
+
+async function unlockPortableConfig() {
+  if (userDataUi.pendingAction) return;
+  setUserDataActionPending(true);
+  try {
+    await activatePortableConfigFromStatusCard();
+  } finally {
+    setUserDataActionPending(false);
+  }
+}
+
+async function rotatePortableConfigPassphrase() {
+  if (userDataUi.pendingAction || userDataUi.portableConfigStatus?.state !== 'ready') return;
+  setUserDataActionPending(true);
+  try {
+    const result = await openPortableConfigDialog('rotate');
+    if (result?.cancelled) return;
+    if (result?.state !== 'ready') {
+      renderPortableConfigStatus(result);
+      showUserDataStatus('口令未更换；加密配置尚未就绪。', 'error');
+      return;
+    }
+    await refreshUserDataStatus();
+    showUserDataStatus('加密配置备份口令已更换。', 'success');
+  } finally {
+    setUserDataActionPending(false);
+  }
+}
+
+async function forgetPortableConfigKey() {
+  if (userDataUi.pendingAction || userDataUi.portableConfigStatus?.state !== 'ready') return;
+  const confirmed = window.confirm(
+    '确定遗忘本机保存的配置密钥吗？密文备份会保留，但下次使用必须重新输入口令。'
+  );
+  if (!confirmed) return;
+  setUserDataActionPending(true);
+  try {
+    await callBackground({ type: 'PORTABLE_CONFIG_FORGET_KEY' });
+    let status;
+    try {
+      status = await callBackground({ type: 'PORTABLE_CONFIG_PROBE' });
+    } catch (error) {
+      renderPortableConfigStatus({
+        state: 'unavailable', pending: false,
+        lastError: 'PORTABLE_CONFIG_PROBE_FAILED'
+      });
+      showUserDataStatus(
+        '本机密钥已遗忘，但无法确认配置备份状态。请恢复目录授权后重试。',
+        'error'
+      );
+      return;
+    }
+    renderPortableConfigStatus(status);
+    if (status?.state !== 'locked' || status?.pending === true) {
+      showUserDataStatus(
+        '本机密钥已遗忘，但配置备份状态尚未确认。请检查目录后重试。',
+        'error'
+      );
+      return;
+    }
+    showUserDataStatus('本机密钥已遗忘；配置备份现在处于待解锁状态。', 'info');
+  } catch (error) {
+    showUserDataStatus(portableConfigErrorText(error), 'error');
+  } finally {
+    setUserDataActionPending(false);
+  }
+}
+
+async function backupPortableConfigNow() {
+  if (userDataUi.pendingAction || userDataUi.portableConfigStatus?.state !== 'ready') return;
+  setUserDataActionPending(true);
+  try {
+    const status = await callBackground({ type: 'PORTABLE_CONFIG_BACKUP_NOW' });
+    renderPortableConfigStatus(status);
+    await refreshUserDataStatus();
+    showUserDataStatus('加密配置备份已更新。', 'success');
+  } catch (error) {
+    showUserDataStatus(portableConfigErrorText(error), 'error');
   } finally {
     setUserDataActionPending(false);
   }
@@ -995,11 +1616,19 @@ async function reauthorizeUserDataDirectory() {
       await refreshUserDataStatus();
       return;
     }
-    await callBackground({ type: 'USER_DATA_SYNC_NOW' });
-    await refreshUserDataStatus();
-    showUserDataStatus('目录权限已恢复并完成同步。', 'success');
+    const prepared = await preparePortableConfigForDirectory();
+    if (prepared.ready) {
+      showUserDataStatus('目录权限已恢复，加密配置已就绪并完成同步。', 'success');
+    } else if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
+      await refreshUserDataStatus();
+      showUserDataStatus('目录权限已恢复，但配置备份仍待创建或解锁。', 'info');
+    } else {
+      await refreshUserDataStatus();
+      showUserDataStatus('目录权限已恢复，但加密配置状态异常；已停止同步。', 'error');
+    }
   } catch (error) {
-    showUserDataStatus(`重新授权失败：${friendlyError(error)}`, 'error');
+    await refreshUserDataStatus();
+    showUserDataStatus(`重新授权失败：${portableConfigErrorText(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);
   }
@@ -1007,10 +1636,12 @@ async function reauthorizeUserDataDirectory() {
 
 async function syncUserDataNow() {
   if (userDataUi.pendingAction) return;
+  if (rejectBlockedManualDirectoryAction()) return;
   setUserDataActionPending(true);
   showUserDataStatus('正在同步本地数据…', 'info');
   try {
     const result = await callBackground({ type: 'USER_DATA_SYNC_NOW' });
+    if (await refreshAfterPortableConfigNotReady(result, '同步已停止')) return;
     await refreshUserDataStatus();
     if (result.permission !== 'granted') {
       showUserDataStatus('目录需要重新授权后才能同步。', 'error');
@@ -1018,6 +1649,7 @@ async function syncUserDataNow() {
       showUserDataStatus(`同步完成：写入 ${result.written || 0} 项。`, 'success');
     }
   } catch (error) {
+    if (await refreshAfterPortableConfigNotReady(error, '同步已停止')) return;
     showUserDataStatus(`同步失败：${friendlyError(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);
@@ -1026,6 +1658,7 @@ async function syncUserDataNow() {
 
 function openRebuildUserDataDialog() {
   if (userDataUi.pendingAction) return;
+  if (rejectBlockedManualDirectoryAction()) return;
   const dialog = document.getElementById('rebuildUserDataDialog');
   if (!dialog.open) dialog.showModal();
 }
@@ -1033,11 +1666,13 @@ function openRebuildUserDataDialog() {
 async function confirmRebuildUserDataIndex(event) {
   event.preventDefault();
   if (userDataUi.pendingAction) return;
+  if (rejectBlockedManualDirectoryAction()) return;
   document.getElementById('rebuildUserDataDialog').close('confirm');
   setUserDataActionPending(true);
   showUserDataStatus('正在核对目录索引并导入较新数据…', 'info');
   try {
     const result = await callBackground({ type: 'USER_DATA_REBUILD_INDEX' });
+    if (await refreshAfterPortableConfigNotReady(result, '重建已停止')) return;
     await refreshSettings();
     await refreshUserDataStatus();
     showUserDataStatus(
@@ -1045,6 +1680,7 @@ async function confirmRebuildUserDataIndex(event) {
       'success'
     );
   } catch (error) {
+    if (await refreshAfterPortableConfigNotReady(error, '重建已停止')) return;
     showUserDataStatus(`重建失败：${friendlyError(error)}`, 'error');
   } finally {
     setUserDataActionPending(false);
@@ -2143,6 +2779,84 @@ async function refreshSettings() {
     applyState(await callBackground({ type: 'LLM_GET_SETTINGS' }));
   } catch (error) {
     showStatus(`读取设置失败：${error.message}`, 'error');
+  }
+}
+
+function renderPdfMineruSettings() {
+  const mode = document.getElementById('pdfMineruMode')?.value || 'agent';
+  const tokenField = document.getElementById('pdfMineruTokenField');
+  const credential = document.getElementById('pdfMineruCredentialState');
+  const clear = document.getElementById('clearPdfMineruToken');
+  if (tokenField) tokenField.hidden = mode !== 'precise';
+  const configured = Boolean(pdfMineruSettingsState.token);
+  if (credential) {
+    credential.dataset.configured = String(configured);
+    credential.textContent = configured
+      ? 'MinerU Token 已保存在本机'
+      : mode === 'precise' ? '精准解析需要 Token' : '轻量解析无需 Token';
+  }
+  if (clear) clear.disabled = !configured;
+}
+
+async function loadPdfMineruSettings() {
+  const stored = await chrome.storage.local.get(SciLLM.PDF_MINERU_SETTINGS_KEY);
+  pdfMineruSettingsState = SciLLM.normalizeMineruPdfSettings(
+    stored?.[SciLLM.PDF_MINERU_SETTINGS_KEY]
+  );
+  document.getElementById('pdfMineruMode').value = pdfMineruSettingsState.mode;
+  document.getElementById('pdfMineruLanguage').value =
+    pdfMineruSettingsState.language;
+  document.getElementById('pdfMineruOcr').checked =
+    pdfMineruSettingsState.isOcr;
+  document.getElementById('pdfMineruToken').value = '';
+  renderPdfMineruSettings();
+}
+
+async function savePdfMineruSettings({ clearToken = false } = {}) {
+  const save = document.getElementById('savePdfMineruSettings');
+  const clear = document.getElementById('clearPdfMineruToken');
+  const status = document.getElementById('pdfMineruStatus');
+  const tokenInput = document.getElementById('pdfMineruToken');
+  const next = SciLLM.normalizeMineruPdfSettings({
+    mode: document.getElementById('pdfMineruMode').value,
+    token: clearToken
+      ? ''
+      : tokenInput.value.trim() || pdfMineruSettingsState.token,
+    quotaUserId: pdfMineruSettingsState.quotaUserId,
+    language: document.getElementById('pdfMineruLanguage').value,
+    isOcr: document.getElementById('pdfMineruOcr').checked,
+    enableTable: true,
+    enableFormula: true
+  });
+  save.disabled = true;
+  clear.disabled = true;
+  if (status) {
+    status.dataset.state = '';
+    status.textContent = clearToken
+      ? '正在清除 MinerU Token…'
+      : '正在保存 PDF 解析设置…';
+  }
+  try {
+    await chrome.storage.local.set({
+      [SciLLM.PDF_MINERU_SETTINGS_KEY]: next
+    });
+    pdfMineruSettingsState = next;
+    tokenInput.value = '';
+    renderPdfMineruSettings();
+    if (status) {
+      status.dataset.state = 'success';
+      status.textContent = clearToken
+        ? 'MinerU Token 已清除；PDF 仍可使用轻量解析。'
+        : 'PDF 解析设置已保存；下次激活 PDF 标签页会自动使用。';
+    }
+  } catch (error) {
+    if (status) {
+      status.dataset.state = 'error';
+      status.textContent = `PDF 解析设置保存失败：${friendlyError(error)}`;
+    }
+  } finally {
+    save.disabled = false;
+    renderPdfMineruSettings();
   }
 }
 

@@ -26,7 +26,9 @@ const {
   validatePanelFollowup,
   normalizePanelFollowupPrompts,
   buildFigureContext,
-  normalizeMethodEvidence
+  normalizeMethodEvidence,
+  localizeFigureMethodLabel,
+  isUsableFigureAnalysisResult
 } = require('../core/figure-analysis.js');
 const { buildFigureCacheKey } = require('../core/cache-planner.js');
 
@@ -98,13 +100,14 @@ function validStandardFigureOutput(depth = 'standard') {
 }
 
 test('defines a versioned strict Figure walkthrough response schema', () => {
-  assert.equal(FIGURE_ANALYSIS_VERSION, '9-figure-context-open-methods');
+  assert.equal(FIGURE_ANALYSIS_VERSION, '12-panel-specific-durable-results');
   const schema = createFigureAnalysisSchema('standard');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.basis.enum, ['vision_text', 'caption_context']);
   assert.ok(schema.required.includes('figure_id'));
   assert.ok(schema.required.includes('panels'));
   assert.ok(schema.required.includes('figure_question_zh'));
+  assert.ok(schema.required.includes('figure_title_zh'));
   assert.ok(schema.required.includes('panel_groups'));
   assert.ok(schema.required.includes('logic_bridges'));
   assert.ok(schema.required.includes('argument_chain'));
@@ -161,6 +164,16 @@ test('uses a compact evidence overview when the webpage exposes no stable Panel 
   assert.match(result.argumentChain[0].established, /Figure caption/);
   assert.equal(result.argumentChain[0].evidenceLevel, 'intervention_effect');
   assert.equal(result.basis, 'caption_context');
+  assert.equal(isUsableFigureAnalysisResult(
+    result,
+    { figureId: 'figure-2', panelHints: [] },
+    { analysisDepth: 'standard' }
+  ), true);
+  assert.equal(isUsableFigureAnalysisResult(
+    { ...result, argumentChain: [] },
+    { figureId: 'figure-2', panelHints: [] },
+    { analysisDepth: 'standard' }
+  ), false);
 });
 
 test('splits large Figure output into strict Panel extraction and synthesis passes', () => {
@@ -534,8 +547,103 @@ test('normalizes known methods locally while retaining new method text and famil
   ], 'other'), [
     { methodText: 'Western blot', methodFamily: 'wet_lab', normalizedMethod: 'WB' },
     { methodText: 'spatial transcriptomics', methodFamily: 'bioinformatics', normalizedMethod: 'spatial transcriptomics' },
-    { methodText: 'patch-clamp electrophysiology', methodFamily: 'wet_lab', normalizedMethod: 'patch-clamp electrophysiology' }
+    { methodText: 'patch-clamp electrophysiology', methodFamily: 'wet_lab', normalizedMethod: '膜片钳电生理记录' }
   ]);
+});
+
+test('localizes descriptive experiment and chart labels while preserving assay names', () => {
+  assert.equal(localizeFigureMethodLabel('schematic'), '实验示意图');
+  assert.equal(localizeFigureMethodLabel('representative images'), '代表性图像');
+  assert.equal(localizeFigureMethodLabel('histological reconstruction'), '组织学重建');
+  assert.equal(localizeFigureMethodLabel('electrophysiology'), '电生理记录');
+  assert.equal(localizeFigureMethodLabel('WB'), 'WB');
+  assert.equal(localizeFigureMethodLabel('RNAscope FISH'), 'RNAscope FISH');
+  assert.equal(localizeFigureMethodLabel('open field test'), '旷场实验');
+  assert.equal(localizeFigureMethodLabel('EPM'), '高架十字迷宫实验');
+  assert.equal(localizeFigureMethodLabel('tail suspension test'), '悬尾实验');
+  assert.equal(localizeFigureMethodLabel('sucrose preference test'), '蔗糖偏好实验');
+  assert.equal(localizeFigureMethodLabel('HPLC'), '高效液相色谱');
+});
+
+test('rejects a group-level behavioral assay list copied across Panels', () => {
+  const raw = validStandardFigureOutput();
+  raw.panels = ['A', 'B', 'C'].map(panel => ({
+    ...raw.panels[0],
+    panel,
+    methods: [
+      'open field test', 'elevated plus maze',
+      'tail suspension test', 'sucrose preference test'
+    ],
+    purpose_zh: '比较同一组动物的全部行为学读出',
+    design_zh: '依次开展全部行为学实验',
+    comparison_zh: '模型组与对照组',
+    direct_observation_zh: '模型组在全部行为学指标上发生变化',
+    local_inference_zh: '整组行为学结果支持模型成立',
+    contribution_zh: '提供整组行为学证据'
+  }));
+  assert.throws(
+    () => validateFigureAnalysis(raw, {
+      ...figureInput,
+      panelHints: ['A', 'B', 'C']
+    }, {
+      visualInput: true,
+      analysisDepth: 'standard',
+      requireCompletePanels: true
+    }),
+    error => error?.code === 'INVALID_RESPONSE' && /copied/.test(error.message)
+  );
+});
+
+test('keeps a durable Figure result usable when later extraction discovers more Panels', () => {
+  const result = {
+    figureId: 'figure-1',
+    analysisDepth: 'standard',
+    figureQuestion: '该图解决什么问题？',
+    coreConclusion: '该图支持一个可复核的结论。',
+    panels: [{
+      panel: 'A',
+      role: 'model_setup',
+      methods: ['实验示意图'],
+      purpose: '建立模型'
+    }]
+  };
+  assert.equal(isUsableFigureAnalysisResult(
+    result,
+    { figureId: 'figure-1', panelHints: ['A', 'B', 'C'] },
+    { analysisDepth: 'standard' }
+  ), true);
+  assert.equal(isUsableFigureAnalysisResult(
+    result,
+    { figureId: 'figure-s1' },
+    { analysisDepth: 'standard' }
+  ), false);
+});
+
+test('rejects a structurally valid but incomplete Figure before completion', () => {
+  const missingConclusion = validStandardFigureOutput('standard');
+  missingConclusion.core_conclusion_zh = '';
+  assert.throws(
+    () => validateFigureAnalysis(missingConclusion, figureInput, {
+      visualInput: true,
+      analysisDepth: 'standard',
+      requireCompletePanels: true
+    }),
+    error => error.code === 'INVALID_RESPONSE' && /core conclusion/i.test(error.message)
+  );
+
+  const emptyPanel = validStandardFigureOutput('standard');
+  Object.assign(emptyPanel.panels[0], {
+    methods: [], purpose_zh: '', design_zh: '', comparison_zh: '',
+    direct_observation_zh: '', local_inference_zh: '', contribution_zh: ''
+  });
+  assert.throws(
+    () => validateFigureAnalysis(emptyPanel, figureInput, {
+      visualInput: true,
+      analysisDepth: 'standard',
+      requireCompletePanels: true
+    }),
+    error => error.code === 'INVALID_RESPONSE' && /empty Panel/i.test(error.message)
+  );
 });
 
 test('normalizes every required deep field', () => {

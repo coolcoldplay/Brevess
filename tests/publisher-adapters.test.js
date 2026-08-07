@@ -79,11 +79,24 @@ test('keeps ScienceDirect leaf article-body containers out of trusted full-text 
   assert.equal(adapter.specificArticleRootSelectors.includes('.article-body'), false);
 });
 
+test('uses the dedicated semantic article root inside the Brevess PDF workspace', () => {
+  const adapter = selectPublisherAdapter({
+    hostname: 'extension-id',
+    pathname: '/pdf-reader.html'
+  });
+  assert.equal(adapter.id, 'brevess-pdf-workspace');
+  assert.equal(adapter.family, 'pdf-workspace');
+  assert.ok(adapter.specificArticleRootSelectors.includes('#pdfReaderArticle'));
+});
+
 test('declares Cell video controls as precise publisher chrome', () => {
   const adapter = selectPublisherAdapter({ hostname: 'www.cell.com' }, {});
   assert.ok(adapter.excludedSelectors.includes('.video-player'));
   assert.ok(adapter.excludedSelectors.includes('.video-playback'));
   assert.ok(adapter.excludedSelectors.includes('.video-player-modal'));
+  assert.ok(adapter.excludedSelectors.includes('.video-caption'));
+  assert.ok(adapter.excludedSelectors.includes('.video-description'));
+  assert.ok(adapter.excludedSelectors.includes('[class*="supplement"][class*="video"]'));
   assert.ok(adapter.excludedSelectors.includes('.keyboard-shortcuts-modal'));
   assert.ok(adapter.excludedSelectors.includes('.download-options-modal'));
   assert.ok(adapter.excludedSelectors.includes('.transcript-panel'));

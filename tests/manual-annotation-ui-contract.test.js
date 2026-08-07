@@ -420,9 +420,9 @@ test('manual mutations push fresh counts to the active side panel without pollin
 test('side-panel highlight distribution separates manual, AI, and rule-generated marks', () => {
   const popup = read('popup.js');
   const css = read('popup.css');
-  assert.match(popup, /manual:\s*\{ label:\s*'手动标注', className:\s*'is-manual' \}/);
-  assert.match(popup, /llm:\s*\{ label:\s*'AI 自动', className:\s*'is-llm' \}/);
-  assert.match(popup, /regex:\s*\{ label:\s*'规则自动', className:\s*'is-regex' \}/);
+  assert.match(popup, /regex:\s*\{ label:\s*'正则', className:\s*'is-regex'/);
+  assert.match(popup, /llm:\s*\{ label:\s*'LLM', className:\s*'is-llm'/);
+  assert.match(popup, /manual:\s*\{[\s\S]{0,100}label:\s*'手动', className:\s*'is-manual'/);
   assert.match(popup, /value\.sources/);
   assert.match(css, /\.workspace-distribution-cell\.is-manual/);
   assert.match(css, /\.workspace-distribution-cell\.is-llm/);
