@@ -54,16 +54,14 @@ foreach ($file in @(
   'options.html', 'options.js', 'options.css',
   'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md',
-  'BUILD39_OPTIMIZATION.md', 'CHANGELOG-v1.0.0.md',
-  'CHANGELOG-v2.4.12.md', 'CHANGELOG-v2.4.13.md',
-  'CHANGELOG-v2.4.14.md', 'CHANGELOG-v2.4.15.md', 'CHANGELOG-v2.4.16.md',
-  'CHANGELOG-v2.4.17.md', 'CHANGELOG-v2.4.18.md', 'CHANGELOG-v2.4.19.md',
-  'CHANGELOG-v2.4.20.md', 'CHANGELOG-v2.4.21.md', 'CHANGELOG-v2.4.22.md',
-  'CHANGELOG-v2.4.23.md', 'CHANGELOG-v2.4.24.md', 'CHANGELOG-v2.4.25.md',
-  'CHANGELOG-v2.4.26.md', 'CHANGELOG-v2.4.27.md', 'CHANGELOG-v2.4.28.md',
-  'CODEX_LOCAL_SETUP.md'
+  'BUILD39_OPTIMIZATION.md', 'CODEX_LOCAL_SETUP.md'
 )) {
   Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $target
 }
+
+$docsTarget = Join-Path $target 'docs'
+New-Item -ItemType Directory -Path $docsTarget -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\changelog') `
+  -Destination $docsTarget -Recurse
 
 Write-Output $target
