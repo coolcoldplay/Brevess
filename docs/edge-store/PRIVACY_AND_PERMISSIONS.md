@@ -1,6 +1,6 @@
 # Partner Center 隐私页填写稿
 
-适用版本：Brevess 1.0.0
+适用版本：Brevess 1.0.1
 
 ## Single Purpose Description
 

@@ -3,7 +3,7 @@ param(
 )
 
 if ([string]::IsNullOrWhiteSpace($BuildName)) {
-  $BuildName = 'Brevess-v1.0.0-build1-store-release'
+  $BuildName = 'Brevess-v1.0.1-build1-store-release'
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot

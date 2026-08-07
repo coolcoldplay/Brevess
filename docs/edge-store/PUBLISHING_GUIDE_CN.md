@@ -1,7 +1,7 @@
 # Brevess：Microsoft Edge Add-ons 上架操作指南
 
-适用版本：1.0.0
-最后核对日期：2026-07-29
+适用版本：1.0.1
+最后核对日期：2026-08-08
 
 ## 先说清楚：哪些步骤必须由发布者本人完成
 
@@ -42,7 +42,7 @@ npm run build:edge-store
 构建目录为：
 
 ```text
-dist\Brevess-Edge-v1.0.0
+dist\Brevess-Edge-v1.0.1
 ```
 
 验证构建：
@@ -50,7 +50,7 @@ dist\Brevess-Edge-v1.0.0
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\verify-edge-store-release.ps1 `
-  -ReleaseRoot .\dist\Brevess-Edge-v1.0.0
+  -ReleaseRoot .\dist\Brevess-Edge-v1.0.1
 ```
 
 只有输出 `Status : PASS` 才继续。
@@ -99,7 +99,7 @@ Microsoft 当前不收取 Edge 扩展开发者注册费。
 3. 上传：
 
    ```text
-   dist\Brevess-Edge-v1.0.0\Brevess-v1.0.0-Microsoft-Edge.zip
+   dist\Brevess-Edge-v1.0.1\Brevess-v1.0.1-Microsoft-Edge.zip
    ```
 
 4. 等待包验证完成，查看 **Extension overview**。
@@ -115,7 +115,7 @@ Microsoft 当前不收取 Edge 扩展开发者注册费。
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\build-edge-store-release.ps1 `
   -CatalogExtensionId 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
-  -ReleaseName 'Brevess-Edge-v1.0.0-catalog'
+  -ReleaseName 'Brevess-Edge-v1.0.1-catalog'
 ```
 
 然后验证：
@@ -123,21 +123,21 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\verify-edge-store-release.ps1 `
-  -ReleaseRoot .\dist\Brevess-Edge-v1.0.0-catalog
+  -ReleaseRoot .\dist\Brevess-Edge-v1.0.1-catalog
 ```
 
 验证通过后，在 Partner Center 的 **Packages** 页面重新上传最终 ZIP：
 
 ```text
-dist\Brevess-Edge-v1.0.0-catalog\Brevess-v1.0.0-Microsoft-Edge.zip
+dist\Brevess-Edge-v1.0.1-catalog\Brevess-v1.0.1-Microsoft-Edge.zip
 ```
 
 ## 第六阶段：发布可选 Codex Bridge
 
-在 GitHub 仓库创建版本为 `v1.0.0` 的 Release，至少上传：
+在 GitHub 仓库创建版本为 `v1.0.1` 的 Release，至少上传：
 
 ```text
-Brevess-Codex-Bridge-Windows-x64-v1.0.0.zip
+Brevess-Codex-Bridge-Windows-x64-v1.0.1.zip
 Brevess-Codex-Bridge-Windows-x64.zip
 ```
 

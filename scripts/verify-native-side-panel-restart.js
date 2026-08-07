@@ -631,7 +631,7 @@ async function clearBrowserWorkspaceStores(options) {
   await firstArticle.page.bringToFront();
   await firstArticle.page.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '1.0.0-build1-store-release', null, { timeout: 10000 });
+      '1.0.1-build1-store-release', null, { timeout: 10000 });
   const workspace = await ensureArticleWorkspace(firstWorker, firstTab.id);
   const saveUi = await saveWorkspaceThroughPanel(firstPanel);
   const saved = await saveRestartFixture(firstOptions, workspace, firstTab.id);

@@ -29,7 +29,7 @@ npm.cmd ci
 npm.cmd test
 npm.cmd run build:pdf-engine
 npm.cmd run prepare:pdf-runtime
-npm.cmd run build:unpacked -- -BuildName brevess-v1.0.0
+npm.cmd run build:unpacked -- -BuildName brevess-v1.0.1
 ```
 
 The unpacked extension and optional local companion are generated under

@@ -8,7 +8,7 @@ const readline = require('node:readline');
 const http = require('node:http');
 const { spawn, spawnSync } = require('node:child_process');
 
-const HOST_VERSION = '1.0.0';
+const HOST_VERSION = '1.0.1';
 const MAX_NATIVE_INPUT_BYTES = 64 * 1024 * 1024;
 const MAX_NATIVE_OUTPUT_BYTES = 900 * 1024;
 const DEFAULT_APP_SERVER_TIMEOUT_MS = 30000;

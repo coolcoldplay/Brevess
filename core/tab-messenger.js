@@ -31,9 +31,9 @@
   ];
   const CONTENT_STYLE_FILES = ['content.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.0-build39-supplemental-coverage-r1';
+    '1.0.1-build1-store-release';
   const FIGURE_EXTRACTOR_REVISION =
-    '1.0.0-build39-supplemental-coverage-r1';
+    '1.0.1-build1-store-release';
   const recoveryByTab = new Map();
   const CONTENT_INJECTION_CLAIM = 'sciLlmContentInjectionClaim';
   const CONTENT_INJECTION_READY = 'sciLlmContentInjectionReady';

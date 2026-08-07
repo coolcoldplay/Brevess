@@ -1,6 +1,6 @@
 // 内容脚本 - 在网页上执行高亮
 document.documentElement.dataset.sciLlmContentRevision =
-    '1.0.0-build1-store-release';
+    '1.0.1-build1-store-release';
 document.documentElement.dataset.sciReaderSingleColumn = 'true';
 document.documentElement.dataset.sciPublisherFamily =
     globalThis.SciLLM?.selectPublisherAdapter?.(location)?.family || 'generic';
