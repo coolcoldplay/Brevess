@@ -1,4 +1,4 @@
-# Brevess 1.0.0
+# Brevess 1.0.1
 
 `Brevess`（Brevity · Evidence · Essence）是一个 Chrome / Microsoft Edge Manifest V3
 论文阅读扩展。它使用原生浏览器侧栏，提供论文导航、离线正则与可选 LLM
@@ -36,7 +36,7 @@
 ## 安装
 
 1. 打开 [最新 Release](https://github.com/coolcoldplay/Brevess/releases/latest)，在
-   **Assets** 中下载 `Brevess-v1.0.0-Microsoft-Edge.zip`。
+   **Assets** 中下载 `Brevess-v1.0.1-Microsoft-Edge.zip`。
 2. 解压 ZIP 到准备长期保留且路径不变的文件夹，并确认其中直接包含 `manifest.json`。
 3. 打开 `edge://extensions/` 或 `chrome://extensions/`。
 4. 开启“开发人员模式”。
@@ -199,11 +199,11 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 
 ## 版本
 
-当前版本：`1.0.0`（运行修订 `1.0.0-build1-store-release`）。这是以 `Brevess`
-品牌发布的首个公开商店版本，包含本机 Codex 就绪修复、本地目录索引合并、
-按网页/功能/模型统计 Token、规则白名单和黑名单，以及经过 Zotero Uminer
-文献库回归的正则目录。详见 [版本历史](docs/changelog/README.md)、
-[1.0.0 变更记录](docs/changelog/CHANGELOG-v1.0.0.md)、
+当前版本：`1.0.1`（运行修订 `1.0.1-build1-store-release`）。本次更新增加 PDF
+研究工作区、补充材料处理、统一研究逻辑图和隐私安全的便携配置备份，并改进
+本机 PDF Figure 提取、工作区恢复及发布隐私边界。详见
+[版本历史](docs/changelog/README.md)、
+[1.0.1 变更记录](docs/changelog/CHANGELOG-v1.0.1.md)、
 [正则优化记录](docs/changelog/CHANGELOG-v2.4.28.md) 和
 [本机 Codex 设置](CODEX_LOCAL_SETUP.md)。
 

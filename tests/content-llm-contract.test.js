@@ -251,7 +251,7 @@ test('paragraph-only outline payload contains scoped text and sends document pro
 test('content script persists safe LLM failure diagnostics across regex fallback', () => {
   const script = read('content.js');
   assert.match(script, /dataset\.sciLlmContentRevision/);
-  assert.match(script, /1\.0\.0-build1-store-release/);
+  assert.match(script, /1\.0\.1-build1-store-release/);
   assert.match(script, /dataset\.sciReaderSingleColumn\s*=\s*'true'/);
   assert.match(script, /dataset\.sciPublisherFamily/);
   assert.match(script, /selectPublisherAdapter\?\.\(location\)/);

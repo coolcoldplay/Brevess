@@ -52,21 +52,21 @@ test('gitignore excludes credentials, browser profiles, and generated archives',
   }
 });
 
-test('1.0.0 release metadata and scale benchmark stay consistent', () => {
+test('1.0.1 release metadata and scale benchmark stay consistent', () => {
   const manifest = JSON.parse(read('manifest.json'));
   const packageJson = JSON.parse(read('package.json'));
-  assert.equal(manifest.version, '1.0.0');
-  assert.equal(packageJson.version, '1.0.0');
+  assert.equal(manifest.version, '1.0.1');
+  assert.equal(packageJson.version, '1.0.1');
   assert.equal(packageJson.scripts['benchmark:article-chat'],
     'node scripts/benchmark-article-chat.mjs');
-  assert.match(read('background.js'), /version:\s*'1\.0\.0'/);
-  assert.match(read('core/background-router.js'), /1\.0\.0-build1-store-release/);
-  assert.match(read('content.js'), /1\.0\.0-build1-store-release/);
+  assert.match(read('background.js'), /version:\s*'1\.0\.1'/);
+  assert.match(read('core/background-router.js'), /1\.0\.1-build1-store-release/);
+  assert.match(read('content.js'), /1\.0\.1-build1-store-release/);
   assert.match(
     read('scripts/build-unpacked-extension.ps1'),
-    /v1\.0\.0-build1-store-release/
+    /v1\.0\.1-build1-store-release/
   );
-  assert.match(read('README.md'), /1\.0\.0-build1-store-release/);
+  assert.match(read('README.md'), /1\.0\.1-build1-store-release/);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'benchmark-article-chat.mjs')), true);
   assert.equal(fs.existsSync(
     path.join(root, 'scripts', 'benchmark-zotero-mineru-regex.mjs')

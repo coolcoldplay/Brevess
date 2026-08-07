@@ -1,6 +1,6 @@
 # 本机 Codex 全文问答
 
-Brevess 1.0.0 的“本机 Codex”模型提供商通过 Chromium Native Messaging 调用
+Brevess 1.0.1 的“本机 Codex”模型提供商通过 Chromium Native Messaging 调用
 Codex App Server。插件不读取或保存明文登录令牌；App Server 把认证状态保存在
 `%LOCALAPPDATA%\BrevessCodexBridge\codex-home`，与桌面 Codex 和 Codex CLI 隔离。
 

@@ -1,6 +1,6 @@
 {
   "name": "brevess",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AGPL browser extension for evidence-aware reading and full-text Q&A of scientific articles",
   "private": true,
   "license": "AGPL-3.0-or-later",

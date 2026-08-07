@@ -1,6 +1,6 @@
 # Microsoft Edge Add-ons 商店文案
 
-适用版本：Brevess 1.0.0
+适用版本：Brevess 1.0.1
 建议类别：Productivity / 生产力
 定价：免费
 支持语言：中文（简体）、English

@@ -20,9 +20,9 @@ test('manifest opens an action-activated native side panel and injects extractio
   assert.equal(enMessages.extensionName.message, 'Brevess');
   assert.ok(zhMessages.extensionDescription.message.length > 20);
   assert.ok(enMessages.extensionDescription.message.length > 60);
-  assert.equal(manifest.version, '1.0.0');
+  assert.equal(manifest.version, '1.0.1');
   assert.equal(packageJson.name, 'brevess');
-  assert.equal(packageJson.version, '1.0.0');
+  assert.equal(packageJson.version, '1.0.1');
   assert.equal(packageJson.license, 'AGPL-3.0-or-later');
   const publicKey = Buffer.from(manifest.key, 'base64');
   assert.ok(publicKey.length > 256);
@@ -91,7 +91,7 @@ test('background worker keeps routed LLM operations alive until completion', () 
   const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
   assert.match(
     background,
-    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'1\.0\.0'/
+    /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'1\.0\.1'/
   );
   assert.match(background, /core\/service-worker-keepalive\.js/);
   assert.match(background, /SciLLM\.keepAliveUntil\(\s*handleRoutedMessage/);
