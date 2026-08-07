@@ -202,8 +202,10 @@ API Key、用户论文、浏览器配置和本地诊断资料不属于公开源�
 当前版本：`1.0.0`（运行修订 `1.0.0-build1-store-release`）。这是以 `Brevess`
 品牌发布的首个公开商店版本，包含本机 Codex 就绪修复、本地目录索引合并、
 按网页/功能/模型统计 Token、规则白名单和黑名单，以及经过 Zotero Uminer
-文献库回归的正则目录。详见 [1.0.0 变更记录](CHANGELOG-v1.0.0.md)、
-[正则优化记录](CHANGELOG-v2.4.28.md) 和 [本机 Codex 设置](CODEX_LOCAL_SETUP.md)。
+文献库回归的正则目录。详见 [版本历史](docs/changelog/README.md)、
+[1.0.0 变更记录](docs/changelog/CHANGELOG-v1.0.0.md)、
+[正则优化记录](docs/changelog/CHANGELOG-v2.4.28.md) 和
+[本机 Codex 设置](CODEX_LOCAL_SETUP.md)。
 
 升级用户的 IndexedDB、旧归档、本地工作区和 Native Messaging 权限会继续兼容；
 保留的非展示型协议标识见[持久化兼容标识说明](docs/COMPATIBILITY_IDENTIFIERS.md)。
