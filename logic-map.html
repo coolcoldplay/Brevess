@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brevess · 论文论证地图</title>
+  <link rel="stylesheet" href="vendor/phosphor/icons.css">
+  <link rel="stylesheet" href="logic-map.css">
+</head>
+<body>
+  <div id="logicMapApp" class="logic-map-app" aria-busy="true">
+    <header class="logic-map-topbar">
+      <div class="logic-map-brand">
+        <span class="logic-map-brand-mark">B</span>
+        <div>
+          <strong>Brevess Research Map</strong>
+          <span id="logicMapArticleTitle">正在读取论文工作区…</span>
+        </div>
+      </div>
+      <div class="logic-map-top-actions">
+        <button id="toggleLogicMapEditor" class="secondary-button" type="button"
+          aria-pressed="false"><i class="ph ph-sidebar"></i><span>折叠编辑</span></button>
+        <button id="collapseAllLogicMapFigures" class="secondary-button" type="button"
+          aria-pressed="false"><i class="ph ph-arrows-in-line-vertical"></i><span>折叠所有图</span></button>
+        <button id="toggleLogicMapFullscreen" class="secondary-button" type="button"
+          aria-pressed="false"><i class="ph ph-arrows-out"></i><span>全屏</span></button>
+        <button id="zoomOutLogicMap" class="icon-button" type="button" aria-label="缩小">
+          <i class="ph ph-minus"></i>
+        </button>
+        <span id="logicMapZoomValue" class="logic-map-zoom-value">100%</span>
+        <button id="zoomInLogicMap" class="icon-button" type="button" aria-label="放大">
+          <i class="ph ph-plus"></i>
+        </button>
+        <button id="exportLogicMapJson" class="secondary-button" type="button">JSON</button>
+        <button id="exportLogicMapSvg" class="secondary-button" type="button">SVG</button>
+        <button id="exportLogicMapPng" class="secondary-button" type="button">PNG</button>
+        <button id="openLogicMapSource" class="primary-button" type="button">
+          <i class="ph ph-export"></i>回到原文
+        </button>
+      </div>
+    </header>
+
+    <div id="logicMapRecovery" class="logic-map-recovery" hidden>
+      <span>发现尚未同步的本地草稿。</span>
+      <button id="restoreLogicMapDraft" type="button">恢复草稿</button>
+      <button id="discardLogicMapDraft" type="button">使用已保存版本</button>
+    </div>
+
+    <main id="logicMapShell" class="logic-map-shell">
+      <aside id="logicMapInspector" class="logic-map-inspector" aria-label="编辑论证">
+        <div class="logic-map-panel-heading">
+          <div><span class="eyebrow">EDITOR</span><h2>编辑论证</h2></div>
+          <button id="collapseLogicMapEditor" class="icon-button" type="button"
+            aria-label="折叠编辑面板"><i class="ph ph-caret-left"></i></button>
+        </div>
+        <div class="logic-map-editor-actions">
+          <button id="addLogicMapStep" type="button"><i class="ph ph-plus"></i>主图</button>
+          <button type="button" data-add-supplemental="figure"><i class="ph ph-image"></i>补充图</button>
+          <button type="button" data-add-supplemental="video"><i class="ph ph-video"></i>补充视频</button>
+          <button type="button" data-add-supplemental="table"><i class="ph ph-table"></i>补充表</button>
+        </div>
+        <div id="logicMapEditorSelection" class="logic-map-editor-selection" aria-live="polite"></div>
+        <form id="logicMapInspectorForm" class="logic-map-inspector-form">
+          <div id="logicMapEditorBody"></div>
+        </form>
+      </aside>
+
+      <section class="logic-map-canvas-shell" aria-label="论文论证主链画布">
+        <div id="logicMapSaveBar" class="logic-map-save-bar">
+          <span id="logicMapSaveStatus" data-state="loading">
+            <i class="ph ph-arrows-clockwise"></i>正在载入…
+          </span>
+          <button id="reloadLogicMapRemote" type="button" hidden>载入远端版本</button>
+          <button id="retryLogicMapSave" type="button" hidden>重试保存</button>
+        </div>
+        <div class="logic-map-canvas-scroll">
+          <div id="logicMapCanvas" class="logic-map-canvas">
+            <section class="logic-map-mechanism-card selectable-module"
+              data-selection-kind="mechanism" tabindex="0">
+              <div class="logic-map-meta-label"><i class="ph ph-path"></i>机制链</div>
+              <div id="logicMapMechanismChain" class="logic-map-mechanism-chain"></div>
+            </section>
+            <div id="logicMapBoard" class="logic-map-board">
+              <svg id="logicMapConnectorLayer" class="logic-map-connector-layer"
+                aria-hidden="true"></svg>
+              <aside class="logic-map-supplemental-lane" aria-label="补充材料">
+                <div class="logic-map-lane-heading">补充材料</div>
+                <div id="logicMapSupplementalLane"></div>
+              </aside>
+              <section id="logicMapMainChain" class="logic-map-main-chain"
+                aria-label="统一问题—证据—结论主链"></section>
+            </div>
+            <section class="logic-map-boundary-card selectable-module"
+              data-selection-kind="boundary" tabindex="0">
+              <div class="logic-map-meta-label"><i class="ph ph-warning"></i>结论边界</div>
+              <p id="logicMapClaimBoundary">等待载入…</p>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="core/i18n.js"></script>
+  <script src="core/research-logic-map.js"></script>
+  <script src="logic-map.js"></script>
+</body>
+</html>

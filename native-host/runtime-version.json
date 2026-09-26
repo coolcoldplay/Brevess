@@ -1,0 +1,11 @@
+{
+  "name": "Eclipse Temurin JRE",
+  "version": "8u492-b09",
+  "openjdkVersion": "1.8.0_492-b09",
+  "platform": "windows-x64",
+  "archive": "OpenJDK8U-jre_x64_windows_hotspot_8u492b09.zip",
+  "archiveBytes": 40117123,
+  "archiveSha256": "bb25b002556afc7ef158cd95ec6270dddb3eecba69acdd7abb9d28b2e9ff0f5e",
+  "source": "https://github.com/adoptium/temurin8-binaries/releases/tag/jdk8u492-b09",
+  "license": "GPL-2.0-with-classpath-exception"
+}

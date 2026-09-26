@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brevess</title>
+    <link rel="stylesheet" href="vendor/phosphor/icons.css">
+    <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="ui-swiss.css">
+</head>
+<body data-ui-surface="sidebar">
+    <div id="sidePanelApp" class="side-panel-app">
+      <header id="sidePanelHeader" class="side-panel-header compact-paper-header">
+        <div id="sidePanelPaperTitle" class="side-panel-paper-title">正在连接当前论文…</div>
+        <details id="sidePanelNotificationCenter" class="side-panel-notification-center"
+          data-sidebar-focus-escape-priority>
+          <summary id="sidePanelNotificationSummary"
+            aria-label="查看通知历史" title="查看通知历史">
+            <i class="ph ph-bell" aria-hidden="true"></i>
+            <time id="sidePanelNotificationTime" datetime="">--:--</time>
+            <span id="sidePanelNotificationLatest">暂无通知</span>
+          </summary>
+          <section class="side-panel-notification-popover" aria-label="通知历史">
+            <div class="side-panel-notification-heading">
+              <strong>通知历史</strong>
+              <div class="side-panel-notification-actions">
+                <span>仅保留最近 40 条</span>
+                <button id="exportAdapterDiagnosticBundle" class="side-panel-tool-button"
+                  type="button" aria-label="导出网页适配诊断包" title="导出网页适配诊断包">
+                  <i class="ph ph-warning" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+            <div id="pdfReaderNoticeActions" class="side-panel-pdf-notice-actions" hidden></div>
+            <ol id="sidePanelNotificationHistory" class="side-panel-notification-history"></ol>
+          </section>
+        </details>
+        <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
+          aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
+          <i class="ph ph-gear" aria-hidden="true"></i>
+        </button>
+      </header>
+      <span id="sidebarFocusAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
+
+      <div id="sidePanelDocumentStatus" class="side-panel-document-status">
+        <span class="side-panel-live-dot" aria-hidden="true"></span>
+        <span id="sidePanelDocumentStatusText" role="status" aria-live="polite">已激活，正在读取当前页面</span>
+        <button id="retryArticlePreparation" class="diagnostic-retry-button" type="button" hidden>
+          <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>重新提取
+        </button>
+        <div class="side-panel-global-tools" role="group" aria-label="当前论文的本地工作区与档案">
+          <div id="figurePanelHeaderFieldsControl" class="figure-panel-header-fields-control" hidden>
+            <button id="figurePanelHeaderFieldsButton"
+              class="side-panel-tool-button figure-panel-header-fields-button" type="button"
+              aria-label="设置 Panel 标题信息" aria-expanded="false"
+              aria-controls="figurePanelHeaderFieldsMenu">
+              <span class="figure-panel-header-fields-triangle" aria-hidden="true"></span>
+            </button>
+            <fieldset id="figurePanelHeaderFieldsMenu" class="figure-panel-header-fields-menu"
+              aria-label="Panel 标题显示字段" data-sidebar-focus-escape-priority hidden>
+              <legend>Panel 标题信息</legend>
+              <label><input type="checkbox" data-figure-panel-header-field="evidenceType"><span>证据类型</span></label>
+              <label><input type="checkbox" data-figure-panel-header-field="purpose"><span>目的</span></label>
+              <label><input type="checkbox" data-figure-panel-header-field="experimentalMethods"><span>实验方法</span></label>
+              <label><input type="checkbox" data-figure-panel-header-field="statisticalMethods"><span>统计学方法</span></label>
+              <label><input type="checkbox" data-figure-panel-header-field="comparison"><span>比较/分组</span></label>
+              <label><input type="checkbox" data-figure-panel-header-field="directObservation"><span>直接观察</span></label>
+            </fieldset>
+          </div>
+          <div id="navigationOutlineControls" class="navigation-outline-controls" role="group"
+            data-workspace-tools="navigation" aria-label="标题层级展开控制" hidden>
+            <button id="expandAllOutlineLevels" class="side-panel-tool-button" type="button"
+              aria-label="展开全部标题层级" title="展开全部标题层级">+</button>
+            <button id="collapseAllOutlineLevels" class="side-panel-tool-button" type="button"
+              aria-label="收起全部标题层级" title="收起全部标题层级">−</button>
+          </div>
+          <div id="highlightsModuleTools" class="module-action-tools" data-workspace-tools="highlights"
+            role="group" aria-label="摘句工具" hidden>
+            <button id="applyHighlight" class="side-panel-tool-button module-primary-action" type="button"
+              data-module-action aria-label="应用高亮" title="应用高亮">高亮</button>
+          </div>
+          <div id="figuresModuleTools" class="module-action-tools" data-workspace-tools="figures"
+            role="group" aria-label="图解工具" hidden>
+            <button id="expandAllFigureLevels" class="side-panel-tool-button" type="button"
+              aria-label="展开全部 Figure" title="展开全部 Figure">+</button>
+            <button id="collapseAllFigureLevels" class="side-panel-tool-button" type="button"
+              aria-label="收起全部 Figure 与 Panel" title="收起全部 Figure 与 Panel">−</button>
+            <button id="analyzeFiguresFromFigures" class="side-panel-tool-button module-primary-action" type="button"
+              data-module-action aria-label="全部解图" title="全部解图">解图</button>
+            <button id="openSupplementalFigureImport" class="side-panel-tool-button" type="button"
+              aria-label="添加补图" title="添加补图"><i class="ph ph-image" aria-hidden="true"></i></button>
+          </div>
+          <div id="notesModuleTools" class="module-action-tools" data-workspace-tools="notes"
+            role="group" aria-label="笔记工具" hidden>
+            <label class="literature-note-template-field">
+              <span class="visually-hidden">文献类型模板</span>
+              <select id="literatureNoteTemplateSelect" aria-label="文献类型模板" title="文献类型模板"></select>
+            </label>
+            <button id="autofillLiteratureNote" class="side-panel-tool-button literature-note-autofill module-primary-action" type="button"
+              data-module-action title="AI 读取全文填写本模板">
+              <i class="ph ph-file-magnifying-glass" aria-hidden="true"></i>
+              <span class="visually-hidden">AI 读取全文填写本模板</span>
+            </button>
+          </div>
+          <div id="chatModuleTools" class="module-action-tools" data-workspace-tools="chat"
+            role="group" aria-label="问答工具" hidden>
+            <button id="clearArticleChat" class="side-panel-tool-button" type="button"
+              aria-label="清空对话" title="清空对话">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <button id="showArticleAbbreviations" class="side-panel-tool-button" type="button"
+            aria-label="查看全文缩写表" title="查看全文缩写表">
+            <span class="side-panel-tool-letter" aria-hidden="true">A</span>
+          </button>
+          <button id="saveCurrentArticleWorkspace" class="side-panel-tool-button" type="button"
+            aria-label="保存到本地文件夹" title="保存到本地文件夹">
+            <i class="ph ph-floppy-disk" aria-hidden="true"></i>
+          </button>
+          <button id="refreshArticleNavigation" class="side-panel-tool-button" type="button"
+            data-workspace-refresh data-workspace-tools="navigation" hidden
+            aria-label="刷新论文导航" title="刷新论文导航">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 19.8 12M4.2 12a8 8 0 0 0 13.7 5.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="refreshFigureInventory" class="side-panel-tool-button" type="button"
+            data-workspace-refresh data-workspace-tools="figures" hidden
+            aria-label="刷新图表目录" title="刷新图表目录">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 19.8 12M4.2 12a8 8 0 0 0 13.7 5.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <details id="sidePanelMoreTools" class="side-panel-more-tools"
+            data-sidebar-focus-escape-priority>
+            <summary id="sidePanelMoreToolsSummary" class="side-panel-tool-button"
+              aria-label="更多论文工具" title="更多论文工具">
+              <span class="side-panel-more-glyph" aria-hidden="true">•••</span>
+            </summary>
+            <div class="side-panel-more-tools-menu" role="menu" aria-label="更多论文工具">
+              <button id="scanArticleWorkspace" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-folder-open" aria-hidden="true"></i><span>扫描并恢复本地工作区</span>
+              </button>
+              <button id="importCurrentArticleArchiveButton" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-upload" aria-hidden="true"></i><span>导入 JSON</span>
+              </button>
+              <button id="exportCurrentArticleArchive" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-download" aria-hidden="true"></i><span>导出 JSON</span>
+              </button>
+              <button id="exportPptMaterials" class="side-panel-more-tool" type="button" role="menuitem">
+                <span class="side-panel-tool-letter" aria-hidden="true">P</span><span>导出 PPT 材料包</span>
+              </button>
+              <button id="exportEnhancedSnapshotToZotero" class="side-panel-more-tool" type="button" role="menuitem">
+                <span class="side-panel-tool-letter" aria-hidden="true">Z</span><span>导出到 Zotero</span>
+              </button>
+              <button id="clearArticleWorkspace" class="side-panel-more-tool is-danger" type="button" role="menuitem">
+                <i class="ph ph-trash" aria-hidden="true"></i><span>清空本地工作区</span>
+              </button>
+            </div>
+          </details>
+          <input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+      <div id="statusMessage" class="status-message side-panel-global-status" role="status"
+          aria-live="polite" aria-atomic="true"></div>
+      <div id="mechanismGenerationStatus" class="mechanism-generation-status"
+        role="status" aria-live="polite" aria-atomic="true" aria-busy="false" hidden>
+        <div class="mechanism-generation-copy">
+          <strong id="mechanismGenerationStage"></strong>
+          <span id="mechanismGenerationDetail"></span>
+        </div>
+        <button id="cancelMechanismGeneration" class="btn btn-danger-outline" type="button"
+          aria-controls="mechanismGenerationStatus" hidden>取消机制链生成</button>
+      </div>
+      <section id="articleArchivePrompt" class="article-archive-prompt" hidden aria-live="polite">
+        <div>
+          <strong>发现这篇论文的本地历史档案</strong>
+          <p id="articleArchivePromptSummary">可以加载上次结果，或保留当前页面并重新分析。</p>
+        </div>
+        <div class="article-archive-actions">
+          <button id="loadArticleArchive" class="btn btn-primary" type="button">加载上次结果</button>
+          <button id="reanalyzeArticle" class="btn btn-secondary" type="button">重新分析</button>
+        </div>
+      </section>
+
+      <main class="workspace-main">
+      <section id="workspace-navigation" class="workspace-view active" data-workspace-view="navigation" role="tabpanel" aria-labelledby="workspace-tab-navigation">
+        <div id="articleNavigationStatus" class="workspace-status">等待读取当前论文结构…</div>
+        <div id="articleNavigationFocusStatus" class="workspace-navigation-focus-status"
+          role="status" aria-live="polite" aria-atomic="true"></div>
+        <div id="articleNavigationTree" class="article-navigation-tree"></div>
+      </section>
+
+      <section id="workspace-highlights" class="workspace-view" data-workspace-view="highlights" role="tabpanel" aria-labelledby="workspace-tab-highlights" hidden>
+        <p id="highlightHeaderTaskStatus" class="module-task-status" role="status" aria-live="polite" hidden></p>
+        <div id="highlightTaskControls" class="analysis-task-controls" hidden>
+          <button id="pauseHighlightAnalysis" class="btn btn-secondary" type="button">暂停分析</button>
+          <button id="cancelHighlightAnalysis" class="btn btn-danger-outline" type="button">取消分析</button>
+        </div>
+        <details id="highlightControls" class="highlight-controls">
+          <summary><i class="ph ph-list-magnifying-glass" aria-hidden="true"></i><span>高亮设置与应用</span></summary>
+      <div class="container">
+        <!-- 识别引擎选择 -->
+        <div class="section analysis-engine-section">
+            <h3>识别引擎</h3>
+            <div class="mode-selector engine-selector">
+                <label>
+                    <input type="radio" name="analysisMode" value="regex" checked>
+                    <span>正则模式</span>
+                </label>
+                <label>
+                    <input type="radio" name="analysisMode" value="llm">
+                    <span>LLM 精确模式</span>
+                </label>
+            </div>
+            <div id="llmAdaptiveControls" class="llm-adaptive-controls">
+                <fieldset id="readingViewControl" class="reading-view-control">
+                    <legend class="adaptive-label">阅读情境</legend>
+                    <div id="readingViewOptions" class="reading-view-options"></div>
+                    <button id="editReadingScenarios" type="button" class="text-button">编辑情境与类别</button>
+                </fieldset>
+                <div id="highlightPresentationControls" class="highlight-presentation-controls" hidden>
+                    <div id="highlightFamilyLegend" class="highlight-family-legend"
+                        aria-label="高亮视觉家族"></div>
+                </div>
+            </div>
+            <div id="confidenceControl" class="confidence-control" hidden>
+                <div class="confidence-label-row">
+                    <label for="confidenceThreshold">证据匹配阈值</label>
+                    <span id="confidenceValue">80%</span>
+                </div>
+                <input id="confidenceThreshold" type="range" min="0.5" max="0.95" step="0.05" value="0.8">
+                <div class="confidence-hint">按本地证据匹配分数筛选；分数不代表实测准确率。</div>
+            </div>
+            <div id="llmDiagnostics" class="llm-diagnostics" hidden></div>
+        </div>
+        
+        <!-- 高亮模式选择 -->
+        <div id="spanModeSection" class="section">
+            <h3>高亮模式</h3>
+            <div class="mode-selector">
+                <label>
+                    <input type="radio" name="highlightMode" value="word" checked>
+                    <span>单词/短语</span>
+                </label>
+                <label>
+                    <input type="radio" name="highlightMode" value="sentence">
+                    <span>整句</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- 逻辑关系类别选择 -->
+        <div class="section fine-category-section">
+            <details id="fineCategoryDetails" open>
+                <summary>情境中的类别 <span id="totalMatchCount" class="match-badge"></span></summary>
+                <div class="category-section-heading">
+                    <h3 class="visually-hidden">逻辑关系类别</h3>
+                    <button id="restoreViewPreset" type="button" class="text-button" hidden>恢复预设</button>
+                </div>
+                <p class="category-group-guidance">逐项选择、查看或编辑规则；新增类别需点击分析，切换情境本身不会调用模型。</p>
+                <div class="categories-container" id="categoriesContainer">
+                    <!-- 将由JavaScript动态生成 -->
+                </div>
+                <button id="moreCategories" type="button" class="more-categories-button"
+                    aria-expanded="false" aria-controls="moreCategoriesPanel" hidden>更多分类</button>
+                <div id="moreCategoriesPanel" class="more-categories-panel" hidden>
+                    <label class="visually-hidden" for="categorySearch">搜索更多分类</label>
+                    <input id="categorySearch" type="search" aria-label="搜索更多分类"
+                        placeholder="按名称或 ID 搜索">
+                    <div id="moreCategoryGroups" class="more-category-groups"></div>
+                </div>
+            </details>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="section actions action-panel">
+            <button id="analyzeFigures" class="btn btn-figure" hidden>逐图解读</button>
+            <div class="annotation-data-row">
+                <div>
+                    <h3>本文标注</h3>
+                    <div id="manualAnnotationSummary" class="manual-annotation-summary"
+                        aria-live="polite" aria-atomic="true">正在读取手动标注…</div>
+                </div>
+                <div class="clear-actions">
+                    <button id="clearAutomaticHighlights" class="btn btn-secondary"><i class="ph ph-eraser" aria-hidden="true"></i>清除自动高亮</button>
+                    <button id="clearManualAnnotations" class="btn btn-danger-outline"><i class="ph ph-highlighter" aria-hidden="true"></i>清除手动标注</button>
+                </div>
+            </div>
+        </div>
+
+      </div>
+        </details>
+        <details class="article-chat-highlight-section" id="semanticHighlightControls">
+          <summary>智能检索高亮</summary>
+          <p id="articleSemanticHighlightHelp">输入想查找的内容，在正文中生成可编辑高亮；不会发送问答或改动问答草稿。</p>
+          <label class="visually-hidden" for="articleSemanticHighlightQuery">检索内容</label>
+          <textarea id="articleSemanticHighlightQuery" rows="2" maxlength="4000"
+            aria-describedby="articleSemanticHighlightHelp" placeholder="例如：本文支持核心结论的实验依据"></textarea>
+          <label class="article-semantic-model-field" for="articleSemanticHighlightProfile">
+            <span>检索模型</span>
+            <select id="articleSemanticHighlightProfile" aria-label="选择智能检索高亮模型"></select>
+          </label>
+          <div class="article-chat-highlight-row">
+            <select id="articleChatHighlightCategory" aria-label="选择智能检索高亮类别"></select>
+            <label class="article-chat-color-field" for="articleChatHighlightColor">
+              <span class="visually-hidden">高亮颜色</span>
+              <input id="articleChatHighlightColor" type="color" value="#2F80ED"
+                aria-label="选择智能检索高亮颜色">
+            </label>
+            <button id="highlightArticleChatMatches" class="btn btn-secondary" type="button">
+              <i class="ph ph-highlighter" aria-hidden="true"></i>查找并高亮
+            </button>
+          </div>
+        </details>
+        <section id="highlightDistribution" class="side-panel-result-card" aria-label="高亮分布">
+          <h3>高亮分布</h3>
+          <div class="workspace-empty">当前页面还没有可归类的高亮。</div>
+        </section>
+      </section>
+
+      <section id="workspace-figures" class="workspace-view" data-workspace-view="figures" role="tabpanel" aria-labelledby="workspace-tab-figures" hidden>
+        <p id="figureWorkspaceSummary" class="module-task-status" aria-live="polite"></p>
+        <p id="figureHeaderTaskStatus" class="module-task-status" role="status" aria-live="polite" hidden></p>
+          <div id="figureTaskControls" class="analysis-task-controls" hidden>
+            <button id="pauseFigureAnalysis" class="btn btn-secondary" type="button">暂停图解</button>
+            <button id="cancelFigureAnalysis" class="btn btn-danger-outline" type="button">取消图解</button>
+          </div>
+        <div id="figureWorkspace" class="figure-workspace">
+          <div class="workspace-empty">正在从网页结构读取 Figure 与 Panel 目录…</div>
+        </div>
+        <details id="supplementalFigureCoverage" class="supplemental-figure-coverage" hidden>
+          <summary class="supplemental-coverage-toggle">
+            <span class="supplemental-coverage-title">补充材料覆盖</span>
+            <span id="supplementalFigureCoverageSummary" class="supplemental-coverage-toggle-summary"
+              aria-live="polite">等待解析</span>
+          </summary>
+          <div id="supplementalFigureCoverageBody" class="supplemental-coverage-body"></div>
+        </details>
+        <nav id="figureQuickNav" class="figure-quick-nav" aria-label="Figure 与 Panel 快速跳转" hidden></nav>
+      </section>
+
+      <section id="workspace-mechanism" class="workspace-view workspace-mechanism-view"
+        data-workspace-view="mechanism" role="tabpanel" aria-labelledby="workspace-tab-figures" hidden>
+        <div class="workspace-view-heading workspace-mechanism-heading">
+          <button id="backFromMechanismChain" class="inline-settings-button" type="button"
+            aria-label="返回 Figure 与 Panel">← 返回</button>
+          <div data-sidebar-focus-heading-copy>
+            <h2>图表梳理</h2>
+            <p>分支、汇合与反馈按证据方向显示；双击文字即可编辑。</p>
+          </div>
+        </div>
+        <div class="workspace-mechanism-toolbar" role="toolbar" aria-label="图表梳理工具">
+          <div class="workspace-mechanism-toolbar-actions">
+            <button id="addMechanismChainNode" class="btn btn-primary" type="button">新增</button>
+            <button id="focusMechanismPath" class="btn btn-secondary" type="button"
+              aria-pressed="false">聚焦路径</button>
+            <div class="workspace-mechanism-export-control">
+              <button id="openMechanismExportMenu" class="btn btn-secondary" type="button"
+                aria-expanded="false" aria-controls="mechanismNetworkExportMenu">导出</button>
+              <div id="mechanismNetworkExportMenu" class="workspace-mechanism-export-menu"
+                role="menu" aria-label="导出或导入图表梳理"
+                data-sidebar-focus-escape-priority hidden>
+                <button type="button" role="menuitem" data-mechanism-export="png">导出 PNG</button>
+                <button type="button" role="menuitem" data-mechanism-export="svg">导出 SVG</button>
+                <button type="button" role="menuitem" data-mechanism-export="json">导出 JSON</button>
+                <button id="importMechanismNetworkButton" type="button" role="menuitem">导入 JSON</button>
+              </div>
+              <input id="importMechanismNetworkFile" type="file"
+                accept="application/json,.json" hidden>
+            </div>
+          </div>
+          <span id="mechanismChainSaveStatus" role="status" aria-live="polite">已保存</span>
+        </div>
+        <nav id="mechanismSectionNavigation" class="workspace-mechanism-section-nav"
+          aria-label="图表梳理区内跳转" hidden>
+          <span>快速查看</span>
+          <button type="button" data-mechanism-region="saved-graph" hidden disabled>已保存图</button>
+          <button type="button" data-mechanism-region="saved-evidence" hidden disabled>已保存证据</button>
+          <button type="button" data-mechanism-region="pending-graph" hidden disabled>候选图</button>
+          <button type="button" data-mechanism-region="pending-evidence" hidden disabled>候选证据</button>
+          <button type="button" data-mechanism-region="pending-unresolved" hidden disabled>未解析条目</button>
+        </nav>
+        <div id="mechanismChainIssues" class="workspace-mechanism-issues"
+          role="status" aria-live="polite"></div>
+        <div id="mechanismNetworkViewport" class="workspace-mechanism-network-viewport">
+          <div id="mechanismChainList" class="workspace-mechanism-network-canvas"></div>
+        </div>
+        <aside id="mechanismSelectionInspector" class="workspace-mechanism-inspector" hidden></aside>
+      </section>
+
+      <section id="workspace-chat" class="workspace-view workspace-chat-view" data-workspace-view="chat" role="tabpanel" aria-labelledby="workspace-tab-chat" hidden>
+        <div class="article-chat-context-bar">
+          <div id="articleChatCoverage" class="article-chat-coverage" aria-live="polite"
+            data-sidebar-focus-static-context>等待读取当前网页正文…</div>
+          <div id="articleChatModelStatus" class="article-chat-model-status" aria-live="polite">
+            <span>正在检查模型连接…</span>
+            <button id="openArticleChatModelSettings" type="button">模型设置</button>
+          </div>
+        </div>
+        <button id="articleChatLoadEarlier" class="article-chat-load-earlier" type="button" hidden>加载更早对话</button>
+        <div id="articleChatMessages" class="article-chat-messages" role="log"
+          aria-live="polite" aria-relevant="additions text" aria-label="全文问答记录">
+          <div class="workspace-empty">可以询问结论、机制、方法、证据强弱、局限，或让模型跨章节比较。</div>
+        </div>
+        <button id="articleChatReturnLatest" class="article-chat-return-latest" type="button" hidden>
+          <i class="ph ph-caret-down" aria-hidden="true"></i>回到最新
+        </button>
+        <form id="articleChatForm" class="article-chat-composer">
+          <label class="visually-hidden" for="articleChatQuestion">向全文提问</label>
+          <div id="articleChatContextScopes" class="article-chat-context-scopes"
+            aria-label="本轮限定章节" hidden></div>
+          <div class="article-chat-input-row">
+            <div class="article-chat-question-wrap">
+              <textarea id="articleChatQuestion" rows="3" maxlength="4000"
+                aria-controls="articleChatCommandMenu" aria-autocomplete="list"
+                aria-describedby="articleChatSearchOption"
+                placeholder="直接提问；输入 @ 限定章节，输入 / 插入快捷提示词"></textarea>
+              <div id="articleChatCommandMenu" class="article-chat-command-menu"
+                role="listbox" aria-label="问答输入建议"
+                data-sidebar-focus-escape-priority hidden></div>
+            </div>
+            <div class="article-chat-submit-controls">
+              <div class="article-chat-submit-options">
+                <button id="articleChatWebSearch"
+                  class="btn btn-secondary article-chat-web-search-toggle" type="button"
+                  aria-pressed="false" aria-label="为下一轮开启联网搜索"
+                  aria-describedby="articleChatSearchOption"
+                  title="联网搜索已关闭；点击后下一轮将检索网络">
+                  <i class="ph ph-magnifying-glass" aria-hidden="true"></i><span>联网</span>
+                </button>
+                <label class="article-chat-model-picker" for="articleChatProfile" title="本轮模型">
+                  <span class="visually-hidden">本轮模型</span>
+                  <select id="articleChatProfile" aria-label="选择全文问答模型"
+                    title="本轮模型"></select>
+                </label>
+              </div>
+              <button id="sendArticleChat" class="btn btn-primary" type="submit"
+                aria-labelledby="sendArticleChatLabel">
+                <i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>
+                <span id="sendArticleChatLabel">发送</span>
+              </button>
+            </div>
+            <p id="articleChatSearchOption" class="article-chat-search-option">联网检索是可选辅助来源；关闭时仅使用论文正文。</p>
+          </div>
+        </form>
+      </section>
+      <section id="literatureNoteDrawer" class="workspace-view literature-note-drawer" data-workspace-view="notes" role="tabpanel" aria-labelledby="openLiteratureNote" hidden>
+        <div class="literature-note-export-actions" role="group" aria-label="笔记复制与导出">
+          <button id="copyLiteratureNote" type="button">复制笔记</button>
+          <button id="exportLiteratureNoteMarkdown" type="button">导出 Markdown</button>
+          <button id="toggleLiteratureNoteMarkdown" type="button" aria-label="查看 Markdown 源码" title="查看 Markdown 源码" aria-pressed="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M8 5l-6 7 6 7M16 5l6 7-6 7M14 3l-4 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <small id="literatureNoteStatus" role="status" aria-live="polite">自动保存到本机</small>
+        </div>
+        <div id="literatureNoteModelHint" class="literature-note-model-hint" aria-live="polite">
+          <span>AI 填写需要已配置的模型。</span>
+          <button id="openLiteratureNoteModelSettings" type="button">模型设置</button>
+        </div>
+        <form id="literatureNoteForm" class="literature-note-form">
+          <div id="literatureNoteFields" class="literature-note-fields"></div>
+        </form>
+      </section>
+      </main>
+
+      <nav class="workspace-bottom-nav" role="tablist" aria-label="论文工作区">
+        <button id="workspace-tab-navigation" class="workspace-nav-button" type="button" data-workspace-target="navigation" role="tab" aria-controls="workspace-navigation" tabindex="0" aria-selected="true"><i class="ph ph-compass" aria-hidden="true"></i><span>导航</span></button>
+        <button id="workspace-tab-highlights" class="workspace-nav-button" type="button" data-workspace-target="highlights" role="tab" aria-controls="workspace-highlights" tabindex="-1" aria-selected="false"><i class="ph ph-quotes" aria-hidden="true"></i><span>摘句</span></button>
+        <button id="workspace-tab-figures" class="workspace-nav-button" type="button" data-workspace-target="figures" role="tab" aria-controls="workspace-figures" tabindex="-1" aria-selected="false"
+          title="F 进入解图；←/→ 切换 Figure，↑/↓ 切换 Panel；1–9 跳 Figure，0 折叠所有 Panel"><i class="ph ph-image" aria-hidden="true"></i><span>图解</span></button>
+        <button id="workspace-tab-chat" class="workspace-nav-button" type="button" data-workspace-target="chat" role="tab" aria-controls="workspace-chat" tabindex="-1" aria-selected="false"><i class="ph ph-chat-circle-text" aria-hidden="true"></i><span>问答</span></button>
+        <button id="openLiteratureNote" class="workspace-nav-button" type="button" data-workspace-target="notes" role="tab" aria-controls="literatureNoteDrawer" tabindex="-1" aria-selected="false"><i class="ph ph-note-pencil" aria-hidden="true"></i><span>笔记</span></button>
+      </nav>
+    </div>
+
+    <dialog id="articleAbbreviationDialog" class="abbreviation-dialog"
+      aria-labelledby="articleAbbreviationTitle">
+      <form method="dialog" class="abbreviation-dialog-content">
+        <header class="abbreviation-dialog-header">
+          <div>
+            <h2 id="articleAbbreviationTitle">全文缩写表</h2>
+            <p id="articleAbbreviationStatus">正在从正文中提取明确声明的缩写与全称…</p>
+          </div>
+          <button class="abbreviation-dialog-close" type="submit"
+            aria-label="关闭缩写表" title="关闭">×</button>
+        </header>
+        <div class="abbreviation-dialog-actions" aria-label="缩略词表操作">
+          <button id="importArticleAbbreviationsToGlobal" type="button">
+            本文导入全局记忆
+          </button>
+          <button id="importGlobalAbbreviationMemoryButton" type="button">
+            导入词库
+          </button>
+          <button id="exportGlobalAbbreviationMemory" type="button">
+            导出词库
+          </button>
+          <input id="importGlobalAbbreviationMemoryFile" type="file"
+            accept=".json,application/json" hidden>
+        </div>
+        <div class="abbreviation-table-shell">
+          <div id="articleAbbreviationTableWrap" class="abbreviation-table-wrap">
+            <table class="abbreviation-table">
+              <thead>
+                <tr>
+                  <th scope="col">缩写</th>
+                  <th scope="col">英文全称</th>
+                  <th scope="col">
+                    <span class="abbreviation-meaning-heading">
+                      <span>中文含义</span>
+                      <button id="translateArticleAbbreviations" type="button"
+                        title="使用“段落概述”对应的 LLM 模型补齐空白中文含义">
+                        一键获取
+                      </button>
+                    </span>
+                  </th>
+                  <th scope="col">来源</th>
+                  <th scope="col"><span class="visually-hidden">操作</span></th>
+                </tr>
+              </thead>
+              <tbody id="articleAbbreviationTableBody"></tbody>
+            </table>
+            <div id="articleAbbreviationEmpty" class="workspace-empty" hidden>
+              正文中暂未发现“全称（缩写）”或“缩写（全称）”形式的可靠定义。
+            </div>
+          </div>
+          <nav id="articleAbbreviationAlphabetNav" class="abbreviation-alphabet-nav"
+            aria-label="按缩写首字母快速跳转"></nav>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="figureResultEditorDialog" class="figure-result-editor-dialog"
+      aria-labelledby="figureResultEditorTitle">
+      <form id="figureResultEditorForm" class="figure-result-editor-content">
+        <header class="figure-result-editor-header">
+          <div>
+            <p class="figure-result-editor-kicker">人工修订</p>
+            <h2 id="figureResultEditorTitle">编辑 Figure 解读</h2>
+            <p id="figureResultEditorDescription">
+              模型原文会保留；保存后显示人工修订版，并同步写入当前论文工作区。
+            </p>
+          </div>
+          <button id="closeFigureResultEditor" class="figure-result-editor-close"
+            type="button" aria-label="关闭 Figure 解读编辑器" title="关闭">×</button>
+        </header>
+        <div id="figureResultEditorBody" class="figure-result-editor-body"></div>
+        <footer class="figure-result-editor-footer">
+          <button id="restoreFigureModelResult" class="btn btn-danger-outline"
+            type="button" hidden>恢复模型原文</button>
+          <span id="figureResultEditorStatus" class="figure-result-editor-status"
+            role="status" aria-live="polite"></span>
+          <button id="cancelFigureResultEditor" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="saveFigureResultEditor" class="btn btn-primary"
+            type="submit">保存人工修订</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="paragraphNoteDialog" class="paragraph-note-dialog"
+      aria-labelledby="paragraphNoteTitle">
+      <form id="paragraphNoteForm" class="paragraph-note-dialog-content">
+        <header class="paragraph-note-dialog-header">
+          <div>
+            <p class="paragraph-note-kicker">手动点评 · 不消耗 token</p>
+            <h2 id="paragraphNoteTitle">段落笔记</h2>
+          </div>
+          <button id="closeParagraphNoteDialog" class="paragraph-note-dialog-close"
+            type="button" aria-label="关闭段落笔记" title="关闭">×</button>
+        </header>
+        <div class="paragraph-note-dialog-body">
+          <blockquote id="paragraphNoteQuote"></blockquote>
+          <label for="paragraphNoteText">我的点评</label>
+          <textarea id="paragraphNoteText" maxlength="4000" rows="9"
+            placeholder="写下判断、疑问、实验启发或后续要核查的线索"></textarea>
+          <p id="paragraphNoteStatus" role="status" aria-live="polite"></p>
+        </div>
+        <footer class="paragraph-note-dialog-footer">
+          <button id="deleteParagraphNote" class="btn btn-danger-outline"
+            type="button">删除笔记</button>
+          <span></span>
+          <button id="cancelParagraphNote" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="saveParagraphNote" class="btn btn-primary"
+            type="submit">保存笔记</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="supplementalFigureImportDialog" class="supplemental-figure-import-dialog"
+      aria-labelledby="supplementalFigureImportTitle">
+      <form id="supplementalFigureImportForm" class="supplemental-figure-import-content"
+        novalidate>
+        <header class="supplemental-figure-import-header">
+          <div>
+            <p class="supplemental-figure-import-kicker">手动补全证据</p>
+            <h2 id="supplementalFigureImportTitle">新建补充 Figure</h2>
+            <p id="supplementalFigureImportDescription">可解析补充 PDF，或用图片、图注创建单张补充图。</p>
+          </div>
+          <button id="closeSupplementalFigureImport"
+            class="supplemental-figure-import-close" type="button"
+            aria-label="关闭新建补充 Figure" title="关闭">×</button>
+        </header>
+
+        <fieldset class="supplemental-figure-source-modes">
+          <legend>选择来源</legend>
+          <label data-supplemental-create-only>
+            <input type="radio" name="supplementalFigureSourceMode" value="pdf">
+            <span>PDF 解析</span>
+          </label>
+          <label>
+            <input type="radio" name="supplementalFigureSourceMode" value="manual" checked>
+            <span>图片 / 图注</span>
+          </label>
+        </fieldset>
+
+        <div class="supplemental-figure-source-panes">
+          <section data-supplemental-source-pane="pdf" aria-label="PDF 来源">
+            <strong>用 MinerU 在后台解析补充 PDF</strong>
+            <p>在这里选择已下载的补充 PDF。解析期间不会切换或覆盖当前正文页面。</p>
+            <label for="supplementalFigurePdfFile">选择补充材料 PDF</label>
+            <input id="supplementalFigurePdfFile" type="file"
+              accept="application/pdf,.pdf">
+            <p>MinerU 将识别图注、Figure 和 Panel；完成后会自动导入并报告缺失项。</p>
+          </section>
+          <section data-supplemental-source-pane="manual" aria-label="Figure 图片或图注来源" hidden>
+            <div class="supplemental-figure-metadata-grid">
+              <label for="supplementalFigureKind">Figure 类型
+                <select id="supplementalFigureKind">
+                  <option value="main">主图</option>
+                  <option value="supplemental" selected>补充图</option>
+                </select>
+              </label>
+              <label for="supplementalFigureLabel">Figure 编号
+                <input id="supplementalFigureLabel" type="text" maxlength="40"
+                  placeholder="例如 Figure S2">
+              </label>
+              <label for="supplementalFigureSourcePage">原 PDF 页码（可选）
+                <input id="supplementalFigureSourcePage" type="number" min="1" max="100000"
+                  inputmode="numeric" placeholder="例如 8">
+              </label>
+            </div>
+            <p>页码按 PDF 阅读器显示的页数填写；图解卡片可据此跳回原 PDF 页面。</p>
+            <label for="supplementalFigureImageFile">选择 Figure 图片</label>
+            <input id="supplementalFigureImageFile" type="file"
+              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+            <div id="supplementalFigurePasteTarget" class="supplemental-figure-paste-target"
+              tabindex="0">点击此处后按 Ctrl+V，可直接粘贴剪贴板图片</div>
+            <p id="supplementalFigureSelectedImage" class="supplemental-figure-selected-image">
+              未选择图片；也可以只填写图注。
+            </p>
+            <label for="supplementalFigureImageCaption">图注（可选）</label>
+            <textarea id="supplementalFigureImageCaption" rows="8" maxlength="8000"
+              placeholder="例如：Figure 3. (A) ... (B) ..."></textarea>
+            <p>图片和图注至少提供一种；图片支持 PNG、JPEG、WebP，最大 20 MiB。</p>
+          </section>
+        </div>
+
+        <p id="supplementalFigureImportStatus" class="supplemental-figure-import-status"
+          role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+        <footer class="supplemental-figure-import-footer">
+          <button id="cancelSupplementalFigureImport" class="btn btn-secondary"
+            type="button">取消</button>
+          <button id="submitSupplementalFigureImport" class="btn btn-primary"
+            type="submit">继续</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="clearManualDialog" class="confirmation-dialog"
+        aria-labelledby="clearManualTitle" aria-describedby="clearManualDescription">
+        <form method="dialog" class="confirmation-dialog-content">
+            <h2 id="clearManualTitle">清除本文手动标注？</h2>
+            <p id="clearManualDescription">这会删除本文保存的手动标注，并移除页面上的荧光笔高亮。</p>
+            <div class="confirmation-dialog-actions">
+                <button id="cancelClearManual" class="btn btn-secondary" value="cancel">取消</button>
+                <button id="confirmClearManual" class="btn btn-danger" value="default">确认清除</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="core/cache-planner.js"></script>
+    <script src="core/privacy-sanitizer.js"></script>
+    <script src="core/article-workspace.js"></script>
+    <script src="core/article-workspace-save.js"></script>
+    <script src="core/article-chat.js"></script>
+    <script src="core/article-chat-web-sources.js"></script>
+    <script src="core/article-archive.js"></script>
+    <script src="core/article-chat-citations.js"></script>
+    <script src="core/abbreviation-extractor.js"></script>
+    <script src="core/research-logic-map.js"></script>
+    <script src="core/panel-ledger.js"></script>
+    <script src="core/evidence-first-mechanism.js"></script>
+    <script src="core/cross-figure-logic.js"></script>
+    <script src="core/panel-context-guard.js"></script>
+    <script src="core/tab-activation.js"></script>
+    <script src="core/pdf-workspace.js"></script>
+  <script src="core/supplemental-materials.js"></script>
+  <script src="core/supplemental-pdf-import-store.js"></script>
+    <script src="core/tab-messenger.js"></script>
+    <script src="core/highlight-presentation.js"></script>
+    <script src="core/keyboard-shortcuts.js"></script>
+    <script src="core/reading-tools.js"></script>
+    <script src="core/literature-note-format.js"></script>
+    <script src="core/literature-note-renderer.js"></script>
+    <script src="core/literature-note-sources.js"></script>
+    <script src="core/literature-note-source-storage.js"></script>
+    <script src="core/literature-note-source-editor.js"></script>
+    <script src="core/literature-note-export.js"></script>
+    <script src="core/literature-note-editor.js"></script>
+    <script src="core/i18n.js"></script>
+    <script src="core/figure-extractor.js"></script>
+    <script src="core/figure-analysis.js"></script>
+    <script src="core/user-data-database.js"></script>
+    <script src="core/directory-sync.js"></script>
+    <script src="core/export-bundle.js"></script>
+    <script src="core/mechanism-network.js"></script>
+    <script src="core/figure-workspace.js"></script>
+    <script src="core/mechanism-pending-preview.js"></script>
+    <script src="core/manual-annotations.js"></script>
+    <script src="vendor/mermaid/mermaid.min.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>

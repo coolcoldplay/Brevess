@@ -1,0 +1,3 @@
+benchmarks/baseline/** text eol=lf
+benchmarks/checkpoint2/split-manifest.json text eol=lf
+benchmarks/checkpoint2/split-manifest.lock text eol=lf

@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Author metadata fixture</title>
+<link rel="canonical" href="https://example.org/author-paper?id=1">
+<meta name="citation_title" content="Author metadata fixture">
+<meta name="citation_author" content="Ada Example"><meta name="citation_author" content="Bo Example"><meta name="citation_author" content="Cy Example">
+<meta name="citation_author_institution" content="Unassigned Institute: mapping unspecified">
+<script type="application/ld+json">{"@graph":[{"@type":"ScholarlyArticle","@id":"https://example.org/author-paper?id=1","headline":"Author metadata fixture","author":[{"@type":"Role","roleName":"Corresponding author","author":{"@id":"#ada"}},{"name":"Bo Example","affiliation":[{"name":"Institute B"},{"name":"Institute C"}]}]},{"@type":"Person","@id":"#ada","name":"Ada Example","affiliation":{"name":"Institute A"}},{"@type":"ScholarlyArticle","@id":"https://example.org/related-paper","headline":"Unrelated recommendation","author":{"name":"Wrong Author"}}]}</script>
+<script type="application/ld+json">invalid JSON</script>
+</head><body><article itemscope itemtype="https://schema.org/ScholarlyArticle" itemid="https://example.org/author-paper?id=1">
+<h1 itemprop="headline">Author metadata fixture</h1>
+<span itemprop="author"><span itemprop="name">Bo Example</span><a href="#aff2">2</a><a href="#cor2">Correspondence</a></span>
+<details id="affiliations"><summary>Affiliations &amp; Notes</summary><p id="aff2">Institute B, Division of Biology</p><p id="cor2">Corresponding author: Bo Example. Public research contact.</p></details>
+<p>Results: the same article text remains unchanged.</p></article>
+<article itemscope itemtype="https://schema.org/ScholarlyArticle" itemid="https://example.org/related-paper"><h2 itemprop="headline">Related paper</h2><span itemprop="author"><span itemprop="name">Cy Example</span><span itemprop="affiliation">Wrong Related Institute</span>Corresponding author</span></article>
+<article itemscope itemtype="https://schema.org/ScholarlyArticle" itemid="https://example.org/author-paper?id=2"><h2 itemprop="headline">Same-path different article</h2><span itemprop="author"><span itemprop="name">Ada Example</span><span itemprop="affiliation">Wrong Query Institute</span></span></article></body></html>

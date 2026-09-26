@@ -1,0 +1,13 @@
+{
+  "name": "PDFFigures2",
+  "version": "0.1.0",
+  "repository": "https://github.com/allenai/pdffigures2",
+  "commit": "3d7ad46753d4a315cccd1c2bcab398380e88c534",
+  "jarSha256": "61b97c6a456b8c993b6c716d0a5f83177dae4521242160f65a51f2ad72459a48",
+  "imageIo": {
+    "version": "1.4.0",
+    "coreSha256": "8ad3c68e9efffb10ac87ff8bc589adf64b04a729c5194c079efd0643607fd72a",
+    "jpeg2000Sha256": "07fb6e3a3040122b846c5e52520033175c3251e2ec8830df82f87cb21f388bb1"
+  },
+  "license": "Apache-2.0"
+}

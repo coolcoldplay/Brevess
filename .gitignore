@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Generated builds and archives
+dist/
+output/
+qa-artifacts/
+发布/
+*.zip
+native-host/bin/*.blob
+native-host/bin/*.exe
+native-host/pdffigures2/pdffigures2.jar
+native-host/runtime/
+*.crx
+*.sha256.txt
+
+# Browser automation state and local agent state
+.playwright-cli/
+.superpowers/
+.codex_tmp/
+playwright-report/
+test-results/
+tmp/
+
+# Private authoring and one-off local QA artifacts
+docs/social/
+docs/prompt-review/
+design-qa.md
+scripts/local-*
+scripts/private-*
+
+# Coverage and logs
+coverage/
+*.log
+__pycache__/
+*.py[cod]
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+

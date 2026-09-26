@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "companionDocumentationFiles": ["LICENSE", "THIRD_PARTY_NOTICES.md", "OPEN_SOURCE.md", "CODEX_LOCAL_SETUP.md"],
+  "browserRootFiles": [
+    "manifest.json",
+    "background.js",
+    "content.js",
+    "content.css",
+    "semantic-find-content.js",
+    "semantic-find-launcher.js",
+    "semantic-find-controller.js",
+    "semantic-find.css",
+    "page-load-indicator-content.js",
+    "popup.html",
+    "popup.js",
+    "popup.css",
+    "ui-swiss.css",
+    "action-popup.html",
+    "action-popup.js",
+    "action-popup.css",
+    "logic-map.html",
+    "logic-map.js",
+    "logic-map.css",
+    "pdf-reader.html",
+    "pdf-reader.js",
+    "pdf-reader-ui.js",
+    "pdf-reader-notices.js",
+    "pdf-reader.css",
+    "pdf-native-reader.mjs",
+    "offline-reader.html",
+    "offline-reader.js",
+    "offline-reader.css",
+    "options.html",
+    "options.js",
+    "options.css",
+    "options-local-library.js",
+    "options-local-library.css",
+    "offscreen.html",
+    "offscreen.js",
+    "offscreen-network-worker.js",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "OPEN_SOURCE.md"
+  ],
+  "browserDirectories": [
+    "core",
+    "providers",
+    "vendor",
+    "icons",
+    "_locales"
+  ],
+  "localDocumentationFiles": [
+    "README.md",
+    "INSTALL.md",
+    "BUILD39_OPTIMIZATION.md",
+    "CODEX_LOCAL_SETUP.md"
+  ],
+  "localDocumentationDirectories": [
+    "docs/changelog"
+  ],
+  "nativeHostFiles": [
+    "native-host/host.js",
+    "native-host/install.ps1",
+    "native-host/login.ps1",
+    "native-host/uninstall.ps1",
+    "native-host/catalog-extension-ids.txt",
+    "native-host/Install-Brevess-Codex-Bridge.cmd",
+    "native-host/Uninstall-Brevess-Codex-Bridge.cmd",
+    "native-host/README-STORE.md",
+    "native-host/bin/brevess-codex-host.exe",
+    "native-host/runtime-version.json"
+  ],
+  "nativeHostDirectories": [
+    "native-host/pdffigures2",
+    "native-host/runtime"
+  ]
+}

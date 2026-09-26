@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extensionName__",
+  "version": "1.0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA+B4vL4I4bJQVURPfrGIV4YjSJ5h0NQBP3NY72ZyN26DX0ffpmTMlRpc1DKaNj21pjN46/Ig1MYu2b3ReoBdQKgzrKMDPACu1GoOOnF37ei79fJXPCovCaMRBXQrEYgsaYCf6RmTlkU98qQQjV6o211akZO0l7Ba4OrNQzUzULFP+AF88rl45cpjRtVFgsM6/duDnnQVWWCaKv1nLtvJvNRfO2AsydO0354f/iI3Ikirpx61xxWP0y/6uElWsqGI6Sm135IG8E+ahF4juNciziGmX+cgRDz2QN+KAdxL2GVewdmTU5AHC2/r9N5kf5JQkvYKb+5Ar0nLQBb31/ChmEQIDAQAB",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "zh_CN",
+  "homepage_url": "https://github.com/coolcoldplay/Brevess",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "unlimitedStorage",
+    "scripting",
+    "offscreen",
+    "sidePanel",
+    "nativeMessaging",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://api.typesafe.ai/*",
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "file:///*"
+  ],
+  "content_scripts": [{
+    "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "file:///*"],
+    "js": ["semantic-find-launcher.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_popup": "action-popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css", "semantic-find.css", "vendor/phosphor/Phosphor.woff2"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

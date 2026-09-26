@@ -1,0 +1,4 @@
+# Microsoft Edge Add-ons / local stable extension ID
+finhfnjbpidfakpmkghkfjlfcfpoandh
+# Microsoft Edge Add-ons catalog CRX ID
+lamcjfhklhdljkhmcadnkcbngdlboihp
