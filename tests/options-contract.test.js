@@ -585,7 +585,7 @@ test('feedback email lives in settings instead of the analysis workspace', () =>
   const options = read('options.html');
   const popup = read('popup.html');
   assert.match(options, /id="support"/);
-  assert.match(options, /https:\/\/github\.com\/coolcoldplay\/Brevess\/issues/);
+  assert.match(options, /mailto:brevess0729@163\.com/);
   assert.doesNotMatch(popup, /mailto:|contact-email/);
 });
 

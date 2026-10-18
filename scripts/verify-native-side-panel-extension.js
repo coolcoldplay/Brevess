@@ -4900,7 +4900,7 @@ async function configureQaCrossFigureProvider(extensionPage, baseUrl) {
   const migrationControls = await options.locator(
     '#exportMigrationBundle,#importMigrationBundle,#confirmMigrationImport'
   ).count();
-  const supportEmail = await options.locator('#support a[href$="/issues"]').first().textContent();
+  const supportEmail = await options.locator('#support a[href^="mailto:"]').textContent();
   await options.waitForFunction(() =>
     document.querySelectorAll('#providerId option').length >= 5 &&
     document.querySelectorAll('#apiProfileList [data-profile-id]').length >= 1
@@ -7019,7 +7019,7 @@ async function configureQaCrossFigureProvider(extensionPage, baseUrl) {
     !results.lateChatDeletionQa.staleTextInSidePanel &&
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
-    supportEmail?.includes('GitHub Issues') &&
+    supportEmail?.trim() === 'brevess0729@163.com' &&
     results.migrationDirectoryQa.permission === 'granted' &&
     results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
     results.migrationDirectoryQa.portableState === 'ready' &&

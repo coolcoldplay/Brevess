@@ -134,7 +134,7 @@
 
 遇到问题或有建议？欢迎联系！
 
-**问题与建议**: <https://github.com/coolcoldplay/Brevess/issues>
+**📮 邮箱**: brevess0729@163.com
 
 您的反馈是改进插件的动力！
 
@@ -177,6 +177,6 @@
 **版本**: v1.1.0  
 **发布日期**: 2024年11月  
 **维护**: Brevess contributors
-**联系**: <https://github.com/coolcoldplay/Brevess/issues>
+**联系**: brevess0729@163.com
 
 **祝您的科研工作顺利！📚✨**

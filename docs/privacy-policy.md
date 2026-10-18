@@ -195,6 +195,6 @@ subject to the updated policy.
 
 ## 10. Contact / 联系方式
 
+- Email: [brevess0729@163.com](mailto:brevess0729@163.com)
 - Issues: <https://github.com/coolcoldplay/Brevess/issues>
-- Security and privacy reports: use the repository Security tab
 - Source: <https://github.com/coolcoldplay/Brevess>

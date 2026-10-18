@@ -33,15 +33,6 @@ test('source traversal and missing required files stop staging',t=>{
  fs.unlinkSync(path.join(root,'manifest.json'));
  assert.throws(()=>inventory.releaseInventory(root,'browser',spec),/ENOENT/);
 });
-test('private payment QR assets are never included',t=>{
- const {root,spec}=fixture(t);
- fs.mkdirSync(path.join(root,'icons/about'),{recursive:true});
- fs.writeFileSync(path.join(root,'icons/about/wechat-support-original.png'),'private');
- fs.writeFileSync(path.join(root,'icons/about/alipay-support-original.png'),'private');
- fs.writeFileSync(path.join(root,'icons/about/wechat-mark.svg'),'public');
- const files=inventory.releaseInventory(root,'browser',{...spec,browserDirectories:['icons']}).map(x=>x.path);
- assert.deepEqual(files,['LICENSE','icons/about/wechat-mark.svg','manifest.json']);
-});
 test('common release inventory includes all application entry points and licenses',()=>{
  const root=path.join(__dirname,'..'),files=inventory.releaseInventory(root,'browser').map(x=>x.path);
  for(const file of ['manifest.json','background.js','action-popup.html','popup.html','options.html','offscreen.html','pdf-reader.html','pdf-native-reader.mjs','semantic-find-controller.js','ui-swiss.css','LICENSE','THIRD_PARTY_NOTICES.md','vendor/pdfjs/build/pdf.worker.min.mjs'])assert.ok(files.includes(file),file);

@@ -492,7 +492,7 @@ figure\s*\d+\s*shows
 
 如有任何问题或建议，欢迎联系：
 
-💬 **问题与建议**: <https://github.com/coolcoldplay/Brevess/issues>
+📧 **邮箱**: brevess0729@163.com
 
 我会尽快回复您的问题！
 
@@ -513,4 +513,4 @@ figure\s*\d+\s*shows
 
 ---
 
-*维护: Brevess contributors | 版本: v1.1.0 | 联系: <https://github.com/coolcoldplay/Brevess/issues>*
+*维护: Brevess contributors | 版本: v1.1.0 | 联系: brevess0729@163.com*

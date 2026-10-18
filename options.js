@@ -5968,10 +5968,10 @@ async function copySupportEmail() {
   button.disabled = true;
   try {
     if (typeof navigator.clipboard?.writeText !== 'function') throw new Error('Clipboard unavailable');
-    await navigator.clipboard.writeText('https://github.com/coolcoldplay/Brevess/issues');
-    status.textContent = '反馈链接已复制。'; status.dataset.state = 'success';
+    await navigator.clipboard.writeText('brevess0729@163.com');
+    status.textContent = '邮箱已复制。'; status.dataset.state = 'success';
   } catch (_) {
-    status.textContent = '复制未完成；可选中链接后手动复制。'; status.dataset.state = 'error';
+    status.textContent = '复制未完成；可选中邮箱后手动复制。'; status.dataset.state = 'error';
   } finally { button.disabled = false; }
 }
 
