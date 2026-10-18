@@ -1,8 +1,9 @@
-# Brevess 1.0.1
+# Brevess 1.0.1 · R36
 
 `Brevess`（Brevity · Evidence · Essence）是一个 Chrome / Microsoft Edge Manifest V3
 论文阅读扩展。它使用原生浏览器侧栏，提供论文导航、离线正则与可选 LLM
-证据高亮、Figure/Panel 解读、全文问答和本地工作区。
+证据高亮、Figure/Panel 解读、全文问答、本地工作区，以及从文献雷达、文献总库到
+假说梳理和组图规划的课题工作台。
 
 - [从 GitHub 下载、安装到完整使用教程](使用教程.md)
 - [下载最新正式版](https://github.com/coolcoldplay/Brevess/releases/latest)
@@ -32,6 +33,23 @@
 - 单篇文献档案：高亮、备注、分析模式、正则/LLM 结果、证据台账、层级大纲、逐段摘要和 Figure 解读可保存为本地 JSON；重装后可导入并恢复到同一在线网页。
 - 双语界面：设置页和侧栏顶部都可在中文与 English 之间切换，选择会全局保存。
 - 整机迁移：设置页可导出/导入完整配置、规则、提示词、Provider 配置、API Key、文献记录和反馈语料；导入后需重新选择本地目录。
+
+## 课题工作台与 MCP
+
+课题工作台把研究动线组织为“文献雷达 → 文献总库 → 假说梳理 → 组图规划”：
+
+- 文献雷达按 PubMed 固定检索条件持续发现新论文，并保留基线、已读状态和摘要来源。
+- 文献总库汇总本机已保存文献和雷达已读元数据；同一论文按 PMID、DOI 和规范标题合并。
+- 假说梳理支持机制节点、支持/反对素材、证据块、正交连线、端点调整和撤销恢复。
+- 组图规划支持 Figure、Panel、证据块、内容规划层、自动排版和方案分支。
+- “文件”菜单可导出/导入假说、组图方案、文献雷达和文献总库；跨设备导入会重新映射实体 ID，
+  只传输元数据、标签和来源清单，不包含 PDF 字节或 API Key。
+- [MCP](mcp/README.md) 可把工作台操作暴露给外部 Agent。写操作仍需本地人审范围、
+  CAS 版本校验和逐次确认；删除、凭据和系统选择器不会由 Agent 绕过。
+
+课题工作台入口为 [workbench/index.html](workbench/index.html)。MCP 的连接方式、
+工具清单和审批边界见 [MCP 说明](mcp/README.md) 与
+[能力矩阵](docs/mcp/CAPABILITY-MATRIX.md)。
 
 ## 安装
 
