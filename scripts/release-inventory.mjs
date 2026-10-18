@@ -8,6 +8,7 @@ export const RELEASE_INVENTORY = Object.freeze(JSON.parse(fs.readFileSync(
 )));
 const PROFILES = new Set(['full', 'browser', 'store', 'companion']);
 const FORBIDDEN_PATH = /(^|\/)(?:\.git|node_modules|tests?|scripts?|output|dist|tmp|qa-artifacts|test-results|browser-profile)(\/|$)|\.(?:zip|crx|pdf|webm|log|map|pdb|pem|key)$|(?:^|\/)\.env(?:\.|$)|\.(?:test|spec)\.[cm]?js$/i;
+const PRIVATE_RELEASE_ASSET = /^icons\/about\/(?:alipay|wechat)-support-original\.png$/i;
 
 function safeRelative(value) {
   const name = String(value).replaceAll('\\', '/');
@@ -56,7 +57,7 @@ export function releaseInventory(rootDir = DEFAULT_ROOT, profile = 'full', spec 
     }
   }
   for (const directory of directories) walk(directory);
-  return [...new Set(files)].sort().map(source => {
+  return [...new Set(files)].filter(source => !PRIVATE_RELEASE_ASSET.test(source)).sort().map(source => {
     const absolute = verify(source), stat = fs.statSync(absolute);
     if (!stat.isFile()) throw new Error(`RELEASE_FILE_REQUIRED:${source}`);
     const destination = profile === 'companion' ? source.replace(/^native-host\//, '') : source;
