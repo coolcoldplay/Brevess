@@ -48,6 +48,168 @@
     return `${JSON.stringify(cloneExportValue(value), null, 2)}\n`;
   }
 
+  function exportOwnData(value, key) {
+    if (!value || typeof value !== 'object') return undefined;
+    try {
+      if (Array.isArray(value)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor && Object.hasOwn(descriptor, 'value')
+        ? descriptor.value : undefined;
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  function exportArray(value, maximum) {
+    let isArray;
+    let lengthDescriptor;
+    try {
+      isArray = Array.isArray(value);
+      lengthDescriptor = isArray
+        ? Object.getOwnPropertyDescriptor(value, 'length') : null;
+    } catch (_) {
+      return null;
+    }
+    const length = lengthDescriptor && Object.hasOwn(lengthDescriptor, 'value')
+      ? lengthDescriptor.value : -1;
+    if (!isArray || !Number.isSafeInteger(length) || length < 0 || length > maximum) {
+      return null;
+    }
+    const output = [];
+    for (let index = 0; index < length; index += 1) {
+      let descriptor;
+      try { descriptor = Object.getOwnPropertyDescriptor(value, String(index)); }
+      catch (_) { return null; }
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+      output.push(descriptor.value);
+    }
+    return output;
+  }
+
+  function graphExportText(value, maximum) {
+    if (typeof value !== 'string' || value.length > maximum * 20) return '';
+    return Array.from(value.normalize('NFKC')
+      .replace(/[\u0000-\u001F\u007F]/gu, ' ')
+      .replace(/\s+/gu, ' ').trim()).slice(0, maximum).join('');
+  }
+
+  function graphExportId(value) {
+    const id = graphExportText(value, 160);
+    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u.test(id) ? id : '';
+  }
+
+  function graphExportLabel(value, fallback = '') {
+    const source = graphExportText(value, 2400);
+    const label = Array.from(source
+      .replace(/<[\s\S]*?>/gu, ' ')
+      .replace(/(?:javascript|vbscript|data)\s*:/giu, ' ')
+      .replace(/%%/gu, ' ')
+      .replace(/\b(?:click|classDef|linkStyle|subgraph|flowchart|graph)\b/giu, ' ')
+      .replace(/\b(?:Figure|Fig\.?|Panel)\s*(?:S?\d+[A-Z]?|[A-Z]\d*)\b/giu, ' ')
+      .replace(/["'`\[\]{}<>|;]/gu, ' ')
+      .replace(/\s+/gu, ' ').trim()).slice(0, 120).join('').trim();
+    return label || fallback;
+  }
+
+  function serializeMechanismGraphExport(value) {
+    if (exportOwnData(value, 'schema') !== 'brevess.mechanism-graph' ||
+        exportOwnData(value, 'schemaVersion') !== 1) {
+      throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    }
+    const rawNodes = exportArray(exportOwnData(value, 'nodes'), 64);
+    const rawEdges = exportArray(exportOwnData(value, 'edges'), 64);
+    const rawComponents = exportArray(exportOwnData(value, 'components'), 64);
+    const rawDisconnected = exportArray(
+      exportOwnData(value, 'disconnectedEvidence'), 64
+    );
+    const rawExclusions = exportArray(exportOwnData(value, 'exclusions'), 16);
+    if (!rawNodes || !rawEdges || !rawComponents || !rawDisconnected || !rawExclusions) {
+      throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    }
+    const nodes = rawNodes.map(raw => ({
+      id: graphExportId(exportOwnData(raw, 'id')),
+      label: graphExportLabel(exportOwnData(raw, 'label'))
+    }));
+    const nodeIds = new Set(nodes.map(node => node.id));
+    if (!nodes.length || nodeIds.size !== nodes.length ||
+        nodes.some(node => !node.id || !node.label)) {
+      throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    }
+    const evidenceCodes = new Set(['S', 'N', 'R', 'E', 'I', 'A', 'O', '0', 'C', '?']);
+    const edges = rawEdges.map(raw => {
+      const codes = exportArray(exportOwnData(raw, 'codes'), 10);
+      const result = {
+        id: graphExportId(exportOwnData(raw, 'id')),
+        from: graphExportId(exportOwnData(raw, 'from')),
+        to: graphExportId(exportOwnData(raw, 'to')),
+        label: graphExportLabel(exportOwnData(raw, 'label')),
+        lineStyle: exportOwnData(raw, 'lineStyle') === 'dashed' ? 'dashed' : 'solid',
+        contested: exportOwnData(raw, 'contested') === true,
+        codes: codes ? codes.filter(code => evidenceCodes.has(code)) : [],
+        polarity: ['positive', 'negative'].includes(exportOwnData(raw, 'polarity'))
+          ? exportOwnData(raw, 'polarity') : 'neutral'
+      };
+      if (!result.id || !nodeIds.has(result.from) || !nodeIds.has(result.to) ||
+          result.from === result.to || !result.label) {
+        throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+      }
+      return result;
+    });
+    const edgeIds = new Set(edges.map(edge => edge.id));
+    if (edgeIds.size !== edges.length) throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    const safeIdArray = (value, allowed, maximum) => {
+      const rows = exportArray(value, maximum);
+      if (!rows) throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+      const ids = rows.map(graphExportId);
+      if (new Set(ids).size !== ids.length || ids.some(id => !allowed.has(id))) {
+        throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+      }
+      return ids;
+    };
+    const components = rawComponents.map(raw => ({
+      componentId: graphExportId(exportOwnData(raw, 'componentId')),
+      nodeIds: safeIdArray(exportOwnData(raw, 'nodeIds'), nodeIds, 64),
+      edgeIds: safeIdArray(exportOwnData(raw, 'edgeIds'), edgeIds, 64)
+    }));
+    if (components.some(component => !component.componentId)) {
+      throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    }
+    const disconnectedEvidence = rawDisconnected.map(raw => {
+      const codes = exportArray(exportOwnData(raw, 'codes'), 10);
+      const claimCount = exportOwnData(raw, 'claimCount');
+      const result = {
+        nodeId: graphExportId(exportOwnData(raw, 'nodeId')),
+        label: graphExportLabel(exportOwnData(raw, 'label')),
+        codes: codes ? codes.filter(code => evidenceCodes.has(code)) : [],
+        claimCount: Number.isSafeInteger(claimCount) && claimCount >= 0 ? claimCount : 0
+      };
+      if (!result.nodeId || !result.label) throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+      return result;
+    });
+    const exclusions = rawExclusions.map(raw => {
+      const count = exportOwnData(raw, 'count');
+      if (exportOwnData(raw, 'reason') !== 'source_backed_schematic' ||
+          !Number.isSafeInteger(count) || count < 1) {
+        throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+      }
+      return { reason: 'source_backed_schematic', count };
+    });
+    return JSON.stringify({
+      schema: 'brevess.mechanism-graph', schemaVersion: 1,
+      nodes, edges, components, disconnectedEvidence, exclusions
+    });
+  }
+
+  function parseMechanismGraphExport(value) {
+    if (typeof value !== 'string' || value.length < 2 || value.length > 1_000_000) {
+      throw new Error('MECHANISM_GRAPH_EXPORT_INVALID');
+    }
+    let parsed;
+    try { parsed = JSON.parse(value); }
+    catch (_) { throw new Error('MECHANISM_GRAPH_EXPORT_INVALID'); }
+    return JSON.parse(serializeMechanismGraphExport(parsed));
+  }
+
   function escapeHtml(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
@@ -190,6 +352,7 @@
       '',
       String(figure.caption || '无'),
       '',
+      ...figurePanelEightFieldMarkdown(figure),
       '## 本图全部解读数据',
       '',
       '```json',
@@ -206,8 +369,78 @@
     ].join('\n');
   }
 
-  function buildPptAgentPrompt(bundle = {}) {
+  function normalizePptExportCustomization(input = {}) {
+    const bounded = (key, fallback, maximum) => {
+      const value = exportOwnData(input, key);
+      return typeof value === 'string'
+        ? value.normalize('NFC').replace(/\r\n?/g, '\n')
+          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+          .trim().slice(0, maximum) || fallback
+        : fallback;
+    };
+    return {
+      language: bounded('language', '中文', 100),
+      durationMinutes: bounded('durationMinutes', '25–35', 100),
+      slideCount: bounded('slideCount', '24–34', 100),
+      audience: bounded('audience', '科研组会 / Journal Club', 1000),
+      template: bounded('template', '', 2000),
+      focusFigures: bounded('focusFigures', '', 2000),
+      narration: exportOwnData(input, 'narration') === true,
+      extraInstructions: bounded('extraInstructions', '', 12000)
+    };
+  }
+
+  function buildPptExportPreview(bundle = {}, options = {}) {
+    const customization = normalizePptExportCustomization(
+      options.customization || bundle.customization
+    );
+    const prompt = Object.hasOwn(options, 'prompt')
+      ? options.prompt : buildPptAgentPrompt(bundle, { customization });
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      throw new Error('PPT_EXPORT_PROMPT_REQUIRED');
+    }
+    if (prompt.length > 200000) throw new Error('PPT_EXPORT_PROMPT_TOO_LARGE');
+    const entries = Array.isArray(options.entries) ? options.entries : [];
+    if (entries.length > 65535) throw new Error('INVALID_ZIP_ENTRY_COUNT');
+    const seen = new Set();
+    const promptPath = 'PROMPT_FOR_CODEX_OR_AGENT.md';
+    const files = entries.map(entry => {
+      const path = sanitizeZipPath(entry?.path);
+      if (seen.has(path)) throw new Error(`DUPLICATE_ZIP_PATH:${path}`);
+      seen.add(path);
+      const data = path === promptPath ? prompt : entry?.data;
+      const byteLength = typeof data === 'string' ? encoder.encode(data).length
+        : data instanceof Uint8Array || data instanceof ArrayBuffer ? data.byteLength
+          : typeof Blob !== 'undefined' && data instanceof Blob ? data.size : null;
+      return {
+        path, byteLength,
+        kind: /\.(?:png|jpe?g|gif|webp|avif|bmp|tiff?)$/i.test(path)
+          ? 'image' : /\.json$/i.test(path) ? 'json' : /\.md$/i.test(path) ? 'markdown' : 'file',
+        editable: path === promptPath
+      };
+    });
     const figures = Array.isArray(bundle.figures) ? bundle.figures : [];
+    return {
+      schemaVersion: 1,
+      title: String(bundle.title || ''),
+      url: String(bundle.url || ''),
+      files,
+      figureCount: figures.length,
+      imageCount: figures.reduce((sum, figure) => sum +
+        (Array.isArray(figure?.imageFiles) ? figure.imageFiles.length : 0), 0),
+      missingImageFigureIds: Array.isArray(bundle.missingImageFigureIds)
+        ? [...bundle.missingImageFigureIds] : [],
+      customization,
+      prompt,
+      promptPath
+    };
+  }
+
+  function buildPptAgentPrompt(bundle = {}, options = {}) {
+    const figures = Array.isArray(bundle.figures) ? bundle.figures : [];
+    const customization = normalizePptExportCustomization(
+      options.customization || bundle.customization
+    );
     return [
       '# 正式 Journal Club PPT 制作任务（给 Codex 或其他 AI）',
       '',
@@ -217,8 +450,21 @@
       '你收到的是 Brevess 导出的可复核材料包。目标不是把论文内容堆进幻灯片，' +
       '而是制作一份可以直接用于正式 Journal Club 的、以原论文 Panel 为主要视觉证据的可编辑 PowerPoint。',
       '',
-      '默认使用中文汇报，按 25–35 分钟设计；页数由证据密度决定，通常为 24–34 页。' +
+      `默认使用${customization.language}汇报，按 ${customization.durationMinutes} 分钟设计；` +
+      `页数由证据密度决定，通常为 ${customization.slideCount} 页。` +
       '如果用户另行给出时长、语言、模板或页数，以用户要求为准。',
+      '',
+      '## 用户自定义要求',
+      '',
+      `- 汇报语言：${customization.language}`,
+      `- 预计时长：${customization.durationMinutes} 分钟`,
+      `- 目标页数：${customization.slideCount} 页`,
+      `- 受众：${customization.audience}`,
+      `- 模板与版式要求：${customization.template || '采用下文默认版式'}`,
+      `- 重点 Figure 或问题：${customization.focusFigures || '按全文证据链组织'}`,
+      `- 口播音频：${customization.narration ? '需要；环境支持时生成并验证同步' : '未要求'}`,
+      customization.extraInstructions
+        ? `- 其他要求：\n${customization.extraInstructions}` : '- 其他要求：无',
       '',
       '## 开始前必须读取',
       '',
@@ -312,7 +558,8 @@
       '',
       '## 四、每一页都要有可直接讲述的演讲备注',
       '',
-      '备注必须写成自然、连贯、可直接朗读的学术汇报口语，不是要点列表，也不是对页面文字的机械复述。' +
+      `备注必须使用${customization.language}写成自然、连贯、可直接朗读的学术汇报口语，` +
+      '不是要点列表，也不是对页面文字的机械复述。' +
       '标题页和结束页也要有简短开场或收束语。整体口吻应像研究者在组会上带着听众读一篇论文：' +
       '有承接、有停顿、有取舍，不要每页都用同一种模板句开头，也不要逐字朗读图注。',
       '',
@@ -329,7 +576,9 @@
       '先准确解释作者证据，再指出边界；没有依据时不要为了显得“批判”而硬挑问题。',
       '6. 说明这一页在全文证据链中的作用，并自然引出下一页的问题。',
       '',
-      '结果页备注通常为 180–350 个中文字符，复杂实验可更长；背景、过渡和总结页通常为 100–220 个中文字符。' +
+      (/^(?:中文|汉语|Chinese|zh(?:-[A-Za-z]+)?)$/i.test(customization.language)
+        ? '结果页备注通常为 180–350 个中文字符，复杂实验可更长；背景、过渡和总结页通常为 100–220 个中文字符。'
+        : '结果页备注通常支持 60–120 秒讲述，背景、过渡和总结页通常支持 30–60 秒；根据汇报语言和总时长调整。') +
       '优先保证逻辑完整，不要用固定套话填充字数。不得编造样本量、统计值、剂量、时间或作者未报告的信息。',
       '',
       '在每页备注末尾另起一段添加不需要朗读的 `[Source trace]`，记录原图路径、Figure/Panel 编号，' +
@@ -337,8 +586,9 @@
       '',
       '## 五、可选口播音频与自动切页',
       '',
-      '如果用户要求语音讲解，且环境能够生成并嵌入音频，则用每页 `[Source trace]` 之前的口语讲稿生成一段独立中文语音。' +
-      '优先使用自然的中文神经网络语音；同时保留完整备注和无音频的可编辑版本。',
+      '如果用户要求语音讲解，且环境能够生成并嵌入音频，则用每页 `[Source trace]` 之前的口语讲稿' +
+      `生成一段独立${customization.language}语音。优先使用自然的${customization.language}神经网络语音；` +
+      '同时保留完整备注和无音频的可编辑版本。',
       '',
       '音频同步必须满足以下硬性规则：',
       '',
@@ -654,7 +904,32 @@
   }
 
   function zoteroPanelRows(panel, followup) {
+    panel = panel && typeof panel === 'object' ? panel : {};
     const methodValues = zoteroPanelMethods(panel);
+    const project = globalThis.SciLLM?.createPanelEightFieldView ||
+      (typeof require === 'function' ? require('./figure-workspace.js').createPanelEightFieldView : null);
+    if (typeof project === 'function') {
+      const projected = project({ ...panel,
+        purpose: zoteroPanelField(panel, 'purpose', ['experimentalPurpose', 'aim']),
+        phenotypeName: zoteroPanelField(panel, 'phenotypeName', ['phenotype']),
+        methods: methodValues.filter(value => !value.startsWith('类别：')),
+        experimentalMethods: panel.experimentalMethods,
+        design: zoteroPanelField(panel, 'design', ['experimentalDesign']),
+        comparison: zoteroPanelField(panel, 'comparison', ['comparisonRelationship']),
+        directObservation: zoteroPanelField(panel, 'directObservation', ['observation', 'result']),
+        localInference: zoteroPanelField(panel, 'localInference', ['inference'])
+      });
+      return [...projected.map(field => [field.label, field.value?.length
+        ? (field.key === 'directObservation' ? `${field.value}\n${field.sourceLabel}` : field.value)
+        : field.emptyLabel || '未报告']),
+        ['笔记', zoteroFirstValue(panel, ['note'])],
+        ['旧论证角色', zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
+        ['方法类别（兼容保留）', zoteroDisplayToken(zoteroFirstValue(panel, ['methodCategory']))],
+        ['全文作用（兼容保留）', zoteroPanelField(panel, 'contribution', ['roleInArgument'])],
+        ['结论边界', zoteroFirstValue(panel, ['claimBoundary'])],
+        ['追问结论', zoteroFirstValue(followup, ['answer', 'summary'])],
+        ['追问边界', zoteroFirstValue(followup, ['claimBoundary', 'caveat'])]];
+    }
     return [
       ['论证角色', zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
       ['研究对象/表型', zoteroFirstValue(panel, ['phenotypeName', 'phenotype'])],
@@ -671,6 +946,37 @@
     ];
   }
 
+  function zoteroPanelField(panel, key, legacyKeys) {
+    return Object.hasOwn(panel, key) && panel[key] !== undefined
+      ? panel[key] : zoteroFirstValue(panel, legacyKeys);
+  }
+
+  function mergeExportPanelEvidence(previous = {}, incoming = {}) {
+    previous = previous && typeof previous === 'object' ? previous : {};
+    incoming = incoming && typeof incoming === 'object' ? incoming : {};
+    const result = { ...previous, ...incoming };
+    if (['directObservation', 'observation', 'result'].some(key => Object.hasOwn(incoming, key)) &&
+        !Object.hasOwn(incoming, 'observationSource')) result.observationSource = 'inference';
+    return result;
+  }
+
+  function figurePanelEightFieldMarkdown(figure) {
+    const analysis = figure.deep || figure.standard || {};
+    const byPanel = new Map((Array.isArray(analysis.panels) ? analysis.panels : [])
+      .filter(panel => panel && typeof panel === 'object' && !Array.isArray(panel))
+      .map((panel, index) => [zoteroPanelLabel(panel.panel || panel.panelId, String(index + 1)), panel]));
+    for (const [id, panel] of Object.entries(figure.panelAnalyses || {})) {
+      const label = zoteroPanelLabel(panel?.panel || panel?.panelId || id, id);
+      byPanel.set(label, mergeExportPanelEvidence(byPanel.get(label), panel));
+    }
+    return [...byPanel].flatMap(([id, panel]) => [
+      `## Panel ${id} 八字段`, '',
+      ...zoteroPanelRows(panel, figure.panelFollowups?.[id]).filter(([, value]) =>
+        value !== undefined && value !== null && value !== '').map(([label, value]) =>
+        `- ${label}：${Array.isArray(value) ? value.join('；') : String(value).replace(/\n/g, '；')}`), ''
+    ]);
+  }
+
   function zoteroFigureAnalysisHtml(figure) {
     const analysis = cloneExportValue(figure.deep || figure.standard || {});
     const panelAnalyses = cloneExportValue(figure.panelAnalyses || {});
@@ -682,7 +988,7 @@
     });
     Object.entries(panelAnalyses).forEach(([rawLabel, panel]) => {
       const label = zoteroPanelLabel(panel?.panel || panel?.panelId || rawLabel, rawLabel);
-      panelByLabel.set(label, { ...(panelByLabel.get(label) || {}), ...panel });
+      panelByLabel.set(label, mergeExportPanelEvidence(panelByLabel.get(label), panel));
     });
     Object.keys(panelFollowups).forEach(rawLabel => {
       const label = zoteroPanelLabel(rawLabel, rawLabel);
@@ -844,9 +1150,6 @@
       `<h2 id="sci-note-figure-${index + 1}">${
         escapeHtml(figure.figureLabel || figure.figureId || `Figure ${index + 1}`)
       }</h2>`,
-      figure.caption
-        ? `<p><strong>图注：</strong>${zoteroInlineMarkup(figure.caption)}</p>`
-        : '',
       zoteroFigureAnalysisHtml(figure)
     ].join('')).join('');
     const crossFigure = zoteroCrossFigureHtml(input.crossFigureLogic);
@@ -888,8 +1191,27 @@
     ].join('');
   }
 
-  // Kept for callers from older unpacked builds. New exports intentionally use
-  // two independent child notes through the functions above.
+  function buildZoteroReadingNoteHtml(input = {}) {
+    const annotations = (Array.isArray(input.annotations) ? input.annotations : []).filter(value => String(value.note || '').trim());
+    const snapshot = input.exportSnapshot;
+    const translations = snapshot?.version === 1 && Array.isArray(snapshot.translations) ? snapshot.translations : [];
+    if (!annotations.length && !translations.length && !snapshot) return '';
+    let source = '';
+    try { const url = new URL(String(input.url || '')); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) source = url.href; } catch (_) {}
+    return [
+      '<div data-sci-reader-note="reading-content"><h1>Brevess：高亮备注与译文</h1>',
+      `<h2>${escapeHtml(input.title || '')}</h2>`,
+      source ? `<p><a href="${escapeHtml(source)}">打开论文原网页</a></p>` : '',
+      snapshot ? `<p>${snapshot.status === 'complete' && !translations.some(value => value.partial)
+        ? '已确认译文已保留。' : '翻译尚未全部完成；仅保留已确认内容，未译部分仍为原文。'}</p>` : '',
+      ...annotations.map((value, index) => `<h3>备注 ${index + 1}</h3><blockquote>${escapeHtml(value.quote || '原句未提供')}</blockquote><p style="white-space:pre-wrap">${escapeHtml(value.note)}</p>`),
+      ...translations.map((value, index) => `<h3>译文 ${index + 1}${value.partial ? '（部分完成）' : ''}</h3><blockquote>${escapeHtml(value.sourceText || '')}</blockquote><p lang="zh" style="white-space:pre-wrap">${escapeHtml(value.translatedText || '')}</p>`),
+      zoteroNoteFooter(input)
+    ].join('');
+  }
+
+  // Kept for older callers. The enhanced entry uses independent figure/chat
+  // notes and an optional reading-content note through the functions above.
   function buildZoteroNoteHtml(input = {}) {
     return [
       buildZoteroFigureNoteHtml(input),
@@ -908,17 +1230,17 @@
       '',
       '## 文件',
       '',
-      '- `snapshot.html`：忠实保留出版社网页 HTML，只固化插件激活时的单栏结构、' +
-        '高亮、可点击备注和可获取的 Figure 高清原图；',
+      '- `snapshot.html`：保留出版社布局、高亮、备注正文与原句回链、已确认译文和可获取的 Figure 原图；部分翻译明确标记。',
       '- `notes/SCI-Reader-Figure-Interpretation.html`：主图串解、Figure 与 Panel 图解；',
       '- `notes/SCI-Reader-Fulltext-QA.html`：独立保存全文问答；',
+      ...(input.readingNoteIncluded ? ['- `notes/SCI-Reader-Reading-Content.html`：独立备份高亮备注、引用原句和已确认译文；'] : []),
       '- `metadata.json`：论文和导出信息。',
       '',
       '## 手工导入',
       '',
       '1. 在 Zotero 中先用浏览器 Connector 保存原论文，或新建网页条目。',
       '2. 将 `snapshot.html` 拖到该条目上作为附件。',
-      '3. 分别打开 `notes` 下的两个 HTML，复制正文并在 Zotero 条目下新建两个子笔记。',
+      '3. 分别打开 `notes` 下的 HTML，复制正文并在 Zotero 条目下新建对应子笔记。',
       ''
     ].join('\n');
   }
@@ -928,13 +1250,18 @@
     sanitizeZipPath,
     cloneExportValue,
     exportJson,
+    serializeMechanismGraphExport,
+    parseMechanismGraphExport,
     escapeHtml,
     crc32,
     createZipBlob,
     buildFigureMarkdown,
+    normalizePptExportCustomization,
+    buildPptExportPreview,
     buildPptAgentPrompt,
     buildZoteroFigureNoteHtml,
     buildZoteroChatNoteHtml,
+    buildZoteroReadingNoteHtml,
     buildZoteroNoteHtml,
     buildZoteroFallbackReadme
   };

@@ -16,6 +16,8 @@ test('default shortcuts are unique and match every requested action', () => {
     analysis: 'A',
     highlights: 'H',
     chat: 'Q',
+    semanticFind: 'J',
+    focusReading: 'V',
     zotero: 'Z',
     ppt: 'P',
     scanLocal: 'R',
@@ -31,6 +33,16 @@ test('default shortcuts are unique and match every requested action', () => {
     KEYBOARD_SHORTCUT_DEFINITIONS.length
   );
   assert.deepEqual(findKeyboardShortcutConflicts(DEFAULT_KEYBOARD_SHORTCUTS), []);
+});
+
+test('focus shortcut upgrade preserves user mappings and uses a free letter', () => {
+  const upgraded = normalizeKeyboardShortcuts({ figures: 'V' });
+  assert.equal(upgraded.figures, 'V');
+  assert.match(upgraded.focusReading, /^[A-Z]$/);
+  assert.notEqual(upgraded.focusReading, 'V');
+  assert.deepEqual(findKeyboardShortcutConflicts(upgraded), []);
+  assert.equal(normalizeKeyboardShortcuts({ focusReading: '' }).focusReading, '');
+  assert.equal(normalizeKeyboardShortcuts({ focusReading: 'X' }).focusReading, 'X');
 });
 
 test('shortcut normalization accepts one letter or digit and preserves explicit disable', () => {

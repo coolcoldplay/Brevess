@@ -195,6 +195,28 @@
     };
   }
 
+  function fitPublicationMetadata(value, maximumTokens) {
+    if (!value || maximumTokens <= 0) return null;
+    const metadata = JSON.parse(JSON.stringify(value));
+    metadata.authors = Array.isArray(metadata.authors) ? metadata.authors : [];
+    metadata.notes = Array.isArray(metadata.notes) ? metadata.notes : [];
+    while (estimateTokens(JSON.stringify(metadata)) > maximumTokens) {
+      metadata.truncated = true;
+      const unassignedNote = metadata.notes.findLastIndex(note => note.kind !== 'correspondence');
+      const otherAuthor = metadata.authors.findLastIndex(author => author.corresponding !== true);
+      const multipleAffiliations = metadata.authors.findLast(author => author.affiliations?.length > 1);
+      if (unassignedNote >= 0) metadata.notes.splice(unassignedNote, 1);
+      else if (metadata.authors.length > 1 && otherAuthor >= 0) metadata.authors.splice(otherAuthor, 1);
+      else if (multipleAffiliations) multipleAffiliations.affiliations.pop();
+      else if (metadata.notes.length) metadata.notes.pop();
+      else if (metadata.authors.length > 1) metadata.authors.pop();
+      else if (metadata.authors[0]?.affiliations?.length) metadata.authors[0].affiliations.pop();
+      else if (metadata.authors.length) metadata.authors.pop();
+      else return null;
+    }
+    return metadata;
+  }
+
   async function planArticleChatContext(input = {}) {
     const index = input.index;
     if (!index || !Array.isArray(index.chunks)) throw new TypeError('Article chat index is required');
@@ -221,8 +243,10 @@
     const contextWindowTokens = resolveContextWindow(profile);
     const safetyRatio = 0.9;
     const reservedTokens = input.reservedTokens ?? DEFAULT_RESERVED_TOKENS;
-    const systemTokens = input.systemTokens ?? DEFAULT_SYSTEM_TOKENS;
-    const queryTokens = estimateTokens(input.query) + 16;
+    const systemTokens = (input.systemTokens ?? DEFAULT_SYSTEM_TOKENS) +
+      Math.max(0, Math.ceil(Number(input.extraSystemTokens) || 0));
+    const fixedInputTokens = Math.max(0, Math.ceil(Number(input.fixedInputTokens) || 0));
+    const queryTokens = estimateTokens(input.query) + 16 + fixedInputTokens;
     const outputBudgetTokens = contextAwareOutputBudget(requestedOutputBudgetTokens, {
       kind: input.kind,
       contextWindowTokens,
@@ -265,7 +289,7 @@
 
     const historyBudget = Math.floor(inputBudgetTokens.available * 0.25);
     const recent = chooseRecentHistory(history, historyBudget);
-    const remainingForArticle = inputBudgetTokens.available - queryTokens -
+    let remainingForArticle = inputBudgetTokens.available - queryTokens -
       memoryTokens - recent.used;
     if (remainingForArticle < 256) {
       throw contextError({
@@ -274,18 +298,35 @@
       });
     }
 
-    const firstTurn = history.length === 0;
-    const bodyChunks = index.chunks.filter(chunk => chunk.recordType === 'body');
-    const completeArticleTokens = bodyChunks.reduce((sum, chunk) =>
+    const articleChunks = index.chunks.filter(chunk =>
+      ['body', 'figure-caption', 'table-caption'].includes(chunk.recordType));
+    const requiredChunkIds = [...new Set(
+      (Array.isArray(input.requiredChunkIds) ? input.requiredChunkIds : [])
+        .map(value => String(value || '')).filter(Boolean)
+    )];
+    const requiredChunks = requiredChunkIds.map(chunkId =>
+      articleChunks.find(chunk => chunk.chunkId === chunkId)
+    );
+    if (requiredChunks.some(chunk => !chunk)) {
+      throw contextError({ phase: 'required-article-context', requiredChunkIds });
+    }
+    const minimumArticleTokens = Math.max(MIN_ARTICLE_CONTEXT_TOKENS,
+      requiredChunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0));
+    const publicationMetadata = fitPublicationMetadata(input.metadata, Math.max(0, Math.min(
+      Math.floor(inputBudgetTokens.available * 0.25), remainingForArticle - minimumArticleTokens
+    )));
+    const metadataTokens = publicationMetadata ? estimateTokens(JSON.stringify(publicationMetadata)) : 0;
+    remainingForArticle -= metadataTokens;
+    const completeArticleTokens = articleChunks.reduce((sum, chunk) =>
       sum + estimateTokens(chunk.text) + 8, 0);
     const broadQuery = typeof shared.isBroadArticleChatQuery === 'function'
       ? shared.isBroadArticleChatQuery(input.query) : false;
-    let mode = firstTurn && broadQuery && completeArticleTokens <= remainingForArticle
+    let mode = broadQuery && completeArticleTokens <= remainingForArticle
       ? 'full' : 'retrieval';
     let chunks;
     let retrieval = null;
     if (mode === 'full') {
-      chunks = bodyChunks.slice();
+      chunks = articleChunks.slice();
     } else {
       retrieval = await shared.retrieveArticleChatContext(index, input.query, {
         maxChars: Math.max(200, Math.min(
@@ -302,12 +343,29 @@
       chunks = retrieval.chunks.slice();
     }
 
+    if (requiredChunks.length) {
+      const required = new Set(requiredChunkIds);
+      chunks = [
+        ...requiredChunks,
+        ...chunks.filter(chunk => !required.has(chunk.chunkId))
+      ];
+    }
+
     let chunkTokens = chunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0);
-    while (chunks.length > 1 && chunkTokens > remainingForArticle) {
+    const requiredTokenCost = requiredChunks.reduce((sum, chunk) =>
+      sum + estimateTokens(chunk.text) + 8, 0);
+    if (requiredTokenCost > remainingForArticle) {
+      throw contextError({
+        phase: 'required-article-context', inputBudgetTokens,
+        remainingForArticle, requiredTokenCost, requiredChunkIds
+      });
+    }
+    while (chunks.length > Math.max(1, requiredChunks.length) &&
+        chunkTokens > remainingForArticle) {
       chunks.pop();
       chunkTokens = chunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0);
     }
-    if (chunks.length === 1 && chunkTokens > remainingForArticle) {
+    if (!requiredChunks.length && chunks.length === 1 && chunkTokens > remainingForArticle) {
       const fitted = fitChunkToBudget(chunks[0], remainingForArticle);
       chunks = fitted ? [fitted] : [];
       chunkTokens = fitted ? estimateTokens(fitted.text) + 8 : 0;
@@ -317,7 +375,7 @@
         phase: 'article-context', inputBudgetTokens, remainingForArticle, chunkTokens
       });
     }
-    const estimatedInputTokens = queryTokens + memoryTokens + recent.used + chunkTokens;
+    const estimatedInputTokens = queryTokens + metadataTokens + memoryTokens + recent.used + chunkTokens;
     const includedHistoryIds = recent.selected.map((turn, indexValue) =>
       historyId(turn, history.indexOf(turn) >= 0 ? history.indexOf(turn) : indexValue));
     const retrievedOldTurnIds = localMemory.map(entry => entry.turnId);
@@ -328,7 +386,11 @@
       inputBudgetTokens: Object.freeze(inputBudgetTokens),
       outputBudgetTokens: Object.freeze(outputBudgetTokens),
       estimatedInputTokens,
+      fixedInputTokens,
+      metadataTokens,
+      publicationMetadata,
       chunks: Object.freeze(chunks),
+      requiredChunkIds: Object.freeze(requiredChunkIds),
       completeHistoryIds: Object.freeze(completeHistoryIds),
       includedHistoryIds: Object.freeze(includedHistoryIds),
       retrievedOldTurnIds: Object.freeze(retrievedOldTurnIds),

@@ -1,13 +1,15 @@
 (function attach(root, factory) {
-  const api = factory(root.SciLLM || {});
+  const shared = root.SciLLM || {};
+  const api = factory(shared);
   if (typeof module === 'object' && module.exports) module.exports = api;
-  root.SciLLM = Object.assign(root.SciLLM || {}, api);
+  root.SciLLM = Object.assign(shared, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const OFFICIAL_MODEL_ENDPOINTS = Object.freeze({
     openai: 'https://api.openai.com/v1/models',
     anthropic: 'https://api.anthropic.com/v1/models?limit=1000',
     gemini: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
-    deepseek: 'https://api.deepseek.com/models'
+    deepseek: 'https://api.deepseek.com/models',
+    typesafe: 'https://api.typesafe.ai/v1/models'
   });
 
   const NON_GENERATIVE_MODEL_PATTERN =
@@ -15,6 +17,65 @@
 
   function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function ownData(value, key) {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+      return undefined;
+    }
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+        ? descriptor.value : undefined;
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  let getProviderTransportLease = ownData(shared, 'getProviderTransportLease');
+
+  function captureProviderTransportLeaseExport() {
+    if (typeof getProviderTransportLease === 'function') return;
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(
+        shared, 'getProviderTransportLease'
+      );
+    } catch (_) {
+      return;
+    }
+    if (descriptor) return;
+    try {
+      Object.defineProperty(shared, 'getProviderTransportLease', {
+        configurable: true,
+        enumerable: false,
+        get() { return getProviderTransportLease; },
+        set(candidate) {
+          if (typeof getProviderTransportLease === 'function' ||
+              typeof candidate !== 'function') return;
+          getProviderTransportLease = candidate;
+          try {
+            Object.defineProperty(shared, 'getProviderTransportLease', {
+              configurable: true,
+              enumerable: true,
+              value: candidate,
+              writable: true
+            });
+          } catch (_) {
+            // The captured function remains authoritative even if exposure fails.
+          }
+        }
+      });
+    } catch (_) {
+      // A namespace that cannot host the capture slot fails closed without a lease.
+    }
+  }
+
+  captureProviderTransportLeaseExport();
+
+  function providerTransportLeaseFor(error) {
+    if (typeof getProviderTransportLease !== 'function') return null;
+    try { return getProviderTransportLease(error); } catch (_) { return null; }
   }
 
   function normalizedBaseUrl(value) {
@@ -69,13 +130,17 @@
       url = base.href;
     }
     if (!url) throw modelDiscoveryError('INVALID_SETTINGS', ['providerId']);
+    const authHeader = providerId === 'openai-compatible'
+      ? (config.authHeader || 'Authorization') : 'Authorization';
+    const prefix = config.authPrefix === undefined ? 'Bearer ' :
+      (config.authPrefix ? `${String(config.authPrefix).trim()} ` : '');
     return {
       providerId,
       url,
-      headers: {
+      headers: Object.assign({}, providerId === 'openai-compatible' ? config.customHeaders || {} : {}, {
         Accept: 'application/json',
-        Authorization: `${String(config.authPrefix ?? 'Bearer').trim()} ${apiKey}`.trim()
-      }
+        [authHeader]: `${prefix}${apiKey}`
+      })
     };
   }
 
@@ -99,7 +164,9 @@
       created: Number(item.created) || 0,
       inputTokenLimit: Number(item.inputTokenLimit) || null,
       outputTokenLimit: Number(item.outputTokenLimit) || null,
-      ownedBy: String(item.owned_by || item.ownedBy || '').trim()
+      ownedBy: String(item.owned_by || item.ownedBy || '').trim(),
+      description: String(item.description || '').trim(),
+      releaseDate: String(item.release_date || item.releaseDate || '').trim()
     };
   }
 
@@ -126,7 +193,8 @@
     providerId,
     config = {},
     fetchImpl = typeof fetch === 'function' ? fetch : null,
-    timeoutMs = 20000
+    timeoutMs = 20000,
+    signal = null
   } = {}) {
     const request = modelListRequest(providerId, config);
     if (request.local) {
@@ -139,43 +207,45 @@
     if (typeof fetchImpl !== 'function') {
       throw modelDiscoveryError('NETWORK_ERROR', [], 'Fetch is unavailable');
     }
-
-    const controller = typeof AbortController === 'function'
-      ? new AbortController() : null;
-    const timeout = controller
-      ? setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 20000))
-      : null;
-    let response;
-    try {
-      response = await fetchImpl(request.url, {
-        method: 'GET',
-        headers: request.headers,
-        ...(controller ? { signal: controller.signal } : {})
-      });
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        throw modelDiscoveryError('REQUEST_TIMEOUT');
-      }
-      throw modelDiscoveryError('NETWORK_ERROR');
-    } finally {
-      if (timeout) clearTimeout(timeout);
+    if (typeof shared.requestJson !== 'function') {
+      throw modelDiscoveryError(
+        'NETWORK_ERROR', [], 'Provider response reader is unavailable'
+      );
     }
 
-    if (!response?.ok) {
-      const code = response?.status === 401 || response?.status === 403
-        ? 'AUTH_INVALID'
-        : response?.status === 429
-          ? 'RATE_LIMITED'
-          : 'PROVIDER_REJECTED';
-      throw modelDiscoveryError(code);
-    }
+    const configuredTimeoutMs = Number(timeoutMs);
+    const requestTimeoutMs = Number.isFinite(configuredTimeoutMs)
+      ? Math.max(1000, configuredTimeoutMs || 20000) : 20000;
     let payload;
     try {
-      payload = typeof response.json === 'function'
-        ? await response.json()
-        : JSON.parse(await response.text());
-    } catch {
-      throw modelDiscoveryError('INVALID_RESPONSE');
+      payload = await shared.requestJson(fetchImpl, request.url, {
+        method: 'GET',
+        headers: request.headers,
+        timeoutMs: requestTimeoutMs,
+        signal
+      });
+    } catch (error) {
+      const status = Math.max(0, Number(error?.status) || 0);
+      const transportLease = providerTransportLeaseFor(error);
+      if (error?.code === 'CANCELLED' ||
+          (error?.code === 'REQUEST_TIMEOUT' &&
+            (status !== 408 || transportLease))) {
+        throw error;
+      }
+      const code = status === 401 || status === 403
+        ? 'AUTH_INVALID'
+        : status === 429
+          ? 'RATE_LIMITED'
+          : status >= 400
+            ? 'PROVIDER_REJECTED'
+            : error?.code === 'CANCELLED'
+              ? 'REQUEST_TIMEOUT'
+              : ['REQUEST_TIMEOUT', 'INVALID_RESPONSE', 'NETWORK_ERROR']
+                  .includes(error?.code)
+                ? error.code
+                : 'NETWORK_ERROR';
+      if (code === error?.code) throw error;
+      throw modelDiscoveryError(code);
     }
     const models = parseModelList(providerId, payload);
     if (!models.length) throw modelDiscoveryError('INVALID_RESPONSE');

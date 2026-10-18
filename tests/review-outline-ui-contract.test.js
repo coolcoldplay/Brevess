@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
-test('navigation separates paragraph jumps from compact summaries and scopes analysis by section', () => {
+test('navigation separates paragraph jumps from compact summaries and scopes analysis by section', async () => {
   const content = read('content.js');
   const popup = read('popup.js');
   const css = read('popup.css');
@@ -25,10 +26,50 @@ test('navigation separates paragraph jumps from compact summaries and scopes ana
     css,
     /\.workspace-view\[data-workspace-view="navigation"\]\s*\{\s*padding-top:\s*0;/
   );
-  assert.match(popup, /navigationButton\.disabled = reviewOutlineState\.running/);
+  assert.doesNotMatch(popup, /navigationButton\.disabled = reviewOutlineState\.running/);
+  assert.doesNotMatch(read('popup.html'), /id="generateOutlineSummaries"/);
   assert.doesNotMatch(popup, /navigationButton\.disabled = !ready/);
   assert.match(popup, /function selectedWorkspaceAnalysisSectionIds/);
-  assert.match(popup, /scopeSectionIds:\s*selectedWorkspaceAnalysisSectionIds\(\)/);
+  const actual = name => {
+    let start = popup.indexOf('function ' + name + '(');
+    assert.ok(start >= 0, name);
+    if (popup.slice(start - 6, start) === 'async ') start -= 6;
+    const next = /\n(?:async )?function /.exec(popup.slice(start + 1));
+    return popup.slice(start, next ? start + 1 + next.index : undefined);
+  };
+  for (const scenario of ['selected', 'changed-selection', 'empty', 'foreign-scope']) {
+    const nodes = scenario === 'empty' ? [] : [
+      { analysisSelected: true, analysisSectionIds: ['A', 'shared'], children: [{ analysisSelected: true, analysisSectionIds: ['A'] }] },
+      { children: [{ analysisSelected: true, analysisSectionIds: ['B', 'shared'] }] }];
+    const snapshot = { documentId: 'source-A', documentHash: 'hash-A', url: 'https://paper.test/a', revision: 1,
+      analysisSelectionCustomized: true, nodes };
+    const sent = [], statuses = [];
+    const c = vm.createContext({ currentWorkspaceSnapshot: snapshot, preparedDocumentState: { documentId: 'alias' },
+      reviewOutlineTaskGeneration: 1, reviewOutlineState: {}, workspaceAnalysisSelectionPending: new Map(),
+      capturePanelContext: () => ({ tabId: 7, key: 'A', url: snapshot.url }), isCurrentReviewOutlineTask: () => true,
+      SciLLM: { normalizeTabDocumentUrl: value => value }, requireUsableLlm: () => true, isSidebarOperationStopping: () => false,
+      showStatus: (...args) => statuses.push(args), updateReviewOutlineButton() {},
+      startReviewOutlineProgressPolling() {}, stopReviewOutlineProgressPolling() {}, refreshReviewOutlineProgress: async () => ({}),
+      refreshArticleWorkspace: async () => {}, persistCurrentArticleArchive: async () => {}, acceptSidebarRuntimeTask() {},
+      refreshSidebarRuntimeDocumentBinding: async () => {
+        if (scenario === 'changed-selection') c.currentWorkspaceSnapshot = { ...snapshot, nodes: [] };
+        return { documentId: snapshot.documentId, documentHash: snapshot.documentHash, documentIdentity: 'world-A' };
+      },
+      sendTabMessage: async (_tabId, message) => {
+        if (message.action === 'getArticleWorkspaceSnapshot') return { success: true, snapshot };
+        assert.equal(message.action, 'analyzeReviewOutlineWithLLM'); sent.push(message);
+        return { success: true, outline: { paragraphCount: 3 } };
+      } });
+    vm.runInContext(actual('selectedWorkspaceAnalysisSectionIds') + '\n' + actual('runReviewOutlineAnalysis'), c);
+    const requested = scenario === 'foreign-scope' ? ['outside-selection'] : Array.from(c.selectedWorkspaceAnalysisSectionIds(snapshot));
+    await c.runReviewOutlineAnalysis({ scopeSnapshot: snapshot, scopeSectionIds: requested, scopeSelectionProvided: true });
+    assert.equal(sent.length, scenario === 'selected' ? 1 : 0, scenario);
+    if (scenario === 'selected') {
+      assert.deepEqual(Array.from(sent[0].scopeSectionIds), ['A', 'shared', 'B']);
+      assert.equal(sent[0].scopeSelectionProvided, true);
+      assert.equal(sent[0].documentId, snapshot.documentId); assert.equal(sent[0].documentHash, snapshot.documentHash);
+    } else if (scenario !== 'empty') assert.ok(statuses.some(item => item[0].includes('REVIEW_OUTLINE_SCOPE_STALE')));
+  }
   assert.match(content, /scopeSelectionProvided:\s*request\.scopeSelectionProvided === true/);
 });
 
@@ -65,21 +106,35 @@ test('side panel requests exactly one paragraph and exposes its cached summary',
   assert.match(popup, /workspaceParagraphsForNode/);
 });
 
-test('every navigation paragraph click focuses the current source before using a cache or LLM', () => {
+test('single paragraph summary falls back to the durable workspace document proof', () => {
   const popup = read('popup.js');
-  assert.match(popup, /paragraphId,\s*sourceKey:\s*paragraph\.sourceKey,\s*navigationRevision:/);
-  assert.match(popup, /await focusWorkspaceSource\(target, panelContext\)/);
+  const start = popup.indexOf('async function runSingleParagraphSummary');
+  const end = popup.indexOf('function renderArticleNavigationTree', start);
+  const workflow = popup.slice(start, end);
+  assert.match(workflow,
+    /preparedDocumentState\?\.documentId\s*\|\|\s*manualAnnotationState\?\.documentId/);
+  assert.match(workflow,
+    /preparedDocumentState\?\.documentHash\s*\|\|\s*manualAnnotationState\?\.documentHash/);
+});
+
+test('every navigation paragraph click only focuses the current source; summaries stay explicit', () => {
+  const popup = read('popup.js');
   assert.match(popup, /PARAGRAPH_STALE/);
   const treeStart = popup.indexOf('function renderArticleNavigationTree');
-  const start = popup.indexOf("button.addEventListener('click', async () => {", treeStart);
-  const end = popup.indexOf('list.appendChild(button);', start);
+  const paragraphStart = popup.indexOf("const paragraphId = String(paragraph.paragraphId || '');", treeStart);
+  const start = popup.indexOf("button.addEventListener('click', async event => {", paragraphStart);
+  const end = popup.indexOf('const summarize = createWorkspaceElement(', start);
+  assert.ok(treeStart >= 0 && paragraphStart > treeStart && start > paragraphStart && end > start);
   const click = popup.slice(start, end);
-  assert.match(click, /focusWorkspaceSource\(target, panelContext\)/);
-  assert.match(click, /if \(saved\?\.summary\)/);
-  assert.ok(
-    click.indexOf('focusWorkspaceSource(target, panelContext)') <
-    click.indexOf('if (saved?.summary)')
-  );
+  assert.match(click, /await focusWorkspaceSource\(\{/);
+  assert.match(click, /paragraphId,\s*sourceKey:\s*paragraph\.sourceKey,\s*navigationRevision:/);
+  assert.match(click, /isCurrentParagraphSummaryTask\(panelContext\)/);
+  assert.match(click, /event\.stopImmediatePropagation\(\)/);
+  assert.match(click, /capture: true/);
+  assert.doesNotMatch(click, /runSingleParagraphSummary|hasUsableLlm/);
+  const summaryEnd = popup.indexOf('const note = createWorkspaceElement(', end);
+  assert.ok(summaryEnd > end);
+  assert.match(popup.slice(end, summaryEnd), /runSingleParagraphSummary\(paragraph, panelContext\)/);
 });
 
 test('review and paragraph tasks capture and guard one panel context across awaits', () => {

@@ -5,6 +5,7 @@ const {
   createMemoryTokenUsageStorageArea,
   createTokenUsageStore
 } = require('../core/token-usage-store.js');
+const { LLM_TASK_IDS } = require('../core/llm-task-catalog.js');
 
 test('aggregates token usage by article, feature, provider, and model', async () => {
   const store = createTokenUsageStore(createMemoryTokenUsageStorageArea());
@@ -60,7 +61,7 @@ test('looks up and clears one canonical article without affecting another', asyn
   const store = createTokenUsageStore(createMemoryTokenUsageStorageArea());
   await store.record({
     canonicalUrl: 'https://example.org/a?x=1',
-    featureId: 'highlight',
+    featureId: 'document_highlight',
     providerId: 'deepseek',
     model: 'deepseek-chat',
     inputTokens: 10,
@@ -68,7 +69,7 @@ test('looks up and clears one canonical article without affecting another', asyn
   });
   await store.record({
     canonicalUrl: 'https://example.org/b',
-    featureId: 'highlight',
+    featureId: 'document_highlight',
     providerId: 'deepseek',
     model: 'deepseek-chat',
     inputTokens: 20,
@@ -83,4 +84,21 @@ test('looks up and clears one canonical article without affecting another', asyn
   assert.deepEqual((await store.list()).map(item => item.canonicalUrl), [
     'https://example.org/b'
   ]);
+});
+
+test('keeps all stable LLM task telemetry IDs as distinct feature buckets', async () => {
+  const store = createTokenUsageStore(createMemoryTokenUsageStorageArea());
+  for (const featureId of LLM_TASK_IDS) {
+    await store.record({
+      canonicalUrl: 'https://example.org/task-telemetry',
+      featureId,
+      providerId: 'openai',
+      model: 'gpt-test',
+      inputTokens: 1,
+      outputTokens: 1
+    });
+  }
+  const [document] = await store.list();
+  assert.deepEqual(Object.keys(document.features).sort(), [...LLM_TASK_IDS].sort());
+  assert.equal(document.totals.requests, LLM_TASK_IDS.length);
 });

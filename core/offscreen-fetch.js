@@ -16,8 +16,10 @@
     const status = Number(result?.status) || 0;
     const headers = {
       get(name) {
-        return String(name || '').toLowerCase() === 'retry-after'
-          ? String(result?.retryAfter || '') || null : null;
+        const key = String(name || '').toLowerCase();
+        if (key === 'retry-after') return String(result?.retryAfter || '') || null;
+        if (key === 'content-type') return String(result?.contentType || '') || null;
+        return null;
       }
     };
     if (result?.success) {
@@ -69,15 +71,30 @@
       await creating;
     }
 
+    function observeWithoutWaiting(value) {
+      try { Promise.resolve(value).catch(() => {}); } catch {
+        // A remote bridge failure must not replace or delay local cancellation.
+      }
+    }
+
+    function sendCancellationWithoutWaiting(requestId) {
+      try {
+        observeWithoutWaiting(chromeApi.runtime.sendMessage({
+          type: 'SCI_OFFSCREEN_FETCH_CANCEL',
+          target: OFFSCREEN_TARGET,
+          requestId
+        }));
+      } catch {
+        // Local cancellation remains authoritative when the bridge is unavailable.
+      }
+    }
+
     async function sendWithAbort(message, signal) {
       const pending = chromeApi.runtime.sendMessage(message);
       if (!signal) return pending;
       if (signal.aborted) {
-        chromeApi.runtime.sendMessage({
-          type: 'SCI_OFFSCREEN_FETCH_CANCEL',
-          target: OFFSCREEN_TARGET,
-          requestId: message.requestId
-        }).catch(() => {});
+        observeWithoutWaiting(pending);
+        sendCancellationWithoutWaiting(message.requestId);
         throw createAbortError();
       }
       return new Promise((resolve, reject) => {
@@ -89,14 +106,12 @@
           callback(value);
         };
         const onAbort = () => {
-          chromeApi.runtime.sendMessage({
-            type: 'SCI_OFFSCREEN_FETCH_CANCEL',
-            target: OFFSCREEN_TARGET,
-            requestId: message.requestId
-          }).catch(() => {});
+          if (settled) return;
+          sendCancellationWithoutWaiting(message.requestId);
           finish(reject)(createAbortError());
         };
         signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
         pending.then(finish(resolve), finish(reject));
       });
     }
@@ -155,6 +170,8 @@
       const cancel = () => {
         if (terminal || cancelled) return;
         cancelled = true;
+        queue.length = 0;
+        deliver({ requestId, type: 'cancelled' });
         try {
           port.postMessage({
             type: 'SCI_OFFSCREEN_FETCH_CANCEL',
@@ -162,23 +179,27 @@
             requestId
           });
         } catch {
-          deliver({ requestId, type: 'cancelled' });
+          // Local cancellation remains authoritative when the bridge is unavailable.
         }
       };
 
       port.onMessage.addListener(deliver);
       port.onDisconnect.addListener(disconnected);
       signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) cancel();
       try {
-        port.postMessage({
-          type: 'SCI_OFFSCREEN_FETCH_STREAM',
-          target: OFFSCREEN_TARGET,
-          requestId,
-          url,
-          options: serializableOptions
-        });
+        if (!terminal) {
+          port.postMessage({
+            type: 'SCI_OFFSCREEN_FETCH_STREAM',
+            target: OFFSCREEN_TARGET,
+            requestId,
+            url,
+            options: serializableOptions
+          });
+        }
         while (!terminal || queue.length) {
           const event = await nextEvent();
+          if (cancelled && event.type !== 'cancelled') continue;
           yield event;
           if (['completed', 'error', 'cancelled'].includes(event.type)) break;
         }
@@ -191,6 +212,7 @@
       }
     };
 
+    offscreenFetch.ensureDocument = ensureOffscreenDocument;
     return offscreenFetch;
   }
 

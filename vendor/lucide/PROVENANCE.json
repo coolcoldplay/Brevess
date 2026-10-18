@@ -1,0 +1,80 @@
+{
+  "package": "lucide-static",
+  "version": "1.55.0",
+  "repository": "https://github.com/lucide-icons/lucide",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.55.0.tgz",
+  "integrity": "sha512-h18lunTFsIJWnY0FMRPjXeO9KcAtNi7fDqtqgWHOFbssfgUWsctn/pA7bpiyrd4g1DuBOJ24CsRnPfkYblwm/A==",
+  "icons": [
+    {
+      "name": "list",
+      "packagePath": "package/icons/list.svg",
+      "sha256": "1f3c1d9a31bcb2ec8a9d2551e8ceef83eb91e25d70055bfede4da625d88bf0e1"
+    },
+    {
+      "name": "list-tree",
+      "packagePath": "package/icons/list-tree.svg",
+      "sha256": "77352d1d81a24dedbe7eb9c746c1fdf9d5a44a4dcdb7f6cbf31d6554bc208460"
+    },
+    {
+      "name": "text",
+      "packagePath": "package/icons/text.svg",
+      "sha256": "f063928ff7e4a4b0af1ca31ae50b00fd0d3591c0e9c669cfb7577fd0f6cbc853"
+    },
+    {
+      "name": "square-dashed",
+      "packagePath": "package/icons/square-dashed.svg",
+      "sha256": "b48efd63e8e6e056da277e3cf811b8c64a03d2807397305399e9de6bb9df1454"
+    },
+    {
+      "name": "square-dashed-text",
+      "packagePath": "package/icons/square-dashed-text.svg",
+      "sha256": "207ed8a166f5242c12598a7cedfafa7af5d8c2c0152c6fdbd85cc442047d13db"
+    },
+    {
+      "name": "scan-line",
+      "packagePath": "package/icons/scan-line.svg",
+      "sha256": "cc64a08a074f43900a7d5f65d0542a0a1e5d1a526b7797b5d9361d534afc2be6"
+    },
+    {
+      "name": "scan-eye",
+      "packagePath": "package/icons/scan-eye.svg",
+      "sha256": "5faa8155cab272962d09f8883064d241965d9feb10ea6bf2a65c2eb3d3b636ee"
+    },
+    {
+      "name": "message-circle",
+      "packagePath": "package/icons/message-circle.svg",
+      "sha256": "dc0f2a92ce020d55c5a556ded4933034beeeb866bcc60a3734d781e63fbda115"
+    },
+    {
+      "name": "message-circle-more",
+      "packagePath": "package/icons/message-circle-more.svg",
+      "sha256": "09bed5a05f676cff60baf705fde3862c3dfbf0706e02d7a13db9213acaefd80f"
+    },
+    {
+      "name": "notebook",
+      "packagePath": "package/icons/notebook.svg",
+      "sha256": "31f396c51259a426d7589303c31c9f3707ab6fade173e2117f71067e75784547"
+    },
+    {
+      "name": "notebook-pen",
+      "packagePath": "package/icons/notebook-pen.svg",
+      "sha256": "597f5235b9893dd7c11ac9873effe63bc922d4954edfd877008bf05cf5cd4479"
+    },
+    {
+      "name": "check",
+      "packagePath": "package/icons/check.svg",
+      "sha256": "de9546f5482b5f2b07c11933c19444bd58a96c29bd2c6e56b7c3ba013b03ab22"
+    },
+    {
+      "name": "x",
+      "packagePath": "package/icons/x.svg",
+      "sha256": "65b78d9fa306e2b6386fb9f3a9f10e1ba8067fa0d079046e1050db84f18f31f6"
+    },
+    {
+      "name": "minus",
+      "packagePath": "package/icons/minus.svg",
+      "sha256": "0f5a45f73a471875ce30b0845719088ea9f66cef280342f40dbd1c52274c8a84"
+    }
+  ],
+  "githubApi": "403 rate limit; official npm release used"
+}

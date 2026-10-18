@@ -1,0 +1,49 @@
+/* Selected R4.3 appearance is kept in vendor/semantic-icons-r42/icons.css.
+ * Only production rail sizing, keyboard focus and real task progress live here. */
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button {
+  --icon-size: 24px;
+  min-width: 44px;
+  min-height: 48px;
+  padding: 7px;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  color: #202020;
+  transition: background-color 160ms linear, color 160ms linear;
+}
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:hover { background: #ededed; }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button[data-selected="true"] { background: #202020; color: #fff; }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:focus-visible { outline-offset: -4px; }
+body[data-ui-surface="sidebar"] .workspace-bottom-nav { flex-basis: 56px; }
+body[data-ui-surface="sidebar"] .bvi-button .workspace-nav-task-progress { display: none; }
+.bvi-button .sr-slot { pointer-events: none; }
+.bvi-progress {
+  position: absolute;
+  bottom: 3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  overflow: hidden;
+  display: none;
+  background: rgba(255, 192, 0, .16);
+  pointer-events: none;
+}
+.bvi-progress > span {
+  display: block;
+  height: 100%;
+  background: rgb(255, 192, 0);
+  transform-origin: left;
+  transform: scaleX(var(--bvi-progress, 0));
+  transition: transform .2s linear;
+}
+.bvi-button[data-status="running"] .bvi-progress { display: block; }
+.bvi-button[data-status="running"][data-indeterminate="true"] .bvi-progress > span { width: 35%; animation: bvi-task-wait 1.8s ease-in-out infinite; }
+@keyframes bvi-task-wait { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
+.bvi-state-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+html[data-reduced="true"] .bvi-progress > span { animation: none !important; transition: none; }
+html[data-reduced="true"] .bvi-button[data-indeterminate="true"] .bvi-progress > span { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .bvi-progress > span { animation: none !important; transition: none; }
+  .bvi-button[data-indeterminate="true"] .bvi-progress > span { transform: none; }
+}

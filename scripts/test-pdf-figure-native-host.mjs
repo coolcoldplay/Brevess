@@ -5,7 +5,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
-const projectRoot = dirname(scriptRoot);
+const extensionRootFlag = process.argv.indexOf('--extension-root');
+const projectRoot = extensionRootFlag >= 0
+  ? resolve(process.argv[extensionRootFlag + 1] || '') : dirname(scriptRoot);
 const useExecutable = process.argv.includes('--exe');
 const pdfFlag = process.argv.indexOf('--pdf');
 const pdfPath = pdfFlag >= 0 ? resolve(process.argv[pdfFlag + 1] || '') : '';
@@ -13,7 +15,8 @@ const executablePath = join(
   projectRoot, 'native-host', 'bin', 'brevess-codex-host.exe'
 );
 const hostPath = join(projectRoot, 'native-host', 'host.js');
-const testStateRoot = join(projectRoot, 'tmp', 'native-host-smoke-state');
+const testStateRoot = process.env.PDF_HOST_STATE_ROOT
+  ? resolve(process.env.PDF_HOST_STATE_ROOT) : join(projectRoot, 'tmp', 'native-host-smoke-state');
 const child = spawn(
   useExecutable ? executablePath : process.execPath,
   useExecutable ? [] : [hostPath],

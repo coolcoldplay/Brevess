@@ -16,6 +16,7 @@ Help users navigate, annotate, and understand evidence in the scientific paper c
 |---|---|
 | `activeTab` | 用户点击插件图标后，临时访问当前标签页，以确认页面、激活论文工作区并把侧栏操作限定到用户明确选择的网页。 |
 | `storage` | 在本机保存设置、分析模式、规则、用户同意状态、可选 API Profile/API Key、文章工作区索引、标注及 Token 使用量。API 凭据不会进入普通导出或诊断包；用户主动启用便携配置备份时，只会以口令保护的认证密文写入所选目录。 |
+| `unlimitedStorage` | 解除浏览器对扩展本地存储的默认容量配额，仅用于保存用户主动创建或保留的大体积论文笔记、标注及其本地文章工作区。该权限不会用于后台扫描网页或自动上传数据，不扩大任何 host/network 网络权限。用户仍可删除单篇工作区、清空本机数据或卸载扩展；数据只保留到用户执行这些删除操作为止。 |
 | `scripting` | 仅在用户激活的当前论文页注入内容脚本，用于读取可见论文 HTML、生成导航、绘制/编辑高亮以及跳转原文。 |
 | `offscreen` | 在 Manifest V3 后台 Service Worker 可能休眠时，使用扩展自带的离屏文档完成用户发起的流式模型网络请求；不用于播放媒体、跟踪或执行远程代码。 |
 | `sidePanel` | 在 Microsoft Edge 原生侧栏中提供论文导航、高亮、摘句、解图和全文问答工作区。 |

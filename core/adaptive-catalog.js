@@ -20,12 +20,12 @@
       name: '快速主线',
       description: '为什么做、如何验证、发现什么、说明什么',
       categoryIds: [
-        'known_background', 'knowledge_gap', 'objective', 'hypothesis',
-        'study_strategy', 'method', 'result', 'key_result', 'interpretation',
-        'conclusion', 'significance_novelty', 'limitation'
+        'known_background', 'scientific_question', 'method', 'result',
+        'interpretation', 'limitation', 'significance_novelty', 'future'
       ]
     },
     mechanism_chain: {
+      legacyOnly: true,
       name: '机制证据链',
       description: '起始因素、机制中介、证据强度与下游结局',
       categoryIds: [
@@ -37,24 +37,19 @@
       ]
     },
     critical_review: {
-      name: '批判性审读',
-      description: '设计、统计、因果边界、替代解释与复现性',
+      name: '批判精读',
+      description: '必要性、充分性、挽救实验、关键对照与原文存疑点',
       categoryIds: [
-        'design_control', 'sample_population', 'measurement_validity',
-        'effect_uncertainty', 'statistical_robustness', 'confounding_reverse_causality',
-        'causal_overreach', 'alternative_explanation', 'replication_external_validation',
-        'generalizability', 'statistical_vs_practical_significance', 'limitation',
-        'transparency_reproducibility'
+        'necessity_evidence', 'sufficiency_evidence', 'rescue_evidence',
+        'design_control', 'review_question'
       ]
     },
     review_synthesis: {
-      name: '综述证据综合',
+      name: '综述阅读',
       description: '范围、共识、矛盾、异质性、证据质量与作者综合判断',
       categoryIds: [
         'review_scope_thesis', 'evidence_consensus', 'conflicting_evidence',
-        'heterogeneity_source', 'evidence_quality_certainty', 'integrative_framework',
-        'author_synthesis', 'knowledge_gap', 'evidence', 'conclusion',
-        'limitation', 'future'
+        'evidence_quality_certainty', 'future'
       ]
     }
   });
@@ -679,6 +674,8 @@
       minimumConfidence: Number(input.minimumConfidence) || 0.8,
       claimMode: input.claimMode || 'explicit',
       relationRequired: Boolean(input.relationRequired),
+      enabledEngines: (input.regex?.phrases?.length || input.regex?.expressions?.length)
+        ? ['llm', 'regex'] : ['llm'],
       regex: Object.freeze({
         phrases: Object.freeze([...(input.regex?.phrases || [])]),
         expressions: Object.freeze([...(input.regex?.expressions || [])]),
@@ -724,12 +721,32 @@
 
   const CASES = [
     {
+      id: 'scientific_question', name: '科学问题', color: '#7C3AED',
+      definition: '作者明确提出本研究要回答的未知、问题、目标或可检验假设；合并旧的缺口、目的和假设入口。',
+      question: '原文是否明确说明本研究要弄清什么，而不是只说做了什么或发现什么？',
+      include: ['可定位的未知关系、研究问题、目的或待检验命题', '明确与当前研究有关'],
+      exclude: ['一般重要性或背景事实', '只有操作步骤或已经得到的结果', '本文之后才拟开展的研究'],
+      slots: ['research_question'], roles: ['question_statement'],
+      positive: 'We sought to determine whether neuronal activity is required for synapse elimination.',
+      negative: 'We quantified synapses using confocal microscopy.'
+    },
+    {
+      id: 'review_question', name: '存疑点（原文）', color: '#B45309',
+      definition: '作者在原文明确承认的解释不确定性、证据疑点、替代解释或尚未排除的偏倚；不包括 AI 自行提出的质疑。',
+      question: '是否能直接引用作者对具体证据或结论保留疑问的原句，而无需补写未提到的信息？',
+      include: ['明确的担忧、未排除的解释或不确定性', '指向具体结论、证据、设计或适用范围'],
+      exclude: ['由未提到某方法推断作者没有做', 'AI 的审稿问题或外部知识补充', '普通研究问题或后续工作但未表述疑点'],
+      slots: ['concern'], roles: ['concern_statement'],
+      positive: 'We cannot exclude that the apparent benefit reflects differences in baseline disease severity.',
+      negative: 'Baseline disease severity was recorded for all participants.'
+    },
+    {
       id: 'known_background', name: '已知背景', color: '#7EA8BE',
       definition: '论文用于建立问题语境的公认知识。',
       question: '该片段是否陈述研究开始前已知且与当前问题直接相关的知识？',
       include: ['陈述既有知识', '与当前研究问题相关'],
       exclude: ['当前研究新结果', '仅有宽泛常识'],
-      slots: ['known_state', 'topic'], roles: ['background_statement'],
+      slots: [], roles: ['background_statement'], version: 2,
       positive: 'Microglia eliminate synapses during development.',
       negative: 'We found that microglia eliminated synapses after treatment.'
     },
@@ -764,12 +781,12 @@
       negative: 'Body weight differed significantly on day 2.'
     },
     {
-      id: 'significance_novelty', name: '创新与意义', color: '#F4A261',
+      id: 'significance_novelty', name: '创新点（作者声明）', color: '#F4A261', version: 2,
       definition: '作者明确陈述研究贡献、新颖性或对领域的影响。',
       question: '是否说明本研究新增了什么认识或改变了什么解释框架？',
       include: ['明确贡献或新颖性', '基于当前研究'],
       exclude: ['一般重要性口号', '未来工作建议'],
-      slots: ['contribution', 'field_impact'], roles: ['significance_statement'],
+      slots: ['contribution'], roles: ['significance_statement'],
       positive: 'These data reveal an immune mechanism linking activity to synapse refinement.',
       negative: 'We hypothesized that the intervention would reveal a new mechanism.'
     },
@@ -1158,12 +1175,12 @@
     const view = suppliedView || READING_VIEWS[normalizedViewId];
     const primaryOverlay = TYPE_OVERLAYS[studyProfile?.primaryType]?.[normalizedViewId] || [];
     const secondaryOverlay = TYPE_OVERLAYS[studyProfile?.secondaryType]?.[normalizedViewId] || [];
-    const primary = studyProfile?.useTypeSpecificWarnings === false
+    const primary = suppliedView || studyProfile?.useTypeSpecificWarnings === false
       ? [] : [...primaryOverlay];
-    const secondary = studyProfile?.useTypeSpecificWarnings === false
+    const secondary = suppliedView || studyProfile?.useTypeSpecificWarnings === false
       ? [] : [...secondaryOverlay].slice(0, 4);
-    const add = Array.isArray(override?.add) ? override.add.map(String) : [];
-    const remove = new Set(Array.isArray(override?.remove) ? override.remove.map(String) : []);
+    const add = !suppliedView && Array.isArray(override?.add) ? override.add.map(String) : [];
+    const remove = new Set(!suppliedView && Array.isArray(override?.remove) ? override.remove.map(String) : []);
     const deletedBuiltIns = new Set(
       Array.isArray(deletedBuiltInCategoryIds)
         ? deletedBuiltInCategoryIds.map(String)

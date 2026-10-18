@@ -1,7 +1,8 @@
 param(
   [string]$CatalogExtensionId = '',
   [string]$ReleaseName = '',
-  [switch]$SkipNativeHostBuild
+  [switch]$SkipNativeHostBuild,
+  [switch]$IncludeStableCompanionAlias
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,21 +46,8 @@ New-Item -ItemType Directory -Path $extensionStage -Force | Out-Null
 New-Item -ItemType Directory -Path $bridgeStage -Force | Out-Null
 New-Item -ItemType Directory -Path $assetsTarget -Force | Out-Null
 
-foreach ($directory in @('core', 'providers', 'vendor', 'icons', '_locales')) {
-  Copy-Item -LiteralPath (Join-Path $projectRoot $directory) `
-    -Destination $extensionStage -Recurse
-}
-foreach ($file in @(
-  'manifest.json', 'background.js', 'content.js', 'content.css',
-  'popup.html', 'popup.js', 'popup.css',
-  'logic-map.html', 'logic-map.js', 'logic-map.css',
-  'pdf-reader.html', 'pdf-reader.js', 'pdf-reader.css',
-  'options.html', 'options.js', 'options.css',
-  'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js',
-  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md'
-)) {
-  Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $extensionStage
-}
+. (Join-Path $PSScriptRoot 'copy-release-files.ps1')
+Copy-BrevessReleaseFiles -ProjectRoot $projectRoot -Target $extensionStage -Profile store
 
 # The source manifest keeps a public key so local/unpacked installs retain a
 # stable extension ID. Microsoft Edge Add-ons assigns the catalog ID itself and
@@ -90,26 +78,7 @@ $hostExecutable = Join-Path $projectRoot 'native-host\bin\brevess-codex-host.exe
 if (-not (Test-Path -LiteralPath $hostExecutable -PathType Leaf)) {
   throw "Codex Bridge executable is missing: $hostExecutable"
 }
-$bridgeBin = Join-Path $bridgeStage 'bin'
-New-Item -ItemType Directory -Path $bridgeBin -Force | Out-Null
-Copy-Item -LiteralPath $hostExecutable -Destination $bridgeBin
-foreach ($directory in @('pdffigures2', 'runtime')) {
-  $source = Join-Path $projectRoot "native-host\$directory"
-  if (-not (Test-Path -LiteralPath $source -PathType Container)) {
-    throw "Local companion component is missing: $source"
-  }
-  Copy-Item -LiteralPath $source -Destination $bridgeStage -Recurse
-}
-foreach ($file in @(
-  'install.ps1', 'login.ps1', 'uninstall.ps1',
-  'Install-Brevess-Codex-Bridge.cmd', 'Uninstall-Brevess-Codex-Bridge.cmd',
-  'README-STORE.md', 'runtime-version.json'
-)) {
-  Copy-Item -LiteralPath (Join-Path $projectRoot "native-host\$file") `
-    -Destination $bridgeStage
-}
-Copy-Item -LiteralPath (Join-Path $projectRoot 'CODEX_LOCAL_SETUP.md') `
-  -Destination $bridgeStage
+Copy-BrevessReleaseFiles -ProjectRoot $projectRoot -Target $bridgeStage -Profile companion
 
 $catalogIds = @(
   Get-Content -LiteralPath (
@@ -138,7 +107,10 @@ $bridgeVersionedZip = Join-Path $releaseRoot (
 $bridgeStableZip = Join-Path $releaseRoot 'Brevess-Codex-Bridge-Windows-x64.zip'
 Compress-Archive -Path (Join-Path $bridgeStage '*') `
   -DestinationPath $bridgeVersionedZip -CompressionLevel Optimal
-Copy-Item -LiteralPath $bridgeVersionedZip -Destination $bridgeStableZip
+if ($IncludeStableCompanionAlias) {
+  # Needed only when publishing the documented stable download URL.
+  Copy-Item -LiteralPath $bridgeVersionedZip -Destination $bridgeStableZip
+}
 
 $storeAssetsSource = Join-Path $projectRoot 'docs\edge-store\assets'
 if (Test-Path -LiteralPath $storeAssetsSource -PathType Container) {
@@ -162,9 +134,9 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\reviewer-demo.html') `
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\index.html') `
   -Destination $releaseRoot
 
-$artifacts = @(
-  $extensionZip, $bridgeVersionedZip, $bridgeStableZip
-) | ForEach-Object {
+$artifactPaths = @($extensionZip, $bridgeVersionedZip)
+if ($IncludeStableCompanionAlias) { $artifactPaths += $bridgeStableZip }
+$artifacts = $artifactPaths | ForEach-Object {
   $item = Get-Item -LiteralPath $_
   [ordered]@{
     file = $item.Name
@@ -172,6 +144,8 @@ $artifacts = @(
     sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()
   }
 }
+$pdfEngineVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'native-host\pdffigures2\VERSION.json') -Raw | ConvertFrom-Json
+$runtimeVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'native-host\runtime-version.json') -Raw | ConvertFrom-Json
 $releaseMetadata = [ordered]@{
   product = 'Brevess'
   version = $version
@@ -179,9 +153,9 @@ $releaseMetadata = [ordered]@{
   catalogExtensionIds = $catalogIds
   localCompanion = [ordered]@{
     nativeHostId = 'com.sci_reader.codex_bridge'
-    pdffigures2Version = '0.1.0'
-    pdffigures2Commit = '3d7ad46753d4a315cccd1c2bcab398380e88c534'
-    temurinVersion = '8u492-b09'
+    pdffigures2Version = $pdfEngineVersion.version
+    pdffigures2Commit = $pdfEngineVersion.commit
+    temurinVersion = $runtimeVersion.version
   }
   artifacts = $artifacts
 }
@@ -194,4 +168,5 @@ $releaseJson = $releaseMetadata | ConvertTo-Json -Depth 5
 
 Write-Output $releaseRoot
 Write-Output $extensionZip
-Write-Output $bridgeStableZip
+if ($IncludeStableCompanionAlias) { Write-Output $bridgeStableZip }
+else { Write-Output $bridgeVersionedZip }

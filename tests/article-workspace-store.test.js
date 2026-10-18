@@ -1,5 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+
+// This fixture stores string primary keys. Match IDBKeyRange.bound semantics so
+// bounded production reads are exercised instead of reverting to whole-store scans.
+globalThis.IDBKeyRange ||= {
+  bound(lower, upper, lowerOpen = false, upperOpen = false) {
+    return { includes(key) {
+      return (lowerOpen ? key > lower : key >= lower) &&
+        (upperOpen ? key < upper : key <= upper);
+    } };
+  }
+};
 
 const {
   USER_DATA_DATABASE_NAME,
@@ -16,6 +29,12 @@ require('../core/operation-control.js');
 const {
   createSupplementalFigureImportDraft
 } = require('../core/supplemental-materials.js');
+const {
+  createFigureWorkspaceDraft,
+  applyFigureWorkspaceMutation,
+  normalizeFigureWorkspaceDraft,
+  publicFigureWorkspaceDraft
+} = require('../core/figure-workspace.js');
 const { createBackgroundRouter } = require('../core/background-router.js');
 const { createIndexedDbDirectoryHandleStore } = require('../core/directory-sync.js');
 const {
@@ -39,6 +58,7 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
   const keyPaths = new Map();
   const openCalls = [];
   let failPutStore = '';
+  let failDeleteStore = '';
   let readwriteTail = Promise.resolve();
 
   function request(transaction, operation) {
@@ -107,9 +127,10 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
             return request(transaction, () => stores.get(name).has(key)
               ? structuredClone(stores.get(name).get(key)) : undefined);
           },
-          getAll() {
-            return request(transaction, () => [...stores.get(name).values()]
-              .map(value => structuredClone(value)));
+          getAll(range) {
+            return request(transaction, () => [...stores.get(name).entries()]
+              .filter(([key]) => !range || range.includes(key))
+              .map(([, value]) => structuredClone(value)));
           },
           put(value) {
             return request(transaction, () => {
@@ -128,7 +149,15 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
               return key;
             });
           },
-          delete(key) { return request(transaction, () => stores.get(name).delete(key)); }
+          delete(key) {
+            return request(transaction, () => {
+              if (failDeleteStore === name) {
+                failDeleteStore = '';
+                throw new Error(`simulated ${name} delete failure`);
+              }
+              return stores.get(name).delete(key);
+            });
+          }
         };
       }
     };
@@ -183,7 +212,8 @@ function createFakeIndexedDb({ version = 0, initialStores = {}, blockedOnce = fa
   };
   return {
     indexedDb, stores, openCalls, database,
-    failNextPutFor(name) { failPutStore = name; }
+    failNextPutFor(name) { failPutStore = name; },
+    failNextDeleteFor(name) { failDeleteStore = name; }
   };
 }
 
@@ -199,6 +229,69 @@ function workspace(overrides = {}) {
     contentHash: '1'.repeat(64),
     ...overrides
   };
+}
+
+function reviewedMechanismMatrixDraft() {
+  let draft = createFigureWorkspaceDraft([{
+    figureId: 'figure-2', figureLabel: 'Figure 2', panelHints: ['A', 'B']
+  }]);
+  const apply = (mutation, now) => {
+    draft = applyFigureWorkspaceMutation(draft, {
+      ...mutation, expectedRevision: draft.revision
+    }, now);
+  };
+  apply({
+    type: 'replace_mechanism_chain', chain: {
+      nodes: [
+        { id: 'source', label: 'Source' },
+        { id: 'result', label: 'Result' },
+        { id: 'deleted', label: 'Delete me' }
+      ],
+      edges: [
+        {
+          id: 'source-result', from: 'source', to: 'result', label: 'supports',
+          polarity: 'neutral', panelEvidence: [{
+            figureId: 'figure-2', panelId: 'A', evidenceClass: 'other',
+            evidenceClassSource: 'inferred'
+          }]
+        },
+        {
+          id: 'feedback', from: 'result', to: 'source', label: 'feedback',
+          polarity: 'negative', panelEvidence: [{
+            figureId: 'figure-2', panelId: 'B', evidenceClass: 'other',
+            evidenceClassSource: 'inferred'
+          }]
+        },
+        {
+          id: 'deleted-edge', from: 'source', to: 'deleted', label: '',
+          polarity: 'neutral', panelEvidence: []
+        }
+      ]
+    }
+  }, 100);
+  apply({
+    type: 'update_mechanism_node', nodeId: 'source', field: 'label', value: 'Reader source'
+  }, 101);
+  apply({
+    type: 'update_mechanism_edge', edgeId: 'source-result', field: 'label', value: 'Reader relation'
+  }, 102);
+  apply({
+    type: 'update_mechanism_edge_evidence', edgeId: 'source-result', index: 0,
+    expectedFigureId: 'figure-2', expectedPanelId: 'A',
+    evidence: {
+      figureId: 'figure-2', panelId: 'A', evidenceClass: 'necessity',
+      evidenceClassSource: 'manual'
+    }
+  }, 103);
+  apply({
+    type: 'set_mechanism_panel_alias', figureId: 'figure-2', panelId: 'A', value: 'rescue'
+  }, 104);
+  apply({
+    type: 'remove_mechanism_edge_evidence', edgeId: 'feedback', index: 0,
+    expectedFigureId: 'figure-2', expectedPanelId: 'B'
+  }, 105);
+  apply({ type: 'remove_mechanism_node', nodeId: 'deleted' }, 106);
+  return publicFigureWorkspaceDraft(draft);
 }
 
 test('v1 and v2 data upgrade to one v4 database in either adapter opening order', async () => {
@@ -267,6 +360,875 @@ test('workspace assets are atomic and enforce revision and content-hash conflict
   assert.equal(await store.getAsset(workspace().workspaceId, 'chat/atomic.json'), null);
   assert.equal((await store.getWorkspace(workspace().workspaceId)).storageRevision,
     ownerBeforeFailure.storageRevision);
+});
+
+test('workspace staging assets are deleted only through exact revision and hash CAS', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const staged = await store.putAsset(
+    owner.workspaceId,
+    'internal/figure-retry-staging/figure-retry-guard-delete1234.json',
+    { kind: 'figure_retry_candidate', status: 'pending_confirmation' }
+  );
+  assert.equal((await store.getWorkspace(owner.workspaceId)).summary.assetCount, 0);
+  await assert.rejects(() => store.deleteAsset(
+    owner.workspaceId, staged.relativePath,
+    { expectedRevision: staged.revision + 1, expectedContentHash: staged.contentHash }
+  ), error => error.code === 'ASSET_REVISION_CONFLICT');
+  await assert.rejects(() => store.deleteAsset(
+    owner.workspaceId, staged.relativePath,
+    { expectedRevision: staged.revision, expectedContentHash: 'wrong-hash' }
+  ), error => error.code === 'ASSET_HASH_CONFLICT');
+  const result = await store.deleteAsset(
+    owner.workspaceId, staged.relativePath,
+    { expectedRevision: staged.revision, expectedContentHash: staged.contentHash }
+  );
+  assert.equal(result.deleted, true);
+  assert.equal(await store.getAsset(owner.workspaceId, staged.relativePath), null);
+  assert.equal((await store.getWorkspace(owner.workspaceId)).summary.assetCount, 0);
+});
+
+test('Figure promotion requires exact staging CAS and target binding inside the main transaction', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const stagePath =
+    'internal/figure-retry-staging/figure-retry-guard-promotecas1234.json';
+  const base = await store.putAsset(owner.workspaceId, mainPath, { science: 'base' });
+  let staged = await store.putAsset(owner.workspaceId, stagePath, {
+    kind: 'figure_retry_candidate', status: 'pending_confirmation',
+    target: { relativePath: mainPath }, candidate: { content: { science: 'retry' } }
+  });
+  for (const requiredStaging of [{
+    relativePath: stagePath, revision: staged.revision + 1, contentHash: staged.contentHash
+  }, {
+    relativePath: stagePath, revision: staged.revision, contentHash: 'wrong-stage-hash'
+  }]) {
+    await assert.rejects(() => store.putAsset(
+      owner.workspaceId, mainPath, { science: 'must not persist' }, {
+        expectedRevision: base.revision,
+        expectedContentHash: base.contentHash,
+        requiredStaging
+      }
+    ), error => error.code === 'STAGING_STALE');
+    assert.deepEqual((await store.getAsset(owner.workspaceId, mainPath)).content,
+      { science: 'base' });
+  }
+  staged = await store.putAsset(owner.workspaceId, stagePath, {
+    kind: 'figure_retry_candidate', status: 'pending_confirmation',
+    target: { relativePath: 'figures/another-draft.json' },
+    candidate: { content: { science: 'retry' } }
+  }, {
+    expectedRevision: staged.revision,
+    expectedContentHash: staged.contentHash
+  });
+  await assert.rejects(() => store.putAsset(
+    owner.workspaceId, mainPath, { science: 'must not persist' }, {
+      expectedRevision: base.revision,
+      expectedContentHash: base.contentHash,
+      requiredStaging: {
+        relativePath: stagePath,
+        revision: staged.revision,
+        contentHash: staged.contentHash
+      }
+    }
+  ), error => error.code === 'STAGING_STALE');
+  assert.deepEqual((await store.getAsset(owner.workspaceId, mainPath)).content,
+    { science: 'base' });
+});
+
+test('pending Figure promotion keeps base summary until staging finalize atomically refreshes it', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const stagingPath =
+    'internal/figure-retry-staging/figure-retry-guard-summary1234.json';
+  const baseContent = { marker: 'base' };
+  const promotedContent = { marker: 'promoted', added: 'retry science' };
+  const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+  const baseSummary = (await store.getWorkspace(owner.workspaceId)).summary;
+  const staged = await store.putAsset(owner.workspaceId, stagingPath, {
+    kind: 'figure_retry_candidate', status: 'pending_confirmation'
+  });
+  const promoted = await store.putAsset(
+    owner.workspaceId, mainPath, promotedContent, {
+      expectedRevision: base.revision,
+      expectedContentHash: base.contentHash,
+      summaryContent: baseContent
+    }
+  );
+  const pendingSummary = (await store.getWorkspace(owner.workspaceId)).summary;
+  assert.equal(pendingSummary.assetCount, baseSummary.assetCount);
+  assert.equal(pendingSummary.assetBytes, baseSummary.assetBytes);
+  await store.deleteAsset(owner.workspaceId, stagingPath, {
+    expectedRevision: staged.revision,
+    expectedContentHash: staged.contentHash,
+    refreshSummaryPath: mainPath
+  });
+  const finalizedSummary = (await store.getWorkspace(owner.workspaceId)).summary;
+  assert.equal(finalizedSummary.assetCount, 1);
+  assert.equal(finalizedSummary.assetBytes, promoted.byteSize);
+});
+
+test('projected Figure retry writes atomically reconcile pre- and post-promotion crash stages', async () => {
+  for (const promotedBeforeCrash of [false, true]) {
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+    const owner = await store.ensureWorkspace(workspace());
+    const mainPath = 'figures/workspace-draft.json';
+    const oldStagePath = promotedBeforeCrash
+      ? 'internal/figure-retry-staging/figure-retry-guard-oldpost1234.json'
+      : 'internal/figure-retry-staging/figure-retry-guard-oldpre12345.json';
+    const baseContent = {
+      revision: 4,
+      figures: [{ figureId: 'f1', panelAnalyses: {
+        A: { conclusion: { value: 'completed A', humanReviewed: true } }
+      } }]
+    };
+    const retryContent = structuredClone(baseContent);
+    retryContent.revision = 5;
+    retryContent.figures[0].panelAnalyses.B = {
+      conclusion: { value: 'unconfirmed retry B', humanReviewed: false }
+    };
+    const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+    const staged = await store.putAsset(owner.workspaceId, oldStagePath, {
+      schemaVersion: 1,
+      kind: 'figure_retry_candidate',
+      status: 'pending_confirmation',
+      target: { relativePath: mainPath },
+      base: {
+        revision: base.revision,
+        contentHash: base.contentHash,
+        byteSize: base.byteSize,
+        updatedAt: base.updatedAt,
+        content: baseContent
+      },
+      candidate: { content: retryContent }
+    });
+    if (promotedBeforeCrash) {
+      await store.putAsset(owner.workspaceId, mainPath, retryContent, {
+        expectedRevision: base.revision,
+        expectedContentHash: base.contentHash,
+        summaryContent: baseContent
+      });
+    }
+    const raw = await store.getAsset(owner.workspaceId, mainPath);
+    const humanContent = structuredClone(baseContent);
+    humanContent.figures[0].note = {
+      value: promotedBeforeCrash ? 'human after post crash' : 'human after pre crash',
+      humanReviewed: true
+    };
+    const mirrored = [];
+    const router = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      articleWorkspaceStore: store,
+      directorySync: {
+        async listWorkspaceManifests() { return { permission: 'granted', matches: [] }; },
+        async enqueueWorkspaceAsset(_workspace, path, nextContent) {
+          mirrored.push({ path, content: structuredClone(nextContent) });
+        }
+      },
+      fetchImpl: async () => { throw new Error('provider must not be called'); }
+    });
+    const loaded = await router.handle({
+      type: 'ARTICLE_WORKSPACE_GET_ASSET',
+      workspaceId: owner.workspaceId,
+      relativePath: mainPath
+    });
+    assert.equal(loaded.success, true);
+    assert.deepEqual(loaded.data.asset.content, baseContent);
+    assert.match(loaded.data.asset.writeToken, /^workspace-write-v1-[a-f0-9]{16}$/u);
+    const saved = await router.handle({
+      type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+      workspaceId: owner.workspaceId,
+      workspaceGeneration: owner.workspaceGeneration,
+      relativePath: mainPath,
+      content: humanContent,
+      expectedRevision: loaded.data.asset.revision,
+      expectedContentHash: loaded.data.asset.contentHash,
+      writeToken: loaded.data.asset.writeToken
+    });
+    assert.equal(saved.success, true);
+    assert.equal((await store.listAssets(owner.workspaceId))
+      .some(asset => asset.relativePath === oldStagePath), false);
+    assert.deepEqual((await store.getAsset(owner.workspaceId, mainPath)).content, humanContent);
+    const exported = await router.handle({
+      type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId: owner.workspaceId
+    });
+    assert.deepEqual(exported.data.assets.map(asset => asset.content), [humanContent]);
+    mirrored.length = 0;
+    await router.handle({
+      type: 'ARTICLE_WORKSPACE_MIRROR_ALL',
+      workspaceId: owner.workspaceId,
+      workspaceGeneration: owner.workspaceGeneration
+    });
+    assert.deepEqual(mirrored, [{ path: mainPath, content: humanContent }]);
+    assert.doesNotMatch(JSON.stringify(exported), /unconfirmed retry B/u);
+    assert.equal(raw.revision >= base.revision, true);
+    assert.equal(staged.revision, 1);
+  }
+});
+
+test('Figure retry promotion transaction rejects a staging record deleted after confirm read', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const stagePath =
+    'internal/figure-retry-staging/figure-retry-guard-confirmrace1234.json';
+  const baseContent = { revision: 1, science: 'base science' };
+  const candidateA = { revision: 2, science: 'unconfirmed A science' };
+  const candidateB = { revision: 2, science: 'confirmed B science' };
+  const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+  const stageA = await store.putAsset(owner.workspaceId, stagePath, {
+    schemaVersion: 1,
+    kind: 'figure_retry_candidate',
+    status: 'pending_confirmation',
+    target: { relativePath: mainPath },
+    base: {
+      revision: base.revision,
+      contentHash: base.contentHash,
+      byteSize: base.byteSize,
+      updatedAt: base.updatedAt,
+      content: baseContent
+    },
+    candidate: { content: candidateA }
+  });
+  let releaseStageRead;
+  let announceStageRead;
+  const stageRead = new Promise(resolve => { announceStageRead = resolve; });
+  const stageRelease = new Promise(resolve => { releaseStageRead = resolve; });
+  let gateStageRead = true;
+  const guardedStore = {
+    ...store,
+    async getAsset(id, path) {
+      const asset = await store.getAsset(id, path);
+      if (gateStageRead && path === stagePath) {
+        gateStageRead = false;
+        announceStageRead();
+        await stageRelease;
+      }
+      return asset;
+    }
+  };
+  const mirrored = [];
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: guardedStore,
+    directorySync: {
+      async listWorkspaceManifests() { return { permission: 'granted', matches: [] }; },
+      async enqueueWorkspaceAsset(_workspace, path, content) {
+        mirrored.push({ path, content: structuredClone(content) });
+      }
+    },
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const confirmingA = router.handle({
+    type: 'ARTICLE_WORKSPACE_CONFIRM_STAGED_ASSET',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration,
+    relativePath: mainPath,
+    stagingPath: stagePath,
+    stagingRevision: stageA.revision,
+    stagingContentHash: stageA.contentHash,
+    commitGuardId: 'figure-retry-guard-confirmrace5678',
+    commitGuardKind: 'figure_retry'
+  }, { async onWorkspaceCommitGuard() { return { success: true }; } });
+  await stageRead;
+  const promotedB = await store.reconcileFigureRetryWrite(
+    owner.workspaceId, mainPath, candidateB, {
+      expectedRawRevision: base.revision,
+      expectedRawContentHash: base.contentHash,
+      pendingStages: [{
+        relativePath: stageA.relativePath,
+        revision: stageA.revision,
+        contentHash: stageA.contentHash
+      }]
+    }
+  );
+  releaseStageRead();
+  const responseA = await confirmingA;
+  assert.equal(responseA.success, false);
+  assert.equal(responseA.error.code, 'STAGING_STALE');
+  const rawMain = await store.getAsset(owner.workspaceId, mainPath);
+  assert.equal(rawMain.revision, promotedB.asset.revision);
+  assert.equal(rawMain.contentHash, promotedB.asset.contentHash);
+  assert.deepEqual(rawMain.content, candidateB);
+  assert.equal(await store.getAsset(owner.workspaceId, stagePath), null);
+
+  const [loaded, listed, exported] = await Promise.all([
+    router.handle({
+      type: 'ARTICLE_WORKSPACE_GET_ASSET',
+      workspaceId: owner.workspaceId,
+      relativePath: mainPath
+    }),
+    router.handle({
+      type: 'ARTICLE_WORKSPACE_LIST_ASSETS',
+      workspaceId: owner.workspaceId
+    }),
+    router.handle({ type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId: owner.workspaceId })
+  ]);
+  await router.handle({
+    type: 'ARTICLE_WORKSPACE_MIRROR_ALL',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration
+  });
+  assert.deepEqual(loaded.data.asset.content, candidateB);
+  assert.deepEqual(listed.data.assets.map(asset => asset.content), [candidateB]);
+  assert.deepEqual(exported.data.assets.map(asset => asset.content), [candidateB]);
+  assert.deepEqual(mirrored, [{ path: mainPath, content: candidateB }]);
+  assert.doesNotMatch(JSON.stringify({ loaded, listed, exported, mirrored }),
+    /unconfirmed A science/u);
+});
+
+test('new Figure retry supersedes every older target stage in one transaction', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const baseContent = {
+    revision: 7,
+    figures: [{ figureId: 'f1', panelAnalyses: {
+      A: { conclusion: { value: 'completed A', humanReviewed: true } }
+    } }]
+  };
+  const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+  const oldStages = [];
+  for (const suffix of ['older1111', 'older2222']) {
+    oldStages.push(await store.putAsset(
+      owner.workspaceId,
+      `internal/figure-retry-staging/figure-retry-guard-${suffix}.json`,
+      {
+        kind: 'figure_retry_candidate', status: 'pending_confirmation',
+        target: { relativePath: mainPath },
+        base: { revision: base.revision, contentHash: base.contentHash, content: baseContent },
+        candidate: { content: { stale: suffix } }
+      }
+    ));
+  }
+  const candidate = structuredClone(baseContent);
+  candidate.revision = 8;
+  candidate.figures[0].panelAnalyses.B = {
+    conclusion: { value: 'recovered missing B', humanReviewed: false }
+  };
+  const newStagePath =
+    'internal/figure-retry-staging/figure-retry-guard-current3333.json';
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const loaded = await router.handle({
+    type: 'ARTICLE_WORKSPACE_GET_ASSET',
+    workspaceId: owner.workspaceId,
+    relativePath: mainPath
+  });
+  assert.deepEqual(loaded.data.asset.content, baseContent);
+  const stagedResponse = await router.handle({
+    type: 'ARTICLE_WORKSPACE_SAVE_ASSET',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration,
+    relativePath: mainPath,
+    content: candidate,
+    expectedRevision: loaded.data.asset.revision,
+    expectedContentHash: loaded.data.asset.contentHash,
+    writeToken: loaded.data.asset.writeToken,
+    commitGuardId: 'figure-retry-guard-current3333',
+    commitGuardKind: 'figure_retry'
+  }, { async onWorkspaceCommitGuard() { return { success: true }; } });
+  assert.equal(stagedResponse.success, true);
+  assert.equal(stagedResponse.data.stagingPath, newStagePath);
+  const currentMain = await store.getAsset(owner.workspaceId, mainPath);
+  const currentStage = await store.getAsset(owner.workspaceId, newStagePath);
+  assert.deepEqual(currentMain.content, baseContent);
+  assert.deepEqual(currentStage.content.base.content, baseContent);
+  assert.deepEqual(currentStage.content.candidate.content, candidate);
+  assert.equal(currentStage.content.candidate.content
+    .figures[0].panelAnalyses.A.conclusion.value, 'completed A');
+  assert.deepEqual((await store.listAssets(owner.workspaceId))
+    .filter(asset => asset.relativePath.startsWith('internal/figure-retry-staging/'))
+    .map(asset => asset.relativePath), [newStagePath]);
+});
+
+test('Figure retry finalize removes every older target stage behind the promoted-main CAS', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const main = await store.putAsset(owner.workspaceId, mainPath, { confirmed: true });
+  const stages = [];
+  for (const suffix of ['oldfinal1111', 'currentfinal2222']) {
+    stages.push(await store.putAsset(
+      owner.workspaceId,
+      `internal/figure-retry-staging/figure-retry-guard-${suffix}.json`,
+      {
+        kind: 'figure_retry_candidate', status: 'pending_confirmation',
+        target: { relativePath: mainPath },
+        base: { revision: 0, contentHash: '', content: null },
+        candidate: { content: { suffix } }
+      }
+    ));
+  }
+  await store.deleteAsset(owner.workspaceId, stages[1].relativePath, {
+    expectedRevision: stages[1].revision,
+    expectedContentHash: stages[1].contentHash,
+    refreshSummaryPath: mainPath,
+    deleteRelatedStagingForPath: mainPath,
+    relatedAssetExpectedRevision: main.revision,
+    relatedAssetExpectedContentHash: main.contentHash
+  });
+  assert.deepEqual((await store.listAssets(owner.workspaceId))
+    .map(asset => asset.relativePath), [mainPath]);
+});
+
+test('Figure retry finalize treats an already-missing staged asset as a CAS conflict', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const stagePath =
+    'internal/figure-retry-staging/figure-retry-guard-missingfinal1234.json';
+  const main = await store.putAsset(owner.workspaceId, mainPath, { confirmed: true });
+  await assert.rejects(() => store.deleteAsset(owner.workspaceId, stagePath, {
+    expectedRevision: 1,
+    expectedContentHash: 'missing-stage-hash',
+    refreshSummaryPath: mainPath,
+    deleteRelatedStagingForPath: mainPath,
+    relatedAssetExpectedRevision: main.revision,
+    relatedAssetExpectedContentHash: main.contentHash
+  }), error => error.code === 'ASSET_REVISION_CONFLICT');
+  assert.deepEqual((await store.getAsset(owner.workspaceId, mainPath)).content,
+    { confirmed: true });
+});
+
+test('Figure retry staging maintenance removes only a bounded batch of expired hidden assets', async () => {
+  let clock = '2026-08-01T00:00:00.000Z';
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb, { now: () => clock });
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/workspace-draft.json';
+  const main = await store.putAsset(
+    owner.workspaceId, mainPath, { science: 'main survives' }
+  );
+  const oldPaths = [];
+  for (const suffix of ['expired1111', 'expired2222', 'expired3333']) {
+    const path = `internal/figure-retry-staging/figure-retry-guard-${suffix}.json`;
+    oldPaths.push(path);
+    await store.putAsset(owner.workspaceId, path, {
+      kind: 'figure_retry_candidate', status: 'pending_confirmation',
+      target: { relativePath: mainPath },
+      base: {
+        revision: main.revision, contentHash: main.contentHash,
+        content: main.content
+      },
+      candidate: { content: { suffix } }
+    });
+  }
+  clock = '2026-08-31T00:00:00.000Z';
+  const freshPath =
+    'internal/figure-retry-staging/figure-retry-guard-fresh4444.json';
+  await store.putAsset(owner.workspaceId, freshPath, {
+    kind: 'figure_retry_candidate', status: 'pending_confirmation',
+    target: { relativePath: mainPath },
+    base: {
+      revision: main.revision, contentHash: main.contentHash,
+      content: main.content
+    },
+    candidate: { content: { fresh: true } }
+  });
+  const first = await store.sweepExpiredFigureRetryStaging({
+    ttlMs: 7 * 24 * 60 * 60 * 1000, maxBatch: 2
+  });
+  assert.equal(first.deleted, 2);
+  assert.equal(first.remainingExpired, true);
+  assert.deepEqual((await store.getAsset(owner.workspaceId, mainPath)).content,
+    { science: 'main survives' });
+  assert.notEqual(await store.getAsset(owner.workspaceId, freshPath), null);
+  const second = await store.sweepExpiredFigureRetryStaging({
+    ttlMs: 7 * 24 * 60 * 60 * 1000, maxBatch: 2
+  });
+  assert.equal(second.deleted, 1);
+  assert.equal(second.remainingExpired, false);
+  assert.deepEqual((await store.listAssets(owner.workspaceId))
+    .map(asset => asset.relativePath).sort(), [freshPath, mainPath].sort());
+  assert.equal(oldPaths.some(path =>
+    fake.stores.get('workspaceAssets').has(`${owner.workspaceId}\u0000${path}`)), false);
+  const backgroundSource = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  assert.match(backgroundSource, /sweepExpiredFigureRetryStagingBatches/u);
+  assert.match(backgroundSource, /pass < 4[\s\S]*remainingExpired !== true/u);
+});
+
+test('Figure retry staging maintenance retains expired promoted quarantine across restart', async () => {
+  let clock = '2026-07-01T00:00:00.000Z';
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb, { now: () => clock });
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/inventory.json';
+  const stagePath =
+    'internal/figure-retry-staging/figure-retry-guard-expiredpromoted1234.json';
+  const baseContent = {
+    figures: [{
+      figureId: 'f1',
+      panelHints: ['A'],
+      panelAnalyses: { A: { conclusion: { value: 'confirmed A' } } }
+    }]
+  };
+  const candidateContent = structuredClone(baseContent);
+  candidateContent.figures[0].panelHints.push('B');
+  candidateContent.figures[0].panelAnalyses.B = {
+    conclusion: { value: 'unconfirmed retry B science' }
+  };
+  const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+  const staged = await store.putAsset(owner.workspaceId, stagePath, {
+    schemaVersion: 1,
+    kind: 'figure_retry_candidate',
+    status: 'pending_confirmation',
+    target: { relativePath: mainPath },
+    base: {
+      revision: base.revision,
+      contentHash: base.contentHash,
+      byteSize: base.byteSize,
+      updatedAt: base.updatedAt,
+      content: baseContent
+    },
+    candidate: { content: candidateContent }
+  });
+  const humanContent = structuredClone(baseContent);
+  humanContent.figures[0].panelHints.push('C');
+  humanContent.figures[0].panelAnalyses.C = {
+    conclusion: { value: 'concurrent human C', humanReviewed: true }
+  };
+  humanContent.figures[0].note = { value: 'concurrent human note', humanReviewed: true };
+  await store.putAsset(owner.workspaceId, mainPath, humanContent, {
+    expectedRevision: base.revision,
+    expectedContentHash: base.contentHash
+  });
+  const router = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const confirmed = await router.handle({
+    type: 'ARTICLE_WORKSPACE_CONFIRM_STAGED_ASSET',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration,
+    relativePath: mainPath,
+    stagingPath: stagePath,
+    stagingRevision: staged.revision,
+    stagingContentHash: staged.contentHash,
+    commitGuardId: 'figure-retry-guard-expiredpromoted5678',
+    commitGuardKind: 'figure_retry'
+  }, { async onWorkspaceCommitGuard() { return { success: true }; } });
+  assert.equal(confirmed.success, true);
+  const durableStage = await store.getAsset(owner.workspaceId, stagePath);
+  assert.deepEqual(durableStage.figureRetryPromotion, {
+    status: 'promoted_pending_confirmation',
+    targetRelativePath: mainPath,
+    mainRevision: confirmed.data.asset.revision,
+    mainContentHash: confirmed.data.asset.contentHash
+  });
+  assert.match(JSON.stringify((await store.getAsset(owner.workspaceId, mainPath)).content),
+    /unconfirmed retry B science/u);
+
+  clock = '2026-08-31T00:00:00.000Z';
+  const swept = await store.sweepExpiredFigureRetryStaging({
+    ttlMs: 7 * 24 * 60 * 60 * 1000,
+    maxBatch: 1
+  });
+  assert.deepEqual(swept, {
+    deleted: 0,
+    remainingExpired: false,
+    maxBatch: 1,
+    ttlMs: 7 * 24 * 60 * 60 * 1000
+  });
+  assert.notEqual(await store.getAsset(owner.workspaceId, stagePath), null);
+
+  const mirrored = [];
+  const restartedRouter = createBackgroundRouter({
+    storageArea: createMemoryStorage(),
+    articleWorkspaceStore: store,
+    directorySync: {
+      async listWorkspaceManifests() { return { permission: 'granted', matches: [] }; },
+      async enqueueWorkspaceAsset(_workspace, path, content) {
+        mirrored.push({ path, content: structuredClone(content) });
+      }
+    },
+    fetchImpl: async () => { throw new Error('provider must not be called'); }
+  });
+  const [loaded, detail, listed, exported] = await Promise.all([
+    restartedRouter.handle({
+      type: 'ARTICLE_WORKSPACE_GET_ASSET',
+      workspaceId: owner.workspaceId,
+      relativePath: mainPath
+    }),
+    restartedRouter.handle({
+      type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId: owner.workspaceId
+    }),
+    restartedRouter.handle({
+      type: 'ARTICLE_WORKSPACE_LIST_ASSETS', workspaceId: owner.workspaceId
+    }),
+    restartedRouter.handle({
+      type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId: owner.workspaceId
+    })
+  ]);
+  await restartedRouter.handle({
+    type: 'ARTICLE_WORKSPACE_MIRROR_ALL',
+    workspaceId: owner.workspaceId,
+    workspaceGeneration: owner.workspaceGeneration
+  });
+  assert.deepEqual(loaded.data.asset.content, humanContent);
+  assert.equal(detail.data.panelCount, 2);
+  assert.deepEqual(listed.data.assets.map(asset => asset.content), [humanContent]);
+  assert.deepEqual(exported.data.assets.map(asset => asset.content), [humanContent]);
+  assert.deepEqual(mirrored, [{ path: mainPath, content: humanContent }]);
+  assert.doesNotMatch(JSON.stringify({ loaded, detail, listed, exported, mirrored }),
+    /unconfirmed retry B science/u);
+});
+
+test('Figure retry staging maintenance retains receipt-less legacy promoted candidates', async () => {
+  for (const withConcurrentHumanEdit of [false, true]) {
+    let clock = '2026-07-01T00:00:00.000Z';
+    const fake = createFakeIndexedDb();
+    const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb, { now: () => clock });
+    const owner = await store.ensureWorkspace(workspace());
+    const mainPath = 'figures/inventory.json';
+    const stagePath = withConcurrentHumanEdit
+      ? 'internal/figure-retry-staging/figure-retry-guard-legacyrebased1234.json'
+      : 'internal/figure-retry-staging/figure-retry-guard-legacyexact12345.json';
+    const baseContent = {
+      figures: [{
+        figureId: 'f1', panelHints: ['A'],
+        panelAnalyses: { A: { conclusion: { value: 'confirmed A' } } }
+      }]
+    };
+    const candidateContent = structuredClone(baseContent);
+    candidateContent.figures[0].panelHints.push('B');
+    candidateContent.figures[0].panelAnalyses.B = {
+      conclusion: { value: 'legacy unconfirmed retry B science' }
+    };
+    const base = await store.putAsset(owner.workspaceId, mainPath, baseContent);
+    await store.putAsset(owner.workspaceId, stagePath, {
+      schemaVersion: 1,
+      kind: 'figure_retry_candidate',
+      status: 'pending_confirmation',
+      target: { relativePath: mainPath },
+      base: {
+        revision: base.revision,
+        contentHash: base.contentHash,
+        byteSize: base.byteSize,
+        updatedAt: base.updatedAt,
+        content: baseContent
+      },
+      candidate: { content: candidateContent }
+    });
+    const rawContent = structuredClone(candidateContent);
+    if (withConcurrentHumanEdit) {
+      rawContent.figures[0].panelHints.push('C');
+      rawContent.figures[0].panelAnalyses.C = {
+        conclusion: { value: 'concurrent human C', humanReviewed: true }
+      };
+      rawContent.figures[0].note = {
+        value: 'concurrent human note', humanReviewed: true
+      };
+    }
+    await store.putAsset(owner.workspaceId, mainPath, rawContent, {
+      expectedRevision: base.revision,
+      expectedContentHash: base.contentHash,
+      summaryContent: baseContent
+    });
+    const expectedProjection = structuredClone(baseContent);
+    if (withConcurrentHumanEdit) {
+      expectedProjection.figures[0].panelHints.push('C');
+      expectedProjection.figures[0].panelAnalyses.C = structuredClone(
+        rawContent.figures[0].panelAnalyses.C
+      );
+      expectedProjection.figures[0].note = structuredClone(rawContent.figures[0].note);
+    }
+
+    clock = '2026-08-31T00:00:00.000Z';
+    const swept = await store.sweepExpiredFigureRetryStaging({
+      ttlMs: 7 * 24 * 60 * 60 * 1000,
+      maxBatch: 1
+    });
+    assert.equal(swept.deleted, 0);
+    assert.equal(swept.remainingExpired, false);
+    assert.notEqual(await store.getAsset(owner.workspaceId, stagePath), null);
+
+    const mirrored = [];
+    const restartedRouter = createBackgroundRouter({
+      storageArea: createMemoryStorage(),
+      articleWorkspaceStore: store,
+      directorySync: {
+        async listWorkspaceManifests() { return { permission: 'granted', matches: [] }; },
+        async enqueueWorkspaceAsset(_workspace, path, content) {
+          mirrored.push({ path, content: structuredClone(content) });
+        }
+      },
+      fetchImpl: async () => { throw new Error('provider must not be called'); }
+    });
+    const [loaded, detail, listed, exported] = await Promise.all([
+      restartedRouter.handle({
+        type: 'ARTICLE_WORKSPACE_GET_ASSET',
+        workspaceId: owner.workspaceId,
+        relativePath: mainPath
+      }),
+      restartedRouter.handle({
+        type: 'ARTICLE_WORKSPACE_DETAIL', workspaceId: owner.workspaceId
+      }),
+      restartedRouter.handle({
+        type: 'ARTICLE_WORKSPACE_LIST_ASSETS', workspaceId: owner.workspaceId
+      }),
+      restartedRouter.handle({
+        type: 'ARTICLE_WORKSPACE_EXPORT', workspaceId: owner.workspaceId
+      })
+    ]);
+    await restartedRouter.handle({
+      type: 'ARTICLE_WORKSPACE_MIRROR_ALL',
+      workspaceId: owner.workspaceId,
+      workspaceGeneration: owner.workspaceGeneration
+    });
+    assert.deepEqual(loaded.data.asset.content, expectedProjection);
+    assert.equal(detail.data.panelCount, withConcurrentHumanEdit ? 2 : 1);
+    assert.deepEqual(listed.data.assets.map(asset => asset.content), [expectedProjection]);
+    assert.deepEqual(exported.data.assets.map(asset => asset.content), [expectedProjection]);
+    assert.deepEqual(mirrored, [{ path: mainPath, content: expectedProjection }]);
+    assert.doesNotMatch(JSON.stringify({ loaded, detail, listed, exported, mirrored }),
+      /legacy unconfirmed retry B science/u);
+  }
+});
+
+test('Figure retry staging maintenance retains an expired stage when cleanup fails', async () => {
+  let clock = '2026-08-01T00:00:00.000Z';
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb, { now: () => clock });
+  const owner = await store.ensureWorkspace(workspace());
+  const mainPath = 'figures/inventory.json';
+  const main = await store.putAsset(owner.workspaceId, mainPath, { confirmed: true });
+  const stagePath =
+    'internal/figure-retry-staging/figure-retry-guard-cleanuperror1234.json';
+  await store.putAsset(owner.workspaceId, stagePath, {
+    kind: 'figure_retry_candidate',
+    status: 'pending_confirmation',
+    target: { relativePath: mainPath },
+    base: {
+      revision: main.revision, contentHash: main.contentHash,
+      content: main.content
+    },
+    candidate: { content: { pending: true } }
+  });
+  clock = '2026-08-31T00:00:00.000Z';
+  fake.failNextDeleteFor('workspaceAssets');
+  await assert.rejects(() => store.sweepExpiredFigureRetryStaging({
+    ttlMs: 7 * 24 * 60 * 60 * 1000,
+    maxBatch: 1
+  }), /simulated workspaceAssets delete failure/u);
+  assert.notEqual(await store.getAsset(owner.workspaceId, stagePath), null);
+  const retried = await store.sweepExpiredFigureRetryStaging({
+    ttlMs: 7 * 24 * 60 * 60 * 1000,
+    maxBatch: 1
+  });
+  assert.equal(retried.deleted, 1);
+  assert.equal(await store.getAsset(owner.workspaceId, stagePath), null);
+});
+
+test('Figure draft workspace asset round trip preserves reviewed empty values and CAS authority', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  let draft = createFigureWorkspaceDraft([{
+    figureId: 'figure-2', figureLabel: 'Figure 2', panelHints: ['A']
+  }]);
+  draft = applyFigureWorkspaceMutation(draft, {
+    type: 'set_figure_field', expectedRevision: draft.revision,
+    figureId: 'figure-2', field: 'remainingQuestion', value: ''
+  }, 222);
+  draft = applyFigureWorkspaceMutation(draft, {
+    type: 'set_panel_field', expectedRevision: draft.revision,
+    figureId: 'figure-2', panelId: 'A', field: 'note', value: 'durable human note'
+  }, 223);
+  const publicDraft = publicFigureWorkspaceDraft(draft);
+  const first = await store.putAsset(
+    owner.workspaceId, 'figures/workspace-draft.json', publicDraft,
+    { expectedRevision: 0, expectedContentHash: '' }
+  );
+  const portableDraft = JSON.parse(JSON.stringify(publicDraft));
+  assert.deepEqual(first.content, portableDraft);
+  assert.deepEqual((await store.getAsset(
+    owner.workspaceId, 'figures/workspace-draft.json'
+  )).content, portableDraft);
+
+  await assert.rejects(() => store.putAsset(
+    owner.workspaceId, 'figures/workspace-draft.json', { overwritten: true },
+    { expectedRevision: 0, expectedContentHash: first.contentHash }
+  ), error => error.code === 'ASSET_REVISION_CONFLICT');
+  assert.deepEqual((await store.getAsset(
+    owner.workspaceId, 'figures/workspace-draft.json'
+  )).content, portableDraft);
+});
+
+test('Figure draft workspace asset round trip preserves the complete reviewed mechanism matrix state', async () => {
+  const fake = createFakeIndexedDb();
+  const store = createIndexedDbArticleWorkspaceStore(fake.indexedDb);
+  const owner = await store.ensureWorkspace(workspace());
+  const edited = reviewedMechanismMatrixDraft();
+  const saved = await store.putAsset(
+    owner.workspaceId, 'figures/workspace-draft.json', edited,
+    { expectedRevision: 0, expectedContentHash: '' }
+  );
+  const stored = await store.getAsset(owner.workspaceId, 'figures/workspace-draft.json');
+  const reloaded = publicFigureWorkspaceDraft(normalizeFigureWorkspaceDraft(stored.content));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(reloaded)), JSON.parse(JSON.stringify(edited)));
+  assert.equal(reloaded.mechanismChain.nodes.find(node => node.id === 'source').label.value,
+    'Reader source');
+  assert.equal(reloaded.mechanismChain.nodes.some(node => node.id === 'deleted'), false);
+  assert.equal(reloaded.mechanismChain.edges.some(edge => edge.id === 'deleted-edge'), false);
+  assert.equal(reloaded.mechanismChain.edges.find(edge => edge.id === 'feedback')
+    .panelEvidence.length, 0);
+  assert.equal(reloaded.mechanismChain.edges.find(edge => edge.id === 'source-result')
+    .panelEvidence[0].evidenceClassSource, 'manual');
+  assert.deepEqual(reloaded.mechanismChain.panelAliases['figure-2:A'], {
+    value: 'rescue', humanReviewed: true, editedAt: 104
+  });
+  assert.equal(reloaded.mechanismChain.reviewTombstones.nodes
+    .some(item => item.id === 'deleted' && item.editedAt === 106), true);
+  assert.equal(reloaded.mechanismChain.reviewTombstones.edges
+    .some(item => item.id === 'deleted-edge' && item.editedAt === 106), true);
+  assert.equal(reloaded.mechanismChain.reviewTombstones.evidence
+    .some(item => item.edgeId === 'feedback' && item.panelId === 'B' &&
+      item.editedAt === 105), true);
+  const regenerated = applyFigureWorkspaceMutation(reloaded, {
+    type: 'replace_mechanism_chain', expectedRevision: reloaded.revision,
+    chain: {
+      nodes: [
+        { id: 'source', label: 'Source' }, { id: 'result', label: 'Result' },
+        { id: 'deleted', label: 'Must stay deleted' }
+      ],
+      edges: [
+        {
+          id: 'feedback', from: 'result', to: 'source', label: 'feedback',
+          polarity: 'negative', panelEvidence: [{
+            figureId: 'figure-2', panelId: 'B', evidenceClass: 'other',
+            evidenceClassSource: 'inferred'
+          }]
+        },
+        {
+          id: 'deleted-edge', from: 'source', to: 'deleted', label: '',
+          polarity: 'neutral', panelEvidence: []
+        }
+      ]
+    }
+  }, 107);
+  assert.equal(regenerated.mechanismChain.nodes.some(node => node.id === 'deleted'), false);
+  assert.equal(regenerated.mechanismChain.edges.find(edge => edge.id === 'feedback')
+    .panelEvidence.length, 0);
+  await assert.rejects(() => store.putAsset(
+    owner.workspaceId, 'figures/workspace-draft.json', { overwritten: true },
+    { expectedRevision: 0, expectedContentHash: saved.contentHash }
+  ), error => error.code === 'ASSET_REVISION_CONFLICT');
 });
 
 test('workspace asset createOnly conflicts without replacing the existing asset', async () => {

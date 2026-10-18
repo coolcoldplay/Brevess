@@ -6,6 +6,7 @@ const {
   wikimediaOriginalImageSource,
   iiifOriginalImageSource,
   wordpressOriginalImageSource,
+  cellPressLargeImageSource,
   unscaledQueryImageSource,
   collectFigureImageCandidates,
   extractFigureImageCandidatesFromHtml,
@@ -58,6 +59,24 @@ test('promotes Springer Nature preview images to their full-resolution resource'
   );
 });
 
+test('promotes Springer Nature Extended Data ESM previews to full resolution', () => {
+  const preview = [
+    'https://media.springernature.com/lw685/springer-static/esm/',
+    'art%3A10.1038%2Fs41586-026-10907-8/MediaObjects/',
+    '41586_2026_10907_Fig6_ESM.jpg'
+  ].join('');
+  const full = preview.replace('/lw685/', '/full/');
+  const figurePage = 'https://www.nature.com/articles/s41586-026-10907-8/figures/6';
+  const image = fakeImage({ 'data-supp-info-image': preview }, '', figurePage);
+
+  assert.equal(springerNatureFullImageSource(preview), full);
+  assert.deepEqual(
+    collectFigureImageCandidates(image, 'https://www.nature.com/articles/test')
+      .slice(0, 3),
+    [full, preview, figurePage]
+  );
+});
+
 test('derives reliable unscaled variants used by common publisher CDNs', () => {
   assert.equal(
     wikimediaOriginalImageSource(
@@ -77,6 +96,49 @@ test('derives reliable unscaled variants used by common publisher CDNs', () => {
     unscaledQueryImageSource('https://cdn.example/figure.png?width=600&token=signed'),
     'https://cdn.example/figure.png?token=signed'
   );
+});
+
+test('binds Cell CMS Figure numbers to the canonical article PII and prefers official large images', () => {
+  const article = 'https://www.cell.com/cell/fulltext/S0092-8674(26)00103-0';
+  const figure1 = [
+    'https://www.cell.com/cms/10.1016/j.cell.2026.01.016/asset/',
+    'c66fef4f-fb95-4262-b275-ee1d9c623728/main.assets/gr1.jpg'
+  ].join('');
+  const figure2 = [
+    'https://www.cell.com/cms/10.1016/j.cell.2026.01.016/asset/',
+    '255eb2de-7616-4e0a-92e0-737b64134d6a/main.assets/gr2.jpg'
+  ].join('');
+
+  assert.equal(cellPressLargeImageSource(figure1, article),
+    'https://ars.els-cdn.com/content/image/1-s2.0-S0092867426001030-gr1_lrg.jpg');
+  assert.equal(cellPressLargeImageSource(figure2, article),
+    'https://ars.els-cdn.com/content/image/1-s2.0-S0092867426001030-gr2_lrg.jpg');
+  assert.deepEqual(collectFigureImageCandidates(
+    fakeImage({ src: figure1 }, figure1), article
+  ).slice(0, 2), [
+    'https://ars.els-cdn.com/content/image/1-s2.0-S0092867426001030-gr1_lrg.jpg',
+    figure1
+  ]);
+});
+
+test('promotes the actual Elsevier dash-gr CDN suffix and never invents Cell PII without a binding', () => {
+  const direct = 'https://ars.els-cdn.com/content/image/1-s2.0-S0092867426001030-gr1.jpg';
+  assert.equal(cellPressLargeImageSource(direct),
+    'https://ars.els-cdn.com/content/image/1-s2.0-S0092867426001030-gr1_lrg.jpg');
+
+  const cms = [
+    'https://www.cell.com/cms/10.1016/j.cell.2026.01.016/asset/',
+    'c66fef4f-fb95-4262-b275-ee1d9c623728/main.assets/gr1.jpg'
+  ].join('');
+  assert.equal(cellPressLargeImageSource(cms, 'https://www.cell.com/cell/fulltext/not-a-pii'), '');
+  assert.equal(cellPressLargeImageSource(cms,
+    'https://www.cell.com/cell/abstract/S0092-8674(26)00103-0'), '');
+  assert.equal(cellPressLargeImageSource(cms,
+    'https://www.cell.com/neuron/fulltext/S0092-8674(26)00103-0'), '');
+  assert.equal(cellPressLargeImageSource(
+    cms.replace('www.cell.com', 'cell.com.example'),
+    'https://www.cell.com/cell/fulltext/S0092-8674(26)00103-0'
+  ), '');
 });
 
 test('extracts original-image metadata and relative srcsets from HTML viewer pages', () => {
@@ -104,6 +166,17 @@ test('selects the first safe source across Figure images', () => {
   })] };
   assert.equal(selectFigureImageSource(figure, 'https://paper.example/article'),
     'https://paper.example/figures/figure-s2.webp');
+});
+
+test('uses the native Nature supplementary image attribute as a Figure source', () => {
+  const figure = { imageElements: [fakeImage({
+    'data-supp-info-image': '//media.springernature.com/full/Fig6_ESM.jpg'
+  })] };
+
+  assert.equal(
+    selectFigureImageSource(figure, 'https://www.nature.com/articles/test'),
+    'https://media.springernature.com/full/Fig6_ESM.jpg'
+  );
 });
 
 test('keeps every distinct safe Figure candidate for load fallback', () => {

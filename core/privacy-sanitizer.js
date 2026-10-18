@@ -19,6 +19,22 @@
     'access', 'api', 'auth', 'authentication', 'client', 'encryption',
     'personal', 'private', 'provider', 'secret', 'signing', 'webhook'
   ]);
+  const MAX_OFFLINE_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+  const OFFLINE_SNAPSHOT_GLOBAL_ATTRIBUTES = new Set([
+    'abbr', 'alt', 'class', 'colspan', 'datetime', 'dir', 'headers', 'height',
+    'hidden', 'id', 'lang', 'open', 'rel', 'reversed', 'role', 'rowspan',
+    'scope', 'span', 'start', 'title', 'type', 'value', 'width'
+  ]);
+  const OFFLINE_SNAPSHOT_SAFE_DATA_ATTRIBUTES = new Set([
+    'data-sci-embedded-original',
+    'data-sci-highlight-source',
+    'data-sci-original-height',
+    'data-sci-original-width'
+  ]);
+  const OFFLINE_SNAPSHOT_ARIA_ATTRIBUTES = new Set([
+    'aria-controls', 'aria-current', 'aria-describedby', 'aria-expanded',
+    'aria-hidden', 'aria-label', 'aria-labelledby', 'aria-level', 'aria-role'
+  ]);
 
   function tokenizePrivacyKey(value) {
     const separated = String(value || '').normalize('NFKC')
@@ -74,10 +90,82 @@
       tokens.includes('providers');
   }
 
+  function isAllowedOfflineSnapshotAttribute(tagName, attributeName, value) {
+    const tag = String(tagName || '').trim().toLowerCase();
+    const name = String(attributeName || '').trim().toLowerCase();
+    const content = String(value || '').trim();
+    if (!tag || !name || /^on/i.test(name)) return false;
+    if (OFFLINE_SNAPSHOT_ARIA_ATTRIBUTES.has(name)) return true;
+    if (OFFLINE_SNAPSHOT_SAFE_DATA_ATTRIBUTES.has(name)) return true;
+    if (name === 'for') return tag === 'label';
+    if (name === 'cite') return ['blockquote', 'q'].includes(tag) &&
+      /^https?:\/\//i.test(content);
+    if (name === 'href') {
+      return ['a', 'area'].includes(tag) &&
+        (/^#[^\s]*$/u.test(content) || /^https?:\/\//i.test(content));
+    }
+    if (name === 'src') {
+      return tag === 'img' &&
+        /^data:image\/(?:avif|gif|jpe?g|png|webp);base64,/i.test(content);
+    }
+    if (name === 'rel') return ['a', 'area'].includes(tag);
+    if (!OFFLINE_SNAPSHOT_GLOBAL_ATTRIBUTES.has(name)) return false;
+    if (name === 'value') return tag === 'li';
+    if (name === 'type') return ['ol', 'ul', 'li'].includes(tag);
+    return true;
+  }
+
+  function offlineSnapshotUtf8Bytes(value) {
+    const text = String(value || '');
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).byteLength;
+    if (typeof Buffer === 'function') return Buffer.byteLength(text, 'utf8');
+    return unescape(encodeURIComponent(text)).length;
+  }
+
+  function selectBoundedOfflineSnapshotHtml(
+    htmlWithImages,
+    fallbackHtmlFactory,
+    maxBytes = MAX_OFFLINE_SNAPSHOT_BYTES
+  ) {
+    const boundedMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || 0));
+    const primaryHtml = String(htmlWithImages || '');
+    const primaryByteSize = offlineSnapshotUtf8Bytes(primaryHtml);
+    if (primaryByteSize <= boundedMaxBytes) {
+      return {
+        html: primaryHtml,
+        byteSize: primaryByteSize,
+        embeddedImagesRetained: true
+      };
+    }
+    const fallbackHtml = String(
+      typeof fallbackHtmlFactory === 'function' ? fallbackHtmlFactory() : ''
+    );
+    const fallbackByteSize = offlineSnapshotUtf8Bytes(fallbackHtml);
+    if (fallbackByteSize <= boundedMaxBytes) {
+      return {
+        html: fallbackHtml,
+        byteSize: fallbackByteSize,
+        embeddedImagesRetained: false
+      };
+    }
+    const error = Object.assign(
+      new Error('离线快照在移除图片后仍超过 64 MiB，未保存；请缩短正文后重试。'),
+      {
+        code: 'OFFLINE_SNAPSHOT_TOO_LARGE_AFTER_IMAGE_FALLBACK',
+        byteSize: fallbackByteSize,
+        maxBytes: boundedMaxBytes
+      }
+    );
+    throw error;
+  }
+
   return {
     tokenizePrivacyKey,
     normalizePrivacyKey,
     isCredentialKey,
-    isExportSensitiveKey
+    isExportSensitiveKey,
+    MAX_OFFLINE_SNAPSHOT_BYTES,
+    isAllowedOfflineSnapshotAttribute,
+    selectBoundedOfflineSnapshotHtml
   };
 });

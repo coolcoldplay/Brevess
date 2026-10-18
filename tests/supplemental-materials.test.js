@@ -10,6 +10,7 @@ const {
   extractSupplementalReferences,
   mergeSupplementalFigureAssets,
   buildSupplementalCoverage,
+  supplementalFigureKey,
   supplementalFigureAssetPath,
   createSupplementalPdfReaderUrl,
   readSupplementalPdfBinding,
@@ -327,6 +328,38 @@ test('creates a bounded persisted source draft without copying transient image d
     'figures/supplemental/caption-s1.json');
   assert.equal(JSON.stringify(asset).includes('data:image/'), false);
   assert.equal(JSON.stringify(asset).includes('transientImage'), false);
+});
+
+test('manual supplemental admissions preserve a strict identity revision end to end', async () => {
+  const input = {
+    sourceMode: 'caption', sourceMaterialId: 'identity-revision-source',
+    caption: 'Figure S1. Identity-bound source.',
+    sourceImportedAt: importedAt, sourceFingerprint: fingerprint('7'),
+    identityRevision: 7
+  };
+  assert.equal(normalizeSupplementalFigureSource(input).identityRevision, 7);
+  assert.throws(() => normalizeSupplementalFigureSource({
+    ...input, identityRevision: Number.MAX_SAFE_INTEGER + 1
+  }), /SUPPLEMENTAL_IDENTITY_REVISION/);
+
+  const direct = createSupplementalFigureImportDraft(input);
+  assert.equal(direct.identityRevision, 7);
+  assert.equal(direct.figures[0].identityRevision, 7);
+
+  let saved = null;
+  const created = await createManualSupplementalDraft({
+    ...input, identityRevision: 1
+  }, {
+    exists: async () => false,
+    randomHex: () => '1234567890abcdef',
+    save: async (_path, content) => {
+      saved = structuredClone(content);
+      return { saved: true };
+    }
+  });
+  assert.equal(created.asset.identityRevision, 1);
+  assert.equal(created.asset.figures[0].identityRevision, 1);
+  assert.equal(saved.figures[0].identityRevision, 1);
 });
 
 test('creates an image draft from already-normalized persistent provenance', () => {
@@ -677,6 +710,89 @@ test('extracts supplemental Figure, Extended Data and Video references from cano
   assert.deepEqual(references[0].panels, ['A']);
 });
 
+test('canonicalizes dotted Extended Data Fig references to the same ED short key', () => {
+  const references = extractSupplementalReferences([{
+    paragraphId: 'ed-reference',
+    text: 'Extended Data Fig. 1a and Extended Data Figure 1c support the conclusion.'
+  }]);
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0].shortLabel, 'ED1');
+  assert.equal(references[0].label, 'Extended Data Figure 1');
+  assert.deepEqual(references[0].panels, ['A', 'C']);
+});
+
+test('extracts every Figure and Panel from plural Nature Extended Data references', () => {
+  const references = extractSupplementalReferences([{
+    paragraphId: 'nature-plural-ed',
+    text: 'The finding was confirmed in Extended Data Figs. 6a–d and 7a–d.'
+  }]);
+
+  assert.deepEqual(references.map(item => item.shortLabel), ['ED6', 'ED7']);
+  assert.deepEqual(references[0].panels, ['A', 'B', 'C', 'D']);
+  assert.deepEqual(references[1].panels, ['A', 'B', 'C', 'D']);
+});
+
+test('does not expose native Nature Extended Data figure links as manual PDF imports', () => {
+  const link = ({ href, label, image = '' }) => ({
+    href,
+    textContent: label,
+    getAttribute(name) {
+      if (name === 'href') return href;
+      if (name === 'data-supp-info-image') return image;
+      return '';
+    }
+  });
+  const documentLike = {
+    baseURI: 'https://www.nature.com/articles/s41586-026-10907-8',
+    querySelectorAll(selector) {
+      if (!selector.startsWith('a[')) return [];
+      return [
+        link({
+          href: '/articles/s41586-026-10907-8/figures/6',
+          label: 'Extended Data Fig. 1 Supporting validation',
+          image: '//media.springernature.com/full/Fig6_ESM.jpg'
+        }),
+        link({
+          href: '/articles/s41586-026-10907-8/figures/7',
+          label: 'Extended Data Fig. 2 Independent cohort',
+          image: '//media.springernature.com/full/Fig7_ESM.jpg'
+        }),
+        link({
+          href: '/articles/s41586-026-10907-8#Sec44',
+          label: 'Extended data figures and tables'
+        }),
+        link({
+          href: '/articles/s41586-026-10907-8/suppl_file/reporting-summary.pdf',
+          label: 'Reporting Summary supplementary information'
+        })
+      ];
+    }
+  };
+
+  const materials = discoverSupplementalMaterials(documentLike);
+
+  assert.equal(materials.length, 1);
+  assert.match(materials[0].url, /reporting-summary\.pdf$/);
+});
+
+test('non-Figure supplemental attachments do not leave Figure coverage blocked', () => {
+  const coverage = buildSupplementalCoverage({
+    references: extractSupplementalReferences([{
+      text: 'Videos S1 and S2 and Source Data are available.'
+    }]),
+    materials: [
+      { materialId: 'video-s1', kind: 'video' },
+      { materialId: 'source-data', kind: 'data' }
+    ],
+    figures: []
+  });
+
+  assert.equal(coverage.status, 'none');
+  assert.equal(coverage.expectedFigureCount, 0);
+  assert.deepEqual(coverage.missingFigureKeys, []);
+});
+
 test('merges imported supplemental figures with collision-safe ids and reports coverage', () => {
   const figures = mergeSupplementalFigureAssets(
     [{ figureId: 'figure-1', figureLabel: 'Figure 1', isSupplemental: false }],
@@ -712,6 +828,33 @@ test('merges imported supplemental figures with collision-safe ids and reports c
   assert.equal(coverage.foundFigureCount, 2);
   assert.equal(coverage.analyzedFigureCount, 1);
   assert.deepEqual(coverage.missingFigureLabels, []);
+});
+
+test('normalizes imported Extended Data figures without losing their distinct series', () => {
+  const figures = mergeSupplementalFigureAssets([], [{
+    materialId: 'publisher-extended-data',
+    figures: [{
+      figureId: 'figure-ed4',
+      figureLabel: 'Extended Data Figure 4',
+      caption: 'Extended Data Figure 4. Independent validation.'
+    }]
+  }]);
+
+  assert.equal(figures.length, 1);
+  assert.equal(figures[0].figureLabel, 'Extended Data Figure 4');
+  assert.equal(figures[0].figureSeries, 'extended-data');
+  assert.equal(figures[0].isSupplemental, true);
+  assert.match(figures[0].figureId, /-ed4$/);
+  const coverage = buildSupplementalCoverage({
+    references: extractSupplementalReferences([{
+      text: 'Extended Data Figure 4 supports the main result.'
+    }]),
+    figures
+  });
+  assert.equal(supplementalFigureKey('ED10'), 'ed10');
+  assert.equal(coverage.expectedFigureCount, 1);
+  assert.equal(coverage.foundFigureCount, 1);
+  assert.deepEqual(coverage.missingFigureKeys, []);
 });
 
 test('round-trips a parent workspace binding through the supplemental PDF reader URL', () => {

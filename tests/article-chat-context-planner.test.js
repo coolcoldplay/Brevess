@@ -188,3 +188,19 @@ test('fails locally when fixed prompt and output reservations cannot fit the con
     systemTokens: 5000
   }), error => error?.code === 'CONTEXT_BUDGET_EXCEEDED');
 });
+
+test('reserves a deterministic context slot for required selected-page evidence', async () => {
+  const index = makeIndex(40, 900);
+  const required = index.chunks.at(-1);
+  const plan = await planArticleChatContext({
+    index,
+    query: 'kinase rescue result',
+    profile: profile({ contextWindowTokens: 8192 }),
+    history: [],
+    requiredChunkIds: [required.chunkId]
+  });
+
+  assert.ok(plan.chunks.some(chunk => chunk.chunkId === required.chunkId));
+  assert.ok(plan.requiredChunkIds.includes(required.chunkId));
+  assert.ok(plan.estimatedInputTokens <= plan.inputBudgetTokens.available);
+});

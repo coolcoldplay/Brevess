@@ -301,6 +301,7 @@
   }
 
   function normalizeCustomCategory(input) {
+    input = flattenUnifiedCategory({ ...(input || {}), builtIn: false });
     const name = String(input.name || '').trim();
     return {
       categoryId: input.categoryId || `custom_${slugify(input.idHint || 'clinical')}_${Date.now().toString(36)}`,
@@ -330,7 +331,10 @@
       color: input.color || '#2F80ED',
       version: Number.isInteger(input.version) && input.version > 0 ? input.version : 1,
       persistence: input.persistence === 'one-off' ? 'one-off' : 'saved',
-      builtIn: false
+      builtIn: false,
+      prompt: input.prompt,
+      regex: input.regex,
+      enabledEngines: input.enabledEngines
     };
   }
 
@@ -391,6 +395,24 @@
     return Number.isFinite(number) ? number : fallback;
   }
 
+  function hasUsableRegexRule(regex) {
+    return ['phrases', 'expressions'].some(field =>
+      Array.isArray(regex?.[field]) && regex[field].some(value =>
+        typeof value === 'string' && value.trim().length > 0
+      )
+    );
+  }
+
+  function normalizeEnabledEngines(category, regex) {
+    const engines = Array.isArray(category.enabledEngines)
+      ? category.enabledEngines.map(String)
+      : (category.builtIn === false && !hasUsableRegexRule(regex)
+        ? ['llm'] : ['llm', 'regex']);
+    return category.builtIn === false && !hasUsableRegexRule(regex)
+      ? engines.filter(engine => engine !== 'regex')
+      : engines;
+  }
+
   function toUnifiedCategory(input = {}) {
     const category = input && typeof input === 'object' ? cloneJsonLike(input) : {};
     const sourcePrompt = isPlainObject(category.prompt)
@@ -439,6 +461,8 @@
         sourcePrompt.allowedQuoteRoles, category.allowedQuoteRoles, ['statement']
       ),
       spanPolicy: sourcePrompt.spanPolicy || category.spanPolicy || 'clause',
+      claimMode: sourcePrompt.claimMode || category.claimMode || 'explicit',
+      relationRequired: sourcePrompt.relationRequired ?? category.relationRequired ?? false,
       minimumConfidence: normalizeMinimumConfidence(
         sourcePrompt.minimumConfidence ?? category.minimumConfidence
       )
@@ -455,8 +479,7 @@
     };
     return {
       ...category,
-      enabledEngines: Array.isArray(category.enabledEngines)
-        ? category.enabledEngines.map(String) : ['llm', 'regex'],
+      enabledEngines: normalizeEnabledEngines(category, regex),
       prompt,
       regex
     };
@@ -510,6 +533,8 @@
       prompt, source, 'allowedQuoteRoles', ['allowedQuoteRoles'], arrayValue
     );
     assignPromptOverride(prompt, source, 'spanPolicy', ['spanPolicy'], stringValue);
+    assignPromptOverride(prompt, source, 'claimMode', ['claimMode'], stringValue);
+    assignPromptOverride(prompt, source, 'relationRequired', ['relationRequired'], Boolean);
     assignPromptOverride(
       prompt, source, 'minimumConfidence', ['minimumConfidence'],
       value => normalizeMinimumConfidence(value)
@@ -555,6 +580,8 @@
       negativeExamples: [...prompt.negativeExamples],
       hardNegativeExamples: [...prompt.negativeExamples],
       spanPolicy: prompt.spanPolicy,
+      claimMode: prompt.claimMode,
+      relationRequired: Boolean(prompt.relationRequired),
       minimumConfidence: prompt.minimumConfidence
     };
   }
@@ -939,6 +966,12 @@
       if (!['phrase', 'clause', 'sentence'].includes(prompt.spanPolicy)) {
         errors.push('prompt.spanPolicy');
       }
+      if (prompt.claimMode !== undefined && !['explicit', 'inferred', 'either'].includes(prompt.claimMode)) {
+        errors.push('prompt.claimMode');
+      }
+      if (prompt.relationRequired !== undefined && typeof prompt.relationRequired !== 'boolean') {
+        errors.push('prompt.relationRequired');
+      }
       if (!Number.isFinite(prompt.minimumConfidence) ||
           prompt.minimumConfidence < 0 || prompt.minimumConfidence > 1) {
         errors.push('prompt.minimumConfidence');
@@ -1023,7 +1056,16 @@
     ].join('\n\n');
   }
 
+  function usesBuiltInCategorySemantics(category, defaultCategory) {
+    // Names and colors do not change the scientific rule. Explicit semantic
+    // edits do: do not silently enforce the former meaning under a stable ID.
+    if (!defaultCategory || category?.builtIn !== true || !category.definition) return true;
+    const fields = ['definition', 'requiredSlots', 'allowedQuoteRoles', 'claimMode', 'relationRequired'];
+    return fields.every(field => JSON.stringify(category[field]) === JSON.stringify(defaultCategory[field]));
+  }
+
   return {
+    usesBuiltInCategorySemantics,
     MAX_REGEX_RULES,
     MAX_REGEX_LENGTH,
     MAX_REGEX_REPEAT,

@@ -115,7 +115,8 @@ Microsoft 当前不收取 Edge 扩展开发者注册费。
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\build-edge-store-release.ps1 `
   -CatalogExtensionId 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
-  -ReleaseName 'Brevess-Edge-v1.0.1-catalog'
+  -ReleaseName 'Brevess-Edge-v1.0.1-catalog' `
+  -IncludeStableCompanionAlias
 ```
 
 然后验证：
@@ -141,7 +142,7 @@ Brevess-Codex-Bridge-Windows-x64-v1.0.1.zip
 Brevess-Codex-Bridge-Windows-x64.zip
 ```
 
-第二个稳定文件名必须保持不变，因为插件设置页使用：
+上述发布命令显式生成第二个稳定文件名；普通本地构建默认只生成版本文件，避免每次都保存重复 ZIP。正式发布时稳定文件名必须保持不变，因为插件设置页使用：
 
 ```text
 https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip

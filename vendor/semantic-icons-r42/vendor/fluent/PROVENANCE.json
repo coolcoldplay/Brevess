@@ -1,0 +1,26 @@
+{
+  "package": "microsoft/fluentui-system-icons",
+  "version": "1e972c733752f97c52a193556b4c81227dc67c15",
+  "repository": "https://github.com/microsoft/fluentui-system-icons",
+  "commit": "1e972c733752f97c52a193556b4c81227dc67c15",
+  "license": "MIT",
+  "integrityVerified": true,
+  "licenseSha256": "69bc45dc42b9acb96a69823adbc6ae538374e3c0bde169b855b32c48eaaef52f",
+  "icons": [
+    {
+      "name": "highlight-24-regular",
+      "sourcePath": "assets/Highlight/SVG/ic_fluent_highlight_24_regular.svg",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/1e972c733752f97c52a193556b4c81227dc67c15/assets/Highlight/SVG/ic_fluent_highlight_24_regular.svg",
+      "sha256": "3f8a4a70e38399927c1de9d61608c54c2f97624209e5c81ef4b3700bceb2199a",
+      "bytes": 1297
+    },
+    {
+      "name": "highlight-24-filled",
+      "sourcePath": "assets/Highlight/SVG/ic_fluent_highlight_24_filled.svg",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/1e972c733752f97c52a193556b4c81227dc67c15/assets/Highlight/SVG/ic_fluent_highlight_24_filled.svg",
+      "sha256": "e31bd069259c1f1b9e52bbc431fa0a24b91c99fc6b0913dd81dcbc5e0419ef06",
+      "bytes": 611
+    }
+  ],
+  "treatment": "Complete original source geometry and fill attributes. Original path fill is #212121; renderer may recolor with CSS currentColor without changing geometry."
+}

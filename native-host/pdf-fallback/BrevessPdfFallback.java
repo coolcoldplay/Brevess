@@ -1,4 +1,6 @@
 import java.awt.image.BufferedImage;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.io.File;
 import java.io.IOException;
@@ -62,13 +64,19 @@ public final class BrevessPdfFallback {
     final float width;
     final float height;
     final String text;
+    final boolean bold;
+    final float fontSize;
+    final float fontTop;
 
-    Chunk(float x, float y, float width, float height, String text) {
+    Chunk(float x, float y, float width, float height, String text, boolean bold, float fontSize, float fontTop) {
       this.x = x;
       this.y = y;
       this.width = width;
       this.height = height;
       this.text = text;
+      this.bold = bold;
+      this.fontSize = fontSize;
+      this.fontTop = fontTop;
     }
   }
 
@@ -112,13 +120,22 @@ public final class BrevessPdfFallback {
       TextPosition first = positions.get(0);
       float width = 0;
       float height = 0;
+      float fontSize = 0;
+      float fontTop = 0;
+      boolean bold = true;
       for (TextPosition position : positions) {
         width += position.getWidthDirAdj();
         height = Math.max(height, position.getHeightDir());
+        fontSize = Math.max(fontSize, position.getFontSizeInPt());
+        float top = position.getFont().getBoundingBox().getUpperRightY() *
+            position.getFont().getFontMatrix().getScaleY() * position.getFontSizeInPt();
+        fontTop = Math.max(fontTop, Math.max(position.getFontSizeInPt(), top));
+        String fontName = position.getFont().getName().toLowerCase(Locale.ROOT);
+        bold &= fontName.contains("bold") || fontName.contains("black") || fontName.contains("heavy");
       }
       String clean = normalize(text);
       if (!clean.isEmpty()) {
-        chunks.add(new Chunk(first.getXDirAdj(), first.getYDirAdj(), width, height, clean));
+        chunks.add(new Chunk(first.getXDirAdj(), first.getYDirAdj(), width, height, clean, bold, fontSize, fontTop));
       }
     }
   }
@@ -129,11 +146,34 @@ public final class BrevessPdfFallback {
     int captionPageIndex;
     int figurePageIndex;
     float startY;
+    float captionLineHeight;
+    float captionFontTop;
     float captionX;
     float captionWidth;
     int textBeforeCaptionChars;
     String text;
     boolean captionListEntry;
+    boolean plateHeading;
+    float plateEndY;
+    boolean plateContinuation;
+    final List<Caption> plateParts = new ArrayList<Caption>();
+    Caption plateSource;
+  }
+
+  private static final class SourceRegion {
+    final int pageIndex;
+    final float x;
+    final float y;
+    final float width;
+    final float height;
+
+    SourceRegion(int pageIndex, float x, float y, float width, float height) {
+      this.pageIndex = pageIndex;
+      this.x = x;
+      this.y = y;
+      this.width = width;
+      this.height = height;
+    }
   }
 
   private static final class RenderedFigure {
@@ -142,13 +182,20 @@ public final class BrevessPdfFallback {
     final float y;
     final float width;
     final float height;
+    final List<SourceRegion> sourceRegions;
 
     RenderedFigure(File image, float x, float y, float width, float height) {
+      this(image, x, y, width, height, new ArrayList<SourceRegion>());
+    }
+
+    RenderedFigure(File image, float x, float y, float width, float height,
+        List<SourceRegion> sourceRegions) {
       this.image = image;
       this.x = x;
       this.y = y;
       this.width = width;
       this.height = height;
+      this.sourceRegions = sourceRegions;
     }
   }
 
@@ -174,6 +221,9 @@ public final class BrevessPdfFallback {
 
   private static String normalizeFigurePrefix(String value) {
     String normalized = normalize(value);
+    normalized = normalized.replaceFirst(
+        "(?i)^Supplement(?:al|ary)\\s+(?:Figure|Fig\\.)\\s+(?:S\\s*)?(\\d+)(?![A-Za-z0-9])",
+        "Figure S$1");
     // Some PDFs paint the same caption glyph twice. PDFBox then exposes a
     // visually normal "Figure" as "FFiigguurree", which must still be
     // recognized as a caption anchor.
@@ -216,6 +266,25 @@ public final class BrevessPdfFallback {
     PageStripper stripper = new PageStripper(pageIndex + 1);
     stripper.getText(document);
     List<Chunk> chunks = stripper.chunks;
+    // Manuscript line numbers live in a repeated, separated left gutter.
+    // Three-digit numbers can otherwise merge with caption text even when
+    // shorter numbers on preceding pages were split into their own lines.
+    float pageWidth = document.getPage(pageIndex).getMediaBox().getWidth();
+    List<Chunk> gutter = new ArrayList<Chunk>();
+    for (Chunk chunk : chunks) {
+      if (!chunk.text.matches("\\d{1,5}") || chunk.x + chunk.width > pageWidth * 0.10f) continue;
+      for (Chunk body : chunks) {
+        if (Math.abs(body.y - chunk.y) < 3f && body.x >= pageWidth * 0.11f &&
+            body.x - chunk.x - chunk.width >= 8f && !body.text.matches("\\d+")) {
+          gutter.add(chunk); break;
+        }
+      }
+    }
+    Set<Integer> lineNumbers = new HashSet<Integer>();
+    for (Chunk chunk : gutter) lineNumbers.add(Integer.parseInt(chunk.text));
+    int consecutive = 0;
+    for (Integer number : lineNumbers) if (lineNumbers.contains(number + 1)) consecutive++;
+    if (consecutive >= 2) chunks.removeAll(gutter);
     Collections.sort(chunks, new Comparator<Chunk>() {
       public int compare(Chunk left, Chunk right) {
         int byY = Float.compare(left.y, right.y);
@@ -264,6 +333,53 @@ public final class BrevessPdfFallback {
         (suffix == null ? "" : suffix.toUpperCase(Locale.ROOT));
   }
 
+  private static boolean continuationSectionHeading(Line line, float bodyFontSize) {
+    String value = normalize(line.text());
+    if (value.isEmpty() || value.length() > 120) return false;
+    if (value.matches("(?i)^(?:materials(?: and methods)?|methods|results|discussion|conclusions?|" +
+        "references|acknowledg(?:e)?ments?|statistical (?:analysis|analyses|methods)|" +
+        "data availability|author contributions|supplementary methods)[:.]?$")) return true;
+    float fontSize = 0;
+    for (Chunk chunk : line.chunks) fontSize = Math.max(fontSize, chunk.fontSize);
+    boolean allBold = !line.chunks.isEmpty();
+    for (Chunk chunk : line.chunks) allBold &= chunk.bold;
+    return (allBold || bodyFontSize > 0 && fontSize > bodyFontSize * 1.15f) && !value.matches(".*[.!?]$") && !PANEL_START.matcher(value).matches();
+  }
+
+  private static boolean bareFigureHeading(String text) {
+    Matcher start = figureStart(normalizeFigurePrefix(text));
+    return start != null && normalize(start.group(2)).isEmpty() &&
+        normalize(start.group(3)).isEmpty();
+  }
+
+  private static boolean plateHeading(Line anchor, List<Line> lines) {
+    if (!bareFigureHeading(anchor.text())) return false;
+    // A label alone can also introduce a multiline prose caption. Require an
+    // independent panel marker beside/below it before treating it as a plate
+    // heading whose image follows, rather than a caption whose image precedes.
+    float window = Math.max(36f, anchor.height * 3f);
+    for (Line line : lines) {
+      if (line == anchor || line.y < anchor.y - 2.6f ||
+          line.y > anchor.y + window) continue;
+      if (normalize(line.text()).matches("[A-Z](?:\\s+[A-Z])*")) return true;
+    }
+    return false;
+  }
+
+  private static boolean captionReferenceLine(Line line, List<Line> lines) {
+    if (!bareFigureHeading(line.text())) return false;
+    for (Line other : lines) {
+      if (other == line) continue;
+      // Multiple Figure labels in a single table row are column headings.
+      if (Math.abs(other.y - line.y) < 3f &&
+          figureStart(normalizeFigurePrefix(other.text())) != null) return true;
+      // A wrapped "related to Figure 1" belongs to the preceding caption.
+      if (other.y < line.y && line.y - other.y < Math.max(24f, line.height * 3f) &&
+          sameTextColumn(other, line) && other.text().matches("(?i).*\\brelated\\s+to\\s*$")) return true;
+    }
+    return false;
+  }
+
   private static List<Caption> captions(PDDocument document) throws IOException {
     List<List<Line>> allLines = new ArrayList<List<Line>>();
     for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
@@ -285,7 +401,7 @@ public final class BrevessPdfFallback {
         }
         if (PANEL_REFERENCE_START.matcher(firstText).find()) continue;
         Matcher start = figureStart(firstText);
-        if (start == null) continue;
+        if (start == null || captionReferenceLine(line, lines)) continue;
         String delimiter = normalize(start.group(2));
         String captionLead = normalize(start.group(3));
         if (delimiter.isEmpty() && BODY_REFERENCE_LEAD.matcher(captionLead).find()) continue;
@@ -302,6 +418,8 @@ public final class BrevessPdfFallback {
         caption.number = caption.label.substring("Figure ".length());
         caption.captionPageIndex = pageIndex;
         caption.startY = line.y;
+        caption.captionLineHeight = line.height;
+        for (Chunk chunk : line.chunks) caption.captionFontTop = Math.max(caption.captionFontTop, chunk.fontTop);
         caption.captionX = line.x;
         caption.captionWidth = Math.max(1f, line.right - line.x);
         int textBeforeCaptionChars = 0;
@@ -312,17 +430,21 @@ public final class BrevessPdfFallback {
           if (!priorText.matches("^\\d+$")) textBeforeCaptionChars += priorText.length();
         }
         caption.textBeforeCaptionChars = textBeforeCaptionChars;
+        caption.plateHeading = plateHeading(line, lines);
         StringBuilder text = new StringBuilder(firstText);
         float lastY = line.y;
         for (int cursor = lineIndex + 1; cursor < lines.size(); cursor++) {
           Line next = lines.get(cursor);
           String nextText = normalizeFigurePrefix(next.text());
-          if (figureStart(nextText) != null) break;
+          if (figureStart(nextText) != null && !captionReferenceLine(next, lines)) break;
           if (next.y < lastY - 2f) break;
           if (next.y > box.getHeight() - 22f) break;
-          if (next.y - line.y > box.getHeight() * 0.34f) break;
+          if (!caption.number.startsWith("S") && next.y - line.y > box.getHeight() * 0.34f) break;
           if (nextText.matches("^\\d+$")) continue;
           if (!sameTextColumn(line, next)) continue;
+          if (caption.number.startsWith("S") &&
+              (next.y - lastY > Math.max(26f, next.height * 3f) ||
+               nextText.matches("(?i)^(?:Table|Supplemental Table|Supplementary Table)\\s+.*"))) break;
           text.append(' ').append(nextText);
           caption.captionX = Math.min(caption.captionX, next.x);
           caption.captionWidth = Math.max(caption.captionWidth, next.right - caption.captionX);
@@ -348,6 +470,63 @@ public final class BrevessPdfFallback {
             }
           }
         }
+        // Supplemental legends often resume with the next Panel on a fresh
+        // page (including after a complete sentence), without "continued".
+        // Require an adjacent next Panel and stop at any gap/new Figure/Table.
+        if (caption.number.startsWith("S") && lastY > box.getHeight() * 0.75f &&
+            pageIndex + 1 < allLines.size() && !CONTINUED.matcher(text.toString()).find()) {
+          int lastPanel = -1;
+          Matcher panel = Pattern.compile("\\(([A-Z](?:\\s*[,\\u2010-\\u2015-]\\s*[A-Z])*)\\)").matcher(text);
+          while (panel.find()) {
+            for (char letter : panel.group(1).toCharArray()) if (letter >= 'A' && letter <= 'Z') lastPanel = Math.max(lastPanel, letter);
+          }
+          float previousY = 0;
+          for (Line next : allLines.get(pageIndex + 1)) {
+            String nextText = normalizeFigurePrefix(next.text());
+            if (nextText.matches("^\\d+$")) continue;
+            if (previousY == 0) {
+              Matcher lead = Pattern.compile("^\\(([A-Z])(?:\\s*[,\\u2010-\\u2015-]\\s*[A-Z])*\\)\\s+.*").matcher(nextText);
+              if (next.y > document.getPage(pageIndex + 1).getMediaBox().getHeight() * 0.20f ||
+                  !lead.matches() || lead.group(1).charAt(0) != lastPanel + 1) break;
+            }
+            if (!sameTextColumn(line, next) ||
+                previousY > 0 && next.y - previousY > Math.max(26f, next.height * 3f) ||
+                figureStart(nextText) != null || nextText.matches("(?i)^Table\\s+.*")) break;
+            text.append(' ').append(nextText);
+            previousY = next.y;
+          }
+        }
+        // A caption may split mid-sentence at a page boundary without an
+        // explicit continuation label. Admit only a lower-case first line at
+        // the top of the next page, in the same text column and contiguous
+        // leading text block; never cross a new Figure or heading boundary.
+        if (!CONTINUED.matcher(text.toString()).find() &&
+            lastY > box.getHeight() * 0.78f &&
+            !normalize(text.toString()).matches(".*[.!?]$") &&
+            pageIndex + 1 < allLines.size()) {
+          PDRectangle nextBox = document.getPage(pageIndex + 1).getMediaBox();
+          List<Line> nextLines = allLines.get(pageIndex + 1);
+          boolean started = false;
+          float previousY = 0;
+          float previousFontSize = 0;
+          for (Chunk chunk : line.chunks) previousFontSize = Math.max(previousFontSize, chunk.fontSize);
+          for (Line next : nextLines) {
+            String nextText = normalizeFigurePrefix(next.text());
+            if (nextText.matches("^\\d+$")) continue;
+            if (continuationSectionHeading(next, previousFontSize)) break;
+            if (!started) {
+              if (next.y > nextBox.getHeight() * 0.20f || nextText.isEmpty() ||
+                  !Character.isLowerCase(nextText.codePointAt(0)) ||
+                  !sameTextColumn(line, next)) break;
+              started = true;
+            }
+            if (next.y > nextBox.getHeight() * 0.45f ||
+                (previousY > 0 && next.y - previousY > Math.max(20f, next.height * 2.2f)) ||
+                figureStart(nextText) != null || !sameTextColumn(line, next)) break;
+            text.append(' ').append(nextText);
+            previousY = next.y;
+          }
+        }
         caption.text = normalize(text.toString()
             .replaceAll("(?i)\\s*legend\\s+continued\\s+on\\s+next\\s+page\\s*", " "));
         caption.figurePageIndex = pageIndex;
@@ -355,12 +534,23 @@ public final class BrevessPdfFallback {
         // the following page. Existing PDFFigures2 results are not recropped,
         // so this conservative previous-page rule only affects absent labels.
         boolean narrowSideCaption = caption.captionWidth < box.getWidth() * 0.56f;
-        if (line.y < box.getHeight() * 0.22f && pageIndex > 0 && !narrowSideCaption) {
+        if (!caption.plateHeading && line.y < box.getHeight() * 0.22f &&
+            pageIndex > 0 && !narrowSideCaption) {
           caption.figurePageIndex = pageIndex - 1;
+        }
+        if (caption.plateHeading) {
+          // Bare plate headings identify the panels below them. Do not append
+          // lane annotations to the caption or use prose-caption crop rules.
+          caption.text = caption.label;
+          caption.captionX = line.x;
+          caption.captionWidth = Math.max(1f, line.right - line.x);
+          caption.figurePageIndex = pageIndex;
+          caption.plateEndY = box.getHeight();
         }
         result.add(caption);
       }
     }
+    boundPlateRegions(result);
     return result;
   }
 
@@ -370,6 +560,143 @@ public final class BrevessPdfFallback {
 
   private static int clamp(int value, int minimum, int maximum) {
     return Math.max(minimum, Math.min(maximum, value));
+  }
+
+  private static SourceRegion plateRegion(Caption caption, float pageWidth, float pageHeight) {
+    float y = Math.max(0f, Math.min(pageHeight - 1f, caption.startY -
+        Math.max(caption.captionLineHeight, caption.captionFontTop)));
+    float endY = Math.min(pageHeight, caption.plateEndY);
+    return new SourceRegion(caption.captionPageIndex, 0f, y, pageWidth,
+        Math.min(pageHeight - y, Math.max(1f, endY - y)));
+  }
+
+  private static void boundPlateRegions(List<Caption> captions) {
+    for (int index = 0; index < captions.size(); index++) {
+      Caption current = captions.get(index);
+      if (!current.plateHeading) continue;
+      for (int nextIndex = index + 1; nextIndex < captions.size(); nextIndex++) {
+        Caption next = captions.get(nextIndex);
+        if (next.captionPageIndex != current.captionPageIndex) break;
+        if (next.startY <= current.startY + Math.max(2.6f, current.captionLineHeight)) continue;
+        // The next accepted Figure anchor bounds the plate, whether it is a
+        // bare title or a prose caption. Body-reference filters already ran.
+        float nextTop = Math.max(0f, next.startY -
+            Math.max(next.captionLineHeight, next.captionFontTop));
+        current.plateEndY = Math.min(current.plateEndY, nextTop);
+        break;
+      }
+    }
+  }
+
+  private static boolean continuesPlate(Caption previous, Caption next,
+      float previousPageHeight, float nextPageHeight) {
+    if (previous == null || next == null || !previous.plateHeading ||
+        !next.plateHeading || !previous.label.equalsIgnoreCase(next.label)) return false;
+    // Require repeated explicit titles on adjacent pages, with no intervening
+    // caption/title and no omitted region after or before the two parts.
+    float nextTop = Math.max(0f, next.startY -
+        Math.max(next.captionLineHeight, next.captionFontTop));
+    return next.captionPageIndex == previous.captionPageIndex + 1 &&
+        previous.plateEndY >= previousPageHeight - 2f &&
+        nextTop <= Math.max(36f, nextPageHeight * 0.08f);
+  }
+
+  private static void groupPlateHeadings(List<Caption> captions, PDDocument document) {
+    Caption head = null;
+    Caption previous = null;
+    // captions() preserves physical page/title order, before bestByLabel drops
+    // repeated labels. Ordinary prose captions and different labels break runs.
+    for (Caption caption : captions) {
+      if (!caption.plateHeading || caption.captionListEntry) {
+        head = null;
+        previous = null;
+        continue;
+      }
+      if (head != null && continuesPlate(previous, caption,
+          document.getPage(previous.captionPageIndex).getMediaBox().getHeight(),
+          document.getPage(caption.captionPageIndex).getMediaBox().getHeight())) {
+        head.plateParts.add(caption);
+        caption.plateContinuation = true;
+      } else {
+        head = caption;
+        head.plateParts.add(caption);
+      }
+      previous = caption;
+    }
+  }
+
+  private static void preservePlateSources(List<Caption> extracted, List<Caption> selected) {
+    Map<String, Caption> sources = new HashMap<String, Caption>();
+    for (Caption caption : extracted) {
+      if (!caption.plateHeading || caption.plateContinuation || caption.captionListEntry) continue;
+      String key = caption.label.toLowerCase(Locale.ROOT);
+      Caption previous = sources.get(key);
+      // A longer continuous run carries more source pages. Never concatenate
+      // separate runs or a repeated prose caption merely because labels match.
+      if (previous == null || caption.plateParts.size() > previous.plateParts.size()) {
+        sources.put(key, caption);
+      }
+    }
+    for (Caption caption : selected) {
+      caption.plateSource = sources.get(caption.label.toLowerCase(Locale.ROOT));
+      if (caption.plateSource != null) caption.figurePageIndex = caption.plateSource.captionPageIndex;
+    }
+  }
+
+  private static RenderedFigure renderPlate(PDDocument document, PDFRenderer renderer,
+      Caption caption, File outputDirectory, int dpi) throws IOException {
+    List<Caption> parts = caption.plateParts.isEmpty()
+        ? Collections.singletonList(caption) : caption.plateParts;
+    List<SourceRegion> regions = new ArrayList<SourceRegion>();
+    BufferedImage combined = null;
+    try {
+      for (Caption part : parts) {
+        PDRectangle media = document.getPage(part.captionPageIndex).getMediaBox();
+        SourceRegion region = plateRegion(part, media.getWidth(), media.getHeight());
+        BufferedImage pageImage = renderer.renderImageWithDPI(
+            region.pageIndex, dpi, ImageType.RGB);
+        try {
+          float scaleX = pageImage.getWidth() / media.getWidth();
+          float scaleY = pageImage.getHeight() / media.getHeight();
+          int cropX = clamp(Math.round(region.x * scaleX), 0, pageImage.getWidth() - 1);
+          int cropY = clamp(Math.round(region.y * scaleY), 0, pageImage.getHeight() - 1);
+          int cropWidth = clamp(Math.round(region.width * scaleX), 1, pageImage.getWidth() - cropX);
+          int cropHeight = clamp(Math.round(region.height * scaleY), 1, pageImage.getHeight() - cropY);
+          int previousHeight = combined == null ? 0 : combined.getHeight();
+          int width = Math.max(combined == null ? 0 : combined.getWidth(), cropWidth);
+          long height = (long) previousHeight + cropHeight;
+          // Bound the accumulated RGB canvas (64 MB), not just each page.
+          // During append, retain at most the old/new canvas and one source page.
+          if (height > Integer.MAX_VALUE || (long) width * height > 16000000L) {
+            throw new IOException("PDF_FIGURE_PLATE_COMPOSITE_TOO_LARGE");
+          }
+          BufferedImage next = new BufferedImage(width, (int) height, BufferedImage.TYPE_INT_RGB);
+          Graphics2D graphics = next.createGraphics();
+          try {
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, next.getWidth(), next.getHeight());
+            if (combined != null) graphics.drawImage(combined, 0, 0, null);
+            graphics.drawImage(pageImage, 0, previousHeight, cropWidth, previousHeight + cropHeight,
+                cropX, cropY, cropX + cropWidth, cropY + cropHeight, null);
+          } finally {
+            graphics.dispose();
+          }
+          if (combined != null) combined.flush();
+          combined = next;
+          regions.add(region);
+        } finally {
+          pageImage.flush();
+        }
+      }
+      File image = new File(outputDirectory, "fallback-" + caption.label.replace(' ', '-') + ".png");
+      ImageIO.write(combined, "png", image);
+      SourceRegion first = regions.get(0);
+      // Legacy page/box fields describe the first original region for jumping.
+      // sourceRegions records every part of the single composed PNG.
+      return new RenderedFigure(image, first.x, first.y, first.width, first.height, regions);
+    } finally {
+      if (combined != null) combined.flush();
+    }
   }
 
   private static float denseBodyTextStart(PDDocument document, int pageIndex,
@@ -484,6 +811,9 @@ public final class BrevessPdfFallback {
 
   private static RenderedFigure renderMissing(PDDocument document, PDFRenderer renderer,
       Caption caption, File outputDirectory, int dpi, float[] preferredBox) throws IOException {
+    if (caption.plateSource != null) return renderPlate(
+        document, renderer, caption.plateSource, outputDirectory, dpi);
+    if (caption.plateHeading) return renderPlate(document, renderer, caption, outputDirectory, dpi);
     int pageIndex = clamp(caption.figurePageIndex, 0, document.getNumberOfPages() - 1);
     PDPage page = document.getPage(pageIndex);
     PDRectangle media = page.getMediaBox();
@@ -554,7 +884,7 @@ public final class BrevessPdfFallback {
         }
         // TextPosition Y is the caption baseline, so leave enough ascender and
         // leading space above it to keep the legend out of the Figure bitmap.
-        float beforeCaption = caption.startY - y - 20f;
+        float beforeCaption = caption.startY - y - Math.max(2f, caption.captionFontTop + 1f);
         if (beforeCaption > media.getHeight() * 0.18f) height = Math.min(height, beforeCaption);
       }
     } else {
@@ -629,6 +959,21 @@ public final class BrevessPdfFallback {
         ",\"caption\":" + json(caption.text) + "}";
   }
 
+  private static String sourceRegionsJson(List<SourceRegion> regions) {
+    if (regions.isEmpty()) return "";
+    StringBuilder result = new StringBuilder(",\"sourceRegions\":[");
+    for (int index = 0; index < regions.size(); index++) {
+      if (index > 0) result.append(',');
+      SourceRegion region = regions.get(index);
+      result.append("{\"pageIndex\":").append(region.pageIndex)
+          .append(",\"box\":{\"x\":").append(region.x)
+          .append(",\"y\":").append(region.y)
+          .append(",\"width\":").append(region.width)
+          .append(",\"height\":").append(region.height).append("}}");
+    }
+    return result.append(']').toString();
+  }
+
   private static int captionScore(Caption caption) {
     Matcher panels = Pattern.compile("\\([A-Z](?:\\s*[-\\u2010-\\u2015]\\s*[A-Z])?\\)")
         .matcher(caption.text);
@@ -651,6 +996,7 @@ public final class BrevessPdfFallback {
       int supplemental = 0;
       int shortSupplemental = 0;
       for (Caption caption : page) {
+        if (caption.plateHeading) continue;
         if (!caption.number.toUpperCase(Locale.ROOT).startsWith("S")) continue;
         supplemental++;
         if (caption.text.length() <= 260) shortSupplemental++;
@@ -659,7 +1005,7 @@ public final class BrevessPdfFallback {
       // page is the journal's supplementary-material index, not four plates.
       if (supplemental >= 4 && shortSupplemental >= 3) {
         for (Caption caption : page) {
-          if (caption.number.toUpperCase(Locale.ROOT).startsWith("S")) {
+          if (!caption.plateHeading && caption.number.toUpperCase(Locale.ROOT).startsWith("S")) {
             caption.captionListEntry = true;
           }
         }
@@ -851,6 +1197,7 @@ public final class BrevessPdfFallback {
   }
 
   public static void main(String[] args) throws Exception {
+    System.setOut(new java.io.PrintStream(System.out, true, "UTF-8"));
     if (args.length < 8) {
       throw new IllegalArgumentException(
           "Usage: PDF outputDir dpi existingLabels boxX boxY boxWidth boxHeight");
@@ -871,9 +1218,10 @@ public final class BrevessPdfFallback {
     try {
       List<Caption> extractedCaptions = captions(document);
       markCaptionListEntries(extractedCaptions);
+      groupPlateHeadings(extractedCaptions, document);
       LinkedHashMap<String, Caption> bestByLabel = new LinkedHashMap<String, Caption>();
       for (Caption caption : extractedCaptions) {
-        if (caption.captionListEntry) continue;
+        if (caption.captionListEntry || caption.plateContinuation) continue;
         String key = caption.label.toLowerCase(Locale.ROOT);
         Caption current = bestByLabel.get(key);
         if (current == null || captionScore(caption) > captionScore(current)) {
@@ -904,6 +1252,7 @@ public final class BrevessPdfFallback {
         }
       });
       remapDetachedPlateAppendix(document, captions);
+      preservePlateSources(extractedCaptions, captions);
       if (preferredBox[0] < 0 || preferredBox[1] < 0 ||
           preferredBox[2] <= 0 || preferredBox[3] <= 0) {
         PDRectangle media = document.getPage(0).getMediaBox();
@@ -951,6 +1300,7 @@ public final class BrevessPdfFallback {
             .append(",\"y1\":").append(rendered.y)
             .append(",\"x2\":").append(rendered.x + rendered.width)
             .append(",\"y2\":").append(rendered.y + rendered.height).append('}')
+            .append(sourceRegionsJson(rendered.sourceRegions))
             .append(",\"imageFile\":").append(json(rendered.image.getName())).append('}');
       }
       result.append("]}");

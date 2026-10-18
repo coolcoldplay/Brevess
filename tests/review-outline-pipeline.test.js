@@ -126,6 +126,24 @@ test('splits a repeatedly invalid multi-paragraph response and completes smaller
   assert.ok(phases.includes('review_split'));
 });
 
+test('uses a visibly labelled extractive fallback when one paragraph repeatedly violates the schema', async () => {
+  const paragraphs = outlineParagraphs(1);
+  const phases = [];
+  const adapter = deterministicReviewAdapter({ invalidMapTimes: 99 });
+  const result = await analyzeReviewOutline({
+    paragraphs, articleTitle: 'Review', reviewSubtype: 'narrative',
+    paragraphOnly: true, adapter, sleepImpl: async () => {},
+    onProgress: event => phases.push(event)
+  });
+  assert.equal(result.paragraphCount, 1);
+  const summary = result.nodes[0].paragraphs[0].summary;
+  assert.match(summary, /模型格式异常/);
+  assert.match(summary, /Paragraph 1 contains review evidence/);
+  assert.ok(phases.some(event => event.phase === 'review_fallback'));
+  assert.equal(adapter.requests.filter(item =>
+    item.schemaName === 'review_paragraph_batch').length, 2);
+});
+
 test('reuses completed map checkpoints after a later run', async () => {
   const checkpoints = [];
   const adapter = deterministicReviewAdapter();
@@ -151,6 +169,38 @@ test('returns paragraph outline when global synthesis is unavailable', async () 
   });
   assert.equal(result.globalSynthesisAvailable, false);
   assert.equal(result.paragraphCount, 2);
+});
+
+test('retrying synthesis after a split reuses all saved paragraphs and publishes them incrementally', async () => {
+  const checkpoints = new Map();
+  await analyzeReviewOutline({ paragraphs: outlineParagraphs(4), articleTitle: 'Review',
+    adapter: deterministicReviewAdapter({ timeoutFirst: true, failReduce: true }), sleepImpl: async () => {},
+    onChunkComplete: async item => checkpoints.set(item.chunkId, item) });
+  const adapter = deterministicReviewAdapter(), events = [];
+  const result = await analyzeReviewOutline({ paragraphs: outlineParagraphs(4), articleTitle: 'Review', adapter,
+    resumeChunks: checkpoints, sleepImpl: async () => {}, onProgress: e => events.push(e) });
+  assert.equal(result.globalSynthesisAvailable, true);
+  assert.equal(adapter.requests.filter(r => r.schemaName === 'review_paragraph_batch').length, 0);
+  assert.ok(events.some(e => e.phase === 'review_chunk_checkpoint' && e.resumed && e.checkpointSummaries.length));
+});
+
+test('partial split recovery requests only unfinished paragraphs and rejects stale source checkpoints', async () => {
+  const checkpoints = new Map();
+  await assert.rejects(analyzeReviewOutline({ paragraphs: outlineParagraphs(4), articleTitle: 'Review',
+    adapter: deterministicReviewAdapter({ timeoutFirst: true }), sleepImpl: async () => {},
+    onChunkComplete: async item => { checkpoints.set(item.chunkId, item);
+      throw Object.assign(new Error('stop after first saved child'), { code: 'CANCELLED' }); } }));
+  for (const changed of [false, true]) {
+    const paragraphs = outlineParagraphs(4);
+    if (changed) paragraphs[0].text += ' changed source';
+    const adapter = deterministicReviewAdapter();
+    await analyzeReviewOutline({ paragraphs, articleTitle: 'Review', adapter,
+      resumeChunks: new Map(checkpoints), sleepImpl: async () => {} });
+    const requested = adapter.requests.filter(r => r.schemaName === 'review_paragraph_batch')
+      .flatMap(r => JSON.parse(r.userPrompt).paragraphs.map(p => p.paragraph_id));
+    assert.equal(requested.length, changed ? 4 : 2);
+    if (!changed) assert.deepEqual(requested, paragraphs.slice(2).map(p => p.paragraphId));
+  }
 });
 
 test('paragraph-only analysis skips the global synthesis request', async () => {
@@ -184,4 +234,8 @@ test('complete outline cache key changes with document model or prompt version',
     buildReviewOutlineCacheKey({ ...base, model: 'm2' }));
   assert.notEqual(buildReviewOutlineCacheKey(base),
     buildReviewOutlineCacheKey({ ...base, promptVersion: '2' }));
+  assert.notEqual(
+    buildReviewOutlineCacheKey({ ...base, analysisStrategy: 'review' }),
+    buildReviewOutlineCacheKey({ ...base, analysisStrategy: 'primary_research' })
+  );
 });

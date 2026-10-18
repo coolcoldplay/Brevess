@@ -1,0 +1,36 @@
+.sr-button{--icon-size:24px;--cycle:1800ms;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:48px;min-height:48px;padding:7px;border:0;border-radius:0;background:transparent;color:#202020;cursor:pointer;transition:background-color 160ms linear,color 160ms linear;isolation:isolate}
+.sr-button:hover{background:#ededed}.sr-button:focus-visible{outline:2px solid #111;outline-offset:4px}.sr-button[data-selected=true]{background:#202020;color:#fff}
+.sr-slot{width:var(--icon-size);height:var(--icon-size);display:block;position:relative;flex-shrink:0}.sr-icon{width:100%;height:100%;display:block;overflow:visible;stroke-linecap:square;stroke-linejoin:miter;stroke-miterlimit:3}.sr-icon rect{rx:0;ry:0}.sr-motion{opacity:0}.sr-label{display:none;font-size:11px;line-height:16px}.show-labels .sr-label{display:block}.sr-busy{position:absolute;right:-5px;top:-4px;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:0}
+.sr-button[data-module=highlights] .sr-icon{transform:scale(.9)}.sr-button[data-module=highlights] .sr-icon path{fill:currentColor}
+.sr-figure-chart .sr-bar-group{stroke-width:5}
+.sr-button[data-state=running] .sr-detail-native,.sr-button[data-state=running] .sr-detail-under{opacity:.22}.sr-button[data-state=running] .sr-chart-column{opacity:.4}.sr-button[data-state=running] .sr-motion{opacity:1}.sr-button[data-state=running] .sr-move{animation-duration:var(--cycle);animation-iteration-count:infinite;animation-timing-function:cubic-bezier(.2,.75,.25,1);animation-delay:calc(var(--order,0)*140ms)}
+.sr-button[data-state=running] .sr-read{animation-name:sr-read}.sr-button[data-state=running] .sr-write,.sr-button[data-state=running] .sr-trace{animation-name:sr-write;stroke-dasharray:1;stroke-dashoffset:1}.sr-button[data-state=running] .sr-think{animation-name:sr-think;animation-duration:1500ms}.sr-button[data-state=running] .sr-ink{animation-name:sr-ink;fill:currentColor;stroke:none;opacity:1}.sr-button[data-state=running] .sr-focus{animation-name:sr-focus}.sr-button[data-state=running] .sr-fill-write{animation-name:sr-fill-write}.sr-button[data-state=running] .sr-image-read{animation-name:sr-image-read}
+.sr-button[data-state=running] .sr-nib-read{animation-name:sr-fill-write}.sr-button[data-set="2"][data-state=running] .sr-nib-read{animation-name:sr-image-read}.sr-button[data-set="4"][data-state=running] .sr-nib-read{animation-name:sr-fill-write;animation-direction:alternate}.sr-button[data-set="3"][data-state=running] .sr-focus{animation-delay:calc(var(--order,0)*180ms)}
+.sr-button[data-state=running] .sr-focus-native{animation:sr-corner-read var(--cycle) linear infinite;animation-delay:calc(var(--order)*140ms)}
+.sr-button[data-set="4"]{--cycle:2000ms}.sr-button[data-set="4"] .sr-ink{animation-direction:alternate}.sr-button[data-set="4"][data-state=running] .sr-image-read{animation-name:sr-image-panels}
+.sr-button.sr-enter:not([data-state=running]) .sr-motion{animation:sr-enter-layer 220ms both}.sr-button.sr-enter:not([data-state=running]) .sr-read,.sr-button.sr-enter:not([data-state=running]) .sr-write,.sr-button.sr-enter:not([data-state=running]) .sr-trace{stroke-dasharray:1;animation:sr-enter-stroke 180ms both;animation-delay:calc(var(--order,0)*12ms)}.sr-button.sr-enter:not([data-state=running]) .sr-ink{fill:currentColor;stroke:none;animation:sr-enter-ink 220ms both}
+.sr-button.sr-enter:not([data-state=running]) .sr-nib-read{animation:sr-enter-nib 220ms both}
+.sr-button.sr-enter:not([data-state=running]) .sr-detail-native,.sr-button.sr-enter:not([data-state=running]) .sr-detail-under{animation:sr-detail-enter 220ms both}
+.sr-button[data-state=complete] .sr-motion{opacity:0}.sr-button[data-state=error]{outline:1px dashed currentColor;outline-offset:2px}
+@keyframes sr-read{0%,8%{opacity:.05}22%,44%{opacity:1}65%,100%{opacity:.05}}
+@keyframes sr-write{0%,8%{opacity:0;stroke-dashoffset:1}36%,72%{opacity:1;stroke-dashoffset:0}90%,100%{opacity:0;stroke-dashoffset:0}}
+@keyframes sr-think{0%,65%,100%{opacity:.1}28%,40%{opacity:1}}
+@keyframes sr-ink{0%,6%{clip-path:inset(0 100% 0 0);opacity:0}14%{opacity:1}42%,72%{clip-path:inset(0);opacity:.85}94%,100%{clip-path:inset(0);opacity:0}}
+@keyframes sr-focus{0%,9%{opacity:.1}25%,68%{opacity:1}90%,100%{opacity:.1}}
+@keyframes sr-fill-write{0%,7%{clip-path:inset(0 100% 0 0);opacity:0}38%,72%{clip-path:inset(0);opacity:1}94%,100%{clip-path:inset(0);opacity:0}}
+@keyframes sr-image-read{0%,5%{clip-path:inset(0 0 100% 0);opacity:0}14%{opacity:1}65%,76%{clip-path:inset(0);opacity:1}98%,100%{clip-path:inset(0);opacity:0}}
+@keyframes sr-image-panels{0%,6%{clip-path:inset(0 100% 0 0);opacity:0}15%{opacity:1}58%,78%{clip-path:inset(0);opacity:1}98%,100%{clip-path:inset(0);opacity:0}}
+@keyframes sr-enter-layer{0%,100%{opacity:0}20%,75%{opacity:1}}
+@keyframes sr-enter-stroke{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+@keyframes sr-enter-ink{from{opacity:0;clip-path:inset(0 100% 0 0)}60%{opacity:.6}to{opacity:0;clip-path:inset(0)}}
+@keyframes sr-enter-nib{0%{clip-path:inset(0 100% 0 0)}100%{clip-path:inset(0)}}
+@keyframes sr-detail-enter{from{opacity:.12}to{opacity:1}}
+@keyframes sr-corner-read{0%,65%,100%{opacity:.6}20%,42%{opacity:1}}
+.sr-button[data-set="2"][data-module=highlights][data-state=running] .sr-icon{animation:sr-highlight-stroke 1400ms ease-in-out infinite;transform-origin:center}
+.sr-button[data-set="2"][data-module=highlights].sr-enter:not([data-state=running]) .sr-icon{animation:sr-highlight-enter 220ms ease-out both}
+@keyframes sr-highlight-stroke{0%,100%{transform:translateX(calc(var(--icon-size)*-.11)) rotate(-4deg) scale(.9)}50%{transform:translateX(calc(var(--icon-size)*.11)) rotate(4deg) scale(.9)}}
+@keyframes sr-highlight-enter{from{transform:translateX(-1.5px) rotate(-3deg) scale(.9)}to{transform:scale(.9)}}
+html[data-reduced=true] .sr-button,html[data-reduced=true] .sr-button *{animation:none!important;transition:none!important}html[data-reduced=true] .sr-button .sr-base{opacity:1!important}html[data-reduced=true] .sr-button .sr-motion{opacity:0!important}html[data-reduced=true] .sr-button[data-state=running] .sr-busy{opacity:1}
+html[data-reduced=true] .sr-button .sr-detail-native,html[data-reduced=true] .sr-button .sr-detail-under{opacity:1!important}
+@media(prefers-reduced-motion:reduce){.sr-button,.sr-button *{animation:none!important;transition:none!important}.sr-button .sr-base{opacity:1!important}.sr-button .sr-motion{opacity:0!important}.sr-button[data-state=running] .sr-busy{opacity:1}}
+@media(prefers-reduced-motion:reduce){.sr-button .sr-detail-native,.sr-button .sr-detail-under{opacity:1!important}}

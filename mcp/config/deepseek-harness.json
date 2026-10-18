@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "brevess": {
+      "command": "node",
+      "args": [
+        "D:\\path\\to\\BREVESS-Deepseek\\mcp\\server.js",
+        "--stdio-only",
+        "--allow-write"
+      ],
+      "env": {
+        "BREVESS_MCP_STATE_DIR": "%LOCALAPPDATA%\\BrevessMcp"
+      }
+    }
+  }
+}
+

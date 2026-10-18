@@ -168,8 +168,10 @@ await fixture.evaluate(() => {
   }
 });
 await sidePanel.evaluate(() => {
-  const view = document.querySelector('[data-workspace-view="analysis"]');
-  if (view) view.scrollTop = 0;
+    const view = document.querySelector('[data-workspace-view="highlights"]');
+    const controls = document.getElementById('highlightControls');
+    if (!view || !controls?.open) throw new Error('The merged highlighter must be visible for capture');
+    view.scrollTop = 0;
 });
 await compose('screenshot-3-rule-highlights-1280x800.png', fixture, sidePanel);
 

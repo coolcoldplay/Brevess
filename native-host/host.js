@@ -11,6 +11,10 @@ const { spawn, spawnSync } = require('node:child_process');
 const HOST_VERSION = '1.0.1';
 const MAX_NATIVE_INPUT_BYTES = 64 * 1024 * 1024;
 const MAX_NATIVE_OUTPUT_BYTES = 900 * 1024;
+const MAX_JSON_TURN_TEXT_BYTES = 3 * 1024 * 1024;
+const MAX_JSON_TURN_ITEMS = 256;
+const MAX_JSON_TURN_EVENTS = 65536;
+const MAX_JSON_ITEM_ID_BYTES = 256;
 const DEFAULT_APP_SERVER_TIMEOUT_MS = 30000;
 const MAX_TURN_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_TURN_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -77,6 +81,307 @@ function codedError(code, message, retryable = false) {
   return error;
 }
 
+const WORKSPACE_DIRECTORY_PROOF_FILE = 'native-directory-binding.json';
+const WORKSPACE_DIRECTORY_MAX_PROOF_MS = 10 * 60 * 1000;
+const WORKSPACE_DIRECTORY_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
+
+function workspaceDirectoryError(suffix, message) {
+  return codedError(`WORKSPACE_DIRECTORY_${suffix}`, message);
+}
+
+// Self-contained for the existing Node SEA build: no dynamically loaded module,
+// shell, user-supplied executable, registry change, or arbitrary open-path API.
+class WorkspaceDirectoryService {
+  constructor(options = {}) {
+    this.stateRoot = path.resolve(options.stateRoot || stateDirectory());
+    this.configPath = path.join(this.stateRoot, 'workspace-directories.json');
+    this.platform = options.platform || process.platform;
+    this.systemRoot = options.systemRoot || process.env.SystemRoot || 'C:\\Windows';
+    this.spawnImpl = options.spawnImpl || spawn;
+    this.now = options.now || Date.now;
+  }
+
+  rootId(value) {
+    if (typeof value !== 'string' || !WORKSPACE_DIRECTORY_UUID.test(value)) {
+      throw workspaceDirectoryError('INVALID_REQUEST', 'A valid directory root identifier is required.');
+    }
+    return value;
+  }
+
+  requireSupported() {
+    if (this.platform !== 'win32') {
+      throw workspaceDirectoryError('UNSUPPORTED', 'Opening workspace folders is supported on Windows only.');
+    }
+  }
+
+  localAbsolute(value) {
+    if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value ||
+        /[\u0000-\u001f\u007f]/u.test(value) || /^[\\/]{2}/u.test(value) ||
+        !path.isAbsolute(value) || (path.sep === '\\' && !/^[a-z]:[\\/]/iu.test(value))) {
+      throw workspaceDirectoryError('INVALID_PATH', 'Use the absolute path of the local Brevess data root.');
+    }
+    const withoutDrive = value.replace(/^[a-z]:/iu, '');
+    if (/[:*?"<>|]/u.test(withoutDrive) || withoutDrive.split(/[\\/]/u).some(part =>
+      part === '.' || part === '..' || (part && /[. ]$/u.test(part)))) {
+      throw workspaceDirectoryError('INVALID_PATH', 'The local directory path is ambiguous or unsafe.');
+    }
+    return path.resolve(value);
+  }
+
+  samePath(first, second) {
+    return path.sep === '\\' ? first.toLowerCase() === second.toLowerCase() : first === second;
+  }
+
+  readJson(file, maximum, suffix) {
+    let descriptor;
+    try {
+      const before = fs.lstatSync(file);
+      if (before.isSymbolicLink() || !before.isFile() ||
+          !this.samePath(fs.realpathSync(file), path.resolve(file))) {
+        throw workspaceDirectoryError('PATH_ESCAPE', 'A directory metadata path was redirected.');
+      }
+      if (before.size < 2 || before.size > maximum) throw Error('BOUNDED_JSON');
+      descriptor = fs.openSync(file, 'r');
+      const opened = fs.fstatSync(descriptor);
+      if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino) {
+        throw workspaceDirectoryError('PATH_ESCAPE', 'Directory metadata changed while being checked.');
+      }
+      const bytes = Buffer.alloc(maximum + 1);
+      const length = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
+      if (length > maximum || !this.samePath(fs.realpathSync(file), path.resolve(file))) throw Error('BOUNDED_JSON');
+      const value = JSON.parse(bytes.subarray(0, length).toString('utf8'));
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('OBJECT_REQUIRED');
+      return value;
+    } catch (error) {
+      if (String(error?.code || '').startsWith('WORKSPACE_DIRECTORY_')) throw error;
+      throw workspaceDirectoryError(suffix, 'Directory metadata is missing, unreadable, or invalid.');
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  }
+
+  readConfig() {
+    try { fs.lstatSync(this.configPath); }
+    catch (error) {
+      if (error.code === 'ENOENT') return { schemaVersion: 1,
+        kind: 'brevess-workspace-directory-bindings', bindings: Object.create(null) };
+      throw workspaceDirectoryError('CONFIG_INVALID', 'Directory binding configuration cannot be read.');
+    }
+    const value = this.readJson(this.configPath, 64 * 1024, 'CONFIG_INVALID');
+    if (value.schemaVersion !== 1 || value.kind !== 'brevess-workspace-directory-bindings' ||
+        !value.bindings || typeof value.bindings !== 'object' || Array.isArray(value.bindings) ||
+        Object.keys(value.bindings).length > 32) {
+      throw workspaceDirectoryError('CONFIG_INVALID', 'Directory binding configuration is invalid.');
+    }
+    for (const [id, root] of Object.entries(value.bindings)) {
+      try { this.rootId(id); this.localAbsolute(root); }
+      catch (_) { throw workspaceDirectoryError('CONFIG_INVALID', 'Directory binding configuration is invalid.'); }
+    }
+    return value;
+  }
+
+  realDirectory(value, suffix) {
+    const candidate = this.localAbsolute(value);
+    try {
+      const real = fs.realpathSync(candidate);
+      this.localAbsolute(real); // Reject network/device targets after resolution too.
+      if (!fs.statSync(real).isDirectory()) throw Error('DIRECTORY_REQUIRED');
+      return real;
+    } catch (error) {
+      if (String(error?.code || '').startsWith('WORKSPACE_DIRECTORY_')) {
+        throw workspaceDirectoryError('PATH_ESCAPE', 'The resolved directory is not a local directory.');
+      }
+      throw workspaceDirectoryError(suffix, 'The saved directory no longer exists or cannot be read.');
+    }
+  }
+
+  proof(root, rootId) {
+    const proof = this.readJson(path.join(root, WORKSPACE_DIRECTORY_PROOF_FILE), 16 * 1024, 'PROOF_INVALID');
+    if (proof.schemaVersion !== 1 || proof.kind !== 'brevess-native-directory-binding' ||
+        typeof proof.rootId !== 'string' || !WORKSPACE_DIRECTORY_UUID.test(proof.rootId)) {
+      throw workspaceDirectoryError('PROOF_INVALID', 'The selected directory has no valid binding proof.');
+    }
+    if (proof.rootId !== rootId) throw workspaceDirectoryError('ROOT_MISMATCH', 'The selected and bound directory roots differ.');
+    return proof;
+  }
+
+  boundRoot(rootId) {
+    const config = this.readConfig();
+    if (!Object.hasOwn(config.bindings, rootId)) {
+      throw workspaceDirectoryError('NOT_BOUND', 'Bind the currently selected data root before opening a folder.');
+    }
+    const stored = config.bindings[rootId];
+    const real = this.realDirectory(stored, 'ROOT_MISSING');
+    if (!this.samePath(real, stored)) throw workspaceDirectoryError('ROOT_MISMATCH', 'The bound directory root was redirected.');
+    this.proof(real, rootId);
+    return real;
+  }
+
+  status(input = {}) {
+    if (input.rootId === '') return { supported: this.platform === 'win32', bound: false, rootId: '' };
+    const rootId = this.rootId(input.rootId);
+    if (this.platform !== 'win32') return { supported: false, bound: false, rootId };
+    const config = this.readConfig();
+    if (!Object.hasOwn(config.bindings, rootId)) return { supported: true, bound: false, rootId };
+    this.boundRoot(rootId);
+    return { supported: true, bound: true, rootId };
+  }
+
+  bind(input = {}) {
+    this.requireSupported(); const rootId = this.rootId(input.rootId);
+    if (typeof input.challenge !== 'string' || !/^[a-f0-9]{64}$/u.test(input.challenge)) {
+      throw workspaceDirectoryError('INVALID_REQUEST', 'A fresh directory binding challenge is required.');
+    }
+    const root = this.realDirectory(input.absolutePath, 'ROOT_MISSING');
+    const proof = this.proof(root, rootId);
+    if (typeof proof.challenge !== 'string' || proof.challenge !== input.challenge ||
+        !Number.isSafeInteger(proof.expiresAt)) {
+      throw workspaceDirectoryError('PROOF_INVALID', 'The directory binding challenge does not match.');
+    }
+    const remaining = proof.expiresAt - this.now();
+    if (!(remaining > 0 && remaining <= WORKSPACE_DIRECTORY_MAX_PROOF_MS)) {
+      throw workspaceDirectoryError('PROOF_EXPIRED', 'Refresh the directory binding proof and try again.');
+    }
+    const config = this.readConfig();
+    if (!Object.hasOwn(config.bindings, rootId) && Object.keys(config.bindings).length >= 32) {
+      throw workspaceDirectoryError('CONFIG_WRITE_FAILED', 'The directory binding limit has been reached.');
+    }
+    config.bindings[rootId] = root;
+    let temporary = '';
+    try {
+      // This is the sole writing path, reached only after an exact fresh proof.
+      fs.mkdirSync(this.stateRoot, { recursive: true });
+      if (!this.samePath(fs.realpathSync(this.stateRoot), this.stateRoot)) throw Error('STATE_ROOT_REDIRECTED');
+      temporary = path.join(this.stateRoot, `workspace-directories-${crypto.randomUUID()}.tmp`);
+      fs.writeFileSync(temporary, `${JSON.stringify(config)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      fs.renameSync(temporary, this.configPath); temporary = '';
+    } catch (_) {
+      throw workspaceDirectoryError('CONFIG_WRITE_FAILED', 'The directory binding could not be saved.');
+    } finally {
+      if (temporary) { try { fs.unlinkSync(temporary); } catch (_) { /* only our exclusive temporary file */ } }
+    }
+    return { supported: true, bound: true, rootId };
+  }
+
+  workspaceTarget(root, input) {
+    const directoryName = input.directoryName;
+    if (typeof directoryName !== 'string' || !directoryName || directoryName.length > 180 ||
+        directoryName.trim() !== directoryName || /[. ]$/u.test(directoryName) ||
+        /[\\/:*?"<>|\u0000-\u001f\u007f]/u.test(directoryName) ||
+        directoryName === '.' || directoryName === '..' ||
+        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(directoryName)) {
+      throw workspaceDirectoryError('INVALID_PATH', 'The workspace directory name is unsafe.');
+    }
+    if (typeof input.workspaceId !== 'string' || !/^workspace:[a-f0-9]{12,64}$/u.test(input.workspaceId) ||
+        !Number.isSafeInteger(input.workspaceGeneration) || input.workspaceGeneration < 0 ||
+        typeof input.canonicalUrl !== 'string' || input.canonicalUrl.length > 4000 ||
+        /[\u0000-\u001f\u007f]/u.test(input.canonicalUrl)) {
+      throw workspaceDirectoryError('INVALID_REQUEST', 'A complete current workspace identity is required.');
+    }
+    const suffix = directoryName.split('--').at(-1);
+    if (!/^[a-f0-9]{12,64}$/u.test(suffix) || !input.workspaceId.slice(10).startsWith(suffix)) {
+      throw workspaceDirectoryError('INVALID_PATH', 'The workspace directory does not match its stable identity.');
+    }
+    const container = path.join(root, 'workspaces');
+    const realContainer = this.realDirectory(container, 'MISSING');
+    if (!this.samePath(container, realContainer)) throw workspaceDirectoryError('PATH_ESCAPE', 'The workspace root was redirected.');
+    const candidate = path.join(container, directoryName);
+    const real = this.realDirectory(candidate, 'MISSING');
+    const relative = path.relative(realContainer, real);
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative) ||
+        !this.samePath(candidate, real)) {
+      throw workspaceDirectoryError('PATH_ESCAPE', 'The workspace directory escaped its bound location.');
+    }
+    const manifest = this.readJson(path.join(real, 'manifest.json'), 1024 * 1024, 'MANIFEST_INVALID');
+    if (manifest.schemaVersion !== 1 || manifest.kind !== 'sci-logic-highlighter-workspace' ||
+        typeof manifest.workspaceId !== 'string' || typeof manifest.canonicalUrl !== 'string' ||
+        typeof manifest.directoryName !== 'string' || !Number.isSafeInteger(manifest.workspaceGeneration) ||
+        manifest.workspaceGeneration < 0) {
+      throw workspaceDirectoryError('MANIFEST_INVALID', 'The workspace manifest has an unsupported or invalid identity.');
+    }
+    if (['workspaceId', 'workspaceGeneration', 'canonicalUrl', 'directoryName'].some(key => manifest[key] !== input[key])) {
+      throw workspaceDirectoryError('IDENTITY_MISMATCH', 'The saved folder belongs to a different workspace or version.');
+    }
+    if (!/^[a-f0-9]{64}$/u.test(manifest.contentHash || '') || !Number.isSafeInteger(manifest.revision) || manifest.revision < 0 ||
+        !Array.isArray(manifest.assets) || !Array.isArray(manifest.aliases) ||
+        typeof manifest.title !== 'string' || typeof manifest.createdAt !== 'string' || typeof manifest.updatedAt !== 'string') {
+      throw workspaceDirectoryError('MANIFEST_INVALID', 'The saved workspace manifest is incomplete.');
+    }
+    return real;
+  }
+
+  researchTarget(root, input) {
+    const identity=input.identity, fields={project:['kind','projectId'],figure:['kind','projectId','planId','figureId'],panel:['kind','projectId','planId','figureId','panelId']};
+    const keys=fields[identity?.kind];
+    if(!keys||!identity||typeof identity!=='object'||Array.isArray(identity)||Object.keys(identity).length!==keys.length||
+      Object.keys(identity).some(key=>!keys.includes(key))||keys.filter(key=>key!=='kind').some(key=>typeof identity[key]!=='string'||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(identity[key]))||
+      Object.keys(input).some(key=>!['type','requestId','rootId','identity','mappingId','mappingRecordId'].includes(key))) {
+      throw workspaceDirectoryError('INVALID_REQUEST','A complete stable workbench identity is required.');
+    }
+    const canonical=value=>JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]&&typeof value[key]==='object'?JSON.parse(canonical(value[key])):value[key]])));
+    const mappingId=crypto.createHash('sha256').update(canonical(identity)).digest('hex');
+    if(input.mappingId!==mappingId||!WORKSPACE_DIRECTORY_UUID.test(input.mappingRecordId||''))throw workspaceDirectoryError('INVALID_REQUEST','The mapping identity is invalid.');
+    const mapFile=path.join(root,'research-data','.brevess-directory-map',mappingId,'map-'+input.mappingRecordId+'.json');
+    const record=this.readJson(mapFile,16384,'MANIFEST_INVALID');
+    const parts=typeof record.relativePath==='string'?record.relativePath.split('/'):[];
+    const depth={project:3,figure:5,panel:6}[identity.kind];
+    if(record.kind!=='brevess-research-data-directory'||record.schemaVersion!==1||record.mappingId!==mappingId||record.recordId!==input.mappingRecordId||
+      canonical(record.identity||{})!==canonical(identity)||typeof record.originalDisplayName!=='string'||parts.length!==depth||!['Brevess','SCI-Highlighter'].includes(parts[0])||!this.samePath(parts[0],path.basename(root))||parts[1]!=='research-data'||
+      parts.some(part=>!part||part==='.'||part==='..'||/[\\:*?"<>|\u0000-\u001f\u007f]/u.test(part)||/[. ]$/u.test(part))) {
+      throw workspaceDirectoryError('MANIFEST_INVALID','The workbench directory mapping is invalid.');
+    }
+    let target=root;
+    for(const part of parts.slice(1)){const candidate=path.join(target,part),real=this.realDirectory(candidate,'MISSING');
+      if(!this.samePath(candidate,real))throw workspaceDirectoryError('PATH_ESCAPE','A workbench data directory was redirected.');target=real;}
+    const marker=this.readJson(path.join(target,'.brevess-data-directory.json'),16384,'MANIFEST_INVALID');
+    if(canonical(marker)!==canonical(record))throw workspaceDirectoryError('IDENTITY_MISMATCH','The folder ownership marker differs from its mapping.');
+    return target;
+  }
+
+  openResearch(input = {}) {
+    this.requireSupported();const rootId=this.rootId(input.rootId),root=this.boundRoot(rootId),target=this.researchTarget(root,input);
+    if(!this.samePath(this.boundRoot(rootId),root)||!this.samePath(this.researchTarget(root,input),target))throw workspaceDirectoryError('PATH_ESCAPE','The workbench directory changed during validation.');
+    if(!/^[a-z]:[\\/]/iu.test(this.systemRoot)||/^[\\/]{2}/u.test(this.systemRoot)||/[\u0000-\u001f\u007f]/u.test(this.systemRoot))throw workspaceDirectoryError('OPEN_FAILED','The Windows folder opener is unavailable.');
+    return new Promise((resolve,reject)=>{
+      let settled=false;const timer=setTimeout(()=>finish(false),5000);timer.unref?.();
+      const finish=success=>{if(settled)return;settled=true;clearTimeout(timer);
+        if(success)resolve({opened:true,rootId,mappingId:input.mappingId});else reject(workspaceDirectoryError('OPEN_FAILED','Windows could not accept the folder-open request.'));};
+      try{const child=this.spawnImpl(path.win32.join(this.systemRoot,'explorer.exe'),[target],{shell:false,windowsHide:true,stdio:'ignore'});
+        child.once('error',()=>finish(false));child.once('spawn',()=>{child.unref?.();finish(true);});}catch(_){finish(false);}
+    });
+  }
+
+  open(input = {}) {
+    this.requireSupported(); const rootId = this.rootId(input.rootId);
+    const root = this.boundRoot(rootId);
+    const target = this.workspaceTarget(root, input);
+    // Recheck directly before spawning. No asynchronous gap, path inference,
+    // workspace creation, or token/expiry downgrade occurs on the open path.
+    if (!this.samePath(this.boundRoot(rootId), root) || !this.samePath(this.workspaceTarget(root, input), target)) {
+      throw workspaceDirectoryError('PATH_ESCAPE', 'The workspace changed while being checked.');
+    }
+    if (!/^[a-z]:[\\/]/iu.test(this.systemRoot) || /^[\\/]{2}/u.test(this.systemRoot) ||
+        /[\u0000-\u001f\u007f]/u.test(this.systemRoot)) {
+      throw workspaceDirectoryError('OPEN_FAILED', 'The Windows folder opener is unavailable.');
+    }
+    const executable = path.win32.join(this.systemRoot, 'explorer.exe');
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => finish(false), 5000); timer.unref?.();
+      const finish = success => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        if (success) resolve({ opened: true, rootId, workspaceId: input.workspaceId });
+        else reject(workspaceDirectoryError('OPEN_FAILED', 'Windows could not accept the folder-open request.'));
+      };
+      try {
+        const child = this.spawnImpl(executable, [target], { shell: false, windowsHide: true, stdio: 'ignore' });
+        child.once('error', () => finish(false));
+        child.once('spawn', () => { child.unref?.(); finish(true); });
+      } catch (_) { finish(false); }
+    });
+  }
+}
+
 function safeChildPath(root, candidate) {
   const resolvedRoot = path.resolve(root);
   const resolvedCandidate = path.resolve(candidate);
@@ -118,7 +423,6 @@ function decodeDataImage(value) {
 class TurnImageStore {
   constructor(root = turnImageDirectory()) {
     this.root = path.resolve(root);
-    this.cleanupStale();
   }
 
   cleanupStale(maxAgeMs = 60 * 60 * 1000) {
@@ -854,13 +1158,41 @@ function runPdffigures2Process(javaPath, args, options = {}) {
 
 class Pdffigures2Runner {
   constructor(options = {}) {
+    // Configuration is validated only when the PDF service is requested.
+    this.javaInitialHeapMiB = options.javaInitialHeapMiB !== undefined
+      ? options.javaInitialHeapMiB : process.env.BREVESS_PDFFIGURES2_JAVA_XMS_MIB;
+    this.javaMaxHeapMiB = options.javaMaxHeapMiB !== undefined
+      ? options.javaMaxHeapMiB : process.env.BREVESS_PDFFIGURES2_JAVA_XMX_MIB;
     this.jarPath = String(options.jarPath || process.env.BREVESS_PDFFIGURES2_JAR || '');
     this.javaPath = String(options.javaPath || '');
-    this.extractorVersion = String(options.extractorVersion || '0.2.0-cross-page');
+    this.extractorVersion = String(options.extractorVersion || '0.2.1-numbered-captions');
     this.dpi = Math.max(72, Math.min(400,
       Number(options.dpi) || DEFAULT_PDF_FIGURE_DPI));
     this.timeoutMs = Math.max(10000,
       Number(options.timeoutMs) || DEFAULT_PDF_FIGURE_TIMEOUT_MS);
+  }
+
+  javaHeapArgs() {
+    const heapMiB = value => {
+      if (value === undefined) return undefined;
+      if (!['number', 'string'].includes(typeof value) ||
+          !/^[1-9]\d{0,3}$/.test(String(value)) || Number(value) > 4096) {
+        throw codedError('PDF_FIGURE_JAVA_HEAP_INVALID',
+          'Java heap settings must be integer MiB values from 1 to 4096');
+      }
+      return Number(value);
+    };
+    const initial = heapMiB(this.javaInitialHeapMiB);
+    const maximum = heapMiB(this.javaMaxHeapMiB);
+    if (initial !== undefined && maximum !== undefined && initial > maximum) {
+      throw codedError('PDF_FIGURE_JAVA_HEAP_INVALID',
+        'Java initial heap must not exceed maximum heap');
+    }
+    // Omitted settings preserve JVM defaults, including ordinary user hosts.
+    return [
+      ...(initial === undefined ? [] : [`-Xms${initial}m`]),
+      ...(maximum === undefined ? [] : [`-Xmx${maximum}m`])
+    ];
   }
 
   bundledJarCandidates() {
@@ -937,28 +1269,56 @@ class Pdffigures2Runner {
   }
 
   async health() {
+    let heapArgs;
+    try {
+      heapArgs = this.javaHeapArgs();
+    } catch (error) {
+      return {
+        available: false,
+        crossPageRecoveryAvailable: false,
+        jpeg2000Available: false,
+        extractorVersion: this.extractorVersion,
+        javaVersion: '',
+        reason: error.code || 'PDF_FIGURE_JAVA_HEAP_INVALID'
+      };
+    }
     const jarPath = this.resolveJar();
     const javaPath = this.resolveJava();
     let javaVersion = '';
+    let probeSucceeded = false;
+    let probeTimedOut = false;
     if (javaPath) {
-      const version = spawnSync(javaPath, ['-version'], {
-        encoding: 'utf8', windowsHide: true, timeout: 10000
-      });
-      javaVersion = String(version.stderr || version.stdout || '')
-        .split(/\r?\n/)[0].trim();
+      let version;
+      try {
+        version = spawnSync(javaPath, [...heapArgs, '-version'], {
+          encoding: 'utf8', windowsHide: true, timeout: 10000
+        });
+      } catch (error) {
+        version = { error };
+      }
+      probeSucceeded = version.status === 0 && !version.error && !version.signal;
+      probeTimedOut = version.error?.code === 'ETIMEDOUT';
+      if (probeSucceeded) {
+        javaVersion = String(version.stderr || version.stdout || '')
+          .split(/\r?\n/)[0].trim();
+      }
     }
+    const available = Boolean(jarPath && javaPath && probeSucceeded);
     return {
-      available: Boolean(jarPath && javaPath),
-      crossPageRecoveryAvailable: Boolean(this.resolveFallbackJar() && javaPath),
+      available,
+      crossPageRecoveryAvailable: available && Boolean(this.resolveFallbackJar()),
       jpeg2000Available: this.resolveImageIoJars().length === 2,
       extractorVersion: this.extractorVersion,
       javaVersion,
       reason: !jarPath ? 'PDF_FIGURE_JAR_MISSING'
-        : !javaPath ? 'PDF_FIGURE_JAVA_MISSING' : ''
+        : !javaPath ? 'PDF_FIGURE_JAVA_MISSING'
+        : probeTimedOut ? 'PDF_FIGURE_JAVA_PROBE_TIMEOUT'
+        : !probeSucceeded ? 'PDF_FIGURE_JAVA_PROBE_FAILED' : ''
     };
   }
 
   async extract(input = {}) {
+    const heapArgs = this.javaHeapArgs();
     const jarPath = this.resolveJar();
     const javaPath = this.resolveJava();
     if (!jarPath) throw codedError(
@@ -984,6 +1344,8 @@ class Pdffigures2Runner {
         'org.allenai.pdffigures2.FigureExtractorBatchCli']
       : ['-jar', jarPath];
     const args = [
+      ...heapArgs,
+      '-Dfile.encoding=UTF-8',
       '-Dsun.java2d.cmm=sun.java2d.cmm.kcms.KcmsServiceProvider',
       ...launcher,
       pdfPath,
@@ -1060,6 +1422,8 @@ class Pdffigures2Runner {
         const labels = matched.map(pdffigures2Label).filter(Boolean);
         const classPath = [fallbackJar, jarPath, ...imageIoJars].join(path.delimiter);
         const recoveredProcess = await runPdffigures2Process(javaPath, [
+          ...heapArgs,
+          '-Dfile.encoding=UTF-8',
           '-cp', classPath, 'BrevessPdfFallback', pdfPath, outputDirectory,
           String(this.dpi), labels.join(','), ...preferred.map(String)
         ], {
@@ -1519,6 +1883,591 @@ class PdfTranslationPageServer {
   }
 }
 
+// This backend remains in host.js: the Windows SEA build embeds only this file.
+const HARNESS_SUPPORTED_VERSION = '0.2.0-rc.2';
+const HARNESS_PROVIDER = 'deepseek-account';
+const HARNESS_MAX_TEXT = 2 * 1024 * 1024;
+
+function classifyHarnessLlmFailure(failure) {
+  if (!failure || typeof failure !== 'object' || Array.isArray(failure)) return { code: 'HARNESS_TURN_FAILED' };
+  // turn/end.reason.error is the official SDK LlmError.failure record. Read
+  // only its exact machine code and numeric HTTP status, never free text/cause.
+  const codes = {
+    ACCOUNT_TOKEN_INVALID: 'AUTH_INVALID', ACCOUNT_SIGN_IN_REQUIRED: 'AUTH_INVALID', AUTH: 'AUTH_INVALID',
+    ACCOUNT_QUOTA: 'QUOTA_EXHAUSTED', ACCOUNT_QUOTA_EXCEEDED: 'QUOTA_EXHAUSTED', QUOTA: 'QUOTA_EXHAUSTED',
+    RATE_LIMIT: 'RATE_LIMITED', SERVER: 'PROVIDER_UNAVAILABLE', TRANSPORT: 'NETWORK_ERROR', TIMEOUT: 'REQUEST_TIMEOUT',
+    CONTEXT_WINDOW_EXCEEDED: 'CONTEXT_BUDGET_EXCEEDED'
+  };
+  const status = Number.isSafeInteger(failure.status) && failure.status >= 100 && failure.status <= 599
+    ? failure.status : undefined;
+  const classified = code => ({ code, ...(status === undefined ? {} : { status }) });
+  if (typeof failure.code === 'string' && Object.hasOwn(codes, failure.code)) return classified(codes[failure.code]);
+  if (status === 401 || status === 403) return classified('AUTH_INVALID');
+  if (status === 402) return classified('QUOTA_EXHAUSTED');
+  if (status === 408) return classified('REQUEST_TIMEOUT');
+  if (status === 429) return classified('RATE_LIMITED');
+  if (status >= 500) return classified('PROVIDER_UNAVAILABLE');
+  return classified('HARNESS_TURN_FAILED');
+}
+
+function harnessPublicError(error) {
+  const allowed = new Set(['HARNESS_NOT_INSTALLED', 'HARNESS_VERSION_UNSUPPORTED',
+    'HARNESS_START_FAILED', 'HARNESS_PROTOCOL_ERROR', 'HARNESS_MODEL_REQUIRED',
+    'HARNESS_MODEL_UNAVAILABLE', 'HARNESS_IMAGE_UNSUPPORTED', 'HARNESS_NOT_AUTHENTICATED',
+    'HARNESS_TOOL_DISABLED', 'HARNESS_MAX_TOKENS', 'HARNESS_TURN_FAILED',
+    'HARNESS_PROCESS_EXITED', 'REQUEST_TIMEOUT', 'INVALID_SETTINGS', 'CANCELLED',
+    'AUTH_INVALID', 'QUOTA_EXHAUSTED', 'RATE_LIMITED', 'PROVIDER_UNAVAILABLE',
+    'NETWORK_ERROR', 'CONTEXT_BUDGET_EXCEEDED', 'WEB_SEARCH_GROUNDING_MISSING',
+    'WEB_SEARCH_RESPONSE_INCOMPLETE']);
+  const code = allowed.has(error?.code) ? error.code : 'HARNESS_TURN_FAILED';
+  // SDK/provider error bodies can contain account tokens, URLs and echoed prompts.
+  return { code, message: code.replaceAll('_', ' ').toLowerCase(),
+    retryable: ['HARNESS_START_FAILED', 'HARNESS_PROCESS_EXITED', 'REQUEST_TIMEOUT',
+      'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'NETWORK_ERROR'].includes(code),
+    ...(Number.isSafeInteger(error?.status) && error.status >= 100 && error.status <= 599 ? { status: error.status } : {}) };
+}
+
+function normalizeHarnessUsage(value) {
+  if (!value || typeof value !== 'object') return null;
+  const token = n => Number.isSafeInteger(n) && n >= 0 ? n : null;
+  const input = token(value.inputTokens), output = token(value.outputTokens);
+  if (input === null || output === null) return null;
+  const read = token(value.cacheReadTokens) ?? 0, write = token(value.cacheWriteTokens) ?? 0;
+  const totalInput = input + read + write;
+  if (!Number.isSafeInteger(totalInput + output)) return null;
+  return { inputTokens: totalInput, outputTokens: output, totalTokens: totalInput + output,
+    reasoningTokens: token(value.reasoningTokens) ?? 0, cacheHitTokens: read,
+    cacheMissTokens: input + write, estimated: false };
+}
+
+function validateHarnessTurn(message) {
+  if (message.webSearch !== undefined && typeof message.webSearch !== 'boolean') {
+    throw codedError('INVALID_SETTINGS', 'Harness webSearch must be a boolean');
+  }
+  const model = typeof message.model === 'string' ? message.model.trim() : '';
+  if (!model || model === 'auto' || model.length > 200 || /[\x00-\x1f]/.test(model)) {
+    throw codedError('HARNESS_MODEL_REQUIRED', 'Choose an installed Harness model');
+  }
+  const systemPrompt = String(message.systemPrompt || ''), userPrompt = String(message.userPrompt || '');
+  if (!userPrompt.trim() || Buffer.byteLength(systemPrompt + userPrompt) > HARNESS_MAX_TEXT) {
+    throw codedError('INVALID_SETTINGS', 'Invalid Harness prompt');
+  }
+  if (message.maxOutputTokens !== undefined && (!Number.isSafeInteger(message.maxOutputTokens) ||
+      message.maxOutputTokens < 1 || message.maxOutputTokens > 256000)) {
+    throw codedError('INVALID_SETTINGS', 'Invalid Harness token bound');
+  }
+  const reasoningEffort = message.reasoningEffort && message.reasoningEffort !== 'auto'
+    ? String(message.reasoningEffort) : undefined;
+  if (reasoningEffort && !['off', 'low', 'high', 'max'].includes(reasoningEffort)) {
+    throw codedError('INVALID_SETTINGS', 'Invalid Harness reasoning effort');
+  }
+  const images = message.images === undefined ? [] : message.images;
+  if (!Array.isArray(images) || images.length > MAX_TURN_IMAGES) throw codedError('INVALID_SETTINGS', 'Invalid Harness images');
+  let bytes = 0;
+  const contentBlocks = [{ type: 'text', text: userPrompt }];
+  for (const image of images) {
+    const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(image?.dataUrl || ''));
+    if (!match || match[2].length % 4 !== 0 || (image.mediaType && image.mediaType !== match[1])) {
+      throw codedError('INVALID_SETTINGS', 'Harness images must be encoded image data');
+    }
+    const size = Buffer.from(match[2], 'base64').length;
+    bytes += size;
+    if (!size || size > MAX_TURN_IMAGE_BYTES || bytes > MAX_TURN_IMAGE_TOTAL_BYTES) throw codedError('INVALID_SETTINGS', 'Harness image bound exceeded');
+    contentBlocks.push({ type: 'image', mimeType: match[1], data: match[2] });
+  }
+  const timeoutMs = Math.max(1000, Math.min(15 * 60 * 1000, Number(message.timeoutMs) || 300000));
+  return { model, systemPrompt, contentBlocks, reasoningEffort, webSearch: message.webSearch === true,
+    maxTokens: message.maxOutputTokens ?? 8192, timeoutMs };
+}
+
+function harnessWebSources(meta) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta) || typeof meta.truncated !== 'boolean' ||
+      !Array.isArray(meta.sources) || !meta.sources.length || meta.sources.length > 8) return null;
+  const urls = new Set(), sources = [];
+  for (const source of meta.sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source) ||
+        typeof source.url !== 'string' || !source.url || source.url.length > 8000 ||
+        /[\s\x00-\x1f\x7f]/.test(source.url) || urls.has(source.url) ||
+        (source.title !== undefined && (typeof source.title !== 'string' || source.title.length > 2000))) return null;
+    let parsed;
+    try { parsed = new URL(source.url); } catch { return null; }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !parsed.hostname) return null;
+    urls.add(source.url);
+    sources.push({ url: source.url, ...(source.title !== undefined ? { title: source.title } : {}) });
+  }
+  return sources;
+}
+
+function readHarnessArchiveManifest(archive, entry) {
+  // Read only a fixed application manifest, never account/configuration files.
+  const fd = fs.openSync(archive, 'r');
+  try {
+    const prefix = Buffer.alloc(16); if (fs.readSync(fd, prefix, 0, 16, 0) !== 16) throw Error('header');
+    const size = prefix.readUInt32LE(4), jsonSize = prefix.readUInt32LE(12);
+    if (jsonSize > 20000000 || size > 25000000 || jsonSize < 2) throw Error('header');
+    const headerBytes = Buffer.alloc(jsonSize); fs.readSync(fd, headerBytes, 0, jsonSize, 16);
+    let node = JSON.parse(headerBytes.toString('utf8'));
+    for (const segment of entry.split('/')) node = node.files?.[segment];
+    if (!node || node.unpacked || !Number.isSafeInteger(node.size) || node.size > 65536) throw Error('manifest');
+    const bytes = Buffer.alloc(node.size); fs.readSync(fd, bytes, 0, node.size, 8 + size + Number(node.offset));
+    return JSON.parse(bytes.toString('utf8'));
+  } finally { fs.closeSync(fd); }
+}
+
+function findHarnessInstallation() {
+  if (process.platform !== 'win32') throw codedError('HARNESS_NOT_INSTALLED', 'Harness Windows installation unavailable');
+  const candidates = [path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'DeepSeek Harness'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'DeepSeek Harness')];
+  for (const candidate of candidates) {
+    const exe = path.join(candidate, 'DeepSeek Harness.exe'), archive = path.join(candidate, 'resources', 'app.asar');
+    if (!fs.existsSync(exe) || !fs.existsSync(archive)) continue;
+    try {
+      const version = readHarnessArchiveManifest(archive, 'package.json').version;
+      const sdkVersion = readHarnessArchiveManifest(archive, 'dsh/node_modules/@deepseek-ai/dsh-sdk-protocol/package.json').version;
+      if (version !== HARNESS_SUPPORTED_VERSION || sdkVersion !== HARNESS_SUPPORTED_VERSION) throw codedError('HARNESS_VERSION_UNSUPPORTED', 'Unsupported Harness installation');
+      return { executable: fs.realpathSync(exe), archive: fs.realpathSync(archive), version, sdkVersion };
+    } catch (error) {
+      if (error.code === 'HARNESS_VERSION_UNSUPPORTED') throw error;
+      throw codedError('HARNESS_VERSION_UNSUPPORTED', 'Harness installation structure changed');
+    }
+  }
+  throw codedError('HARNESS_NOT_INSTALLED', 'DeepSeek Harness is not installed');
+}
+
+// Fixed bootstrap program; content/system/image data never enters argv or code.
+async function closedHarnessBootstrap() {
+  const fs = require('node:fs'), path = require('node:path');
+  const { pathToFileURL } = require('node:url');
+  for (const method of ['log', 'info', 'debug', 'warn', 'error']) console[method] = () => {};
+  const archive = process.argv[2];
+  const base = path.join(archive, 'dsh', 'node_modules', '@deepseek-ai');
+  const names = ['cordis', 'dsh-session', 'dsh-agent', 'dsh-llm', 'dsh-session-projection',
+    'dsh-system-prompt', 'dsh-tools', 'dsh-agent-loop', 'dsh-attachment-local',
+    'dsh-credentials-local', 'dsh-authorization', 'dsh-deepseek-account-platform',
+    'dsh-llm-deepseek-account', 'dsh-sdk-protocol', 'dsh-sdk-jsonrpc-server',
+    'dsh-web', 'dsh-web-search-deepseek', 'dsh-tool-web', 'dsh-tool-call-timeout-policy'];
+  const modules = {};
+  for (const name of names) modules[name] = await import(pathToFileURL(path.join(base, name, 'lib', 'index.js')).href);
+  const { Context } = modules.cordis;
+  const ctx = new Context();
+  const mount = async (name, config) => ctx.plugin(modules[name].default || modules[name], config);
+  await mount('dsh-session'); await mount('dsh-agent'); await mount('dsh-llm');
+  await mount('dsh-session-projection');
+  await mount('dsh-system-prompt', { includeHarnessIdentity: false, includeRuntimeContext: false });
+  await mount('dsh-tools', { mode: 'native' });
+  // Search producers mount only for an explicit standalone web request below.
+  // No loader, filesystem, skills, jobs, PTC or subagent plugins.
+  await mount('dsh-agent-loop', { agents: [] });
+  await mount('dsh-attachment-local', { dshHome: process.cwd(), maxImagesPerMessage: 8,
+    maxImageBytes: 4194304, maxMessageImageBytes: 25165824 });
+  await mount('dsh-credentials-local', { watch: false });
+  await mount('dsh-authorization');
+  await mount('dsh-deepseek-account-platform', { desktopPlatform: 'win32' });
+  // Explicit official endpoint prevents an inherited project env changing auth destination.
+  await mount('dsh-llm-deepseek-account', { baseURL: 'https://api.deepseek.com/anthropic' });
+  let webSearch = false, searchCalls = 0;
+  ctx.tools.guard(exec => {
+    const queries = exec.arguments?.queries;
+    if (!webSearch || exec.name !== 'web_search' || searchCalls >= 1 ||
+        !Array.isArray(queries) || queries.length !== 1 || typeof queries[0] !== 'string' ||
+        !queries[0].trim() || queries[0].length > 8192) return 'HARNESS_TOOL_DISABLED';
+    searchCalls++;
+  });
+  ctx.on('system-prompt/assemble', (assembly) => {
+    if (webSearch ? assembly.tools.length !== 1 || assembly.tools[0].name !== 'web_search'
+      : assembly.tools.length !== 0) throw new Error('HARNESS_TOOL_DISABLED');
+    return assembly;
+  });
+  const transport = new modules['dsh-sdk-protocol'].JsonRpcLineTransport(process.stdin, process.stdout);
+  const sdk = new modules['dsh-sdk-jsonrpc-server'].HarnessSdkJsonRpcServer(ctx, transport, { maxTokensAsSuccess: false });
+  let configured = false;
+  let rootSessionId;
+  ctx.on('agent/assistant-stream', function ({ frame }) {
+    const agent = ctx.agents.currentInitiator();
+    if (String(agent?.session.id) !== rootSessionId || frame.type !== 'chunk') return;
+    // Tool turns contain multiple attempts; only durable final text crosses this bridge.
+    if (webSearch) return;
+    if (frame.chunk.type === 'tool-call-delta' || (frame.chunk.type === 'block-end' && frame.chunk.block?.type === 'tool-call')) {
+      transport.notify('brevess.toolRejected', { sessionId: rootSessionId });
+    } else if (frame.chunk.type === 'text-delta') {
+      transport.notify('brevess.delta', { sessionId: rootSessionId, text: frame.chunk.text, revision: frame.revision, attemptId: String(frame.attemptId) });
+    } else if (frame.chunk.type === 'usage') {
+      transport.notify('brevess.usage', { sessionId: rootSessionId, usage: frame.chunk.usage });
+    }
+  });
+  const models = async () => {
+    const catalog = await ctx.llm.listModels('deepseek-account');
+    return Promise.all(catalog.map(async entry => {
+      const info = await ctx.llm.resolveModelInfo('deepseek-account', entry.id);
+      return { id: entry.id, name: entry.name, inputModalities: entry.inputModalities || ['text'],
+        reasoningEfforts: info.reasoning?.efforts.map(e => e.id) || [], defaultReasoningEffort: info.reasoning?.defaultEffort,
+        maxTokens: info.defaultMaxTokens, contextWindow: info.context?.contextWindow };
+    }));
+  };
+  const shutdown = async () => {
+    await sdk.shutdown(); await transport.flush(); await ctx.root.fiber.dispose(); transport.close();
+    process.exit(0);
+  };
+  transport.onRequest(async (method, params) => {
+    if (method === 'brevess.health') {
+      const state = await ctx.deepseekAccount.getState();
+      return { accountStatus: state.status, toolsEnabled: false, webSearchSupported: true,
+        allowedWebTools: ['web_search'], provider: 'deepseek-account' };
+    }
+    if (method === 'brevess.models') return { models: await models(), provider: 'deepseek-account' };
+    if (method === 'brevess.configure') {
+      if (configured || typeof params.systemPrompt !== 'string' || params.systemPrompt.length > 2097152 ||
+          typeof params.webSearch !== 'boolean') throw Error('INVALID_SETTINGS');
+      configured = true;
+      webSearch = params.webSearch;
+      if (webSearch) {
+        await mount('dsh-web', { searchProvider: 'deepseek-official' });
+        await mount('dsh-web-search-deepseek', {
+          baseURL: 'https://api.deepseek.com/anthropic/v1', maxUses: 1, maxTokens: 4096
+        });
+        await mount('dsh-tool-web', {
+          search: true, fetch: false, searchMaxQueries: 1, searchMaxResults: 8, searchTimeoutMs: 60000
+        });
+        await mount('dsh-tool-call-timeout-policy');
+      }
+      ctx.systemPrompt.section({ name: 'brevess:task', order: 0, complete: true,
+        interpolate: false, text: params.systemPrompt });
+      return { configured: true };
+    }
+    if (method === 'initialize') {
+      if (!configured || params.provider !== 'deepseek-account') throw Error('INVALID_SETTINGS');
+      params = { ...params, cwd: process.cwd() };
+    }
+    if (method === 'session/prompt') {
+      if (rootSessionId || typeof params.sessionId !== 'string') throw Error('INVALID_SETTINGS');
+      rootSessionId = params.sessionId;
+      if (params.contentBlocks?.some(b => b.type === 'image')) {
+        const catalog = await models();
+        if (!catalog.find(m => m.id === sdk.model)?.inputModalities.includes('image')) throw Error('HARNESS_IMAGE_UNSUPPORTED');
+      }
+    }
+    if (method === 'shutdown') { setImmediate(() => shutdown().catch(() => process.exit(0))); return {}; }
+    if (!['initialize', 'session/prompt'].includes(method)) throw Error('INVALID_SETTINGS');
+    return sdk.handleRequest(method, params);
+  });
+  process.stdin.once('end', () => shutdown().catch(() => process.exit(0)));
+  transport.start();
+}
+
+function harnessBootstrapSource() {
+  return "'use strict';\n(" + closedHarnessBootstrap.toString() + ")().catch(() => process.exit(71));\n";
+}
+
+class HarnessSdkProcess {
+  constructor(options = {}) {
+    this.installation = options.installation || null;
+    this.spawnProcess = options.spawnProcess || spawn;
+    this.pending = new Map(); this.sequence = 0; this.closed = false;
+  }
+  async start(onNotification, onFailure) {
+    this.installation ||= findHarnessInstallation();
+    this.onNotification = onNotification; this.onFailure = onFailure;
+    const base = path.join(stateDirectory(), 'harness-tasks'); fs.mkdirSync(base, { recursive: true });
+    this.taskParent = fs.realpathSync(base);
+    this.root = fs.mkdtempSync(path.join(base, 'sdk-'));
+    this.createdRoot = fs.realpathSync(this.root);
+    const script = path.join(this.root, 'bootstrap.cjs'); fs.writeFileSync(script, harnessBootstrapSource(), { mode: 0o600 });
+    // No shell, user-selected executable, project environment files or prompt arguments.
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    for (const name of Object.keys(env)) if (/^(?:NODE_OPTIONS|NODE_PATH|ELECTRON_NO_ASAR|DSH_HOME|DEEPSEEK_BASE_URL|DEEPSEEK_SEARCH_BASE_URL|DSH_WEB_SEARCH_PROVIDER|DSH_WEB_FETCH_PROVIDER)$/i.test(name)) delete env[name];
+    let child;
+    try {
+      child = this.spawnProcess(this.installation.executable, [script, this.installation.archive],
+        { cwd: this.root, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch {
+      this.removeRoot(); throw codedError('HARNESS_START_FAILED', 'Harness could not start');
+    }
+    this.child = child;
+    child.stderr.on('data', () => {}); // Do not expose SDK credential/provider diagnostics.
+    child.stdin.on('error', () => this.fail(codedError('HARNESS_PROCESS_EXITED', 'Harness input closed')));
+    child.stdout.on('error', () => this.fail(codedError('HARNESS_PROTOCOL_ERROR', 'Harness output closed')));
+    child.on('error', () => this.fail(codedError('HARNESS_START_FAILED', 'Harness could not start')));
+    child.on('exit', () => {
+      this.exited = true;
+      if (!this.closed) this.fail(codedError('HARNESS_PROCESS_EXITED', 'Harness exited before completion'));
+      this.removeRoot();
+    });
+    let buffer = '';
+    child.stdout.setEncoding('utf8'); child.stdout.on('data', text => {
+      if (this.closed) return;
+      buffer += text;
+      if (buffer.length > 32 * 1024 * 1024) return this.fail(codedError('HARNESS_PROTOCOL_ERROR', 'Harness output bound exceeded'));
+      let end;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+        if (!line.trim()) continue;
+        let frame; try { frame = JSON.parse(line); } catch { return this.fail(codedError('HARNESS_PROTOCOL_ERROR', 'Invalid Harness frame')); }
+        if (frame.jsonrpc !== '2.0') return this.fail(codedError('HARNESS_PROTOCOL_ERROR', 'Invalid Harness protocol'));
+        if (frame.id !== undefined) {
+          const pending = this.pending.get(frame.id); if (!pending) continue;
+          this.pending.delete(frame.id); clearTimeout(pending.timer);
+          if (frame.error) pending.reject(codedError('HARNESS_TURN_FAILED', 'Harness SDK rejected the request'));
+          else pending.resolve(frame.result);
+        } else if (typeof frame.method === 'string') {
+          try { this.onNotification?.(frame); } catch { this.fail(codedError('HARNESS_PROTOCOL_ERROR', 'Harness notification failed')); return; }
+        }
+      }
+    });
+  }
+  request(method, params, timeoutMs = 30000) {
+    if (this.closed || !this.child) return Promise.reject(this.failure || codedError('HARNESS_PROCESS_EXITED', 'Harness process unavailable'));
+    const id = ++this.sequence;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(codedError('REQUEST_TIMEOUT', 'Harness SDK timed out')); }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', error => {
+        if (!error) return; const pending = this.pending.get(id); if (!pending) return;
+        this.pending.delete(id); clearTimeout(timer); reject(codedError('HARNESS_PROCESS_EXITED', 'Harness input closed'));
+      });
+    });
+  }
+  fail(error) {
+    if (this.closed) return;
+    this.failure = error;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    this.pending.clear();
+    this.onFailure?.(error); this.close();
+  }
+  removeRoot() {
+    if (!this.root) return;
+    const target = this.root; this.root = null;
+    try {
+      const resolved = fs.realpathSync(target);
+      // Check absolute identity and the immediate parent before any recursive delete.
+      if (!path.isAbsolute(resolved) || resolved !== this.createdRoot ||
+          path.dirname(resolved) !== this.taskParent || !/^sdk-[A-Za-z0-9_-]+$/.test(path.basename(resolved)) ||
+          fs.lstatSync(target).isSymbolicLink()) return;
+      fs.rmSync(resolved, { recursive: true, force: true });
+    } catch { /* OS may briefly hold attachment files. */ }
+  }
+  close() {
+    if (this.closed) return; this.closed = true;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(this.failure || codedError('CANCELLED', 'Harness request closed')); }
+    this.pending.clear();
+    if (!this.child || this.exited) { this.removeRoot(); return; }
+    try { this.child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: ++this.sequence, method: 'shutdown', params: {} }) + '\n'); } catch {}
+    const child = this.child;
+    const timer = setTimeout(() => { if (!this.exited) child.kill(); }, 750);
+    timer.unref?.(); child.once('exit', () => clearTimeout(timer));
+  }
+}
+
+class HarnessBridgeService {
+  constructor(options = {}) {
+    this.send = options.send || (() => {});
+    this.processFactory = options.processFactory || (() => new HarnessSdkProcess());
+    this.active = new Map(); this.controls = new Map(); this.closed = false;
+  }
+  async handle(message) {
+    if (this.closed) return;
+    const requestId = String(message.requestId || '');
+    if (!requestId || requestId.length > 200 || /[\x00-\x1f]/.test(requestId)) return;
+    if (message.type === 'harness.turn.cancel') {
+      const context = this.active.get(requestId);
+      if (context) this.finish(context, 'cancelled');
+      return;
+    }
+    if (message.type === 'harness.control.cancel') {
+      const context = this.controls.get(requestId);
+      if (context) this.finishControl(context, 'cancelled');
+      return;
+    }
+    if (message.type === 'harness.turn.start') return this.startTurn(message);
+    if (!['harness.health.check', 'harness.models.list'].includes(message.type)) {
+      this.send({ type: 'harness.error', requestId, error: harnessPublicError({ code: 'INVALID_SETTINGS' }) }); return;
+    }
+    if (this.controls.has(requestId) || this.active.has(requestId)) return;
+    const context = { requestId, child: null, terminal: false };
+    this.controls.set(requestId, context);
+    try {
+      const child = context.child = this.processFactory();
+      await child.start(() => {}, error => this.finishControl(context, 'error', error));
+      if (context.terminal || this.closed || this.controls.get(requestId) !== context) return;
+      const data = await child.request(message.type === 'harness.health.check' ? 'brevess.health' : 'brevess.models', {});
+      if (context.terminal || this.closed || this.controls.get(requestId) !== context) return;
+      this.finishControl(context, 'completed', null, { type: message.type === 'harness.health.check' ? 'harness.health.result' : 'harness.models.result', requestId,
+        hostVersion: HOST_VERSION, version: child.installation?.version || HARNESS_SUPPORTED_VERSION,
+        installed: true, toolsEnabled: false, webSearchSupported: true,
+        allowedWebTools: ['web_search'], provider: HARNESS_PROVIDER,
+        ...(message.type === 'harness.health.check' ? { accountStatus: data.accountStatus,
+          credentialStored: data.accountStatus === 'credential-stored' } : { models: data.models || [] }) });
+    } catch (error) {
+      if (!context.terminal && !this.closed) this.finishControl(context, 'error', error);
+    }
+  }
+  finishControl(context, status, error, result) {
+    if (context.terminal || this.controls.get(context.requestId) !== context) return;
+    context.terminal = true;
+    this.controls.delete(context.requestId);
+    context.child?.close();
+    if (this.closed) return;
+    this.send(status === 'completed' ? result : status === 'cancelled'
+      ? { type: 'harness.control.cancelled', requestId: context.requestId }
+      : { type: 'harness.error', requestId: context.requestId, error: harnessPublicError(error) });
+  }
+  async startTurn(message) {
+    const requestId = String(message.requestId);
+    if (this.active.has(requestId) || this.controls.has(requestId)) return; // Existing owned request remains intact.
+    let input;
+    try { input = validateHarnessTurn(message); }
+    catch (error) { this.send({ type: 'harness.turn.error', requestId, error: harnessPublicError(error) }); return; }
+    const context = { requestId, input, child: this.processFactory(), sessionId: 'brevess-' + crypto.randomUUID(),
+      turn: null, terminal: false, text: '', streamed: '', usage: null, liveUsage: null, startedAt: Date.now(), seen: new Set(),
+      webEvents: new Map(), lastWebSeq: 0, webCall: null, webResult: null, finalStep: null, finalSeq: null };
+    this.active.set(requestId, context);
+    context.timer = setTimeout(() => this.finish(context, 'error', { code: 'REQUEST_TIMEOUT' }), input.timeoutMs);
+    try {
+      await context.child.start(frame => this.notification(context, frame), error => this.finish(context, 'error', error));
+      if (context.terminal) return;
+      const catalog = await context.child.request('brevess.models', {});
+      if (context.terminal) return;
+      const model = catalog.models?.find(entry => entry.id === input.model);
+      if (!model) {
+        const health = await context.child.request('brevess.health', {});
+        throw codedError(health.accountStatus === 'signed-out' ? 'HARNESS_NOT_AUTHENTICATED' : 'HARNESS_MODEL_UNAVAILABLE', 'Selected Harness model is not available');
+      }
+      if (input.contentBlocks.some(b => b.type === 'image') && !model.inputModalities?.includes('image')) throw codedError('HARNESS_IMAGE_UNSUPPORTED', 'Selected Harness model does not accept images');
+      await context.child.request('brevess.configure', { systemPrompt: input.systemPrompt, webSearch: input.webSearch });
+      if (context.terminal) return;
+      await context.child.request('initialize', { cwd: context.child.root || stateDirectory(), provider: HARNESS_PROVIDER,
+        model: input.model, maxTokens: input.maxTokens, ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}) });
+      if (context.terminal) return;
+      this.send({ type: 'harness.turn.started', requestId, model: input.model, sessionId: context.sessionId });
+      // Events can arrive before this enqueue acknowledgement resolves.
+      context.promptSent = true;
+      await context.child.request('session/prompt', { sessionId: context.sessionId, contentBlocks: input.contentBlocks });
+    } catch (error) { if (!context.terminal) this.finish(context, 'error', error); }
+  }
+  notification(context, frame) {
+    if (context.terminal || !context.promptSent || frame.params?.sessionId !== context.sessionId) return;
+    const params = frame.params;
+    if (frame.method === 'brevess.toolRejected') { this.finish(context, 'error', { code: 'HARNESS_TOOL_DISABLED' }); return; }
+    if (context.input.webSearch && ['brevess.delta', 'brevess.usage'].includes(frame.method)) return;
+    if (frame.method === 'brevess.usage') { context.liveUsage = normalizeHarnessUsage(params.usage); return; }
+    if (frame.method === 'brevess.delta') {
+      if (typeof params.text !== 'string' || !Number.isSafeInteger(params.revision) || context.seen.has('r:' + params.revision)) return;
+      if (context.attemptId && context.attemptId !== params.attemptId) { this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' }); return; }
+      context.attemptId = params.attemptId;
+      context.seen.add('r:' + params.revision); context.streamed += params.text;
+      if (context.streamed.length > 8 * 1024 * 1024) { this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' }); return; }
+      this.sendText(context, params.text); return;
+    }
+    if (frame.method !== 'session.event') return;
+    const event = params.event, data = event?.data || {};
+    if (event?.type === 'turn/start' && context.turn === null) {
+      if (Number.isSafeInteger(data.turn) && data.turn > 0) context.turn = data.turn;
+      return;
+    }
+    if (context.turn === null || data.turn !== context.turn) return;
+    if (context.input.webSearch && ['assistant/message', 'tool/call', 'tool/result', 'turn/end'].includes(event.type)) {
+      if (!Number.isSafeInteger(event.seq) || event.seq <= 0) {
+        this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' }); return;
+      }
+      const fingerprint = crypto.createHash('sha256')
+        .update(JSON.stringify({ type: event.type, data, sourceEventSeqs: event.sourceEventSeqs })).digest('hex');
+      if (context.webEvents.has(event.seq)) {
+        if (context.webEvents.get(event.seq) !== fingerprint) this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' });
+        return;
+      }
+      if (event.seq <= context.lastWebSeq || context.webEvents.size >= 64) {
+        this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' }); return;
+      }
+      context.webEvents.set(event.seq, fingerprint); context.lastWebSeq = event.seq;
+    }
+    if (event.type === 'tool/call') {
+      const queries = data.arguments?.queries;
+      if (!context.input.webSearch || data.name !== 'web_search' || context.webCall ||
+          typeof data.callId !== 'string' || !data.callId || data.callId.length > 200 || /[\x00-\x1f\x7f]/.test(data.callId) ||
+          !Number.isSafeInteger(data.step) || data.step < 1 || !Array.isArray(queries) || queries.length !== 1 ||
+          typeof queries[0] !== 'string' || !queries[0].trim() || queries[0].length > 8192) {
+        this.finish(context, 'error', { code: 'HARNESS_TOOL_DISABLED' }); return;
+      }
+      context.webCall = { callId: data.callId, step: data.step, seq: event.seq }; return;
+    }
+    if (event.type === 'tool/result' && context.input.webSearch) {
+      const call = context.webCall, message = data.message, sources = harnessWebSources(data.meta);
+      if (!call || context.webResult || data.step !== call.step || message?.role !== 'tool' ||
+          message.toolCallId !== call.callId || message.source?.kind !== 'tool' || message.source.callId !== call.callId ||
+          message.isError || data.error !== undefined || !Array.isArray(event.sourceEventSeqs) ||
+          event.sourceEventSeqs.length !== 1 || event.sourceEventSeqs[0] !== call.seq || !sources) {
+        this.finish(context, 'error', { code: 'WEB_SEARCH_GROUNDING_MISSING' }); return;
+      }
+      context.webResult = { seq: event.seq, sources }; return;
+    }
+    if (event.type === 'assistant/message') {
+      const identity = 'message:' + (event.seq ?? data.step);
+      if (context.seen.has(identity)) return; context.seen.add(identity);
+      const content = data.message?.content || [];
+      const text = content.filter(block => block.type === 'text').map(block => block.text || '').join('');
+      if (context.input.webSearch) {
+        const hasTools = content.some(block => block.type === 'tool-call');
+        const source = data.message?.source;
+        if (!hasTools && (data.message?.role !== 'assistant' || source?.kind !== 'model' ||
+            source.provider !== HARNESS_PROVIDER || source.model !== context.input.model)) {
+          this.finish(context, 'error', { code: 'WEB_SEARCH_RESPONSE_INCOMPLETE' }); return;
+        }
+        context.text = hasTools || data.interrupted === true ? '' : text;
+        context.finalStep = hasTools || data.interrupted === true ? null : data.step;
+        context.finalSeq = hasTools || data.interrupted === true ? null : event.seq;
+      } else context.text += text;
+      if (context.text.length > 8 * 1024 * 1024) { this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' }); return; }
+      if (!context.input.webSearch && !context.streamed && text) this.sendText(context, text);
+      const usage = normalizeHarnessUsage(data.usage);
+      if (usage) {
+        if (!context.usage) context.usage = usage;
+        else for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'reasoningTokens', 'cacheHitTokens', 'cacheMissTokens']) context.usage[key] += usage[key];
+        if (!context.input.webSearch) this.send({ type: 'harness.turn.usage', requestId: context.requestId, usage: context.usage });
+      }
+    } else if (event.type === 'turn/end') {
+      const kind = data.reason?.kind;
+      if (context.input.webSearch && kind === 'completed') {
+        if (!context.webCall || !context.webResult) this.finish(context, 'error', { code: 'WEB_SEARCH_GROUNDING_MISSING' });
+        else if (!context.text.trim() || !Number.isSafeInteger(context.finalStep) || context.finalStep <= context.webCall.step ||
+            !Number.isSafeInteger(context.finalSeq) || context.finalSeq <= context.webResult.seq) {
+          this.finish(context, 'error', { code: 'WEB_SEARCH_RESPONSE_INCOMPLETE' });
+        } else {
+          this.sendText(context, context.text); this.finish(context, 'completed');
+        }
+      } else if (context.streamed && context.streamed !== context.text && kind === 'completed') this.finish(context, 'error', { code: 'HARNESS_PROTOCOL_ERROR' });
+      else if (kind === 'completed' && context.text.trim()) this.finish(context, 'completed');
+      else this.finish(context, 'error', kind === 'max-tokens' ? { code: 'HARNESS_MAX_TOKENS' }
+        : kind === 'error' ? classifyHarnessLlmFailure(data.reason?.error) : { code: 'HARNESS_TURN_FAILED' });
+    }
+  }
+  sendText(context, text) {
+    // Keep every Native Messaging frame safely below Chromium's 1 MiB cap.
+    for (let offset = 0; offset < text.length; offset += 65536) this.send({
+      type: 'harness.turn.delta', requestId: context.requestId, text: text.slice(offset, offset + 65536)
+    });
+  }
+  finish(context, status, error) {
+    if (context.terminal) return;
+    context.terminal = true; clearTimeout(context.timer); this.active.delete(context.requestId);
+    const knownUsage = context.usage || context.liveUsage || { inputTokens: Math.ceil((context.input.systemPrompt.length + context.input.contentBlocks[0].text.length) / 4) + (context.input.contentBlocks.length - 1) * 1024,
+      outputTokens: Math.ceil((context.text || context.streamed).length / 4), estimated: true };
+    // The official auxiliary-search provider does not expose its model usage.
+    const usage = context.input.webSearch ? { ...knownUsage, estimated: true, searchUsageIncluded: false } : knownUsage;
+    this.send({ type: 'harness.turn.' + status, requestId: context.requestId, model: context.input.model,
+      elapsedMs: Date.now() - context.startedAt, usage,
+      ...(status === 'completed' ? { finishReason: 'stop' } : {}),
+      ...(status === 'completed' && context.input.webSearch ? { webSearch: { schemaVersion: 1, searched: true,
+        responseId: context.sessionId + ':' + context.turn, callId: context.webCall.callId,
+        sources: context.webResult.sources } } : {}),
+      ...(error ? { error: harnessPublicError(error) } : {}) });
+    context.child.close();
+  }
+  close() {
+    if (this.closed) return; this.closed = true;
+    for (const context of [...this.active.values()]) this.finish(context, 'cancelled');
+    for (const context of [...this.controls.values()]) this.finishControl(context, 'cancelled');
+  }
+}
+
 class CodexBridgeHost {
   constructor(options = {}) {
     this.server = options.server || new CodexAppServer(options);
@@ -1533,7 +2482,10 @@ class CodexBridgeHost {
     });
     this.pdfTranslationPages = options.pdfTranslationPages ||
       new PdfTranslationPageServer(options.pdfTranslationPageOptions);
+    this.workspaceDirectoryService = options.workspaceDirectoryService ||
+      new WorkspaceDirectoryService(options.workspaceDirectoryOptions);
     this.send = options.send || (() => {});
+    this.harness = options.harness || new HarnessBridgeService({ send: this.send });
     this.active = new Map();
     this.pendingCancellations = new Set();
     this.loginRequests = new Map();
@@ -1563,6 +2515,12 @@ class CodexBridgeHost {
         platformOs: initialized?.platformOs || process.platform,
         accountType: account?.account?.type || 'unknown',
         planType: account?.account?.planType || '',
+        jsonResponseCapabilities: {
+          version: 1,
+          completedFinal: true,
+          outputSchemaForwarding: true
+        },
+        terminationReceiptCapabilities: { version: 1, upstreamTerminal: true },
         ...this.eventStore.paths()
       });
     } catch (error) {
@@ -1687,9 +2645,18 @@ class CodexBridgeHost {
         phases: new Map(),
         sentByItem: new Map(),
         usage: null,
-        cancelPending: false,
+        cancelPending: message.responseMode === 'json' && this.pendingCancellations.has(requestId),
         startedSent: false,
-        imageLease
+        imageLease,
+        jsonResponse: message.responseMode === 'json' ? {
+          items: new Map(),
+          invalidReason: '',
+          textBytes: 0,
+          eventCount: 0,
+          resourceTerminated: false,
+          resourceInterruptSent: false,
+          schemaForwarded: Object.prototype.hasOwnProperty.call(message, 'outputSchema')
+        } : null
       };
       // Register before turn/start so very fast app-server notifications cannot
       // race ahead of the JSON-RPC response and disappear.
@@ -1705,8 +2672,17 @@ class CodexBridgeHost {
           ...imageLease.inputs
         ],
         ...(message.model && message.model !== 'auto' ? { model: message.model } : {}),
-        ...(effort !== 'auto' ? { effort } : {})
+        ...(effort !== 'auto' ? { effort } : {}),
+        ...(context.jsonResponse?.schemaForwarded ? { outputSchema: message.outputSchema } : {})
       });
+      if (context.jsonResponse?.resourceTerminated) {
+        if (!context.jsonResponse.resourceInterruptSent && result?.turn?.id) {
+          context.turnId = String(result.turn.id);
+          context.jsonResponse.resourceInterruptSent = true;
+          void this.interruptContext(context);
+        }
+        return;
+      }
       const turnId = String(result?.turn?.id || '');
       if (!turnId) {
         throw codedError('CODEX_PROVIDER_REJECTED', 'Codex did not return a turn ID');
@@ -1716,14 +2692,19 @@ class CodexBridgeHost {
         context.startedSent = true;
         this.send({ type: 'turn.started', requestId, threadId, turnId });
       }
-      if (context.cancelPending || this.pendingCancellations.delete(requestId)) {
+      const pendingCancellation = this.pendingCancellations.delete(requestId);
+      if (context.cancelPending || pendingCancellation) {
         context.cancelPending = true;
         await this.interruptContext(context);
       }
     } catch (error) {
       if (context) this.active.delete(requestId);
-      this.imageStore.cleanup(context?.imageLease || imageLease);
-      this.send({ type: 'turn.error', requestId, error: publicError(error) });
+      if (!context?.jsonResponse?.resourceTerminated) {
+        this.imageStore.cleanup(context?.imageLease || imageLease);
+        this.send({ type: 'turn.error', requestId, error: publicError(error) });
+      }
+    } finally {
+      this.pendingCancellations.delete(requestId);
     }
   }
 
@@ -1743,6 +2724,118 @@ class CodexBridgeHost {
       }
     }
     return null;
+  }
+
+  recordJsonItem(context, itemId, rawPhase, eventType, text) {
+    const json = context.jsonResponse;
+    const id = typeof itemId === 'string' ? itemId : '';
+    const phase = rawPhase === 'final_answer' || rawPhase === 'commentary' ? rawPhase : null;
+    const value = typeof text === 'string' ? text : '';
+    const textBytes = Buffer.byteLength(value, 'utf8');
+    const previous = json.items.get(id);
+    if (eventType === 'completed' && (phase || previous?.phase) === 'final_answer' &&
+        textBytes > MAX_NATIVE_OUTPUT_BYTES) {
+      this.abortJsonResources(context, 'Codex bridge output exceeded the Native Messaging limit', 'INVALID_RESPONSE');
+      return;
+    }
+    if (Buffer.byteLength(id, 'utf8') > MAX_JSON_ITEM_ID_BYTES ||
+        (!previous && json.items.size >= MAX_JSON_TURN_ITEMS) ||
+        json.eventCount >= MAX_JSON_TURN_EVENTS ||
+        textBytes > MAX_JSON_TURN_TEXT_BYTES - json.textBytes) {
+      this.abortJsonResources(context, 'JSON response exceeded the request-wide resource limit');
+      return;
+    }
+    json.eventCount += 1;
+    json.textBytes += textBytes;
+    const textHash = crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+    if (!id) json.invalidReason = 'A JSON response item has no identity';
+    if (rawPhase !== undefined && rawPhase !== null && !phase) {
+      json.invalidReason = 'A JSON response item has unsupported phase metadata';
+    }
+    let item = json.items.get(id);
+    if (!item) {
+      item = { itemId: id, phase: null, completed: false, completedText: '', completedTextHash: '' };
+      json.items.set(id, item);
+    }
+    if (phase) {
+      if (item.phase && item.phase !== phase) {
+        json.invalidReason = 'A JSON response item has conflicting phase metadata';
+      } else {
+        item.phase = phase;
+      }
+    }
+    if (eventType === 'completed') {
+      const completedTextHash = crypto.createHash('sha256').update(value, 'utf16le').digest('hex');
+      if (typeof text !== 'string') {
+        json.invalidReason = 'A completed JSON response item has no full text';
+      } else if (item.completed && (item.completedTextHash !== completedTextHash ||
+          (item.phase !== 'commentary' && item.completedText !== text))) {
+        json.invalidReason = 'A JSON response item has conflicting completed text';
+      } else {
+        item.completed = true;
+        item.completedText = text;
+        item.completedTextHash = completedTextHash;
+      }
+    }
+    if (item.phase === 'commentary') item.completedText = '';
+    this.send({
+      type: 'turn.item.diagnostic',
+      requestId: context.requestId,
+      itemId: id,
+      phase: item.phase === 'final_answer' ? 'final' : item.phase || 'unknown',
+      eventType,
+      textLength: value.length,
+      textHash
+    });
+  }
+
+  abortJsonResources(context, message, code = 'CODEX_JSON_RESOURCE_LIMIT') {
+    const json = context.jsonResponse;
+    if (json.resourceTerminated) return;
+    json.resourceTerminated = true;
+    json.resourceInterruptSent = Boolean(context.threadId && context.turnId);
+    json.items.clear();
+    this.active.delete(context.requestId);
+    this.pendingCancellations.delete(context.requestId);
+    this.imageStore.cleanup(context.imageLease);
+    this.send({ type: 'turn.error', requestId: context.requestId,
+      error: publicError(codedError(code, message, false)) });
+    void this.interruptContext(context);
+  }
+
+  commitJsonResponse(context) {
+    const json = context.jsonResponse;
+    const reject = (message, code = 'CODEX_JSON_PROTOCOL_INVALID') => {
+      this.send({ type: 'turn.error', requestId: context.requestId,
+        terminationReceiptProtocol: 1, upstreamStatus: 'completed',
+        threadId: context.threadId, turnId: context.turnId,
+        error: publicError(codedError(code, message, false)) });
+      return false;
+    };
+    if (json.invalidReason) return reject(json.invalidReason);
+    const completed = [...json.items.values()].filter(item => item.completed);
+    if (completed.some(item => !item.phase)) {
+      return reject('A completed JSON response item has unknown phase');
+    }
+    const finals = completed.filter(item => item.phase === 'final_answer');
+    if (finals.length !== 1) return reject('JSON response requires exactly one completed final assistant item');
+    const item = finals[0];
+    if (!item.completedText.trim()) return reject('The completed JSON final assistant item is empty');
+    const message = {
+      type: 'turn.delta',
+      requestId: context.requestId,
+      text: item.completedText,
+      itemId: item.itemId,
+      phase: 'final',
+      itemCompleted: true,
+      jsonResponseProtocol: 1,
+      schemaForwarded: json.schemaForwarded
+    };
+    if (Buffer.byteLength(JSON.stringify(message), 'utf8') > MAX_NATIVE_OUTPUT_BYTES) {
+      return reject('Codex bridge output exceeded the Native Messaging limit', 'INVALID_RESPONSE');
+    }
+    this.send(message);
+    return true;
   }
 
   handleServerNotification(message) {
@@ -1786,10 +2879,18 @@ class CodexBridgeHost {
     }
     if (!context) return;
     if (method === 'item/started' && params.item?.type === 'agentMessage') {
+      if (context.jsonResponse) {
+        this.recordJsonItem(context, params.item.id, params.item.phase, 'started', params.item.text);
+        return;
+      }
       context.phases.set(String(params.item.id), params.item.phase || null);
       return;
     }
     if (method === 'item/agentMessage/delta') {
+      if (context.jsonResponse) {
+        this.recordJsonItem(context, params.itemId, null, 'delta', params.delta);
+        return;
+      }
       const itemId = String(params.itemId || '');
       const phase = context.phases.get(itemId);
       if (phase === 'commentary') return;
@@ -1800,6 +2901,10 @@ class CodexBridgeHost {
       return;
     }
     if (method === 'item/completed' && params.item?.type === 'agentMessage') {
+      if (context.jsonResponse) {
+        this.recordJsonItem(context, params.item.id, params.item.phase, 'completed', params.item.text);
+        return;
+      }
       const itemId = String(params.item.id || '');
       const phase = params.item.phase || context.phases.get(itemId);
       if (phase === 'commentary') return;
@@ -1814,6 +2919,9 @@ class CodexBridgeHost {
     }
     if (method === 'turn/completed') {
       const status = String(params.turn?.status || 'failed');
+      const terminationProof = context.jsonResponse && ['completed', 'interrupted', 'failed'].includes(params.turn?.status) ? { terminationReceiptProtocol: 1,
+        threadId: context.threadId, turnId: context.turnId,
+        upstreamStatus: status === 'completed' ? 'completed' : status === 'interrupted' ? 'interrupted' : 'failed' } : {};
       if (context.usage) {
         this.send({
           type: 'turn.usage',
@@ -1822,14 +2930,19 @@ class CodexBridgeHost {
         });
       }
       if (status === 'completed') {
-        this.send({
-          type: 'turn.completed',
-          requestId: context.requestId,
-          finishReason: 'stop',
-          usage: context.usage
-        });
+        if (context.jsonResponse && context.cancelPending) {
+          this.send({ type: 'turn.cancelled', requestId: context.requestId, ...terminationProof });
+        } else if (!context.jsonResponse || this.commitJsonResponse(context)) {
+          this.send({
+            type: 'turn.completed',
+            requestId: context.requestId,
+            ...terminationProof,
+            finishReason: 'stop',
+            usage: context.usage
+          });
+        }
       } else if (status === 'interrupted') {
-        this.send({ type: 'turn.cancelled', requestId: context.requestId });
+        this.send({ type: 'turn.cancelled', requestId: context.requestId, ...terminationProof });
       } else {
         const turnError = classifyTurnError(params.turn?.error || {});
         appendLog(
@@ -1839,11 +2952,13 @@ class CodexBridgeHost {
         this.send({
           type: 'turn.error',
           requestId: context.requestId,
+          ...terminationProof,
           error: publicError(turnError)
         });
       }
       this.imageStore.cleanup(context.imageLease);
       this.active.delete(context.requestId);
+      this.pendingCancellations.delete(context.requestId);
     }
   }
 
@@ -1976,6 +3091,21 @@ class CodexBridgeHost {
 
   async handle(message = {}) {
     const type = String(message.type || '');
+    if (type.startsWith('harness.')) return this.harness.handle(message);
+    if (type.startsWith('workspace.directory.')) {
+      const requestId = String(message.requestId || '');
+      try {
+        const action = type.slice('workspace.directory.'.length);
+        if (!['status', 'bind', 'open', 'openResearch'].includes(action)) {
+          throw workspaceDirectoryError('INVALID_REQUEST', 'Unknown workspace directory request.');
+        }
+        const result = await this.workspaceDirectoryService[action](message);
+        this.send({ type: `${type}.result`, requestId, ...result });
+      } catch (error) {
+        this.send({ type: 'workspace.directory.error', requestId, error: publicError(error) });
+      }
+      return;
+    }
     if (type.startsWith('pdf.figure.')) return this.handlePdfFigure(message);
     if (type.startsWith('pdf.translation.')) return this.handlePdfTranslation(message);
     if (type === 'health.check') return this.health(String(message.requestId || ''));
@@ -2003,10 +3133,12 @@ class CodexBridgeHost {
 
   close(options = {}) {
     this.unsubscribe?.();
+    this.harness.close();
     for (const context of this.active.values()) {
       this.imageStore.cleanup(context.imageLease);
     }
     this.active.clear();
+    this.pendingCancellations.clear();
     this.pdfFigureStore.close();
     if (options.keepTranslation !== true) this.pdfTranslationPages.close();
     this.server.close();
@@ -2078,8 +3210,15 @@ if (require.main === module || !module.parent) runNativeHost();
 
 module.exports = {
   HOST_VERSION,
+  HarnessBridgeService,
+  HarnessSdkProcess,
+  harnessBootstrapSource,
+  findHarnessInstallation,
+  normalizeHarnessUsage,
+  validateHarnessTurn,
   CodexAppServer,
   CodexBridgeHost,
+  WorkspaceDirectoryService,
   TurnImageStore,
   ReaderEventStore,
   PdfFigureTaskStore,

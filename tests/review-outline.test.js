@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   REVIEW_OUTLINE_VERSION,
+  selectArticleOutlineStrategy,
   createReviewParagraphSchema,
   compileReviewParagraphPrompt,
   validateReviewParagraphBatch,
@@ -12,6 +13,39 @@ const {
   buildReviewOutlineTree,
   collectReviewParagraphSummaries
 } = require('../core/review-outline.js');
+
+test('selects a generic or primary-research strategy when review metadata is absent', () => {
+  assert.equal(selectArticleOutlineStrategy(null), 'generic_article');
+  assert.equal(selectArticleOutlineStrategy({
+    primaryType: '', reviewSubtype: 'not_review'
+  }), 'generic_article');
+  assert.equal(selectArticleOutlineStrategy({
+    primaryType: 'basic_mechanistic', reviewSubtype: 'not_review'
+  }), 'primary_research');
+  assert.equal(selectArticleOutlineStrategy({
+    primaryType: 'narrative_review', reviewSubtype: 'narrative'
+  }), 'review');
+});
+
+test('generic article prompts never claim the paper is a review', () => {
+  const genericParagraphs = [{
+    paragraphId: 'p1', sectionId: 'results', sectionTitle: 'Results',
+    text: 'Treatment restored the phenotype.'
+  }];
+  const mapPrompt = compileReviewParagraphPrompt(
+    'batch-1', genericParagraphs, 'primary_research'
+  );
+  assert.match(mapPrompt.systemPrompt, /生物医学论文/);
+  assert.doesNotMatch(mapPrompt.systemPrompt, /综述结构分析助手|被引研究/);
+  const reducePrompt = compileReviewSynthesisPrompt(
+    'Mechanistic paper', genericParagraphs, [{
+      paragraphId: 'p1', summary: '治疗恢复表型', rhetoricalRole: 'evidence_support',
+      keyPoint: '支持因果结论', transitionFromPrevious: ''
+    }], 'not_review', 'primary_research'
+  );
+  assert.match(reducePrompt.systemPrompt, /研究问题.*结果.*结论/s);
+  assert.doesNotMatch(reducePrompt.systemPrompt, /生物医学综述的/);
+});
 
 const paragraphs = [{
   paragraphId: 'sec-a-p-001', sectionId: 'sec-a', sectionTitle: 'Mechanisms',
@@ -39,7 +73,7 @@ test('paragraph schema requires one bounded summary record per requested id', ()
     'paragraph_id', 'summary_zh', 'rhetorical_role', 'key_point_zh',
     'transition_from_previous_zh'
   ]);
-  assert.equal(REVIEW_OUTLINE_VERSION, '2');
+  assert.equal(REVIEW_OUTLINE_VERSION, '3');
 });
 
 test('paragraph prompt sends heading paths and source text as untrusted JSON', () => {

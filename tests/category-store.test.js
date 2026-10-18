@@ -13,6 +13,7 @@ const {
   normalizeCustomCategory,
   validateCategory,
   toUnifiedCategory,
+  flattenUnifiedCategory,
   mergeCategoryOverrides,
   validateUnifiedCategory,
   hasUnsafeRegexStructure,
@@ -74,7 +75,57 @@ test('normalizes a user-defined AI category', () => {
   assert.match(category.categoryId, /^custom_clinical_/);
   assert.equal(category.version, 1);
   assert.equal(category.persistence, 'saved');
+  assert.deepEqual(category.enabledEngines, ['llm']);
   assert.deepEqual(validateCategory(category), []);
+});
+
+test('custom regex capability requires a usable matching rule and stays canonical', () => {
+  const emptyRegex = normalizeCustomCategory({
+    categoryId: 'custom_empty_regex',
+    name: 'Empty regex',
+    definition: 'A semantic category without local matching rules.',
+    color: '#3366CC',
+    enabledEngines: ['llm', 'regex'],
+    regex: {
+      phrases: [], expressions: [], excludePhrases: ['excluded only'],
+      caseSensitive: false, wholeWord: true
+    }
+  });
+  assert.deepEqual(emptyRegex.enabledEngines, ['llm']);
+  assert.deepEqual(
+    flattenUnifiedCategory(toUnifiedCategory(emptyRegex)).enabledEngines,
+    ['llm']
+  );
+
+  const inferredRegex = normalizeCustomCategory({
+    categoryId: 'custom_inferred_regex',
+    name: 'Inferred regex',
+    definition: 'A category with a usable local matching rule.',
+    color: '#3366CC',
+    regex: {
+      phrases: ['patient selection'], expressions: [],
+      caseSensitive: false, wholeWord: true
+    }
+  });
+  assert.deepEqual(inferredRegex.enabledEngines, ['llm', 'regex']);
+
+  const llmOnlyWithRules = normalizeCustomCategory({
+    ...inferredRegex,
+    categoryId: 'custom_llm_only_with_rules',
+    enabledEngines: ['llm']
+  });
+  assert.deepEqual(llmOnlyWithRules.enabledEngines, ['llm']);
+
+  const enabledLater = normalizeCustomCategory({
+    ...emptyRegex,
+    regex: {
+      ...emptyRegex.regex,
+      phrases: ['later local rule']
+    },
+    enabledEngines: ['llm', 'regex']
+  });
+  assert.deepEqual(enabledLater.enabledEngines, ['llm', 'regex']);
+  assert.deepEqual(validateUnifiedCategory(enabledLater), []);
 });
 
 test('rejects incomplete or unsafe category shapes', () => {

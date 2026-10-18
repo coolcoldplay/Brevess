@@ -23,6 +23,7 @@ function createFakeRuntime() {
   const messageListeners = [];
   const disconnectListeners = [];
   const sent = [];
+  let connectCalls = 0;
   const port = {
     onMessage: { addListener(listener) { messageListeners.push(listener); } },
     onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
@@ -33,13 +34,21 @@ function createFakeRuntime() {
     runtime: {
       lastError: null,
       connectNative(name) {
+        connectCalls += 1;
         assert.equal(name, 'com.sci_reader.codex_bridge');
         return port;
       }
     },
     sent,
+    get connectCalls() { return connectCalls; },
     emit(message) { messageListeners.forEach(listener => listener(message)); }
   };
+}
+
+async function collectStream(stream) {
+  const events = [];
+  for await (const event of stream) events.push(event);
+  return events;
 }
 
 test('local Codex client streams deltas and completion over Native Messaging', async () => {
@@ -69,6 +78,76 @@ test('local Codex client streams deltas and completion over Native Messaging', a
     'metadata', 'text_delta', 'completed'
   ]);
   assert.equal(events[1].text, '{"type":"final"}');
+});
+
+test('local Codex client multiplexes interleaved turns over one Native Messaging port', async () => {
+  const fake = createFakeRuntime();
+  const client = createCodexNativeClient(fake.runtime);
+  const first = client.streamTurn({ userPrompt: 'First', ephemeral: true });
+  const second = client.streamTurn({ userPrompt: 'Second', ephemeral: true });
+  const [firstRequest, secondRequest] = fake.sent;
+
+  assert.equal(fake.connectCalls, 1);
+  assert.equal(firstRequest.type, 'turn.start');
+  assert.equal(secondRequest.type, 'turn.start');
+  assert.notEqual(firstRequest.requestId, secondRequest.requestId);
+
+  const firstEventsPromise = collectStream(first);
+  const secondEventsPromise = collectStream(second);
+  fake.emit({
+    type: 'turn.started', requestId: secondRequest.requestId,
+    threadId: 'thread-second', turnId: 'turn-second'
+  });
+  fake.emit({ type: 'turn.delta', requestId: secondRequest.requestId, text: 'B1' });
+  fake.emit({
+    type: 'turn.started', requestId: firstRequest.requestId,
+    threadId: 'thread-first', turnId: 'turn-first'
+  });
+  fake.emit({ type: 'turn.delta', requestId: firstRequest.requestId, text: 'A1' });
+  fake.emit({ type: 'turn.delta', requestId: secondRequest.requestId, text: 'B2' });
+  fake.emit({ type: 'turn.delta', requestId: firstRequest.requestId, text: 'A2' });
+  fake.emit({ type: 'turn.completed', requestId: secondRequest.requestId });
+  fake.emit({ type: 'turn.completed', requestId: firstRequest.requestId });
+
+  const [firstEvents, secondEvents] = await Promise.all([
+    firstEventsPromise, secondEventsPromise
+  ]);
+  assert.equal(firstEvents.filter(event => event.type === 'text_delta')
+    .map(event => event.text).join(''), 'A1A2');
+  assert.equal(secondEvents.filter(event => event.type === 'text_delta')
+    .map(event => event.text).join(''), 'B1B2');
+  assert.equal(firstEvents.at(-1).type, 'completed');
+  assert.equal(secondEvents.at(-1).type, 'completed');
+});
+
+test('cancelling one multiplexed Codex turn does not cancel its peer', async () => {
+  const fake = createFakeRuntime();
+  const client = createCodexNativeClient(fake.runtime);
+  const firstController = new AbortController();
+  const first = client.streamTurn({
+    userPrompt: 'Cancel this turn', signal: firstController.signal
+  });
+  const second = client.streamTurn({ userPrompt: 'Keep this turn running' });
+  const [firstRequest, secondRequest] = fake.sent;
+  const firstEventsPromise = collectStream(first);
+  const secondEventsPromise = collectStream(second);
+
+  firstController.abort();
+  const cancelRequest = fake.sent.at(-1);
+  assert.equal(cancelRequest.type, 'turn.cancel');
+  assert.equal(cancelRequest.requestId, firstRequest.requestId);
+  fake.emit({ type: 'turn.cancelled', requestId: firstRequest.requestId });
+  fake.emit({ type: 'turn.delta', requestId: secondRequest.requestId, text: 'peer result' });
+  fake.emit({ type: 'turn.completed', requestId: secondRequest.requestId });
+
+  const [firstEvents, secondEvents] = await Promise.all([
+    firstEventsPromise, secondEventsPromise
+  ]);
+  assert.deepEqual(firstEvents.map(event => event.type), ['cancelled']);
+  assert.equal(secondEvents.filter(event => event.type === 'text_delta')
+    .map(event => event.text).join(''), 'peer result');
+  assert.equal(secondEvents.at(-1).type, 'completed');
+  assert.equal(fake.sent.filter(message => message.type === 'turn.cancel').length, 1);
 });
 
 test('local Codex client reports its own turn deadline as a timeout', async () => {
@@ -257,7 +336,7 @@ test('reader reverse-channel event store keeps an append-only log and latest sna
   assert.equal(JSON.parse(log).eventId, result.eventId);
 });
 
-test('local Codex connection test performs an ephemeral model turn after health', async () => {
+test('local Codex connection test is health-only before independent capability probes', async () => {
   const calls = [];
   const adapter = createCodexLocalAdapter({
     model: 'auto',
@@ -280,12 +359,11 @@ test('local Codex connection test performs an ephemeral model turn after health'
 
   const result = await adapter.testConnection({ timeoutMs: 5000 });
 
-  assert.equal(result.modelProbe, true);
+  assert.equal(result.connected, true);
+  assert.equal(result.accountType, 'chatgpt');
+  assert.equal(result.planType, 'plus');
   assert.equal(calls[0].type, 'health');
-  assert.equal(calls[1].type, 'turn');
-  assert.equal(calls[1].input.ephemeral, true);
-  assert.equal(calls[1].input.reasoningEffort, 'low');
-  assert.match(calls[1].input.systemPrompt, /Reply with exactly: OK/);
+  assert.equal(calls.length, 1);
 });
 
 test('Native Messaging framing survives split input chunks', () => {
@@ -431,4 +509,108 @@ test('bridge preserves fast turn notifications that arrive before turn/start res
     'turn.started', 'turn.delta', 'turn.completed'
   ]);
   assert.equal(sent[1].text, 'fast answer');
+});
+
+test('bridge keeps two concurrent ephemeral threads and turns isolated', async () => {
+  const sent = [];
+  const requests = [];
+  const pendingThreadStarts = [];
+  let notify = null;
+  const server = {
+    onNotification(listener) {
+      notify = listener;
+      return () => {};
+    },
+    async start() {},
+    request(method, params) {
+      requests.push({ method, params });
+      if (method === 'thread/start') {
+        return new Promise(resolve => pendingThreadStarts.push(resolve));
+      }
+      if (method === 'turn/start') {
+        return Promise.resolve({ turn: { id: `turn-${params.threadId}` } });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${method}`));
+    },
+    close() {}
+  };
+  const host = new CodexBridgeHost({
+    server,
+    threadMap: {
+      get() { throw new Error('ephemeral turns must not read the thread map'); },
+      set() { throw new Error('ephemeral turns must not write the thread map'); },
+      delete() {}
+    },
+    imageStore: {
+      materialize() { return { directory: '', inputs: [], imageCount: 0 }; },
+      cleanup() {}
+    },
+    eventStore: {},
+    pdfFigureStore: { close() {} },
+    pdfTranslationPages: { close() {}, hasPublishedPage() { return false; } },
+    send(message) { sent.push(message); }
+  });
+
+  const firstStart = host.startTurn({
+    requestId: 'request-first', ephemeral: true, userPrompt: 'First batch'
+  });
+  const secondStart = host.startTurn({
+    requestId: 'request-second', ephemeral: true, userPrompt: 'Second batch'
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pendingThreadStarts.length, 2);
+  pendingThreadStarts[1]({ thread: { id: 'thread-second' } });
+  pendingThreadStarts[0]({ thread: { id: 'thread-first' } });
+  await Promise.all([firstStart, secondStart]);
+
+  assert.equal(host.active.size, 2);
+  assert.deepEqual(
+    requests.filter(request => request.method === 'turn/start')
+      .map(request => request.params.threadId).sort(),
+    ['thread-first', 'thread-second']
+  );
+  notify({
+    method: 'item/agentMessage/delta',
+    params: {
+      threadId: 'thread-second', turnId: 'turn-thread-second',
+      itemId: 'message-second', delta: 'second result'
+    }
+  });
+  notify({
+    method: 'item/agentMessage/delta',
+    params: {
+      threadId: 'thread-first', turnId: 'turn-thread-first',
+      itemId: 'message-first', delta: 'first result'
+    }
+  });
+  notify({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-second',
+      turn: { id: 'turn-thread-second', status: 'completed' }
+    }
+  });
+  notify({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-first',
+      turn: { id: 'turn-thread-first', status: 'completed' }
+    }
+  });
+
+  assert.equal(host.active.size, 0);
+  assert.deepEqual(
+    sent.filter(message => message.type === 'turn.delta')
+      .map(message => [message.requestId, message.text]),
+    [
+      ['request-second', 'second result'],
+      ['request-first', 'first result']
+    ]
+  );
+  assert.deepEqual(
+    sent.filter(message => message.type === 'turn.completed')
+      .map(message => message.requestId),
+    ['request-second', 'request-first']
+  );
+  host.close();
 });

@@ -6,26 +6,22 @@
   <title>Brevess 设置</title>
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
   <link rel="stylesheet" href="options.css">
+  <link rel="stylesheet" href="options-local-library.css">
+  <link rel="stylesheet" href="ui-swiss.css">
 </head>
-<body>
+<body data-ui-surface="settings">
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="#categoryWorkspace" aria-label="Brevess 设置首页">
+      <a class="brand" href="#page=overview" aria-label="Brevess 设置首页">
         <img class="brand-mark" src="icons/icon128.png" alt="">
         <span><strong>Brevess</strong><small>Brevity · Evidence · Essence</small></span>
       </a>
+      <strong class="settings-center-title">设置中心</strong>
       <button id="returnToPdfReader"
-        class="button primary compact-button pdf-reader-return" type="button" hidden>
-        返回 PDF 解析结果
+        class="button quiet compact-button pdf-reader-return" type="button"
+        aria-label="返回 PDF 阅读器" hidden>
+        ← 返回 PDF
       </button>
-      <nav class="page-nav" aria-label="设置页面导航">
-        <button type="button" data-settings-nav="categories" aria-selected="true">类别规则</button>
-        <button type="button" data-settings-nav="modes" aria-selected="false">分析模式</button>
-        <button type="button" data-settings-nav="models" aria-selected="false">模型与分析</button>
-        <button type="button" data-settings-nav="shortcuts" aria-selected="false">快捷键</button>
-        <button type="button" data-settings-nav="data" aria-selected="false">本地数据</button>
-        <button type="button" data-settings-nav="about" aria-selected="false">关于与反馈</button>
-      </nav>
       <label class="language-switcher" for="globalLanguage">
         <span class="sr-only">设置界面语言</span>
         <select id="globalLanguage" aria-label="设置界面语言">
@@ -34,12 +30,77 @@
         </select>
       </label>
       <a class="sr-only" href="#keyboardShortcuts">快捷键设置兼容入口</a>
-      <button id="reopenOnboarding" class="button quiet compact-button onboarding-reopen" type="button">新手引导</button>
       <span id="effectiveMode" class="mode-badge">当前：正则模式</span>
     </div>
   </header>
 
+  <div class="settings-frame">
+    <aside class="settings-sidebar" aria-label="设置导航">
+      <div class="settings-sidebar-heading">
+        <p class="section-kicker">Brevess 设置</p>
+        <h2>设置中心</h2>
+      </div>
+      <div class="settings-nav-group">
+        <span class="settings-nav-label">开始使用</span>
+        <button type="button" data-settings-nav="overview" aria-selected="true"><span class="settings-nav-number" aria-hidden="true">01</span><i class="ph ph-compass" aria-hidden="true"></i><span class="settings-nav-title">设置概览</span></button>
+        <button type="button" data-settings-nav="storage" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">02</span><i class="ph ph-folder-open" aria-hidden="true"></i><span class="settings-nav-title">本地保存</span><small id="settingsNavStorageState">可选</small></button>
+        <button type="button" data-settings-nav="models" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">03</span><i class="ph ph-chats-circle" aria-hidden="true"></i><span class="settings-nav-title">模型与连接</span><small id="settingsNavModelState">待配置</small></button>
+      </div>
+      <div class="settings-nav-group">
+        <span class="settings-nav-label">阅读与分析</span>
+        <button type="button" data-settings-nav="workbench" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">04</span><i class="ph ph-squares-four" aria-hidden="true"></i><span class="settings-nav-title">课题工作台</span></button>
+        <button type="button" data-settings-nav="modes" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">05</span><i class="ph ph-gear" aria-hidden="true"></i><span class="settings-nav-title">阅读场景</span></button>
+        <button type="button" data-settings-nav="categories" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">06</span><i class="ph ph-highlighter" aria-hidden="true"></i><span class="settings-nav-title">高亮类别</span></button>
+        <button type="button" data-settings-nav="reading" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">07</span><i class="ph ph-note-pencil" aria-hidden="true"></i><span class="settings-nav-title">PDF 与阅读工具</span></button>
+      </div>
+      <div class="settings-nav-group">
+        <span class="settings-nav-label">系统</span>
+        <button type="button" data-settings-nav="shortcuts" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">08</span><i class="ph ph-floppy-disk" aria-hidden="true"></i><span class="settings-nav-title">快捷键</span></button>
+        <button type="button" data-settings-nav="data" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">09</span><i class="ph ph-database" aria-hidden="true"></i><span class="settings-nav-title">数据与备份</span></button>
+        <button type="button" data-settings-nav="about" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">10</span><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i><span class="settings-nav-title">关于与反馈</span></button>
+      </div>
+    </aside>
+    <div class="settings-content">
+      <label class="settings-mobile-nav" for="settingsMobilePage">
+        <span id="settingsMobileNumber" class="settings-mobile-number" aria-hidden="true">01</span>
+        <span>设置页面</span>
+        <select id="settingsMobilePage">
+          <option value="overview">设置概览</option>
+          <option value="storage">本地保存</option>
+          <option value="models">模型与连接</option>
+          <option value="workbench">课题工作台</option>
+          <option value="modes">阅读场景</option>
+          <option value="categories">高亮类别</option>
+          <option value="reading">PDF 与阅读工具</option>
+          <option value="shortcuts">快捷键</option>
+          <option value="data">数据与备份</option>
+          <option value="about">关于与反馈</option>
+        </select>
+      </label>
   <main class="settings-shell">
+    <section id="researchWorkbenchSettings" class="settings-panel workbench-settings" data-settings-page="workbench" aria-labelledby="workbenchSettingsHeading" hidden>
+      <div class="workbench-settings__header">
+        <div><h2 id="workbenchSettingsHeading">课题工作台</h2><p>假说梳理 · 组图规划</p></div>
+        <div class="workbench-settings__actions">
+          <a class="button quiet compact-button" href="#page=storage">配置本地目录</a>
+          <a class="button primary compact-button" href="workbench/index.html" target="_blank" rel="noopener">全屏打开</a>
+        </div>
+      </div>
+      <iframe id="researchWorkbenchFrame" title="课题工作台：假说梳理与组图规划" data-workbench-src="workbench/index.html"></iframe>
+    </section>
+    <section id="setupFocusBar" class="setup-focus-bar" aria-labelledby="onboardingStepTitle" hidden>
+      <div>
+        <p class="section-kicker">个性化设置</p>
+        <strong id="onboardingStepTitle">完成当前配置</strong>
+        <p id="onboardingStepDescription">这里使用的就是日常设置页面，之后可随时回来修改。</p>
+        <p id="onboardingStepState" role="status" aria-live="polite"></p>
+      </div>
+      <div class="setup-focus-actions">
+        <button id="onboardingBack" class="button quiet" type="button">返回设置概览</button>
+        <button id="onboardingSkip" class="button quiet" type="button">暂时跳过</button>
+        <button id="onboardingContinue" class="button primary" type="button">继续下一项</button>
+      </div>
+    </section>
     <header class="page-header">
       <div>
         <p id="settingsPageEyebrow" class="eyebrow">Brevess · 规则工作区</p>
@@ -48,22 +109,95 @@
       </div>
     </header>
 
-    <section id="onboardingGuide" class="settings-panel onboarding-guide" aria-labelledby="onboardingStepTitle" hidden>
-      <div class="onboarding-guide-copy">
-        <p class="section-kicker">首次使用设置</p>
-        <div id="onboardingProgress" class="onboarding-progress" role="list" aria-label="新手引导进度">
-          <span role="listitem" data-onboarding-progress="storage"><b>1</b>本地保存目录</span>
-          <span role="listitem" data-onboarding-progress="api"><b>2</b>API 配置</span>
+    <section id="settingsOverview" class="settings-overview" data-settings-page="overview"
+      aria-labelledby="settingsOverviewHeading">
+      <header class="settings-overview-header">
+        <div>
+          <p class="section-kicker">设置概览</p>
+          <h1 id="settingsOverviewHeading">确认阅读、保存与模型状态</h1>
+          <p>基础阅读可直接使用；本地目录与 AI 模型按你的工作方式选配。</p>
         </div>
-        <h1 id="onboardingStepTitle">选择本地保存目录</h1>
-        <p id="onboardingStepDescription" class="subtitle">本地文件夹是可选项；暂时跳过也能立即使用导航、阅读与手动标注。</p>
-        <p id="onboardingStepState" class="onboarding-step-state" role="status" aria-live="polite"></p>
+        <button id="reopenOnboarding" class="button quiet compact-button" type="button">重新检查设置</button>
+      </header>
+
+      <div class="overview-status-grid" aria-label="关键设置状态">
+        <article class="overview-status-card is-ready">
+          <i class="ph ph-compass" aria-hidden="true"></i>
+          <div><span>基础阅读</span><strong id="overviewLocalState">已可用</strong></div>
+        </article>
+        <article class="overview-status-card" id="overviewStorageCard">
+          <i class="ph ph-folder-open" aria-hidden="true"></i>
+          <div><span>本地保存</span><strong id="overviewStorageState">检查中</strong></div>
+        </article>
+        <article class="overview-status-card" id="overviewModelCard">
+          <i class="ph ph-chats-circle" aria-hidden="true"></i>
+          <div><span>AI 模型</span><strong id="overviewModelState">检查中</strong></div>
+        </article>
+        <article class="overview-status-card" id="overviewConsentCard">
+          <i class="ph ph-check-circle" aria-hidden="true"></i>
+          <div><span>正文发送许可</span><strong id="overviewConsentState">检查中</strong></div>
+        </article>
       </div>
-      <div class="onboarding-actions">
-        <button id="onboardingBack" class="button quiet" type="button" hidden>上一步</button>
-        <button id="onboardingSkip" class="button quiet" type="button">暂不选择，继续</button>
-        <button id="onboardingContinue" class="button primary" type="button" disabled>继续配置 API</button>
-        <button id="onboardingFinish" class="button primary" type="button" hidden disabled>完成并打开插件</button>
+
+      <div class="settings-overview-grid">
+        <section id="onboardingGuide" class="overview-setup-card" aria-labelledby="setupChecklistHeading">
+          <header>
+            <div>
+              <p class="section-kicker">开始使用</p>
+              <h2 id="setupChecklistHeading">按需开启更多能力</h2>
+              <p>基础阅读无需 AI。完成模型与许可后启用问答和解图；本地目录始终可选。</p>
+            </div>
+            <div id="onboardingProgress" class="overview-progress" aria-label="阅读就绪状态">可直接阅读</div>
+          </header>
+
+          <div class="setup-checklist" role="list">
+            <article class="setup-check-row is-complete" role="listitem">
+              <span class="setup-check-icon"><i class="ph ph-check-circle" aria-hidden="true"></i></span>
+              <div><strong>浏览与手动工具</strong><p>导航、阅读、高亮和手动笔记已经可以直接使用。</p></div>
+              <span class="setup-check-state">已就绪</span>
+            </article>
+            <article id="setupStorageRow" class="setup-check-row" role="listitem">
+              <span class="setup-check-icon"><i class="ph ph-folder-open" aria-hidden="true"></i></span>
+              <div><strong>选择本地保存目录</strong><p>可选；用于目录镜像、离线阅读和跨设备手动备份。</p></div>
+              <span id="setupStorageState" class="setup-check-state">可选</span>
+              <div class="setup-check-actions">
+                <button id="overviewConfigureStorage" class="button secondary compact-button" type="button">选择目录</button>
+                <button id="overviewSkipStorage" class="button quiet compact-button" type="button">暂时跳过</button>
+              </div>
+            </article>
+            <article id="setupApiRow" class="setup-check-row" role="listitem">
+              <span class="setup-check-icon"><i class="ph ph-chats-circle" aria-hidden="true"></i></span>
+              <div><strong>连接 AI 模型</strong><p>用于问答、解图、翻译和释义；可随时更换模型。</p></div>
+              <span id="setupApiState" class="setup-check-state">待检查</span>
+              <div class="setup-check-actions">
+                <button id="overviewConfigureApi" class="button secondary compact-button" type="button">去配置</button>
+                <button id="overviewSkipApi" class="button quiet compact-button" type="button">暂时跳过</button>
+              </div>
+            </article>
+            <article id="setupConsentRow" class="setup-check-row" role="listitem">
+              <span class="setup-check-icon"><i class="ph ph-check-circle" aria-hidden="true"></i></span>
+              <div><strong>确认正文发送许可</strong><p>只有在启用 LLM 功能时，才把所需正文或图注发送给所选服务商。</p></div>
+              <span id="setupConsentState" class="setup-check-state">待确认</span>
+            </article>
+          </div>
+          <button id="onboardingFinish" class="button primary overview-finish" type="button" hidden disabled>完成并打开插件</button>
+        </section>
+
+        <aside class="overview-quick-card" aria-labelledby="overviewQuickHeading">
+          <p class="section-kicker">常用入口</p>
+          <h2 id="overviewQuickHeading">当前阅读配置</h2>
+          <dl class="overview-current-list">
+            <div><dt>当前模型</dt><dd id="overviewCurrentModel">仅本地功能</dd></div>
+            <div><dt>高亮模式</dt><dd id="overviewHighlightMode">规则模式</dd></div>
+            <div><dt>离线网页</dt><dd id="overviewSnapshotState">未启用</dd></div>
+            <div><dt>保存目录</dt><dd id="overviewDirectoryState">仅浏览器本地</dd></div>
+          </dl>
+          <div class="overview-quick-actions">
+            <button class="overview-link-button" data-settings-nav="reading" type="button"><span>PDF 与阅读工具</span><i class="ph ph-caret-down is-forward" aria-hidden="true"></i></button>
+            <button class="overview-link-button" data-settings-nav="categories" type="button"><span>高亮类别规则</span><i class="ph ph-caret-down is-forward" aria-hidden="true"></i></button>
+            <button class="overview-link-button" data-settings-nav="data" type="button"><span>浏览本地数据</span><i class="ph ph-caret-down is-forward" aria-hidden="true"></i></button>
+          </div>
+        </aside>
       </div>
     </section>
 
@@ -107,6 +241,8 @@
             <div class="section-heading-actions">
               <button id="exportCategoryModule" class="button quiet compact-button"
                 type="button" disabled>导出本类别</button>
+              <button id="duplicateSelectedCategory" class="button quiet compact-button"
+                type="button" disabled>复制为自定义类别</button>
               <label class="button secondary compact-button">
                 导入到本类别
                 <input id="importCategoryModule" type="file" accept="application/json,.json" hidden>
@@ -159,7 +295,7 @@
               <textarea id="categoryPositiveExamples" data-category-field rows="5"></textarea>
             </label>
             <label class="field">
-              <span>反例（每行一条）</span>
+              <span>反例（建议填写容易混淆的难反例，每行一条）</span>
               <textarea id="categoryNegativeExamples" data-category-field rows="5"></textarea>
             </label>
             <label class="field">
@@ -170,6 +306,19 @@
               <span>允许的引用角色（每行一条）</span>
               <textarea id="categoryAllowedQuoteRoles" data-category-field rows="3"></textarea>
             </label>
+            <label class="field">
+              <span>语义判定方式</span>
+              <select id="categoryClaimMode" data-category-field>
+                <option value="explicit">仅明确陈述</option>
+                <option value="inferred">允许合理推断</option>
+                <option value="either">明确陈述或合理推断</option>
+              </select>
+            </label>
+            <div class="field checkbox-field category-relation-field">
+              <span>关系约束</span>
+              <label><input id="categoryRelationRequired" data-category-field
+                type="checkbox"> 必须包含实体或变量之间的关系</label>
+            </div>
             <label class="field">
               <span>高亮片段范围</span>
               <select id="categorySpanPolicy" data-category-field>
@@ -236,25 +385,35 @@
       data-settings-page="modes" aria-labelledby="analysisModeSettingsHeading" hidden>
       <div class="settings-panel-heading">
         <div>
-          <p class="section-kicker">Analysis Modes · 分析组合</p>
-          <h2 id="analysisModeSettingsHeading">自定义每一种论文分析模式</h2>
-          <p>每个模式直接从全局类别目录勾选规则；侧栏不再要求选择论文类型。</p>
+          <p class="section-kicker">Reading scenarios · 阅读场景</p>
+          <h1 id="analysisModeSettingsHeading">阅读场景</h1>
+          <p>每个场景可自由组合全局类别；切换、编辑和保存场景不会发起模型请求。</p>
         </div>
         <div class="section-heading-actions">
-          <button id="addAnalysisMode" class="button secondary" type="button">新增模式</button>
-          <button id="resetAnalysisModes" class="button quiet" type="button">恢复内置模式</button>
+          <button id="addAnalysisMode" class="button secondary" type="button">新增场景</button>
+          <button id="resetAnalysisModes" class="button quiet" type="button">恢复全部内置场景</button>
         </div>
       </div>
       <div class="analysis-mode-layout">
-        <aside class="analysis-mode-rail" aria-label="分析模式列表">
-          <div id="analysisModeList" class="analysis-mode-list" role="listbox"></div>
+        <aside class="analysis-mode-rail" aria-label="阅读场景列表">
+          <div id="analysisModeList" class="analysis-mode-list" role="listbox"
+            aria-label="阅读场景"></div>
         </aside>
-        <section class="analysis-mode-editor" aria-label="编辑分析模式">
+        <section class="analysis-mode-editor" aria-label="编辑阅读场景">
+          <div class="analysis-mode-editor-heading">
+            <span id="analysisModeKindBadge" class="override-badge">自定义场景</span>
+            <div class="analysis-mode-editor-actions">
+              <button id="duplicateAnalysisMode" class="button quiet compact-button"
+                type="button">复制场景</button>
+              <button id="restoreAnalysisMode" class="button quiet compact-button"
+                type="button" hidden>恢复此内置场景</button>
+            </div>
+          </div>
           <div class="form-grid two-columns">
-            <label class="field"><span>模式名称</span>
+            <label class="field"><span>场景名称</span>
               <input id="analysisModeName" type="text" maxlength="80">
             </label>
-            <label class="field"><span>模式 ID</span>
+            <label class="field"><span>场景 ID</span>
               <input id="analysisModeId" type="text" readonly>
             </label>
             <label class="field span-two"><span>说明</span>
@@ -267,39 +426,114 @@
           </div>
           <div id="analysisModeCategoryList" class="analysis-mode-category-list"></div>
           <div class="settings-actions">
-            <button id="deleteAnalysisMode" class="button danger quiet" type="button">删除当前模式</button>
-            <button id="saveAnalysisModes" class="button primary" type="button">保存分析模式</button>
+            <button id="deleteAnalysisMode" class="button danger quiet" type="button">删除当前场景</button>
+            <button id="saveAnalysisModes" class="button primary" type="button">保存阅读场景</button>
           </div>
           <div id="analysisModeStatus" class="status" role="status" aria-live="polite"></div>
+          <section id="deletedBuiltInAnalysisModeSection" class="deleted-built-in-section"
+            aria-labelledby="deletedBuiltInAnalysisModeHeading" hidden>
+            <div>
+              <h3 id="deletedBuiltInAnalysisModeHeading">已删除的内置场景</h3>
+              <p>这些场景不会自行返回；只有在这里主动恢复后才会重新出现。</p>
+            </div>
+            <div id="deletedBuiltInAnalysisModeList" class="deleted-built-in-list"
+              aria-live="polite"></div>
+          </section>
         </section>
       </div>
+    </section>
+
+    <section id="localStorageSettings" class="settings-panel focused-settings-page"
+      data-settings-page="storage" aria-labelledby="localStorageSettingsHeading" hidden>
+      <div class="settings-panel-heading">
+        <div>
+          <p class="section-kicker">Local storage · 可选</p>
+          <h1 id="localStorageSettingsHeading">本地保存目录</h1>
+          <p>把论文工作区镜像到你授权的文件夹，便于离线阅读、手动备份和迁移。浏览器本地数据仍是主数据源。</p>
+        </div>
+      </div>
+      <div id="storageSettingsBody" class="local-data-layout"></div>
+      <div class="settings-actions storage-settings-actions">
+        <button id="saveStoragePreferences" class="button primary" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存本地存储设置</button>
+      </div>
+      <div id="storagePreferencesStatus" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section id="readingSettings" class="settings-panel focused-settings-page"
+      data-settings-page="reading" aria-labelledby="readingSettingsHeading" hidden>
+      <div class="settings-panel-heading">
+        <div>
+          <p class="section-kicker">Reading tools · 阅读体验</p>
+          <h1 id="readingSettingsHeading">PDF 与阅读工具</h1>
+          <p>集中管理 PDF 解析、全文问答快捷提示词、选中文段动作、Panel 追问和离线正文保存。</p>
+        </div>
+      </div>
+      <nav class="reading-settings-nav" aria-label="阅读工具分区">
+        <button type="button" data-reading-settings-target="pdfMineruSettings">PDF 解析</button>
+        <button type="button" data-reading-settings-target="ttsSettings">选区朗读</button>
+        <button type="button" data-reading-settings-target="literatureUrlSettings">论文网址</button>
+        <button type="button" data-reading-settings-target="articleChatPromptSettings">快捷提示词</button>
+        <button type="button" data-reading-settings-target="literatureNoteTemplateSettings">文献笔记模板</button>
+        <button type="button" data-reading-settings-target="selectionLlmActionSettings">选区动作</button>
+        <button type="button" data-reading-settings-target="panelFollowupSettings">Panel 追问</button>
+      </nav>
+      <div id="readingSettingsBody" class="reading-settings-stack">
+        <section id="literatureUrlSettings" class="settings-section" aria-labelledby="literatureUrlHeading">
+          <div class="section-heading"><div><h3 id="literatureUrlHeading">文献网页白名单</h3><p>内置规则识别出版社与预印本的论文网址。未识别网页在点击侧栏时会询问是否开启；插件图标中的“开始研读”可直接开启。</p></div></div>
+          <label class="field"><span>自定义网址，每行一条</span>
+            <textarea id="literatureUrlWhitelist" rows="5" spellcheck="false" placeholder="papers.example.org&#10;*.archive.example.org&#10;https://example.org/articles/*"></textarea>
+            <small>域名只匹配该域名；*.域名包含其子域名。完整网址匹配指定路径，末尾 * 可匹配路径下所有文章。删除一行即可移除规则。</small>
+          </label>
+          <button id="saveLiteratureUrlWhitelist" class="button secondary" type="button">保存网址白名单</button>
+          <p id="literatureUrlStatus" class="status" role="status" aria-live="polite"></p>
+        </section>
+        <section id="ttsSettings" class="settings-section tts-settings" aria-labelledby="ttsSettingsHeading">
+          <div class="section-heading"><div><h3 id="ttsSettingsHeading">选区朗读</h3><p>在网页或 PDF 中选中文字后点击朗读。默认使用浏览器内置朗读，无需 API Key 或部署模型。</p></div></div>
+          <div class="form-grid two-columns">
+            <label class="field"><span>朗读服务</span><select id="ttsMode"><option value="browser">浏览器内置（免费，无需密钥）</option><option value="local">本地 Kokoro</option><option value="online">在线兼容接口</option></select></label>
+            <label class="field"><span>语速</span><input id="ttsSpeed" type="number" min="0.25" max="4" step="0.05" value="1"><small>1 为原速，范围 0.25–4。</small></label>
+            <label id="ttsEndpointField" class="field tts-wide" hidden><span>语音接口地址</span><input id="ttsEndpoint" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8880/v1/audio/speech"><small id="ttsEndpointHint">本地模式只连接本机回环地址；请先启动 Kokoro。</small></label>
+            <label id="ttsModelField" class="field" hidden><span>语音模型</span><input id="ttsModel" type="text" maxlength="120" autocomplete="off" value="kokoro"></label>
+            <label id="ttsTransportField" class="field" hidden><span>本地传输方式</span><select id="ttsTransport"><option value="auto">自动兼容（优先 JSON）</option><option value="json-pcm">JSON（避免音频下载接管）</option><option value="standard">标准音频（兼容旧服务）</option></select><small>自动模式探测本机 Kokoro 的 JSON 支持；旧服务沿用标准音频，可能被下载工具接管。</small></label>
+            <label id="ttsApiKeyField" class="field" hidden><span>API Key（可选）</span><input id="ttsApiKey" type="password" autocomplete="new-password"><small id="ttsKeyState">密钥只保存在本机，保存后不回显。</small><span class="tts-clear-key"><input id="ttsClearApiKey" type="checkbox">清除已保存的 Key</span></label>
+            <div class="field"><label for="ttsVoiceEn">英文音色</label><select id="ttsVoiceEn"><option value="af_heart">af_heart</option></select><input id="ttsVoiceEnCustom" type="text" maxlength="80" autocomplete="off" aria-label="自定义英文音色 ID" placeholder="手动输入音色 ID" hidden></div>
+            <div class="field"><label for="ttsVoiceZh">中文音色</label><select id="ttsVoiceZh"><option value="zf_xiaoxiao">zf_xiaoxiao</option></select><input id="ttsVoiceZhCustom" type="text" maxlength="80" autocomplete="off" aria-label="自定义中文音色 ID" placeholder="手动输入音色 ID" hidden></div>
+          </div>
+          <p id="ttsBrowserHint" class="tts-note">使用浏览器和系统提供的音色，无需部署模型。自动选择优先匹配语种，缺少时使用系统可用音色；标为“联网”的音色可能需要网络。</p>
+          <label class="tts-auto-play"><input id="ttsAutoPlay" type="checkbox"><span>选中文字后自动朗读（默认关闭）</span></label>
+          <p class="tts-note">音色可选择或手动填写。含中文的选区使用中文音色；中英混排及专业缩写的读音以服务支持为准。</p>
+          <p id="ttsVoicesStatus" class="tts-note" role="status" aria-live="polite">正在准备音色列表…</p>
+          <div class="tts-actions">
+            <button id="saveTtsSettings" class="button primary" type="button">保存朗读设置</button>
+            <button id="ttsRefreshVoices" class="button quiet" type="button">刷新音色</button>
+            <button id="ttsPreviewEnglish" class="button quiet" type="button">试听英文</button>
+            <button id="ttsPreviewChinese" class="button quiet" type="button">试听中文</button>
+            <button id="ttsResume" class="button quiet" type="button" hidden>点击播放</button>
+            <button id="ttsStop" class="button quiet" type="button" disabled>停止朗读</button>
+          </div>
+          <p id="ttsStatus" class="status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
+      <div class="settings-actions reading-settings-actions">
+        <button id="saveReadingSettings" class="button primary" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存阅读工具设置</button>
+      </div>
+      <div id="readingSettingsStatus" class="status" role="status" aria-live="polite"></div>
     </section>
 
     <section id="providerSettings" class="settings-panel" data-settings-page="models"
       aria-labelledby="providerHeading" hidden>
       <div class="settings-panel-heading">
-        <div><p class="section-kicker">分析配置</p><h2 id="providerHeading">模型服务与分析方式</h2></div>
+        <div><p class="section-kicker">AI · 按需启用</p><h1 id="providerHeading">模型与连接</h1><p>先完成一个可用连接，再按任务选择模型；导航、阅读和手动标注无需模型。</p></div>
         <span id="credentialState" class="credential-state">尚未配置</span>
       </div>
-      <div class="settings-section">
-        <h3>分析方式</h3>
-        <div class="form-grid two-columns">
-          <label class="field">
-            <span>正文高亮引擎</span>
-            <select id="analysisMode">
-              <option value="regex">正则模式（离线）</option>
-              <option value="llm">LLM 精确模式</option>
-            </select>
-            <small>这里只控制“亮文”的自动高亮方式；段落概述、解图和全文问答仍可独立使用已配置的模型。</small>
-          </label>
-          <label class="check-field">
-            <input id="autoAnalyze" type="checkbox">
-            <span>进入论文页后自动分析正文</span>
-          </label>
-        </div>
-      </div>
-      <div class="settings-section">
-        <div class="section-heading"><div><h3>命名 API Profiles</h3><p>可为不同任务保存独立的模型服务与 Token 策略。</p></div></div>
+      <div id="apiProfilesSettings" class="settings-section">
+        <div class="section-heading"><div><h3>模型连接</h3><p>配置名称、服务商、凭据和模型保存在本机；测试只发送内置合成内容。</p></div></div>
+        <ol class="provider-setup-steps" aria-label="接入配置流程">
+          <li><strong>1 · 保存配置</strong><span id="providerConfigurationStep">待配置</span></li>
+          <li><strong>2 · 读取目录</strong><span id="providerDirectoryStep">可手填模型 ID</span></li>
+          <li><strong>3 · 选择模型</strong><span id="providerModelStep">待选择</span></li>
+          <li><strong>4 · 验证能力</strong><span id="providerTestStep">尚未验证</span></li>
+        </ol>
         <div class="api-profile-layout">
           <aside class="api-profile-rail" aria-label="API Profile 列表">
             <div class="api-profile-list-heading"><strong>Profiles</strong><button id="addApiProfile" class="button quiet compact-button" type="button">新增</button></div>
@@ -310,33 +544,30 @@
               <label class="field"><span>配置名称</span><input id="profileName" type="text" autocomplete="off" placeholder="例如：主力模型"><small>输入后按 Enter 或移开焦点即可单独保存名称。</small></label>
               <div class="profile-editor-actions"><button id="duplicateApiProfile" class="button quiet compact-button" type="button">复制</button><button id="deleteApiProfile" class="button quiet compact-button" type="button">删除</button></div>
             </div>
-            <fieldset class="token-policy-fieldset">
-              <legend>Token 策略</legend>
-              <div class="token-mode-options">
-                <label><input id="tokenModeAuto" name="tokenMode" type="radio" value="auto" checked> 自动（按任务预算）</label>
-                <label><input id="tokenModeManual" name="tokenMode" type="radio" value="manual"> 手动上限</label>
-              </div>
-              <label id="autoTokenCapField" class="field"><span>自动上限（可留空）</span><input id="autoTokenCap" type="number" min="512" max="2000000" step="256" placeholder="按所选模型自动判断"></label>
-              <label id="manualMaxTokensField" class="field" hidden><span>手动最大 Token</span><input id="manualMaxTokens" type="number" min="512" max="2000000" step="256" value="4096"></label>
-              <label class="field"><span>上下文窗口 Token（高级，可留空）</span><input id="contextWindowTokens" type="number" min="8192" max="2000000" step="1024" placeholder="使用插件的保守默认值"><small>仅在服务商明确给出窗口大小时填写；它与输出 Token 上限相互独立。</small></label>
-            </fieldset>
             <div class="profile-connection-fields">
               <div class="form-grid two-columns">
                 <label class="field"><span>Provider</span><select id="providerId"></select><small>国内服务商已独立列出；“自定义兼容接口”用于其他 OpenAI 兼容服务。</small></label>
                 <div class="field model-discovery-field">
-                  <span>模型名称</span>
+                  <span>模型 ID（可手动输入）</span>
                   <div class="model-discovery-row">
                     <input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID">
                     <select id="modelSuggestionsSelect" aria-label="选择联网获取的模型"
                       title="选择联网获取的模型">
                       <option value="">在线模型</option>
                     </select>
-                    <button id="refreshModels" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>联网获取</button>
+                    <button id="refreshModels" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span id="modelDiscoveryActionLabel">联网获取</span></button>
                   </div>
                   <datalist id="modelSuggestions"></datalist>
-                  <small id="modelDiscoveryStatus" role="status" aria-live="polite">选择 Provider 后会自动获取当前账号可用模型；仍可手动输入。</small>
+                  <input id="modelDirectorySearch" type="search" autocomplete="off" aria-label="筛选模型候选" placeholder="搜索目录或内置候选（不修改模型 ID）">
+                  <small id="modelInputHint">可直接填写服务商提供的完整模型 ID，包括未出现在候选列表中的新模型。保存和调用均以左侧输入框为准。</small>
+                  <small id="modelDiscoveryStatus" role="status" aria-live="polite">选择 Provider 后会读取目录；内置候选、目录模型与手填 ID 分别标注，目录不代表能力验证。</small>
                 </div>
                 <label id="apiKeyField" class="field"><span>API Key</span><input id="apiKey" type="password" autocomplete="new-password" placeholder="粘贴 API Key"><small>Key 仅保存在本机扩展存储中；保存后不会再次回显。</small></label>
+                <p id="typesafeScopeHint" class="support-message" hidden><strong>TypeSafe Jev</strong> 用于文本概率判定，不支持生成问答、笔记或解图；请前往<a id="typesafeTaskRoutingLink" href="#taskRoutingSettings">按功能指定模型 → 语义查找</a>，将此 Profile 指定给语义查找或文献高亮。</p>
+                <label id="reasoningEffortField" class="field" hidden><span>推理强度</span>
+                  <select id="reasoningEffort"></select>
+                  <small id="reasoningEffortHint">仅在当前服务商与模型支持时发送推理参数。</small>
+                </label>
               </div>
               <div id="compatibleFields" class="compatible-fields" hidden>
                 <label id="compatiblePresetField" class="field"><span>接口预设</span><select id="compatiblePreset"></select><small id="compatiblePresetHint">选择后自动填入服务地址与默认模型；API Key 不会被修改。</small></label>
@@ -368,26 +599,84 @@
                 <p id="codexReverseChannelStatus" class="support-message">
                   反向通道尚未检查。连接后，解图进度与结果会实时写入本机事件账本，供 Codex 按需读取。
                 </p>
-                <label class="field"><span>推理强度</span>
-                  <select id="codexReasoningEffort">
-                    <option value="auto">自动（沿用 Codex 设置）</option>
-                    <option value="low">低</option>
-                    <option value="medium">中</option>
-                    <option value="high">高</option>
-                    <option value="xhigh">极高</option>
-                  </select>
-                  <small>全文问答通常建议“自动”或“中”；更高强度可能增加等待时间。</small>
-                </label>
+              </div>
+              <div id="harnessLocalFields" class="compatible-fields" hidden>
+                <p class="support-message"><strong>本机 DeepSeek Harness</strong> 复用官方桌面保存的登录，无需填写 API Key 或服务网址。请先安装官方 Harness 并在其桌面应用登录，再刷新状态。</p>
+                <div class="codex-auth-card">
+                  <div>
+                    <strong>官方桌面登录状态</strong>
+                    <p id="harnessAuthStatus" role="status" aria-live="polite">尚未检查安装与保存登录</p>
+                  </div>
+                  <div class="codex-auth-actions">
+                    <button id="harnessRefreshStatus" class="button quiet compact-button" type="button">刷新状态</button>
+                  </div>
+                </div>
+                <p class="support-message">状态检测仅确认安装与保存登录；请点击“测试连接”验证模型实际可用性。<code>deepseek-flash</code> 支持解图，<code>deepseek-v4-pro</code> 用于文本任务；推理强度按当前模型能力发送。</p>
               </div>
             </div>
+            <details id="profileAdvancedSettings" class="settings-disclosure profile-advanced-settings">
+              <summary>高级连接设置</summary>
+              <fieldset class="token-policy-fieldset">
+                <legend>Token 策略</legend>
+                <p class="support-message">输出 Token 由插件根据任务、模型容量和截断重试自动分配，无需手动设置上限。</p>
+                <label class="field"><span>上下文窗口 Token（高级，可留空）</span><input id="contextWindowTokens" type="number" min="8192" max="2000000" step="1024" placeholder="使用插件的保守默认值"><small>仅在服务商明确给出窗口大小时填写；它与输出 Token 上限相互独立。</small></label>
+              </fieldset>
+            </details>
           </div>
         </div>
+        <div class="privacy-section connection-consent">
+          <h4>正文发送许可</h4>
+          <label class="consent-box"><input id="consentGranted" type="checkbox"><span>我知道启用 LLM 模式后，插件会根据任务路由，把论文正文、图注或图片发送到我选择的第三方模型服务；API Key 仍只保存在本机扩展存储中。</span></label>
+          <ul><li>API Key 不会进入论文页面、同步存储、日志、缓存或语料导出。</li><li>“测试连接”会发送插件内置的合成文本、微型 PNG 和 JSON Schema；绝不发送当前论文内容。</li><li>自定义接口只在你点击保存或测试时申请对应域名权限。</li></ul>
+        </div>
+        <div id="providerConnectionActions" class="settings-actions provider-connection-actions">
+          <button id="saveSettings" class="button primary" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存连接</button>
+          <button id="testProvider" class="button secondary" type="button"><i class="ph ph-test-tube" aria-hidden="true"></i>测试连接</button>
+          <label id="reasoningStructuredProbeField" class="check-field compact" hidden>
+            <input id="testReasoningStructured" type="checkbox">
+            <span>仅文本配置：额外测试结构化推理（可选；视觉配置会自动测试）</span>
+          </label>
+        </div>
+        <fieldset class="provider-probe-selection">
+          <legend>选择额外测试项</legend>
+          <p>基础文本始终测试；图片配置沿用自动图片与结构化检查。额外测试各自调用模型。</p>
+          <label class="check-field compact"><input id="testPlainJson" type="checkbox"><span>文本 JSON（普通提示）</span></label>
+          <label class="check-field compact"><input id="testStructuredSchema" type="checkbox"><span>文本 JSON Schema（样例校验）</span></label>
+        </fieldset>
+        <div id="providerConnectionStatus" class="provider-connection-status">
+          <strong>操作反馈</strong>
+          <div id="status" class="status" role="status" aria-live="polite">尚未测试连接</div>
+        </div>
+        <div class="provider-capability-results" aria-live="polite">
+          <strong>本页能力验证结果</strong>
+          <p>结果只对当前配置有效；修改配置需重新测试。未测试、跳过与不支持均不会计作通过。</p>
+          <ul id="providerProbeResults" class="provider-probe-results"></ul>
+        </div>
       </div>
+      <details id="modelBehaviorAdvanced" class="settings-section settings-disclosure model-behavior-settings">
+        <summary>高级：正文分析方式</summary>
+        <div id="analysisBehaviorSettings" class="settings-disclosure-body">
+          <div class="form-grid two-columns">
+            <label class="field">
+              <span>正文高亮引擎</span>
+              <select id="analysisMode">
+                <option value="regex">正则模式（离线）</option>
+                <option value="llm">LLM 精确模式</option>
+              </select>
+              <small>这里只控制“亮文”的自动高亮方式；段落概述、解图和全文问答仍可独立使用已配置的模型。</small>
+            </label>
+            <label class="check-field">
+              <input id="autoAnalyze" type="checkbox">
+              <span>进入论文页后自动分析正文</span>
+            </label>
+          </div>
+        </div>
+      </details>
       <div id="pdfMineruSettings" class="settings-section pdf-mineru-settings">
         <div class="section-heading">
           <div>
-            <h3>PDF 解析 · MinerU</h3>
-            <p>在浏览器中打开 PDF 后激活 Brevess，即会按这里的配置自动解析；无需在 PDF 页面再次选择文件或填写 Token。</p>
+            <h3>PDF 原页阅读与增强识别</h3>
+            <p>原页阅读和本地文字索引无需 MinerU。只有主动点击“增强文本识别”时，才会按这里的配置处理 PDF。</p>
           </div>
           <span id="pdfMineruCredentialState" class="credential-state">轻量解析无需 Token</span>
         </div>
@@ -420,6 +709,9 @@
           </label>
         </div>
         <div class="settings-actions compact-settings-actions">
+          <button id="openPdfReader" class="button primary" type="button">
+            打开 PDF
+          </button>
           <button id="savePdfMineruSettings" class="button secondary" type="button">
             保存 PDF 解析设置
           </button>
@@ -428,23 +720,23 @@
           </button>
         </div>
         <p id="pdfMineruStatus" class="support-message" role="status" aria-live="polite">
-          PDF 会发送到 MinerU 做版面解析；解析后的正文仍遵循下方的模型发送许可。
+          未点击增强识别时，PDF 不会发送到 MinerU；原页阅读、查找和本地文字索引仍可直接使用。
         </p>
       </div>
-      <div class="settings-section task-routing-section">
-        <div class="section-heading"><div><h3>全局默认与任务路由</h3><p>根据任务路由选择第三方模型服务；未单独指定时使用全局默认。</p></div></div>
+      <div id="taskRoutingSettings" class="settings-section task-routing-section">
+        <div class="section-heading"><div><h3>按功能指定模型</h3><p>每个用户可见的 AI 功能都可独立指定模型、推理强度和 Token 规则；未单独指定时使用全局默认。</p></div></div>
         <div class="form-grid two-columns">
           <label class="field"><span>全局默认 Profile</span><select id="globalProfileId"></select></label>
         </div>
-        <div class="task-route-grid">
-          <label class="field"><span>文段高亮（高亮匹配）</span><select id="routeHighlight"></select></label>
-          <label class="field"><span>段落概述</span><select id="routeSummary"></select></label>
-          <label class="field"><span>逐图解读</span><select id="routeFigure"></select></label>
-          <label class="field"><span>跨图串解</span><select id="routeCrossFigure"></select></label>
+        <p class="support-message">以下是未保存的编辑预览；点击保存后生效。全局默认仅用于明确选择继承全局的任务。原文与导航翻译默认使用浏览器本地翻译，专用配置失效时不会转用其他模型。</p>
+        <div id="taskPolicyModules"></div>
+        <div hidden aria-hidden="true">
+          <table id="llmTaskPolicyTable"><tbody id="llmTaskPolicyTableBody"></tbody></table>
+          <details id="advancedTaskRouting"><table><tbody id="llmAdvancedTaskPolicyTableBody"></tbody></table></details>
         </div>
-        <p id="routeFigureWarning" class="support-message" role="status" hidden>图注任务最好选择支持视觉输入的模型。</p>
+        <p class="support-message">解图支持已配置的生成模型：多模态模型读取原图，纯文本模型使用正文与图注。</p>
       </div>
-      <div class="settings-section chat-quick-prompt-settings">
+      <div id="articleChatPromptSettings" class="settings-section chat-quick-prompt-settings">
         <div class="section-heading">
           <div>
             <h3>全文问答快捷提示词</h3>
@@ -459,7 +751,38 @@
         </div>
         <div id="articleChatQuickPromptList" class="named-prompt-list"></div>
       </div>
-      <div class="settings-section panel-followup-settings">
+      <div id="literatureNoteTemplateSettings" class="settings-section literature-note-template-settings">
+        <div class="section-heading">
+          <div>
+            <h3>文献笔记模板</h3>
+            <p id="literatureNoteTemplateDescription"></p>
+          </div>
+          <div class="section-heading-actions">
+            <span id="literatureNoteTemplateEditState" class="editor-status" data-state="saved" role="status" aria-live="polite">已保存</span>
+            <button id="addLiteratureNoteTemplate" class="button secondary compact-button" type="button">新增模板</button>
+            <button id="resetLiteratureNoteTemplates" class="button quiet compact-button" type="button">恢复预设</button>
+          </div>
+        </div>
+        <label class="field literature-note-template-select"><span>当前模板</span><select id="literatureNoteTemplateSelector"></select></label>
+        <div class="literature-note-template-workspace">
+          <nav id="literatureNoteTemplateNav" class="literature-note-template-nav" aria-label="文献笔记模板"></nav>
+          <div id="literatureNoteTemplateList" class="named-prompt-list literature-note-template-editors"></div>
+        </div>
+      </div>
+      <div id="selectionLlmActionSettings" class="settings-section selection-llm-action-settings">
+        <div class="section-heading">
+          <div>
+            <h3>选中文段后的分析按钮</h3>
+            <p>“翻译”和“释义”为默认动作；可自定义更多按钮及发送到全文问答的内置提示词。</p>
+          </div>
+          <div class="section-heading-actions">
+            <button id="addSelectionLlmAction" class="button secondary compact-button" type="button">新增动作</button>
+            <button id="resetSelectionLlmActions" class="button quiet compact-button" type="button">恢复预设</button>
+          </div>
+        </div>
+        <div id="selectionLlmActionList" class="named-prompt-list"></div>
+      </div>
+      <div id="panelFollowupSettings" class="settings-section panel-followup-settings">
         <div class="section-heading">
           <div><h3>Panel 追问提示词</h3><p>追问选项的名称和提示词都可以新增、修改或删除；历史回答会按轮次折叠保留。</p></div>
           <div class="section-heading-actions">
@@ -471,28 +794,22 @@
         </div>
         <div id="panelFollowupPresetList" class="named-prompt-list"></div>
       </div>
-      <div class="settings-section figure-original-settings">
+      <div id="figureOriginalSettings" class="settings-section figure-original-settings">
         <div class="section-heading">
           <div>
-            <h3>Figure 高清原图</h3>
-            <p>原图打开后可持久缓存在浏览器本地，并按最近使用自动清理旧缓存。</p>
+            <h3>离线内容与高清原图</h3>
+            <p>控制需要长期保存在浏览器本地的完整正文网页与 Figure 高清原图。</p>
           </div>
         </div>
         <label class="check-field">
           <input id="autoCacheFigureImages" type="checkbox" checked>
           <span>自动缓存每张已加载的 Figure 高清原图（推荐，可显著加快再次打开和导出）</span>
         </label>
+        <label class="check-field">
+          <input id="saveArticleWebSnapshot" type="checkbox" checked>
+          <span>保存文献时同时保存可离线恢复的完整正文网页（推荐；断网或离开校园网后仍可阅读）</span>
+        </label>
       </div>
-      <div class="settings-section privacy-section">
-        <h3>正文发送许可</h3>
-        <label class="consent-box"><input id="consentGranted" type="checkbox"><span>我知道启用 LLM 模式后，插件会根据任务路由，把论文正文、图注或图片发送到我选择的第三方模型服务；API Key 仍只保存在本机扩展存储中。</span></label>
-        <ul><li>API Key 不会进入论文页面、同步存储、日志、缓存或语料导出。</li><li>“测试连接”只发送插件内置的合成句，不发送当前论文。</li><li>自定义接口只在你点击保存或测试时申请对应域名权限。</li></ul>
-      </div>
-      <div class="settings-actions">
-        <button id="saveSettings" class="button primary" type="button"><i class="ph ph-floppy-disk" aria-hidden="true"></i>保存模型设置</button>
-        <button id="testProvider" class="button secondary" type="button"><i class="ph ph-test-tube" aria-hidden="true"></i>测试连接</button>
-      </div>
-      <div id="status" class="status" role="status" aria-live="polite"></div>
     </section>
 
     <section id="keyboardShortcuts" class="settings-panel keyboard-shortcuts-panel"
@@ -500,7 +817,7 @@
       <div class="settings-panel-heading">
         <div>
           <p class="section-kicker">键盘操作</p>
-          <h2 id="keyboardShortcutsHeading">快捷键自定义</h2>
+          <h1 id="keyboardShortcutsHeading">快捷键</h1>
           <p>点击输入框后直接按一个字母或数字；Backspace/Delete 可停用。输入文字、编辑表单或打开高清原图时不会误触。</p>
         </div>
         <button id="resetKeyboardShortcuts" class="button quiet compact-button"
@@ -527,9 +844,15 @@
       <div class="form-grid two-columns">
         <label class="field"><span>应当包含（每行一条）</span><textarea id="customCategoryInclude" rows="3"></textarea></label>
         <label class="field"><span>应当排除（每行一条）</span><textarea id="customCategoryExclude" rows="3"></textarea></label>
+        <label class="field"><span>判定问题</span><textarea id="customCategoryDecisionQuestion" rows="3"></textarea></label>
         <label class="field"><span>正例（每行一条）</span><textarea id="customCategoryPositive" rows="3"></textarea></label>
-        <label class="field"><span>反例（每行一条）</span><textarea id="customCategoryNegative" rows="3"></textarea></label>
+        <label class="field"><span>反例（建议填写容易混淆的难反例，每行一条）</span><textarea id="customCategoryNegative" rows="3"></textarea></label>
+        <label class="field"><span>必需信息槽（每行一条）</span><textarea id="customCategoryRequiredSlots" rows="3"></textarea></label>
+        <label class="field"><span>允许的引用角色（每行一条）</span><textarea id="customCategoryAllowedQuoteRoles" rows="3" placeholder="例如：statement"></textarea></label>
         <label class="field"><span>优先高亮范围</span><select id="customCategorySpanPolicy"><option value="phrase">短语</option><option value="clause" selected>分句</option><option value="sentence">整句</option></select></label>
+        <label class="field"><span>最低置信度</span><input id="customCategoryMinimumConfidence" type="number" min="0" max="1" step="0.05" value="0.8"></label>
+        <label class="field"><span>语义判定方式</span><select id="customCategoryClaimMode"><option value="explicit">仅明确陈述</option><option value="inferred">允许合理推断</option><option value="either">明确陈述或合理推断</option></select></label>
+        <div class="field checkbox-field category-relation-field"><span>关系约束</span><label><input id="customCategoryRelationRequired" type="checkbox"> 必须包含实体或变量之间的关系</label></div>
         <label class="field"><span>保留方式</span><select id="customCategoryPersistence"><option value="saved">长期保存</option><option value="one-off">仅本次浏览会话</option></select></label>
       </div>
       <div class="category-form-actions"><button id="saveCustomCategory" class="button secondary" type="button">添加识别类别</button></div>
@@ -549,12 +872,19 @@
       aria-labelledby="localDataHeading" hidden>
       <div class="settings-panel-heading">
         <div>
-          <p class="section-kicker">仅保存在本机</p>
-          <h2 id="localDataHeading">本地数据与备份</h2>
-          <p>选择一个目录镜像类别、标注与反馈。页面只显示目录名称，不读取或展示系统完整路径。</p>
+          <p class="section-kicker">LOCAL FIRST · 本地数据</p>
+          <h1 id="localDataHeading">阅读资料与本地数据</h1>
+          <p>检索本地文献与缩略词；需要时再展开工作区维护、目录同步与迁移。</p>
         </div>
       </div>
       <div class="local-data-layout">
+        <section id="localReadingLibrary" class="settings-section local-data-section" aria-label="本地文献与缩略词库"></section>
+        <details class="local-data-maintenance">
+          <summary>
+            <span><i class="ph ph-database" aria-hidden="true"></i>维护、同步与迁移</span>
+            <small>工作区管理、目录镜像、整机迁移与反馈语料</small>
+          </summary>
+          <div class="local-data-maintenance__body">
         <section id="articleWorkspaceOverview" class="settings-section local-data-section article-workspace-overview" aria-labelledby="articleWorkspaceOverviewHeading">
           <div class="section-heading local-data-heading">
             <div>
@@ -606,6 +936,22 @@
             <strong id="userDataDirectory">尚未选择目录</strong>
           </div>
           <p id="userDataSupportMessage" class="support-message" role="status" aria-live="polite" hidden></p>
+          <section id="nativeDirectorySettings" class="native-directory-settings" aria-labelledby="nativeDirectoryHeading">
+            <h4 id="nativeDirectoryHeading">在文件管理器中打开文献目录</h4>
+            <p id="nativeDirectoryHelp">首次使用需显式绑定本机路径。填写所选保存位置内实际数据根（Brevess 或兼容的 SCI-Highlighter 文件夹）的完整绝对路径，不是论文子目录，也不一定是上方选择的外层文件夹。浏览器只提供目录名，无法替你推算路径。</p>
+            <label class="native-directory-path-field" for="nativeDirectoryPath">
+              <span>实际数据根绝对路径</span>
+              <input id="nativeDirectoryPath" type="text" autocomplete="off" spellcheck="false" aria-describedby="nativeDirectoryHelp" placeholder="例如 D:\论文资料\Brevess">
+            </label>
+            <div class="native-directory-actions">
+              <button id="bindNativeDirectory" class="button secondary compact-button" type="button">绑定本机目录路径</button>
+              <button id="checkNativeDirectory" class="button quiet compact-button" type="button">检查助手与绑定状态</button>
+            </div>
+            <p id="nativeDirectoryStatus" class="native-directory-status" role="status" aria-live="polite">尚未检查。绑定只核验现有目录，不会选择新的保存位置或创建文献文件夹。</p>
+            <p class="native-directory-help">需要支持目录打开功能的本机助手；旧版请随插件一起更新。此处不会自动安装助手。
+              <a href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" target="_blank" rel="noopener noreferrer">查看本机助手安装说明</a>
+            </p>
+          </section>
           <section class="portable-config-card" aria-labelledby="portableConfigHeading">
             <div class="portable-config-heading">
               <div>
@@ -645,7 +991,7 @@
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="migrationHeading">整机迁移</h3>
-              <p>导出模型配置、API Key、自定义请求头、分析模式、分类提示词/正则、手动标注与反馈语料；在新浏览器导入后即可继续使用。</p>
+              <p>导出模型配置、API Key、自定义请求头、阅读场景、分类提示词/正则、手动标注与反馈语料；在新浏览器导入后即可继续使用。</p>
             </div>
             <span class="credential-state">完整配置</span>
           </div>
@@ -668,7 +1014,8 @@
           <p class="corpus-note">离线规则至少需要来自 3 篇不同文档的重复正向证据。</p>
           <div class="corpus-actions"><button id="exportCorpusJsonl" class="button secondary" type="button">导出 JSONL</button><button id="exportCorpusCsv" class="button secondary" type="button">导出 CSV</button><button id="distillRules" class="button secondary" type="button">生成离线规则</button></div>
         </section>
-
+          </div>
+        </details>
       </div>
     </section>
 
@@ -677,7 +1024,7 @@
       <div class="settings-panel-heading">
         <div>
           <p class="section-kicker">项目信息</p>
-          <h2 id="aboutSettingsHeading">关于、开源与反馈</h2>
+          <h1 id="aboutSettingsHeading">关于、开源与反馈</h1>
           <p>许可证、源代码和问题反馈统一放在这里。</p>
         </div>
       </div>
@@ -685,10 +1032,14 @@
           <div class="section-heading local-data-heading">
             <div>
               <h3 id="supportHeading">问题反馈</h3>
-              <p>遇到适配问题、功能异常或有改进建议，欢迎通过邮箱联系。</p>
+              <p>遇到适配问题、功能异常或有改进建议，请通过 GitHub Issues 反馈。</p>
             </div>
           </div>
-          <a class="support-email" href="mailto:brevess0729@163.com">brevess0729@163.com</a>
+          <div class="support-email-row">
+            <a class="support-email" href="https://github.com/coolcoldplay/Brevess/issues" target="_blank" rel="noopener noreferrer"><svg class="support-email-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg><span>GitHub Issues · 问题与建议</span></a>
+            <button id="copySupportEmail" class="button quiet compact-button" type="button" aria-label="复制反馈链接"><svg class="support-copy-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制链接</span></button>
+          </div>
+          <p id="supportCopyStatus" class="support-copy-status" role="status" aria-live="polite"></p>
         </section>
 
         <section id="openSource" class="settings-section open-source-notice" aria-labelledby="openSourceHeading">
@@ -707,6 +1058,8 @@
         </section>
     </section>
   </main>
+    </div>
+  </div>
 
   <dialog id="unsavedCategoryDialog" class="confirm-dialog" aria-labelledby="unsavedCategoryDialogTitle">
     <form method="dialog">
@@ -777,11 +1130,73 @@
   </dialog>
   <script src="core/migration-bundle.js"></script>
   <script src="core/keyboard-shortcuts.js"></script>
+  <script src="core/reading-tools.js"></script>
+  <script src="core/tts-service.js"></script>
+  <script src="core/literature-url.js"></script>
+  <script src="core/selection-tts.js"></script>
   <script src="core/i18n.js"></script>
   <script src="core/user-data-database.js"></script>
   <script src="core/privacy-sanitizer.js"></script>
   <script src="core/directory-sync.js"></script>
   <script src="core/pdf-workspace.js"></script>
+  <dialog id="taskTokenRuleDialog" class="task-token-rule-dialog"
+    aria-labelledby="taskTokenRuleDialogTitle">
+    <form id="taskTokenRuleForm">
+      <header class="task-token-dialog-heading">
+        <div>
+          <p class="section-kicker">Token budget</p>
+          <h2 id="taskTokenRuleDialogTitle">执行 Token 规则</h2>
+          <p id="taskTokenRuleDialogTask">选择一项功能后编辑。</p>
+        </div>
+        <button id="closeTaskTokenRuleDialog" class="button quiet compact-button"
+          type="button" aria-label="关闭 Token 规则">关闭</button>
+      </header>
+      <div class="task-token-rule-layout">
+        <fieldset>
+          <legend>输入预算</legend>
+          <div class="task-token-field-grid">
+            <label class="field"><span>安全比例</span><input type="number" min="0.5" max="1" step="0.01" data-token-rule-field="safetyRatio" required></label>
+            <label class="field"><span>预留 Token</span><input type="number" min="0" max="2000000" step="1" data-token-rule-field="reservedTokens" required></label>
+            <label class="field"><span>来源上限 Token</span><input type="number" min="1" max="2000000" step="1" data-token-rule-field="sourceCapTokens" placeholder="不限"></label>
+            <label class="field"><span>最大任务单元</span><input type="number" min="1" max="1000000" step="1" data-token-rule-field="maxUnits" required></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>输出预算</legend>
+          <div class="task-token-field-grid">
+            <label class="field"><span>基础 Token</span><input type="number" min="0" max="2000000" step="1" data-token-rule-field="base" required></label>
+            <label class="field"><span>每单元 Token</span><input type="number" min="0" max="2000000" step="1" data-token-rule-field="perUnit" required></label>
+            <label class="field"><span>最低 Token</span><input type="number" min="512" max="2000000" step="1" data-token-rule-field="floor" required></label>
+            <label class="field"><span>最高 Token</span><input type="number" min="512" max="2000000" step="1" data-token-rule-field="ceiling" required></label>
+            <label class="field"><span>截断重试次数</span><input type="number" min="0" max="10" step="1" data-token-rule-field="truncationRetries" required></label>
+            <label class="field"><span>重试倍率</span><input type="number" min="1.01" max="4" step="0.01" data-token-rule-field="retryMultiplier" required></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="task-token-preview" aria-live="polite">
+        <span>有效输入 <strong id="taskTokenInputPreview">—</strong></span>
+        <span>有效输出 <strong id="taskTokenOutputPreview">—</strong></span>
+      </div>
+      <p id="taskTokenRuleError" class="support-message task-token-rule-error"
+        role="alert" hidden></p>
+      <details class="task-token-copy">
+        <summary>复制到其他功能</summary>
+        <div id="taskTokenCopyTargets" class="task-token-copy-targets"></div>
+        <button id="copyTaskTokenRule" class="button quiet compact-button"
+          type="button">复制到已选功能</button>
+      </details>
+      <div class="task-token-dialog-actions">
+        <button id="resetTaskTokenRule" class="button quiet" type="button">恢复自动规则</button>
+        <button id="saveTaskTokenRule" class="button primary" type="submit">应用规则</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="core/llm-task-catalog.js"></script>
+  <script src="core/token-budget.js"></script>
+  <script src="providers/provider-registry.js"></script>
+  <script src="options-workbench.js"></script>
   <script src="options.js"></script>
+  <script src="core/local-library-tags.js"></script>
+  <script src="options-local-library.js"></script>
 </body>
 </html>

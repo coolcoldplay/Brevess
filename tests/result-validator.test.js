@@ -3,10 +3,30 @@ const assert = require('node:assert/strict');
 const {
   validateChunkResult,
   mergeAnnotations,
-  validateAnnotationSemantics
+  validateAnnotationSemantics,
+  validateAnnotationStructureSemantics
 } = require('../core/result-validator.js');
 require('../core/category-store.js');
 const { createAdaptiveCategoryCatalog } = require('../core/adaptive-catalog.js');
+
+test('necessity manipulation accepts inhibiting while still requiring an observed reduced outcome', () => {
+  for (const quote of [
+    'Inhibiting kinase K abolished growth-factor-induced proliferation.',
+    'The intervention inhibits kinase K and abolished growth-factor-induced proliferation.'
+  ]) {
+    assert.equal(validateAnnotationStructureSemantics({
+      categoryId: 'necessity_evidence', quotes: [quote], slots: []
+    }).valid, true);
+  }
+  for (const quote of [
+    'Inhibiting kinase K changed its phosphorylation state.',
+    'The growth-factor response was abolished in the second cohort.'
+  ]) {
+    assert.deepEqual(validateAnnotationStructureSemantics({
+      categoryId: 'necessity_evidence', quotes: [quote], slots: []
+    }), { valid: false, reason: 'NECESSITY_STRUCTURE_MISSING' });
+  }
+});
 const {
   rescueParagraphs,
   criticalParagraphs,

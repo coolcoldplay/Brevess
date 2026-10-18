@@ -5,18 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Brevess PDF 阅读工作区</title>
   <link rel="stylesheet" href="content.css">
+  <link rel="stylesheet" href="semantic-find.css">
+  <link rel="stylesheet" href="bilingual-translation.css">
+  <link rel="stylesheet" href="vendor/pdfjs/web/pdf_viewer.css">
   <link rel="stylesheet" href="pdf-reader.css">
+  <link rel="stylesheet" href="ui-swiss.css">
 </head>
-<body class="brevess-pdf-reader">
+<body class="brevess-pdf-reader" data-ui-surface="pdf">
   <header class="pdf-reader-toolbar">
     <div class="pdf-reader-brand">
-      <span class="pdf-reader-mark" aria-hidden="true">B</span>
+      <img class="pdf-reader-mark" src="icons/icon48.png" width="32" height="32" alt="">
       <div>
-        <strong>Brevess PDF 阅读工作区</strong>
+        <strong>Brevess PDF</strong>
         <span id="pdfReaderSubtitle">正在准备文献 PDF…</span>
       </div>
     </div>
+    <nav class="pdf-reader-navigation" aria-label="PDF 页码与查找" data-sci-plugin-ui>
+      <div class="pdf-reader-page-controls" role="group" aria-label="翻页">
+        <button id="pdfReaderPreviousPage" type="button" aria-label="上一页">‹</button>
+        <label><span class="pdf-reader-page-label">页</span>
+          <input id="pdfReaderPageNumber" type="number" min="1" value="1" aria-label="页码"></label>
+        <span id="pdfReaderPageCount">/ —</span>
+        <button id="pdfReaderNextPage" type="button" aria-label="下一页">›</button>
+      </div>
+      <div class="pdf-reader-search-controls" role="search">
+        <input id="pdfReaderFind" type="search" placeholder="在 PDF 中查找" aria-label="在 PDF 中查找">
+        <button id="pdfReaderFindPrevious" type="button" aria-label="上一处">↑</button>
+        <button id="pdfReaderFindNext" type="button" aria-label="下一处">↓</button>
+        <output id="pdfReaderFindStatus" aria-live="polite"></output>
+      </div>
+    </nav>
     <div class="pdf-reader-toolbar-actions" data-sci-plugin-ui>
+      <button id="pdfReaderStudy" class="pdf-reader-button is-primary" type="button">研读侧栏</button>
       <div class="pdf-reader-zoom" role="group" aria-label="阅读缩放">
         <button id="pdfReaderZoomOut" class="pdf-reader-icon-button" type="button"
           aria-label="缩小">−</button>
@@ -26,96 +46,200 @@
         <button id="pdfReaderZoomReset" class="pdf-reader-icon-button is-wide" type="button"
           aria-label="适合阅读宽度">适宽</button>
       </div>
-      <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" hidden>返回上处</button>
-      <button id="pdfReaderReturnToArticle" class="pdf-reader-button" type="button"
-        aria-label="返回原论文正文" hidden>← 返回原论文正文</button>
-      <button id="pdfReaderViewToggle" class="pdf-reader-button is-primary" type="button"
-        aria-pressed="false" hidden>查看原始 PDF</button>
-      <button id="pdfReaderReparse" class="pdf-reader-button" type="button" hidden>
-        重新解析
-      </button>
-      <a id="pdfReaderOpenOriginalTab" class="pdf-reader-link" href="#" target="_blank"
-        rel="noreferrer">新标签打开 PDF</a>
-      <button id="pdfReaderSettingsToggle" class="pdf-reader-button" type="button"
-        >解析设置</button>
+      <div class="pdf-reader-more">
+        <button id="pdfReaderMoreToggle" class="pdf-reader-icon-button pdf-reader-more-toggle"
+          type="button" aria-expanded="false" aria-controls="pdfReaderMoreMenu"
+          aria-haspopup="menu"><span aria-hidden="true">•••</span><span class="pdf-reader-more-label">更多</span></button>
+        <div id="pdfReaderMoreMenu" class="pdf-reader-more-menu" role="menu" hidden>
+          <button id="pdfReaderReviewFigurePages" class="pdf-reader-button" type="button"
+            role="menuitem" aria-controls="pdfFigurePageReview">核对 Figure 图像页</button>
+          <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" role="menuitem" hidden>返回上处</button>
+          <button id="pdfReaderReturnToArticle" class="pdf-reader-button" type="button"
+            role="menuitem" aria-label="返回原论文正文" hidden>← 返回原论文正文</button>
+          <button id="pdfReaderViewToggle" class="pdf-reader-button is-primary" type="button"
+            role="menuitem" aria-pressed="false" hidden>查看原始 PDF</button>
+          <button id="pdfReaderStartParse" class="pdf-reader-button is-primary" type="button"
+            role="menuitem" hidden>增强文本识别</button>
+          <button id="pdfReaderReparse" class="pdf-reader-button" type="button"
+            role="menuitem" hidden>重新解析</button>
+          <button id="pdfReaderSaveAnnotated" class="pdf-reader-button is-primary" type="button"
+            role="menuitem" hidden>保存带批注副本</button>
+          <button id="pdfReaderOverwriteAnnotated" class="pdf-reader-button is-danger" type="button"
+            role="menuitem" hidden>覆盖原 PDF</button>
+          <a id="pdfReaderOpenOriginalTab" class="pdf-reader-link" href="#" target="_blank"
+            role="menuitem" rel="noreferrer">新标签打开 PDF</a>
+          <button id="pdfReaderSettingsToggle" class="pdf-reader-button" type="button"
+            role="menuitem">识别设置</button>
+          <button id="pdfReaderRetry" class="pdf-reader-button is-primary" type="button"
+            role="menuitem" hidden>重新解析</button>
+          <button id="pdfReaderOpenSettings" class="pdf-reader-button" type="button"
+            role="menuitem" hidden>打开 MinerU 设置</button>
+        </div>
+      </div>
     </div>
   </header>
 
-  <p id="pdfMineruQuotaStatus" class="pdf-reader-quota" role="status"
-    aria-live="polite" hidden></p>
-  <p id="pdfFigureEngineStatus" class="pdf-reader-figure-engine-status" role="status"
-    aria-live="polite" hidden></p>
+  <section id="pdfReaderNoticeStack" class="pdf-reader-notice-stack"
+    aria-label="PDF 阅读状态" hidden>
+    <div class="pdf-reader-notice-heading">
+      <output id="pdfReaderNoticesSummary" aria-live="polite"></output>
+      <button id="pdfReaderNoticesToggle" class="pdf-reader-notice-toggle" type="button"
+        aria-expanded="true" aria-controls="pdfReaderNotices">收起</button>
+    </div>
+    <div id="pdfReaderNotices" class="pdf-reader-notices">
+      <p id="pdfMineruQuotaStatus" class="pdf-reader-quota" role="status"
+        aria-live="polite" aria-atomic="true" hidden></p>
+      <p id="pdfFigureEngineStatus" class="pdf-reader-figure-engine-status" role="status"
+        aria-live="polite" aria-atomic="true" hidden></p>
+      <p id="pdfReaderSaveStatus" class="pdf-reader-save-status" role="status"
+        aria-live="polite" aria-atomic="true" hidden></p>
 
-  <section id="pdfReaderControl" class="pdf-reader-control" aria-labelledby="pdfReaderStatusTitle">
-    <div class="pdf-reader-status-copy">
-      <h1 id="pdfReaderStatusTitle">正在解析 PDF</h1>
-      <p id="pdfReaderStatus" role="status" aria-live="polite">
-        正在连接 MinerU；完成后全文问答和 Figure 解读会自动可用。
-      </p>
-      <div class="pdf-reader-progress" aria-hidden="true">
-        <span id="pdfReaderProgressBar"></span>
-      </div>
+      <section id="pdfReaderControl" class="pdf-reader-control" aria-labelledby="pdfReaderStatusTitle">
+        <div class="pdf-reader-status-copy">
+          <h1 id="pdfReaderStatusTitle">正在准备 PDF</h1>
+          <p id="pdfReaderStatus" role="status" aria-live="polite">
+            直接显示 PDF 原页并在本机建立文字索引；扫描件可使用增强识别。
+          </p>
+          <div class="pdf-reader-progress" role="progressbar" aria-label="PDF 页处理进度"
+            aria-hidden="true" hidden>
+            <span id="pdfReaderProgressBar"></span>
+          </div>
+        </div>
+        <p class="pdf-reader-privacy">
+          原页阅读与文字索引在本机完成。仅主动使用“增强文本识别”时，PDF 才发送至 MinerU；显示仍保留 PDF 原页。
+        </p>
+      </section>
     </div>
-    <div class="pdf-reader-status-actions">
-      <button id="pdfReaderRetry" class="pdf-reader-button is-primary" type="button" hidden>
-        重新解析
-      </button>
-      <button id="pdfReaderOpenSettings" class="pdf-reader-button" type="button" hidden>
-        打开 MinerU 设置
-      </button>
-    </div>
-    <div id="pdfLocalFileFallback" class="pdf-reader-local-fallback" hidden>
-      <strong>浏览器尚未允许扩展读取这个本地 PDF</strong>
-      <p>可在扩展管理页允许访问文件网址后重新解析；也可以只在这里重新选择当前文件。</p>
-      <label class="pdf-reader-file-field">
-        <span>选择当前本地 PDF</span>
-        <input id="pdfLocalFile" type="file" accept="application/pdf,.pdf">
-      </label>
-    </div>
-    <p class="pdf-reader-privacy">
-      PDF 会发送到 MinerU 进行版面解析；Token 与解析偏好统一在 Brevess 的“模型与分析”设置页管理。
-    </p>
+  </section>
+
+  <section id="pdfLocalFileFallback" class="pdf-reader-local-fallback pdf-reader-source-entry" hidden>
+          <strong>浏览器尚未允许扩展读取这个本地 PDF</strong>
+          <p>可在扩展管理页允许访问文件网址后重新解析；也可以只在这里重新选择当前文件。</p>
+          <label class="pdf-reader-file-field">
+            <span>选择当前本地 PDF</span>
+            <input id="pdfLocalFile" type="file" accept="application/pdf,.pdf">
+          </label>
+          <div class="pdf-reader-remote-source">
+            <label for="pdfRemoteUrl">或输入远程 PDF 地址</label>
+            <div class="pdf-reader-remote-source-row">
+              <input id="pdfRemoteUrl" type="url" inputmode="url" autocomplete="url"
+                placeholder="https://example.org/article.pdf" aria-describedby="pdfRemoteUrlStatus">
+              <button id="pdfRemoteUrlOpen" class="pdf-reader-button" type="button">
+                打开远程 PDF
+              </button>
+            </div>
+            <p id="pdfRemoteUrlStatus" class="pdf-reader-remote-source-status"
+              role="alert" hidden></p>
+          </div>
+          <button id="pdfLocalFilePicker" class="pdf-reader-button" type="button" hidden>
+            选择可安全覆盖的本地 PDF
+          </button>
   </section>
 
   <section id="pdfOriginalViewer" class="pdf-original-viewer" aria-label="原始 PDF" hidden>
-    <iframe id="pdfOriginalFrame" title="原始 PDF"></iframe>
-    <p>
+    <div id="pdfNativeViewer" class="pdf-native-viewer" aria-label="可选择文字的原始 PDF"></div>
+    <iframe id="pdfOriginalFrame" title="原始 PDF" hidden></iframe>
+    <p class="pdf-original-embed-hint">
       若出版社禁止内嵌显示，请使用顶部“新标签打开 PDF”；返回本页后解析结果仍会保留。
     </p>
   </section>
 
   <div id="pdfReaderWorkspace" class="pdf-reader-workspace">
     <main id="pdfReaderPage" class="pdf-reader-page">
-      <article id="pdfReaderArticle" class="pdf-reader-article" aria-label="解析后的 PDF 正文"></article>
+      <article id="pdfReaderArticle" class="pdf-reader-article" aria-label="PDF 辅助文字索引"></article>
     </main>
   </div>
 
+  <script src="core/i18n.js"></script>
+  <script src="core/task-telemetry.js"></script>
   <script src="core/category-store.js"></script>
+  <script src="core/highlight-presentation.js"></script>
   <script src="core/confidence-policy.js"></script>
   <script src="core/result-validator.js"></script>
   <script src="core/sentence-boundary.js"></script>
   <script src="core/publisher-adapters.js"></script>
   <script src="core/article-structure.js"></script>
   <script src="core/article-extractor.js"></script>
+  <script src="core/article-bibliography.js"></script>
+  <script src="core/article-preindex.js"></script>
   <script src="core/abbreviation-extractor.js"></script>
   <script src="core/article-chat-citations.js"></script>
+  <script src="core/article-chat-attachments.js"></script>
+  <script src="core/article-chat.js"></script>
+  <script src="core/article-chat-web-sources.js"></script>
   <script src="core/publisher-diagnostics.js"></script>
   <script src="core/highlight-distribution.js"></script>
   <script src="core/supplemental-materials.js"></script>
+  <script src="core/supplemental-pdf-import-store.js"></script>
   <script src="core/figure-extractor.js"></script>
   <script src="core/figure-viewer.js"></script>
+  <script src="core/figure-image-tiles.js"></script>
   <script src="core/figure-analysis.js"></script>
+  <script src="core/figure-result-binding.js"></script>
+  <script src="core/figure-stage-diagnostics.js"></script>
+  <script src="core/faithful-page-snapshot.js"></script>
+  <script src="core/research-logic-map.js"></script>
+  <script src="core/panel-ledger.js"></script>
+  <script src="core/pdf-annotations.js"></script>
+  <script src="core/pdf-text-projection.js"></script>
+  <script src="core/pdf-ocr-text-layer.js"></script>
+  <script src="core/pdf-annotation-export.js"></script>
+  <script src="core/pdf-save-policy.js"></script>
   <script src="core/manual-annotations.js"></script>
+  <script src="core/reading-tools.js"></script>
   <script src="core/cache-planner.js"></script>
   <script src="core/review-outline.js"></script>
   <script src="core/privacy-sanitizer.js"></script>
   <script src="core/article-workspace.js"></script>
+  <script src="core/article-workspace-save.js"></script>
   <script src="core/article-archive.js"></script>
   <script src="core/export-bundle.js"></script>
+  <script src="core/evidence-first-mechanism.js"></script>
+  <script src="core/cross-figure-logic.js"></script>
+  <script src="core/mechanism-canvas-model.js"></script>
+  <script src="core/research-workbench-canvas-interaction.js"></script>
+  <script src="core/mechanism-drawing-layout.js"></script>
+  <script src="core/mechanism-drawing-ui.js"></script>
+  <script src="core/mechanism-drawing-bridge.js"></script>
+  <script src="core/mechanism-network.js"></script>
+  <script src="core/figure-workspace.js"></script>
   <script src="core/pdf-workspace.js"></script>
+  <script src="core/pdf-source-store.js"></script>
+  <script src="core/pdf-canonical-page.js"></script>
+  <script src="core/pdf-heading-extractor.js"></script>
+  <script src="core/pdf-semantic-index.js"></script>
+  <script src="core/pdf-semantic-compat.js"></script>
+  <script src="core/pdf-figure-context.js"></script>
+  <script src="core/pdf-figure-context-production.js"></script>
+  <script src="core/pdf-figure-request.js"></script>
+  <script src="core/figure-asset-registry.js"></script>
+  <script src="core/pdf-semantic-worker-client.js"></script>
+  <script src="core/pdf-semantic-sidecar.js"></script>
+  <script src="core/pdf-native-document.js"></script>
+  <script src="core/pdf-bibliography.js"></script>
+  <script src="core/pdf-article-metadata.js"></script>
+  <script src="core/pdf-figure-panel-inventory.js"></script>
+  <script src="core/pdf-native-figures.js"></script>
+  <script src="core/pdf-native-reader-state.js"></script>
   <script src="core/pdf-figure-engine.js"></script>
   <script src="core/pdf-figure-native-client.js"></script>
+  <script src="core/semantic-find.js"></script>
+  <script src="semantic-find-controller.js"></script>
+  <script src="core/translation-source.js"></script>
+  <script src="core/translation-checkpoint.js"></script>
+  <script src="core/selection-tts.js"></script>
+  <script src="core/local-translator.js"></script>
+  <script src="core/bilingual-translation-controller.js"></script>
+  <script src="bilingual-translation-content.js"></script>
+  <script src="core/operation-control.js"></script>
+  <script src="core/paragraph-note-markers.js"></script>
   <script src="content.js"></script>
+  <script src="semantic-find-content.js"></script>
   <script src="pdf-reader.js"></script>
+  <script src="pdf-reader-ui.js"></script>
+  <script src="core/sidebar-interactions.js"></script>
+  <script src="pdf-figure-page-review.js"></script>
+  <script src="pdf-reader-notices.js"></script>
+  <script type="module" src="pdf-native-reader.mjs"></script>
 </body>
 </html>

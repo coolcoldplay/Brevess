@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+require('../core/article-structure.js');
+require('../core/article-extractor.js');
+
 const {
   FIGURE_SELECTOR,
   parseFigureLabel,
@@ -9,7 +12,8 @@ const {
   splitFigureCaptionByPanelGroups,
   extractElementPanelHints,
   figureInventoryNeedsRefresh,
-  extractArticleFigures
+  extractArticleFigures,
+  extractArticleFiguresFromRecords
 } = require('../core/figure-extractor.js');
 
 test('Figure extraction keeps large MinerU Panel image groups intact', () => {
@@ -110,10 +114,65 @@ function documentWith(candidates) {
   };
 }
 
+test('builds Figure context from supplied body records without resolving images', () => {
+  const candidate = figure({
+    caption: 'Figure 6. (A) Overview. (B) Quantification.',
+    images: [image('https://journal.example/f6.jpg')]
+  });
+  let fetchCalls = 0;
+  let imageConstructorCalls = 0;
+  const previousFetch = globalThis.fetch;
+  const previousImage = globalThis.Image;
+  globalThis.fetch = () => { fetchCalls += 1; throw new Error('inventory must not fetch'); };
+  globalThis.Image = class ImageProbe {
+    constructor() { imageConstructorCalls += 1; }
+  };
+  try {
+    const [result] = extractArticleFiguresFromRecords(documentWith([candidate]), [
+      { recordType: 'body', paragraphId: 'body-1', text: 'Figure 6 demonstrates the main effect.' },
+      { recordType: 'figure-caption', paragraphId: 'caption-1', text: 'Figure 6 must not enter context.' },
+      { paragraphId: 'legacy-1', text: 'Fig. 6 confirms the legacy context projection.' }
+    ]);
+
+    assert.deepEqual(result.panelHints, ['A', 'B']);
+    assert.deepEqual(result.contextParagraphs.map(item => item.paragraphId), ['body-1', 'legacy-1']);
+    assert.strictEqual(result.element, candidate);
+    assert.strictEqual(result.captionElement, candidate.captionElement);
+    assert.strictEqual(result.imageElements[0], candidate.querySelectorAll('img')[0]);
+    assert.equal(fetchCalls, 0);
+    assert.equal(imageConstructorCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.Image = previousImage;
+  }
+});
+
+test('legacy Figure wrapper extracts only when its paragraph argument is absent', () => {
+  const candidate = figure({ caption: 'Figure 7. Inventory fixture.' });
+  const previousExtractor = globalThis.SciLLM.extractArticle;
+  let extractionCalls = 0;
+  globalThis.SciLLM.extractArticle = () => {
+    extractionCalls += 1;
+    return [{ recordType: 'body', paragraphId: 'body-7', text: 'Figure 7 is cited here.' }];
+  };
+  try {
+    assert.equal(extractArticleFigures(documentWith([candidate]), []).length, 1);
+    assert.equal(extractionCalls, 0);
+    assert.deepEqual(
+      extractArticleFigures(documentWith([candidate]))[0].contextParagraphs.map(item => item.paragraphId),
+      ['body-7']
+    );
+    assert.equal(extractionCalls, 1);
+  } finally {
+    globalThis.SciLLM.extractArticle = previousExtractor;
+  }
+});
+
 test('parses English and Chinese main Figure labels but excludes supplementary labels', () => {
   assert.deepEqual(parseFigureLabel('Figure 12. Study workflow'), {
     figureNumber: 12,
     figureCode: '12',
+    figureSeries: 'main',
     isSupplemental: false,
     figureId: 'figure-12',
     figureLabel: 'Figure 12'
@@ -122,6 +181,7 @@ test('parses English and Chinese main Figure labels but excludes supplementary l
   assert.deepEqual(parseFigureLabel('Supplementary Figure 2'), {
     figureNumber: 2,
     figureCode: 'S2',
+    figureSeries: 'supplemental',
     isSupplemental: true,
     figureId: 'figure-s2',
     figureLabel: 'Figure S2'
@@ -174,7 +234,7 @@ test('extracts, deduplicates and numerically sorts main article Figures', () => 
   assert.deepEqual(results[3].contextParagraphs.map(item => item.paragraphId), ['p2']);
 });
 
-test('filters icon-sized images and bounds related paragraph context', () => {
+test('filters icon-sized images and leaves full matching paragraphs for the prompt budget', () => {
   const candidate = figure({
     caption: 'Figure 4. Multi-panel assay.',
     images: [
@@ -190,8 +250,8 @@ test('filters icon-sized images and bounds related paragraph context', () => {
   const [result] = extractArticleFigures(documentWith([candidate]), paragraphs);
 
   assert.equal(result.imageElements.length, 1);
-  assert.equal(result.contextParagraphs.length, 6);
-  assert.ok(result.contextParagraphs.every(item => item.text.length <= 1200));
+  assert.equal(result.contextParagraphs.length, 9);
+  assert.deepEqual(result.contextParagraphs.map(item => item.text), paragraphs.map(item => item.text));
 });
 
 test('collects individual, paired, and ranged panel hints from a Figure caption', () => {
@@ -228,6 +288,35 @@ test('recognizes lowercase Nature legend markers and ranges without an LLM', () 
     extractPanelHints('Fig. 1 | Study overview. a, cohort design. b–d, UMAP and quantification. e: validation.'),
     ['A', 'B', 'C', 'D', 'E']
   );
+});
+
+test('keeps Extended Data Figures in a collision-safe supplemental series', () => {
+  assert.deepEqual(parseFigureLabel('Extended Data Figure 4. Validation cohort.'), {
+    figureNumber: 4,
+    figureCode: 'ED4',
+    figureSeries: 'extended-data',
+    isSupplemental: true,
+    figureId: 'figure-ed4',
+    figureLabel: 'Extended Data Figure 4'
+  });
+
+  const main = figure({
+    caption: 'Figure 4. Main causal experiment.',
+    images: [image('https://journal.example/f4.jpg')]
+  });
+  const extended = figure({
+    caption: 'Extended Data Figure 4. Orthogonal validation. (A-C) Replication panels.',
+    images: [image('https://journal.example/ed4.jpg')]
+  });
+  const results = extractArticleFigures(documentWith([main, extended]), [
+    { paragraphId: 'main-ref', text: 'Figure 4 establishes the causal effect.' },
+    { paragraphId: 'ed-ref', text: 'Extended Data Figure 4B confirms the result.' }
+  ]);
+
+  assert.deepEqual(results.map(item => item.figureId), ['figure-4', 'figure-ed4']);
+  assert.deepEqual(results[0].contextParagraphs.map(item => item.paragraphId), ['main-ref']);
+  assert.deepEqual(results[1].contextParagraphs.map(item => item.paragraphId), ['ed-ref']);
+  assert.deepEqual(results[1].panelHints, ['A', 'B', 'C']);
 });
 
 test('recognizes publisher legends that use bold-style bare letters after sentence boundaries', () => {
@@ -424,6 +513,172 @@ test('keeps caption-only Figures so protected or canvas images can use text evid
   assert.equal(result.caption, 'Figure 6. Caption-only mechanistic summary.');
 });
 
+test('discovers a caption-only Extended Data Figure inside an accordion', () => {
+  const captionElement = {
+    textContent: 'Extended Data Figure 7',
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getAttribute() { return ''; },
+    closest(selector) {
+      return /details|accordion/i.test(selector) ? accordion : null;
+    }
+  };
+  const expandedLegend = {
+    textContent: 'Extended Data Figure 7. (A) Cohort design. (B-D) Replication results.',
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getAttribute() { return ''; }
+  };
+  const accordion = {
+    textContent: `${captionElement.textContent} ${expandedLegend.textContent}`,
+    querySelector(selector) {
+      return /figcaption|caption|description/i.test(selector) ? expandedLegend : null;
+    },
+    querySelectorAll(selector) {
+      if (/figcaption|caption|description/i.test(selector)) return [expandedLegend];
+      return [];
+    },
+    getAttribute() { return ''; },
+    closest() { return null; }
+  };
+  const documentLike = {
+    querySelectorAll(selector) {
+      if (selector === FIGURE_SELECTOR) return [];
+      return /figcaption|caption|description|summary/i.test(selector)
+        ? [captionElement] : [];
+    }
+  };
+
+  const [result] = extractArticleFigures(documentLike, [{
+    paragraphId: 'ed-7-ref',
+    sectionTitle: 'Validation',
+    text: 'Extended Data Figure 7C provides the independent replication.'
+  }]);
+
+  assert.equal(result.figureId, 'figure-ed7');
+  assert.equal(result.figureSeries, 'extended-data');
+  assert.equal(result.isSupplemental, true);
+  assert.equal(result.element, accordion);
+  assert.equal(result.caption, expandedLegend.textContent);
+  assert.deepEqual(result.imageElements, []);
+  assert.deepEqual(result.panelHints, ['A', 'B', 'C', 'D']);
+  assert.deepEqual(result.contextParagraphs.map(item => item.paragraphId), ['ed-7-ref']);
+});
+
+test('discovers Nature title-plus-content Extended Data sections with dotted Fig labels', () => {
+  const title = { textContent: 'Extended Data Fig. 1.' };
+  const content = {
+    textContent: 'a, Quality control data. b–d, Independent validation assays. e, Rescue result.',
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getAttribute() { return ''; }
+  };
+  const section = {
+    textContent: `${title.textContent} ${content.textContent}`,
+    querySelector(selector) {
+      if (/__title|section-title|h2|h3|h4/.test(selector)) return title;
+      if (/__content|section-content/.test(selector)) return content;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (/img|panel/.test(selector)) return [];
+      return [];
+    },
+    getAttribute() { return ''; },
+    closest() { return null; }
+  };
+  const documentLike = {
+    querySelectorAll(selector) {
+      if (selector === FIGURE_SELECTOR) return [];
+      if (selector === '.c-article-section') return [section];
+      return [];
+    }
+  };
+
+  const [result] = extractArticleFigures(documentLike, [{
+    paragraphId: 'ed-1-ref',
+    sectionTitle: 'Results',
+    text: 'Extended Data Fig. 1c confirms the result.'
+  }]);
+
+  assert.equal(result.figureId, 'figure-ed1');
+  assert.equal(result.figureLabel, 'Extended Data Figure 1');
+  assert.equal(result.caption, `${title.textContent} ${content.textContent}`);
+  assert.equal(result.captionElement, content);
+  assert.deepEqual(result.panelHints, ['A', 'B', 'C', 'D', 'E']);
+  assert.deepEqual(result.contextParagraphs.map(item => item.paragraphId), ['ed-1-ref']);
+});
+
+test('discovers every nested Nature supplementary item and its data-supp-info image', () => {
+  const outerTitle = { textContent: 'Extended data figures and tables' };
+  const nestedItem = number => {
+    const title = {
+      textContent: `Extended Data Fig. ${number} Supporting validation.`,
+      getAttribute(name) {
+        if (name === 'data-supp-info-image') {
+          return `//media.springernature.com/full/s41586-026-10907-8_Fig${number + 5}_ESM.jpg`;
+        }
+        return '';
+      }
+    };
+    const description = {
+      textContent: 'a, Cohort design. b, Independent validation mice c, Rescue result.',
+      querySelector() { return null; },
+      querySelectorAll(selector) {
+        return selector === 'b,strong'
+          ? ['a', 'b', 'c'].map(textContent => ({ textContent })) : [];
+      },
+      getAttribute() { return ''; }
+    };
+    const item = {
+      textContent: `${title.textContent} ${description.textContent}`,
+      querySelector(selector) {
+        if (/supplementary__title|supp-info-link|__title|section-title|h2|h3|h4/.test(selector)) {
+          return title;
+        }
+        if (/supplementary__description|__content|section-content/.test(selector)) {
+          return description;
+        }
+        return null;
+      },
+      querySelectorAll(selector) {
+        if (/data-supp-info-image/.test(selector)) return [title];
+        if (/supplementary__description/.test(selector)) return [description];
+        return [];
+      },
+      getAttribute() { return ''; },
+      closest() { return null; }
+    };
+    return item;
+  };
+  const items = [nestedItem(1), nestedItem(2)];
+  const outerSection = {
+    querySelector(selector) {
+      return /__title|section-title|h2|h3|h4/.test(selector) ? outerTitle : null;
+    },
+    querySelectorAll(selector) {
+      return /supplementary__item/.test(selector) ? items : [];
+    }
+  };
+  const documentLike = {
+    querySelectorAll(selector) {
+      if (selector === FIGURE_SELECTOR) return [];
+      if (selector === '.c-article-section') return [outerSection];
+      return [];
+    }
+  };
+
+  const results = extractArticleFigures(documentLike, []);
+
+  assert.deepEqual(results.map(item => item.figureId), ['figure-ed1', 'figure-ed2']);
+  assert.deepEqual(results[0].panelHints, ['A', 'B', 'C']);
+  assert.equal(results[0].imageElements.length, 1);
+  assert.match(
+    results[0].imageElements[0].getAttribute('data-supp-info-image'),
+    /_Fig6_ESM\.jpg$/
+  );
+});
+
 test('keeps lazy-loaded publisher images from data-src attributes', () => {
   const lazyImage = {
     currentSrc: '',
@@ -489,7 +744,7 @@ test('does not attach Figure S5 citations to main Figure 5', () => {
   });
   const results = extractArticleFigures(documentWith([figure5, figureS5]), [
     { paragraphId: 'main', text: 'Figure 5 shows the causal intervention.' },
-    { paragraphId: 'supplement', text: 'Figure S5F shows the supporting control.' }
+    { paragraphId: 'supplement', text: 'Supplementary Figure 5F shows the supporting control.' }
   ]);
 
   assert.deepEqual(results[0].contextParagraphs.map(item => item.paragraphId), ['main']);

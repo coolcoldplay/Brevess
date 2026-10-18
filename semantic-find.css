@@ -1,0 +1,112 @@
+.sci-semantic-find {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 2147483200;
+  box-sizing: border-box;
+  display: flex;
+  width: min(430px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #d5d5d5;
+  border-radius: 0;
+  color: #202020;
+  background: #fff;
+  accent-color: #202020;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: none;
+}
+
+.sci-semantic-find[hidden] { display: none !important; }
+
+.sci-semantic-find *,
+.sci-semantic-find *::before,
+.sci-semantic-find *::after { box-sizing: border-box; }
+
+.sci-semantic-find__header,
+.sci-semantic-find__header > div,
+.sci-semantic-find__search,
+.sci-semantic-find__navigation,
+.sci-semantic-find__threshold,
+.sci-semantic-find__legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sci-semantic-find__header { justify-content: space-between; }
+.sci-semantic-find__header strong { font-size: 14px; }
+.sci-semantic-find__search input { min-width: 0; flex: 1; }
+.sci-semantic-find__navigation { flex-wrap: wrap; }
+.sci-semantic-find__navigation [data-semantic-find-role="position"] { margin-left: auto; }
+
+.sci-semantic-find button,
+.sci-semantic-find input {
+  width: auto;
+  max-width: none;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #d5d5d5;
+  border-radius: 0;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  box-shadow: none;
+  appearance: auto;
+}
+
+.sci-semantic-find button { padding: 5px 9px; cursor: pointer; }
+.sci-semantic-find button:is(:hover, :focus, :active) { color: #202020; background: #f4f4f4; box-shadow: none; }
+.sci-semantic-find button:focus:not(:focus-visible) { outline: none; }
+.sci-semantic-find button:disabled { cursor: default; opacity: .48; }
+.sci-semantic-find input[type="search"] { padding: 5px 9px; }
+.sci-semantic-find button:focus-visible,
+.sci-semantic-find input:focus-visible { outline: 2px solid #202020; outline-offset: 1px; }
+
+.sci-semantic-find__threshold { display: grid; grid-template-columns: auto minmax(56px, 1fr) 58px; margin: 0; padding: 0; max-width: none; color: #646464; }
+.sci-semantic-find__threshold input[type="range"] { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; appearance: auto; overflow: visible; }
+.sci-semantic-find__threshold input[type="number"] { width: 100%; min-width: 0; padding: 4px 6px; }
+/* Host sites may globally restyle native sliders; reset only our own parts. */
+.sci-semantic-find input[type="range"]::-webkit-slider-runnable-track { all: revert; }
+.sci-semantic-find input[type="range"]::-webkit-slider-thumb { all: revert; }
+
+.sci-semantic-find__legend { color: #646464; font-size: 12px; }
+.sci-semantic-find__legend-bar {
+  width: 54px;
+  height: 10px;
+  flex: none;
+  border: 1px solid rgba(181, 118, 0, .3);
+  border-radius: 0;
+  background: linear-gradient(90deg, rgba(255, 187, 35, .18), rgba(255, 187, 35, .88));
+}
+
+.sci-semantic-find [data-semantic-find-role="progress"],
+.sci-semantic-find [data-semantic-find-role="scope"],
+.sci-semantic-find [data-semantic-find-role="status"] {
+  overflow-wrap: anywhere;
+  color: #646464;
+  font-size: 12px;
+}
+
+.sci-semantic-find [data-semantic-find-role="status"][data-state="error"] { color: #a13434; }
+.sci-semantic-find [data-semantic-find-role="status"][data-state="success"] { color: #28724b; }
+.sci-semantic-find [data-semantic-find-role="status"][data-state="working"] { color: #646464; }
+
+@media (max-width: 460px) {
+  .sci-semantic-find {
+    top: 8px;
+    right: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .sci-semantic-find__search { align-items: stretch; }
+  .sci-semantic-find__navigation [data-semantic-find-role="score"] { width: 100%; }
+}

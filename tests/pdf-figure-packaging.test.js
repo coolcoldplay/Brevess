@@ -19,14 +19,28 @@ test('PDF Figure engine and runtime are pinned by version and SHA-256', () => {
   assert.match(runtime.archiveSha256, /^[a-f0-9]{64}$/);
 });
 
-test('Edge release keeps PDF reader in the store ZIP and native binaries only in companion ZIP', () => {
+test('Edge release keeps PDF reader in the store ZIP and native binaries only in companion ZIP', async () => {
   const release = read('scripts/build-edge-store-release.ps1');
-  assert.match(release, /'pdf-reader\.html', 'pdf-reader\.js', 'pdf-reader\.css'/);
-  assert.match(release, /foreach \(\$directory in @\('pdffigures2', 'runtime'\)\)/);
-  assert.match(release, /Copy-Item -LiteralPath \$source -Destination \$bridgeStage -Recurse/);
-  const extensionCopy = release.slice(0, release.indexOf('$extensionZip'));
-  assert.doesNotMatch(extensionCopy, /native-host\\runtime/);
-  assert.doesNotMatch(extensionCopy, /pdffigures2\.jar/);
+  const { releaseInventory } = await import('../scripts/release-inventory.mjs');
+  const store = releaseInventory(root, 'store').map(file => file.path);
+  const companion = releaseInventory(root, 'companion').map(file => file.path);
+  for (const filename of [
+    'pdf-reader.html',
+    'pdf-reader.js',
+    'pdf-reader-ui.js',
+    'pdf-reader-notices.js',
+    'pdf-reader.css',
+    'pdf-native-reader.mjs'
+  ]) {
+    assert.ok(store.includes(filename), filename);
+  }
+  assert.match(release, /Copy-BrevessReleaseFiles[^\r\n]*-Target \$extensionStage -Profile store/);
+  assert.match(release, /Copy-BrevessReleaseFiles[^\r\n]*-Target \$bridgeStage -Profile companion/);
+  assert.equal(store.some(file => file.startsWith('native-host/') || /\.(exe|jar)$/i.test(file)), false);
+  for (const file of ['bin/brevess-codex-host.exe', 'runtime/bin/java.exe',
+    'pdffigures2/pdffigures2.jar', 'pdffigures2/brevess-pdf-fallback.jar']) {
+    assert.ok(companion.includes(file), file);
+  }
 });
 
 test('local companion installer copies PDF engine and bundled Java beside native host', () => {

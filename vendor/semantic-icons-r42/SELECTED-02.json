@@ -1,0 +1,39 @@
+{
+  "scheme": 2,
+  "name": "结构线条",
+  "revision": "R4.3",
+  "userSelection": "用户选定02；保留高亮划句与解图柱状图，问答按最新要求恢复单气泡。",
+  "preview": "http://127.0.0.1:8731/semantic-r4/index.html?scheme=2",
+  "evidence": "evidence/single-chat/SUMMARY.json",
+  "screenshot": "evidence/single-chat/final-24.png",
+  "files": [
+    {
+      "path": "resources.js",
+      "sha256": "57631ec2ac457efcd7c9c3aa301a341e0baad76f15522a6341198b58dcd96e37"
+    },
+    {
+      "path": "icons.js",
+      "sha256": "680345f25fe736cc09557a1f5212fb91045b3d788394720b0745ae118f693483"
+    },
+    {
+      "path": "icons.css",
+      "sha256": "c52f59da23a6a49827c288b34a8d0bae703b3f1749f49b3dfd6322c0e517cdba"
+    },
+    {
+      "path": "vendor/lucide/LICENSE",
+      "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    },
+    {
+      "path": "vendor/tabler/LICENSE",
+      "sha256": "b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db"
+    },
+    {
+      "path": "vendor/mdi/LICENSE",
+      "sha256": "3bae6305bcaa6d10219b999f65c342034c2d40b1c0e8567fa08605e73ccba829"
+    },
+    {
+      "path": "vendor/mdi/LICENSE-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  ]
+}

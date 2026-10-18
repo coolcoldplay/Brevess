@@ -1,0 +1,60 @@
+{
+  "package": "@tabler/icons",
+  "version": "3.49.0",
+  "license": "MIT",
+  "repository": "https://github.com/tabler/tabler-icons",
+  "tarball": "https://registry.npmjs.org/@tabler/icons/-/icons-3.49.0.tgz",
+  "integrity": "sha512-l+GnSkFETx0U26icxv1VUFnxxiTqXfCcVRiRAnyMwibupM2S2L/hSaZ9gmSgz01rkrsH/93NvLsxykqdanc6lw==",
+  "integrityVerified": true,
+  "icons": [
+    {
+      "name": "list-details",
+      "packagePath": "package/icons/outline/list-details.svg",
+      "sha256": "0962fc59e4cdd6933d1e242d94c1920a1a56ec8c55773df67ab46b27e97c79bf",
+      "bytes": 614
+    },
+    {
+      "name": "highlight",
+      "packagePath": "package/icons/outline/highlight.svg",
+      "sha256": "e949cb45abb1dbd6820a82ac76813ac1a3353cb6588387867ec43b289f1e3d81",
+      "bytes": 497
+    },
+    {
+      "name": "photo-scan",
+      "packagePath": "package/icons/outline/photo-scan.svg",
+      "sha256": "389a7ca96eb34dec2520351874f7c91a0ba031c83099056c426de3231cdfb0f8",
+      "bytes": 659
+    },
+    {
+      "name": "message-2",
+      "packagePath": "package/icons/outline/message-2.svg",
+      "sha256": "c17d3c91f77f51eaf9cf9174f724c6508fec8e7000cec32c3df8f57471fa8716",
+      "bytes": 483
+    },
+    {
+      "name": "message-chatbot",
+      "packagePath": "package/icons/outline/message-chatbot.svg",
+      "sha256": "eadb641ae1f10e8bea321577d984065661e7563a0e2da3a92e85c9381c8bbd1e",
+      "bytes": 535
+    },
+    {
+      "name": "notes",
+      "packagePath": "package/icons/outline/notes.svg",
+      "sha256": "6b9fbb63e9b9083710398a14a359027e9c54486be7c57501a2afbb7d61820247",
+      "bytes": 498
+    },
+    {
+      "name": "notebook",
+      "packagePath": "package/icons/outline/notebook.svg",
+      "sha256": "a45d86c493173f0129412077c89f6bb5d65c20fc9b02c73cd30e9f73c52f1688",
+      "bytes": 483
+    },
+    {
+      "name": "book-2",
+      "packagePath": "package/icons/outline/book-2.svg",
+      "sha256": "50b44063c67eaf31e8bca9d8a026767e32117cf5fed3ad61ccc2545fe178059a",
+      "bytes": 458
+    }
+  ],
+  "treatment": "Complete source geometry. Only root sizing/class/id excluded from runtime attrs; original SVG bytes retained."
+}

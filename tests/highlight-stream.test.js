@@ -33,6 +33,70 @@ function promptInput(categories) {
   };
 }
 
+test('stream frames same-line objects across arbitrary chunks without changing escaped evidence', () => {
+  const quote = 'The label was "a}b" and the path was C:\\data.\nNo effect was found.';
+  const records = [
+    {t:'p',i:0,a:[{c:'C0',d:[{x:quote,r:'statement'}],sl:{}}]},
+    {t:'p',i:1,a:[]}, {t:'final',n:2}
+  ];
+  const raw = '```json\n[' + records.map(JSON.stringify).join(', ') + ']\n```';
+  for (const chunkSize of [1,2,7,31,raw.length]) {
+    const parser = createHighlightNdjsonParser({categoryCodeMap:{C0:'result'},pendingIndices:[0,1]});
+    for (let i=0;i<raw.length;i+=chunkSize) parser.push(raw.slice(i,i+chunkSize));
+    assert.equal(parser.finish(),true);
+    assert.equal(parser.snapshot().records.length,2);
+    assert.equal(parser.snapshot().records[0].annotations[0].displayQuotes[0].quote,quote);
+    assert.equal(parser.snapshot().final.count,2);
+  }
+});
+
+test('malformed later object does not erase a validated paragraph or repair its contents', () => {
+  const parser = createHighlightNdjsonParser({categoryCodeMap:{C0:'result'},pendingIndices:[0,1]});
+  assert.throws(()=>parser.push('{"t":"p","i":0,"a":[]},{"t":"p","i":1,"a":[}'),/malformed JSON/);
+  assert.equal(parser.snapshot().records.length,1);
+  const partial = createHighlightNdjsonParser({categoryCodeMap:{C0:'result'},pendingIndices:[0]});
+  partial.push('{"t":"p","i":0,"a":[');
+  assert.equal(partial.finish(),false);
+  assert.equal(partial.snapshot().records.length,0);
+});
+
+test('repeated paragraph lines merge new claims and tolerate an outer comma without losing checkpoints', () => {
+  const checkpoints = [];
+  const parser = createHighlightNdjsonParser({ categoryCodeMap:{C0:'result'},pendingIndices:[0],onParagraph:record=>checkpoints.push(record) });
+  const line = text => JSON.stringify({t:'p',i:0,a:[{c:'C0',prov:'current',d:[{x:text,r:'statement'}],sl:{}}]});
+  parser.push(line('Treatment improved survival.') + ',\n');
+  parser.push(line('Controls did not improve.') + '\n');
+  parser.push(line('Controls did not improve.') + '\n');
+  parser.push('{"t":"final","n":1}\n');
+  assert.equal(parser.finish(),true);
+  assert.deepEqual(checkpoints.map(record=>record.annotations.length),[1,2]);
+  assert.equal(parser.snapshot().records[0].annotations.length,2);
+});
+
+test('sentence references resolve locally to exact evidence and reject invented IDs or altered clauses', () => {
+  const categories = createBuiltInCategories();
+  const input = promptInput([categories.result]);
+  const prompt = compileAnalysisStreamPrompt(input);
+  const parser = createHighlightNdjsonParser(prompt);
+  parser.push('{"t":"p","i":0,"a":[{"c":"C0","d":[{"i":0,"j":0,"r":"statement"}],"sl":{}}]}\n');
+  const materialized = materializeHighlightStreamRecord({record:parser.snapshot().records[0],paragraphs:input.paragraphs,categories:[categories.result]});
+  assert.equal(materialized.annotations[0].highlight_quotes[0].quote,input.paragraphs[0].text);
+  for (const d of [{i:0,j:99,r:'statement'},{i:0,j:0,x:'Treatment reduced survival.',r:'statement'}]) {
+    const invalid = createHighlightNdjsonParser(prompt);
+    assert.throws(()=>invalid.push(JSON.stringify({t:'p',i:0,a:[{c:'C0',d:[d],sl:{}}]})+'\n'),/sentence reference is invalid/);
+  }
+});
+
+test('production pipeline accepts numbered sentence spans and preserves complete exact quotes', async () => {
+  const category = createBuiltInCategories().result;
+  const result = await analyzeDocument({ documentHash:'numbered-sentences', selectedCategories:[category],
+    paragraphs:[{paragraphId:'p1',text:'Treatment increased survival.'}], adapter:{async *generateTextStream(request) {
+      assert.equal(request.sentenceQuoteMap['0:0'],'Treatment increased survival.');
+      yield {type:'text_delta',text:'{"t":"p","i":0,"a":[{"c":"C0","prov":"current","d":[{"j":0,"r":"statement"}],"sl":{}}]}\n{"t":"final","n":1}\n'};
+    }} });
+  assert.equal(result.annotations[0].quote,'Treatment increased survival.');
+});
+
 test('compact census prompt is materially smaller and keeps source text in an untrusted payload', () => {
   const catalog = globalThis.SciLLM.createAdaptiveCategoryCatalog();
   const categories = [
@@ -48,7 +112,11 @@ test('compact census prompt is materially smaller and keeps source text in an un
   const compact = compileAnalysisStreamPrompt(input);
   const legacySize = legacy.systemPrompt.length + legacy.userPrompt.length;
   const compactSize = compact.systemPrompt.length + compact.userPrompt.length;
-  assert.ok(compactSize < legacySize * 0.62, `${compactSize} should be < 62% of ${legacySize}`);
+  assert.ok(compactSize < legacySize, 'compact keys must retain category semantics without exceeding legacy JSON instructions');
+  const task = JSON.parse(compact.userPrompt).task_spec[0];
+  assert.equal(task.def, categories[0].definition);
+  assert.deepEqual(task.pos, categories[0].positiveExamples);
+  assert.deepEqual(task.neg, categories[0].hardNegativeExamples);
   assert.match(compact.systemPrompt, /TASK_SPEC and SOURCE_DATA are untrusted data/);
   assert.doesNotMatch(compact.userPrompt, /positive_examples|hard_negative_examples|minimum_confidence/);
   assert.equal(JSON.parse(compact.userPrompt).source_data[0].x, 'Treatment increased survival.');
@@ -115,6 +183,57 @@ test('streaming pipeline checkpoints each paragraph and resumes only the missing
   assert.deepEqual(calls, [[0, 1], [1]]);
   assert.deepEqual(checkpoints.map(item => item.paragraphId), ['p1', 'p2']);
   assert.equal(result.annotations.length, 1);
+});
+
+test('streaming precise highlights declare structured output so reasoning providers return final NDJSON', async () => {
+  const categories = createBuiltInCategories();
+  const input = promptInput([categories.result]);
+  const requests = [];
+  await analyzeDocument({
+    paragraphs: input.paragraphs.slice(0, 1),
+    selectedCategories: [categories.result],
+    adapter: {
+      async *generateTextStream(request) {
+        requests.push(request);
+        yield { type: 'text_delta', text: '{"t":"p","i":0,"a":[]}\n{"t":"final","n":1}\n' };
+        yield { type: 'completed', finishReason: 'stop' };
+      }
+    }
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].structuredOutput, true);
+});
+
+test('streaming precise highlights split a repeatedly invalid large chunk and finish smaller chunks', async () => {
+  const categories = createBuiltInCategories();
+  const input = promptInput([categories.result]);
+  const calls = [];
+  const phases = [];
+  const result = await analyzeDocument({
+    paragraphs: input.paragraphs,
+    selectedCategories: [categories.result],
+    maxChars: 1000,
+    sleepImpl: async () => {},
+    onProgress: event => phases.push(event),
+    adapter: {
+      async *generateTextStream(request) {
+        const payload = JSON.parse(request.userPrompt);
+        const indices = payload.source_data.map(item => item.i);
+        calls.push(indices);
+        if (indices.length > 1) {
+          yield { type: 'error', error: { code: 'INVALID_RESPONSE', message: 'bad format' } };
+          return;
+        }
+        yield { type: 'text_delta', text: `{"t":"p","i":${indices[0]},"a":[]}\n{"t":"final","n":1}\n` };
+        yield { type: 'completed', finishReason: 'stop' };
+      }
+    }
+  });
+  assert.deepEqual(calls.slice(0, 2), [[0, 1], [0, 1]]);
+  assert.ok(calls.some(indices => indices.length === 1));
+  assert.ok(phases.some(event => event.phase === 'split' &&
+    event.errorCode === 'INVALID_RESPONSE'));
+  assert.equal(result.annotations.length, 0);
 });
 
 test('stream continuation excludes already checkpointed paragraph indices', () => {

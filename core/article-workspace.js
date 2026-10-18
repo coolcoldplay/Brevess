@@ -17,9 +17,10 @@
     throw error;
   }
 
-  function fail(code) {
+  function fail(code, details = null) {
     const error = new Error(code);
     error.code = code;
+    if (details && typeof details === 'object') Object.assign(error, details);
     throw error;
   }
 
@@ -79,19 +80,22 @@
     return normalizeText(value, 500).toLocaleLowerCase('en-US');
   }
 
-  function assertWorkspaceSafeValue(value, depth = 0, seen = new Set()) {
+  function assertWorkspaceSafeValue(value, depth = 0, seen = new Set(), path = []) {
     if (depth > 40) fail('WORKSPACE_VALUE_TOO_DEEP');
     if (value === null || value === undefined || typeof value !== 'object') return value;
     if (seen.has(value)) fail('WORKSPACE_VALUE_CYCLIC');
     seen.add(value);
     if (Array.isArray(value)) {
-      value.forEach(item => assertWorkspaceSafeValue(item, depth + 1, seen));
+      value.forEach((item, index) =>
+        assertWorkspaceSafeValue(item, depth + 1, seen, [...path, String(index)]));
     } else {
       for (const [key, item] of Object.entries(value)) {
         if (privacy.isCredentialKey(key)) {
-          fail('WORKSPACE_CONTAINS_CREDENTIALS');
+          fail('WORKSPACE_CONTAINS_CREDENTIALS', {
+            keyPath: [...path, key].join('.').slice(0, 500)
+          });
         }
-        assertWorkspaceSafeValue(item, depth + 1, seen);
+        assertWorkspaceSafeValue(item, depth + 1, seen, [...path, key]);
       }
     }
     seen.delete(value);
@@ -214,7 +218,11 @@
     assertWorkspaceSafeValue(input);
     const id = `workspace:${workspaceHash(input.workspaceId)}`;
     const directoryName = normalizeText(input.directoryName, 180);
-    const suffix = directoryName.split('--').at(-1)?.toLocaleLowerCase('en-US') || '';
+    // The title can itself end in '-' (including at the 92-character limit).
+    // Use the final delimiter so overlapping hyphens do not enter the hash.
+    const suffixStart = directoryName.lastIndexOf('--');
+    const suffix = (suffixStart < 0 ? directoryName : directoryName.slice(suffixStart + 2))
+      .toLocaleLowerCase('en-US');
     if (!directoryName || suffix.length < 12 || !workspaceHash(id).startsWith(suffix)) {
       fail('INVALID_WORKSPACE_DIRECTORY');
     }

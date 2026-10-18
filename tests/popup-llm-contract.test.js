@@ -2,9 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 function read(file) {
   return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+}
+
+function functionSource(script, name) {
+  let start = script.indexOf('function ' + name + '(');
+  assert.ok(start >= 0, `actual ${name} is present`);
+  if (script.slice(start - 6, start) === 'async ') start -= 6;
+  const next = /\n(?:async )?function /u.exec(script.slice(start + 1));
+  return script.slice(start, next ? start + 1 + next.index : undefined);
 }
 
 test('popup offers explicit regex and LLM modes plus a direct settings gear', () => {
@@ -20,12 +29,38 @@ test('popup offers explicit regex and LLM modes plus a direct settings gear', ()
   assert.match(html, /id="llmDiagnostics"/);
 });
 
-test('popup preserves completed LLM chunks and retries only unfinished work', () => {
+test('popup preserves completed LLM chunks and retries only unfinished work', async () => {
   const html = read('popup.html');
   const script = read('popup.js');
   assert.match(html, /core\/tab-messenger\.js/);
   assert.match(script, /sendTabMessageWithRecovery/);
-  assert.doesNotMatch(script, /chrome\.tabs\.sendMessage/);
+  // The sole direct transport is a read-only current-frame notification identity
+  // probe. Analysis still goes through the activated-tab recovery boundary.
+  const probeSource = functionSource(script, 'recordCurrentArticleNotification');
+  assert.doesNotMatch(script.replace(probeSource, ''), /chrome\.tabs\.sendMessage/);
+  const calls = [], notifications = [], attributes = { documentIdentity: 'current-doc', navigationIdentity: 'https://paper.test/a' };
+  const chrome = { runtime: { id: 'extension-id' }, tabs: { sendMessage: async (...args) => {
+    calls.push({ probe: args }); return attributes;
+  } } };
+  const context = vm.createContext({ chrome, tabContextSequence: 1,
+    activePanelTabContext: { tabId: 7, activated: true, url: attributes.navigationIdentity },
+    SciLLM: { sendTabMessageWithRecovery: async (...args) => { calls.push({ recovered: args }); return { success: true }; },
+      normalizeTabDocumentUrl: value => value },
+    recordSidePanelNotification: (...args) => notifications.push(args) });
+  vm.runInContext(functionSource(script, 'sendTabMessage') + '\n' + probeSource, context);
+  const message = { action: 'analyzeArticleWithLLM', operationId: 'resume-unfinished' }, options = { expectedUrl: attributes.navigationIdentity };
+  assert.equal((await context.sendTabMessage(7, message, options)).success, true);
+  assert.deepEqual(calls[0].recovered, [chrome, 7, message, options]);
+  await assert.rejects(context.sendTabMessage(8, message), { code: 'PANEL_TAB_NOT_ACTIVATED' });
+  context.activePanelTabContext.activated = false;
+  await assert.rejects(context.sendTabMessage(7, message), { code: 'PANEL_TAB_NOT_ACTIVATED' });
+  assert.equal(calls.length, 1, 'inactive/wrong-tab requests cannot reach any transport');
+  context.activePanelTabContext.activated = true;
+  const sender = { id: chrome.runtime.id, frameId: 0, tab: { id: 7 }, url: attributes.navigationIdentity };
+  assert.equal(await context.recordCurrentArticleNotification({ documentIdentity: 'current-doc', message: 'saved' }, sender), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].probe)), [7, { action: 'getContentScriptRevision' }, { frameId: 0 }]);
+  assert.equal(await context.recordCurrentArticleNotification({ documentIdentity: 'old-doc', message: 'stale' }, sender), false);
+  assert.equal(notifications.length, 1, 'same-URL old document cannot publish a notification');
   assert.match(script, /analyzeArticleWithLLM/);
   assert.match(script, /LLM_UPDATE_PREFERENCES/);
   assert.match(script, /options\.html#categoryWorkspace/);
@@ -59,7 +94,7 @@ test('an unavailable LLM mode turns the primary action into a settings CTA', () 
   assert.match(script, /chrome\.runtime\.openOptionsPage\(\)/);
 });
 
-test('popup article chat allows queueing and preserves the composer while blocks stream', () => {
+test('popup article chat preserves streamed blocks and turns the primary send action into cancel', () => {
   const html = read('popup.html');
   const script = read('popup.js');
   const start = script.indexOf('function articleChatStatusText');
@@ -72,7 +107,9 @@ test('popup article chat allows queueing and preserves the composer while blocks
   assert.match(chat, /function renderArticleChatBlock/);
   assert.match(chat, /selectedProfileId:\s*profileId/);
   assert.doesNotMatch(chat, /if \(articleChatRequestPending\) return;[\s\S]{0,700}articleChatQuestion/);
-  assert.doesNotMatch(chat, /send\.disabled = loading/);
+  assert.match(chat, /send\.disabled = loading \? false/);
+  assert.match(chat, /send\.dataset\.mode = loading \? 'cancel' : 'send'/);
+  assert.match(chat, /loading \? '取消回答' : '发送'/);
 });
 
 test('popup formats effective-route fallback without exposing provider secrets', () => {
@@ -178,6 +215,7 @@ test('workspace refresh and cached-tab restore resume the shared Figure progress
   );
   assert.match(script, /function mergeRefreshedFigureCatalog/);
   assert.match(refresh, /mergeRefreshedFigureCatalog\(/);
+  assert.match(refresh, /forceRefresh:\s*forceRefresh\s*\|\|\s*announce\s*\|\|\s*Boolean\(figureRefreshResult\)/);
   assert.match(script, /extractorProbeFigureId/);
   assert.match(refresh, /resumeFigureProgressFromWorkspaceSnapshot\(snapshot/);
   assert.match(script, /hasRunningFigureProgress\(status\)/);
@@ -227,17 +265,52 @@ test('side panel follows the active tab without activating untouched papers', ()
   assert.doesNotMatch(boot, /await initializeCurrentArticle\(\)/);
 });
 
-test('popup carries the prepared document identity into analysis actions without paper-type selection', () => {
+test('popup carries the prepared document identity into analysis actions without paper-type selection', async () => {
   const script = read('popup.js');
   assert.doesNotMatch(script, /type:\s*'LLM_SET_STUDY_TYPE'/);
   assert.match(
     script,
     /action:\s*'analyzeArticleWithLLM'[\s\S]{0,240}documentId:\s*preparedDocumentState\.documentId/
   );
-  assert.match(
-    script,
-    /action:\s*'analyzeReviewOutlineWithLLM'[\s\S]{0,240}documentId:\s*preparedDocumentState\.documentId/
-  );
+  // Preserve the historical test name. Navigation now uses the independently
+  // verified workspace identity that owns its scope, not the preparation alias.
+  const guard = require('../core/panel-context-guard.js');
+  for (const mutation of ['none', 'documentId', 'documentHash', 'live-proof']) {
+    const snapshot = { documentId: 'canonical-A', documentHash: 'hash-A', url: 'https://paper.test/a', revision: 4,
+      nodes: [{ analysisSelected: true, analysisSectionIds: ['section-A'] }] };
+    const sent = [], accepted = [], statuses = [];
+    const c = vm.createContext({ SciLLM: { ...guard, normalizeTabDocumentUrl: value => value },
+      activePanelTabContext: { tabId: 7, key: '7|https://paper.test/a', url: snapshot.url, activated: true, tabContextSequence: 1 },
+      reviewOutlineTaskGeneration: 1, reviewOutlineState: {}, currentWorkspaceSnapshot: snapshot,
+      preparedDocumentState: { documentId: 'prepared-other-ID', documentHash: 'prepared-other-hash' },
+      manualAnnotationState: null, sidebarRuntimeDocumentBinding: null, workspaceAnalysisSelectionPending: new Map(),
+      requireUsableLlm: () => true, isSidebarOperationStopping: () => false,
+      showStatus: (...args) => statuses.push(args), updateReviewOutlineButton() {},
+      startReviewOutlineProgressPolling() {}, stopReviewOutlineProgressPolling() {},
+      refreshReviewOutlineProgress: async () => ({}), refreshArticleWorkspace: async () => {}, persistCurrentArticleArchive: async () => {},
+      acceptSidebarRuntimeTask: task => accepted.push(task) });
+    c.sendTabMessage = async (_tabId, message) => {
+      if (message.action === 'getContentScriptRevision') {
+        if (mutation === 'documentId' || mutation === 'documentHash') c.currentWorkspaceSnapshot = { ...snapshot, [mutation]: 'foreign' };
+        return { documentIdentity: 'world-A', navigationIdentity: snapshot.url };
+      }
+      if (message.action === 'getArticleWorkspaceSnapshot') return { success: true,
+        snapshot: mutation === 'live-proof' ? { ...snapshot, documentHash: 'foreign' } : snapshot };
+      assert.equal(message.action, 'analyzeReviewOutlineWithLLM'); sent.push(message);
+      return { success: true, outline: { paragraphCount: 1 } };
+    };
+    vm.runInContext(['capturePanelContext', 'isCurrentPanelContext', 'isCurrentReviewOutlineTask',
+      'selectedWorkspaceAnalysisSectionIds', 'refreshSidebarRuntimeDocumentBinding', 'runReviewOutlineAnalysis']
+      .map(name => functionSource(script, name)).join('\n'), c);
+    await c.runReviewOutlineAnalysis({ operationId: 'navigation-identity-check', scopeSectionIds: ['section-A'], scopeSelectionProvided: true });
+    assert.equal(sent.length, mutation === 'none' ? 1 : 0, mutation);
+    assert.equal(accepted.length, mutation === 'none' ? 1 : 0, mutation);
+    if (mutation === 'none') {
+      assert.equal(sent[0].documentId, snapshot.documentId); assert.equal(sent[0].documentHash, snapshot.documentHash);
+      assert.equal(sent[0].expectedDocumentIdentity, 'world-A'); assert.equal(sent[0].expectedNavigationIdentity, snapshot.url);
+      assert.deepEqual(Array.from(sent[0].scopeSectionIds), ['section-A']);
+    } else assert.ok(statuses.some(item => item[0].includes('REVIEW_OUTLINE_SCOPE_STALE')));
+  }
 });
 
 test('popup exposes a persistent LLM confidence slider', () => {
@@ -262,14 +335,31 @@ test('popup exposes Figure LLM tools independently from the selected highlight e
   assert.match(html, /全部解图/);
   assert.match(script, /function updateFigureButton/);
   assert.match(script, /function hasUsableLlm/);
-  assert.match(script, /figureButton\.hidden\s*=\s*false/);
-  assert.match(script, /figureButton\.disabled\s*=\s*running/);
+  for (const analysisMode of ['regex', 'llm']) {
+    for (const ready of [false, true]) {
+      for (const running of [false, true]) {
+        const attrs = new Map(), button = { hidden: false, disabled: false, textContent: '', dataset: { moduleAction: '' },
+          classList: { toggle() {} }, setAttribute: (key, value) => attrs.set(key, String(value)),
+          getAttribute: key => attrs.get(key) };
+        const context = vm.createContext({ analysisMode,
+          document: { getElementById: id => id === 'analyzeFiguresFromFigures' ? button : null },
+          hasUsableLlm: () => ready, hasRunningFigureProgress: state => state.running,
+          figureAnalysisState: { running }, figureSelectedIds: new Set(), crossFigureLogicRunning: false,
+          figureButtonProgressLabel: () => '已存 2 Panel', llmUnavailableMessage: () => '请配置图解模型',
+          updateFigureTaskControls() {} });
+        vm.runInContext(functionSource(script, 'setModuleActionLabel') + '\n' + functionSource(script, 'updateFigureButton'), context);
+        context.updateFigureButton();
+        assert.equal(button.hidden, true, 'legacy action stays hidden in either highlight engine');
+        assert.equal(button.disabled, running, 'Figure running state is independent of highlight engine');
+        assert.equal(button.getAttribute('aria-busy'), String(running));
+        if (!ready) assert.equal(button.title, '请配置图解模型');
+      }
+    }
+  }
   assert.doesNotMatch(script, /figureButton\.hidden\s*=\s*!isLlm/);
   assert.match(script, /action:\s*'analyzeFiguresWithLLM'/);
   assert.match(script, /逐图解读完成/);
-  const handlerStart = script.indexOf('async function runFigureAnalysis');
-  const handlerEnd = script.indexOf('function setupEventListeners', handlerStart);
-  const handler = script.slice(handlerStart, handlerEnd);
+  const handler = functionSource(script, 'runFigureAnalysis');
   assert.doesNotMatch(handler, /applyRegexOnTab|mode:\s*'regex'/);
   assert.match(css, /\.btn-figure/);
 });
@@ -384,7 +474,25 @@ test('new supplemental Figure dialog combines image and caption into one manual 
   assert.match(script, /updateSupplementalFigureDraft/);
   assert.match(script, /deleteSupplementalFigure/);
   assert.match(script, /normalizeManualMetadata/);
-  assert.match(script, /PDF 第 \$\{Math\.floor\(Number\(figure\.sourcePage\)\)\} 页/);
+  const tools = loadSupplementalFigureImportTools();
+  assert.equal(tools.normalizeManualMetadata({ sourcePage: '7' }).sourcePage, 7);
+  assert.equal(tools.normalizeManualMetadata({ sourcePage: '' }).sourcePage, 0);
+  for (const sourcePage of [-1, 1.5, 'invalid']) {
+    assert.throws(() => tools.normalizeManualMetadata({ sourcePage }), { code: 'MANUAL_FIGURE_PAGE' });
+  }
+  const pageStart = script.indexOf('const visualPages = result?.pdfEvidenceBinding');
+  const pageEnd = script.indexOf("details.appendChild(createWorkspaceElement('p', 'workspace-source-note'", pageStart);
+  assert.ok(pageStart >= 0 && pageEnd > pageStart, 'actual rendered PDF evidence note is present');
+  const pageNote = new Function('figure', 'result', `${script.slice(pageStart, pageEnd)}\nreturn sourceNote;`);
+  const figure = { sourcePage: 7, artworkPageNumbers: [8, 9], artworkCoverage: 'complete' };
+  assert.equal(pageNote(figure, { basis: 'vision_text', pdfEvidenceBinding: {
+    visualEvidenceSet: { requiredArtworkPageNumbers: [10, 11] }, assetProof: { pageNumbers: [5] }
+  } }), '图像依据：PDF 第 10、11 页原页。');
+  assert.equal(pageNote(figure, { basis: 'vision_text', pdfEvidenceBinding: { assetProof: { pageNumbers: [5] } } }), '图像依据：PDF 第 5 页原页。');
+  assert.equal(pageNote(figure, null), '已核对图像页：8、9。');
+  assert.equal(pageNote({ sourcePage: 7 }, { basis: 'vision_text' }), '图像依据：PDF 第 7 页原页。');
+  assert.equal(pageNote(figure, { basis: 'caption_context' }), '文字依据：图注与相关正文（未读取图片）。');
+  assert.equal(pageNote({ sourcePage: 7 }, null), '图像范围待核对；图注所在页可能不包含完整 Figure。');
   assert.ok(html.indexOf('core/supplemental-materials.js') < html.indexOf('popup.js'));
   assert.match(css, /\.supplemental-figure-import-dialog/);
   assert.match(css, /\[data-supplemental-source-pane\]\[hidden\]/);
@@ -652,65 +760,18 @@ test('supplemental import rejects explicit failure responses from live and close
   );
 });
 
-test('supplemental PDF opening consumes the validated target tuple without active-tab fallback', async () => {
+test('supplemental PDF opening consumes the validated target tuple without foreground navigation', () => {
   const script = read('popup.js');
   const start = script.indexOf('async function openSupplementalMaterialPdf');
   const end = script.indexOf('let supplementalFigureImportTarget', start);
   const source = script.slice(start, end);
-  assert.match(source, /openSupplementalMaterialPdf\(material, target\)/);
+  assert.match(source, /openSupplementalMaterialPdf\(material, target, selectedFile = null\)/);
   assert.match(source, /validateTarget\(target\)/);
   assert.match(source, /target\.targetArticleTabId/);
-  assert.match(source, /已在新标签页打开/);
+  assert.match(source, /active:\s*false/);
+  assert.match(source, /supplementalImportToken/);
   assert.doesNotMatch(source, /指定论文标签页/);
   assert.doesNotMatch(source, /activePanelTabContext|currentWorkspaceSnapshot|chrome\.tabs\.query/);
-  const created = [];
-  const bindings = [];
-  const target = {
-    workspaceId: `workspace:${'e'.repeat(64)}`,
-    workspaceGeneration: 2,
-    targetArticleTabId: 55,
-    canonicalUrl: 'https://journal.example/paper',
-    documentHash: `sha256:${'f'.repeat(64)}`
-  };
-  const openPdf = new Function(
-    'supplementalFigureImportTools', 'SciLLM', 'chrome', 'showStatus',
-    `${source}\nreturn openSupplementalMaterialPdf;`
-  )(
-    { validateTarget: value => ({ ...value }) },
-    {
-      createSupplementalPdfReaderUrl: (_getUrl, binding) => {
-        bindings.push(binding);
-        return 'chrome-extension://test/pdf-reader.html';
-      },
-      markTabActivated: async () => {}
-    },
-    {
-      runtime: { getURL: value => `chrome-extension://test/${value}` },
-      storage: { session: {} },
-      tabs: {
-        get: async () => assert.fail('must not inspect or reuse the paper tab'),
-        update: async () => assert.fail('must not overwrite the paper tab'),
-        create: async options => {
-          created.push(options);
-          return { id: 99, ...options };
-        }
-      }
-    },
-    () => {}
-  );
-  await openPdf({ materialId: 'supplement-s1', title: 'Supplement S1', url: '' }, target);
-  assert.deepEqual(created, [{
-    url: 'chrome-extension://test/pdf-reader.html',
-    active: true
-  }]);
-  assert.deepEqual(bindings[0], {
-    sourceUrl: '',
-    title: 'Supplement S1',
-    materialId: 'supplement-s1',
-    parentWorkspaceId: target.workspaceId,
-    parentWorkspaceGeneration: 2,
-    parentCanonicalUrl: target.canonicalUrl,
-    parentDocumentHash: target.documentHash,
-    parentTabId: 55
-  });
+  assert.doesNotMatch(source, /active:\s*true/);
+  assert.doesNotMatch(source, /chrome\.tabs\.update\([^)]*active:\s*true/);
 });

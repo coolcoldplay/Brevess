@@ -110,7 +110,9 @@
         sourceUrl: normalizeFigureImageCacheKey(input.sourceUrl) || cacheKey,
         contentType: String(input.contentType || 'application/octet-stream'),
         byteLength: bytes.byteLength,
+        ...(input.httpStatus ? {httpStatus:input.httpStatus} : {}),
         bytes,
+        ...(input.tiffDerivation ? {tiffDerivation: JSON.parse(JSON.stringify(input.tiffDerivation))} : {}),
         createdAt: Math.max(0, Number(input.createdAt) || now),
         lastAccessedAt: now
       };

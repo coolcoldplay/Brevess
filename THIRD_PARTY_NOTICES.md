@@ -13,6 +13,58 @@ The packaged extension includes the Phosphor icon font and its CSS under
 - Upstream: <https://github.com/phosphor-icons/core>
 - License copy: [vendor/phosphor/LICENSE](vendor/phosphor/LICENSE)
 
+## Sidebar icons: selected SemanticIcons 02 / R4.3
+
+The current five sidebar icons use original Lucide-static 1.55.0 and Material
+Design Icons geometry with CSS animation. The resource catalog also retains
+Tabler 3.49.0 comparison assets. Components, original
+SVGs, licenses, fixed versions and SHA256 provenance are retained under
+`vendor/semantic-icons-r42/`. `sidebar-module-icons.js` adapts the component
+to the existing production task state; it does not use a morphing engine.
+
+- Lucide: ISC, including the Feather-derived MIT notice;
+  [license](vendor/semantic-icons-r42/vendor/lucide/LICENSE).
+- Tabler, Copyright (c) 2020-2026 Paweł Kuna: MIT;
+  [license](vendor/semantic-icons-r42/vendor/tabler/LICENSE).
+- Material Design Icons, Pictogrammers: Pictogrammers Free License with
+  Apache-2.0 for icons;
+  [notice](vendor/semantic-icons-r42/vendor/mdi/LICENSE),
+  [Apache-2.0 text](vendor/semantic-icons-r42/vendor/mdi/LICENSE-Apache-2.0.txt).
+- The unmodified resource catalog retains unused comparison assets from
+  Phosphor and Microsoft Fluent. Their licenses and provenance are retained
+  in the corresponding `vendor/semantic-icons-r42/vendor/` directories.
+
+## Retained Lucide Icons and Morphicons resources
+
+The earlier sidebar implementation used Lucide-static 1.55.0 SVG geometry and
+the Morphicons 1.7.1 path interpolation engine. Those original resources and
+license records remain in the repository; the current sidebar does not load
+that engine.
+The mono-resource-r3 asset set includes the original selection-frame, scan-eye,
+and message-circle pairs under `vendor/lucide/`; their hashes are recorded in
+`vendor/lucide/PROVENANCE.json`. Bundled license copies are also retained under
+`licenses/lucide-ISC-MIT.txt` and `licenses/morphicons-MIT.txt`.
+
+- Lucide Icons and Contributors: ISC, with the included Feather-derived MIT notice.
+  Upstream: <https://github.com/lucide-icons/lucide>.
+  Full license: [vendor/lucide/LICENSE](vendor/lucide/LICENSE).
+- Morphicons, Copyright (c) 2026 Guillermo: MIT.
+  Upstream: <https://github.com/guillermolg00/morphicons>.
+  Full license: [vendor/morphicons/LICENSE](vendor/morphicons/LICENSE).
+- Fixed package versions, official package URLs, integrity values and SVG hashes
+  are recorded in each library's `vendor/*/PROVENANCE.json`.
+
+## PDF.js
+
+The PDF reader includes PDF.js 5.4.624 under `vendor/pdfjs/`. The selection
+controller in `core/pdf-text-projection.js` adapts the same version's
+`web/text_layer_builder.js` selection boundary handling.
+
+- Copyright Mozilla Foundation and contributors
+- License: Apache License 2.0
+- Upstream: <https://github.com/mozilla/pdf.js/tree/v5.4.624>
+- License copy: [vendor/pdfjs/LICENSE](vendor/pdfjs/LICENSE)
+
 ## Development-only dependencies
 
 Playwright is used only for automated browser verification and is not copied

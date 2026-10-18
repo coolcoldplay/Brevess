@@ -16,8 +16,9 @@
     `${SEMANTIC_HEADING_SELECTOR},${SUPPLEMENTAL_HEADING_SELECTOR},p,li,caption,[role="paragraph"]`;
   const STRUCTURAL_TEXT_SELECTOR = `${CONTENT_BLOCK_SELECTOR},figcaption`;
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
-  const EXTRACTOR_VERSION = '2.1.0-extractor-r17';
+  const EXTRACTOR_VERSION = '2.1.0-extractor-r18';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
+  const SOURCE_UI_SELECTOR = '[data-sci-plugin-ui],[data-sci-translation]';
   const INJECTED_TRANSLATION_SELECTOR = [
     '.immersive-translate-target-wrapper',
     '[class*="immersive-translate-target-translation" i]',
@@ -27,8 +28,8 @@
     'nav,aside,footer,form,figure,[hidden],[aria-hidden="true"],' +
     '.citation,.citation-content,.advertisement,.related-articles,' +
     '.recommended,.comments,.social-share,.article-outline,.outline-panel,.table-of-contents,' +
-    '.article-tools,.article-header-actions,' +
-    `${INJECTED_TRANSLATION_SELECTOR},` +
+    '.article-tools,.article-header-actions,.app-nls-widget,[data-test="nls-component"],' +
+    `${SOURCE_UI_SELECTOR},${INJECTED_TRANSLATION_SELECTOR},` +
     '[role="tooltip"],[data-aa-name*="citation" i],' +
     '[class*="citation" i],[class*="cite-preview" i],[class*="ref-preview" i],' +
     '[class*="reference-preview" i],[class*="reference-popover" i],' +
@@ -217,12 +218,25 @@
     return { text: output.join(''), rawStarts, rawEnds };
   }
 
+  function isScientificInlineTextExcluded(node) {
+    if (node?.nodeType === 8) return true;
+    const element = node?.nodeType === 3 ? node.parentElement : node;
+    // Cell embeds bibliography flyouts inside body paragraphs. Keep the
+    // reference-citations wrapper and author/year control; only omit details.
+    // Do not reuse EXCLUDED_ANCESTOR_SELECTOR here: its broad citation match
+    // would also discard the visible inline reference and independent entries.
+    const selector = `${SOURCE_UI_SELECTOR},${INJECTED_TRANSLATION_SELECTOR},` +
+      '.reference-citations .dropBlock__holder,.reference-citations .citation,' +
+      '.reference-citations .citation-content';
+    return Boolean(element?.closest?.(selector) || element?.matches?.(selector));
+  }
+
   function scientificInlineText(element) {
     if (!element) return '';
     const visit = node => {
       if (!node) return '';
+      if (isScientificInlineTextExcluded(node)) return '';
       if (node.nodeType === 3) return String(node.nodeValue || '');
-      if (node.matches?.(INJECTED_TRANSLATION_SELECTOR)) return '';
       const tagName = String(node.tagName || '').toUpperCase();
       const childNodes = [...(node.childNodes || [])];
       const content = childNodes.length
@@ -245,6 +259,231 @@
       .trim();
   }
 
+  // Extraction and source navigation must derive a caption from the same DOM
+  // nodes. Nature stores the title and panel/statistics text separately.
+  function articleCaptionSource(element) {
+    if (!element) return null;
+    const documentRef = element.ownerDocument;
+    const locationLike = documentRef?.location;
+    const nature = /(^|\.)nature\.com$/i.test(String(locationLike?.hostname || '')) &&
+      /^\/articles\/[^/]+\/?$/.test(String(locationLike?.pathname || ''));
+    const springer = /^link\.springer\.com$/i.test(String(locationLike?.hostname || '')) &&
+      /^\/article\/10\.\d+\/.+/.test(String(locationLike?.pathname || ''));
+    const springerOwner = springer ? closestSafely(element, 'figure') : null;
+    // Only the split description layout needs this strict reconstruction.
+    // Other Springer pages can carry their complete caption in figcaption.
+    const splitSpringer = springerOwner && queryAllSafely(springerOwner,
+      '.c-article-section__figure-description,[aria-describedby^="figure-"][aria-describedby$="-desc"]').length > 0;
+    const jci = /(^|\.)jci\.org$/i.test(String(locationLike?.hostname || '')) &&
+      /^\/articles\/view\/[1-9]\d*\/?$/.test(String(locationLike?.pathname || ''));
+    const figcaption = String(element.tagName || '').toUpperCase() === 'FIGCAPTION';
+    const supplementaryTitle = element.matches?.('h3.c-article-supplementary__title');
+    const plosTitle = /(^|\.)journals\.plos\.org$/i.test(String(locationLike?.hostname || '')) &&
+      element.matches?.('#artText .figure > .figcaption');
+    // Native PLOS TIFF supplements have a linked title and description, without
+    // an HTML image. Share the exact source owner already admitted by Figures.
+    if (element.matches?.('.Statement__Supplementarymaterial .SupplementaryMaterial > strong.label')) {
+      if (closestSafely(element, EXCLUDED_ANCESTOR_SELECTOR)) return null;
+      const discover = shared.discoverNativeTiffFigures || globalThis.SciLLM?.discoverNativeTiffFigures;
+      const source = typeof discover === 'function' && discover(documentRef).find(item => item.publisher === 'frontiers' && item.titleElement === element);
+      if (!source) return null;
+      return { element: source.element, titleElement: element, parts: [element, ...source.captionParts],
+        text: source.caption, displayText: [element, ...source.captionParts].map(scientificInlineText).join(' '),
+        sourceIdentity: source.materialId, panelScope: source.captionElement };
+    }
+    if (element.matches?.('#artText .supplementary-material > h3.siTitle')) {
+      if (closestSafely(element, EXCLUDED_ANCESTOR_SELECTOR)) return null;
+      const discover = shared.discoverNativeTiffFigures ||
+        (typeof globalThis !== 'undefined' ? globalThis.SciLLM?.discoverNativeTiffFigures : null);
+      const owner = closestSafely(element, '.supplementary-material');
+      const source = typeof discover === 'function' && discover(documentRef)
+        .find(item => item.element === owner &&
+          queryAllSafely(owner, 'h3.siTitle').length === 1 &&
+          queryAllSafely(owner, 'h3.siTitle')[0] === element);
+      if (!source) return null;
+      const parts = source.captionElement === element ? [element] : [element, source.captionElement];
+      return { element: owner, titleElement: element, parts,
+        text: source.caption, displayText: parts.map(scientificInlineText).join(' '),
+        sourceIdentity: owner.querySelector('a.link-target[id]').id,
+        panelScope: source.captionElement };
+    }
+    const jciLegend = jci && element.matches?.('.figure > p') &&
+      element.querySelector?.(':scope > span.figure_title');
+    if (!figcaption && !plosTitle && !jciLegend && !(nature && supplementaryTitle)) return null;
+    const excluded = EXCLUDED_ANCESTOR_SELECTOR.split(',')
+      .filter(selector => selector.trim() !== 'figure').join(',') +
+      ',#sci-reading-panel,[data-sci-plugin-ui],.c-article-related,.c-article-recommendations-card,' +
+      '[data-test*="related" i],[data-test*="recommend" i]';
+    if (closestSafely(element, excluded)) return null;
+    let parts = [element], focusElement = element, sourceIdentity = '', panelScope = null;
+    const frontiersOwner = figcaption &&
+      /(^|\.)frontiersin\.org$/i.test(String(locationLike?.hostname || '')) &&
+      closestSafely(element, '.ArticleFigure');
+    if (jciLegend) {
+      const container = element.parentElement;
+      const labels = queryAllSafely(container, ':scope > a.figure_number');
+      const legends = queryAllSafely(container, ':scope > p').filter(node =>
+        node.querySelector?.(':scope > span.figure_title'));
+      const label = /^Figure\s+([1-9]\d{0,2})$/i.exec(canonicalContentText(labels[0]));
+      if (labels.length !== 1 || legends.length !== 1 || legends[0] !== element ||
+          !label || queryAllSafely(container, '.table_thumbnail').length) return null;
+      const expectedPath = `${locationLike.pathname.replace(/\/$/, '')}/figure/${Number(label[1])}`;
+      const ownLink = link => {
+        try { const url = new URL(link?.getAttribute?.('href'), locationLike.href);
+          return url.origin === locationLike.origin && url.pathname.replace(/\/$/, '') === expectedPath;
+        } catch (_) { return false; }
+      };
+      const images = queryAllSafely(container, 'img.figure_thumbnail').filter(image =>
+        closestSafely(image, '.figure') === container && !closestSafely(image, excluded));
+      const articleId = locationLike.pathname.replace(/\/$/, '').split('/').at(-1);
+      if (!ownLink(labels[0]) || !images.length || images.some(image => {
+        try { const url = new URL(image.getAttribute('src'), locationLike.href);
+          return !/^https?:$/.test(url.protocol) || !ownLink(image.closest?.('a')) ||
+            !new RegExp(`/(?:JCI|jci\\.insight\\.)${articleId}\\.f${Number(label[1])}\\.[a-z0-9]+$`, 'i').test(url.pathname);
+        } catch (_) { return true; }
+      })) return null;
+      parts = [labels[0], element]; focusElement = container;
+      sourceIdentity = expectedPath; panelScope = element;
+    } else if (splitSpringer) {
+      const container = springerOwner;
+      const titles = queryAllSafely(container, 'figcaption');
+      const label = /^(?:Fig\.?|Figure)\s*([1-9]\d{0,2})$/i.exec(canonicalContentText(element));
+      if (!container || titles.length !== 1 || titles[0] !== element || !label) return null;
+      const id = `figure-${Number(label[1])}-desc`;
+      const descriptions = queryAllSafely(container, `[id="${id}"]`);
+      const images = queryAllSafely(container, 'img').filter(image =>
+        closestSafely(image, 'figure') === container && !closestSafely(image, excluded));
+      const figurePath = `${locationLike.pathname.replace(/\/$/, '')}/figures/${Number(label[1])}`;
+      const ownLink = queryAllSafely(container, 'a[href]').some(link => {
+        try { const url = new URL(link.getAttribute('href'), locationLike.href);
+          return url.origin === locationLike.origin && url.pathname.replace(/\/$/, '') === figurePath;
+        } catch (_) { return false; }
+      });
+      const ownImage = image => {
+        try {
+          const url = new URL(image.getAttribute('src'), locationLike.href);
+          const doi = decodeURIComponent(locationLike.pathname.replace(/^\/article\//, '').replace(/\/$/, ''));
+          const path = decodeURIComponent(url.pathname);
+          return /^https?:$/.test(url.protocol) && url.hostname === 'media.springernature.com' &&
+            path.includes(`/art:${doi}/MediaObjects/`) &&
+            new RegExp(`_Fig${Number(label[1])}_HTML\\.[a-z0-9]+$`, 'i').test(path);
+        } catch (_) { return false; }
+      };
+      if (descriptions.length !== 1 || queryAllSafely(documentRef, `[id="${id}"]`).length !== 1 ||
+          closestSafely(descriptions[0], 'figure') !== container || !ownLink || !images.length ||
+          images.some(image => !ownImage(image) || image.getAttribute('aria-describedby') !== id ||
+            !new RegExp(`^(?:Fig\\.?|Figure)\\s*${Number(label[1])}$`, 'i').test(image.getAttribute('alt') || ''))) return null;
+      const prose = queryAllSafely(descriptions[0], 'p').filter(node =>
+        !closestSafely(node, excluded) && canonicalContentText(node));
+      if (!prose.length) return null;
+      parts = [element, ...prose]; focusElement = container;
+      sourceIdentity = id; panelScope = descriptions[0];
+    } else if (frontiersOwner) {
+      const titles = queryAllSafely(frontiersOwner, '.ArticleFigure__title');
+      const legends = queryAllSafely(frontiersOwner, 'figcaption');
+      const label = /^Figure\s+(\d+)\s*$/i.exec(canonicalContentText(titles[0]));
+      const innerLabel = /^Fig(?:ure)?\.?\s*(\d+)\b/i.exec(canonicalContentText(element));
+      if (titles.length !== 1 || legends.length !== 1 || legends[0] !== element ||
+          !label || frontiersOwner.id !== `f${Number(label[1])}` ||
+          (innerLabel && Number(innerLabel[1]) !== Number(label[1])) ||
+          !canonicalContentText(element)) return null;
+      const images = queryAllSafely(frontiersOwner, 'img');
+      if (!images.length || images.some(image => {
+        const imageLabel = /^Figure\s+(\d+)\s*$/i.exec(image.getAttribute('alt') || '');
+        return !imageLabel || Number(imageLabel[1]) !== Number(label[1]);
+      })) return null;
+      parts = [titles[0], element];
+      focusElement = frontiersOwner;
+      sourceIdentity = frontiersOwner.id;
+      panelScope = element;
+    } else if (plosTitle) {
+      const container = closestSafely(element, '.figure');
+      const titles = queryAllSafely(container, '.figcaption');
+      const label = /^(?:Fig\.?|Figure)\s*(\d+)\s*\./i.exec(canonicalContentText(element));
+      const doi = String(container?.getAttribute?.('data-doi') || '');
+      const articleDoi = new URL(locationLike.href).searchParams.get('id');
+      const expectedDoi = label && `${articleDoi}.g${String(Number(label[1])).padStart(3, '0')}`;
+      const images = queryAllSafely(container, 'img');
+      const imageIds = images.map(image => {
+        try { return new URL(image.getAttribute('src'), locationLike.href).searchParams.get('id'); }
+        catch (_) { return ''; }
+      });
+      const prose = queryAllSafely(container, ':scope > p').filter(node =>
+        !node.matches?.('.caption_object') &&
+        !closestSafely(node, excluded) && canonicalContentText(node));
+      // PLOS also publishes complete title-only legends with one empty native
+      // caption slot. Missing slots and bare labels are not this native shape.
+      const slots = queryAllSafely(container, ':scope > p.caption_target');
+      const titleOnly = !prose.length && slots.length === 1 &&
+        !canonicalContentText(slots[0]) && label &&
+        /[\p{L}\p{N}]/u.test(canonicalContentText(element).slice(label[0].length));
+      if (titles.length !== 1 || titles[0] !== element || !label || !articleDoi ||
+          doi !== expectedDoi || !imageIds.length || imageIds.some(id => id !== doi) ||
+          (!prose.length && !titleOnly)) return null;
+      parts = [element, ...prose];
+      focusElement = container;
+      sourceIdentity = doi;
+      panelScope = container;
+    } else if (nature) {
+      const article = closestSafely(element, 'article');
+      const articleTitles = queryAllSafely(documentRef, 'article h1[data-test="article-title"]')
+        .filter(title => !closestSafely(title, excluded));
+      if (articleTitles.length !== 1 || closestSafely(articleTitles[0], 'article') !== article) return null;
+      const container = figcaption
+        ? closestSafely(element, 'figure')
+        : closestSafely(element, '.c-article-supplementary__item');
+      const selector = figcaption ? '.c-article-section__figure-description[data-test="bottom-caption"]'
+        : '.c-article-supplementary__description';
+      const descriptions = queryAllSafely(container, selector).filter(node =>
+        closestSafely(node, figcaption ? 'figure' : '.c-article-supplementary__item') === container &&
+        !closestSafely(node, excluded));
+      const titles = queryAllSafely(container, figcaption ? 'figcaption' : 'h3.c-article-supplementary__title');
+      const titleText = canonicalContentText(element);
+      const label = figcaption ? /^(?:Fig\.\s*\d+\s*:|Figure\s+\d+(?:\s*:|\s*$))/i
+        : /^Extended Data Fig(?:ure)?\.\s*\d+\b/i;
+      const figurePath = `${String(locationLike.pathname).replace(/\/$/, '')}/figures/`;
+      const ownFigureLink = queryAllSafely(container, 'a[href]').some(link => {
+        try {
+          const href = new URL(link.getAttribute('href'), locationLike.href);
+          return href.origin === locationLike.origin && href.pathname.startsWith(figurePath) &&
+            /^\d+\/?$/.test(href.pathname.slice(figurePath.length));
+        } catch (_) { return false; }
+      });
+      if (!container || titles.length !== 1 || titles[0] !== element ||
+          descriptions.length !== 1 || !canonicalContentText(descriptions[0]) ||
+          !label.test(titleText) || !ownFigureLink) return null;
+      // Only prose in the description belongs to the caption; Source data and
+      // image/download controls are navigation rather than scientific evidence.
+      const prose = queryAllSafely(descriptions[0], 'p').filter(node =>
+        !closestSafely(node, excluded) && !/^(?:Source data|Full size image)$/i.test(canonicalContentText(node)));
+      if (!prose.length) return null;
+      parts = [element, ...prose];
+      focusElement = container;
+      sourceIdentity = String(element.id || (figcaption
+        ? element.querySelector?.('[id]')?.id : container.id) || '');
+      panelScope = descriptions[0];
+    }
+    const displayText = parts.map(scientificInlineText).filter(Boolean).join(' ');
+    const text = displayText.replace(/<\/?(?:sup|sub)>/gi, '').replace(/\s+/g, ' ').trim();
+    return text ? { element: focusElement, titleElement: element, parts, text, displayText, sourceIdentity, panelScope } : null;
+  }
+
+  function collectArticleCaptionSources(documentRef) {
+    return queryAllSafely(documentRef, 'figcaption,h3.c-article-supplementary__title,#artText .figure > .figcaption,.figure > p,#artText .supplementary-material > h3.siTitle,.Statement__Supplementarymaterial .SupplementaryMaterial > strong.label')
+      .map(articleCaptionSource).filter(Boolean);
+  }
+
+  function blocksWithCaptionSource(element, block) {
+    const caption = articleCaptionSource(element);
+    if (!caption) return block.kind === 'figure-caption' ? [] : [block];
+    const captionBlock = { ...block, kind: 'figure-caption', level: 0,
+      text: caption.text, displayText: caption.displayText,
+      sourceKey: block.sourceKey || caption.sourceIdentity,
+      domId: block.domId || caption.sourceIdentity,
+      blockFingerprint: block.blockFingerprint || caption.sourceIdentity };
+    return block.kind === 'heading' ? [block, captionBlock] : [captionBlock];
+  }
+
   function immersiveTranslationTexts(element) {
     if (!element) return [];
     const candidates = [];
@@ -254,6 +493,7 @@
     }
     const seen = new Set();
     return candidates
+      .filter(node => !closestSafely(node, SOURCE_UI_SELECTOR))
       .filter(node => !candidates.some(parent =>
         parent !== node && parent.contains?.(node)))
       .map(node => String(node.textContent || '')
@@ -435,6 +675,12 @@
   function collectContentElements(root, adapter = null) {
     if (!root?.querySelectorAll) return [];
     const allElements = [...root.querySelectorAll('*')];
+    const nativeSources = collectArticleCaptionSources(root);
+    const separatelyOwned = nativeSources.filter(source => source.element !== source.titleElement);
+    const nativeTitles = new Set(nativeSources.map(source => source.titleElement));
+    const jci = /(^|\.)jci\.org$/i.test(String(root.ownerDocument?.location?.hostname || root.location?.hostname || ''));
+    const inOwnedLegend = element => separatelyOwned.some(source =>
+      element !== source.titleElement && source.element.contains?.(element));
     const adapterHeadings = new Set(
       (adapter?.headingSelectors || []).flatMap(selector =>
         queryAllSafely(root, selector))
@@ -444,8 +690,12 @@
         queryAllSafely(root, selector))
     );
     const primaryElements = allElements.filter(element => {
+      if (inOwnedLegend(element)) return false;
+      if (nativeTitles.has(element)) return true;
+      if (jci && closestSafely(element, '.figure')) return false;
       if (isExcludedContentElement(element, adapter)) return false;
       if (element.tagName === 'FIGCAPTION') return true;
+      if (articleCaptionSource(element)) return true;
       const adapterHeading = adapterHeadings.has(element) &&
         !PRIMARY_CONTENT_TAGS.has(element.tagName) &&
         element.tagName !== 'FIGCAPTION' &&
@@ -462,6 +712,8 @@
         !isSupplementalMediaParagraphText(canonicalContentText(element));
     });
     const supplementalCandidates = allElements.filter(element => {
+      if (inOwnedLegend(element) || articleCaptionSource(element)) return false;
+      if (jci && closestSafely(element, '.figure')) return false;
       const role = element.getAttribute?.('role');
       const isTextContainer = UNRECOGNIZED_BLOCK_TAGS.has(element.tagName);
       if (!isTextContainer && role !== 'paragraph') return false;
@@ -548,6 +800,7 @@
       return true;
     }
     return (adapter?.excludedSelectors || []).some(selector =>
+      (tagName !== 'FIGCAPTION' || selector !== 'figure') &&
       Boolean(closestSafely(element, selector))
     );
   }
@@ -611,7 +864,7 @@
   }
 
   function buildRecordsFromElements(elements) {
-    const blocks = elements.map((element, sourceIndex) => ({
+    const blocks = elements.flatMap((element, sourceIndex) => blocksWithCaptionSource(element, {
       kind: getBlockKind(element),
       level: isHeadingElement(element) ? getHeadingLevel(element) : 0,
       text: canonicalContentText(element),
@@ -820,21 +1073,21 @@
       });
       content.forEach(element => {
         if (isHeadingElement(element)) {
-          blocks.push({
+          blocks.push(...blocksWithCaptionSource(element, {
             kind: 'heading',
             level: getHeadingLevel(element),
             text: canonicalContentText(element),
             displayText: bilingualHeadingDisplayText(element),
             domId: String(element.id || ''),
             blockFingerprint: String(element.id || '')
-          });
+          }));
           return;
         }
         const kind = getBlockKind(element);
         if (!['paragraph', 'figure-caption', 'table-caption'].includes(kind)) return;
         const sourceIndex = sourceElements.length;
         sourceElements.push(element);
-        blocks.push({
+        blocks.push(...blocksWithCaptionSource(element, {
           kind,
           level: 0,
           text: canonicalContentText(element),
@@ -848,7 +1101,7 @@
             element.id || ''
           ),
           blockFingerprint: String(element.id || '')
-        });
+        }));
       });
     });
 
@@ -948,6 +1201,24 @@
 
   function outlineRecordsAreReliable(outlineRecords, rootRecords) {
     if (!outlineRecords.length) return false;
+    const outlineBodyRecords = outlineRecords.filter(record =>
+      String(record?.recordType || 'body') === 'body');
+    const rootBodyRecords = (Array.isArray(rootRecords) ? rootRecords : [])
+      .filter(record => String(record?.recordType || 'body') === 'body');
+    if (rootBodyRecords.length >= 20) {
+      const outlineCharacterCount = outlineBodyRecords.reduce((sum, record) =>
+        sum + normalizeTextWithOffsets(record?.text).text.length, 0);
+      const rootCharacterCount = rootBodyRecords.reduce((sum, record) =>
+        sum + normalizeTextWithOffsets(record?.text).text.length, 0);
+      const paragraphCoverage = outlineBodyRecords.length / rootBodyRecords.length;
+      const characterCoverage = rootCharacterCount > 0
+        ? outlineCharacterCount / rootCharacterCount : 1;
+      // A table of contents can name every section while its anchors resolve to
+      // title wrappers or one teaser paragraph per section. Treating that as a
+      // complete article silently drops Methods, Extended Data citations, and
+      // most of the evidence used by chat and Figure analysis.
+      if (paragraphCoverage < 0.5 && characterCoverage < 0.75) return false;
+    }
     const sections = new Map();
     outlineRecords.forEach(record => {
       const sectionId = String(record.sectionId || '');
@@ -1107,20 +1378,39 @@
   }
 
   function buildArticleStructureFromRecords(documentRef, records, options = {}) {
-    if (typeof shared.buildArticleStructure !== 'function') {
+    const dynamicShared = typeof globalThis === 'undefined' ? null : globalThis.SciLLM;
+    const buildStructure = shared.buildArticleStructure || dynamicShared?.buildArticleStructure;
+    if (typeof buildStructure !== 'function') {
       throw new Error('Article structure module must be loaded before extraction');
     }
     const locationLike = options.locationLike || documentRef?.location || {};
     const adapter = options.adapter || (typeof shared.selectPublisherAdapter === 'function'
       ? shared.selectPublisherAdapter(locationLike, documentRef)
       : { id: 'generic', family: 'generic' });
-    return shared.buildArticleStructure(recordsToStructureInput(
+    return buildStructure(recordsToStructureInput(
       Array.isArray(records) ? records : [],
       documentRef,
       adapter,
       options.strategy || 'cached-records',
       options.diagnostics || {}
     ));
+  }
+
+  function buildArticleIndexFromRecords(documentRef, records, options = {}) {
+    const typedRecords = Array.isArray(records) ? records : [];
+    // Figure extraction is loaded independently and may arrive after this
+    // module, so resolve its shared entry point only when the index is built.
+    const dynamicShared = typeof globalThis === 'undefined' ? null : globalThis.SciLLM;
+    const extractFiguresFromRecords = shared.extractArticleFiguresFromRecords ||
+      dynamicShared?.extractArticleFiguresFromRecords;
+    if (typeof extractFiguresFromRecords !== 'function') {
+      throw new Error('Figure extractor module must be loaded before building an article index');
+    }
+    return {
+      typedRecords,
+      structure: buildArticleStructureFromRecords(documentRef, typedRecords, options),
+      figures: extractFiguresFromRecords(documentRef, typedRecords, options)
+    };
   }
 
   function extractArticleStructure(documentRef, options = {}) {
@@ -1320,6 +1610,192 @@
     };
   }
 
+  function extractArticleAuthorMetadata(documentRef) {
+    const clean = (value, max = 1800) => String(value || '').normalize('NFKC')
+      .replace(/\s+/gu, ' ').trim().slice(0, max);
+    const all = (scope, selector, limit = 200) =>
+      Array.from(scope?.querySelectorAll?.(selector) || []).slice(0, limit);
+    const text = node => clean(node?.getAttribute?.('content') || node?.textContent);
+    const canonical = value => {
+      if (typeof value !== 'string' || !value.trim()) return '';
+      try {
+        const url = new URL(value, documentRef?.location?.href);
+        for (const key of [...url.searchParams.keys()]) {
+          if (/^(?:utm_|fbclid$|gclid$)/iu.test(key)) url.searchParams.delete(key);
+        }
+        url.searchParams.sort();
+        return /^https?:$/u.test(url.protocol) ? `${url.origin}${url.pathname}${url.search}` : '';
+      }
+      catch (_) { return ''; }
+    };
+    const sourceUrl = canonical(documentRef?.querySelector?.('link[rel="canonical"]')?.href ||
+      documentRef?.location?.href);
+    const title = clean(documentRef?.querySelector?.('meta[name="citation_title"]')?.content || documentRef?.title);
+    const authors = [];
+    const notes = [];
+    const byName = new Map();
+    let truncated = false;
+    const add = (name, affiliations = [], corresponding = null, source = '') => {
+      name = clean(name, 200);
+      if (!name) return null;
+      const key = name.toLocaleLowerCase();
+      let author = byName.get(key);
+      if (!author) {
+        if (authors.length >= 200) { truncated = true; return null; }
+        author = { name, affiliations: [], corresponding: null, source };
+        authors.push(author); byName.set(key, author);
+      }
+      for (const affiliation of affiliations) {
+        const value = clean(affiliation, 500);
+        if (value && !author.affiliations.includes(value) && author.affiliations.length < 12) {
+          author.affiliations.push(value);
+        }
+      }
+      if (corresponding === true) author.corresponding = true;
+      return author;
+    };
+    const note = (value, source, kind) => {
+      const content = clean(value);
+      if (!content || notes.some(item => item.text === content)) return;
+      if (notes.length >= 30) { truncated = true; return; }
+      notes.push({ text: content, source: clean(source, 160), kind });
+    };
+    const correspondence = value => /\bcorrespond(?:ence|ing author)s?\b|通讯作者|通信作者/iu.test(value);
+    const articleOwnerSelector = 'article,[itemtype*="Article"],' +
+      '[typeof~="Article"],[typeof~="ScholarlyArticle"],[typeof~="MedicalScholarlyArticle"]';
+    const authorContext = node => {
+      const article = node?.closest?.(articleOwnerSelector);
+      const url = canonical(article?.getAttribute?.('itemid') ||
+        article?.getAttribute?.('about') || article?.getAttribute?.('resource'));
+      const headline = text(all(article, '[itemprop~="headline"],[property~="headline"]')
+        .find(value => value.closest?.(articleOwnerSelector) === article));
+      const related = node?.closest?.('.related-articles,.recommended,.citation,.citation-content,' +
+        '[class*="related-content" i],[class*="recommendation" i]');
+      return { url, headline, foreign: Boolean(related || (url && url !== sourceUrl) ||
+        (!url && headline && title && headline !== title)) };
+    };
+    const rdfaRoleText = node => {
+      const ignored = '[property~="affiliation"],[typeof~="Organization"],' +
+        '[property~="email"],a[href^="mailto:"],[property~="givenName"],' +
+        '[property~="familyName"],[property~="name"],[property~="identifier"],' +
+        'script,style,noscript,template';
+      if (node.matches?.(ignored)) return '';
+      // Read folded cards without altering them. Email addresses, person
+      // names and institution names are not correspondence-role evidence.
+      const copy = node.cloneNode(true);
+      for (const value of all(copy,
+        `[property~="author"],[itemprop~="author"],${ignored}`, Infinity)) value.remove();
+      const walker = documentRef.createTreeWalker(copy, 4);
+      const fragments = [];
+      let fragment;
+      let length = 0;
+      while (length < 1800 && (fragment = walker.nextNode())) {
+        const value = clean(fragment.nodeValue);
+        fragments.push(value);
+        length += value.length + 1;
+      }
+      // Adjacent block labels in Cell have no textContent whitespace.
+      return clean(fragments.join(' '));
+    };
+    // Citation institutions do not specify an author relation. Keep them as
+    // unassigned notes instead of guessing from the order of separate tags.
+    all(documentRef, 'meta[name="citation_author"]', 201).forEach(node =>
+      add(node.content, [], null, 'citation_author'));
+    all(documentRef, 'meta[name="citation_author_institution"]').forEach(node =>
+      note(node.content, 'citation_author_institution (author mapping unspecified)', 'affiliation'));
+
+    const objects = [];
+    for (const script of all(documentRef, 'script[type="application/ld+json"]', 8)) {
+      if (String(script.textContent || '').length > 500000) { truncated = true; continue; }
+      try {
+        const parsed = JSON.parse(script.textContent);
+        const values = Array.isArray(parsed) ? parsed : [parsed];
+        for (const value of values.slice(0, 200)) {
+          if (value && typeof value === 'object') {
+            objects.push(value, ...(Array.isArray(value['@graph']) ? value['@graph'].slice(0, 200) : []));
+          }
+        }
+      } catch (_) { /* Malformed structured metadata is not executable content. */ }
+    }
+    const refs = new Map(objects.filter(item => item?.['@id']).map(item => [item['@id'], item]));
+    const resolve = item => typeof item === 'string' ? (refs.get(item) || item)
+      : item?.['@id'] && refs.has(item['@id']) ? { ...refs.get(item['@id']), ...item } : item;
+    const array = value => Array.isArray(value) ? value : value == null ? [] : [value];
+    const articles = objects.filter(item => array(item?.['@type']).some(type =>
+      /^(?:ScholarlyArticle|MedicalScholarlyArticle|Article)$/u.test(type)));
+    for (const article of articles) {
+      const url = canonical(article.url || article['@id']);
+      const headline = clean(article.headline || article.name);
+      if (url && url !== sourceUrl) continue;
+      if (!(url && url === sourceUrl) && !(headline && headline === title) &&
+          !(articles.length === 1 && !url && !headline)) continue;
+      for (const raw of array(article.author).slice(0, 200)) {
+        const role = resolve(raw);
+        const person = resolve(role?.author || role);
+        const name = typeof person === 'string' ? person
+          : person?.name || [person?.givenName, person?.familyName].filter(Boolean).join(' ');
+        const affiliations = array(person?.affiliation).map(value => {
+          const entry = resolve(value); return typeof entry === 'string' ? entry : entry?.name;
+        });
+        add(name, affiliations, correspondence(clean(role?.roleName)) ? true : null, 'json-ld');
+      }
+    }
+    for (const node of all(documentRef,
+      '[itemprop~="author"],[property~="author"][typeof~="Person"]', 201)) {
+      const rdfa = node.matches?.('[property~="author"][typeof~="Person"]') === true;
+      const ownRdfa = selector => all(node, selector).filter(value =>
+        value.closest?.('[property~="author"],[itemprop~="author"]') === node);
+      const rdfaName = property => text(ownRdfa(`[property~="${property}"]`).find(value =>
+        !value.closest?.('[property~="affiliation"],[typeof~="Organization"]') &&
+        value.closest?.('[typeof~="Person"]') === node));
+      const nameNode = node.querySelector?.('[itemprop~="name"]');
+      const givenName = rdfa ? rdfaName('givenName') : '';
+      const familyName = rdfa ? rdfaName('familyName') : '';
+      const name = rdfa
+        ? (givenName && familyName ? `${givenName} ${familyName}`
+          : rdfaName('name') || givenName || familyName)
+        : text(nameNode) || text(node);
+      if (!name) continue;
+      const { url: articleUrl, headline, foreign } = authorContext(node);
+      if (foreign) continue;
+      if (!byName.has(clean(name, 200).toLocaleLowerCase()) &&
+          !(articleUrl && articleUrl === sourceUrl) && !(headline && headline === title)) continue;
+      const affiliationText = value => rdfa
+        ? text(all(value, '[property~="name"]').find(name =>
+          name.closest?.('[property~="affiliation"]') === value)) || text(value)
+        : text(value);
+      const affiliations = (rdfa ? ownRdfa('[property~="affiliation"]')
+        : all(node, '[itemprop~="affiliation"]')).map(affiliationText);
+      let isCorresponding = correspondence(rdfa ? rdfaRoleText(node) : text(node));
+      for (const link of all(node, 'a[href^="#"]', 30)) {
+        if (rdfa && link.closest?.('[property~="author"],[itemprop~="author"]') !== node) continue;
+        const id = String(link.getAttribute('href') || '').slice(1);
+        const target = documentRef?.getElementById?.(id);
+        if (!target || authorContext(target).foreign) continue;
+        const targetAuthor = rdfa
+          ? target.closest?.('[property~="author"],[itemprop~="author"]') : null;
+        if (targetAuthor && targetAuthor !== node) continue;
+        const content = text(target);
+        if (correspondence(rdfa ? rdfaRoleText(target) : content)) {
+          isCorresponding = true;
+          note(content, `#${id}`, 'correspondence');
+        } else if (/^aff(?:iliation)?[-_\d]/iu.test(id) ||
+          target.matches?.('[itemprop~="affiliation"],[property~="affiliation"]')) {
+          affiliations.push(affiliationText(target));
+        }
+      }
+      add(name, affiliations, isCorresponding ? true : null, rdfa ? 'rdfa' : 'microdata');
+    }
+    // Folded correspondence notes are page evidence too. Preserve their exact
+    // labels; the model must not infer a corresponding author from an email alone.
+    for (const node of all(documentRef, '[id^="cor"], [role="doc-footnote"]', 100)) {
+      if (authorContext(node).foreign) continue;
+      const content = text(node);
+      if (correspondence(content)) note(content, node.id ? `#${node.id}` : 'doc-footnote', 'correspondence');
+    }
+    return { sourceUrl, authors, notes, truncated };
+  }
+
   function extractArticle(documentRef, options = {}) {
     if (isLikelyNonArticleChallenge(documentRef)) return [];
     const adapter = options.adapter || (
@@ -1342,7 +1818,74 @@
       : rootExtraction.records.filter(record => record.recordType === 'body');
   }
 
+  function isArticleExtractionCacheReusable(records) {
+    return Array.isArray(records) && records.some(record => record?.recordType === 'body' &&
+      typeof record.text === 'string' && record.text.trim().length > 0);
+  }
+
+  function isArticleSourceMutationExcluded(node, adapter = null, boundary = null) {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    const selector = EXCLUDED_ANCESTOR_SELECTOR.split(',').filter(value => value.trim() !== 'figure').join(',');
+    // A removed subtree may already be attached to a new, excluded owner.
+    // Only matches inside the original removed root describe its source contents.
+    const owned = match => Boolean(match && (!boundary || match === boundary || boundary.contains?.(match)));
+    if (owned(closestSafely(element, selector))) return true;
+    return (adapter?.excludedSelectors || []).some(value => value.trim() !== 'figure' &&
+      owned(closestSafely(element, value)));
+  }
+
+  async function waitForArticleSourceStable({ getReadyState, getIdentity, getMutationTime,
+    now = () => Date.now(), wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxWaitMs = 1500 } = {}) {
+    const identity = getIdentity();
+    const duration = Math.min(2000, Math.max(0, Number(maxWaitMs) || 0));
+    const started = now();
+    const failure = (code, reasonCode) => Object.assign(new Error(reasonCode), { code, reasonCode });
+    for (let attempt = 0; attempt <= Math.ceil(duration / 100); attempt++) {
+      if (!identity || getIdentity() !== identity) throw failure('ARTICLE_WORKSPACE_CONTEXT_CHANGED', 'ARTICLE_SOURCE_CONTEXT_CHANGED');
+      const browserReady = ['interactive', 'complete'].includes(getReadyState());
+      const mutationTime = Number(getMutationTime());
+      const quiet = Number.isFinite(mutationTime) && now() - mutationTime >= 300;
+      if (browserReady && quiet) return Object.freeze({ ready: true, elapsedMs: Math.max(0, now() - started) });
+      if (now() - started >= duration || attempt === Math.ceil(duration / 100)) {
+        throw failure('ARTICLE_PAGE_LOADING', browserReady ? 'ARTICLE_BODY_UNSTABLE' : 'ARTICLE_BROWSER_LOADING');
+      }
+      await wait(Math.min(100, Math.max(0, duration - (now() - started))));
+    }
+  }
+
+  function createArticleReadinessCompletionNotifier({ documentRef, windowRef,
+    isWaiting, getIdentity, notify, schedule = (callback, delay) => setTimeout(callback, delay),
+    cancelSchedule = token => clearTimeout(token) } = {}) {
+    let timer = null, pendingIdentity = '', notifiedIdentity = '', destroyed = false;
+    function onReady() {
+      if (destroyed || !isWaiting() || !['interactive', 'complete'].includes(documentRef.readyState)) return;
+      const identity = getIdentity();
+      if (!identity || identity === notifiedIdentity) return;
+      pendingIdentity = identity;
+      if (timer !== null) return;
+      timer = schedule(async () => {
+        timer = null;
+        const expected = pendingIdentity;
+        if (destroyed || !isWaiting() || getIdentity() !== expected || documentRef.readyState === 'loading') return;
+        notifiedIdentity = expected;
+        try { await notify(expected); } catch (_) { /* One bounded signal; manual retry stays available. */ }
+      }, 300);
+    }
+    documentRef?.addEventListener?.('readystatechange', onReady);
+    windowRef?.addEventListener?.('load', onReady);
+    return Object.freeze({ onReady, destroy() {
+      destroyed = true;
+      if (timer !== null) cancelSchedule(timer);
+      documentRef?.removeEventListener?.('readystatechange', onReady);
+      windowRef?.removeEventListener?.('load', onReady);
+    } });
+  }
+
   return {
+    isArticleExtractionCacheReusable,
+    isArticleSourceMutationExcluded,
+    waitForArticleSourceStable,
+    createArticleReadinessCompletionNotifier,
     isExcludedSectionHeading,
     isNavigableArticleSectionHeading,
     classifyMajorSectionHeading,
@@ -1356,7 +1899,10 @@
     hashNormalizedText,
     summarizeArticleRecords,
     normalizeTextWithOffsets,
+    isScientificInlineTextExcluded,
     scientificInlineText,
+    articleCaptionSource,
+    collectArticleCaptionSources,
     immersiveTranslationTexts,
     bilingualHeadingDisplayText,
     collectContentElements,
@@ -1365,8 +1911,11 @@
     summarizeUnrecognizedTextBlocks,
     diagnoseArticleExtraction,
     extractArticleFromOutline,
+    outlineRecordsAreReliable,
     extractArticle,
+    extractArticleAuthorMetadata,
     buildArticleStructureFromRecords,
+    buildArticleIndexFromRecords,
     extractArticleStructure,
     prepareReviewOutlineParagraphs
   };

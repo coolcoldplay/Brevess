@@ -27,11 +27,30 @@
   function buildLocalPdfWorkspaceUrl(fileName, contentHash) {
     const hash = String(contentHash || '').trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(hash)) return '';
-    const safeName = String(fileName || '').normalize('NFKC')
+    const leafName = String(fileName || '').normalize('NFKC')
+      .split(/[\\/]/u).at(-1) || '';
+    const safeName = leafName
       .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ')
       .replace(/\s+/g, ' ').trim().slice(0, 240);
     if (!safeName) return '';
     return `file:///brevess-local-pdf/${hash}/${encodeURIComponent(safeName)}`;
+  }
+
+  function withLocalPdfWorkspaceSource(readerUrl, sourceUrl) {
+    try {
+      const reader = new URL(String(readerUrl || ''));
+      const source = new URL(String(sourceUrl || ''));
+      if (!/(?:^|\/)pdf-reader\.html$/iu.test(reader.pathname) ||
+          source.protocol !== 'file:' || source.host || source.username ||
+          source.password || source.search || source.hash ||
+          !/^\/brevess-local-pdf\/[a-f0-9]{64}\/[^/]{1,720}$/u.test(source.pathname)) {
+        return '';
+      }
+      reader.searchParams.set('source', source.href);
+      return reader.href;
+    } catch (_) {
+      return '';
+    }
   }
 
   function isPdfReaderUrl(value) {
@@ -87,6 +106,83 @@
       isOcr: value.isOcr === true,
       enableTable: value.enableTable !== false,
       enableFormula: value.enableFormula !== false
+    };
+  }
+
+  function planOriginalPdfTextEnhancement(settings, nativeSnapshot = {}) {
+    const normalized = normalizeMineruPdfSettings(settings);
+    const snapshot = nativeSnapshot && typeof nativeSnapshot === 'object'
+      ? nativeSnapshot : {};
+    const structure = snapshot.structure && typeof snapshot.structure === 'object'
+      ? snapshot.structure : {};
+    const phase = String(snapshot.phase || '').trim();
+    const coverage = structure?.diagnostics?.textCoverage &&
+      typeof structure.diagnostics.textCoverage === 'object'
+      ? structure.diagnostics.textCoverage
+      : snapshot.textCoverage && typeof snapshot.textCoverage === 'object'
+        ? snapshot.textCoverage : null;
+    const coverageSignals = [];
+    if (typeof coverage?.terminal === 'boolean') coverageSignals.push(coverage.terminal);
+    if (typeof coverage?.checkedComplete === 'boolean') {
+      coverageSignals.push(coverage.checkedComplete);
+    }
+    if (coverage?.pendingPages !== undefined && coverage?.pendingPages !== null &&
+        Number.isFinite(Number(coverage.pendingPages))) {
+      coverageSignals.push(Number(coverage.pendingPages) === 0);
+    }
+    const nativeIndexComplete = coverageSignals.length
+      ? coverageSignals.every(Boolean)
+      : phase === 'text-ready' || phase === 'partial-index';
+    const metadataCandidates = [snapshot.pageMetadata, snapshot.pages, structure.pages];
+    const metadata = metadataCandidates.find(value => Array.isArray(value) && value.length) ||
+      metadataCandidates.find(Array.isArray) || [];
+    const pageCount = Math.max(0, Math.floor(
+      Number(snapshot.pageCount) ||
+      Number(structure?.diagnostics?.textCoverage?.totalPages) ||
+      metadata.length
+    ));
+    const lowTextPageNumbers = [...new Set(metadata.flatMap((page, index) => {
+      if (page?.textStatus === 'failed' ||
+          (page?.textStatus === 'empty' && page?.ocrCandidate === false)) return [];
+      const rawCharCount = page?.charCount;
+      const charCount = rawCharCount === null || rawCharCount === ''
+        ? Number.NaN : Number(rawCharCount);
+      if (!Number.isFinite(charCount) || charCount < 0 || charCount >= 30) return [];
+      const pageNumber = Math.floor(Number(page?.pageNumber) || index + 1);
+      return pageNumber >= 1 && (!pageCount || pageNumber <= pageCount) ? [pageNumber] : [];
+    }))].sort((left, right) => left - right);
+    const paragraphs = Array.isArray(structure.paragraphs)
+      ? structure.paragraphs : (Array.isArray(snapshot.paragraphs) ? snapshot.paragraphs : null);
+    const diagnosticParagraphCount = structure?.diagnostics?.paragraphCount ??
+      snapshot?.diagnostics?.paragraphCount;
+    const paragraphCountKnown = Boolean(paragraphs) ||
+      (diagnosticParagraphCount !== null && diagnosticParagraphCount !== '' &&
+        Number.isFinite(Number(diagnosticParagraphCount)) && Number(diagnosticParagraphCount) >= 0);
+    const paragraphCount = paragraphs ? paragraphs.length
+      : paragraphCountKnown ? Math.floor(Number(diagnosticParagraphCount)) : 0;
+    const explicitlyBlank = metadata.length > 0 && metadata.every(page =>
+      page?.textStatus === 'empty' && page?.ocrCandidate === false);
+    const emptyNativeIndex = pageCount > 0 && paragraphCountKnown && paragraphCount === 0 &&
+      !explicitlyBlank;
+    const requiresCoordinateOcr = nativeIndexComplete &&
+      (lowTextPageNumbers.length > 0 || emptyNativeIndex);
+    const effectiveSettings = requiresCoordinateOcr
+      ? { ...normalized, mode: 'precise', isOcr: true }
+      : { ...normalized };
+    const blocked = requiresCoordinateOcr && !effectiveSettings.token;
+    return {
+      effectiveSettings,
+      nativeIndexComplete,
+      requiresCoordinateOcr,
+      preserveOriginalPdf: true,
+      lowTextPageNumbers,
+      reason: !nativeIndexComplete
+        ? 'native-index-incomplete'
+        : requiresCoordinateOcr
+          ? (lowTextPageNumbers.length ? 'low-text-pages' : 'empty-native-index')
+          : 'native-text-sufficient',
+      blocked,
+      blockCode: blocked ? 'PDF_OCR_PRECISE_TOKEN_REQUIRED' : ''
     };
   }
 
@@ -250,38 +346,388 @@
       });
   }
 
-  function markdownInlineTokens(value) {
-    const source = normalizeScientificInline(value)
-      .replace(/<(?!\/?(?:sup|sub)\b)[^>]+>/gi, ' ');
-    const tokens = [];
-    const pattern = /<sup\b[^>]*>([^<\n]*)<\/sup>|<sub\b[^>]*>([^<\n]*)<\/sub>|`([^`\n]+)`|\*\*([^*\n]+)\*\*|__([^_\n]+)__|(?<!\*)\*([^*\n]+)\*(?!\*)|(?<!_)_([^_\n]+)_(?!_)|\[([^\]]+)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/gi;
-    let cursor = 0;
-    for (const match of source.matchAll(pattern)) {
-      if (match.index > cursor) tokens.push({
-        type: 'text',
-        text: source.slice(cursor, match.index).replace(/<\/?(?:sup|sub)\b[^>]*>/gi, '')
-      });
-      if (match[1] !== undefined) tokens.push({ type: 'superscript', text: decodePdfHtmlEntities(match[1]) });
-      else if (match[2] !== undefined) tokens.push({ type: 'subscript', text: decodePdfHtmlEntities(match[2]) });
-      else if (match[3] !== undefined) tokens.push({ type: 'code', text: match[3] });
-      else if (match[4] !== undefined || match[5] !== undefined) {
-        tokens.push({ type: 'strong', text: match[4] ?? match[5] });
-      } else if (match[6] !== undefined || match[7] !== undefined) {
-        tokens.push({ type: 'emphasis', text: match[6] ?? match[7] });
-      } else {
-        let href = '';
-        try {
-          const parsed = new URL(match[9], 'https://brevess.invalid/');
-          if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) href = match[9];
-        } catch (_) {}
-        tokens.push({ type: href ? 'link' : 'text', text: match[8], href });
-      }
-      cursor = match.index + match[0].length;
+  const LEGACY_TEX_RUN = /\\(?:bar|overline)\s*\{\s*([^{}\n]{1,120}?)\s*\}|\{\\tt\s+([^{}^_\n]{1,120})\}|\^\s*\{\s*(?:\\tt\s+)?([^{}\n]{1,40}?)\s*\}|_\s*\{\s*([^{}\n]{1,40}?)\s*\}/y;
+  const PDF_INLINE_HTML_SCRIPT = /<(sup|sub)\b[^>]{0,120}>([^<\n]{1,120})<\/\1\s*>/iy;
+  const PDF_INLINE_CODE = /`([^`\n]{1,240})`/y;
+  const PDF_INLINE_LINK = /\[([^\]\n]{1,240})\]\(([^)\s]{1,2048})(?:\s+["'][^"'\n]{0,240}["'])?\)/y;
+  const PDF_INLINE_TAG = /<[^>\n]{0,240}>/y;
+  const PDF_ALLOWED_TEX_COMMAND = /\\(frac|mathbf|mathrm|mathsf|mathtt|mathit|mathcal|textrm|textbf|textit|operatorname|text|hat|circ)\b/y;
+
+  function matchPdfInlineAt(pattern, source, cursor) {
+    pattern.lastIndex = cursor;
+    return pattern.exec(source);
+  }
+
+  function pushPdfInlineToken(tokens, type, text, extra = {}) {
+    const decoded = decodePdfHtmlEntities(String(text || ''));
+    if (!decoded) return;
+    const previous = tokens.at(-1);
+    if (type === 'text' && previous?.type === 'text') {
+      previous.text += decoded;
+      return;
     }
-    if (cursor < source.length) tokens.push({
-      type: 'text',
-      text: source.slice(cursor).replace(/<\/?(?:sup|sub)\b[^>]*>/gi, '')
+    tokens.push({ type, text: decoded, ...extra });
+  }
+
+  function safePdfInlineHref(value) {
+    const href = String(value || '');
+    try {
+      const parsed = new URL(href, 'https://brevess.invalid/');
+      return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? href : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function legacyScientificToken(match) {
+    if (match[1] !== undefined) return { type: 'overline', text: match[1] };
+    if (match[2] !== undefined) return { type: 'text', text: scientificFormatGroup('', match[2]) };
+    if (match[3] !== undefined) return { type: 'sup', text: match[3] };
+    return { type: 'sub', text: match[4] };
+  }
+
+  function readPdfMarkdownSpan(source, cursor) {
+    const marker = source[cursor];
+    if (marker !== '*' && marker !== '_') return null;
+    const doubled = source[cursor + 1] === marker;
+    const delimiter = doubled ? marker.repeat(2) : marker;
+    const contentStart = cursor + delimiter.length;
+    const limit = Math.min(source.length, contentStart + 240 + delimiter.length);
+    let search = contentStart;
+    while (search < limit) {
+      if (source[search] === '\\') {
+        search += 2;
+        continue;
+      }
+      if (!doubled && source.startsWith(marker.repeat(2), search)) {
+        const nestedEnd = source.indexOf(marker.repeat(2), search + 2);
+        if (nestedEnd < 0 || nestedEnd + 2 > limit) return null;
+        search = nestedEnd + 2;
+        continue;
+      }
+      if (source.startsWith(delimiter, search)) {
+        const content = source.slice(contentStart, search);
+        if (!content || content.includes('\n')) return null;
+        return {
+          type: doubled ? 'strong' : 'em',
+          content,
+          length: search + delimiter.length - cursor
+        };
+      }
+      search += 1;
+    }
+    return null;
+  }
+
+  function readPdfLegacyFallback(source, cursor) {
+    const prefixes = [
+      ['\\overline{', 10], ['\\bar{', 5], ['{\\tt ', 5],
+      ['^{', 2], ['_{', 2]
+    ];
+    const prefix = prefixes.find(([value]) => source.startsWith(value, cursor));
+    if (!prefix) return null;
+    const payloadStart = cursor + prefix[1];
+    const newline = source.indexOf('\n', payloadStart);
+    const semicolon = source.indexOf(';', payloadStart);
+    const boundedEnd = Math.min(source.length, payloadStart + 4096);
+    const closing = source.indexOf('}', payloadStart);
+    const hasBoundedClosing = closing >= 0 && closing < boundedEnd &&
+      (newline < 0 || closing < newline) &&
+      (semicolon < 0 || closing < semicolon);
+    return {
+      payload: hasBoundedClosing ? source.slice(payloadStart, closing) : '',
+      length: hasBoundedClosing ? closing + 1 - cursor : prefix[1]
+    };
+  }
+
+  function readBoundedTexGroup(source, cursor, options = {}) {
+    if (source[cursor] !== '{') return null;
+    const maxLength = Math.max(1, Math.min(512, Number(options.maxLength) || 120));
+    const maxDepth = Math.max(1, Math.min(4, Number(options.maxDepth) || 2));
+    let depth = 0;
+    const limit = Math.min(source.length, cursor + maxLength + 2);
+    for (let index = cursor; index < limit; index += 1) {
+      if (source[index] === '\n') return null;
+      if (source[index] === '{') {
+        depth += 1;
+        if (depth > maxDepth) return null;
+      } else if (source[index] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return {
+            content: source.slice(cursor + 1, index),
+            length: index + 1 - cursor
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  function readAllowedTexCommand(source, cursor) {
+    const commandMatch = matchPdfInlineAt(PDF_ALLOWED_TEX_COMMAND, source, cursor);
+    if (!commandMatch) return null;
+    const command = commandMatch[1];
+    if (command === 'circ') {
+      return { type: 'text', text: '°', length: commandMatch[0].length };
+    }
+    let groupCursor = cursor + commandMatch[0].length;
+    while (source[groupCursor] === ' ' && groupCursor - cursor < 8) groupCursor += 1;
+    const first = readBoundedTexGroup(source, groupCursor, {
+      maxLength: command === 'frac' ? 80 : 120,
+      maxDepth: 2
     });
+    if (!first) return null;
+    const firstTokens = markdownInlineTokens(first.content);
+    const firstText = firstTokens.map(token => token.text).join('');
+    if (command === 'frac') {
+      let secondCursor = groupCursor + first.length;
+      while (source[secondCursor] === ' ' && secondCursor - groupCursor < 8) secondCursor += 1;
+      const second = readBoundedTexGroup(source, secondCursor, {
+        maxLength: 80,
+        maxDepth: 2
+      });
+      if (!second) return null;
+      const secondText = markdownInlineTokens(second.content)
+        .map(token => token.text).join('');
+      return {
+        type: 'text',
+        text: `${firstText}/${secondText}`,
+        length: secondCursor + second.length - cursor
+      };
+    }
+    const type = ['mathbf', 'textbf'].includes(command) ? 'strong'
+      : ['mathit', 'textit'].includes(command) ? 'em' : 'text';
+    const text = command === 'hat' ? `${firstText}\u0302`.normalize('NFC') : firstText;
+    const transparent = ['mathrm', 'mathsf', 'mathtt', 'mathcal', 'textrm',
+      'operatorname', 'text'].includes(command);
+    return {
+      type,
+      text,
+      ...(transparent ? { tokens: firstTokens } : {}),
+      length: groupCursor + first.length - cursor
+    };
+  }
+
+  function unwrapTexFallbackGroup(value) {
+    const source = String(value || '').trimStart();
+    if (!source.startsWith('{')) return { payload: source, rest: '' };
+    let depth = 0;
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === '{') depth += 1;
+      else if (source[index] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return {
+            payload: source.slice(1, index),
+            rest: source.slice(index + 1)
+          };
+        }
+      }
+    }
+    return { payload: source.slice(1), rest: '' };
+  }
+
+  function readAllowedTexFallback(source, cursor) {
+    const commandMatch = matchPdfInlineAt(PDF_ALLOWED_TEX_COMMAND, source, cursor);
+    if (!commandMatch) return null;
+    const payloadStart = cursor + commandMatch[0].length;
+    const semicolon = source.indexOf(';', payloadStart);
+    const newline = source.indexOf('\n', payloadStart);
+    const boundary = [semicolon, newline, source.length, payloadStart + 4096]
+      .filter(index => index >= payloadStart)
+      .reduce((minimum, index) => Math.min(minimum, index), source.length);
+    const segment = source.slice(payloadStart, boundary);
+    const first = unwrapTexFallbackGroup(segment);
+    let text = first.payload;
+    if (commandMatch[1] === 'frac') {
+      const second = unwrapTexFallbackGroup(first.rest);
+      text = `${first.payload}/${second.payload}`;
+    }
+    return {
+      type: 'text',
+      text,
+      length: boundary - cursor
+    };
+  }
+
+  function findPdfDollarClose(source, cursor) {
+    const limit = Math.min(source.length, cursor + 242);
+    for (let index = cursor + 1; index < limit; index += 1) {
+      if (source[index] === '\n') return -1;
+      if (source[index] === '\\') {
+        index += 1;
+        continue;
+      }
+      if (source[index] === '$') return index;
+    }
+    return -1;
+  }
+
+  function looksLikeScientificMathRun(value) {
+    const source = String(value || '').trim();
+    if (!source || source.length > 240) return false;
+    return /^(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]+$/.test(source) ||
+      /\\[A-Za-z]+|\^\s*(?:\{|[+\-−0-9])|_\s*(?:\{|[+\-−0-9])|[≤≥≈±×]|(?:^|\s)[A-Za-z]\s*[<=>]\s*[+\-−]?\d/.test(source);
+  }
+
+  function markdownInlineTokens(value) {
+    const source = String(value || '').normalize('NFC');
+    const tokens = [];
+    let plain = '';
+    let cursor = 0;
+    const flushPlain = () => {
+      pushPdfInlineToken(tokens, 'text', plain);
+      plain = '';
+    };
+    const consume = (match, token) => {
+      flushPlain();
+      if (token) pushPdfInlineToken(tokens, token.type, token.text, token.extra);
+      cursor += match[0].length;
+    };
+
+    while (cursor < source.length) {
+      let match = matchPdfInlineAt(/\\([`'\^"~])\s+(?=[A-Za-z])/y, source, cursor);
+      if (match && /[A-Za-z]$/.test(plain)) {
+        const letter = plain.at(-1);
+        plain = plain.slice(0, -1) + scientificAccent('', letter, match[1]);
+        cursor += match[0].length;
+        continue;
+      }
+      match = matchPdfInlineAt(/\\([`'\^"~])([A-Za-z])/y, source, cursor);
+      if (match && /[A-Za-z]$/.test(plain)) {
+        plain += scientificAccent('', match[2], match[1]);
+        cursor += match[0].length;
+        continue;
+      }
+      const escaped = source[cursor] === '\\' &&
+        /[\\`*_{}\[\]()#+.!$-]/.test(source[cursor + 1] || '');
+      if (escaped) {
+        plain += source[cursor + 1];
+        cursor += 2;
+        continue;
+      }
+      match = matchPdfInlineAt(PDF_INLINE_HTML_SCRIPT, source, cursor);
+      if (match) {
+        consume(match, { type: match[1].toLowerCase(), text: match[2] });
+        continue;
+      }
+      match = matchPdfInlineAt(/\^\{\s*\\circ\s*\}/y, source, cursor);
+      if (match) {
+        consume(match, { type: 'text', text: '°' });
+        continue;
+      }
+      match = matchPdfInlineAt(LEGACY_TEX_RUN, source, cursor);
+      if (match) {
+        consume(match, legacyScientificToken(match));
+        continue;
+      }
+      const legacyFallback = readPdfLegacyFallback(source, cursor);
+      if (legacyFallback) {
+        flushPlain();
+        if (legacyFallback.payload) {
+          pushPdfInlineToken(tokens, 'text', legacyFallback.payload.replace(/\\tt\s*/g, ''));
+        }
+        cursor += legacyFallback.length;
+        continue;
+      }
+      const allowedCommand = readAllowedTexCommand(source, cursor);
+      if (allowedCommand) {
+        flushPlain();
+        if (Array.isArray(allowedCommand.tokens)) {
+          allowedCommand.tokens.forEach(token =>
+            pushPdfInlineToken(tokens, token.type, token.text,
+              token.href ? { href: token.href } : {})
+          );
+        } else {
+          pushPdfInlineToken(tokens, allowedCommand.type, allowedCommand.text);
+        }
+        cursor += allowedCommand.length;
+        continue;
+      }
+      const allowedFallback = readAllowedTexFallback(source, cursor);
+      if (allowedFallback) {
+        flushPlain();
+        pushPdfInlineToken(tokens, 'text', allowedFallback.text);
+        cursor += allowedFallback.length;
+        continue;
+      }
+      match = matchPdfInlineAt(PDF_INLINE_CODE, source, cursor);
+      if (match) {
+        consume(match, { type: 'code', text: match[1] });
+        continue;
+      }
+      const markdownSpan = readPdfMarkdownSpan(source, cursor);
+      if (markdownSpan) {
+        flushPlain();
+        const content = markdownInlineTokens(markdownSpan.content)
+          .map(token => token.text).join('');
+        pushPdfInlineToken(tokens, markdownSpan.type, content);
+        cursor += markdownSpan.length;
+        continue;
+      }
+      match = matchPdfInlineAt(PDF_INLINE_LINK, source, cursor);
+      if (match) {
+        const href = safePdfInlineHref(match[2]);
+        consume(match, href
+          ? { type: 'link', text: match[1], extra: { href } }
+          : { type: 'text', text: match[1] });
+        continue;
+      }
+      match = matchPdfInlineAt(/\^([+\-−0-9])/y, source, cursor);
+      if (match) {
+        consume(match, { type: 'sup', text: match[1] });
+        continue;
+      }
+      match = matchPdfInlineAt(/_([+\-−0-9])/y, source, cursor);
+      if (match) {
+        consume(match, { type: 'sub', text: match[1] });
+        continue;
+      }
+      match = matchPdfInlineAt(/<\/?(?:sup|sub)\b[^>\n]{0,120}>/iy, source, cursor);
+      if (match) {
+        consume(match, null);
+        continue;
+      }
+      match = matchPdfInlineAt(PDF_INLINE_TAG, source, cursor);
+      if (match) {
+        consume(match, { type: 'text', text: ' ' });
+        continue;
+      }
+      match = matchPdfInlineAt(/\\tt(?=\s|[A-Z0-9])/y, source, cursor);
+      if (match) {
+        consume(match, null);
+        continue;
+      }
+      match = matchPdfInlineAt(/\\(?:bar|overline)(?=\s|[A-Z0-9]|$)/y, source, cursor);
+      if (match) {
+        consume(match, null);
+        continue;
+      }
+      if (source[cursor] === '$') {
+        const closing = findPdfDollarClose(source, cursor);
+        const content = closing >= 0 ? source.slice(cursor + 1, closing) : '';
+        if (closing >= 0 && looksLikeScientificMathRun(content)) {
+          flushPlain();
+          markdownInlineTokens(content).forEach(token =>
+            pushPdfInlineToken(tokens, token.type, token.text,
+              token.href ? { href: token.href } : {}));
+          cursor = closing + 1;
+        } else {
+          plain += '$';
+          cursor += 1;
+        }
+        continue;
+      }
+      match = matchPdfInlineAt(/\\([A-Za-z]+)\b/y, source, cursor);
+      if (match && SCIENCE_SYMBOLS[match[1]]) {
+        consume(match, { type: 'text', text: SCIENCE_SYMBOLS[match[1]] });
+        continue;
+      }
+      plain += source[cursor];
+      cursor += 1;
+    }
+    flushPlain();
     return tokens.filter(token => token.text);
   }
 
@@ -355,7 +801,10 @@
           return {
             text,
             ...(text !== source ? { markdown: source } : {}),
-            ...(Number(item?.depth) > 0 ? { depth: Number(item.depth) } : {})
+            ...(Number(item?.depth) > 0 ? { depth: Number(item.depth) } : {}),
+            ...(Number.isSafeInteger(item?.ordinal) && item.ordinal > 0
+              ? { ordinal: item.ordinal }
+              : {})
           };
         }).filter(item => item.text)
       });
@@ -479,7 +928,13 @@
         if (list.length && ordered !== listOrdered) flushList();
         listOrdered = ordered;
         const indentation = String(listItem[1] || '').replace(/\t/g, '  ').length;
-        list.push({ text: listItem[3].trim(), depth: Math.floor(indentation / 2) });
+        const orderedMarker = /^([0-9]{1,6})[.)]$/.exec(listItem[2]);
+        const ordinal = orderedMarker ? Number(orderedMarker[1]) : null;
+        list.push({
+          text: listItem[3].trim(),
+          depth: Math.floor(indentation / 2),
+          ...(Number.isSafeInteger(ordinal) && ordinal > 0 ? { ordinal } : {})
+        });
         return;
       }
       flushList();
@@ -496,7 +951,27 @@
     flushList();
     flushTable();
     if (inFence) flushCode();
-    return blocks;
+    return blocks.map((block, index) => ({
+      ...block,
+      id: `pdf-block-${index + 1}`
+    }));
+  }
+
+  function renderPdfListBlock(documentRef, block, appendInline) {
+    const list = documentRef.createElement(block?.ordered ? 'ol' : 'ul');
+    (block?.items || []).forEach(item => {
+      const listItem = documentRef.createElement('li');
+      if (block.ordered && Number.isSafeInteger(item?.ordinal) && item.ordinal > 0) {
+        listItem.value = item.ordinal;
+      }
+      if (typeof appendInline === 'function') {
+        appendInline(listItem, item?.markdown || item?.text || '');
+      } else {
+        listItem.textContent = String(item?.text || '');
+      }
+      list.appendChild(listItem);
+    });
+    return list;
   }
 
   function isPdfFigureCaptionText(value) {
@@ -578,32 +1053,95 @@
       .test(text);
   }
 
+  const PDF_CAPTION_CONTINUATION_PATTERNS = Object.freeze([
+    /^(?:[*†‡§]\s*)?p\s*[<=>≤≥]/i,
+    /^n\s*=/i,
+    /^scale bars?\b/i,
+    /^p[ -]?values?\b/i,
+    /^values?\s+(?:(?:are|were)\s+)?(?:(?:presented|shown|expressed|reported)\s+as\s+)?(?:mean|median)\b/i,
+    /^error bars?\s+(?:show|shown|indicate|represent|denote)(?:ed|s)?\s+(?:the\s+)?(?:s\.?(?:e\.?)?m\.?|s\.?(?:d\.?)?|standard (?:error|deviation)|confidence intervals?|interquartile range)\b/i,
+    /^data (?:are|were)\s+(?:(?:presented|shown|expressed|reported)\s+as\s+)?(?:mean|median)\b/i
+  ]);
+
+  function isPdfCaptionContinuationText(value) {
+    const text = cleanMarkdownInline(value).trim()
+      .replace(/^\\+(?=\*?p\s*[<=>≤≥])/i, '');
+    return PDF_CAPTION_CONTINUATION_PATTERNS.some(pattern => pattern.test(text));
+  }
+
+  function pdfBlockSignature(block) {
+    return JSON.stringify({
+      type: String(block?.type || ''),
+      text: String(block?.text || ''),
+      markdown: String(block?.markdown || ''),
+      source: String(block?.source || ''),
+      items: Array.isArray(block?.items)
+        ? block.items.map(item => String(item?.text || '')) : []
+    });
+  }
+
+  function pdfBlockIdentity(block) {
+    const explicitId = String(block?.id || '').trim();
+    if (explicitId) return explicitId;
+    const signature = pdfBlockSignature(block);
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < signature.length; index += 1) {
+      hash ^= signature.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `pdf-block-legacy-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  }
+
   function buildPdfFigureSemanticCaptions(blocks, pairs) {
     const input = Array.isArray(blocks) ? blocks : [];
     const sourcePairs = Array.isArray(pairs) ? pairs : associatePdfFigureCaptions(input);
     return sourcePairs.map(pair => {
       const parts = [String(pair.caption || '').trim()].filter(Boolean);
       const panelBlockIndices = [];
+      const consumedBlockIndices = [];
+      const consumedBlockIds = [];
+      const consumedBlocks = [];
       let cursor = pair.captionIndex + 1;
-      while (cursor < input.length && panelBlockIndices.length < 80) {
+      while (cursor < input.length && consumedBlockIndices.length < 80) {
         const block = input[cursor];
         if (!block) break;
         if (block.type === 'image' ||
             ((block.type === 'heading' || block.type === 'paragraph') &&
               isPdfFigureCaptionText(block.text))) break;
         if (block.type === 'heading') break;
-        if (block.type === 'paragraph' && isExplicitPanelLegendText(block.text)) {
+        if (block.type === 'paragraph' && (
+          isExplicitPanelLegendText(block.text) ||
+          isPdfCaptionContinuationText(block.text)
+        )) {
           parts.push(String(block.text || '').trim());
-          panelBlockIndices.push(cursor);
+          if (isExplicitPanelLegendText(block.text)) panelBlockIndices.push(cursor);
+          consumedBlockIndices.push(cursor);
+          consumedBlockIds.push(pdfBlockIdentity(block));
+          consumedBlocks.push({
+            id: pdfBlockIdentity(block),
+            signature: pdfBlockSignature(block)
+          });
           cursor += 1;
           continue;
         }
-        if (block.type === 'list' && block.items?.some(item =>
-          isExplicitPanelLegendText(item?.text))) {
+        const listItems = block.type === 'list' && Array.isArray(block.items)
+          ? block.items.filter(item => String(item?.text || '').trim()) : [];
+        if (listItems.length && listItems.every(item =>
+          isExplicitPanelLegendText(item?.text) ||
+          isPdfCaptionContinuationText(item?.text))) {
           block.items.forEach(item => {
-            if (isExplicitPanelLegendText(item?.text)) parts.push(item.text);
+            if (isExplicitPanelLegendText(item?.text) ||
+                isPdfCaptionContinuationText(item?.text)) parts.push(item.text);
           });
-          panelBlockIndices.push(cursor);
+          if (listItems.some(item => isExplicitPanelLegendText(item?.text))) {
+            panelBlockIndices.push(cursor);
+          }
+          consumedBlockIndices.push(cursor);
+          consumedBlockIds.push(pdfBlockIdentity(block));
+          consumedBlocks.push({
+            id: pdfBlockIdentity(block),
+            signature: pdfBlockSignature(block)
+          });
           cursor += 1;
           continue;
         }
@@ -612,7 +1150,10 @@
       return {
         ...pair,
         caption: parts.join('\n'),
-        panelBlockIndices
+        panelBlockIndices,
+        consumedBlockIndices,
+        consumedBlockIds,
+        consumedBlocks
       };
     });
   }
@@ -707,8 +1248,25 @@
     return first.index;
   }
 
-  function normalizePdfDocumentBlocks(blocks) {
+  function normalizePdfDocumentBlocks(blocks, semanticCaptions) {
     const input = Array.isArray(blocks) ? blocks : [];
+    const consumedBlockIds = new Set((Array.isArray(semanticCaptions)
+      ? semanticCaptions : []).flatMap(caption =>
+      Array.isArray(caption?.consumedBlockIds) ? caption.consumedBlockIds : []
+    ));
+    const consumedBlockKeyCounts = new Map();
+    (Array.isArray(semanticCaptions)
+      ? semanticCaptions : []).flatMap(caption =>
+      Array.isArray(caption?.consumedBlocks) ? caption.consumedBlocks : []
+    ).forEach(block => {
+      const key = `${block.id}\u0000${block.signature}`;
+      consumedBlockKeyCounts.set(key, (consumedBlockKeyCounts.get(key) || 0) + 1);
+    });
+    const inputIdCounts = new Map();
+    input.forEach(block => {
+      const id = pdfBlockIdentity(block);
+      inputIdCounts.set(id, (inputIdCounts.get(id) || 0) + 1);
+    });
     const methodOutlineLevels = pdfMethodOutlineLevels(input);
     const preferredTitleIndex = pdfPreferredDocumentTitleIndex(input);
     let documentTitleSeen = false;
@@ -734,6 +1292,14 @@
 
     input.forEach((block, index) => {
       if (!block || typeof block !== 'object') return;
+      const blockId = pdfBlockIdentity(block);
+      const blockKey = `${blockId}\u0000${pdfBlockSignature(block)}`;
+      const matchedCount = consumedBlockKeyCounts.get(blockKey) || 0;
+      if (matchedCount > 0) {
+        consumedBlockKeyCounts.set(blockKey, matchedCount - 1);
+        return;
+      }
+      if (inputIdCounts.get(blockId) === 1 && consumedBlockIds.has(blockId)) return;
       const text = repairPdfReflowText(block.text);
       if (block.type === 'paragraph' && text && !isPdfFigureCaptionText(text)) {
         if (isPdfMajorSectionTitle(text)) {
@@ -996,6 +1562,9 @@
           previous.markdown = `${previousSource} ${block.markdown || text}`
             .replace(/\s+/g, ' ').trim();
         }
+        if (Number.isSafeInteger(previous.pageNumber) &&
+            Number.isSafeInteger(block.pageNumber) &&
+            previous.pageNumber !== block.pageNumber) delete previous.pageNumber;
         emittedHeadings.delete(previousComparable);
         emittedHeadings.add(comparablePdfHeading(previous.text));
         return;
@@ -1027,8 +1596,7 @@
       ...caption,
       groupIndex: index,
       imageIndices: [],
-      anchorIndex: caption.captionIndex,
-      consumedBlockIndices: []
+      anchorIndex: caption.captionIndex
     }));
     const imageIndices = input.flatMap((block, index) =>
       block?.type === 'image' ? [index] : []
@@ -1062,7 +1630,7 @@
       group.anchorIndex = Math.min(group.captionIndex, ...group.imageIndices);
       group.consumedBlockIndices = [...new Set([
         group.captionIndex,
-        ...(group.panelBlockIndices || []),
+        ...(group.consumedBlockIndices || group.panelBlockIndices || []),
         ...group.imageIndices
       ])].sort((a, b) => a - b);
       return group;
@@ -1354,10 +1922,12 @@
     PDF_MINERU_MAX_FILE_BYTES,
     normalizePdfSourceUrl,
     buildLocalPdfWorkspaceUrl,
+    withLocalPdfWorkspaceSource,
     isPdfReaderUrl,
     isLikelyPdfUrl,
     createPdfReaderUrl,
     normalizeMineruPdfSettings,
+    planOriginalPdfTextEnhancement,
     hasPdfByteSignature,
     mineruUsageDay,
     normalizeMineruUsageLedger,
@@ -1368,10 +1938,12 @@
     markdownInlineTokens,
     parseMarkdownImage,
     markdownToPdfBlocks,
+    renderPdfListBlock,
     isPdfFigureCaptionText,
     isPdfTableCaptionText,
     associatePdfFigureCaptions,
     isExplicitPanelLegendText,
+    isPdfCaptionContinuationText,
     buildPdfFigureSemanticCaptions,
     stripPdfHeadingNumbering,
     pdfHeadingNumberDepth,

@@ -172,6 +172,12 @@
       ...makeCategorySnapshot(input.categorySnapshot)
     };
 
+    const pdfAnchor = input.pdfAnchor === undefined || input.pdfAnchor === null
+      ? undefined
+      : (typeof shared.normalizePdfAnchor === 'function'
+        ? shared.normalizePdfAnchor(input.pdfAnchor)
+        : fail('PDF_ANNOTATION_SUPPORT_UNAVAILABLE'));
+
     return {
       ...cloneJsonLike(input),
       annotationId,
@@ -187,7 +193,8 @@
       note,
       status,
       createdAt: normalizeTimestamp(input.createdAt, 'INVALID_CREATED_AT'),
-      updatedAt: normalizeTimestamp(input.updatedAt, 'INVALID_UPDATED_AT')
+      updatedAt: normalizeTimestamp(input.updatedAt, 'INVALID_UPDATED_AT'),
+      ...(pdfAnchor ? { pdfAnchor } : {})
     };
   }
 
@@ -345,6 +352,81 @@
     return { status: 'unresolved', reason: 'NOT_FOUND' };
   }
 
+  function sameManualAnnotationRefreshIdentity(committedState, response, expectedTabId) {
+    const tabId = Number(expectedTabId);
+    const documentId = unicodeText(response?.documentId).trim();
+    const documentHash = unicodeText(response?.documentHash).trim();
+    const canonicalUrl = unicodeText(response?.canonicalUrl).trim();
+    const contentWorldNonce = unicodeText(response?.contentWorldNonce).trim();
+    const documentEpoch = Number(response?.documentEpoch);
+    if (!Number.isSafeInteger(tabId) || !documentId || !documentHash || !canonicalUrl ||
+      !/^[a-f0-9]{32,64}$/iu.test(contentWorldNonce) ||
+      !Number.isSafeInteger(documentEpoch) || documentEpoch < 1) return false;
+    return Number(committedState?.tabId) === tabId &&
+      unicodeText(committedState?.documentId).trim() === documentId &&
+      unicodeText(committedState?.documentHash).trim() === documentHash &&
+      unicodeText(committedState?.canonicalUrl).trim() === canonicalUrl &&
+      unicodeText(committedState?.contentWorldNonce).trim() === contentWorldNonce &&
+      Number(committedState?.documentEpoch) === documentEpoch;
+  }
+
+  function normalizeRefreshTabUrl(value) {
+    if (typeof shared.normalizeTabDocumentUrl === 'function') {
+      return shared.normalizeTabDocumentUrl(value);
+    }
+    return unicodeText(value).trim().replace(/#.*$/u, '');
+  }
+
+  function manualAnnotationRefreshCommitMode(input = {}) {
+    const expectedTabId = Number(input.expectedTabId);
+    const capturedTabId = Number(input.capturedTab?.id);
+    const currentTabId = Number(input.currentTab?.id);
+    const capturedUrl = normalizeRefreshTabUrl(
+      input.capturedTab?.url || input.capturedTab?.pendingUrl
+    );
+    const currentUrl = normalizeRefreshTabUrl(
+      input.currentTab?.url || input.currentTab?.pendingUrl
+    );
+    const response = input.response;
+    const liveProof = input.liveProof;
+    const responseIdentity = {
+      tabId: expectedTabId,
+      documentId: unicodeText(response?.documentId).trim(),
+      documentHash: unicodeText(response?.documentHash).trim(),
+      canonicalUrl: unicodeText(response?.canonicalUrl).trim(),
+      contentWorldNonce: unicodeText(response?.contentWorldNonce).trim(),
+      documentEpoch: Number(response?.documentEpoch)
+    };
+    if (!Number.isSafeInteger(expectedTabId) ||
+      capturedTabId !== expectedTabId || currentTabId !== expectedTabId ||
+      !capturedUrl || capturedUrl !== currentUrl ||
+      !sameManualAnnotationRefreshIdentity(responseIdentity, response, expectedTabId) ||
+      !sameManualAnnotationRefreshIdentity(responseIdentity, liveProof, expectedTabId)) return null;
+    if (input.superseded === true) {
+      return sameManualAnnotationRefreshIdentity(
+        input.committedState,
+        response,
+        expectedTabId
+      ) ? 'committed' : null;
+    }
+    return 'response';
+  }
+
+  function manualAnnotationEventCommitMode(
+    verifiedState,
+    event,
+    eventTabId,
+    activeTabId
+  ) {
+    const tabId = Number(eventTabId);
+    if (!Number.isSafeInteger(tabId) || tabId !== Number(activeTabId)) return 'ignore';
+    return sameManualAnnotationRefreshIdentity(
+      verifiedState,
+      event,
+      tabId
+    ) ? 'verified' : 'refresh';
+  }
+
   return {
     MAX_NOTE_LENGTH,
     WARNING_ANNOTATIONS_PER_DOCUMENT,
@@ -353,6 +435,9 @@
     normalizeManualAnnotation,
     normalizeDocumentRecord,
     locateAnnotationInBlocks,
-    makeCategorySnapshot
+    makeCategorySnapshot,
+    sameManualAnnotationRefreshIdentity,
+    manualAnnotationRefreshCommitMode,
+    manualAnnotationEventCommitMode
   };
 });

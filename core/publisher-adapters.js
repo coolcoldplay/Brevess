@@ -190,6 +190,7 @@
       outlineRootSelectors: ['#artText .nav', '.article-toc'],
       headingSelectors: ['.title', '.heading'],
       paragraphSelectors: ['#artText p'],
+      excludedSelectors: ['figshare-widget', '.figshare-loader'],
       stabilitySelectors: ['#artText']
     }),
     createAdapter({

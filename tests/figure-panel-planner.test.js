@@ -68,6 +68,58 @@ test('extracts only the shared legend and target-Panel caption range', () => {
   assert.doesNotMatch(panelB.combined, /Treatment groups and tumor volume/);
 });
 
+test('preserves scientific source text from caption and body through Panel planning', () => {
+  const caption = 'Figure 1. Values use p < 0.05. (A) Dose was 10² units and x > 1. (B) Control.';
+  const extracted = extractFigurePanelCaption(caption, 'A');
+  assert.match(extracted.sharedLegend, /p < 0\.05/u);
+  assert.match(extracted.targetText, /10² units and x > 1/u);
+  assert.doesNotMatch(extracted.targetText, /102 units/u);
+  const fullWidthMarker = extractFigurePanelCaption(
+    'Ｆｉｇｕｒｅ 1. （Ａ） Dose was 10² units. （Ｂ） Control.', 'A'
+  );
+  assert.match(fullWidthMarker.targetText, /（Ａ） Dose was 10² units/u);
+  assert.doesNotMatch(fullWidthMarker.targetText, /（Ｂ） Control/u);
+
+  const plans = buildFigurePanelPlans({
+    requestMode: 'followup', documentHash: '9'.repeat(64),
+    figureId: 'figure-1', figureLabel: 'Figure 1', panelId: 'A', caption,
+    contextParagraphs: [{ paragraphId: 'science-1', sectionTitle: 'Results',
+      text: '🧪 Figure 1A reports dose 10² units with p < 0.05.' }],
+    customQuestion: 'What does Figure 1A report?', imageVariants: [],
+    contextWindowTokens: 8192, outputTokens: 2048
+  });
+  assert.equal(plans.length, 1);
+  assert.match(plans[0].captionEvidence.targetText, /10² units and x > 1/u);
+  assert.equal(plans[0].contextParagraphs[0].text,
+    '🧪 Figure 1A reports dose 10² units with p < 0.05.');
+  assert.ok(plans[0].estimatedInputTokens <= plans[0].inputBudgetTokens);
+});
+
+test('extracts lowercase grouped Nature legends without treating crossrefs or acronyms as Panels', () => {
+  const caption = [
+    'Extended Data Fig. 1. Values are mean ± s.e.m.',
+    'a, Quality-control data.',
+    'b–d, Independent validation assays.',
+    'e,f, Rescue and replication.',
+    'See Extended Data Fig. 2a. n.s., not significant; P, probability.'
+  ].join(' ');
+
+  const panelC = extractFigurePanelCaption(caption, 'C');
+  const panelF = extractFigurePanelCaption(caption, 'F');
+
+  assert.match(panelC.sharedLegend, /mean ± s\.e\.m/);
+  assert.match(panelC.targetText, /Independent validation assays/);
+  assert.doesNotMatch(panelC.targetText, /Quality-control|Rescue/);
+  assert.match(panelF.targetText, /Rescue and replication/);
+});
+
+test('does not split a caption on isolated inline cross-reference or acronym letters', () => {
+  const caption = 'Figure 3. See Extended Data Fig. 1a. n.s., not significant; P, probability.';
+  const result = extractFigurePanelCaption(caption, 'P');
+  assert.equal(result.sharedLegend, '');
+  assert.equal(result.targetText, caption);
+});
+
 test('selects two to four topic-relevant body paragraphs with stable identities', () => {
   const selected = selectFigurePanelParagraphs(paragraphs, {
     panelId: 'A', figureLabel: 'Figure 2', topic: 'grouping_stats',
@@ -174,6 +226,30 @@ test('never invents input capacity when the requested output leaves too little c
   assert.deepEqual(plans, []);
 });
 
+test('budgets the verbatim scientific source rather than a shorter NFKC search projection', () => {
+  const jamo = '\u1100\u1161\u11a8';
+  const caption = `Figure 1. (A) ${jamo.repeat(400)}`;
+  const contextParagraphs = Array.from({ length: 4 }, (_, index) => ({
+    paragraphId: `jamo-${index + 1}`, sectionTitle: 'Results',
+    text: `Figure 1A reports ${jamo.repeat(500)}`
+  }));
+  assert.equal(caption.length, 1214);
+  assert.equal(contextParagraphs[0].text.length, 1518);
+  assert.equal(contextParagraphs[0].text.normalize('NFKC').length, 518);
+
+  const input = {
+    requestMode: 'followup', documentHash: '8'.repeat(64),
+    figureId: 'figure-1', figureLabel: 'Figure 1', panelId: 'A', caption,
+    contextParagraphs, customQuestion: 'Explain Figure 1A.', imageVariants: [],
+    contextWindowTokens: 8192
+  };
+  assert.deepEqual(buildFigurePanelPlans({ ...input, outputTokens: 3072 }), []);
+  const admitted = buildFigurePanelPlans({ ...input, outputTokens: 2944 });
+  assert.equal(admitted.length, 1);
+  assert.ok(admitted[0].estimatedInputTokens > 3532);
+  assert.ok(admitted[0].estimatedInputTokens <= admitted[0].inputBudgetTokens);
+});
+
 test('estimates larger images as larger inputs and isolates every Panel cache key', () => {
   const small = estimateFigurePanelInputTokens({ text: 'same', width: 768, height: 512 });
   const large = estimateFigurePanelInputTokens({ text: 'same', width: 1200, height: 900 });
@@ -199,4 +275,37 @@ test('recognizes only capacity-shaped failures for smaller-payload retries', () 
   assert.equal(isFigurePanelCapacityError({ code: 'PROVIDER_REJECTED', message: 'image is too large' }), true);
   assert.equal(isFigurePanelCapacityError({ code: 'AUTH_INVALID' }), false);
   assert.equal(isFigurePanelCapacityError({ code: 'RATE_LIMITED' }), false);
+});
+
+test('preserves each native PDF variant proof and binds text fallback to the same semantic context', () => {
+  const binding = { documentHash: 'a'.repeat(64), documentGeneration: 2, semanticRevision: 3 };
+  const semanticContextDigest = 'b'.repeat(64);
+  const variant = imageVariant(1200, 1200, 900, 'panel_crop');
+  variant.assetProof = {
+    assetId: `pdfa-${'c'.repeat(48)}`, imageContentHash: 'd'.repeat(64),
+    ...binding, figureId: 'figure-2', sourceType: 'panel', sourceSlot: 'panel-a-1200',
+    pageNumbers: [2], mimeType: 'image/jpeg', width: 1200, height: 900,
+    assetRevision: 1, cropRevision: 1, parentAssetId: `pdfa-${'e'.repeat(48)}`,
+    parentImageContentHash: 'f'.repeat(64), rect: { x: 0, y: 0, width: 1, height: 1 },
+    encoderRevision: 1
+  };
+  variant.pdfEvidenceBinding = { figureId: 'figure-2', binding,
+    semanticContextDigest, assetProof: variant.assetProof };
+  const plans = buildFigurePanelPlans({
+    requestMode: 'interpretation', figureId: 'figure-2', figureLabel: 'Figure 2',
+    panelId: 'A', caption: 'Figure 2. (A) Result.', contextParagraphs: paragraphs,
+    imageVariants: [variant], pdfEvidenceBinding: { figureId: 'figure-2', binding,
+      semanticContextDigest, assetProof: null }, contextWindowTokens: 32768, outputTokens: 2048
+  });
+  assert.equal(plans[0].assetProof.assetId, variant.assetProof.assetId);
+  assert.deepEqual(plans[0].pdfEvidenceBinding, variant.pdfEvidenceBinding);
+  assert.equal(plans.at(-1).assetProof, null);
+  assert.equal(plans.at(-1).pdfEvidenceBinding.semanticContextDigest, semanticContextDigest);
+  assert.notEqual(buildFigurePanelCacheKey({
+    documentHash: binding.documentHash, figureHash: 'f', panelId: 'A',
+    pdfEvidenceBinding: plans[0].pdfEvidenceBinding
+  }), buildFigurePanelCacheKey({
+    documentHash: binding.documentHash, figureHash: 'f', panelId: 'A',
+    pdfEvidenceBinding: plans.at(-1).pdfEvidenceBinding
+  }));
 });

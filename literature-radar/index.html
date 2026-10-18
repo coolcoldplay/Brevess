@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>文献雷达 · Brevess</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div><p class="eyebrow">BREVESS / LITERATURE RADAR</p><h1>文献雷达</h1><p class="intro">让新文献，沿着你的研究问题汇集。</p></div>
+    <button class="primary" id="new-radar" type="button">新建追踪任务 <span aria-hidden="true">＋</span></button>
+  </header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <div class="layout">
+    <aside class="trackers" aria-label="文献追踪任务">
+      <div class="section-label"><span>追踪任务</span><span id="radar-count">00</span></div>
+      <div id="radar-list"></div>
+      <div class="side-note"><strong>本机保存 · PubMed</strong><p>固定检索式，持续发现。其他文献源尚未接入。</p><p id="schedule-mode">正在读取运行状态…</p></div>
+    </aside>
+    <main id="feed" aria-label="文献时间流">
+      <div id="empty" class="empty"><span class="empty-mark" aria-hidden="true">⌁</span><h2>从一个研究问题开始</h2><p>新建文献追踪任务，保存 PubMed 检索式。首次检索建立基线，后续新增按时间汇集在这里。</p><p class="muted">支持字段标签、布尔逻辑和 PubMed 原生检索语法。</p></div>
+      <section id="radar-detail" hidden>
+        <div class="detail-heading"><div><p class="eyebrow">PUBMED / SAVED SEARCH</p><h2 id="radar-name"></h2></div><div class="actions"><button id="edit-radar" type="button">编辑检索式</button><button id="check-radar" class="primary" type="button">立即检查</button></div></div>
+        <p id="query-preview" class="query"></p>
+        <div class="scan-status"><span id="scan-state"></span><button id="toggle-radar" class="text-button" type="button">暂停自动检查</button></div>
+        <dl class="scan-times"><div><dt>最近成功检查</dt><dd id="last-success">尚未检查</dd></div><div><dt>最近尝试</dt><dd id="last-attempt">尚未检查</dd></div><div><dt>监测间隔</dt><dd id="interval"></dd></div></dl>
+        <p id="scan-window" class="muted"></p>
+        <div id="scan-error" class="error-box" role="status" hidden></div>
+        <details class="method"><summary>检索口径与运行说明</summary><p>按 PubMed 记录创建日期 CRDT 检索，向前重叠 7 天，以 PMID 去重。首次结果属于基线；“新增”是后续检查首次发现的匹配记录。晚到索引和历史修订超过重叠范围可能漏检。按入库日期由新到旧排列；日期缺失时用本机首次发现时间。</p><p>检索时间按 UTC 日界覆盖；七天重叠避免同日漏检。浏览器关闭时不运行，休眠恢复后补查到期任务。每次完整检查成功才更新进度。最多每次处理 5,000 篇，超限会明确失败并保留进度。</p><p>检索式会发送给 NCBI；任务与结果保存在本机扩展数据库。没有邮件、外部推送或自动 AI 分析。</p><a href="https://pubmed.ncbi.nlm.nih.gov/help/#crdt" target="_blank" rel="noopener noreferrer">PubMed 日期与检索说明 ↗</a><p id="query-translation"></p><p id="query-warnings"></p></details>
+        <div class="feed-controls"><div class="filters" role="group" aria-label="文献类型"><button data-filter="new" aria-pressed="true">新增 <span id="count-new">0</span></button><button data-filter="baseline" aria-pressed="false">基线 <span id="count-baseline">0</span></button><button data-filter="all" aria-pressed="false">全部 <span id="count-all">0</span></button></div><label class="revision-label">检索版本<select id="revision" aria-label="检索版本"></select></label></div>
+        <details class="ai-panel" id="relevance-panel"><summary>AI 相关性评分</summary>
+          <p class="hint">使用“语义查找”配置的模型，依据标题和摘要逐篇评分。仅点击开始后调用模型；扫描、展开和排序不调用 AI。</p>
+          <label for="score-description">相关性描述</label><textarea id="score-description" rows="2" maxlength="4000" placeholder="例如：胶质母细胞瘤免疫治疗中，肿瘤微环境对治疗响应的影响"></textarea>
+          <div class="form-grid"><div><label for="score-start">PubMed 入库日期 · 从</label><input id="score-start" type="date"></div><div><label for="score-end">至（含当日）</label><input id="score-end" type="date"></div></div>
+          <p id="score-count" class="hint"></p><div class="ai-actions"><button id="score-papers" type="button">开始 / 继续评分</button><button id="stop-scoring" type="button" disabled>停止</button></div>
+          <p id="score-status" role="status"></p><p id="score-model" class="hint"></p><label for="score-history">已保存的评分任务</label><select id="score-history"><option value="">选择已保存的评分任务</option></select>
+        </details>
+        <div class="feed-meta"><span id="feed-description"></span><label><input type="checkbox" id="unread-only"> 仅未读</label></div>
+        <div class="enrichment-controls"><button id="backfill-abstracts" type="button">补齐摘要</button><label for="paper-sort">排序</label><select id="paper-sort"><option value="time">时间从新到旧</option><option value="relevance">相关性从高到低</option></select><span class="hint">指向标题或摘要，按 Alt 查看中文对照</span></div>
+        <div id="paper-list" class="waterfall"></div>
+        <button id="load-more" class="load-more" type="button" hidden>加载更多</button>
+      </section>
+    </main>
+  </div>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form id="radar-form">
+      <div class="editor-heading"><div><p class="eyebrow">SAVED SEARCH</p><h2 id="editor-title">新建文献追踪任务</h2></div><button id="close-editor" type="button" aria-label="关闭编辑">×</button></div>
+      <label for="name">雷达名称</label><input id="name" name="name" maxlength="120" required placeholder="例如：胶质母细胞瘤免疫治疗">
+      <label for="query">PubMed 检索式</label><textarea id="query" name="query" rows="5" maxlength="4000" required spellcheck="false" placeholder="glioblastoma[tiab] AND immunotherapy[tiab]"></textarea>
+      <details class="ai-panel" id="query-ai-panel"><summary>AI 生成检索式</summary>
+        <p class="hint">使用全局默认模型生成可编辑候选。原检索式保留，应用后仍需手动保存。</p>
+        <label for="query-need">研究需求或已有检索式</label><textarea id="query-need" rows="3" maxlength="4000" placeholder="用中文或英文描述希望追踪的研究"></textarea>
+        <div class="ai-actions"><button id="generate-query" type="button">AI 生成候选</button><button id="cancel-query-ai" type="button">停止生成</button></div><p id="query-ai-status" role="status"></p>
+        <div id="query-candidate-area" hidden><label for="query-candidate">候选检索式（可编辑）</label><textarea id="query-candidate" rows="4" maxlength="4000"></textarea><div class="ai-actions"><button id="validate-query" type="button">验证 PubMed 解析</button><button id="apply-query" type="button">应用候选</button></div><p id="query-validation" class="hint" role="status"></p></div>
+      </details>
+      <p class="hint">保留 PubMed 原生语法。请使用可长期复用的检索式，监测日期由雷达添加。<a id="preview-query" href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank" rel="noopener noreferrer">在 PubMed 预览 ↗</a></p>
+      <div class="form-grid"><div><label for="frequency">监测间隔（小时）</label><input id="frequency" name="frequency" type="number" min="0" max="720" step="1" value="24" required><p class="hint">1–720 小时；0 表示仅手动检查。</p></div><div><label for="baseline">首次回溯</label><select id="baseline" name="baseline"><option value="1">今天入库</option><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option></select><p class="hint">首次结果单列为基线，不计为新增。</p></div></div>
+      <label class="checkbox-label"><input id="enabled" name="enabled" type="checkbox" checked> 启用自动检查</label>
+      <p id="edit-note" class="hint">启用后，在运行条件允许时检查到期任务。</p><p id="form-error" role="alert"></p>
+      <div class="form-actions"><button id="cancel-editor" type="button">取消</button><button class="primary" type="submit">保存雷达</button></div>
+    </form>
+  </dialog>
+  <script src="../core/literature-radar-model.js"></script><script src="../core/literature-radar-store.js"></script><script src="../core/literature-radar-pubmed.js"></script><script src="../core/literature-radar-service.js"></script><script src="../core/literature-radar-agent-tools.js"></script><script src="../core/literature-radar-ai.js"></script><script src="../core/local-translator.js"></script><script src="enrichment.js"></script><script src="app.js"></script>
+</body>
+</html>

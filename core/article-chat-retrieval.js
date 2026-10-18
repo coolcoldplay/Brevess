@@ -168,13 +168,20 @@
       const exactPhraseBoost = phrases.reduce((sum, phrase) =>
         sum + (normalizedText.includes(phrase) ? 5 : 0), 0);
       const headingBoost = sectionBoost(chunk, normalizedQuery);
+      const figureNumbers = value => [...value.matchAll(/(?:\bfig(?:ure)?[\s:._-]*|图\s*)(s?\d+)(?!\d)/giu)]
+        .map(match => match[1].toLowerCase());
+      const requestedFigures = figureNumbers(normalizedQuery);
+      const captionFigures = chunk.recordType === 'figure-caption'
+        ? figureNumbers(`${chunk.sectionTitle} ${normalizedText.slice(0, 500)}`) : [];
+      const figureBoost = requestedFigures.some(number => captionFigures.includes(number)) ? 12 : 0;
       return {
         ...chunk,
-        score: bm25 + exactPhraseBoost + headingBoost,
+        score: bm25 + exactPhraseBoost + headingBoost + figureBoost,
         explanation: {
           bm25,
           exactPhraseBoost,
           sectionBoost: headingBoost,
+          figureBoost,
           embeddingSimilarity: 0,
           rrf: 0
         }

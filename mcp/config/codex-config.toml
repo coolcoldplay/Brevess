@@ -1,0 +1,14 @@
+# This HTTP form was verified by the coordinating session with an isolated
+# CODEX_HOME. Start the MCP server separately; do not edit the user's main
+# config unless they explicitly ask.
+
+[mcp_servers.brevess]
+url = "http://127.0.0.1:9537/mcp"
+bearer_token_env_var = "BREVESS_MCP_TOKEN"
+
+# Start the matching server in another terminal:
+# node mcp/server.js --http-only --allow-write
+#
+# The token must be the same local bridge token printed by the server. Never
+# put an OpenAI/DeepSeek API key in this setting.
+

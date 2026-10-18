@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const { selectPublisherAdapter } = require('../core/publisher-adapters.js');
 require('../core/article-structure.js');
 const {
@@ -16,10 +19,34 @@ const {
   selectContentRoot,
   diagnoseArticleExtraction,
   extractArticle,
+  buildArticleStructureFromRecords,
+  buildArticleIndexFromRecords,
   extractArticleStructure,
+  outlineRecordsAreReliable,
   prepareReviewOutlineParagraphs,
   summarizeArticleRecords
 } = require('../core/article-extractor.js');
+const { extractArticleFigures } = require('../core/figure-extractor.js');
+
+test('rejects a title-complete outline that captures only a small fraction of the article body', () => {
+  const headings = ['Abstract', 'Introduction', 'Results', 'Discussion', 'Methods'];
+  const outlineRecords = headings.flatMap((title, index) => [{
+    recordType: 'body',
+    sectionId: `outline-${index}`,
+    sectionTitle: title,
+    text: `${title} outline excerpt with one short scientific paragraph.`
+  }]);
+  const rootRecords = headings.flatMap((title, sectionIndex) =>
+    Array.from({ length: 10 }, (_, paragraphIndex) => ({
+      recordType: 'body',
+      sectionId: `root-${sectionIndex}`,
+      sectionTitle: title,
+      text: `${title} complete scientific paragraph ${paragraphIndex + 1} with methods, evidence, results, and interpretation.`
+    }))
+  );
+
+  assert.equal(outlineRecordsAreReliable(outlineRecords, rootRecords), false);
+});
 
 test('filters numbered inline citation flyouts without dropping the References section', () => {
   const flyout =
@@ -53,6 +80,29 @@ test('preserves scientific superscript and subscript semantics in display text',
   );
 
   assert.equal(scientificInlineText(root), 'Ca<sup>2+</sup> and H<sub>2</sub>O');
+});
+
+test('plugin note UI cannot change canonical text while highlight contents and scientific notation remain', () => {
+  const text = value => ({ nodeType: 3, nodeValue: value });
+  const element = (tagName, childNodes, pluginUi = false) => ({
+    nodeType: 1, tagName, childNodes,
+    matches: selector => pluginUi && selector.includes('[data-sci-plugin-ui]')
+  });
+  const original = element('P', [text('Response for Ca'), element('SUP', [text('2+')]),
+    text(' in H'), element('SUB', [text('2')]), text('O remained stable.')]);
+  const highlighted = element('P', [text('Response for '), element('MARK', [text('Ca'),
+    element('SUP', [text('2+')])]), text(' in H'), element('SUB', [text('2')]),
+    text('O remained stable.'), element('BUTTON', [text('备注')], true),
+    element('SPAN', [element('STRONG', [text('plugin details')])], true)]);
+  assert.equal(scientificInlineText(highlighted), scientificInlineText(original));
+  const records = root => buildParagraphRecords([
+    { kind: 'heading', level: 2, text: 'Results' },
+    { kind: 'paragraph', text: scientificInlineText(root) }
+  ]);
+  assert.deepEqual(records(highlighted), records(original));
+  const onlyUi = element('P', [text('plugin paragraph')], true);
+  assert.equal(scientificInlineText(onlyUi), '');
+  assert.deepEqual(records(onlyUi), []);
 });
 
 test('keeps immersive translation out of canonical text but renders heading translation on a new line', () => {
@@ -607,7 +657,7 @@ test('reports privacy-safe extraction diagnostics for the selected content root'
 
   const diagnostics = diagnoseArticleExtraction(documentRef);
 
-  assert.equal(diagnostics.version, '2.1.0-extractor-r17');
+  assert.equal(diagnostics.version, '2.1.0-extractor-r18');
   assert.equal(diagnostics.candidateCount, 2);
   assert.equal(diagnostics.selectedRoot, 'MAIN#paper.article-main.content');
   assert.deepEqual(diagnostics.selected, {
@@ -2026,4 +2076,128 @@ test('recovers Cell Highlights and Summary when the publisher outline omits them
     'Highlights', 'Summary', 'Introduction', 'Results'
   ], JSON.stringify(structure));
   assert.equal(structure.paragraphs.some(item => /Author affiliations/.test(item.text)), false);
+});
+
+test('builds structure and Figure inventory from one shared typed-record pass', () => {
+  const heading = {
+    tagName: 'H2', id: '', className: '', textContent: 'Results', dataset: {},
+    closest: () => null, querySelector: () => null, querySelectorAll: () => [],
+    getAttribute: () => null
+  };
+  const paragraph = {
+    tagName: 'P', id: '', className: '',
+    textContent: 'Figure 1 shows the intervention reduced the measured phenotype in the experimental cohort.',
+    dataset: {}, closest: () => null, querySelector: () => null, querySelectorAll: () => [],
+    getAttribute: () => null
+  };
+  const captionElement = {
+    textContent: 'Figure 1. (A) Intervention overview. (B) Quantified response.',
+    querySelector: () => null,
+    getAttribute: () => ''
+  };
+  const imageElement = {
+    currentSrc: 'https://journal.example/figure-1.jpg', naturalWidth: 1200, naturalHeight: 800,
+    width: 1200, height: 800,
+    getAttribute: name => name === 'src' ? 'https://journal.example/figure-1.jpg' : ''
+  };
+  const captionRecordElement = {
+    tagName: 'FIGCAPTION', id: '', className: '', textContent: captionElement.textContent,
+    dataset: {}, closest: () => null, querySelector: () => null, querySelectorAll: () => [],
+    getAttribute: () => null
+  };
+  const figureElement = {
+    textContent: captionElement.textContent, className: '',
+    closest: () => null,
+    querySelector: selector => /figcaption|caption|description/i.test(selector)
+      ? captionElement : null,
+    querySelectorAll: selector => /img/i.test(selector) ? [imageElement] :
+      /figcaption|caption|description/i.test(selector) ? [captionElement] : [],
+    getAttribute: () => ''
+  };
+  let contentCollectionCount = 0;
+  let rejectAdditionalArticleCollection = false;
+  const root = {
+    tagName: 'MAIN', id: '', className: '',
+    querySelectorAll: () => {
+      contentCollectionCount += 1;
+      if (rejectAdditionalArticleCollection) {
+        throw new Error('composite must reuse the supplied typed records');
+      }
+      return [heading, paragraph, captionRecordElement];
+    },
+    getAttribute: () => null
+  };
+  const documentRef = {
+    title: 'Shared typed-record fixture', body: root,
+    querySelectorAll: selector => {
+      if (selector.includes('.figure-wrap')) return [figureElement];
+      if (selector.includes('figcaption') || selector.includes('caption') ||
+          selector.includes('.c-article-section')) return [];
+      if (selector.includes('article') || selector.includes('main')) return [root];
+      return [];
+    },
+    querySelector: () => root
+  };
+  const typedRecords = extractArticle(documentRef, { includeTyped: true });
+  const expectedStructure = buildArticleStructureFromRecords(documentRef, typedRecords);
+  const expectedFigures = extractArticleFigures(documentRef, typedRecords);
+  const firstPassContentCollectionCount = contentCollectionCount;
+  assert.ok(firstPassContentCollectionCount > 0);
+  rejectAdditionalArticleCollection = true;
+  const index = buildArticleIndexFromRecords(documentRef, typedRecords);
+
+  assert.equal(contentCollectionCount, firstPassContentCollectionCount);
+  assert.deepEqual(index.structure.nodes.map(node => node.title), ['Results']);
+  assert.deepEqual(index.structure, expectedStructure);
+  assert.deepEqual(index.figures.map(item => ({
+    figureId: item.figureId,
+    panelHints: item.panelHints,
+    contextParagraphs: item.contextParagraphs
+  })), expectedFigures.map(item => ({
+    figureId: item.figureId,
+    panelHints: item.panelHints,
+    contextParagraphs: item.contextParagraphs
+  })));
+  assert.strictEqual(index.typedRecords, typedRecords);
+  assert.strictEqual(index.figures[0].element, figureElement);
+  assert.strictEqual(index.figures[0].captionElement, captionElement);
+  assert.strictEqual(index.figures[0].imageElements[0], imageElement);
+});
+
+test('resolves the Figure extractor after article extractor loads into an empty UMD namespace', () => {
+  const context = vm.createContext({});
+  const load = filename => vm.runInContext(fs.readFileSync(
+    path.join(__dirname, '..', 'core', filename), 'utf8'
+  ), context, { filename });
+  load('article-extractor.js');
+  load('article-structure.js');
+  load('figure-extractor.js');
+
+  const captionElement = {
+    textContent: 'Figure 2. (A) Isolated load-order fixture.',
+    querySelector: () => null,
+    getAttribute: () => ''
+  };
+  const figureElement = {
+    textContent: captionElement.textContent, className: '', closest: () => null,
+    querySelector: () => captionElement,
+    querySelectorAll: selector => /caption|description/i.test(selector) ? [captionElement] : [],
+    getAttribute: () => ''
+  };
+  const documentRef = {
+    title: 'UMD load-order fixture',
+    querySelectorAll: selector => selector.includes('.figure-wrap') ? [figureElement] : []
+  };
+  const records = [{
+    recordType: 'body', paragraphId: 'results-p-001', sourceIdentity: 'results-p-001',
+    sectionId: 'sec-results', sectionTitle: 'Results', headingLevel: 2,
+    headingPath: [{ level: 2, sectionId: 'sec-results', title: 'Results' }],
+    textHash: 'fixture', text: 'Figure 2 provides the isolated result.', kind: 'paragraph'
+  }];
+
+  const index = context.SciLLM.buildArticleIndexFromRecords(documentRef, records);
+
+  assert.equal(index.structure.nodes[0].title, 'Results');
+  assert.equal(index.figures[0].figureId, 'figure-2');
+  assert.strictEqual(index.figures[0].element, figureElement);
 });

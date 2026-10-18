@@ -30,6 +30,17 @@
   const byId = id => document.getElementById(id);
   const text = (value, maximum = 12000) => String(value || '')
     .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
+  function safeMechanismDisplayLabel(value) {
+    return text(value, 180)
+      .replace(/<[^>]*>/gu, ' ')
+      .replace(/\b(?:javascript|data|vbscript)\s*:/giu, ' ')
+      .replace(/\b(?:panel|figure|fig\.?)\s*[a-z0-9._-]*/giu, ' ')
+      .replace(/(?:面板|图)\s*[a-z0-9一二三四五六七八九十._-]+/giu, ' ')
+      .replace(/[\[\]{}<>"'`]/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 120) || '未命名节点';
+  }
   const uid = prefix => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const icon = name => {
     const node = document.createElement('i');
@@ -260,6 +271,45 @@
     return card;
   }
 
+  function appendScientificQuestionGraph(parent, questions) {
+    const items = Array.isArray(questions) ? questions : [];
+    const byQuestionId = new Map(items.map(question => [
+      question.questionId, question.text || question.questionId
+    ]));
+    const relationLabels = {
+      root: '总问题', progressive: '递进', parallel: '并列', branch: '分支',
+      convergent: '汇合', validation: '验证'
+    };
+    const list = document.createElement('ol');
+    if (!items.length) {
+      const empty = document.createElement('li');
+      empty.className = 'empty-copy';
+      empty.textContent = '待补充科学问题';
+      list.appendChild(empty);
+    } else items.forEach(question => {
+      const row = document.createElement('li');
+      row.appendChild(document.createTextNode(question.text || '未命名科学问题'));
+      const relationType = relationLabels[question.relationType] || relationLabels.root;
+      const parentQuestionIds = Array.isArray(question.parentQuestionIds)
+        ? question.parentQuestionIds : [];
+      const supportingFigureIds = Array.isArray(question.supportingFigureIds)
+        ? question.supportingFigureIds : [];
+      const relation = document.createElement('span');
+      relation.className = 'evidence-role';
+      relation.textContent = `关系：${relationType}` + (
+        parentQuestionIds.length
+          ? `；上游：${parentQuestionIds.map(id => byQuestionId.get(id) || id).join('、')}`
+          : '；上游：无'
+      );
+      const support = document.createElement('span');
+      support.className = 'evidence-limitation';
+      support.textContent = `支持 Figure：${supportingFigureIds.join('、') || '待补充'}`;
+      row.append(relation, support);
+      list.appendChild(row);
+    });
+    parent.appendChild(list);
+  }
+
   function locatorLabel(locator) {
     if (locator?.kind === 'time-range') {
       return `${Number(locator.startSeconds) || 0}s–${Number(locator.endSeconds) || 0}s`;
@@ -397,8 +447,12 @@
     chain.appendChild(chainCard('background', '已知背景', 'book-open-text',
       logicMap.meta.backgroundItems, {}, 'chain-background'));
     chain.appendChild(chainArrow());
-    chain.appendChild(chainCard('scientific', '科学问题', 'lightbulb',
-      logicMap.meta.scientificQuestions, {}, 'chain-scientific'));
+    const scientific = chainCard(
+      'scientific', '科学问题', 'lightbulb', [], {}, 'chain-scientific'
+    );
+    scientific.querySelector('ul')?.remove();
+    appendScientificQuestionGraph(scientific, logicMap.meta.scientificQuestions);
+    chain.appendChild(scientific);
     logicMap.steps.forEach((step, index) => {
       chain.appendChild(chainArrow());
       chain.appendChild(renderFigureStage(step, index));
@@ -638,15 +692,21 @@
     edges.forEach((edge, index) => {
       const row = document.createElement('div');
       row.className = 'mechanism-edge-row';
+      const relationKind = edge.relationKind === 'correlative' || edge.effect === 'associate'
+        ? 'correlative' : 'causal';
+      const dashed = edge.lineStyle === 'dashed' || relationKind === 'correlative';
+      const contested = edge.contested === true;
+      const strokeColor = dashed ? '#27343b' : '#247d72';
+      row.classList.toggle('is-contested', contested);
+      row.dataset.lineStyle = dashed ? 'dashed' : 'solid';
       const sourceNode = document.createElement('span');
       sourceNode.className = 'mechanism-node';
-      sourceNode.textContent = edge.sourceId;
+      sourceNode.textContent = safeMechanismDisplayLabel(edge.sourceId);
       const targetNode = document.createElement('span');
       targetNode.className = 'mechanism-node';
-      targetNode.textContent = edge.targetId;
+      targetNode.textContent = safeMechanismDisplayLabel(edge.targetId);
       const connector = document.createElement('span');
       connector.className = 'mechanism-edge-track';
-      const dashed = edge.effect === 'associate' || edge.evidence !== 'strong';
       const arrowId = `mechanism-promote-arrow-${index}`;
       const svg = svgElement('svg', {
         class: 'mechanism-edge-svg', viewBox: '0 0 180 48',
@@ -657,26 +717,25 @@
         id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5,
         markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse'
       });
-      marker.appendChild(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#247d72' }));
+      marker.appendChild(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: strokeColor }));
       defs.appendChild(marker);
       svg.appendChild(defs);
       svg.appendChild(svgElement('line', {
         x1: 3, y1: 27, x2: 174, y2: 27,
-        stroke: '#247d72', 'stroke-width': 3,
+        stroke: strokeColor, 'stroke-width': 3,
         'stroke-dasharray': dashed ? '10 7' : '',
         'marker-end': edge.effect === 'inhibit' ? '' : `url(#${arrowId})`
       }));
       if (edge.effect === 'inhibit') {
         svg.appendChild(svgElement('line', {
           x1: 174, y1: 16, x2: 174, y2: 38,
-          stroke: '#247d72', 'stroke-width': 4
+          stroke: strokeColor, 'stroke-width': 4
         }));
       }
-      const refs = document.createElement('small');
-      refs.className = 'mechanism-edge-meta';
-      refs.textContent = Array.isArray(edge.supportPanels) && edge.supportPanels.length
-        ? edge.supportPanels.join('、') : '';
-      connector.append(refs, svg);
+      const status = document.createElement('small');
+      status.className = 'mechanism-edge-meta';
+      status.textContent = contested ? '支持与反证并存' : '';
+      connector.append(status, svg);
       row.append(sourceNode, connector, targetNode);
       chain.appendChild(row);
     });
@@ -817,14 +876,107 @@
   }
 
   function renderScientificEditor(body) {
-    const section = editorSection('科学问题（可分点）');
-    editorList(section, logicMap.meta.scientificQuestions, {
-      addLabel: '添加科学问题', create: () => ({ questionId: uid('question'), text: '' }),
-      onChange: () => markObjectEdited(logicMap.meta, 'scientificQuestions'),
-      onRemove: item => logicMap.meta.finalConclusions.forEach(conclusion => {
-        conclusion.questionIds = conclusion.questionIds.filter(id => id !== item.questionId);
-      })
+    const section = editorSection('科学问题（关系图）');
+    const questions = logicMap.meta.scientificQuestions;
+    const relationChoices = [
+      ['root', '总问题'], ['progressive', '递进'], ['parallel', '并列'],
+      ['branch', '分支'], ['convergent', '汇合'], ['validation', '验证']
+    ];
+    questions.forEach((question, index) => {
+      const card = editorSection(`问题 ${index + 1}`, [
+        button('删除', () => {
+          questions.splice(index, 1);
+          logicMap.meta.finalConclusions.forEach(conclusion => {
+            conclusion.questionIds = conclusion.questionIds.filter(
+              id => id !== question.questionId
+            );
+          });
+          questions.forEach(candidate => {
+            candidate.parentQuestionIds = (candidate.parentQuestionIds || [])
+              .filter(id => id !== question.questionId);
+            if (candidate.relationType !== 'root' && !candidate.parentQuestionIds.length) {
+              candidate.relationType = 'root';
+            }
+          });
+          markObjectEdited(logicMap.meta, 'scientificQuestions');
+          markChanged();
+          render();
+        }, { className: 'danger' })
+      ]);
+      editorField(card, '问题内容', question.text, value => {
+        question.text = value;
+        markObjectEdited(question, 'text');
+        markObjectEdited(logicMap.meta, 'scientificQuestions');
+      }, { rows: 2, maxLength: 2400 });
+      editorSelect(card, '逻辑关系', question.relationType, relationChoices, value => {
+        question.relationType = value;
+        if (value === 'root') question.parentQuestionIds = [];
+        else if (!question.parentQuestionIds?.length && index > 0) {
+          question.parentQuestionIds = [questions[index - 1].questionId];
+        }
+        markObjectEdited(question, 'relationType');
+        markObjectEdited(question, 'parentQuestionIds');
+        markObjectEdited(logicMap.meta, 'scientificQuestions');
+      });
+      const parents = document.createElement('div');
+      parents.className = 'question-link-grid';
+      const availableParents = questions.slice(0, index);
+      if (question.relationType === 'root' || !availableParents.length) {
+        const empty = document.createElement('span');
+        empty.className = 'empty-copy';
+        empty.textContent = question.relationType === 'root'
+          ? '总问题无需上游问题' : '当前没有可选择的上游问题';
+        parents.appendChild(empty);
+      } else availableParents.forEach(parentQuestion => {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = (question.parentQuestionIds || [])
+          .includes(parentQuestion.questionId);
+        checkbox.addEventListener('change', () => {
+          const current = new Set(question.parentQuestionIds || []);
+          if (checkbox.checked) current.add(parentQuestion.questionId);
+          else current.delete(parentQuestion.questionId);
+          question.parentQuestionIds = [...current];
+          markObjectEdited(question, 'parentQuestionIds');
+          markObjectEdited(logicMap.meta, 'scientificQuestions');
+          markChanged();
+          scheduleCanvasRender();
+        });
+        label.append(
+          checkbox,
+          document.createTextNode(parentQuestion.text || parentQuestion.questionId)
+        );
+        parents.appendChild(label);
+      });
+      card.appendChild(parents);
+      editorField(
+        card,
+        '支持 Figure（用逗号分隔）',
+        (question.supportingFigureIds || []).join(', '),
+        value => {
+          question.supportingFigureIds = [...new Set(
+            value.split(/[,，、;；\s]+/u).map(item => item.trim()).filter(Boolean)
+          )];
+          markObjectEdited(question, 'supportingFigureIds');
+          markObjectEdited(logicMap.meta, 'scientificQuestions');
+        },
+        { multiline: false, maxLength: 1200 }
+      );
+      section.appendChild(card);
     });
+    section.appendChild(button('＋ 添加科学问题', () => {
+      const previous = questions.at(-1);
+      questions.push({
+        questionId: uid('question'), text: '',
+        relationType: previous ? 'progressive' : 'root',
+        parentQuestionIds: previous ? [previous.questionId] : [],
+        supportingFigureIds: []
+      });
+      markObjectEdited(logicMap.meta, 'scientificQuestions');
+      markChanged();
+      render();
+    }, { className: 'editor-add' }));
     body.appendChild(section);
   }
 
@@ -1596,3 +1748,4 @@
     setSaveStatus('error', `载入失败：${error.message}`);
   });
 })();
+void globalThis.SciLLM?.bootstrapInterfaceLanguage?.();

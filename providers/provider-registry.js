@@ -24,15 +24,33 @@
     },
     deepseek: {
       label: 'DeepSeek', defaultModel: 'deepseek-v4-flash',
-      models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      models: [
+        'deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'
+      ],
       supportsVision: false, visionInputFormat: 'none',
       contextWindowTokens: 128000, maxOutputTokens: 65536
+    },
+    typesafe: {
+      label: 'TypeSafe Jev（文本判定）', defaultModel: 'jev-latest',
+      models: ['jev-latest', 'jev-1.13.0', 'jev-preview'],
+      supportsVision: false, visionInputFormat: 'none',
+      supportedTaskIds: ['document_highlight', 'semantic_find'], textGeneration: false,
+      typedDecisions: true, decisionTypes: ['noul', 'choice'],
+      contextWindowTokens: 64000, maxStateQuestionTokens: 32000,
+      maxOutputTokens: 32768
     },
     'codex-local': {
       label: '本机 Codex', defaultModel: 'auto',
       models: ['auto'],
       supportsVision: true, visionInputFormat: 'codex-local',
       contextWindowTokens: 400000, maxOutputTokens: 65536,
+      localOnly: true
+    },
+    'deepseek-harness': {
+      label: '本机 DeepSeek Harness', defaultModel: 'deepseek-flash',
+      models: ['deepseek-flash', 'deepseek-v4-pro'],
+      supportsVision: false, visionInputFormat: 'deepseek-harness',
+      contextWindowTokens: 1000000, maxOutputTokens: 256000,
       localOnly: true
     },
     'openai-compatible': {
@@ -100,33 +118,248 @@
     }
   ];
 
-  const FACTORIES = {
-    openai: shared.createOpenAIAdapter,
-    anthropic: shared.createAnthropicAdapter,
-    gemini: shared.createGeminiAdapter,
-    deepseek: shared.createDeepSeekAdapter,
-    'codex-local': shared.createCodexLocalAdapter,
-    'openai-compatible': shared.createOpenAICompatibleAdapter
+  const FACTORY_EXPORTS = {
+    openai: 'createOpenAIAdapter',
+    anthropic: 'createAnthropicAdapter',
+    gemini: 'createGeminiAdapter',
+    deepseek: 'createDeepSeekAdapter',
+    typesafe: 'createTypeSafeAdapter',
+    'codex-local': 'createCodexLocalAdapter',
+    'deepseek-harness': 'createDeepSeekHarnessAdapter',
+    'openai-compatible': 'createOpenAICompatibleAdapter'
   };
 
+  function runtimeShared() {
+    if (typeof globalThis !== 'undefined' && globalThis.SciLLM) {
+      return globalThis.SciLLM;
+    }
+    return shared;
+  }
+
   function getProviderDefinitions() {
-    return JSON.parse(JSON.stringify(DEFINITIONS));
+    const definitions = JSON.parse(JSON.stringify(DEFINITIONS));
+    const highlightVersion = runtimeShared().JEV_HIGHLIGHT_ALGORITHM_VERSION;
+    const semanticFindVersion = runtimeShared().SEMANTIC_FIND_VERSION || 'semantic-find-v1';
+    definitions.typesafe.taskAlgorithmVersions = {
+      semantic_find: String(semanticFindVersion)
+    };
+    if (typeof highlightVersion === 'string' && highlightVersion) {
+      definitions.typesafe.taskAlgorithmVersions.document_highlight = highlightVersion;
+    }
+    return definitions;
   }
 
   function getCompatibleProviderPresets() {
     return JSON.parse(JSON.stringify(COMPATIBLE_PROVIDER_PRESETS));
   }
 
+  function noReasoningCapability() {
+    return {
+      supported: false,
+      mode: 'none',
+      levels: [],
+      defaultLevel: 'auto'
+    };
+  }
+
+  function reasoningCapability(mode, levels, defaultLevel = 'auto') {
+    return {
+      supported: true,
+      mode,
+      levels: [...levels],
+      defaultLevel
+    };
+  }
+
+  function getProviderReasoningCapabilities(providerId, config = {}) {
+    const model = normalizedModelName(config);
+    if (providerId === 'openai') {
+      if (/\/chat\/completions(?:[/?#]|$)/i.test(String(config.baseUrl || ''))) {
+        return noReasoningCapability();
+      }
+      if (/^(?:gpt-5(?:[-_.]|$)|o(?:1|3|4)(?:[-_.]|$))/.test(model)) {
+        if (/^gpt-5-pro(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', ['auto', 'high']);
+        }
+        if (/^gpt-5\.(?:2|4)-pro(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', ['auto', 'medium', 'high', 'xhigh']);
+        }
+        if (/^gpt-5\.6(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', [
+            'auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'
+          ]);
+        }
+        if (/^gpt-5\.1(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', [
+            'auto', 'none', 'low', 'medium', 'high'
+          ]);
+        }
+        if (/^gpt-5\.(?:2|4)(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', [
+            'auto', 'none', 'low', 'medium', 'high', 'xhigh'
+          ]);
+        }
+        if (/^gpt-5(?:$|-20\d{2}|-(?:mini|nano|codex)(?:[-_.]|$))/.test(model)) {
+          return reasoningCapability('effort', [
+            'auto', 'minimal', 'low', 'medium', 'high'
+          ]);
+        }
+        if (/^o(?:1|3|4)(?:[-_.]|$)/.test(model)) {
+          return reasoningCapability('effort', /(?:^|[-_.])pro(?:[-_.]|$)/.test(model)
+            ? ['auto', 'high'] : ['auto', 'low', 'medium', 'high']);
+        }
+      }
+      return noReasoningCapability();
+    }
+    if (providerId === 'anthropic') {
+      const opus47Plus = /^claude-opus-4-(?:7|8)(?:[-_.]|$)/.test(model);
+      const opus45 = /^claude-opus-4-5(?:[-_.]|$)/.test(model);
+      const effortModel = /^claude-(?:sonnet-4-6|opus-4-(?:5|6|7|8))(?:[-_.]|$)/
+        .test(model);
+      if (!effortModel) return noReasoningCapability();
+      return reasoningCapability('effort', opus47Plus
+        ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
+        : opus45
+          ? ['auto', 'low', 'medium', 'high']
+          : ['auto', 'low', 'medium', 'high', 'max']);
+    }
+    if (providerId === 'gemini') {
+      if (/^gemini-3\.1-flash-lite-image(?:[-_.]|$)/.test(model)) {
+        return reasoningCapability('effort', ['auto', 'minimal', 'high']);
+      }
+      if (/^gemini-3-pro-preview(?:[-_.]|$)/.test(model)) {
+        return reasoningCapability('effort', ['auto', 'low', 'high']);
+      }
+      if (/^gemini-3\.1-pro-preview(?:[-_.]|$)/.test(model)) {
+        return reasoningCapability('effort', ['auto', 'low', 'medium', 'high']);
+      }
+      if (/^gemini-(?:3\.(?:5|6)-flash(?:-lite)?|3\.1-flash-lite|3-flash-preview)(?:[-_.]|$)/
+        .test(model)) {
+        return reasoningCapability('effort', [
+          'auto', 'minimal', 'low', 'medium', 'high'
+        ]);
+      }
+      return noReasoningCapability();
+    }
+    if (providerId === 'deepseek') {
+      // The official Chat Completions API lists deepseek-flash as a current
+      // alias with the same explicit thinking toggle and effort controls.
+      // Keep this exact so an undocumented future model is not inferred.
+      return /^deepseek-(?:flash$|v4(?:[-_.]|$)|chat$|reasoner$)/.test(model)
+        ? reasoningCapability('effort', ['low', 'high', 'max'], 'high')
+        : noReasoningCapability();
+    }
+    if (providerId === 'codex-local') {
+      return reasoningCapability('effort', [
+        'auto', 'low', 'medium', 'high', 'xhigh'
+      ]);
+    }
+    if (providerId === 'deepseek-harness' && ['deepseek-flash', 'deepseek-v4-pro'].includes(String(config?.model || '').trim())) {
+      return reasoningCapability('effort', ['auto', 'low', 'high', 'max']);
+    }
+    if (providerId === 'openai-compatible') {
+      const mode = String(config.reasoningMode || '').trim().toLowerCase();
+      if (mode === 'effort') {
+        return reasoningCapability('effort', [
+          'auto', 'minimal', 'low', 'medium', 'high', 'xhigh'
+        ]);
+      }
+      if (mode === 'toggle') {
+        return reasoningCapability('toggle', ['auto', 'enabled', 'disabled']);
+      }
+    }
+    return noReasoningCapability();
+  }
+
+  function normalizeReasoningForProvider(providerId, config = {}, requested = {}) {
+    const requestedEnabled = requested?.enabled === true;
+    if (!requestedEnabled) return { enabled: false, effort: 'auto' };
+    const capability = getProviderReasoningCapabilities(providerId, config);
+    if (capability.supported !== true || !Array.isArray(capability.levels)) {
+      return { enabled: false, effort: 'auto' };
+    }
+    if (capability.mode === 'toggle') {
+      return capability.levels.includes('enabled')
+        ? { enabled: true, effort: 'enabled' }
+        : { enabled: false, effort: 'auto' };
+    }
+
+    let effort = String(requested?.effort || 'auto').trim().toLowerCase() || 'auto';
+    if (providerId === 'deepseek') {
+      if (effort === 'disabled' || effort === 'none') {
+        return { enabled: false, effort: 'auto' };
+      }
+      if (effort === 'enabled' || effort === 'auto') effort = capability.defaultLevel;
+      else if (effort === 'minimal') effort = 'low';
+      else if (effort === 'medium' || effort === 'xhigh') effort = 'high';
+    }
+    if (effort === 'none' || effort === 'disabled') {
+      return { enabled: false, effort: 'auto' };
+    }
+    if (effort === 'auto' || capability.levels.includes(effort)) {
+      return { enabled: true, effort };
+    }
+    const fallback = capability.levels.includes(capability.defaultLevel)
+      ? capability.defaultLevel : 'auto';
+    return { enabled: true, effort: fallback };
+  }
+
   function getProviderCapabilities(providerId, config = {}) {
     const definition = DEFINITIONS[providerId];
-    if (!definition) return { supportsVision: false, visionInputFormat: 'none' };
+    if (!definition) return {
+      supportsVision: false,
+      visionInputFormat: 'none',
+      reasoning: noReasoningCapability()
+    };
+    // Official model aliases served by DeepSeek-V4.1-Flash (2026-09-25).
+    // Match the documented API names only; Pro and speculative suffixes stay text-only.
+    const deepSeekVision = providerId === 'deepseek' && [
+      'deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'
+    ].includes(normalizedModelName(config));
+    const harnessVision = providerId === 'deepseek-harness' && String(config?.model || '').trim() === 'deepseek-flash';
     const supportsVision = providerId === 'openai-compatible'
       ? config.supportsVision === true
-      : definition.supportsVision === true;
-    return {
+      : harnessVision || deepSeekVision || definition.supportsVision === true;
+    const capabilities = {
       supportsVision,
-      visionInputFormat: supportsVision ? definition.visionInputFormat : 'none'
+      visionInputFormat: supportsVision
+        ? (deepSeekVision ? 'openai' : definition.visionInputFormat)
+        : 'none',
+      reasoning: getProviderReasoningCapabilities(providerId, config)
     };
+    if (Array.isArray(definition.supportedTaskIds)) {
+      capabilities.supportedTaskIds = [...definition.supportedTaskIds];
+    }
+    if (definition.textGeneration === false) capabilities.textGeneration = false;
+    if (definition.typedDecisions === true) capabilities.typedDecisions = true;
+    if (Array.isArray(definition.decisionTypes)) {
+      capabilities.decisionTypes = [...definition.decisionTypes];
+    }
+    const algorithmVersion = runtimeShared().JEV_HIGHLIGHT_ALGORITHM_VERSION;
+    const semanticFindVersion = runtimeShared().SEMANTIC_FIND_VERSION || 'semantic-find-v1';
+    const taskAlgorithmVersions = definition.taskAlgorithmVersions || (
+      providerId === 'typesafe'
+        ? { semantic_find: String(semanticFindVersion) }
+        : null
+    );
+    if (providerId === 'typesafe' && typeof algorithmVersion === 'string' &&
+        algorithmVersion && taskAlgorithmVersions) {
+      taskAlgorithmVersions.document_highlight = algorithmVersion;
+    }
+    if (taskAlgorithmVersions) {
+      capabilities.taskAlgorithmVersions = { ...taskAlgorithmVersions };
+    }
+    if (Number(definition.maxStateQuestionTokens) > 0) {
+      capabilities.maxStateQuestionTokens = Number(definition.maxStateQuestionTokens);
+    }
+    return capabilities;
+  }
+
+  function providerSupportsTask(providerId, taskId) {
+    const definition = DEFINITIONS[providerId];
+    if (!definition) return false;
+    return !Array.isArray(definition.supportedTaskIds) ||
+      definition.supportedTaskIds.includes(String(taskId || ''));
   }
 
   function validContextWindowOverride(value) {
@@ -154,6 +387,9 @@
     if (/^gemini-(?:2\.5|3(?:\.|-|$))/.test(model)) {
       return { contextWindowTokens: 1000000, maxOutputTokens: 65536 };
     }
+    if (/^jev(?:[-_.]|$)/.test(model)) {
+      return { contextWindowTokens: 64000, maxOutputTokens: 32768 };
+    }
     return null;
   }
 
@@ -173,6 +409,7 @@
 
   function getProviderMaxOutputTokens(providerId, config = {}, override = null) {
     const explicit = validOutputTokenOverride(override);
+    if (providerId === 'deepseek-harness') return Math.min(explicit || 256000, 256000);
     if (explicit) return explicit;
     const known = knownModelCapacity(config);
     if (known) return known.maxOutputTokens;
@@ -200,22 +437,45 @@
       }
       return errors;
     }
+    if (providerId === 'deepseek-harness') {
+      if (!String(config?.model || '').trim() || String(config.model).trim() === 'auto') errors.push('model');
+      if (!['auto', 'off', 'low', 'high', 'max'].includes(String(config?.reasoningEffort || 'auto'))) errors.push('reasoningEffort');
+      return errors;
+    }
     if (!String(config?.apiKey || '').trim()) errors.push('apiKey');
     if (!String(config?.model || '').trim()) errors.push('model');
     const baseUrl = String(config?.baseUrl || '').trim();
+    if (providerId === 'typesafe' && baseUrl) {
+      const normalized = baseUrl.replace(/\/+$/u, '');
+      if (normalized !== 'https://api.typesafe.ai/v1' &&
+          normalized !== 'https://api.typesafe.ai/v1/systemone') {
+        errors.push('baseUrl');
+      }
+      return errors;
+    }
     if ((DEFINITIONS[providerId].requiresBaseUrl || baseUrl) && !isHttpUrl(baseUrl)) {
       errors.push('baseUrl');
     }
     return errors;
   }
 
-  function createProviderAdapter({ providerId, config, fetchImpl, nativeClient }) {
+  function createProviderAdapter({ providerId, config, fetchImpl, nativeClient, harnessClient }) {
     const errors = validateProviderConfig(providerId, config);
     if (errors.length) throw new Error(`Invalid provider config: ${errors.join(',')}`);
-    const factory = FACTORIES[providerId];
-    const adapter = providerId === 'codex-local'
+    const factory = runtimeShared()[FACTORY_EXPORTS[providerId]];
+    if (typeof factory !== 'function') {
+      throw new Error(`Provider adapter is unavailable: ${providerId}`);
+    }
+    const adapterConfig = {
+      ...config,
+      __providerCapabilities: getProviderCapabilities(providerId, config),
+      __reasoningCapabilities: getProviderReasoningCapabilities(providerId, config)
+    };
+    const adapter = providerId === 'deepseek-harness'
+      ? factory(config, harnessClient)
+      : providerId === 'codex-local'
       ? factory(config, nativeClient)
-      : factory(config, fetchImpl || fetch);
+      : factory(adapterConfig, fetchImpl || fetch);
     adapter.maxOutputTokens = getProviderMaxOutputTokens(providerId, config);
     adapter.contextWindowTokens = getProviderContextWindowTokens(providerId, config);
     return adapter;
@@ -225,6 +485,9 @@
     getProviderDefinitions,
     getCompatibleProviderPresets,
     getProviderCapabilities,
+    providerSupportsTask,
+    getProviderReasoningCapabilities,
+    normalizeReasoningForProvider,
     getProviderContextWindowTokens,
     getProviderMaxOutputTokens,
     validateProviderConfig,

@@ -7,15 +7,21 @@ function read(file) {
   return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 }
 
-test('main-Figure synthesis auto-generates the research map and keeps blank creation', () => {
+test('legacy research-map assets remain compatible while mechanism generation is explicit', () => {
   const html = read('popup.html');
   const popup = read('popup.js');
   const content = read('content.js');
 
   assert.doesNotMatch(html, /id="createResearchLogicMap"/);
-  assert.match(html, /id="createBlankResearchLogicMap"/);
-  assert.match(popup, /action: 'createArticleLogicMap'/);
-  assert.match(popup, /logic-map\.html/);
+  assert.doesNotMatch(html, /id="createBlankResearchLogicMap"|手动梳理/);
+  assert.doesNotMatch(html, /id="analyzeCrossFigureLogic"/);
+  assert.doesNotMatch(popup, /getElementById\('createBlankResearchLogicMap'\)/);
+  const wiring = popup.slice(
+    popup.indexOf('async function runFigureAnalysis'),
+    popup.indexOf('async function showFigureOriginalImage')
+  );
+  assert.doesNotMatch(wiring, /runCrossFigureLogic\(/);
+  assert.doesNotMatch(wiring, /chrome\.tabs\.create|openResearchLogicMapEditor/);
   assert.match(content, /async function createArticleLogicMap/);
   assert.match(content, /logicMap = await createArticleLogicMap\(\{ blank: false \}\)/);
   assert.match(content, /logic-maps\/index\.json/);
@@ -54,6 +60,26 @@ test('research-map editor implements the unified schema-v3 problem-evidence chai
   assert.match(css, /logic-map-focus-mode/);
 });
 
+test('scientific-question graph is readable and its relations remain editable', () => {
+  const js = read('logic-map.js');
+  const chain = js.slice(
+    js.indexOf('function appendScientificQuestionGraph'),
+    js.indexOf('function locatorLabel')
+  );
+  const editor = js.slice(
+    js.indexOf('function renderScientificEditor'),
+    js.indexOf('function renderStepQuestionEditor')
+  );
+  assert.match(chain, /relationType/);
+  assert.match(chain, /parentQuestionIds/);
+  assert.match(chain, /supportingFigureIds/);
+  assert.match(editor, /relationType/);
+  assert.match(editor, /parentQuestionIds/);
+  assert.match(editor, /supportingFigureIds/);
+  assert.match(editor, /convergent/);
+  assert.match(editor, /markObjectEdited/);
+});
+
 test('supplemental lane supports manual CRUD, collision-free flow and two centered bezier links', () => {
   const html = read('logic-map.html');
   const js = read('logic-map.js');
@@ -82,20 +108,55 @@ test('supplemental lane supports manual CRUD, collision-free flow and two center
   assert.doesNotMatch(js, /\.innerHTML\s*=/);
 });
 
-test('mechanism edges use pathway endpoints and evidence-sensitive stroke styles', () => {
+test('mechanism edges use pathway endpoints and audited relation stroke styles', () => {
   const js = read('logic-map.js');
   const css = read('logic-map.css');
 
   assert.match(js, /edge\.effect === 'inhibit'/);
   assert.match(js, /mechanism-promote-arrow/);
-  assert.match(js, /edge\.effect === 'associate' \|\| edge\.evidence !== 'strong'/);
+  assert.match(js, /edge\.relationKind === 'correlative' \|\| edge\.effect === 'associate'/);
+  assert.match(js, /edge\.lineStyle === 'dashed' \|\| relationKind === 'correlative'/);
+  assert.doesNotMatch(js, /edge\.evidence !== 'strong'/);
   assert.match(js, /'stroke-dasharray': dashed \? '10 7' : ''/);
+  assert.match(js, /row\.classList\.toggle\('is-contested', contested\)/);
+  assert.match(js, /row\.dataset\.lineStyle = dashed \? 'dashed' : 'solid'/);
+  assert.match(js, /safeMechanismDisplayLabel/);
+  assert.doesNotMatch(js, /refs\.textContent = Array\.isArray\(edge\.supportPanels\)/);
   assert.match(js, /x1: 174, y1: 16, x2: 174, y2: 38/);
   assert.match(js, /row\.append\(sourceNode, connector, targetNode\)/);
   assert.match(css, /\.mechanism-edge-row \{[^}]*grid-template-columns:/s);
+  assert.match(css, /\.mechanism-edge-row\.is-contested/);
   assert.doesNotMatch(css, /\.logic-map-mechanism-chain \{[^}]*overflow-x:\s*auto/s);
   assert.match(js, /function synchronizeMechanismChain/);
   assert.match(js, /synchronizeMechanismChain\(\)/);
+});
+
+test('Figure workspace mechanism entry replaces the new-tab argument-ladder path', () => {
+  const popup = read('popup.js');
+  const rendererStart = popup.indexOf('function renderResearchLogicMapSnapshot');
+  const rendererEnd = popup.indexOf('function syncFigureQuickNavFromScroll', rendererStart);
+  const renderer = popup.slice(rendererStart, rendererEnd);
+  assert.match(renderer, /图表梳理/);
+  assert.match(renderer, /openMechanismChainWorkspace/);
+  assert.doesNotMatch(renderer, /openResearchLogicMapEditor|chrome\.tabs\.create/);
+  assert.doesNotMatch(read('popup.html'), /手动梳理|createBlankResearchLogicMap/);
+});
+
+test('reachable cross-Figure generation status names only the mechanism chain', () => {
+  const popup = read('popup.js');
+  const start = popup.indexOf('async function runCrossFigureLogic');
+  const end = popup.indexOf('async function runCreateResearchLogicMap', start);
+  const run = popup.slice(start, end);
+  assert.match(run, /机制链/);
+  assert.doesNotMatch(run, /论证阶梯|argument ladder/iu);
+});
+
+test('reachable side-panel UI has no old argument-ladder or integration-analysis wording', () => {
+  const html = read('popup.html');
+  const popup = read('popup.js');
+  assert.doesNotMatch(html, /论文论证阶梯|论证阶梯|整合分析|手动梳理/);
+  assert.doesNotMatch(popup, /论文论证阶梯|论证阶梯|整合分析|手动梳理/);
+  assert.doesNotMatch(html, /id="analyzeCrossFigureLogic"/);
 });
 
 test('editor preserves conflict drafts and non-adjacent schema-v3 links', () => {

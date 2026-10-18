@@ -1,11 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const pdf = require('../core/pdf-workspace.js');
 const engine = require('../core/pdf-figure-engine.js');
 
 test('legacy whole-Figure manifests are marked for native-only cache upgrade', () => {
   assert.equal(engine.PDF_FIGURE_SCHEMA_VERSION, 3);
-  assert.equal(engine.PDF_FIGURE_PIPELINE_VERSION, '0.2.0-cross-page');
+  assert.equal(engine.PDF_FIGURE_PIPELINE_VERSION, '0.2.1-numbered-captions');
   assert.equal(engine.pdfFigureManifestNeedsRefresh(null), true);
   assert.equal(engine.pdfFigureManifestNeedsRefresh({
     schemaVersion: 2,
@@ -14,6 +15,10 @@ test('legacy whole-Figure manifests are marked for native-only cache upgrade', (
   assert.equal(engine.pdfFigureManifestNeedsRefresh({
     schemaVersion: 3,
     extractorVersion: '0.2.0-cross-page'
+  }), true);
+  assert.equal(engine.pdfFigureManifestNeedsRefresh({
+    schemaVersion: 3,
+    extractorVersion: '0.2.1-numbered-captions'
   }), false);
 });
 
@@ -129,6 +134,29 @@ test('PDFFigures2 captions replace MinerU caption headings and adjacent Panel le
 
   assert.deepEqual([...plan.consumedCaptionIndices], [1, 2, 3]);
   assert.equal(plan.consumedCaptionIndices.has(4), false);
+});
+
+test('native Figure article plan consumes adjacent statistical tails through the shared classifier', () => {
+  const blocks = pdf.markdownToPdfBlocks([
+    'Figure 7. OFC D1+ and D2+ neurons drive distinct effects.', '',
+    '(A) Design. (B-D) Behavior.', '',
+    '\\*p < 0.01; ANOVA for (G-I).', '',
+    'VTA-nucleus accumbens circuits remain ordinary body text.'
+  ].join('\n'));
+  const figures = engine.normalizePdffigures2Figures([{
+    figType: 'Figure', name: '7', page: 11,
+    caption: 'Figure 7. OFC D1+ and D2+ neurons drive distinct effects.',
+    regionBoundary: { x1: 10, y1: 20, x2: 300, y2: 400 }
+  }]);
+  const plan = engine.buildPdfFigureArticlePlan(blocks, figures, {
+    isCaptionContinuationText: pdf.isPdfCaptionContinuationText
+  });
+  const statisticalIndex = plan.blocks.findIndex(block => /ANOVA/.test(block.text || ''));
+  const bodyIndex = plan.blocks.findIndex(block => /^VTA-nucleus/.test(block.text || ''));
+
+  assert.match(plan.figures[0].caption, /ANOVA/);
+  assert.equal(plan.consumedCaptionIndices.has(statisticalIndex), true);
+  assert.equal(plan.consumedCaptionIndices.has(bodyIndex), false);
 });
 
 test('author affiliation superscripts are never mistaken for Figure caption anchors', () => {

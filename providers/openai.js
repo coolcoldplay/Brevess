@@ -25,11 +25,60 @@
     return /\/chat\/completions(?:[/?#]|$)/i.test(String(value || '').trim());
   }
 
+  function officialResponsesEndpoint(value) {
+    const configured = String(value || '').trim();
+    if (!configured) return 'https://api.openai.com/v1/responses';
+    try {
+      const parsed = new URL(configured);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
+          parsed.port ||
+          parsed.hostname.toLocaleLowerCase('en-US') !== 'api.openai.com' ||
+          parsed.search || parsed.hash || parsed.pathname.replace(/\/+$/u, '') !== '/v1/responses') {
+        return '';
+      }
+      return 'https://api.openai.com/v1/responses';
+    } catch {
+      return '';
+    }
+  }
+
   function openAIHeaders(config) {
     return {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`
     };
+  }
+
+  function reasoningBody(config, request) {
+    const capability = config.__reasoningCapabilities;
+    const effort = String(request.reasoningEffort ?? config.reasoningEffort ?? 'auto');
+    if (capability?.supported !== true || capability.mode !== 'effort' ||
+        effort === 'auto' || !capability.levels.includes(effort)) return {};
+    return { reasoning: { effort } };
+  }
+
+  function promptCacheBody(config, request) {
+    const endpoint = String(config.baseUrl || '').trim();
+    if (request.ephemeral === true || (endpoint &&
+        !/^https:\/\/api\.openai\.com(?:[/:]|$)/i.test(endpoint))) return {};
+    const source = String(request.promptCacheKey || request.conversationKey || '').trim();
+    if (!source) return {};
+    return { prompt_cache_key: `brevess:${source}`.slice(0, 128) };
+  }
+
+  function chatReasoningBody(config, request) {
+    const body = reasoningBody(config, request);
+    // An explicit adapter allowlist: unknown models/gateways must not inherit
+    // public-summary support merely by resembling a reasoning model.
+    const supportsSummary = /^(?:gpt-5(?:-mini|-nano)?(?:-2025-08-07)?|o4-mini(?:-2025-04-16)?)$/u
+      .test(String(config.model || ''));
+    const enabled = request.reasoningEnabled ?? config.reasoningEnabled;
+    const effort = String(request.reasoningEffort ?? config.reasoningEffort ?? 'auto');
+    const enabledAuto = enabled === true && effort === 'auto' &&
+      config.__reasoningCapabilities?.supported === true && config.__reasoningCapabilities.mode === 'effort';
+    if (!officialResponsesEndpoint(config.baseUrl) || !supportsSummary || enabled === false ||
+        (!body.reasoning && !enabledAuto) || ['none', 'disabled'].includes(effort)) return body;
+    return { reasoning: { ...body.reasoning, summary: 'auto' } };
   }
 
   function createOpenAIAdapter(config, fetchImpl) {
@@ -74,12 +123,14 @@
             ...images.map(image => ({ type: 'input_image', image_url: image.dataUrl }))
           ]
         }] : request.userPrompt;
+        const reasoning = chatReasoningBody(config, request);
         return shared.createProviderTextStream({
           fetchImpl,
           url: config.baseUrl || 'https://api.openai.com/v1/responses',
           providerId: 'openai',
           model: config.model,
           protocol: 'openai-responses',
+          publicProcess: reasoning.reasoning?.summary === 'auto' ? 'openai-summary' : '',
           request,
           options: {
             method: 'POST',
@@ -90,7 +141,9 @@
               input,
               max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
               store: false,
-              stream: true
+              stream: true,
+              ...reasoning,
+              ...promptCacheBody(config, request)
             }),
             signal: request.signal,
             timeoutMs: request.timeoutMs
@@ -132,6 +185,8 @@
           input,
           max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
           store: false,
+          ...reasoningBody(config, request),
+          ...promptCacheBody(config, request),
           text: {
             format: {
               type: 'json_schema',
@@ -172,6 +227,65 @@
         });
       }
     };
+    const webSearchEndpoint = officialResponsesEndpoint(config.baseUrl);
+    if (webSearchEndpoint) {
+      adapter.generateWebSearchTextStream = async function* generateWebSearchTextStream(request) {
+        yield { type: 'started', providerId: 'openai', model: String(config.model || '') };
+        try {
+          const images = shared.normalizeImageInputs(request.images);
+          const input = images.length ? [{
+            role: 'user',
+            content: [
+              { type: 'input_text', text: request.userPrompt },
+              ...images.map(image => ({ type: 'input_image', image_url: image.dataUrl }))
+            ]
+          }] : request.userPrompt;
+          const startedAt = Date.now();
+          const data = await shared.requestJson(fetchImpl, webSearchEndpoint, {
+            method: 'POST',
+            headers: openAIHeaders(config),
+            body: JSON.stringify({
+              model: config.model,
+              instructions: request.systemPrompt,
+              input,
+              max_output_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              tools: [{ type: 'web_search' }],
+              tool_choice: { type: 'web_search' },
+              store: false,
+              stream: false,
+              ...reasoningBody(config, request),
+              ...promptCacheBody(config, request)
+            }),
+            signal: request.signal,
+            timeoutMs: request.timeoutMs
+          });
+          if (data?.status === 'incomplete' &&
+              data?.incomplete_details?.reason === 'max_output_tokens') {
+            throw new shared.ProviderRequestError(
+              'OUTPUT_TRUNCATED', 'Model output reached its token limit'
+            );
+          }
+          const normalized = shared.normalizeArticleChatWebResponse(data, {
+            providerId: 'openai', model: String(config.model || '')
+          }, { requireGrounding: true });
+          const usage = shared.normalizeStreamUsage(normalized.usage);
+          shared.emitProviderTelemetry(request, {
+            providerId: 'openai', model: data?.model || config.model,
+            elapsedMs: Date.now() - startedAt,
+            finishReason: 'completed', usage: normalized.usage
+          });
+          if (request.signal?.aborted) throw new shared.ProviderRequestError('CANCELLED', 'Provider request was cancelled');
+          yield { type: 'search_progress', verification: 'provider_verified', stage: 'completed' };
+          if (request.signal?.aborted) throw new shared.ProviderRequestError('CANCELLED', 'Provider request was cancelled');
+          yield { type: 'text_delta', text: normalized.text };
+          yield { type: 'web_grounding', grounding: normalized.grounding };
+          yield { type: 'usage', usage };
+          yield { type: 'completed', finishReason: 'completed' };
+        } catch (error) {
+          yield { type: 'error', error: shared.publicStreamError(error) };
+        }
+      };
+    }
     return adapter;
   }
 

@@ -15,12 +15,19 @@
     return String(value || '').normalize('NFC').replace(/\0/g, '').trim().slice(0, maximum);
   }
 
-  function normalizeQuote(value, defaultIndex) {
+  function normalizeQuote(value, defaultIndex, sentenceQuoteMap = {}) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw streamError('INVALID_RESPONSE', 'Highlight quote must be an object');
     }
     const paragraphIndex = Number(value.i ?? defaultIndex);
-    const quote = normalizedText(value.x, 6000);
+    const sentenceKey = `${paragraphIndex}:${Number(value.j)}`;
+    const hasSentence = value.j !== undefined;
+    const sentence = hasSentence && Number.isInteger(Number(value.j)) &&
+      Object.prototype.hasOwnProperty.call(sentenceQuoteMap, sentenceKey) ? sentenceQuoteMap[sentenceKey] : '';
+    if (hasSentence && (!sentence || (value.x && !sentence.includes(String(value.x))))) {
+      throw streamError('INVALID_RESPONSE', 'Highlight sentence reference is invalid');
+    }
+    const quote = normalizedText(value.x || sentence, 6000);
     const role = normalizedText(value.r || 'statement', 80);
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0 || !quote || !role) {
       throw streamError('INVALID_RESPONSE', 'Highlight quote is incomplete');
@@ -28,7 +35,7 @@
     return { paragraphIndex, quote, role };
   }
 
-  function normalizeAnnotation(value, paragraphIndex, categoryCodeMap) {
+  function normalizeAnnotation(value, paragraphIndex, categoryCodeMap, sentenceQuoteMap) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw streamError('INVALID_RESPONSE', 'Highlight annotation must be an object');
     }
@@ -38,9 +45,9 @@
       throw streamError('INVALID_RESPONSE', 'Highlight category code is not requested');
     }
     const displayQuotes = (Array.isArray(value.d) ? value.d : [])
-      .slice(0, 16).map(item => normalizeQuote(item, paragraphIndex));
+      .slice(0, 16).map(item => normalizeQuote(item, paragraphIndex, sentenceQuoteMap));
     const supportQuotes = (Array.isArray(value.s) ? value.s : [])
-      .slice(0, 24).map(item => normalizeQuote(item, paragraphIndex));
+      .slice(0, 24).map(item => normalizeQuote(item, paragraphIndex, sentenceQuoteMap));
     if (!displayQuotes.length) {
       throw streamError('INVALID_RESPONSE', 'Highlight annotation has no display span');
     }
@@ -72,6 +79,11 @@
     );
     let buffer = '';
     let final = null;
+    let cursor = 0;
+    let objectStart = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
 
     function processRecord(value) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -84,10 +96,19 @@
         }
         const annotations = (Array.isArray(value.a) ? value.a : [])
           .slice(0, 96).map(item => normalizeAnnotation(
-            item, paragraphIndex, categoryCodeMap
+            item, paragraphIndex, categoryCodeMap, options.sentenceQuoteMap
           ));
-        const record = { type: 'paragraph', paragraphIndex, annotations };
-        if (!records.has(paragraphIndex)) {
+        const prior = records.get(paragraphIndex);
+        const seen = new Set((prior?.annotations || []).map(item => JSON.stringify(item)));
+        const merged = [...(prior?.annotations || [])];
+        annotations.forEach(item => {
+          const key = JSON.stringify(item);
+          if (!seen.has(key)) { seen.add(key); merged.push(item); }
+        });
+        const record = { type: 'paragraph', paragraphIndex, annotations: merged };
+        // Some models emit one paragraph record per claim. Retain all distinct
+        // grounded claims and checkpoint the cumulative record instead of silently dropping later lines.
+        if (!prior || merged.length > prior.annotations.length) {
           records.set(paragraphIndex, record);
           try { options.onParagraph?.(record); } catch { /* Progress callbacks are isolated. */ }
         }
@@ -119,14 +140,49 @@
       throw streamError('INVALID_RESPONSE', 'Highlight stream record type is unsupported');
     }
 
-    function processLine(line) {
-      const text = String(line || '').trim();
-      if (!text || /^```(?:jsonl?|ndjson)?\s*$/i.test(text) || text === '```') return null;
-      let value;
-      try { value = JSON.parse(text); } catch {
-        throw streamError('INVALID_RESPONSE', 'Highlight stream line is malformed JSON');
+    function resetFrame() {
+      cursor = 0; objectStart = -1; depth = 0; inString = false; escaped = false;
+    }
+
+    function drain() {
+      // Frame complete objects independently of transport chunks and physical
+      // lines. Only tolerate outer separators; never repair evidence or JSON
+      // inside a record. Earlier validated paragraph checkpoints survive errors.
+      while (cursor < buffer.length) {
+        const char = buffer[cursor];
+        if (objectStart < 0) {
+          if (/[\s,\[\]]/.test(char)) { cursor++; continue; }
+          if (char === '`') {
+            const end = buffer.indexOf('\n', cursor);
+            if (end < 0) return;
+            if (!/^```(?:jsonl?|ndjson)?\s*$/i.test(buffer.slice(cursor, end).trim())) {
+              throw streamError('INVALID_RESPONSE', 'Highlight stream contains unexpected text');
+            }
+            cursor = end + 1; continue;
+          }
+          if (char !== '{') throw streamError('INVALID_RESPONSE', 'Highlight stream contains unexpected text');
+          objectStart = cursor; depth = 1; cursor++; continue;
+        }
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+        } else if (char === '"') inString = true;
+        else if (char === '{') depth++;
+        else if (char === '}') depth--;
+        cursor++;
+        if (!depth) {
+          const text = buffer.slice(objectStart, cursor);
+          buffer = buffer.slice(cursor);
+          resetFrame();
+          let value;
+          try { value = JSON.parse(text); } catch {
+            throw streamError('INVALID_RESPONSE', 'Highlight stream line is malformed JSON');
+          }
+          processRecord(value);
+        }
       }
-      return processRecord(value);
+      if (objectStart < 0) { buffer = ''; resetFrame(); }
     }
 
     return {
@@ -135,28 +191,23 @@
         if (buffer.length > maximumBufferChars) {
           throw streamError('INVALID_RESPONSE', 'Highlight NDJSON buffer exceeded its limit');
         }
-        let boundary;
-        while ((boundary = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, boundary).replace(/\r$/, '');
-          buffer = buffer.slice(boundary + 1);
-          processLine(line);
-        }
+        drain();
       },
       finish() {
-        const pending = buffer.trim();
-        buffer = '';
-        if (!pending) return true;
         try {
-          processLine(pending);
-          return true;
+          drain();
+          const remaining = objectStart < 0 ? buffer.slice(cursor).trim() : buffer.trim();
+          return !remaining || (objectStart < 0 && /^```\s*$/.test(remaining));
         } catch (error) {
           if (error?.code === 'INVALID_RESPONSE') return false;
           throw error;
+        } finally {
+          buffer = ''; resetFrame();
         }
       },
       discardPending() {
         const discarded = buffer.length;
-        buffer = '';
+        buffer = ''; resetFrame();
         return discarded;
       },
       snapshot() {

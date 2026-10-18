@@ -4,8 +4,11 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const RESEARCH_LOGIC_MAP_KIND = 'brevess-research-logic-map';
-  const RESEARCH_LOGIC_MAP_SCHEMA_VERSION = 3;
+  const RESEARCH_LOGIC_MAP_SCHEMA_VERSION = 4;
   const RESEARCH_LOGIC_MAP_INDEX_PATH = 'logic-maps/index.json';
+  const SCIENTIFIC_QUESTION_RELATIONS = new Set([
+    'root', 'progressive', 'parallel', 'branch', 'convergent', 'validation'
+  ]);
 
   function text(value, maximum = 12000) {
     return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
@@ -103,11 +106,34 @@
       ? value
       : (text(value) ? [{ text: value }] : []);
     const used = new Set();
-    return source.slice(0, 60).map((item, index) => ({
-      questionId: allocateCollectionId(item?.questionId, 'question', index, used),
-      text: text(item?.text ?? item, 2400),
-      ...editedState(item, ['text'])
-    })).filter(item => item.text);
+    const candidates = source.slice(0, 60).map((item, index) => {
+      const relation = text(item?.relationType, 40).toLowerCase();
+      return {
+        questionId: allocateCollectionId(item?.questionId, 'question', index, used),
+        text: text(item?.text ?? item?.value ?? item, 2400),
+        relationType: SCIENTIFIC_QUESTION_RELATIONS.has(relation) ? relation : 'root',
+        rawParentQuestionIds: item?.parentQuestionIds,
+        supportingFigureIds: [...new Set((Array.isArray(item?.supportingFigureIds)
+          ? item.supportingFigureIds : []).map(figureId => safeId(figureId, '')))]
+          .filter(Boolean).slice(0, 60),
+        ...editedState(item, [
+          'text', 'relationType', 'parentQuestionIds', 'supportingFigureIds'
+        ])
+      };
+    }).filter(item => item.text);
+    const questionOrder = new Map(
+      candidates.map((item, index) => [item.questionId, index])
+    );
+    return candidates.map((item, index) => {
+      const parentQuestionIds = item.relationType === 'root' ? [] : [...new Set(
+        (Array.isArray(item.rawParentQuestionIds) ? item.rawParentQuestionIds : [])
+          .map(parentId => safeId(parentId, ''))
+          .filter(parentId => parentId && parentId !== item.questionId &&
+            questionOrder.has(parentId) && questionOrder.get(parentId) < index)
+      )].slice(0, 20);
+      const { rawParentQuestionIds, ...question } = item;
+      return { ...question, parentQuestionIds };
+    });
   }
 
   function normalizeFinalConclusions(value, validQuestionIds = new Set()) {
@@ -316,7 +342,7 @@
     const panelsById = mapPanelById(result);
     const groups = Array.isArray(result?.panelGroups) ? result.panelGroups : [];
     if (groups.length) {
-      return groups.slice(0, 24).map((group, index) => {
+      return groups.slice(0, 30).map((group, index) => {
         const panelIds = list(group?.panels, 30);
         const panelRecords = panelIds.map(panelId => panelsById.get(panelId)).filter(Boolean);
         const explicitPoints = panelIds.map(panelId => {
@@ -770,6 +796,12 @@
       Array.isArray(metaInput.scientificQuestions)
         ? metaInput.scientificQuestions : metaInput.scientificQuestion
     );
+    const centralScientificQuestion = text(
+      metaInput.centralScientificQuestion ||
+        scientificQuestions.find(item => item.relationType === 'root')?.text ||
+        scientificQuestions[0]?.text,
+      3000
+    );
     const scientificQuestionIds = new Set(
       scientificQuestions.map(item => item.questionId)
     );
@@ -813,6 +845,7 @@
         canonicalUrl: text(metaInput.canonicalUrl, 2000),
         documentHash: normalizeDocumentHash(metaInput.documentHash),
         backgroundItems,
+        centralScientificQuestion,
         scientificQuestions,
         finalConclusions,
         overallThesis: text(metaInput.overallThesis, 3000),
@@ -838,7 +871,8 @@
         updatedAt: timestamp,
         ...editedState(metaInput, [
           'title', 'articleTitle', 'canonicalUrl', 'documentHash',
-          'backgroundItems', 'scientificQuestions', 'finalConclusions',
+          'backgroundItems', 'centralScientificQuestion', 'scientificQuestions',
+          'finalConclusions',
           'mechanismEdges', 'claimBoundary'
         ])
       },
@@ -936,9 +970,21 @@
           .filter(Boolean).join(' → '),
       3000
     );
-    const scientificQuestionText = text(
-      input.scientificQuestion || steps[0]?.questionItems?.[0]?.text,
-      2400
+    const centralScientificQuestion = text(
+      crossFigureLogic?.centralScientificQuestion || input.centralScientificQuestion ||
+        input.scientificQuestion || steps[0]?.questionItems?.[0]?.text,
+      3000
+    );
+    const scientificQuestions = Array.isArray(crossFigureLogic?.scientificQuestions) &&
+      crossFigureLogic.scientificQuestions.length
+      ? crossFigureLogic.scientificQuestions
+      : centralScientificQuestion ? [{
+          questionId: 'question-1', text: centralScientificQuestion,
+          relationType: 'root', parentQuestionIds: [],
+          supportingFigureIds: steps[0]?.figureId ? [steps[0].figureId] : []
+        }] : [];
+    const scientificQuestionIds = scientificQuestions.map((item, index) =>
+      safeId(item?.questionId, `question-${index + 1}`)
     );
     const supplementalFigureById = new Map(
       supplementalFigures.map(figure => [text(figure.figureId, 120), figure])
@@ -985,13 +1031,12 @@
         backgroundItems: Array.isArray(crossFigureLogic?.backgroundItems) &&
           crossFigureLogic.backgroundItems.length
           ? crossFigureLogic.backgroundItems : (input.backgroundItems || []),
-        scientificQuestions: scientificQuestionText ? [{
-          questionId: 'question-1', text: scientificQuestionText
-        }] : [],
+        centralScientificQuestion,
+        scientificQuestions,
         finalConclusions: overallThesis ? [{
           conclusionId: 'conclusion-1',
           text: overallThesis,
-          questionIds: scientificQuestionText ? ['question-1'] : []
+          questionIds: scientificQuestionIds
         }] : [],
         overallThesis,
         mechanismChain: crossFigureLogic?.mechanismChain ||
@@ -1036,7 +1081,8 @@
       return next;
     };
     carryEdited(generated.meta, saved.meta, [
-      'title', 'backgroundItems', 'scientificQuestions', 'finalConclusions',
+      'title', 'backgroundItems', 'centralScientificQuestion',
+      'scientificQuestions', 'finalConclusions',
       'mechanismEdges', 'claimBoundary'
     ]);
     const savedSteps = new Map(saved.steps.map(step => [step.figureId, step]));
@@ -1088,6 +1134,7 @@
         canonicalUrl: input.canonicalUrl,
         documentHash: input.documentHash,
         backgroundItems: [],
+        centralScientificQuestion: '',
         scientificQuestions: [],
         finalConclusions: [],
         overallThesis: '',
@@ -1139,12 +1186,30 @@
       current.text = text(patch.text, 2400);
       changed.push('text');
     }
+    if (Object.hasOwn(patch, 'relationType')) {
+      const relationType = text(patch.relationType, 40).toLowerCase();
+      if (SCIENTIFIC_QUESTION_RELATIONS.has(relationType)) {
+        current.relationType = relationType;
+        changed.push('relationType');
+      }
+    }
+    if (Object.hasOwn(patch, 'parentQuestionIds')) {
+      current.parentQuestionIds = Array.isArray(patch.parentQuestionIds)
+        ? [...patch.parentQuestionIds] : [];
+      changed.push('parentQuestionIds');
+    }
+    if (Object.hasOwn(patch, 'supportingFigureIds')) {
+      current.supportingFigureIds = Array.isArray(patch.supportingFigureIds)
+        ? [...patch.supportingFigureIds] : [];
+      changed.push('supportingFigureIds');
+    }
     if (Object.hasOwn(patch, 'humanReviewed')) {
       current.humanReviewed = patch.humanReviewed === true;
     }
     current.manuallyEdited = true;
     current.manuallyEditedFields = mergeEditedFields(
-      current.manuallyEditedFields, changed, ['text']
+      current.manuallyEditedFields, changed,
+      ['text', 'relationType', 'parentQuestionIds', 'supportingFigureIds']
     );
     return normalizeResearchLogicMap(next);
   }

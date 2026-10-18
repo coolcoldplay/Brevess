@@ -2,6 +2,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+
+test('settings navigation asks for local storage before model connection', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'options.html'), 'utf8');
+  const start = html.indexOf('<div class="settings-nav-group">');
+  const end = html.indexOf('<div class="settings-nav-group">', start + 1);
+  const firstGroup = html.slice(start, end);
+  assert.ok(firstGroup.indexOf('data-settings-nav="storage"') >= 0);
+  assert.ok(firstGroup.indexOf('data-settings-nav="models"') >= 0);
+  assert.ok(
+    firstGroup.indexOf('data-settings-nav="storage"') <
+      firstGroup.indexOf('data-settings-nav="models"')
+  );
+});
 const vm = require('node:vm');
 
 function read(file) {
@@ -29,15 +42,61 @@ test('settings header uses the Brevess logo and brand line', () => {
   assert.doesNotMatch(html, /class="brand-mark"[^>]*>SL</);
 });
 
-test('exposes named API profiles, token policy, and task routing controls', () => {
+test('PDF reader return control is contextual, compact, and rejects a missing query value', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const styles = read('options.css');
+  const button = html.slice(
+    html.indexOf('id="returnToPdfReader"') - 80,
+    html.indexOf('id="returnToPdfReader"') + 320
+  );
+  const parser = script.slice(
+    script.indexOf('function pdfReaderReturnTabId('),
+    script.indexOf('function configurePdfReaderReturn(')
+  );
+
+  assert.match(button, /class="[^"]*quiet[^"]*pdf-reader-return[^"]*"/);
+  assert.match(button, /aria-label="返回 PDF 阅读器"/);
+  assert.match(button, /←\s*返回 PDF/);
+  assert.doesNotMatch(button, /\bprimary\b/);
+  assert.match(parser, /const rawValue = new URLSearchParams\(location\.search\)\.get\('returnPdfTab'\)/);
+  assert.match(parser, /if \(!rawValue \|\| !\/\^\\d\+\$\/\.test\(rawValue\)\) return null/);
+  assert.match(parser, /Number\.isSafeInteger\(value\)/);
+  assert.doesNotMatch(parser, /Number\(new URLSearchParams/);
+  assert.match(styles, /\.pdf-reader-return\s*\{[^}]*width:\s*auto[^}]*justify-self:\s*start/s);
+});
+
+test('settings header keeps low-emphasis tools balanced while navigation moves into the settings frame', () => {
+  const styles = read('options.css');
+  assert.match(styles, /\.mode-badge\s*\{[^}]*color:\s*var\(--muted\)[^}]*background:\s*#F4F6F8/s);
+  const medium = styles.slice(
+    styles.indexOf('@media (min-width: 901px) and (max-width: 1300px)'),
+    styles.indexOf('@media (min-width: 901px) and (max-width: 1300px)') + 1400
+  );
+  assert.match(medium, /\.settings-frame\s*\{[^}]*grid-template-columns:\s*210px/s);
+  assert.doesNotMatch(styles, /\.page-nav button\[aria-selected="true"\]/);
+  const phoneStart = styles.indexOf('@media (max-width: 620px)');
+  const phone = styles.slice(phoneStart, phoneStart + 3600);
+  assert.match(phone, /\.pdf-reader-return\s*\{[^}]*width:\s*auto[^}]*max-width:\s*100%/s);
+});
+
+test('exposes named API profiles and a per-feature model policy table', () => {
   const html = read('options.html');
   const script = read('options.js');
   [
     'apiProfileList', 'addApiProfile', 'duplicateApiProfile', 'deleteApiProfile',
-    'profileName', 'globalProfileId', 'routeHighlight', 'routeSummary',
-    'routeFigure', 'routeCrossFigure', 'tokenModeAuto', 'tokenModeManual',
-    'autoTokenCap', 'manualMaxTokens', 'contextWindowTokens'
+    'profileName', 'globalProfileId', 'llmTaskPolicyTable', 'llmTaskPolicyTableBody',
+    'taskTokenRuleDialog', 'contextWindowTokens'
   ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
+  ['routeHighlight', 'routeSummary', 'routeFigure', 'routeCrossFigure']
+    .forEach(id => assert.doesNotMatch(html, new RegExp(`id="${id}"`)));
+  for (const column of ['功能', '模型选择', '推理', '推理强度', 'Token 规则', '编辑预览']) {
+    assert.ok(script.includes(`'${column}'`), column);
+  }
+  ['tokenModeManual', 'autoTokenCap', 'manualMaxTokens']
+    .forEach(id => assert.doesNotMatch(html, new RegExp(`id="${id}"`)));
+  assert.match(html, /id="reasoningEffortField"/);
+  assert.match(html, /id="reasoningEffort"/);
   assert.doesNotMatch(html, /id="maxOutputTokens"/);
   const editorStart = html.indexOf('class="api-profile-editor"');
   const editorEnd = html.indexOf('task-routing-section');
@@ -47,10 +106,187 @@ test('exposes named API profiles, token policy, and task routing controls', () =
     .forEach(id => assert.match(editor, new RegExp(`id="${id}"`)));
   ['LLM_SAVE_PROFILE', 'LLM_UPDATE_PROFILE_ROUTING', 'LLM_DUPLICATE_PROFILE',
     'LLM_DELETE_PROFILE'].forEach(type => assert.match(script, new RegExp(type)));
-  assert.match(script, /将只依据图注和正文解读/);
-  assert.match(html, /根据任务路由.*第三方模型服务/);
+  assert.match(script, /SciLLM\.LLM_TASK_IDS/);
+  assert.match(script, /SciLLM\.TASK_DEFINITIONS/);
+  assert.match(script, /function renderTaskPolicyTable\(/);
+  assert.match(script, /function collectTaskPolicies\(/);
+  assert.match(html, /每个用户可见的 AI 功能都可独立指定模型/);
   assert.match(html, /上下文窗口.*高级/);
   assert.match(script, /contextWindowTokens/);
+});
+
+test('task token dialog edits only bounded execution rules and supports preview reset and copy', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const tokenFields = [
+    'safetyRatio', 'reservedTokens', 'sourceCapTokens', 'maxUnits',
+    'base', 'perUnit', 'floor', 'ceiling', 'truncationRetries', 'retryMultiplier'
+  ];
+  tokenFields.forEach(field => {
+    assert.match(html, new RegExp(`data-token-rule-field="${field}"`));
+  });
+  tokenFields.filter(field => field !== 'sourceCapTokens').forEach(field => {
+    assert.match(
+      html,
+      new RegExp(`<input[^>]*data-token-rule-field="${field}"[^>]*required|` +
+        `<input[^>]*required[^>]*data-token-rule-field="${field}"`)
+    );
+  });
+  const sourceCapInput = html.match(/<input[^>]*data-token-rule-field="sourceCapTokens"[^>]*>/)?.[0] || '';
+  assert.doesNotMatch(sourceCapInput, /\brequired\b/);
+  assert.match(html, /id="taskTokenInputPreview"/);
+  assert.match(html, /id="taskTokenOutputPreview"/);
+  assert.match(html, /id="resetTaskTokenRule"/);
+  assert.match(html, /id="copyTaskTokenRule"/);
+  assert.match(html, /id="taskTokenCopyTargets"/);
+  assert.match(script, /function validateTaskTokenRuleDraft\(/);
+  assert.match(script, /floor\s*>\s*ceiling/);
+  assert.match(script, /SciLLM\.computeInputTokenBudget/);
+  assert.match(script, /SciLLM\.computeOutputTokenBudget/);
+  assert.match(script, /function resetTaskTokenRule\(/);
+  assert.match(script, /function copyTaskTokenRuleToSelectedTasks\(/);
+  assert.match(script, /if \(!raw\)[\s\S]*不能为空/);
+  assert.match(script, /taskTokenRuleDialog'\)[\s\S]{0,80}\.addEventListener\('cancel'/);
+  assert.match(script, /taskTokenRuleDialog'\)[\s\S]{0,80}\.addEventListener\('close'/);
+  const dialogStart = html.indexOf('id="taskTokenRuleDialog"');
+  const dialogEnd = html.indexOf('</dialog>', dialogStart);
+  const dialog = html.slice(dialogStart, dialogEnd);
+  assert.doesNotMatch(dialog, /prompt|提示词|schema|API Key|credential|密码/i);
+});
+
+test('task policy collection is a strict six-field settings payload', () => {
+  const script = read('options.js');
+  const start = script.indexOf('function collectTaskPolicies(');
+  const end = script.indexOf('async function addApiProfile(', start + 1);
+  const source = script.slice(start, end);
+  for (const key of [
+    'mode', 'profileId', 'reasoningEnabled', 'reasoningEffort',
+    'tokenRule', 'allowTextFallback'
+  ]) assert.match(source, new RegExp(`\\b${key}\\b`));
+  assert.match(source, /effectiveTaskProfile\(policy\)/);
+  assert.match(source, /SciLLM\.normalizeReasoningForProvider/);
+  assert.match(source, /reasoningEnabled:\s*normalizedReasoning\.enabled\s*===\s*true/);
+  for (const forbidden of ['apiKey', 'prompt', 'responseSchema', 'code']) {
+    assert.doesNotMatch(source, new RegExp(forbidden, 'i'));
+  }
+});
+
+test('migrates both legacy DeepSeek thinking booleans into explicit reasoning choices', () => {
+  const script = read('options.js');
+  assert.match(script, /config\.thinking\s*===\s*true\s*\?\s*'enabled'\s*:\s*'disabled'/);
+  assert.match(script, /config\.reasoningEffort\s*===\s*'auto'\)\s*delete config\.thinking/);
+});
+
+test('settings expose an optional structured reasoning probe with privacy-safe status copy', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const i18n = read('core/i18n.js');
+  assert.match(html, /id="testReasoningStructured"/);
+  assert.match(html, /结构化推理.*可选/);
+  assert.match(script, /reasoning_structured/);
+  assert.match(script, /结构化推理失败（连接正常）/);
+  assert.match(script, /结构化推理通过/);
+  assert.doesNotMatch(script, /result\.probes[^\n]*(?:request|systemPrompt|userPrompt|responseSchema)/);
+  assert.match(i18n, /'同时测试结构化推理（可选）':\s*'Also test structured reasoning \(optional\)'/);
+  assert.match(i18n, /结构化推理失败（连接正常）/);
+
+  const start = script.indexOf('function formatProviderProbeSummary(');
+  const end = script.indexOf('\nasync function testProvider(', start);
+  const context = {};
+  vm.runInNewContext(
+    `${script.slice(start, end)}\nglobalThis.format = formatProviderProbeSummary;`,
+    context
+  );
+  const summary = context.format({
+    probes: [
+      { id: 'connectivity', status: 'passed' },
+      {
+        id: 'reasoning_structured', status: 'failed',
+        request: { userPrompt: 'PRIVATE_REQUEST_MUST_NOT_RENDER' }
+      }
+    ],
+    warnings: [{ probeId: 'reasoning_structured', code: 'INVALID_RESPONSE' }],
+    estimatedInputTokens: 42
+  });
+  assert.match(summary, /结构化推理失败（连接正常）/);
+  assert.doesNotMatch(summary, /PRIVATE_REQUEST_MUST_NOT_RENDER|INVALID_RESPONSE/);
+
+  assert.match(script, /function providerProbeIds\(/);
+  const helpersStart = script.indexOf('function providerProbeIds(');
+  vm.runInNewContext(
+    `${script.slice(helpersStart, end)}\n` +
+      'globalThis.ids = providerProbeIds; globalThis.connection = formatProviderConnectionStatus;',
+    context
+  );
+  assert.deepEqual([...context.ids(false)], ['connectivity']);
+  assert.deepEqual([...context.ids(true)], ['connectivity', 'reasoning_structured']);
+
+  const failed = {
+    providerId: 'deepseek', model: 'deepseek-v4-pro',
+    probes: [
+      { id: 'connectivity', status: 'passed' },
+      { id: 'reasoning_structured', status: 'failed' }
+    ],
+    warnings: [{ probeId: 'reasoning_structured' }], estimatedInputTokens: 42
+  };
+  assert.match(context.connection(failed, '', 'zh-CN'),
+    /^连接成功：.*结构化推理失败（连接正常）/);
+  assert.match(context.connection(failed, '', 'en'),
+    /^Connection successful: .*Structured reasoning failed \(connection is working\)/);
+  assert.doesNotMatch(context.connection(failed, '', 'en'), /连接|推理|探针|估算/);
+  for (const [status, zh, en] of [
+    ['passed', '结构化推理通过', 'Structured reasoning passed'],
+    ['skipped', '结构化推理已跳过（当前配置不支持）',
+      'Structured reasoning skipped (unsupported by this profile)']
+  ]) {
+    const result = {
+      ...failed,
+      probes: [
+        { id: 'connectivity', status: 'passed' },
+        { id: 'reasoning_structured', status }
+      ],
+      warnings: []
+    };
+    assert.match(context.connection(result, '', 'zh-CN'), new RegExp(zh));
+    assert.match(context.connection(result, '', 'en'), new RegExp(en.replace(/[()]/g, '\\$&')));
+  }
+});
+
+test('reasoning probe control follows capability visibility and clears stale opt-in', () => {
+  const script = read('options.js');
+  const start = script.indexOf('function renderReasoningEffort(');
+  const end = script.indexOf('\nfunction providerProbeIds(', start);
+  const elements = {
+    reasoningEffortField: { hidden: false },
+    reasoningEffort: {
+      value: '', replaceChildren() {}, appendChild() {}
+    },
+    reasoningStructuredProbeField: { hidden: false },
+    testReasoningStructured: { checked: true },
+    model: { value: 'model' },
+    reasoningEffortHint: { textContent: '' }
+  };
+  let capability = { supported: false, mode: 'none', levels: [] };
+  const context = {
+    selectedProfileId: 'profile',
+    document: {
+      getElementById: id => elements[id],
+      createElement: () => ({ value: '', textContent: '' })
+    },
+    providerSelectionDescriptor: () => ({ providerId: 'deepseek' }),
+    profileById: () => ({ config: {} }),
+    SciLLM: { getProviderReasoningCapabilities: () => capability }
+  };
+  vm.runInNewContext(`${script.slice(start, end)}\nglobalThis.render = renderReasoningEffort;`, context);
+  context.render();
+  assert.equal(elements.reasoningStructuredProbeField.hidden, true);
+  assert.equal(elements.testReasoningStructured.checked, false);
+  capability = {
+    supported: true, mode: 'toggle', levels: ['auto', 'enabled', 'disabled'],
+    defaultLevel: 'auto'
+  };
+  context.render();
+  assert.equal(elements.reasoningStructuredProbeField.hidden, false);
 });
 
 test('settings load the unified IndexedDB schema before directory persistence', () => {
@@ -74,6 +310,21 @@ test('settings expose full CRUD for named Panel follow-up presets', () => {
   assert.match(script, /dataDeletePanelPreset|deletePanelPreset|deletePanelPreset/i);
   assert.match(script, /figurePanelFollowupPresets/);
   assert.match(script, /figurePanelFollowupPrompts/);
+});
+
+test('settings expose customizable literature-note templates, selection actions, and offline snapshots', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  [
+    'literatureNoteTemplateList', 'addLiteratureNoteTemplate',
+    'resetLiteratureNoteTemplates', 'selectionLlmActionList',
+    'addSelectionLlmAction', 'resetSelectionLlmActions', 'saveArticleWebSnapshot'
+  ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
+  assert.match(html, /core\/reading-tools\.js/);
+  assert.match(script, /function collectLiteratureNoteTemplates\(/);
+  assert.match(script, /function collectSelectionLlmActions\(/);
+  assert.match(script, /literatureNoteTemplates/);
+  assert.match(script, /selectionLlmActions/);
 });
 
 test('settings manage custom analysis modes, chat prompts, module transfer, and language', () => {
@@ -103,27 +354,36 @@ test('Panel follow-up history is rendered in reachable expanded prior rounds', (
   const editableStart = popup.indexOf('function isEditableKeyboardTarget(', controlStart);
   const helper = popup.slice(helperStart, controlStart);
   const control = popup.slice(controlStart, editableStart);
+  const uiTextStart = popup.indexOf('function createFigurePanelUiText(');
+  const uiTextEnd = popup.indexOf('function figurePanelUiText(', uiTextStart);
+  const uiText = popup.slice(uiTextStart, uiTextEnd);
   const editableEnd = popup.indexOf('\nfunction ', editableStart + 1);
   const editable = popup.slice(editableStart, editableEnd);
   assert.ok(helperStart >= 0 && controlStart > helperStart);
   assert.match(helper, /panelFollowupHistories/);
   assert.match(helper, /document\.createElement\('details'\)/);
   assert.match(helper, /details\.open = true/);
-  assert.match(helper, /历史追问/);
+  assert.match(uiText, /historyHeading:\s*`历史追问 · \$\{displayId\}/);
+  assert.match(helper, /summary\.textContent = historyText\.historyHeading/);
   assert.match(helper, /priorHistory/);
   assert.match(helper, /workspace-panel-followup-history-round/);
-  assert.match(control, /appendPanelFollowupHistory\(root, figure, panelId, answer\)/);
+  assert.match(helper, /createFigurePanelUiText\(figure\?\.figureLabel, panelId,/);
+  assert.match(helper, /preferredDisplayId:\s*panelDisplayId/);
+  assert.match(control,
+    /appendPanelFollowupHistory\(root, figure, panelId, displayId, answer\)/);
+  assert.match(control, /const displayId = uiText\.displayId/);
   assert.doesNotMatch(editable, /panelFollowupHistories|priorHistory/);
   assert.match(css, /\.workspace-panel-followup-history/);
   assert.match(css, /\.workspace-panel-followup-history-round/);
 });
 
-test('route renderer trusts normalized state routes and does not restore stale UI selections', () => {
+test('task policy renderer trusts normalized state policies and has no coarse route fallback', () => {
   const script = read('options.js');
-  const start = script.indexOf('function renderRouteOptions(');
-  const end = script.indexOf('\nfunction renderFigureRouteWarning', start);
+  const start = script.indexOf('function syncTaskPolicyDraftsFromState(');
+  const end = script.indexOf('function handleTaskPolicyTableChange(', start + 1);
   const renderer = script.slice(start, end);
-  assert.doesNotMatch(renderer, /if\s*\(!select\.value\s*&&\s*current[\s\S]*select\.value\s*=\s*current/);
+  assert.match(renderer, /state\?\.settings\?\.taskPolicies/);
+  assert.doesNotMatch(renderer, /taskRoutes|routeHighlight|routeSummary|routeFigure|routeCrossFigure/);
 });
 
 test('profile editor guards unsaved navigation and exposes a reusable in-flight action guard', () => {
@@ -138,8 +398,13 @@ test('profile editor guards unsaved navigation and exposes a reusable in-flight 
   assert.match(script, /function beginProfileMutation\(/);
   assert.match(script, /function endProfileMutation\(/);
   assert.match(script, /globalProfileId[\s\S]*markProfileEditorDirty/);
-  assert.match(script, /routeHighlight[\s\S]*markProfileEditorDirty/);
+  assert.match(script, /llmTaskPolicyTableBody[\s\S]*markProfileEditorDirty/);
   assert.match(script, /canLeaveProfileEditor\(['"]切换/);
+  const guardStart = script.indexOf('function canLeaveProfileEditor(');
+  const guardEnd = script.indexOf('function beginProfileAction(', guardStart);
+  const guard = script.slice(guardStart, guardEnd);
+  assert.match(guard, /syncTaskPolicyDraftsFromState\(\)/);
+  assert.match(guard, /globalProfileId[\s\S]*state\?\.settings\?\.globalProfileId/);
 });
 
 test('profile save snapshots auto-analysis before async state re-rendering', () => {
@@ -172,6 +437,23 @@ test('settings expose and persist default-on Figure original caching', () => {
     script,
     /state\.settings\?\.autoCacheFigureImages !== false/
   );
+});
+
+test('local storage owns Figure caching and offline article persistence controls', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const organizeStart = script.indexOf('function organizeSettingsContent()');
+  const organizeEnd = script.indexOf('\nasync function returnToPdfReader', organizeStart);
+  const organize = script.slice(organizeStart, organizeEnd);
+
+  assert.match(html, /id="saveStoragePreferences"/);
+  assert.match(html, /id="storagePreferencesStatus"/);
+  assert.match(organize, /storageBody\.append\(figureOriginalSettings\)/);
+  assert.doesNotMatch(
+    organize,
+    /\[\s*[\s\S]*?'figureOriginalSettings'[\s\S]*?\]\.forEach/
+  );
+  assert.match(script, /saveStoragePreferences[\s\S]*saveScopedPreferences/);
 });
 
 test('settings expose a validated customizable keyboard shortcut workspace', () => {
@@ -209,7 +491,72 @@ test('settings are split into top-level pages and expose full custom-category CR
   assert.match(html, /id="deletedBuiltInCategoriesList"/);
   assert.match(script, /function renderDeletedBuiltInCategories/);
   assert.match(css, /\.category-title-delete/);
-  assert.match(css, /\.page-nav button\[aria-selected="true"\]/);
+  assert.match(css, /\.settings-nav-group button\[aria-selected="true"\]/);
+});
+
+test('settings hub makes overview the persistent home and groups destinations by task', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  assert.match(html, /id="settingsOverview"[^>]*data-settings-page="overview"/);
+  assert.match(html, /class="settings-frame"/);
+  assert.match(html, /class="settings-sidebar"/);
+  for (const label of ['开始使用', '阅读与分析', '系统']) {
+    assert.match(html, new RegExp(label));
+  }
+  for (const page of ['overview', 'models', 'storage', 'reading', 'data']) {
+    assert.match(html, new RegExp(`data-settings-nav="${page}"`));
+    assert.match(html, new RegExp(`data-settings-page="${page}"`));
+  }
+  assert.doesNotMatch(html, /<nav class="page-nav"/);
+  assert.match(script, /const SETTINGS_PAGE_ORDER\s*=\s*\[\s*'overview'/);
+  assert.match(script, /let activeSettingsPage\s*=\s*'overview'/);
+  assert.match(script, /document\.body\.dataset\.activeSettingsPage\s*=\s*nextPage/);
+  assert.doesNotMatch(script, /document\.body\.dataset\.settingsPage\s*=/);
+  assert.match(css, /\.settings-frame\s*\{/);
+});
+
+test('first-run setup is a persistent overview checklist that opens focused real settings', () => {
+  const html = read('options.html');
+  const script = read('options.js');
+  const css = read('options.css');
+  [
+    'onboardingGuide', 'setupStorageRow', 'setupApiRow',
+    'overviewConfigureStorage', 'overviewConfigureApi',
+    'onboardingFinish', 'setupFocusBar'
+  ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
+  const browsingIndex = html.indexOf('class="setup-check-row is-complete"');
+  const storageIndex = html.indexOf('id="setupStorageRow"');
+  const apiIndex = html.indexOf('id="setupApiRow"');
+  const consentIndex = html.indexOf('id="setupConsentRow"');
+  assert.ok(browsingIndex >= 0 && browsingIndex < storageIndex);
+  assert.ok(storageIndex < apiIndex, 'local storage must be offered before API setup');
+  assert.ok(apiIndex < consentIndex);
+  assert.match(script, /function openOnboardingStep\(/);
+  assert.match(
+    script,
+    /activateSettingsPage\(step\s*===\s*'storage'\s*\?\s*'storage'\s*:\s*'models'/
+  );
+  assert.match(script, /function renderSettingsOverview\(/);
+  assert.match(script, /function organizeSettingsContent\(/);
+  assert.doesNotMatch(css, /body\.is-onboarding \.settings-shell > :not/);
+});
+
+test('desktop settings navigation aligns with the page canvas instead of using a nested outer card', () => {
+  const css = read('options.css');
+  const sidebarRule = css.match(/\.settings-sidebar\s*\{([^}]+)\}/)?.[1] || '';
+  assert.match(sidebarRule, /border:\s*0/);
+  assert.match(sidebarRule, /background:\s*transparent/);
+  assert.match(sidebarRule, /box-shadow:\s*none/);
+});
+
+test('settings hub collapses its sidebar into a compact mobile destination selector', () => {
+  const html = read('options.html');
+  const css = read('options.css');
+  assert.match(html, /class="settings-mobile-nav"/);
+  assert.match(html, /id="settingsMobilePage"/);
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*\.settings-sidebar/);
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*\.settings-mobile-nav/);
 });
 
 test('settings UI uses background messages and never sync storage', () => {
@@ -238,7 +585,7 @@ test('feedback email lives in settings instead of the analysis workspace', () =>
   const options = read('options.html');
   const popup = read('popup.html');
   assert.match(options, /id="support"/);
-  assert.match(options, /mailto:brevess0729@163\.com/);
+  assert.match(options, /https:\/\/github\.com\/coolcoldplay\/Brevess\/issues/);
   assert.doesNotMatch(popup, /mailto:|contact-email/);
 });
 
@@ -428,7 +775,10 @@ test('local data controls form one accessible section and load the shared direct
   assert.match(html, /冲突[^<]*备份|备份[^<]*冲突/);
   assert.match(css, /--navy:\s*#0B4778/i);
   assert.match(css, /\.local-data-layout\s*\{/);
-  assert.doesNotMatch(html, /<svg|😀|📁|💾/u);
+  const supportIcons = [...html.matchAll(/<svg class="support-(?:email|copy)-icon"[^>]*>[\s\S]*?<\/svg>/g)];
+  assert.equal(supportIcons.length, 2, 'About email and copy actions have their authorized vector icons');
+  const remainingMarkup = html.replace(/<svg class="support-(?:email|copy)-icon"[^>]*>[\s\S]*?<\/svg>/g, '');
+  assert.doesNotMatch(remainingMarkup, /<svg|😀|📁|💾/u);
 });
 
 test('portable encrypted settings expose an accessible safe passphrase workflow', () => {
@@ -508,14 +858,14 @@ test('portable directory preparation probes before any drained sync and gates ev
 
   const cached = await run('ready');
   assert.deepEqual(cached.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'ready', 'reload', 'USER_DATA_SYNC_NOW', 'status',
+    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW', 'status',
     'completed'
   ]);
   assert.equal(cached.events.find(event => event[1] === 'USER_DATA_SYNC_NOW')[2], true);
 
   const created = await run('missing', { state: 'ready' });
   assert.deepEqual(created.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready', 'reload',
+    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready',
     'USER_DATA_SYNC_NOW', 'status', 'completed'
   ]);
 
@@ -527,11 +877,11 @@ test('portable directory preparation probes before any drained sync and gates ev
 
   const cachedFailureEvents = [];
   await assert.rejects(
-    run('ready', undefined, { failReload: true, events: cachedFailureEvents }),
+    run('locked', { state: 'ready' }, { failReload: true, events: cachedFailureEvents }),
     /cached-ready-secret/
   );
   assert.deepEqual(cachedFailureEvents.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'ready', 'reload'
+    'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload'
   ]);
 
   for (const [state, dialogResult] of [
@@ -574,7 +924,9 @@ test('deferred portable activation finishes create and unlock safely before onbo
         if (failSync) throw Object.assign(new Error(secret), { code: 'UNKNOWN_FAILURE' });
         return { permission: 'granted' };
       },
-      reloadSettings: async () => { events.push(['reload']); },
+      reloadSettings: async options => {
+        events.push(['reload', options?.replaceTaskPolicyDrafts === true]);
+      },
       refreshStatus: async () => { events.push(['refresh']); },
       isOnboardingActive: () => true,
       markStorageCompleted: async () => { events.push(['onboarding', 'completed']); },
@@ -587,7 +939,7 @@ test('deferred portable activation finishes create and unlock safely before onbo
 
   const created = await run('missing', { state: 'ready' });
   assert.deepEqual(created.events, [
-    ['dialog', 'create'], ['render', 'ready'], ['reload'],
+    ['dialog', 'create'], ['render', 'ready'],
     ['call', 'USER_DATA_SYNC_NOW', true], ['refresh'],
     ['onboarding', 'completed']
   ]);
@@ -595,7 +947,7 @@ test('deferred portable activation finishes create and unlock safely before onbo
 
   const unlocked = await run('locked', { state: 'ready' });
   assert.deepEqual(unlocked.events, [
-    ['dialog', 'unlock'], ['render', 'ready'], ['reload'],
+    ['dialog', 'unlock'], ['render', 'ready'], ['reload', true],
     ['call', 'USER_DATA_SYNC_NOW', true], ['refresh'],
     ['onboarding', 'completed']
   ]);
@@ -622,25 +974,31 @@ test('deferred portable activation finishes create and unlock safely before onbo
   context.refreshSettings = async () => {
     restoreEvents.push(['legacy-reload']);
   };
-  for (const currentState of ['locked', 'missing']) {
-    restoreEvents.length = 0;
-    restoreNotices.length = 0;
-    const restoreFailed = await context.activate({
-      currentState,
-      openDialog: async () => ({ state: 'ready' }),
-      call: async message => { restoreEvents.push(['call', message.type]); },
-      refreshStatus: async () => { restoreEvents.push(['refresh']); },
-      isOnboardingActive: () => true,
-      markStorageCompleted: async () => { restoreEvents.push(['onboarding']); },
-      renderStatus: () => {},
-      showStatus: (message, type) => restoreNotices.push([message, type]),
-      errorText: () => '无法完成加密配置操作，请稍后重试。'
-    });
-    assert.deepEqual(restoreEvents, [['portable-reload']], currentState);
-    assert.equal(restoreFailed.completed, false);
-    assert.equal(restoreNotices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
-    assert.doesNotMatch(restoreNotices.flat().join(' '), new RegExp(restoreSecret));
-  }
+  const activationDependencies = currentState => ({
+    currentState,
+    openDialog: async () => ({ state: 'ready' }),
+    call: async message => { restoreEvents.push(['call', message.type]); },
+    refreshStatus: async () => { restoreEvents.push(['refresh']); },
+    isOnboardingActive: () => true,
+    markStorageCompleted: async () => { restoreEvents.push(['onboarding']); },
+    renderStatus: () => {},
+    showStatus: (message, type) => restoreNotices.push([message, type]),
+    errorText: () => '无法完成加密配置操作，请稍后重试。'
+  });
+  const restoreFailed = await context.activate(activationDependencies('locked'));
+  assert.deepEqual(restoreEvents, [['portable-reload']]);
+  assert.equal(restoreFailed.completed, false);
+  assert.equal(restoreNotices.at(-1)[0], '无法完成加密配置操作，请稍后重试。');
+  assert.doesNotMatch(restoreNotices.flat().join(' '), new RegExp(restoreSecret));
+
+  restoreEvents.length = 0;
+  restoreNotices.length = 0;
+  const createSucceeded = await context.activate(activationDependencies('missing'));
+  assert.deepEqual(restoreEvents, [
+    ['call', 'USER_DATA_SYNC_NOW'], ['refresh'], ['onboarding']
+  ]);
+  assert.equal(createSucceeded.completed, true);
+  assert.equal(restoreEvents.some(event => event[0] === 'portable-reload'), false);
 });
 
 test('portable settings refresh rejects safely and initial unlock stops before sync', async () => {
@@ -654,13 +1012,17 @@ test('portable settings refresh rejects safely and initial unlock stops before s
       refreshEvents.push(['call', message.type]);
       return { settings: { globalProfileId: 'restored-profile' } };
     },
-    applyState: value => refreshEvents.push(['apply', value.settings.globalProfileId])
+    applyState: (value, options) => refreshEvents.push([
+      'apply', value.settings.globalProfileId, options?.replaceTaskPolicyDrafts
+    ])
   };
   vm.runInNewContext(`${script.slice(refreshStart, refreshEnd)}\n` +
     'globalThis.refreshPortable = refreshPortableSettings;', refreshContext);
   await refreshContext.refreshPortable();
+  await refreshContext.refreshPortable({ replaceTaskPolicyDrafts: true });
   assert.deepEqual(refreshEvents, [
-    ['call', 'LLM_GET_SETTINGS'], ['apply', 'restored-profile']
+    ['call', 'LLM_GET_SETTINGS'], ['apply', 'restored-profile', false],
+    ['call', 'LLM_GET_SETTINGS'], ['apply', 'restored-profile', true]
   ]);
 
   const activationStart = script.indexOf('// Portable config activation: start.');
@@ -736,12 +1098,13 @@ test('portable settings refresh rejects safely and initial unlock stops before s
     'refresh-status'
   ].includes(event[0])), [
     ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
-    ['render', 'ready'], ['portable-reload'], ['refresh-status']
+    ['render', 'ready'], ['call', 'USER_DATA_SYNC_NOW', true],
+    ['refresh-status']
   ]);
-  assert.equal(events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false);
-  assert.equal(events.some(event => event[0] === 'onboarding-complete'), false);
-  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
-  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
+  assert.equal(events.some(event => event[0] === 'portable-reload'), false);
+  assert.equal(events.some(event => event[0] === 'onboarding-complete'), true);
+  assert.equal(notices.at(-1)[0], '目录已保存，加密配置已就绪并完成本地数据同步。');
+  assert.equal(notices.at(-1)[1], 'success');
 });
 
 test('portable passphrase mode helpers validate and map only the intended background fields', () => {
@@ -1576,7 +1939,7 @@ test('workspace overview exposes per-article token usage by feature and model', 
   assert.match(css, /\.article-workspace-token-feature\s*\{/);
 });
 
-test('settings reuse directory and API controls in a skippable two-step onboarding view', () => {
+test('settings reuse directory and API controls from a persistent skippable setup checklist', () => {
   const html = read('options.html');
   const script = read('options.js');
   const css = read('options.css');
@@ -1596,16 +1959,16 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(script, /if \(result\.opened\)[\s\S]*chrome\.tabs\.remove\(settingsTabId\)/);
   assert.match(script, /chrome\.tabs\.remove\(settingsTabId\)\.catch\(\(\) => window\.close\(\)\)/);
   assert.match(script, /step === ['"]storage['"]\s*\?\s*['"]暂不选择，继续['"]\s*:\s*['"]暂不配置，直接使用['"]/);
-  assert.match(script, /if \(step === ['"]storage['"]\)[\s\S]*onboardingUi\.step = ['"]api['"][\s\S]*else[\s\S]*await finishOnboarding\(\)/);
+  assert.match(script, /function openOnboardingStep\(step\)/);
+  assert.match(script, /function returnToSettingsOverview\(\)/);
   assert.match(script, /暂时不配置也能直接使用导航、摘句、手动高亮与本地阅读/);
   assert.match(script, /chooseUserDataDirectory/);
   assert.match(script, /addEventListener\(['"]click['"],\s*continueOnboarding\)/);
   assert.match(script, /persistForm/);
   assert.match(script, /function syncSettingsPageVisibility/);
-  assert.match(script, /section\.id === onboardingSectionId/);
-  assert.match(script, /onboardingUi\.step === ['"]api['"][\s\S]*providerSettings[\s\S]*localData/);
-  assert.match(script, /enterOnboardingLayout\(\)[\s\S]*syncSettingsPageVisibility\(\)/);
-  assert.match(script, /leaveOnboardingLayout\(\)[\s\S]*syncSettingsPageVisibility\(\)/);
+  assert.match(script, /section\.dataset\.settingsPage === activeSettingsPage/);
+  assert.match(script, /activateSettingsPage\(step === ['"]storage['"] \? ['"]storage['"] : ['"]models['"]\)/);
+  assert.match(script, /focusBar\.hidden = !focusVisible/);
   assert.match(css, /body\.is-onboarding/);
   assert.match(css, /data-onboarding-step/);
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
@@ -1613,7 +1976,7 @@ test('settings reuse directory and API controls in a skippable two-step onboardi
   assert.match(css, /\.button\[aria-busy=["']true["']\]:disabled\s*\{[^}]*cursor:\s*wait/);
 });
 
-test('model settings own the MinerU PDF parsing configuration', () => {
+test('reading settings own the MinerU PDF parsing configuration', () => {
   const html = read('options.html');
   const script = read('options.js');
   const reader = read('pdf-reader.html');
@@ -1624,11 +1987,11 @@ test('model settings own the MinerU PDF parsing configuration', () => {
   assert.match(html, /core\/pdf-workspace\.js/);
   assert.match(script, /function loadPdfMineruSettings\(\)/);
   assert.match(script, /function savePdfMineruSettings\(/);
-  assert.match(script, /options\.html#pdf-mineru|['"]pdf-mineru['"]:\s*['"]models['"]/);
+  assert.match(script, /options\.html#pdf-mineru|['"]pdf-mineru['"]:\s*['"]reading['"]/);
   assert.doesNotMatch(reader, /id=["']pdfMineruToken["']/);
 });
 
-test('onboarding reveals the real storage and API forms instead of only the guide card', () => {
+test('settings visibility follows the selected real destination during focused setup', () => {
   const script = read('options.js');
   const start = script.indexOf('function syncSettingsPageVisibility(');
   const end = script.indexOf('\nfunction activateSettingsPage(', start);
@@ -1637,6 +2000,7 @@ test('onboarding reveals the real storage and API forms instead of only the guid
     { id: 'categoryWorkspace', dataset: { settingsPage: 'categories' } },
     { id: 'customCategoryCard', dataset: { settingsPage: 'categories' } },
     { id: 'providerSettings', dataset: { settingsPage: 'models' } },
+    { id: 'localStorageSettings', dataset: { settingsPage: 'storage' } },
     { id: 'localData', dataset: { settingsPage: 'data' } }
   ].map(section => ({
     ...section,
@@ -1645,7 +2009,7 @@ test('onboarding reveals the real storage and API forms instead of only the guid
   }));
   const context = {
     onboardingUi: { active: true, step: 'storage' },
-    activeSettingsPage: 'categories',
+    activeSettingsPage: 'storage',
     document: {
       querySelectorAll(selector) {
         assert.equal(selector, '[data-settings-page]');
@@ -1659,15 +2023,16 @@ test('onboarding reveals the real storage and API forms instead of only the guid
   );
 
   context.syncVisibility();
-  assert.equal(sections.find(section => section.id === 'localData').hidden, false);
+  assert.equal(sections.find(section => section.id === 'localStorageSettings').hidden, false);
   assert.equal(sections.find(section => section.id === 'providerSettings').hidden, true);
 
-  context.onboardingUi.step = 'api';
+  context.activeSettingsPage = 'models';
   context.syncVisibility();
-  assert.equal(sections.find(section => section.id === 'localData').hidden, true);
+  assert.equal(sections.find(section => section.id === 'localStorageSettings').hidden, true);
   assert.equal(sections.find(section => section.id === 'providerSettings').hidden, false);
 
   context.onboardingUi.active = false;
+  context.activeSettingsPage = 'categories';
   context.syncVisibility();
   assert.equal(sections.find(section => section.id === 'categoryWorkspace').hidden, false);
   assert.equal(sections.find(section => section.id === 'customCategoryCard').hidden, false);
@@ -1688,6 +2053,10 @@ test('continuing to API implicitly skips an unfinished storage step and never st
     async setOnboardingStepState(step, status) {
       events.push([step, status]);
       context.onboardingUi.state.steps[step] = status;
+    },
+    openOnboardingStep(step) {
+      context.onboardingUi.step = step;
+      events.push(['open', step]);
     },
     renderOnboarding() { events.push(['render', context.onboardingUi.step]); },
     document: { getElementById() { return { textContent: '' }; } },

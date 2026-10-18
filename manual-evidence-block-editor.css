@@ -1,0 +1,19 @@
+.manual-evidence-dialog { box-sizing: border-box; width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); margin: auto; padding: 20px; overflow: auto; background: var(--color-surface, #fff); color: var(--color-text, #262626); border: 1px solid var(--color-border, #d7d7d7); border-radius: 0; font: 13px/1.55 Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+.manual-evidence-dialog::backdrop { background: rgb(0 0 0 / 22%); }
+.manual-evidence-dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.manual-evidence-note, .manual-evidence-field small { color: var(--color-text-muted, #666); font-size: 12px; }
+.manual-evidence-dialog fieldset { margin: 14px 0; padding: 10px; border: 1px solid var(--color-border, #ddd); }
+.manual-evidence-choice { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 4px 0; }
+.manual-evidence-field { display: flex; flex-direction: column; gap: 5px; margin: 12px 0; }
+.manual-evidence-field input, .manual-evidence-field textarea, .manual-evidence-field select { box-sizing: border-box; width: 100%; border: 1px solid var(--color-border, #ccc); border-radius: 0; padding: 8px; font: inherit; color: inherit; background: var(--color-surface, #fff); }
+.manual-evidence-field textarea { resize: vertical; min-height: 44px; }
+.manual-evidence-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.manual-evidence-actions button { min-height: 32px; padding: 5px 10px; }
+.manual-evidence-status { color: var(--color-text, #262626); overflow-wrap: anywhere; }
+.manual-evidence-detail { padding: 8px 0; }
+.manual-evidence-detail p { margin: 7px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.manual-evidence-archive { margin: 12px 0; padding: 10px; border: 1px solid var(--color-border, #ddd); font-size: 12px; }
+.manual-evidence-archive summary { cursor: pointer; overflow-wrap: anywhere; }
+
+.manual-evidence-dialog :is(button, input, textarea, select, summary):focus-visible { outline: 2px solid var(--swiss-ink, #202020); outline-offset: 2px; }
+.manual-evidence-regroup { padding: 12px 0; border-block: 1px solid var(--color-border, #ddd); }

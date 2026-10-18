@@ -1,8 +1,24 @@
 (function attach(root, factory) {
-  const api = factory(root.SciLLM || {});
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  const isCommonJs = typeof module === 'object' && module.exports;
+  const shared = root.SciLLM || {};
+  if (isCommonJs) {
+    Object.assign(shared, require('./llm-task-catalog.js'));
+    Object.assign(shared, require('./token-budget.js'));
+    Object.assign(shared, require('./tts-service.js'));
+    Object.assign(shared, require('./literature-url.js'));
+  }
+  const api = factory(shared);
+  if (isCommonJs) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const DEFAULT_FIGURE_PANEL_HEADER_FIELDS = Object.freeze({
+    evidenceType: true,
+    purpose: false,
+    experimentalMethods: true,
+    statisticalMethods: true,
+    comparison: false,
+    directObservation: false
+  });
   const FALLBACK_PANEL_FOLLOWUP_PROMPTS = Object.freeze({
     grouping: '解释实验分组、对照组与比较关系，并明确这些分组能够和不能支持的结论。',
     technique_principle: '解释实验或生物信息学技术的原理、读出指标及合理的解释边界。',
@@ -128,6 +144,7 @@
     analysis: 'A',
     highlights: 'H',
     chat: 'Q',
+    semanticFind: 'J',
     zotero: 'Z',
     ppt: 'P',
     scanLocal: 'R',
@@ -156,10 +173,25 @@
           ? '' : /^[A-Z0-9]$/.test(normalized) ? normalized : defaultKey];
       }));
   }
+  const LEGACY_SCENARIO_PRESETS = {"quick_story":{"name":"快速主线","description":"为什么做、如何验证、发现什么、说明什么","categoryIds":["known_background","knowledge_gap","objective","hypothesis","study_strategy","method","result","key_result","interpretation","conclusion","significance_novelty","limitation"]},"mechanism_chain":{"name":"机制证据链","description":"起始因素、机制中介、证据强度与下游结局","categoryIds":["driver_intervention","association_evidence","causal_effect","mechanism_mediator","necessity_evidence","sufficiency_evidence","rescue_evidence","temporal_dose_evidence","cross_system_validation","mechanism_gap","alternative_mechanism","evidence","interpretation"]},"critical_review":{"name":"批判性审读","description":"设计、统计、因果边界、替代解释与复现性","categoryIds":["design_control","sample_population","measurement_validity","effect_uncertainty","statistical_robustness","confounding_reverse_causality","causal_overreach","alternative_explanation","replication_external_validation","generalizability","statistical_vs_practical_significance","limitation","transparency_reproducibility"]},"review_synthesis":{"name":"综述证据综合","description":"范围、共识、矛盾、异质性、证据质量与作者综合判断","categoryIds":["review_scope_thesis","evidence_consensus","conflicting_evidence","heterogeneity_source","evidence_quality_certainty","integrative_framework","author_synthesis","knowledge_gap","evidence","conclusion","limitation","future"]}};
+
+  function migrateUntouchedScenarioPresets(saved, normalized) {
+    if (saved.scenarioPresetVersion === 1 || !Array.isArray(saved.analysisModes)) return normalized;
+    const legacy = Object.entries(LEGACY_SCENARIO_PRESETS);
+    const untouched = saved.analysisModes.length === legacy.length && legacy.every(([id, preset]) => {
+      const mode = saved.analysisModes.find(item => item?.id === id);
+      const override = saved.viewCategoryOverrides?.[id];
+      return mode && mode.name === preset.name && mode.description === preset.description &&
+        JSON.stringify(mode.categoryIds) === JSON.stringify(preset.categoryIds) &&
+        !(override?.add?.length || override?.remove?.length);
+    });
+    return untouched ? createDefaultAnalysisModes() : normalized;
+  }
+
   function createDefaultAnalysisModes() {
     const source = shared.READING_VIEWS && typeof shared.READING_VIEWS === 'object'
       ? shared.READING_VIEWS : {};
-    return Object.entries(source).map(([id, definition]) => ({
+    return Object.entries(source).filter(([, definition]) => !definition.legacyOnly).map(([id, definition]) => ({
       id,
       name: String(definition?.name || id),
       description: String(definition?.description || ''),
@@ -180,7 +212,10 @@
         .replace(/^_+|_+$/g, '').slice(0, 80) || `mode_${index + 1}`;
       let suffix = 2;
       const baseId = id;
-      while (seen.has(id)) id = `${baseId}_${suffix++}`.slice(0, 80);
+      while (seen.has(id)) {
+        const ending = `_${suffix++}`;
+        id = `${baseId.slice(0, 80 - ending.length)}${ending}`;
+      }
       seen.add(id);
       const baseIds = Array.isArray(raw.categoryIds)
         ? raw.categoryIds : Array.isArray(fallback.categoryIds)
@@ -196,7 +231,7 @@
         id,
         name: String(raw.name || fallback.name || `分析模式 ${index + 1}`)
           .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80),
-        description: String(raw.description || fallback.description || '')
+        description: String(raw.description ?? fallback.description ?? '')
           .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 240),
         categoryIds
       };
@@ -204,16 +239,41 @@
     return normalized.length ? normalized : defaults;
   }
   const STORAGE_KEY = 'sciLlmSettingsV2';
+  const V5_SETTINGS_BACKUP_KEY = 'sciLlmSettingsV5Backup';
   const SESSION_CATEGORY_KEY = 'sciLlmSessionCategoriesV2';
   const CATEGORY_IDS = [
     'hypothesis', 'objective', 'method', 'result', 'conclusion', 'comparison',
     'limitation', 'future', 'causality', 'emphasis', 'evidence', 'interpretation'
   ];
   const TASK_ROUTE_KEYS = ['highlight', 'summary', 'figure', 'crossFigure'];
+  const REASONING_EFFORTS = new Set([
+    'auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'
+  ]);
+  const LEGACY_TASK_ROUTE_GROUPS = Object.freeze({
+    highlight: Object.freeze([
+      'document_highlight', 'evidence_ledger_review'
+    ]),
+    summary: Object.freeze([
+      'paragraph_summary', 'article_outline_summary', 'abbreviation_translation',
+      'paper_research_logic', 'paper_innovations', 'paper_limitations',
+      'literature_note_autofill', 'article_chat', 'selection_chat'
+    ]),
+    figure: Object.freeze([
+      'figure_walkthrough', 'figure_panel_interpretation', 'figure_panel_followup'
+    ]),
+    crossFigure: Object.freeze(['cross_figure_mechanism'])
+  });
+  const LEGACY_ROUTE_REPRESENTATIVES = Object.freeze({
+    highlight: 'document_highlight',
+    summary: 'paragraph_summary',
+    figure: 'figure_walkthrough',
+    crossFigure: 'cross_figure_mechanism'
+  });
   const PROFILE_ID_PATTERN = /^profile_[a-z0-9_]{3,80}$/;
   const PUBLIC_CONFIG_MAX_DEPTH = 32;
   const PROVIDER_IDS = [
-    'openai', 'anthropic', 'gemini', 'deepseek', 'codex-local', 'openai-compatible'
+    'openai', 'anthropic', 'gemini', 'deepseek', 'typesafe', 'codex-local', 'deepseek-harness',
+    'openai-compatible'
   ];
   const PROVIDER_ID_SET = new Set(PROVIDER_IDS);
   const PROVIDER_NAMES = {
@@ -221,7 +281,9 @@
     anthropic: 'Anthropic',
     gemini: 'Gemini',
     deepseek: 'DeepSeek',
+    typesafe: 'TypeSafe Jev（文本判定）',
     'codex-local': '本机 Codex',
+    'deepseek-harness': '本机 DeepSeek Harness',
     'openai-compatible': 'OpenAI-compatible'
   };
   const PROVIDER_VISION_DEFAULTS = {
@@ -229,7 +291,9 @@
     anthropic: true,
     gemini: true,
     deepseek: false,
+    typesafe: false,
     'codex-local': true,
+    'deepseek-harness': false,
     'openai-compatible': false
   };
   const LEGACY_PROVIDER_DEFAULTS = {
@@ -239,8 +303,12 @@
     deepseek: {
       apiKey: '', model: 'deepseek-v4-flash', maxOutputTokens: 4096, thinking: false
     },
+    typesafe: { apiKey: '', model: 'jev-latest', maxOutputTokens: 4096 },
     'codex-local': {
       model: 'auto', reasoningEffort: 'auto', maxOutputTokens: 4096
+    },
+    'deepseek-harness': {
+      model: 'deepseek-flash', reasoningEffort: 'auto', maxOutputTokens: 4096
     },
     'openai-compatible': {
       apiKey: '', model: '', presetId: 'custom', baseUrl: '',
@@ -288,6 +356,15 @@
     return [...new Set((Array.isArray(value) ? value : [])
       .map(String)
       .filter(item => /^[a-z][a-z0-9_]*$/.test(item)))];
+  }
+
+  function normalizeFigurePanelHeaderFields(value) {
+    const source = isPlainObject(value) ? value : {};
+    return Object.fromEntries(Object.entries(DEFAULT_FIGURE_PANEL_HEADER_FIELDS)
+      .map(([key, fallback]) => [
+        key,
+        typeof source[key] === 'boolean' ? source[key] : fallback
+      ]));
   }
 
   function normalizeDeletedBuiltInCategoryIds(value) {
@@ -397,17 +474,9 @@
   }
 
   function createTokenPolicy(value = {}) {
-    const input = isPlainObject(value) ? value : {};
-    if (input.mode === 'manual') {
-      return {
-        mode: 'manual',
-        autoCap: null,
-        manualMax: normalizeTokenLimit(input.manualMax, 4096)
-      };
-    }
     return {
       mode: 'auto',
-      autoCap: normalizeTokenLimit(input.autoCap, null),
+      autoCap: null,
       manualMax: null
     };
   }
@@ -439,6 +508,127 @@
     }));
   }
 
+  function normalizeTaskPolicy(taskId, value, profiles) {
+    const definition = shared.getLlmTaskDefinition(taskId);
+    const input = isPlainObject(value) ? value : {};
+    const availableProfiles = isPlainObject(profiles) ? profiles : {};
+    const profileId = String(input.profileId || '');
+    const validProfileRoute = input.mode === 'profile' &&
+      Object.prototype.hasOwnProperty.call(availableProfiles, profileId);
+    const translationTask = definition.requirements?.translation === true;
+    const translationMode = ['global', 'profile'].includes(input.mode)
+      ? input.mode : 'local';
+    const catalogReasoning = REASONING_EFFORTS.has(definition.defaultReasoning)
+      ? definition.defaultReasoning : 'auto';
+    const reasoningEffort = REASONING_EFFORTS.has(input.reasoningEffort)
+      ? input.reasoningEffort : catalogReasoning;
+    const reasoningEnabled = typeof input.reasoningEnabled === 'boolean'
+      ? input.reasoningEnabled
+      : (typeof input.thinking === 'boolean' ? input.thinking : false);
+    const tokenRule = typeof shared.normalizeTaskTokenRule === 'function'
+      ? shared.normalizeTaskTokenRule(taskId, input.tokenRule)
+      : definition.defaultTokenRule;
+    const visionTask = definition.requirements?.vision === true;
+    return {
+      mode: translationTask ? translationMode : validProfileRoute ? 'profile' : 'global',
+      profileId: translationTask
+        ? (translationMode === 'profile' ? profileId : null)
+        : (validProfileRoute ? profileId : null),
+      reasoningEnabled,
+      reasoningEffort,
+      tokenRule,
+      allowTextFallback: visionTask && input.allowTextFallback === true
+    };
+  }
+
+  function semanticFindDefaultPolicy(profiles, profileOrder = []) {
+    const availableProfiles = isPlainObject(profiles) ? profiles : {};
+    const orderedIds = [
+      ...(Array.isArray(profileOrder) ? profileOrder : []),
+      ...Object.keys(availableProfiles)
+    ];
+    const seen = new Set();
+    const profileId = orderedIds.find(id => {
+      const normalizedId = String(id || '');
+      if (!normalizedId || seen.has(normalizedId)) return false;
+      seen.add(normalizedId);
+      const profile = availableProfiles[normalizedId];
+      if (profile?.providerId !== 'typesafe' || !isConfiguredProfile(profile)) return false;
+      const endpoint = String(profile.config?.baseUrl || '').replace(/\/+$/u, '');
+      return !endpoint || endpoint === 'https://api.typesafe.ai/v1' ||
+        endpoint === 'https://api.typesafe.ai/v1/systemone';
+    });
+    return normalizeTaskPolicy('semantic_find', profileId ? {
+      mode: 'profile', profileId
+    } : {}, availableProfiles);
+  }
+
+  function createDefaultTaskPolicies(profiles = {}, profileOrder = []) {
+    return Object.fromEntries(shared.LLM_TASK_IDS.map(taskId => [
+      taskId,
+      taskId === 'semantic_find'
+        ? semanticFindDefaultPolicy(profiles, profileOrder)
+        : normalizeTaskPolicy(taskId, {}, profiles)
+    ]));
+  }
+
+  function normalizeTaskPolicies(value, profiles, profileOrder = []) {
+    const input = isPlainObject(value) ? value : {};
+    return Object.fromEntries(shared.LLM_TASK_IDS.map(taskId => [
+      taskId,
+      taskId === 'semantic_find' &&
+        !Object.prototype.hasOwnProperty.call(input, taskId)
+        ? semanticFindDefaultPolicy(profiles, profileOrder)
+        : normalizeTaskPolicy(taskId, input[taskId], profiles)
+    ]));
+  }
+
+  function migrateLegacyTaskRoutes(
+    taskRoutes,
+    profiles,
+    globalProfileId,
+    profileOrder = []
+  ) {
+    const input = isPlainObject(taskRoutes) ? taskRoutes : {};
+    const availableProfiles = isPlainObject(profiles) ? profiles : {};
+    const globalProfile = Object.prototype.hasOwnProperty.call(
+      availableProfiles, globalProfileId
+    ) ? availableProfiles[globalProfileId] : null;
+    const routeKeyByTaskId = Object.fromEntries(
+      Object.entries(LEGACY_TASK_ROUTE_GROUPS)
+        .flatMap(([routeKey, taskIds]) => taskIds.map(taskId => [taskId, routeKey]))
+    );
+    return Object.fromEntries(shared.LLM_TASK_IDS.map(taskId => {
+      if (taskId === 'semantic_find') {
+        return [taskId, semanticFindDefaultPolicy(availableProfiles, profileOrder)];
+      }
+      const route = isPlainObject(input[routeKeyByTaskId[taskId]])
+        ? input[routeKeyByTaskId[taskId]] : {};
+      const selectedProfile = route.mode === 'profile' &&
+        Object.prototype.hasOwnProperty.call(availableProfiles, route.profileId)
+        ? availableProfiles[route.profileId] : globalProfile;
+      const profileConfig = isPlainObject(selectedProfile?.config)
+        ? selectedProfile.config : {};
+      return [taskId, normalizeTaskPolicy(taskId, {
+        ...route,
+        reasoningEnabled: profileConfig.reasoningEnabled,
+        thinking: profileConfig.thinking,
+        reasoningEffort: profileConfig.reasoningEffort
+      }, availableProfiles)];
+    }));
+  }
+
+  function projectLegacyTaskRoutes(taskPolicies, profiles) {
+    const normalized = normalizeTaskPolicies(taskPolicies, profiles);
+    return Object.fromEntries(TASK_ROUTE_KEYS.map(routeKey => {
+      const policy = normalized[LEGACY_ROUTE_REPRESENTATIVES[routeKey]];
+      return [routeKey, {
+        mode: policy.mode,
+        profileId: policy.profileId
+      }];
+    }));
+  }
+
   function legacyProfileId(providerId) {
     return `profile_legacy_${String(providerId || '').toLowerCase()
       .replace(/[^a-z0-9]/g, '_')}`;
@@ -462,6 +652,7 @@
     // Figure pixels for upgraded profiles.
     const vision = providerId === 'codex-local'
       ? true
+      : providerId === 'deepseek-harness' ? String(config.model || '').trim() === 'deepseek-flash'
       : (hasExplicitVision
         ? Boolean(value.capabilities.vision)
         : (providerId === 'openai-compatible'
@@ -501,7 +692,9 @@
     const savedProviders = isPlainObject(saved.providers) ? saved.providers : {};
     const profiles = {};
     const profileOrder = [];
-    PROVIDER_IDS.filter(providerId => providerId !== 'codex-local').forEach(providerId => {
+    PROVIDER_IDS.filter(providerId =>
+      !['codex-local', 'deepseek-harness', 'typesafe'].includes(providerId)
+    ).forEach(providerId => {
       const legacyConfig = Object.assign(
         {},
         cloneJsonLike(LEGACY_PROVIDER_DEFAULTS[providerId]),
@@ -558,13 +751,17 @@
   }
 
   function createDefaultSettings() {
+    const profiles = { profile_default_openai: createDefaultProfile() };
     return {
-      version: 5,
+      version: 6,
       mode: 'regex',
       language: 'zh-CN',
       consentGranted: false,
       autoAnalyze: false,
+      literatureUrlWhitelist: [],
+      tts: shared.normalizeTtsSettings(),
       autoCacheFigureImages: true,
+      saveArticleWebSnapshot: true,
       confidenceThreshold: shared.DEFAULT_CONFIDENCE_THRESHOLD || 0.8,
       readingViewId: 'quick_story',
       analysisModes: normalizeAnalysisModes(),
@@ -574,20 +771,26 @@
       studyTypeOverrides: {},
       selectedCategoryIds: [...CATEGORY_IDS],
       customCategories: [],
-      profiles: { profile_default_openai: createDefaultProfile() },
+      profiles,
       globalProfileId: 'profile_default_openai',
       profileOrder: ['profile_default_openai'],
-      taskRoutes: createDefaultTaskRoutes(),
+      taskPolicies: createDefaultTaskPolicies(profiles, ['profile_default_openai']),
+      figurePanelHeaderFields: normalizeFigurePanelHeaderFields(),
       figurePanelFollowupPrompts: normalizeStoredPanelFollowupPrompts({}),
       figurePanelFollowupPresets: normalizePanelFollowupPresets(),
       articleChatQuickPrompts: normalizeArticleChatQuickPrompts(),
+      literatureNoteTemplates: shared.normalizeLiteratureNoteTemplates
+        ? shared.normalizeLiteratureNoteTemplates() : [],
+      lastLiteratureNoteTemplateId: 'basic_research',
+      selectionLlmActions: shared.normalizeSelectionActions
+        ? shared.normalizeSelectionActions() : [],
       keyboardShortcuts: normalizeStoredKeyboardShortcuts({})
     };
   }
 
   function mergeSettings(saved, options = {}) {
     if (isPlainObject(saved) && typeof saved.version === 'number' &&
-        Number.isFinite(saved.version) && saved.version > 5) {
+        Number.isFinite(saved.version) && saved.version > 6) {
       return cloneJsonLike(saved);
     }
     const defaults = createDefaultSettings();
@@ -597,7 +800,7 @@
     }
     const merged = Object.assign({}, defaults, saved);
     const savedVersion = Number(saved.version);
-    merged.version = 5;
+    merged.version = 6;
     merged.selectedCategoryIds = Array.isArray(saved.selectedCategoryIds) ?
       [...saved.selectedCategoryIds] : defaults.selectedCategoryIds;
     merged.customCategories = Array.isArray(saved.customCategories) ?
@@ -613,7 +816,10 @@
       merged.globalProfileId = Object.prototype.hasOwnProperty.call(
         merged.profiles, selectedLegacyProfileId
       ) ? selectedLegacyProfileId : merged.profileOrder[0];
-      merged.taskRoutes = createDefaultTaskRoutes();
+      merged.taskPolicies = createDefaultTaskPolicies(
+        merged.profiles,
+        merged.profileOrder
+      );
     } else {
       const normalizedProfiles = normalizeProfiles(saved.profiles);
       const explicitlyEmptyProfiles = isPlainObject(saved.profiles) &&
@@ -625,8 +831,23 @@
       merged.globalProfileId = Object.prototype.hasOwnProperty.call(
         merged.profiles, saved.globalProfileId
       ) ? saved.globalProfileId : (merged.profileOrder[0] || '');
-      merged.taskRoutes = normalizeTaskRoutes(saved.taskRoutes, merged.profiles);
+      const hasExplicitTaskPolicies = isPlainObject(saved.taskPolicies);
+      const useLegacyRouteCompatibility = savedVersion >= 6 &&
+        !hasExplicitTaskPolicies && isPlainObject(saved.taskRoutes);
+      merged.taskPolicies = savedVersion >= 6 && !useLegacyRouteCompatibility
+        ? normalizeTaskPolicies(
+          saved.taskPolicies,
+          merged.profiles,
+          merged.profileOrder
+        )
+        : migrateLegacyTaskRoutes(
+          saved.taskRoutes,
+          merged.profiles,
+          merged.globalProfileId,
+          merged.profileOrder
+        );
     }
+    delete merged.taskRoutes;
     delete merged.providerId;
     delete merged.providers;
     merged.confidenceThreshold = shared.normalizeConfidenceThreshold
@@ -637,6 +858,16 @@
       saved.analysisModes,
       saved.analysisModes ? {} : merged.viewCategoryOverrides
     );
+    const beforeScenarioMigration = merged.analysisModes;
+    merged.analysisModes = migrateUntouchedScenarioPresets(saved, merged.analysisModes);
+    if (merged.analysisModes !== beforeScenarioMigration) {
+      merged.previousScenarioPresets = cloneJsonLike(saved.analysisModes);
+    }
+    merged.scenarioPresetVersion = 1;
+    // Preserve a pre-scenario workspace's explicitly selected legacy view.
+    if (!saved.analysisModes && saved.readingViewId === 'mechanism_chain' && shared.READING_VIEWS?.mechanism_chain) {
+      merged.analysisModes.push({ id: 'mechanism_chain', ...cloneJsonLike(shared.READING_VIEWS.mechanism_chain) });
+    }
     const availableModeIds = new Set(merged.analysisModes.map(mode => mode.id));
     merged.readingViewId = availableModeIds.has(String(saved.readingViewId || ''))
       ? String(saved.readingViewId) : (merged.analysisModes[0]?.id || 'quick_story');
@@ -655,8 +886,14 @@
     );
     merged.studyTypeOverrides = normalizeStudyTypeOverrides(saved.studyTypeOverrides);
     merged.autoCacheFigureImages = saved.autoCacheFigureImages !== false;
+    merged.saveArticleWebSnapshot = saved.saveArticleWebSnapshot !== false;
     merged.language = String(saved.language || '').toLowerCase().startsWith('en')
       ? 'en' : 'zh-CN';
+    merged.tts = shared.normalizeTtsSettings(saved.tts);
+    merged.literatureUrlWhitelist = shared.normalizeLiteratureUrlWhitelist(saved.literatureUrlWhitelist);
+    merged.figurePanelHeaderFields = normalizeFigurePanelHeaderFields(
+      saved.figurePanelHeaderFields
+    );
     merged.figurePanelFollowupPrompts = normalizeStoredPanelFollowupPrompts(
       saved.figurePanelFollowupPrompts
     );
@@ -676,10 +913,38 @@
     merged.articleChatQuickPrompts = normalizeArticleChatQuickPrompts(
       saved.articleChatQuickPrompts
     );
+    merged.literatureNoteTemplates = shared.normalizeLiteratureNoteTemplates
+      ? shared.normalizeLiteratureNoteTemplates(saved.literatureNoteTemplates)
+      : defaults.literatureNoteTemplates;
+    const availableNoteTemplateIds = new Set(
+      merged.literatureNoteTemplates.map(template => template.id)
+    );
+    merged.lastLiteratureNoteTemplateId = availableNoteTemplateIds.has(
+      String(saved.lastLiteratureNoteTemplateId || '')
+    ) ? String(saved.lastLiteratureNoteTemplateId) :
+      (merged.literatureNoteTemplates[0]?.id || '');
+    merged.selectionLlmActions = shared.normalizeSelectionActions
+      ? shared.normalizeSelectionActions(saved.selectionLlmActions)
+      : defaults.selectionLlmActions;
     merged.keyboardShortcuts = normalizeStoredKeyboardShortcuts(
       saved.keyboardShortcuts
     );
     return merged;
+  }
+
+  function createV5BackupPayload(saved, options = {}) {
+    if (!isPlainObject(saved)) return null;
+    const savedVersion = Number(saved.version);
+    if (Number.isFinite(savedVersion) && savedVersion > 5) return null;
+    const normalized = mergeSettings(saved, options);
+    if (normalized.version !== 6) return null;
+    const backup = cloneJsonLike(normalized);
+    backup.version = 5;
+    backup.taskRoutes = savedVersion >= 5
+      ? normalizeTaskRoutes(saved.taskRoutes, backup.profiles)
+      : createDefaultTaskRoutes();
+    delete backup.taskPolicies;
+    return backup;
   }
 
   function callStorage(storageArea, method, value) {
@@ -720,8 +985,28 @@
 
   async function saveSettings(storageArea, settings) {
     const normalized = mergeSettings(settings);
-    await callStorage(storageArea, 'set', { [STORAGE_KEY]: normalized });
-    return normalized;
+    const payload = { [STORAGE_KEY]: normalized };
+    if (normalized.version === 6 && typeof storageArea?.get === 'function') {
+      let previous = await callStorage(
+        storageArea, 'get', [STORAGE_KEY, V5_SETTINGS_BACKUP_KEY]
+      );
+      const hasRecognizedKey = [STORAGE_KEY, V5_SETTINGS_BACKUP_KEY].some(key =>
+        Object.prototype.hasOwnProperty.call(previous || {}, key)
+      );
+      if (!hasRecognizedKey) {
+        const [settingsResult, backupResult] = await Promise.all([
+          callStorage(storageArea, 'get', STORAGE_KEY),
+          callStorage(storageArea, 'get', V5_SETTINGS_BACKUP_KEY)
+        ]);
+        previous = Object.assign({}, settingsResult, backupResult);
+      }
+      if (previous?.[V5_SETTINGS_BACKUP_KEY] === undefined) {
+        const backup = createV5BackupPayload(previous?.[STORAGE_KEY] ?? settings);
+        if (backup) payload[V5_SETTINGS_BACKUP_KEY] = backup;
+      }
+    }
+    await callStorage(storageArea, 'set', payload);
+    return mergeSettings(normalized);
   }
 
   async function loadSessionCategories(storageArea) {
@@ -768,6 +1053,13 @@
   function toPublicSettings(settings) {
     const normalized = mergeSettings(settings);
     const publicSettings = sanitizePublicConfigValue(normalized);
+    if (normalized.version === 6) publicSettings.tts = shared.toPublicTtsSettings(normalized.tts);
+    if (normalized.version === 6 && isPlainObject(normalized.taskPolicies)) {
+      publicSettings.taskRoutes = projectLegacyTaskRoutes(
+        normalized.taskPolicies,
+        normalized.profiles
+      );
+    }
     if (!isPlainObject(normalized.profiles) || !isPlainObject(publicSettings.profiles)) {
       return publicSettings;
     }
@@ -791,7 +1083,7 @@
   function isConfiguredProfile(profile) {
     if (!isPlainObject(profile) || !PROVIDER_ID_SET.has(profile.providerId) ||
         !isPlainObject(profile.config)) return false;
-    const configured = profile.providerId === 'codex-local'
+    const configured = ['codex-local', 'deepseek-harness'].includes(profile.providerId)
       ? isNonBlankString(profile.config.model)
       : isNonBlankString(profile.config.apiKey) &&
         isNonBlankString(profile.config.model);
@@ -814,7 +1106,10 @@
 
   return {
     TASK_ROUTE_KEYS,
+    V5_SETTINGS_BACKUP_KEY,
     PROFILE_ID_PATTERN,
+    DEFAULT_FIGURE_PANEL_HEADER_FIELDS,
+    normalizeFigurePanelHeaderFields,
     DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS,
     normalizeArticleChatQuickPrompts,
     DEFAULT_PANEL_FOLLOWUP_PRESETS,
@@ -826,6 +1121,10 @@
     createTokenPolicy,
     normalizeContextWindowTokens,
     normalizeTaskRoutes,
+    normalizeTaskPolicy,
+    normalizeTaskPolicies,
+    migrateLegacyTaskRoutes,
+    createV5BackupPayload,
     normalizeProfile,
     legacyProfileId,
     deriveViewOverride,

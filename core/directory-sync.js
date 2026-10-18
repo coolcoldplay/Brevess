@@ -14,6 +14,8 @@
   const LEGACY_ROOT_DIRECTORY_NAME = 'SCI-Highlighter';
   const WORKSPACE_INDEX_PATH = 'workspace-index.json';
   const WORKSPACE_ROOT_PATH = 'workspaces';
+  const NATIVE_DIRECTORY_BINDING_PATH = 'native-directory-binding.json';
+  const NATIVE_DIRECTORY_BINDING_KIND = 'brevess-native-directory-binding';
   const PORTABLE_CONFIG_PATH = shared.PORTABLE_CONFIG_PATH ||
     'settings/portable-config.enc.json';
   const HANDLE_KEY = 'selected-directory';
@@ -281,22 +283,60 @@
     }
     async function put(input) {
       return serialize(async () => {
+        const archive = queuedArticleArchive(input);
         const database = await openDatabase();
-        const transaction = database.transaction(SYNC_QUEUE_STORE_NAME, 'readwrite');
-        const store = transaction.objectStore(SYNC_QUEUE_STORE_NAME);
-        const meta = (await requestToPromise(store.get(META_KEY))) || { key: META_KEY, ...defaultMeta() };
-        meta.pendingSequence += 1;
-        const item = {
-          ...cloneJsonLike(input),
-          key: `pending:${input.relativePath}`,
-          kind: 'pending',
-          relativePath: String(input.relativePath),
-          queueRevision: meta.pendingSequence
-        };
-        store.put(item);
-        store.put(meta);
-        await transactionDone(transaction);
-        return cloneJsonLike(item);
+        const transaction = database.transaction(archive
+          ? [DOCUMENT_STORE_NAME, SYNC_QUEUE_STORE_NAME] : SYNC_QUEUE_STORE_NAME, 'readwrite');
+        const done = transactionDone(transaction);
+        try {
+          const store = transaction.objectStore(SYNC_QUEUE_STORE_NAME);
+          if (archive) {
+            const current = await requestToPromise(transaction.objectStore(DOCUMENT_STORE_NAME)
+              .get(archive.documentId));
+            if (!archiveMatchesDocument(archive, current)) {
+              await done;
+              fail('ARTICLE_ARCHIVE_DOCUMENT_CONFLICT');
+            }
+          }
+          const meta = (await requestToPromise(store.get(META_KEY))) || { key: META_KEY, ...defaultMeta() };
+          meta.pendingSequence += 1;
+          const item = {
+            ...cloneJsonLike(input),
+            key: `pending:${input.relativePath}`,
+            kind: 'pending',
+            relativePath: String(input.relativePath),
+            queueRevision: meta.pendingSequence
+          };
+          store.put(item);
+          store.put(meta);
+          await done;
+          return cloneJsonLike(item);
+        } catch (error) {
+          try { transaction.abort(); } catch (_) {}
+          await done.catch(() => undefined);
+          throw error;
+        }
+      });
+    }
+    async function withCurrentArchive(item, operation) {
+      const archive = queuedArticleArchive(item);
+      if (!archive) return operation(false);
+      return documentArchiveHelpers().withDocumentArchiveLock(indexedDbRef, archive.documentId, async () => {
+        const database = await openDatabase();
+        const transaction = database.transaction([DOCUMENT_STORE_NAME, SYNC_QUEUE_STORE_NAME], 'readonly');
+        const done = transactionDone(transaction);
+        try {
+          const [current, queued] = await Promise.all([
+            requestToPromise(transaction.objectStore(DOCUMENT_STORE_NAME).get(archive.documentId)),
+            requestToPromise(transaction.objectStore(SYNC_QUEUE_STORE_NAME).get(`pending:${item.relativePath}`))
+          ]);
+          await done;
+          if (!queued || queued.queueRevision !== item.queueRevision) return;
+          return operation(!archiveMatchesDocument(archive, current));
+        } catch (error) {
+          await done.catch(() => undefined);
+          throw error;
+        }
       });
     }
     async function get(relativePath) {
@@ -345,7 +385,28 @@
         return cloneJsonLike(next);
       });
     }
-    return { put, get, getAll, remove, getMeta, setMeta };
+    return { put, get, getAll, remove, getMeta, setMeta, withCurrentArchive };
+  }
+
+  function documentArchiveHelpers() {
+    if (typeof shared.withDocumentArchiveLock === 'function') return shared;
+    if (typeof require === 'function') return require('./document-store.js');
+    fail('DOCUMENT_ARCHIVE_COORDINATION_UNAVAILABLE');
+  }
+
+  function queuedArticleArchive(item) {
+    if (item.type !== 'json') return null;
+    const value = JSON.parse(item.content);
+    if (value?.kind !== 'sci-logic-highlighter-article') return null;
+    // Validate durable rows too, including queues saved by earlier versions.
+    return shared.validateArticleArchive(value);
+  }
+
+  function archiveMatchesDocument(archive, current) {
+    if (current === undefined || current === null) return true;
+    const normalize = documentArchiveHelpers().normalizeDocumentRecord;
+    return stableStringify(normalize(current).annotations) ===
+      stableStringify(normalize(archive.documentRecord).annotations);
   }
 
   function saveDirectoryHandle(indexedDbRef, handle) {
@@ -610,7 +671,9 @@
     queueStore = createMemorySyncQueue(),
     sourceId = 'extension',
     assetImporter = async () => ({ imported: false, reason: 'unsupported' }),
-    bundleExporter = async () => ({ schemaVersion: 1 })
+    bundleExporter = async () => ({ schemaVersion: 1 }),
+    cryptoRef = globalThis.crypto,
+    now = Date.now
   } = {}) {
     let activeFlush = null;
     let rerunRequested = false;
@@ -642,6 +705,189 @@
       error.code = code;
       Object.assign(error, details);
       return error;
+    }
+
+    function nativeDirectoryOperation(operation) {
+      return serializeWorkspaceMutation(async () => {
+        try { return await operation(); } catch (error) {
+          if (String(error?.code || '').startsWith('WORKSPACE_DIRECTORY_')) throw error;
+          if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+            fail('WORKSPACE_DIRECTORY_PERMISSION_REQUIRED');
+          }
+          fail('WORKSPACE_DIRECTORY_IO_ERROR');
+        }
+      });
+    }
+
+    async function nativeDirectoryRoot() {
+      const handle = await handleStore.load();
+      if (!handle) fail('WORKSPACE_DIRECTORY_UNCONFIGURED');
+      if (await permissionState(handle) !== 'granted') {
+        fail('WORKSPACE_DIRECTORY_PERMISSION_REQUIRED');
+      }
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') fail('WORKSPACE_DIRECTORY_ROOT_MISSING');
+        throw error;
+      }
+      const rootName = String(root?.name || '');
+      if (![ROOT_DIRECTORY_NAME, LEGACY_ROOT_DIRECTORY_NAME].includes(rootName)) {
+        fail('WORKSPACE_DIRECTORY_ROOT_MISSING');
+      }
+      return { handle, root, rootName };
+    }
+
+    async function assertNativeDirectoryRootCurrent(context) {
+      const handle = await handleStore.load();
+      const sameEntry = async (left, right) => Boolean(left && right &&
+        (left === right || (typeof left.isSameEntry === 'function' && await left.isSameEntry(right))));
+      if (!await sameEntry(context.handle, handle)) fail('WORKSPACE_DIRECTORY_ROOT_CHANGED');
+      if (await permissionState(handle) !== 'granted') fail('WORKSPACE_DIRECTORY_PERMISSION_REQUIRED');
+      let root;
+      try { root = await getRootDirectory(handle, false); } catch (error) {
+        if (error?.name === 'NotFoundError') fail('WORKSPACE_DIRECTORY_ROOT_CHANGED');
+        throw error;
+      }
+      if (!await sameEntry(context.root, root)) fail('WORKSPACE_DIRECTORY_ROOT_CHANGED');
+    }
+
+    async function readNativeDirectoryProof(root, allowMissing = false) {
+      const content = await readText(root, NATIVE_DIRECTORY_BINDING_PATH);
+      if (content === null) {
+        if (allowMissing) return null;
+        fail('WORKSPACE_DIRECTORY_BINDING_MISSING');
+      }
+      let value;
+      try { value = content.length <= 4096 ? JSON.parse(content) : null; } catch (_) {}
+      if (!isPlainObject(value) ||
+          Object.keys(value).sort().join(',') !== 'challenge,expiresAt,kind,rootId,schemaVersion' ||
+          value.schemaVersion !== 1 || value.kind !== NATIVE_DIRECTORY_BINDING_KIND ||
+          typeof value.rootId !== 'string' || typeof value.challenge !== 'string' ||
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value.rootId) ||
+          !/^[a-f0-9]{64}$/u.test(value.challenge) ||
+          !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= 0) {
+        fail('WORKSPACE_DIRECTORY_BINDING_INVALID');
+      }
+      // Expiry limits native binding attempts, not subsequent read-only root identity checks.
+      return value;
+    }
+
+    function readNativeDirectoryBinding() {
+      return nativeDirectoryOperation(async () => {
+        const context = await nativeDirectoryRoot();
+        const proof = await readNativeDirectoryProof(context.root);
+        await assertNativeDirectoryRootCurrent(context);
+        return { rootId: proof.rootId, rootName: context.rootName };
+      });
+    }
+
+    function prepareNativeDirectoryBinding() {
+      return nativeDirectoryOperation(() => serializeDirectJsonMutation(NATIVE_DIRECTORY_BINDING_PATH, async () => {
+        const context = await nativeDirectoryRoot();
+        const previous = await readNativeDirectoryProof(context.root, true);
+        if (typeof cryptoRef?.getRandomValues !== 'function') fail('WORKSPACE_DIRECTORY_CRYPTO_UNAVAILABLE');
+        const bytes = new Uint8Array(48);
+        try { cryptoRef.getRandomValues(bytes); } catch (_) { fail('WORKSPACE_DIRECTORY_CRYPTO_UNAVAILABLE'); }
+        const hex = values => [...values].map(value => value.toString(16).padStart(2, '0')).join('');
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const idHex = hex(bytes.slice(0, 16));
+        const rootId = previous?.rootId ||
+          `${idHex.slice(0, 8)}-${idHex.slice(8, 12)}-${idHex.slice(12, 16)}-${idHex.slice(16, 20)}-${idHex.slice(20)}`;
+        const expiresAt = now() + 5 * 60 * 1000;
+        if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) fail('WORKSPACE_DIRECTORY_BINDING_INVALID');
+        const proof = { schemaVersion: 1, kind: NATIVE_DIRECTORY_BINDING_KIND,
+          rootId, challenge: hex(bytes.slice(16)), expiresAt };
+        await assertNativeDirectoryRootCurrent(context);
+        await writeText(context.root, NATIVE_DIRECTORY_BINDING_PATH, `${JSON.stringify(proof, null, 2)}\n`);
+        await assertNativeDirectoryRootCurrent(context);
+        return { rootId, rootName: context.rootName, challenge: proof.challenge, expiresAt };
+      }));
+    }
+
+    function validateNativeWorkspaceDirectoryName(value) {
+      try {
+        if (typeof value !== 'string' || value.includes('/') || value.includes('\\') ||
+            /[. ]$/u.test(value) || shared.normalizeWorkspaceRelativePath(value) !== value) {
+          fail('WORKSPACE_DIRECTORY_PATH_INVALID');
+        }
+      } catch (_) { fail('WORKSPACE_DIRECTORY_PATH_INVALID'); }
+    }
+
+    function nativeWorkspaceIdentityMatches(actual, expected) {
+      return ['workspaceId', 'workspaceGeneration', 'canonicalUrl', 'directoryName', 'contentHash']
+        .every(key => actual[key] === expected[key]);
+    }
+
+    async function assertNativeWorkspaceSynced(expected, diskEntry) {
+      const prefix = `${WORKSPACE_ROOT_PATH}/${expected.directoryName}/`;
+      const pending = await queueStore.getAll();
+      for (const item of pending) {
+        const path = normalizeRelativePath(item.relativePath, { internal: true });
+        if (path.startsWith(prefix)) fail('WORKSPACE_DIRECTORY_NOT_SYNCED');
+        if (path !== WORKSPACE_INDEX_PATH) continue;
+        let queuedEntry;
+        try {
+          const index = shared.validateWorkspaceIndex(JSON.parse(item.content));
+          queuedEntry = index.workspaces.find(entry => entry.workspaceId === expected.workspaceId);
+        } catch (_) { fail('WORKSPACE_DIRECTORY_NOT_SYNCED'); }
+        // A shared index update for another paper must not block this paper.
+        if (stableStringify(queuedEntry) !== stableStringify(diskEntry)) {
+          fail('WORKSPACE_DIRECTORY_NOT_SYNCED');
+        }
+      }
+    }
+
+    function getWorkspaceDirectoryOpenTarget(workspace) {
+      return nativeDirectoryOperation(async () => {
+        const context = await nativeDirectoryRoot();
+        const proof = await readNativeDirectoryProof(context.root);
+        validateNativeWorkspaceDirectoryName(workspace?.directoryName);
+        let expected;
+        try { expected = workspaceManifest(workspace); } catch (_) { fail('WORKSPACE_DIRECTORY_IDENTITY_MISMATCH'); }
+        if (!Number.isSafeInteger(workspace?.workspaceGeneration) || workspace.workspaceGeneration < 0 ||
+            ['workspaceId', 'workspaceGeneration', 'canonicalUrl', 'directoryName'].some(key => workspace[key] !== expected[key])) {
+          fail('WORKSPACE_DIRECTORY_IDENTITY_MISMATCH');
+        }
+        let index;
+        try { index = await loadWorkspaceIndexForRead(context.root); } catch (error) {
+          if (error?.code === 'INVALID_WORKSPACE_INDEX') fail('WORKSPACE_DIRECTORY_MANIFEST_INVALID');
+          throw error;
+        }
+        const entry = index.workspaces.find(item => item.workspaceId === expected.workspaceId);
+        if (!entry) fail('WORKSPACE_DIRECTORY_NOT_SYNCED');
+        validateNativeWorkspaceDirectoryName(entry.directoryName);
+        await assertNativeWorkspaceSynced(expected, entry);
+        if (!nativeWorkspaceIdentityMatches(entry, expected)) fail('WORKSPACE_DIRECTORY_IDENTITY_MISMATCH');
+        let content;
+        try {
+          await getDirectoryAtPath(context.root, `${WORKSPACE_ROOT_PATH}/${expected.directoryName}`);
+          content = await readText(context.root, entry.manifestPath);
+        } catch (error) {
+          if (error?.name === 'NotFoundError') fail('WORKSPACE_DIRECTORY_NOT_SYNCED');
+          throw error;
+        }
+        if (content === null) fail('WORKSPACE_DIRECTORY_NOT_SYNCED');
+        let manifest;
+        let rawManifest;
+        try {
+          rawManifest = JSON.parse(content);
+          manifest = shared.validateWorkspaceManifest(rawManifest);
+        } catch (_) {
+          fail('WORKSPACE_DIRECTORY_MANIFEST_INVALID');
+        }
+        validateNativeWorkspaceDirectoryName(manifest.directoryName);
+        if (!nativeWorkspaceIdentityMatches(rawManifest, manifest) ||
+            !nativeWorkspaceIdentityMatches(manifest, expected) ||
+            stableStringify(shared.createWorkspaceIndex([manifest]).workspaces[0]) !== stableStringify(entry)) {
+          fail('WORKSPACE_DIRECTORY_IDENTITY_MISMATCH');
+        }
+        await assertNativeDirectoryRootCurrent(context);
+        await assertNativeWorkspaceSynced(expected, entry);
+        return { rootId: proof.rootId, rootName: context.rootName,
+          workspaceId: manifest.workspaceId, workspaceGeneration: manifest.workspaceGeneration,
+          canonicalUrl: manifest.canonicalUrl, directoryName: manifest.directoryName };
+      });
     }
 
     async function discardQueuedPortableConfig() {
@@ -908,6 +1154,25 @@
       const data = cloneJsonLike(input);
       const requestedRevision = validateRevision(metadata.revision ?? Date.now());
       const existingAssetCandidates = await readQueuedAndDiskJson(location.fullPath);
+      if (Object.hasOwn(metadata, 'expectedDirectoryAsset')) {
+        const expected = metadata.expectedDirectoryAsset;
+        const matchesSource = value => value &&
+          value.kind === 'sci-logic-highlighter-workspace-asset' &&
+          value.workspaceId === baseManifest.workspaceId &&
+          value.relativePath === location.assetPath &&
+          Number(value.workspaceGeneration) === Number(baseManifest.workspaceGeneration) &&
+          Number(value.revision) === Number(expected?.revision) &&
+          value.contentHash === expected?.contentHash &&
+          stableStringify(value.data) === stableStringify(expected?.data);
+        const disk = existingAssetCandidates.disk, queued = existingAssetCandidates.queued;
+        // A restore is allowed to advance only the exact source seen by SCAN.
+        // Check before touching the asset, manifest or index queue.
+        if (expected === null ? (disk || queued) :
+            (!isPlainObject(expected) || !matchesSource(disk) ||
+              (queued && !matchesSource(queued)))) {
+          fail('WORKSPACE_RESTORE_DIRECTORY_CONFLICT');
+        }
+      }
       const matchingAssets = [
         existingAssetCandidates.queued,
         existingAssetCandidates.disk
@@ -1419,131 +1684,161 @@
       const items = await queueStore.getAll();
       for (const item of items) {
         try {
-          if (item.relativePath === PORTABLE_CONFIG_PATH) {
+          const guardedArchive = typeof queueStore.withCurrentArchive === 'function' && queuedArticleArchive(item);
+          const preserveArchiveConflict = async () => {
+            // queueRevision is unique only within this database. Another profile
+            // may share this directory: preserve any already-different conflict.
+            const conflictPath = conflictRelativePath(item.relativePath, item.revision,
+              `archive-q${item.queueRevision}`);
+            const previousConflict = await readText(root, conflictPath);
+            if (previousConflict !== null && previousConflict !== item.content) {
+              fail('ARTICLE_ARCHIVE_CONFLICT_EXISTS');
+            }
+            if (previousConflict === null) await writeText(root, conflictPath, item.content);
+            await recordConflict(item, conflictPath);
+            result.conflicts += 1;
             await queueStore.remove(item.relativePath, item.queueRevision);
-            continue;
-          }
-          const latestQueued = await queueStore.get(item.relativePath);
-          if (!latestQueued || latestQueued.queueRevision !== item.queueRevision) continue;
-          if (item.type === 'binary') {
-            const incoming = binaryBytes(item.content);
-            const existing = await readBinary(root, item.relativePath);
-            const identical = existing?.byteLength === incoming.byteLength &&
-              existing.every((value, index) => value === incoming[index]);
-            if (!identical) {
-              await writeBinary(root, item.relativePath, incoming);
+          };
+          const flushItem = async documentConflict => {
+            if (documentConflict) return preserveArchiveConflict();
+            if (item.relativePath === PORTABLE_CONFIG_PATH) {
+              await queueStore.remove(item.relativePath, item.queueRevision);
+              return;
+            }
+            const latestQueued = await queueStore.get(item.relativePath);
+            if (!latestQueued || latestQueued.queueRevision !== item.queueRevision) return;
+            if (item.type === 'binary') {
+              const incoming = binaryBytes(item.content);
+              const existing = await readBinary(root, item.relativePath);
+              const identical = existing?.byteLength === incoming.byteLength &&
+                existing.every((value, index) => value === incoming[index]);
+              if (!identical) {
+                await writeBinary(root, item.relativePath, incoming);
+                result.written += 1;
+              }
+              index = indexWithAsset(index, item);
+              await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+              await queueStore.remove(item.relativePath, item.queueRevision);
+              return;
+            }
+            const existingContent = await readText(root, item.relativePath);
+            if (item.type === 'json' && existingContent) {
+              const existing = parseValidJson(existingContent);
+              if (!existing) fail('INVALID_PRIMARY_JSON');
+              const incoming = parseValidJson(item.content);
+              if (!incoming) fail('INVALID_QUEUED_JSON');
+              if (item.relativePath === WORKSPACE_INDEX_PATH &&
+                  stableStringify(existing) !== stableStringify(incoming)) {
+                const merged = mergeWorkspaceIndexes(existing, incoming);
+                const mergedContent = `${JSON.stringify(merged, null, 2)}\n`;
+                await writeText(root, item.relativePath, mergedContent);
+                result.written += 1;
+                result.imported += existing.revision > incoming.revision ? 1 : 0;
+                index = indexWithAsset(index, {
+                  ...item,
+                  revision: merged.revision,
+                  contentHash: contentHash(stableStringify(merged))
+                });
+                await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+                await queueStore.remove(item.relativePath, item.queueRevision);
+                return;
+              }
+              if (existing.revision > incoming.revision) {
+                const importNewer = async () => {
+                  // Importers may mutate documents. They run after the archive lock
+                  // is released, then reacquire it and re-read both durable records.
+                  const imported = await importer(item.relativePath, cloneJsonLike(existing));
+                  if (!imported?.imported) fail('DIRECTORY_VERSION_NEWER');
+                  result.imported += 1;
+                  const finishImport = async conflict => {
+                    if (conflict) return preserveArchiveConflict();
+                    index = indexWithAsset(index, {
+                      ...item, revision: existing.revision,
+                      sourceId: String(existing.sourceId || ''),
+                      contentHash: contentHash(stableStringify(existing))
+                    });
+                    await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+                    await queueStore.remove(item.relativePath, item.queueRevision);
+                  };
+                  return guardedArchive
+                    ? queueStore.withCurrentArchive(item, finishImport) : finishImport(false);
+                };
+                return guardedArchive ? importNewer : importNewer();
+              }
+              if (existing.revision === incoming.revision) {
+                if (stableStringify(existing) !== stableStringify(incoming)) {
+                  const conflictPath = conflictRelativePath(
+                    item.relativePath, item.revision, item.sourceId
+                  );
+                  await writeText(root, conflictPath, item.content);
+                  await recordConflict(item, conflictPath);
+                  result.conflicts += 1;
+                  const match = /^workspaces\/([^/]+)\/(?!manifest\.json$).+/u
+                    .exec(item.relativePath);
+                  if (match) {
+                    const pendingManifest = await queueStore.get(
+                      `workspaces/${match[1]}/manifest.json`
+                    );
+                    if (pendingManifest?.content) {
+                      try {
+                        const manifest = shared.validateWorkspaceManifest(
+                          JSON.parse(pendingManifest.content)
+                        );
+                        await queueStore.remove(pendingManifest.relativePath,
+                          pendingManifest.queueRevision);
+                        const pendingWorkspaceIndex = await queueStore.get(WORKSPACE_INDEX_PATH);
+                        if (pendingWorkspaceIndex?.content) {
+                          const queuedIndex = shared.validateWorkspaceIndex(
+                            JSON.parse(pendingWorkspaceIndex.content)
+                          );
+                          const diskIndexContent = await readText(root, WORKSPACE_INDEX_PATH);
+                          const diskIndex = diskIndexContent
+                            ? shared.validateWorkspaceIndex(JSON.parse(diskIndexContent)) : null;
+                          const primaryEntry = diskIndex?.workspaces.find(entry =>
+                            entry.workspaceId === manifest.workspaceId);
+                          const entries = queuedIndex.workspaces.filter(entry =>
+                            entry.workspaceId !== manifest.workspaceId);
+                          if (primaryEntry) entries.push(primaryEntry);
+                          const corrected = shared.validateWorkspaceIndex({
+                            ...queuedIndex,
+                            revision: queuedIndex.revision + 1,
+                            updatedAt: new Date().toISOString(),
+                            workspaces: entries
+                          });
+                          await queueStore.remove(WORKSPACE_INDEX_PATH,
+                            pendingWorkspaceIndex.queueRevision);
+                          await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH, corrected);
+                        }
+                      } catch (_) {}
+                    }
+                  }
+                }
+                index = indexWithAsset(index, {
+                  ...item,
+                  revision: existing.revision,
+                  sourceId: String(existing.sourceId || ''),
+                  contentHash: contentHash(stableStringify(existing))
+                });
+                await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
+                await queueStore.remove(item.relativePath, item.queueRevision);
+                return;
+              }
+              await writeText(root, backupRelativePath(item.relativePath), existingContent);
+            } else if (item.type === 'text' && existingContent !== null && existingContent !== item.content) {
+              await writeText(root, backupRelativePath(item.relativePath), existingContent);
+            }
+            if (existingContent !== item.content) {
+              await writeText(root, item.relativePath, item.content);
               result.written += 1;
             }
             index = indexWithAsset(index, item);
             await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
             await queueStore.remove(item.relativePath, item.queueRevision);
-            continue;
-          }
-          const existingContent = await readText(root, item.relativePath);
-          if (item.type === 'json' && existingContent) {
-            const existing = parseValidJson(existingContent);
-            if (!existing) fail('INVALID_PRIMARY_JSON');
-            const incoming = parseValidJson(item.content);
-            if (!incoming) fail('INVALID_QUEUED_JSON');
-            if (item.relativePath === WORKSPACE_INDEX_PATH &&
-                stableStringify(existing) !== stableStringify(incoming)) {
-              const merged = mergeWorkspaceIndexes(existing, incoming);
-              const mergedContent = `${JSON.stringify(merged, null, 2)}\n`;
-              await writeText(root, item.relativePath, mergedContent);
-              result.written += 1;
-              result.imported += existing.revision > incoming.revision ? 1 : 0;
-              index = indexWithAsset(index, {
-                ...item,
-                revision: merged.revision,
-                contentHash: contentHash(stableStringify(merged))
-              });
-              await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
-              await queueStore.remove(item.relativePath, item.queueRevision);
-              continue;
-            }
-            if (existing.revision > incoming.revision) {
-              const imported = await importer(item.relativePath, cloneJsonLike(existing));
-              if (!imported?.imported) fail('DIRECTORY_VERSION_NEWER');
-              result.imported += 1;
-              index = indexWithAsset(index, {
-                ...item,
-                revision: existing.revision,
-                sourceId: String(existing.sourceId || ''),
-                contentHash: contentHash(stableStringify(existing))
-              });
-              await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
-              await queueStore.remove(item.relativePath, item.queueRevision);
-              continue;
-            }
-            if (existing.revision === incoming.revision) {
-              if (stableStringify(existing) !== stableStringify(incoming)) {
-                const conflictPath = conflictRelativePath(
-                  item.relativePath, item.revision, item.sourceId
-                );
-                await writeText(root, conflictPath, item.content);
-                await recordConflict(item, conflictPath);
-                result.conflicts += 1;
-                const match = /^workspaces\/([^/]+)\/(?!manifest\.json$).+/u
-                  .exec(item.relativePath);
-                if (match) {
-                  const pendingManifest = await queueStore.get(
-                    `workspaces/${match[1]}/manifest.json`
-                  );
-                  if (pendingManifest?.content) {
-                    try {
-                      const manifest = shared.validateWorkspaceManifest(
-                        JSON.parse(pendingManifest.content)
-                      );
-                      await queueStore.remove(pendingManifest.relativePath,
-                        pendingManifest.queueRevision);
-                      const pendingWorkspaceIndex = await queueStore.get(WORKSPACE_INDEX_PATH);
-                      if (pendingWorkspaceIndex?.content) {
-                        const queuedIndex = shared.validateWorkspaceIndex(
-                          JSON.parse(pendingWorkspaceIndex.content)
-                        );
-                        const diskIndexContent = await readText(root, WORKSPACE_INDEX_PATH);
-                        const diskIndex = diskIndexContent
-                          ? shared.validateWorkspaceIndex(JSON.parse(diskIndexContent)) : null;
-                        const primaryEntry = diskIndex?.workspaces.find(entry =>
-                          entry.workspaceId === manifest.workspaceId);
-                        const entries = queuedIndex.workspaces.filter(entry =>
-                          entry.workspaceId !== manifest.workspaceId);
-                        if (primaryEntry) entries.push(primaryEntry);
-                        const corrected = shared.validateWorkspaceIndex({
-                          ...queuedIndex,
-                          revision: queuedIndex.revision + 1,
-                          updatedAt: new Date().toISOString(),
-                          workspaces: entries
-                        });
-                        await queueStore.remove(WORKSPACE_INDEX_PATH,
-                          pendingWorkspaceIndex.queueRevision);
-                        await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH, corrected);
-                      }
-                    } catch (_) {}
-                  }
-                }
-              }
-              index = indexWithAsset(index, {
-                ...item,
-                revision: existing.revision,
-                sourceId: String(existing.sourceId || ''),
-                contentHash: contentHash(stableStringify(existing))
-              });
-              await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
-              await queueStore.remove(item.relativePath, item.queueRevision);
-              continue;
-            }
-            await writeText(root, backupRelativePath(item.relativePath), existingContent);
-          } else if (item.type === 'text' && existingContent !== null && existingContent !== item.content) {
-            await writeText(root, backupRelativePath(item.relativePath), existingContent);
-          }
-          if (existingContent !== item.content) {
-            await writeText(root, item.relativePath, item.content);
-            result.written += 1;
-          }
-          index = indexWithAsset(index, item);
-          await writeText(root, 'index.json', `${JSON.stringify(index, null, 2)}\n`);
-          await queueStore.remove(item.relativePath, item.queueRevision);
+
+          };
+          const afterUnlock = guardedArchive
+            ? await queueStore.withCurrentArchive(item, flushItem) : await flushItem(false);
+          if (typeof afterUnlock === 'function') await afterUnlock();
         } catch (error) {
           result.failed += 1;
           Object.assign(result, await recordFailure(error, item.relativePath));
@@ -1818,6 +2113,9 @@
       saveDirectoryHandle: saveDirectoryHandleMethod,
       getDirectoryHandle: getDirectoryHandleMethod,
       requestDirectoryPermission,
+      readNativeDirectoryBinding,
+      prepareNativeDirectoryBinding,
+      getWorkspaceDirectoryOpenTarget,
       enqueueJson,
       enqueueText,
       compareAndSwapJson,

@@ -2,6 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { CONTENT_SCRIPT_REVISION } = require('../core/tab-messenger.js');
+const {
+  executeContentRevisionAssignment
+} = require('./helpers/content-revision-runtime.js');
 
 const root = path.join(__dirname, '..');
 
@@ -33,12 +37,16 @@ test('repository contains the complete AGPL release documentation', () => {
   ]) assert.match(notices, new RegExp(filename.replace(/[./]/g, '\\$&')));
 });
 
-test('unpacked build carries license, notices, and source instructions', () => {
+test('unpacked build carries license, notices, and source instructions through its shared inventory', async () => {
   const buildScript = read('scripts/build-unpacked-extension.ps1');
+  assert.match(buildScript, /Copy-BrevessReleaseFiles/);
+  assert.match(buildScript, /-Profile \$PackageVariant/);
+  const { releaseInventory } = await import('../scripts/release-inventory.mjs');
+  const shipped = new Set(releaseInventory(root, 'full').map(entry => entry.path));
   for (const filename of [
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md'
   ]) {
-    assert.match(buildScript, new RegExp(`'${filename.replace('.', '\\.')}'`));
+    assert.ok(shipped.has(filename), `${filename} must be included in the actual release inventory`);
   }
 });
 
@@ -61,7 +69,14 @@ test('1.0.1 release metadata and scale benchmark stay consistent', () => {
     'node scripts/benchmark-article-chat.mjs');
   assert.match(read('background.js'), /version:\s*'1\.0\.1'/);
   assert.match(read('core/background-router.js'), /1\.0\.1-build1-store-release/);
-  assert.match(read('content.js'), /1\.0\.1-build1-store-release/);
+  assert.equal(
+    executeContentRevisionAssignment(read('content.js')),
+    CONTENT_SCRIPT_REVISION
+  );
+  assert.match(
+    read('core/tab-messenger.js'),
+    /1\.0\.1-article-preindex-contract-v1/
+  );
   assert.match(
     read('scripts/build-unpacked-extension.ps1'),
     /v1\.0\.1-build1-store-release/

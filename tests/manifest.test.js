@@ -2,9 +2,45 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { createHash } = require('node:crypto');
 
-test('manifest opens an action-activated native side panel and injects extraction on demand', () => {
+function captureFirstImportScripts(source) {
+  const sentinel = new Error('IMPORT_SCRIPTS_CAPTURED');
+  let captured = null;
+  try {
+    vm.runInNewContext(String(source), {
+      importScripts(...files) {
+        captured = [...files];
+        throw sentinel;
+      }
+    }, { filename: 'captured-background.js', timeout: 1000 });
+  } catch (error) {
+    if (error !== sentinel) throw error;
+  }
+  if (!captured) throw new Error('BACKGROUND_IMPORT_SCRIPTS_NOT_FOUND');
+  return captured;
+}
+
+test('background import capture ignores comments and quote-style decoys', () => {
+  const source = `
+    // importScripts('ignored-comment.js');
+    const decoy = "core/panel-ledger.js";
+    importScripts(
+      "core/panel-ledger.js",
+      'core/evidence-first-mechanism.js',
+      "core/cross-figure-logic.js"
+    );
+    importScripts('ignored-later.js');
+  `;
+  assert.deepEqual(captureFirstImportScripts(source), [
+    'core/panel-ledger.js',
+    'core/evidence-first-mechanism.js',
+    'core/cross-figure-logic.js'
+  ]);
+});
+
+test('manifest opens a deliberate action popup before native side-panel activation', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.equal(manifest.name, '__MSG_extensionName__');
@@ -35,10 +71,18 @@ test('manifest opens an action-activated native side panel and injects extractio
     'git+https://github.com/coolcoldplay/Brevess.git'
   );
   assert.equal(manifest.background.service_worker, 'background.js');
-  assert.equal(manifest.action.default_popup, undefined);
+  assert.equal(manifest.action.default_popup, 'action-popup.html');
   assert.deepEqual(manifest.side_panel, { default_path: 'popup.html' });
-  assert.equal(manifest.content_scripts, undefined);
+  assert.deepEqual(manifest.content_scripts, [{
+    matches: ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*', 'file:///*'],
+    js: ['core/page-tools.js', 'semantic-find-launcher.js'], run_at: 'document_idle', all_frames: false
+  }, {
+    matches: ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*', 'file:///*'],
+    js: ['core/translation-source.js', 'core/translation-checkpoint.js', 'core/local-translator.js', 'core/bilingual-translation-controller.js', 'bilingual-translation-content.js'],
+    css: ['bilingual-translation.css'], run_at: 'document_idle', all_frames: false
+  }], 'J and Alt entry points are available before sidebar activation; neither starts a model on page load');
   assert.deepEqual(manifest.host_permissions, [
+    'https://api.typesafe.ai/*',
     'https://*/*',
     'http://localhost/*',
     'http://127.0.0.1/*',
@@ -48,6 +92,10 @@ test('manifest opens an action-activated native side panel and injects extractio
   assert.ok(manifest.permissions.includes('offscreen'));
   assert.ok(manifest.permissions.includes('sidePanel'));
   assert.ok(manifest.permissions.includes('nativeMessaging'));
+  assert.ok(manifest.permissions.includes('webNavigation'),
+    'committed document identity is required for durable provider-owner teardown');
+  assert.ok(manifest.permissions.includes('unlimitedStorage'),
+    'large local literature notes and annotations require quota-independent local storage');
 });
 
 test('manifest icon set uses square Brevess PNG assets at every declared size', () => {
@@ -86,9 +134,22 @@ test('Edge store release strips the local stable-ID key and verifies it cannot l
   );
 });
 
+test('Edge permission disclosure explains unlimited local storage without broadening network access', () => {
+  const disclosure = fs.readFileSync(path.join(
+    __dirname, '..', 'docs', 'edge-store', 'PRIVACY_AND_PERMISSIONS.md'
+  ), 'utf8');
+  assert.match(disclosure, /`unlimitedStorage`/);
+  assert.match(disclosure, /论文笔记.*标注|标注.*论文笔记/);
+  assert.match(disclosure, /不(?:会|用于).*后台扫描/);
+  assert.match(disclosure, /不(?:会|用于).*自动上传/);
+  assert.match(disclosure, /不.*(?:扩大|增加).*host.*network|不.*(?:扩大|增加).*网络权限/i);
+  assert.match(disclosure, /用户.*删除|删除.*用户/);
+});
+
 test('background worker keeps routed LLM operations alive until completion', () => {
   const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
   const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const backgroundScripts = captureFirstImportScripts(background);
   assert.match(
     background,
     /message\?\.type === 'LLM_FOUNDATION_STATUS'[\s\S]*?version:\s*'1\.0\.1'/
@@ -96,12 +157,37 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /core\/service-worker-keepalive\.js/);
   assert.match(background, /SciLLM\.keepAliveUntil\(\s*handleRoutedMessage/);
   assert.match(background, /async function handleRoutedMessage\(/);
-  const outlineModule = background.indexOf("'core/review-outline.js'");
-  const pipelineModule = background.indexOf("'core/review-outline-pipeline.js'");
-  const manualAnnotationsModule = background.indexOf("'core/manual-annotations.js'");
-  const documentStoreModule = background.indexOf("'core/document-store.js'");
-  const directorySyncModule = background.indexOf("'core/directory-sync.js'");
-  const routerModule = background.indexOf("'core/background-router.js'");
+  const outlineModule = backgroundScripts.indexOf('core/review-outline.js');
+  const pipelineModule = backgroundScripts.indexOf('core/review-outline-pipeline.js');
+  const manualAnnotationsModule = backgroundScripts.indexOf('core/manual-annotations.js');
+  const documentStoreModule = backgroundScripts.indexOf('core/document-store.js');
+  const directorySyncModule = backgroundScripts.indexOf('core/directory-sync.js');
+  const panelLedgerModule = backgroundScripts.indexOf('core/panel-ledger.js');
+  const evidenceFirstMechanismModule = backgroundScripts.indexOf(
+    'core/evidence-first-mechanism.js'
+  );
+  const crossFigureLogicModule = backgroundScripts.indexOf('core/cross-figure-logic.js');
+  const operationControlModule = backgroundScripts.indexOf('core/operation-control.js');
+  const analysisCacheModule = backgroundScripts.indexOf('core/analysis-cache.js');
+  const mechanismOperationCoordinatorModule = backgroundScripts.indexOf(
+    'core/mechanism-operation-coordinator.js'
+  );
+  const routerModule = backgroundScripts.indexOf('core/background-router.js');
+  for (const modulePath of [
+    'core/panel-ledger.js',
+    'core/evidence-first-mechanism.js',
+    'core/cross-figure-logic.js',
+    'core/operation-control.js',
+    'core/analysis-cache.js',
+    'core/mechanism-operation-coordinator.js',
+    'core/background-router.js'
+  ]) {
+    assert.equal(
+      backgroundScripts.filter(file => file === modulePath).length,
+      1,
+      `${modulePath} must load exactly once in the background worker`
+    );
+  }
   assert.match(background, /core\/task-profile-router\.js/);
   assert.match(background, /core\/token-budget\.js/);
   assert.match(background, /core\/operation-control\.js/);
@@ -110,24 +196,38 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.ok(pipelineModule >= 0 && pipelineModule < routerModule);
   assert.ok(manualAnnotationsModule >= 0 && manualAnnotationsModule < documentStoreModule);
   assert.ok(documentStoreModule < directorySyncModule && directorySyncModule < routerModule);
+  assert.ok(
+    panelLedgerModule >= 0 &&
+      panelLedgerModule < evidenceFirstMechanismModule &&
+      evidenceFirstMechanismModule < crossFigureLogicModule,
+    'evidence-first mechanism must load between the panel ledger and cross-figure logic'
+  );
+  assert.ok(
+    operationControlModule >= 0 &&
+      operationControlModule < mechanismOperationCoordinatorModule &&
+      analysisCacheModule < mechanismOperationCoordinatorModule &&
+      mechanismOperationCoordinatorModule < routerModule,
+    'mechanism operation coordinator must load after its controls/cache and before the router'
+  );
   assert.match(background, /LLM_ANALYZE_REVIEW_OUTLINE/);
   assert.match(background, /setPanelBehavior\(\{\s*openPanelOnActionClick:\s*false\s*\}\)/);
   assert.match(background, /core\/tab-activation\.js/);
   assert.match(background, /core\/tab-messenger\.js/);
-  assert.match(background, /chrome\.action\.onClicked\.addListener/);
+  assert.doesNotMatch(background, /chrome\.action\.onClicked\.addListener/);
+  assert.match(background, /message\?\.type === 'ACTION_POPUP_GET_STATE'/);
+  assert.match(background, /message\?\.type === 'ACTION_POPUP_START_READING'/);
   assert.match(background, /markTabActivated/);
   assert.match(background, /chrome\.sidePanel\.open/);
-  const actionListenerStart = background.indexOf('chrome.action.onClicked.addListener(tab => {');
-  const actionListenerEnd = background.indexOf('\n});', actionListenerStart);
-  const actionListener = background.slice(actionListenerStart, actionListenerEnd);
-  assert.match(actionListener, /beginToolbarSidePanelOpen\(tab\)/);
-  assert.match(actionListener, /handleToolbarAction\(tab,\s*panelOpen/);
+  const popupStart = background.indexOf("message?.type === 'ACTION_POPUP_START_READING'");
+  const popupStartEnd = background.indexOf("message?.type === 'SIDE_PANEL_RESTORE_FROM_USER_GESTURE'", popupStart);
+  const popupStartHandler = background.slice(popupStart, popupStartEnd);
+  assert.match(popupStartHandler, /beginToolbarSidePanelOpen\(tab\)/);
+  assert.match(popupStartHandler, /handleToolbarAction\(tab,\s*panelOpen/);
   assert.ok(
-    actionListener.indexOf('beginToolbarSidePanelOpen(tab)') <
-      actionListener.indexOf('handleToolbarAction(tab, panelOpen'),
-    'the side-panel open attempt must start before any asynchronous onboarding lookup'
+    popupStartHandler.indexOf('beginToolbarSidePanelOpen(tab)') <
+      popupStartHandler.indexOf('handleToolbarAction(tab, panelOpen'),
+    'the side-panel open attempt must start before the popup message handler yields'
   );
-  assert.doesNotMatch(actionListener, /\bawait\b/);
   assert.ok(
     background.indexOf('chrome.sidePanel.open({ windowId: tab.windowId })') <
       background.indexOf('SciLLM.markTabActivated(chrome.storage.session, tab)'),
@@ -137,7 +237,6 @@ test('background worker keeps routed LLM operations alive until completion', () 
   const tabUpdatedStart = background.indexOf('chrome.tabs.onUpdated.addListener');
   const tabUpdatedEnd = background.indexOf('chrome.tabs.onRemoved.addListener', tabUpdatedStart);
   const tabUpdatedListener = background.slice(tabUpdatedStart, tabUpdatedEnd);
-  assert.match(tabUpdatedListener, /ensureGlobalSidePanelAvailability/);
   assert.doesNotMatch(tabUpdatedListener, /sidePanel\.open|armTabSidePanelRestore/);
   assert.doesNotMatch(tabUpdatedListener, /clearTabActivation/);
   assert.match(background, /chrome\.tabs\.onActivated\.addListener/);
@@ -183,7 +282,11 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /chrome\.runtime\.onStartup\.addListener/);
   assert.match(background, /core\/onboarding\.js/);
   assert.match(background, /options\.html#onboarding/);
-  assert.match(background, /shouldStartOnboarding/);
+  assert.doesNotMatch(
+    background,
+    /ACTION_POPUP_START_READING[\s\S]{0,1200}shouldStartOnboarding/,
+    'explicit reading activation must not be redirected into onboarding'
+  );
   assert.match(background, /ONBOARDING_PREPARE_FINISH/);
   assert.match(
     background,
@@ -202,6 +305,197 @@ test('background worker keeps routed LLM operations alive until completion', () 
     background,
     /onInstalled\.addListener\([\s\S]{0,500}options\.html#onboarding|onStartup\.addListener\([\s\S]{0,500}options\.html#onboarding/
   );
+});
+
+test('background wires committed-document and tab-removal owner teardown through keepalive', async () => {
+  const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const start = background.indexOf('function commitTrustedNavigationOwner');
+  const end = background.indexOf('const portableConfigStorageChangeListener', start);
+  assert.ok(start >= 0 && end > start);
+  const listeners = {};
+  const routerCommits = [];
+  const serviceCommits = [];
+  const routerRetirements = [];
+  const serviceRetirements = [];
+  const pending = [];
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  };
+  const routerCommitGate = deferred();
+  const serviceCommitGate = deferred();
+  const routerRetirementGate = deferred();
+  const serviceRetirementGate = deferred();
+  let completedKeepalives = 0;
+  const context = {
+    Promise,
+    ttsRouter: { commitDocument() {}, retireTab() {} },
+    llmRouter: {
+      async commitTrustedDocument(value) {
+        routerCommits.push(value);
+        await routerCommitGate.promise;
+        return { cleaned: 0 };
+      },
+      async retireTrustedTab(value) {
+        routerRetirements.push(value);
+        await routerRetirementGate.promise;
+        return { cleaned: 0 };
+      }
+    },
+    semanticFindService: {
+      async commitTrustedDocument(value) {
+        serviceCommits.push(value);
+        await serviceCommitGate.promise;
+        return { cancelled: 0 };
+      },
+      async retireTrustedTab(value) {
+        serviceRetirements.push(value);
+        await serviceRetirementGate.promise;
+        return { cancelled: 0 };
+      }
+    },
+    SciLLM: {
+      keepAliveUntil(promise) {
+        const tracked = Promise.resolve(promise).then(value => {
+          completedKeepalives += 1;
+          return value;
+        });
+        pending.push(tracked);
+        return tracked;
+      }
+    },
+    chrome: {
+      runtime: { id: 'runtime-id' },
+      webNavigation: {
+        onCommitted: { addListener(listener) { listeners.committed = listener; } },
+        onHistoryStateUpdated: { addListener() { listeners.history = true; } }
+      },
+      tabs: { onRemoved: { addListener(listener) { listeners.removed = listener; } } }
+    }
+  };
+  vm.runInNewContext(background.slice(start, end), context, {
+    filename: 'background-owner-lifecycle.js'
+  });
+  assert.equal(typeof listeners.committed, 'function');
+  assert.equal(typeof listeners.removed, 'function');
+  assert.equal(listeners.history, undefined,
+    'history-only navigation must retain the same document owner');
+  listeners.committed({
+    tabId: 19, frameId: 2,
+    documentId: '19191919-1919-4919-8919-191919191919'
+  });
+  listeners.committed({ tabId: 19, frameId: 2, documentId: '' });
+  listeners.removed(19);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(completedKeepalives, 1,
+    'the ignored invalid document decision may settle independently');
+  routerCommitGate.resolve();
+  routerRetirementGate.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(completedKeepalives, 1,
+    'keepalive must still await semantic-find owner retirement');
+  serviceCommitGate.resolve();
+  serviceRetirementGate.resolve();
+  await Promise.all(pending);
+  const committedOwner = {
+    senderExtensionId: 'runtime-id', senderTabId: 19, senderFrameId: 2,
+    senderDocumentId: '19191919-1919-4919-8919-191919191919'
+  };
+  const retiredOwner = {
+    senderExtensionId: 'runtime-id', senderTabId: 19
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(routerCommits)), [committedOwner]);
+  assert.deepEqual(JSON.parse(JSON.stringify(serviceCommits)), [committedOwner]);
+  assert.deepEqual(JSON.parse(JSON.stringify(routerRetirements)), [retiredOwner]);
+  assert.deepEqual(JSON.parse(JSON.stringify(serviceRetirements)), [retiredOwner]);
+  assert.equal(completedKeepalives, 3);
+  assert.equal(pending.length, 3,
+    'valid mutations and the bounded ignored-event decision stay inside keepalive');
+});
+
+test('action popup exposes three privacy-safe reading choices', () => {
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'action-popup.html'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'action-popup.css'), 'utf8');
+  const script = fs.readFileSync(path.join(root, 'action-popup.js'), 'utf8');
+  const verifier = fs.readFileSync(
+    path.join(root, 'scripts', 'verify-action-popup-extension.mjs'), 'utf8'
+  );
+
+  for (const id of ['startReading', 'openHistory', 'openSettings']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /开始研读/);
+  assert.match(html, /查看历史/);
+  assert.match(html, /打开设置/);
+  assert.match(script, /ACTION_POPUP_GET_STATE/);
+  assert.match(script, /ACTION_POPUP_START_READING/);
+  assert.match(script, /bootstrapInterfaceLanguage/);
+  assert.match(script, /options\.html#page=data/);
+  assert.match(script, /options\.html#page=overview/);
+  assert.doesNotMatch(script, /apiKey|articleText|canonicalSnapshot/i);
+  assert.match(html, /vendor\/phosphor\/icons\.css/);
+  assert.match(html, /core\/i18n\.js/);
+  assert.match(html, /ph-compass/);
+  assert.match(html, /ph-database/);
+  assert.match(html, /ph-gear/);
+  assert.doesNotMatch(html, /准备研读入口|点击后才会激活当前页面/);
+  assert.match(html, /id="pageStatus"[^>]*hidden/);
+  assert.ok(html.indexOf('id="pageStatus"') > html.indexOf('action-popup__actions'));
+  assert.match(script, /pageStatus\.hidden\s*=\s*!normalized/);
+  assert.match(css, /html,\s*body\s*\{[^}]*width:\s*360px/s);
+  assert.match(css, /html,\s*body\s*\{[^}]*min-width:\s*360px/s);
+  assert.match(css, /html,\s*body\s*\{[^}]*max-width:\s*360px/s);
+  assert.match(css, /overflow-x:\s*hidden/);
+  assert.match(css, /\.action-popup\s*\{[^}]*box-sizing:\s*border-box/s);
+  assert.match(css, /\.action-popup\s*\{[^}]*width:\s*360px/s);
+  assert.match(css, /\.action-popup\s*\{[^}]*padding:\s*16px/s);
+  assert.match(css, /\.action-popup__actions\s*\{[^}]*gap:\s*10px/s);
+  assert.match(css, /\.action-popup__button\s*\{[^}]*min-height:\s*64px/s);
+  assert.match(css, /\.action-popup__button\s*\{[^}]*padding:\s*12px/s);
+  assert.match(css, /\.action-popup__button\s*\{[^}]*column-gap:\s*12px/s);
+  assert.match(
+    css,
+    /\.action-popup__button-copy strong,\s*\.action-popup__button-copy small\s*\{[^}]*min-width:\s*0[^}]*white-space:\s*nowrap[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*overflow-wrap:\s*normal/s
+  );
+  // Native popup sizing must not depend on its previous viewport dimensions.
+  assert.doesNotMatch(css, /@media\s*\(max-width:/);
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(verifier, /chrome\.action\.openPopup\(\)/);
+  assert.match(
+    verifier,
+    /waitForEvent\('page',[\s\S]*?page\.url\(\)\.includes\('\/action-popup\.html'\)/
+  );
+  assert.doesNotMatch(verifier, /\.goto\([^)]*action-popup\.html/s);
+  assert.doesNotMatch(verifier, /viewport:\s*\{\s*width:\s*420/);
+  assert.match(verifier, /process\.env\.HEADLESS\s*===\s*'0'/);
+  assert.match(verifier, /normalMetrics/);
+  assert.match(verifier, /longLabelMetrics/);
+  assert.match(verifier, /titleLines/);
+  assert.match(verifier, /subtitleLines/);
+  assert.match(verifier, /scrollWidth\s*>\s*\w+\.clientWidth/);
+  assert.match(verifier, /normalMetrics\.popupPadding[\s\S]*?>=\s*16/);
+  assert.match(verifier, /cardVerticalGaps/);
+  assert.match(verifier, /Math\.abs\(gap\s*-\s*10\)\s*<=/);
+  assert.match(verifier, /longLabelMetrics\.cards\.every/);
+  assert.doesNotMatch(verifier, /longLabelMetrics\.cards\.some/);
+  assert.match(verifier, /Target\.setDiscoverTargets/);
+  assert.match(verifier, /Target\.targetCreated/);
+  assert.match(verifier, /Target\.attachToTarget/);
+  assert.match(verifier, /Page\.captureScreenshot/);
+  assert.match(verifier, /targetDiagnostics/);
+  assert.match(verifier, /Runtime\.evaluate[\s\S]*?userGesture:\s*true/);
+  assert.match(verifier, /process\.env\.MANUAL_ACTION\s*===\s*'1'/);
+  assert.match(verifier, /MANUAL_ACTION_READY/);
+  assert.match(verifier, /manualActionTimeoutMs/);
+  assert.match(
+    verifier,
+    /if\s*\(!manualAction\)[\s\S]*?chrome\.action\.openPopup\(\)/
+  );
+  assert.match(verifier, /action-popup-toolbar\.png/);
 });
 
 test('production workflow contains no classifier or secondary-type UI remnants', () => {

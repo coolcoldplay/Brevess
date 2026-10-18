@@ -11,6 +11,7 @@ const {
 
 const catalog = createUnifiedCategoryCatalog();
 const adaptiveCategoryIds = Object.keys(createAdaptiveCategoryCatalog())
+  .filter(categoryId => catalog[categoryId].enabledEngines.includes('regex'))
   .filter(categoryId => ![
     'hypothesis', 'objective', 'method', 'result', 'conclusion', 'comparison',
     'limitation', 'future', 'causality', 'emphasis', 'evidence',

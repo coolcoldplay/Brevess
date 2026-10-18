@@ -174,7 +174,7 @@ function figureWorkspace() {
   };
 }
 
-test('creates a schema v3 argument chain from analyzed Figures', () => {
+test('creates a schema v4 argument chain from analyzed Figures', () => {
   const map = createResearchLogicMapFromFigures({
     workspaceId: 'workspace-1',
     articleTitle: 'Example paper',
@@ -183,8 +183,8 @@ test('creates a schema v3 argument chain from analyzed Figures', () => {
     now: '2026-07-30T12:00:00.000Z'
   });
 
-  assert.equal(RESEARCH_LOGIC_MAP_SCHEMA_VERSION, 3);
-  assert.equal(map.schemaVersion, 3);
+  assert.equal(RESEARCH_LOGIC_MAP_SCHEMA_VERSION, 4);
+  assert.equal(map.schemaVersion, 4);
   assert.equal(map.kind, RESEARCH_LOGIC_MAP_KIND);
   assert.equal(map.steps.length, 2);
   assert.deepEqual(map.steps[0].questionItems.map(item => item.text), [
@@ -215,7 +215,7 @@ test('creates a schema v3 argument chain from analyzed Figures', () => {
   assert.equal(map.view.mode, undefined);
 });
 
-test('migrates v2 strings into stable v3 bullets and merges the handoff question', () => {
+test('migrates v2 strings into stable v4 bullets and merges the handoff question', () => {
   const migrated = normalizeResearchLogicMap({
     schemaVersion: 2,
     mapId: 'migration-map',
@@ -240,7 +240,7 @@ test('migrates v2 strings into stable v3 bullets and merges the handoff question
     ]
   });
 
-  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.schemaVersion, 4);
   assert.deepEqual(migrated.meta.backgroundItems.map(item => item.text), ['Known biology']);
   assert.deepEqual(migrated.steps[0].questionItems.map(item => item.text), ['Q1']);
   assert.deepEqual(migrated.steps[1].questionItems.map(item => item.text), ['Q2']);
@@ -311,6 +311,89 @@ test('normalizes missing and duplicate IDs deterministically and filters danglin
   assert.deepEqual(map.meta.finalConclusions[0].questionIds, ['question-kept']);
   assert.doesNotMatch(JSON.stringify(map), /questionItemIds/);
   assert.deepEqual(map, normalizeResearchLogicMap(map));
+});
+
+test('migrates legacy scientific questions and preserves paper-level relationship fields', () => {
+  const migrated = normalizeResearchLogicMap(v3Fixture({
+    schemaVersion: 3,
+    meta: {
+      centralScientificQuestion: '',
+      scientificQuestions: [
+        { questionId: 'root', text: 'What phenomenon does the paper explain?' },
+        {
+          questionId: 'mechanism', text: 'What mechanism explains it?',
+          relationType: 'progressive', parentQuestionIds: ['root'],
+          supportingFigureIds: ['figure-2', 'figure-2']
+        },
+        {
+          questionId: 'convergence', text: 'Where do the branches converge?',
+          relationType: 'convergent', parentQuestionIds: ['root', 'mechanism', 'missing'],
+          supportingFigureIds: ['figure-1', 'figure-2']
+        }
+      ]
+    }
+  }));
+
+  assert.equal(migrated.schemaVersion, 4);
+  assert.equal(migrated.meta.centralScientificQuestion,
+    'What phenomenon does the paper explain?');
+  assert.deepEqual(migrated.meta.scientificQuestions, [
+    {
+      questionId: 'root', text: 'What phenomenon does the paper explain?',
+      relationType: 'root', parentQuestionIds: [], supportingFigureIds: [],
+      manuallyEdited: false, manuallyEditedFields: [], humanReviewed: false
+    },
+    {
+      questionId: 'mechanism', text: 'What mechanism explains it?',
+      relationType: 'progressive', parentQuestionIds: ['root'],
+      supportingFigureIds: ['figure-2'], manuallyEdited: false,
+      manuallyEditedFields: [], humanReviewed: false
+    },
+    {
+      questionId: 'convergence', text: 'Where do the branches converge?',
+      relationType: 'convergent', parentQuestionIds: ['root', 'mechanism'],
+      supportingFigureIds: ['figure-1', 'figure-2'], manuallyEdited: false,
+      manuallyEditedFields: [], humanReviewed: false
+    }
+  ]);
+  assert.deepEqual(migrated, normalizeResearchLogicMap(migrated));
+});
+
+test('creates map questions from the whole-paper synthesis instead of Figure 1', () => {
+  const workspace = figureWorkspace();
+  workspace.crossFigureLogic.result.centralScientificQuestion =
+    'How does neural signaling causally organize tissue ageing across the study?';
+  workspace.crossFigureLogic.result.scientificQuestions = [
+    {
+      questionId: 'root', text: 'Does a reproducible age-related signal exist?',
+      relationType: 'root', parentQuestionIds: [], supportingFigureIds: ['figure-1']
+    },
+    {
+      questionId: 'causality', text: 'Is that signal causally required?',
+      relationType: 'validation', parentQuestionIds: ['root'],
+      supportingFigureIds: ['figure-2']
+    }
+  ];
+  const map = createResearchLogicMapFromFigures({
+    workspaceId: 'workspace-1', figureWorkspace: workspace,
+    now: '2026-07-30T12:00:00.000Z'
+  });
+
+  assert.equal(map.meta.centralScientificQuestion,
+    workspace.crossFigureLogic.result.centralScientificQuestion);
+  assert.deepEqual(map.meta.scientificQuestions.map(item => ({
+    questionId: item.questionId,
+    relationType: item.relationType,
+    parentQuestionIds: item.parentQuestionIds,
+    supportingFigureIds: item.supportingFigureIds
+  })), workspace.crossFigureLogic.result.scientificQuestions.map(item => ({
+    questionId: item.questionId,
+    relationType: item.relationType,
+    parentQuestionIds: item.parentQuestionIds,
+    supportingFigureIds: item.supportingFigureIds
+  })));
+  assert.notEqual(map.meta.centralScientificQuestion,
+    map.steps[0].questionItems[0].text);
 });
 
 test('normalizes locator boundaries without mixing locator shapes', () => {
@@ -410,6 +493,9 @@ test('scientific question and final conclusion updates are immutable and round-t
   const originalSnapshot = JSON.stringify(original);
   let updated = updateScientificQuestion(original, 'question-1', {
     text: 'Edited scientific question',
+    relationType: 'validation',
+    parentQuestionIds: [],
+    supportingFigureIds: ['figure-1'],
     humanReviewed: true
   });
   updated = updateFinalConclusion(updated, 'conclusion-1', {
@@ -422,6 +508,11 @@ test('scientific question and final conclusion updates are immutable and round-t
   assert.notEqual(updated, original);
   assert.equal(roundTrip.meta.scientificQuestions[0].text, 'Edited scientific question');
   assert.equal(roundTrip.meta.scientificQuestions[0].humanReviewed, true);
+  assert.equal(roundTrip.meta.scientificQuestions[0].relationType, 'validation');
+  assert.deepEqual(roundTrip.meta.scientificQuestions[0].supportingFigureIds, ['figure-1']);
+  assert.deepEqual(roundTrip.meta.scientificQuestions[0].manuallyEditedFields, [
+    'text', 'relationType', 'parentQuestionIds', 'supportingFigureIds'
+  ]);
   assert.equal(roundTrip.meta.finalConclusions[0].text, 'Edited final conclusion');
   assert.deepEqual(roundTrip.meta.finalConclusions[0].questionIds, ['question-1']);
   assert.equal(roundTrip.meta.finalConclusions[0].manuallyEdited, true);
@@ -666,14 +757,15 @@ test('normalizes editable maps, indexes them, and exports every v3 chain layer',
   assert.match(svg, /<\/svg>$/);
 });
 
-test('creates a normalized blank v3 map and requires analysis for generated maps', () => {
+test('creates a normalized blank v4 map and requires analysis for generated maps', () => {
   const map = createBlankResearchLogicMap({
     workspaceId: 'workspace-2',
     mapId: 'manual-map',
     articleTitle: 'Manual paper',
     now: '2026-07-30T12:00:00.000Z'
   });
-  assert.equal(map.schemaVersion, 3);
+  assert.equal(map.schemaVersion, 4);
+  assert.equal(map.meta.centralScientificQuestion, '');
   assert.deepEqual(map.meta.backgroundItems, []);
   assert.deepEqual(map.meta.scientificQuestions, []);
   assert.deepEqual(map.meta.finalConclusions, []);

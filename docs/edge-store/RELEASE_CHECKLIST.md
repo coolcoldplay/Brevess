@@ -13,7 +13,7 @@
 - [ ] 所有商店截图来自同一发布版本，没有旧标题、旧 Logo、调试文字、重复占位回复或混合测试语言。
 - [ ] 隐私政策 URL 可在无登录窗口访问。
 - [ ] 支持 URL、项目网站和 reviewer demo 均返回 HTTP 200。
-- [ ] GitHub Release 中存在稳定文件名 `Brevess-Codex-Bridge-Windows-x64.zip`。
+- [ ] 发布构建显式传入 `-IncludeStableCompanionAlias`，GitHub Release 中存在稳定文件名 `Brevess-Codex-Bridge-Windows-x64.zip`。
 - [ ] Partner Center 分配的 Edge 扩展 ID 已写入 Bridge 的 `catalog-extension-ids.txt` 并重新打包。
 - [ ] Windows Defender/SmartScreen 与至少一个干净 Windows 用户环境已检查 Bridge 包。
 - [ ] Privacy 页中的单一用途、权限、远程代码和数据使用披露与实际行为一致。

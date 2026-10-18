@@ -4,7 +4,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const PDF_FIGURE_SCHEMA_VERSION = 3;
-  const PDF_FIGURE_PIPELINE_VERSION = '0.2.0-cross-page';
+  const PDF_FIGURE_PIPELINE_VERSION = '0.2.1-numbered-captions';
   const PDF_FIGURE_SOURCE = 'pdffigures2';
   const PDF_FIGURE_INVENTORY_SOURCE = 'pdf-pdffigures2';
 
@@ -29,7 +29,7 @@
     );
     if (!match) return null;
     const compact = match[1].replace(/\s+/g, '');
-    const supplemental = /^s/i.test(compact);
+    const supplemental = /^s/i.test(compact) || /^supplement(?:ary|al)?\s+/i.test(text);
     const digits = compact.replace(/^s/i, '');
     if (!/^\d+$/.test(digits)) return null;
     return {
@@ -49,7 +49,7 @@
       number: String(Number(directName[1].replace(/^s\s*/i, ''))),
       suffix: String(directName[2] || '').toUpperCase()
     } : null);
-    const supplemental = kind === 'supplemental' || parsed?.supplemental === true;
+    const supplemental = parsed ? parsed.supplemental === true : kind === 'supplemental';
     const number = parsed?.number || (fallbackNumber > 0 ? String(fallbackNumber) : '');
     if (!number) return {
       label: '', number: '', supplemental, explicit: false
@@ -206,6 +206,17 @@
       source: PDF_FIGURE_SOURCE,
       extractorVersion: normalizedText(options.extractorVersion || raw.extractorVersion || '')
     };
+    if (Array.isArray(raw.sourceRegions) && raw.sourceRegions.length) {
+      const regions = raw.sourceRegions.map(region => {
+        const sourcePageIndex = region?.pageIndex;
+        const box = normalizeBox(region?.box);
+        if (!Number.isInteger(sourcePageIndex) || sourcePageIndex < 0 || !box) return null;
+        return { pageIndex: sourcePageIndex, box };
+      });
+      // Preserve optional provenance only as a complete list; do not silently
+      // turn a malformed multipage list into an apparently complete subset.
+      if (regions.every(Boolean)) result.sourceRegions = regions;
+    }
     result.figureId = figureIdFor(result, options.documentFingerprint);
     return result;
   }
@@ -316,7 +327,7 @@
     );
     if (!match) return '';
     const compact = String(match[1] || '').replace(/\s+/g, '');
-    const supplemental = /^s/i.test(compact);
+    const supplemental = /^s/i.test(compact) || /^supplement(?:ary|al)?\s+/i.test(text);
     const digits = compact.replace(/^s/i, '');
     if (!/^\d+$/.test(digits)) return '';
     const parts = {
@@ -368,8 +379,16 @@
     return hasConsecutivePair ? labels : [];
   }
 
-  function panelLegendContinuationIndices(blocks, captionIndex, captionText = '') {
+  function panelLegendContinuationIndices(
+    blocks,
+    captionIndex,
+    captionText = '',
+    options = {}
+  ) {
     const indices = [];
+    const isCaptionContinuationText =
+      typeof options.isCaptionContinuationText === 'function'
+        ? options.isCaptionContinuationText : () => false;
     let cursor = Number(captionIndex) + 1;
     while (cursor < blocks.length && indices.length < 80) {
       const block = blocks[cursor];
@@ -377,10 +396,13 @@
           captionLabel(block.text)) break;
       const isPanelParagraph = block.type === 'paragraph' &&
         explicitPanelLegendText(block.text);
+      const isContinuationParagraph = block.type === 'paragraph' &&
+        isCaptionContinuationText(block.text);
       const isPanelList = block.type === 'list' &&
         Array.isArray(block.items) && block.items.length > 0 &&
-        block.items.every(item => explicitPanelLegendText(item?.text));
-      if (!isPanelParagraph && !isPanelList) break;
+        block.items.every(item => explicitPanelLegendText(item?.text) ||
+          isCaptionContinuationText(item?.text));
+      if (!isPanelParagraph && !isContinuationParagraph && !isPanelList) break;
       indices.push(cursor);
       cursor += 1;
     }
@@ -433,7 +455,7 @@
       )[0] || '';
   }
 
-  function buildPdfFigureArticlePlan(inputBlocks, inputFigures) {
+  function buildPdfFigureArticlePlan(inputBlocks, inputFigures, options = {}) {
     const cleaned = removeMineruFigureImages(inputBlocks);
     const blocks = cleaned.blocks;
     const captions = blocks.flatMap((block, index) => {
@@ -463,7 +485,7 @@
         if (semantic) {
           consumedCaptionIndices.add(semantic.index);
           const continuationIndices = panelLegendContinuationIndices(
-            blocks, semantic.index, semantic.text
+            blocks, semantic.index, semantic.text, options
           );
           continuationIndices.forEach(index => consumedCaptionIndices.add(index));
           const semanticCaption = [
@@ -608,6 +630,14 @@
   function pdfFigureManifestNeedsRefresh(manifest) {
     if (!manifest || typeof manifest !== 'object') return true;
     if (Number(manifest.schemaVersion) < PDF_FIGURE_SCHEMA_VERSION) return true;
+    const paths = new Map();
+    for (const figure of Array.isArray(manifest.figures) ? manifest.figures : []) {
+      const explicit = labelFromFigure({ name: figure.originalName, caption: figure.caption }, figure.kind);
+      if (figure.labelWasExplicit && explicit.label && explicit.label !== figure.figureLabel) return true;
+      const path = String(figure.image?.workspacePath || ''), hash = String(figure.image?.sha256 || '');
+      if (path && paths.has(path) && paths.get(path) !== hash) return true;
+      if (path) paths.set(path, hash);
+    }
     return normalizedText(manifest.extractorVersion) !== PDF_FIGURE_PIPELINE_VERSION;
   }
 

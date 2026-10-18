@@ -2,7 +2,7 @@
   const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const CAUSALITY_NON_CAUSAL_PATTERNS = [
     /\bas\s+(?:shown|illustrated|reported|described|indicated|listed|depicted|presented)\s+in\b/i,
     /\bas\s+(?:an?|the)\s+(?:example|illustration|marker|measure|proxy|control|reference|baseline)\b/i,
@@ -23,7 +23,7 @@
   const PRACTICAL_SIGNIFICANCE_EVIDENCE = /\b(?:clinical(?:ly)?|practical(?:ly)?|meaningful|important|relevant|minimal(?:ly)? important|MCID|effect size|magnitude|negligible|trivial)\b|临床(?:意义|重要)|实际(?:意义|重要)|最小临床重要差异|效应量/i;
   const STATISTICAL_EVIDENCE = /\b(?:statistical(?:ly)?|significant|p[- ]?value|p\s*[<=>]|FDR|q[- ]?value|confidence interval|credible interval|effect estimate)\b|统计(?:显著|意义)|置信区间|可信区间/i;
   const RESCUE_EVIDENCE = /\b(?:rescu(?:e|ed)|restor(?:e|ed|ation)|revers(?:e|ed|al)|recover(?:ed|y)|normaliz(?:e|ed|ation)|returned? to|wild[- ]type phenotype)\b|补救|挽救|恢复|逆转|回归正常/i;
-  const NECESSITY_MANIPULATION = /\b(?:block(?:ed|ade|ing)?|remov(?:e|ed|al)|delet(?:e|ed|ion)|knock[- ]?(?:out|down)|inhibit(?:ed|ion)?|deplet(?:e|ed|ion)|ablat(?:e|ed|ion)|neutraliz(?:e|ed|ation)|deficien(?:t|cy))\b|阻断|敲除|敲低|删除|抑制|耗竭|缺失/i;
+  const NECESSITY_MANIPULATION = /\b(?:block(?:ed|ade|ing)?|remov(?:e|ed|al)|delet(?:e|ed|ion)|knock[- ]?(?:out|down)|inhibit(?:ed|ing|ion|s)?|deplet(?:e|ed|ion)|ablat(?:e|ed|ion)|neutraliz(?:e|ed|ation)|deficien(?:t|cy))\b|阻断|敲除|敲低|删除|抑制|耗竭|缺失/i;
   const NECESSITY_OUTCOME = /\b(?:prevent(?:ed|ion)?|abolish(?:ed)?|reduc(?:e|ed|tion)|attenuat(?:e|ed|ion)|failed to|no longer|lost|required|dependent)\b|阻止|消除|减弱|降低|不再|依赖|必需/i;
   const SUFFICIENCY_CONTEXT = /\b(?:alone|by itself|in the absence of|without (?:the )?(?:original|upstream)|sufficient|sufficed)\b|单独|足以|在缺少|无需上游/i;
   const TIME_DOSE_RELATIONSHIP = /\b(?:dose|concentration|duration|time)\b.{0,70}\b(?:dependent|response|gradient|trend|increas(?:e|ed)|decreas(?:e|ed)|rose|fell|declin(?:e|ed)|chang(?:e|ed)|peak(?:ed)?)\b|\b(?:increas(?:e|ed)|decreas(?:e|ed)|rose|fell|declin(?:e|ed)|chang(?:e|ed)|peak(?:ed)?)\b.{0,70}\b(?:dose|concentration|duration|time|before|after|subsequent(?:ly)?|over time)\b|剂量(?:依赖|反应|梯度)|随(?:剂量|时间).*(?:增加|降低|变化)|(?:先于|随后|之后).*(?:增加|降低|变化)/i;
@@ -453,6 +453,7 @@
     const paragraphMap = new Map(paragraphs.map(item => [item.paragraphId, item]));
     const categories = normalizeRequestedCategories(requestedCategories, requestedCategoryIds);
     const categoryMap = new Map(categories.map(item => [item.categoryId, item]));
+    const defaults = shared.createUnifiedCategoryCatalog?.() || shared.createBuiltInCategories?.() || {};
     const reviewed = new Set(Array.isArray(response?.paragraphs_reviewed)
       ? response.paragraphs_reviewed : []);
     const annotations = [];
@@ -467,6 +468,9 @@
         rejected.push({ annotation: raw, reason: 'CATEGORY_NOT_REQUESTED' });
         return;
       }
+      const semanticCategoryId = shared.usesBuiltInCategorySemantics?.(
+        category, defaults[normalized.categoryId]
+      ) === false ? '' : normalized.categoryId;
       if (!Number.isFinite(normalized.confidence) ||
           normalized.confidence < 0 || normalized.confidence > 1) {
         rejected.push({ annotation: raw, reason: 'INVALID_CONFIDENCE' });
@@ -491,6 +495,11 @@
         return;
       }
       const allQuotes = [...normalized.highlightQuotes, ...normalized.supportQuotes];
+      if ((raw.locally_derived === true || !semanticCategoryId) && slots.some(slot =>
+        !allQuotes.some(item => normalizeGroundingText(item.quote).includes(normalizeGroundingText(slot.value))))) {
+        rejected.push({ annotation: raw, reason: 'SLOT_VALUE_NOT_GROUNDED' });
+        return;
+      }
       const calibrated = calibrateAnnotationEpistemics({
         quotes: allQuotes,
         confidence: normalized.confidence,
@@ -507,7 +516,7 @@
         rejected.push({ annotation: raw, reason: 'INVALID_QUOTE_ROLE' });
         return;
       }
-      if (!normalized.legacy && requiredQuoteRoles(normalized.categoryId)
+      if (!normalized.legacy && requiredQuoteRoles(semanticCategoryId)
         .some(role => !quoteRoles.has(role))) {
         rejected.push({ annotation: raw, reason: 'STRONG_EVIDENCE_STRUCTURE_MISSING' });
         return;
@@ -533,7 +542,7 @@
         }
         const semantics = validateAnnotationSemantics({
           quote: grounded.quote,
-          categoryId: normalized.categoryId
+          categoryId: semanticCategoryId
         });
         if (!semantics.valid) {
           rejected.push({ annotation: raw, reason: semantics.reason });
@@ -550,6 +559,8 @@
           annotationId: normalized.annotationId,
           relationId: normalized.relationId,
           claimMode: normalized.claimMode,
+          provenance: ['current', 'prior', 'interpretation'].includes(raw.provenance) ? raw.provenance : '',
+          confidenceBasis: raw.locally_derived === true ? 'local_evidence_heuristic' : 'model_reported',
           quoteRole: String(rawQuote.role || ''),
           slots,
           minimumConfidence: Number(category.minimumConfidence) || 0.8
@@ -567,7 +578,7 @@
         }));
       pending.forEach(item => { item.supportSpans = supportSpans; });
       const structureSemantics = validateAnnotationStructureSemantics({
-        categoryId: normalized.categoryId,
+        categoryId: semanticCategoryId,
         quotes: allQuotes,
         slots
       });
@@ -575,7 +586,7 @@
         rejected.push({ annotation: raw, reason: structureSemantics.reason });
         return;
       }
-      if (REVIEW_RELATION_CATEGORIES.has(normalized.categoryId)) {
+      if (REVIEW_RELATION_CATEGORIES.has(semanticCategoryId)) {
         reviewCandidates.push({ normalized, pending, validationPending, slots, raw });
       } else {
         annotations.push(...pending);
@@ -644,6 +655,8 @@
           annotationId: annotation.annotationId || '',
           relationId: annotation.relationId || '',
           claimMode: annotation.claimMode || 'explicit',
+          provenance: annotation.provenance || '',
+          confidenceBasis: annotation.confidenceBasis || 'model_reported',
           quoteRole: annotation.quoteRole || 'statement',
           slots: Array.isArray(annotation.slots) ? annotation.slots : [],
           supportSpans: Array.isArray(annotation.supportSpans) ? annotation.supportSpans : [],

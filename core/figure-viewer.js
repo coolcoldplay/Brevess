@@ -6,6 +6,7 @@
   const ORIGINAL_IMAGE_ATTRIBUTES = Object.freeze([
     'data-original',
     'data-original-src',
+    'data-viewer-src',
     'data-full',
     'data-full-src',
     'data-full-image',
@@ -19,6 +20,7 @@
     'data-enlarge',
     'data-image',
     'data-image-src',
+    'data-supp-info-image',
     'data-src'
   ]);
   const LAZY_IMAGE_ATTRIBUTES = Object.freeze([
@@ -59,16 +61,202 @@
     }).filter(item => item.source).sort((left, right) => right.width - left.width);
   }
 
+  const NCBI_TILE_ORIGIN = 'https://www.ncbi.nlm.nih.gov';
+  const NCBI_TILE_VIEWER_PATH = '/core/lw/2.0/html/tileshop_pmc/tileshop_pmc_inline.html';
+  const NCBI_TILE_PATH = '/corecgi/tileshop/tileshop.fcgi';
+  const NCBI_TILE_LIMIT = 128;
+  function ncbiTileError(code = 'NCBI_FIGURE_TILE_MANIFEST_INVALID') {
+    const error = new Error('NCBI Figure tile source is invalid or incomplete');
+    error.code = code;
+    return error;
+  }
+  function freezeNcbiTileValue(value) {
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(freezeNcbiTileValue);
+      Object.freeze(value);
+    }
+    return value;
+  }
+  function ncbiTileRecord(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return false;
+    const actual = Object.keys(value);
+    return actual.length === keys.length && keys.every(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor && Object.hasOwn(descriptor, 'value');
+    });
+  }
+  function parseNcbiFigureTileshopSource(value, baseUrl, expectedImageSource = '') {
+    if ([value, baseUrl, expectedImageSource].some(item => typeof item !== 'string' ||
+        item.length > 4096 || /[\u0000-\u001f\u007f]/u.test(item))) return null;
+    try {
+      const document = new URL(baseUrl);
+      const article = document.pathname.match(/^\/articles\/PMC([1-9]\d{0,8})(?:\/|$)/u);
+      if (document.origin !== 'https://pmc.ncbi.nlm.nih.gov' || document.username ||
+          document.password || !article) return null;
+      document.hash = '';
+      const viewer = new URL(value, document.href);
+      if (viewer.origin !== NCBI_TILE_ORIGIN || viewer.username || viewer.password ||
+          viewer.hash || viewer.pathname !== NCBI_TILE_VIEWER_PATH) return null;
+      const keys = [...viewer.searchParams.keys()];
+      if (new Set(keys).size !== keys.length || keys.some(key => !['p', 'id', 'title'].includes(key))) return null;
+      const project = viewer.searchParams.get('p');
+      const imageName = viewer.searchParams.get('id') || '';
+      const picture = imageName.match(/^([1-9]\d{0,8})_([A-Za-z0-9][A-Za-z0-9._-]{0,159}\.(?:jpe?g|png|gif|webp))$/u);
+      if (project !== 'PMC3' || !picture || picture[1] !== article[1] ||
+          picture[2].includes('..')) return null;
+      let expected = '';
+      if (expectedImageSource) {
+        const image = new URL(expectedImageSource, document.href);
+        const imagePath = image.pathname.match(/^\/pmc\/blobs\/([a-f0-9]{4,64})\/([1-9]\d{0,8})\/([a-f0-9]{4,64})\/([^/]+)$/u);
+        if (image.origin !== 'https://cdn.ncbi.nlm.nih.gov' || image.username || image.password ||
+            image.search || image.hash || !imagePath || imagePath[2] !== article[1] ||
+            imagePath[4] !== picture[2]) return null;
+        expected = image.href;
+      }
+      const canonicalViewer = new URL(NCBI_TILE_VIEWER_PATH, NCBI_TILE_ORIGIN);
+      canonicalViewer.searchParams.set('p', project);
+      canonicalViewer.searchParams.set('id', imageName);
+      const manifest = new URL(NCBI_TILE_PATH, NCBI_TILE_ORIGIN);
+      for (const [key, item] of Object.entries({ manifest: '1', p: project, id: imageName, w: '800', h: '800' }))
+        manifest.searchParams.set(key, item);
+      return freezeNcbiTileValue({ version: 'ncbi-figure-tileshop-source-v1',
+        viewerUrl: canonicalViewer.href, documentUrl: document.href,
+        imageSource: expected, pmcid: `PMC${article[1]}`, project,
+        imageName, imageFileName: picture[2], manifestUrl: manifest.href });
+    } catch (_) { return null; }
+  }
+  function canonicalNcbiTileSource(value) {
+    const keys = ['version', 'viewerUrl', 'documentUrl', 'imageSource', 'pmcid',
+      'project', 'imageName', 'imageFileName', 'manifestUrl'];
+    if (!ncbiTileRecord(value, keys)) throw ncbiTileError();
+    const source = parseNcbiFigureTileshopSource(value.viewerUrl, value.documentUrl, value.imageSource);
+    if (!source || keys.some(key => source[key] !== value[key])) throw ncbiTileError();
+    return source;
+  }
+  function parseNcbiTileData(text) {
+    if (typeof text !== 'string' || !text.trim() || text.length > 16384) throw ncbiTileError();
+    // Official manifests use unquoted object keys. Tokenize this small data
+    // grammar, quote keys and use JSON.parse; never execute the returned text.
+    const pattern = /"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[\da-fA-F]{4}))*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:]|[A-Za-z_][A-Za-z0-9_]*/gu;
+    const tokens = [];
+    let end = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (text.slice(end, match.index).trim() || tokens.length >= 1024) throw ncbiTileError();
+      tokens.push(match[0]);
+      end = match.index + match[0].length;
+    }
+    if (text.slice(end).trim()) throw ncbiTileError();
+    const scopes = [];
+    const encoded = tokens.map((token, index) => {
+      if (token === '{' || token === '[') {
+        if (scopes.length >= 4) throw ncbiTileError();
+        scopes.push(token === '{' ? new Set() : null);
+      } else if (token === '}' || token === ']') scopes.pop();
+      const key = tokens[index + 1] === ':';
+      if (key) {
+        const scope = scopes.at(-1);
+        const name = token.startsWith('"') ? JSON.parse(token) : token;
+        if (!scope || typeof name !== 'string' || scope.has(name)) throw ncbiTileError();
+        scope.add(name);
+        return JSON.stringify(name);
+      }
+      if (/^[A-Za-z_]/u.test(token)) throw ncbiTileError();
+      return token;
+    });
+    try { return JSON.parse(encoded.join('')); } catch (_) { throw ncbiTileError(); }
+  }
+  function buildNcbiTilePlan(source, view, satelliteId) {
+    const { W: width, H: height, w: tileWidth, h: tileHeight, sId: layerId } = view;
+    if (![width, height, tileWidth, tileHeight].every(number => Number.isSafeInteger(number) && number > 0) ||
+        Math.max(width, height) > 8192 || width * height > 40000000 ||
+        Math.max(tileWidth, tileHeight) > 1024 || typeof layerId !== 'string' ||
+        !/^[1-9]\d{0,11}$/u.test(layerId) || typeof satelliteId !== 'string' ||
+        !/^[1-9]\d{0,7}$/u.test(satelliteId)) throw ncbiTileError();
+    const rows = Math.ceil(height / tileHeight), columns = Math.ceil(width / tileWidth);
+    if (rows * columns > NCBI_TILE_LIMIT) throw ncbiTileError();
+    const tiles = [];
+    for (let row = 1; row <= rows; row += 1) for (let column = 1; column <= columns; column += 1) {
+      const x = (column - 1) * tileWidth, y = (row - 1) * tileHeight;
+      const rect = { x, y, width: Math.min(tileWidth, width - x), height: Math.min(tileHeight, height - y) };
+      const url = new URL(NCBI_TILE_PATH, NCBI_TILE_ORIGIN);
+      for (const [key, value] of Object.entries({ p: source.project, id: layerId,
+        s: satelliteId, r: String(row), c: String(column) })) url.searchParams.set(key, value);
+      tiles.push({ index: tiles.length, row, column, url: url.href, ...rect, sourceRect: { ...rect } });
+    }
+    return freezeNcbiTileValue({ version: 'ncbi-figure-tileshop-plan-v1', source,
+      width, height, tileWidth, tileHeight, rows, columns, layerId, satelliteId, tiles });
+  }
+  function parseNcbiFigureTileshopManifest(text, value) {
+    const source = canonicalNcbiTileSource(value);
+    const data = parseNcbiTileData(text);
+    if (!ncbiTileRecord(data, ['ProjectName', 'ImageName', 'Header', 'Footer', 'Sat', 'aView']) ||
+        data.ProjectName !== source.project || data.ImageName !== source.imageName ||
+        typeof data.Sat !== 'string' || !/^[1-9]\d{0,7}$/u.test(data.Sat) ||
+        [data.Header, data.Footer].some(item => typeof item !== 'string' || item.length > 1024 || /[\u0000-\u001f]/u.test(item)) ||
+        !Array.isArray(data.aView) || !data.aView.length || data.aView.length > 12) throw ncbiTileError();
+    const ids = new Set();
+    for (const view of data.aView) {
+      if (!ncbiTileRecord(view, ['sId', 'sName', 'fScale', 'W', 'H', 'w', 'h']) ||
+          typeof view.sId !== 'string' || ids.has(view.sId) || typeof view.sName !== 'string' ||
+          view.sName.length > 24 || !Number.isFinite(view.fScale) || view.fScale <= 0 || view.fScale > 4 ||
+          ![view.W, view.H, view.w, view.h].every(n => Number.isSafeInteger(n) && n > 0) ||
+          Math.max(view.W, view.H) > 8192 || view.W * view.H > 40000000 ||
+          Math.max(view.w, view.h) > 1024 || !/^[1-9]\d{0,11}$/u.test(view.sId)) throw ncbiTileError();
+      const percent = view.sName.match(/^(\d+(?:\.\d+)?)%$/u);
+      if ((percent && Math.abs(Number(percent[1]) / 100 - view.fScale) > 0.00001) ||
+          (!percent && view.sName !== 'fit')) throw ncbiTileError();
+      ids.add(view.sId);
+    }
+    const candidates = data.aView.filter(view => view.fScale <= 1)
+      .sort((a, b) => b.fScale - a.fScale);
+    const selected = candidates[0];
+    if (!selected || candidates.some((view, index) => index && view.fScale === candidates[index - 1].fScale))
+      throw ncbiTileError();
+    for (const view of data.aView) {
+      const ratio = view.fScale / selected.fScale;
+      if (Math.abs(view.W - selected.W * ratio) > 1 || Math.abs(view.H - selected.H * ratio) > 1)
+        throw ncbiTileError();
+    }
+    return buildNcbiTilePlan(source, selected, data.Sat);
+  }
+  function validateNcbiFigureTileshopTiles(value, decoded) {
+    const keys = ['version', 'source', 'width', 'height', 'tileWidth', 'tileHeight',
+      'rows', 'columns', 'layerId', 'satelliteId', 'tiles'];
+    if (!ncbiTileRecord(value, keys)) throw ncbiTileError();
+    const expected = buildNcbiTilePlan(canonicalNcbiTileSource(value.source), {
+      W: value.width, H: value.height, w: value.tileWidth, h: value.tileHeight, sId: value.layerId
+    }, value.satelliteId);
+    if (keys.filter(key => !['source', 'tiles'].includes(key)).some(key => value[key] !== expected[key]) ||
+        !Array.isArray(value.tiles) || value.tiles.length !== expected.tiles.length ||
+        value.tiles.some((tile, index) => !ncbiTileRecord(tile, Object.keys(expected.tiles[index])) ||
+          Object.keys(expected.tiles[index]).some(key => key === 'sourceRect'
+            ? !ncbiTileRecord(tile.sourceRect, ['x', 'y', 'width', 'height']) ||
+              Object.keys(expected.tiles[index].sourceRect).some(part => tile.sourceRect[part] !== expected.tiles[index].sourceRect[part])
+            : tile[key] !== expected.tiles[index][key]))) throw ncbiTileError();
+    const fail = () => { throw ncbiTileError('NCBI_FIGURE_TILES_INCOMPLETE'); };
+    if (!Array.isArray(decoded) || decoded.length !== expected.tiles.length) fail();
+    const seen = new Set();
+    for (const record of decoded) {
+      const tile = expected.tiles[record?.index];
+      if (!tile || !Number.isSafeInteger(record?.index) || seen.has(record.index) ||
+          record.width !== tile.width || record.height !== tile.height ||
+          ['url', 'x', 'y'].some(key => Object.hasOwn(record, key) && record[key] !== tile[key])) fail();
+      seen.add(record.index);
+    }
+    return true;
+  }
+
   function springerNatureFullImageSource(value, baseUrl = '') {
     const safe = safeFigureSource(value, baseUrl);
     if (!safe) return '';
     try {
       const url = new URL(safe);
       if (url.hostname.toLowerCase() !== 'media.springernature.com') return '';
-      if (!/^\/[^/]+\/springer-static\/image\//i.test(url.pathname)) return '';
+      if (!/^\/[^/]+\/springer-static\/(?:image|esm)\//i.test(url.pathname)) return '';
       url.pathname = url.pathname.replace(
-        /^\/[^/]+\/springer-static\/image\//i,
-        '/full/springer-static/image/'
+        /^\/[^/]+\/springer-static\/(image|esm)\//i,
+        '/full/springer-static/$1/'
       );
       return url.href;
     } catch (_) {
@@ -135,9 +323,52 @@
     }
   }
 
+  function cellPressLargeImageSource(value, baseUrl = '') {
+    const safe = safeFigureSource(value, baseUrl);
+    if (!safe) return '';
+    try {
+      const sourceUrl = new URL(safe);
+      const sourceHost = sourceUrl.hostname.toLowerCase();
+      const directCdnMatch = sourceUrl.pathname.match(
+        /^(\/content\/image\/1-s2\.0-S\d{16}-gr\d+)(?=\.(?:jpe?g|png|webp)$)/i
+      );
+      if (sourceHost === 'ars.els-cdn.com' && directCdnMatch) {
+        sourceUrl.pathname = sourceUrl.pathname.replace(
+          /(-gr\d+)(?=\.(?:jpe?g|png|webp)$)/i,
+          '$1_lrg'
+        );
+        return sourceUrl.href;
+      }
+
+      if (!['cell.com', 'www.cell.com'].includes(sourceHost)) return '';
+      const figureMatch = sourceUrl.pathname.match(
+        /^\/cms\/10\.1016\/j\.([a-z0-9]+)\.\d{4}\.\d{2}\.\d{3}\/asset\/[a-f0-9-]+\/main\.assets\/gr(\d+)\.jpg$/i
+      );
+      if (!figureMatch) return '';
+
+      const articleUrl = new URL(String(baseUrl || ''));
+      if (!['cell.com', 'www.cell.com'].includes(articleUrl.hostname.toLowerCase())) return '';
+      let articlePath = articleUrl.pathname;
+      try { articlePath = decodeURIComponent(articlePath); } catch (_) { return ''; }
+      const articleMatch = articlePath.match(
+        /^\/([a-z0-9-]+)\/fulltext\/(S\d{4}-\d{4}\(\d{2}\)\d{5}-\d)\/?$/i
+      );
+      if (!articleMatch) return '';
+      const articleJournal = articleMatch[1].replace(/-/g, '').toLowerCase();
+      if (articleJournal !== figureMatch[1].toLowerCase()) return '';
+      const pii = articleMatch[2].replace(/[^a-z0-9]/gi, '').toUpperCase();
+      if (!/^S\d{16}$/.test(pii)) return '';
+      return `https://ars.els-cdn.com/content/image/1-s2.0-${pii}-gr${figureMatch[2]}_lrg.jpg`;
+    } catch (_) {
+      return '';
+    }
+  }
+
   function publisherLargeSuffixSource(value, baseUrl = '') {
     const safe = safeFigureSource(value, baseUrl);
     if (!safe) return '';
+    const cellPressLarge = cellPressLargeImageSource(safe, baseUrl);
+    if (cellPressLarge) return cellPressLarge;
     try {
       const url = new URL(safe);
       let nextPath = url.pathname;
@@ -145,10 +376,10 @@
         nextPath = nextPath.replace(/-[ms](?=\.(?:gif|jpe?g|png|webp)$)/i, '-l');
       } else if (/_small(?=\.(?:gif|jpe?g|png|webp)$)/i.test(nextPath)) {
         nextPath = nextPath.replace(/_small(?=\.(?:gif|jpe?g|png|webp)$)/i, '_large');
-      } else if (/_gr\d+(?=\.(?:gif|jpe?g|png|webp)$)/i.test(nextPath) &&
+      } else if (/(?:_|-)gr\d+(?=\.(?:gif|jpe?g|png|webp)$)/i.test(nextPath) &&
           /(?:els-cdn|sciencedirect)/i.test(url.hostname)) {
         nextPath = nextPath.replace(
-          /(_gr\d+)(?=\.(?:gif|jpe?g|png|webp)$)/i,
+          /((?:_|-)gr\d+)(?=\.(?:gif|jpe?g|png|webp)$)/i,
           '$1_lrg'
         );
       }
@@ -294,6 +525,10 @@
     ].filter(Boolean);
     const pictureSources = collectPictureSources(imageElement);
 
+    // Publisher-declared originals are authoritative; inferred URL variants
+    // are optional upgrades and must not preempt these observed sources.
+    push(elementAttribute(imageElement, 'data-viewer-src'));
+    collectFigureViewerLinks(imageElement, baseUrl).filter(value => IMAGE_EXTENSIONS.test(value)).forEach(push);
     [...explicitOriginals, ...srcset, ...pictureSources, ...displayed]
       .forEach(value => collectOriginalUrlVariants(value, baseUrl).forEach(push));
     explicitOriginals.forEach(push);
@@ -390,6 +625,12 @@
   function collectFigureImageSources(figure, baseUrl = '') {
     const seen = new Set();
     const candidates = [];
+    if(figure?.sourceKind==='publisher-tiff-supplement') {
+      const source=safeFigureSource(figure.nativeTiffSource?.sourceUrl,baseUrl);
+      if(/^https:\/\/journals\.plos\.org\/[a-z]+\/article\/file\?/.test(source)) {
+        seen.add(source);candidates.push(source);
+      }
+    }
     Array.from(figure?.imageElements || []).forEach(imageElement => {
       collectFigureImageCandidates(imageElement, baseUrl).forEach(source => {
         if (seen.has(source)) return;
@@ -400,13 +641,152 @@
     return candidates;
   }
 
+  function bindFigureViewerViewport(viewer) {
+    const doc = viewer.ownerDocument, view = doc.defaultView, vv = view.visualViewport;
+    const scroll = { left: view.scrollX, top: view.scrollY }, focus = doc.activeElement;
+    const roots = [doc.documentElement, doc.body].filter(Boolean);
+    const overflow = roots.map(node => ({ node, value: node.style.getPropertyValue('overflow'),
+      priority: node.style.getPropertyPriority('overflow') }));
+    const fit = () => {
+      for (const [property, value] of Object.entries({ left: (vv?.offsetLeft || 0) + 'px',
+        top: (vv?.offsetTop || 0) + 'px', right: 'auto', bottom: 'auto',
+        width: (vv?.width || view.innerWidth) + 'px', height: (vv?.height || view.innerHeight) + 'px' })) {
+        viewer.style.setProperty(property, value, 'important');
+      }
+    };
+    roots.forEach(node => node.style.setProperty('overflow', 'hidden', 'important'));
+    view.addEventListener('resize', fit); vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit); fit();
+    return () => {
+      view.removeEventListener('resize', fit); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit);
+      for (const { node, value, priority } of overflow) {
+        if (node.style.getPropertyValue('overflow') !== 'hidden' || node.style.getPropertyPriority('overflow') !== 'important') continue;
+        if (value) node.style.setProperty('overflow', value, priority); else node.style.removeProperty('overflow');
+      }
+      view.scrollTo({ ...scroll, behavior: 'instant' });
+      if (focus?.isConnected) focus.focus({ preventScroll: true });
+    };
+  }
+
+  function figureOriginalDisplaySourceIdentity(image) {
+    const names = ['src', 'srcset', 'sizes', ...ORIGINAL_IMAGE_ATTRIBUTES, ...LAZY_IMAGE_ATTRIBUTES, 'data-srcset'];
+    return JSON.stringify([String(image?.currentSrc || image?.src || image?.getAttribute?.('src') || ''),
+      names.map(name => [name, image?.getAttribute?.(name) ?? null]),
+      Array.from(image?.closest?.('picture')?.querySelectorAll?.('source') || []).map(source =>
+        ['src', 'srcset', 'sizes', 'media', 'type'].map(name => [name, source.getAttribute(name)]))]);
+  }
+
+  function createFigureOriginalDisplayManager({ windowRef = globalThis, documentRef = globalThis.document, getPageIdentity } = {}) {
+    const entries = new Map(), pending = new WeakMap();
+    const properties = ['background-image', 'background-size', 'background-position', 'background-repeat',
+      'background-origin', 'background-clip', 'object-position'];
+    let closed = false;
+    const remove = (image, expectedEntry) => {
+      const entry = entries.get(image);
+      if (!entry || expectedEntry && entry !== expectedEntry) return;
+      entries.delete(image);
+      image.removeEventListener?.('load', read);
+      for (const original of entry.originalStyles) {
+        if (image.style.getPropertyValue(original.property) !== entry.appliedStyles[original.property] ||
+            image.style.getPropertyPriority(original.property) !== 'important') continue;
+        if (original.value) image.style.setProperty(original.property, original.value, original.priority);
+        else image.style.removeProperty(original.property);
+      }
+      windowRef.URL.revokeObjectURL(entry.objectUrl);
+    };
+    const current = (image, entry) => !closed && image.isConnected && getPageIdentity() === entry.pageIdentity &&
+      figureOriginalDisplaySourceIdentity(image) === entry.sourceIdentity && properties.every(property =>
+        image.style.getPropertyValue(property) === entry.appliedStyles[property] && image.style.getPropertyPriority(property) === 'important');
+    const read = () => {
+      for (const [image, entry] of entries) if (!current(image, entry)) remove(image);
+      return new Map(Array.from(entries, ([image, entry]) => [image, { ...entry,
+        cacheReceipt: { ...entry.cacheReceipt }, originalStyles: entry.originalStyles.map(style => ({ ...style })) }]));
+    };
+    const observer = new windowRef.MutationObserver(read);
+    observer.observe(documentRef.documentElement, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ['src', 'srcset', 'sizes', 'media', 'type', 'style', ...ORIGINAL_IMAGE_ATTRIBUTES, ...LAZY_IMAGE_ATTRIBUTES, 'data-srcset'] });
+    const resized = () => { read(); windowRef.requestAnimationFrame(read); };
+    const dispose = () => {
+      closed = true;
+      observer.disconnect();
+      windowRef.removeEventListener('load', read, true);
+      windowRef.removeEventListener('resize', resized);
+      windowRef.removeEventListener('pagehide', dispose);
+      for (const image of [...entries.keys()]) remove(image);
+    };
+    // Picture/media selection can change currentSrc without a DOM mutation.
+    windowRef.addEventListener('load', read, true);
+    windowRef.addEventListener('resize', resized);
+    windowRef.addEventListener('pagehide', dispose, { once: true });
+    return {
+      entries: read, dispose,
+      async apply(image, resource, metadata = {}) {
+        const receipt = resource?.cacheReceipt, bytes = resource?.bytes;
+        const originalArea = Number(image?.naturalWidth) * Number(image?.naturalHeight);
+        if (closed || !image?.isConnected || !originalArea || resource?.cacheStored !== true ||
+            !receipt || !/^[a-f0-9]{64}$/.test(receipt.sha256 || '') || !bytes?.length || receipt.byteLength !== bytes.length ||
+            !/^https?:\/\//.test(receipt.cacheKey || '') || !/^data:image\//.test(resource.dataUrl || '') ||
+            !(resource.pixelWidth * resource.pixelHeight > originalArea)) return false;
+        const identity = metadata.sourceIdentity || figureOriginalDisplaySourceIdentity(image);
+        const pageIdentity = getPageIdentity(), ticket = {};
+        pending.set(image, ticket);
+        const valid = () => !closed && pending.get(image) === ticket && image.isConnected &&
+          pageIdentity === getPageIdentity() && figureOriginalDisplaySourceIdentity(image) === identity;
+        const digest = new Uint8Array(await windowRef.crypto.subtle.digest('SHA-256', bytes));
+        if (!valid() || Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('') !== receipt.sha256) return false;
+        const objectUrl = windowRef.URL.createObjectURL(new windowRef.Blob([bytes], { type: resource.contentType }));
+        let installedEntry = null;
+        try {
+          const decoded = new windowRef.Image(); decoded.src = objectUrl; await decoded.decode();
+          if (!valid()) { windowRef.URL.revokeObjectURL(objectUrl); return false; }
+          remove(image);
+          const before = image.getBoundingClientRect(), style = windowRef.getComputedStyle(image);
+          const fit = style.objectFit, position = style.objectPosition;
+          const size = fit === 'contain' || fit === 'cover' ? fit : fit === 'none' ||
+              fit === 'scale-down' && image.naturalWidth <= before.width && image.naturalHeight <= before.height
+            ? `${image.naturalWidth}px ${image.naturalHeight}px` : fit === 'scale-down' ? 'contain' : '100% 100%';
+          const originalStyles = properties.map(property => ({ property, value: image.style.getPropertyValue(property),
+            priority: image.style.getPropertyPriority(property) }));
+          const appliedStyles = { 'background-image': `url("${objectUrl}")`, 'background-size': size,
+            'background-position': position, 'background-repeat': 'no-repeat', 'background-origin': 'content-box',
+            'background-clip': 'content-box', 'object-position': '-1000000px -1000000px' };
+          for (const property of properties) image.style.setProperty(property, appliedStyles[property], 'important');
+          // Read CSSOM's canonical spelling for exact cleanup comparisons.
+          for (const property of properties) appliedStyles[property] = image.style.getPropertyValue(property);
+          const entry = { ...metadata, pageIdentity, sourceIdentity: identity, objectUrl, dataUrl: resource.dataUrl,
+            cacheReceipt: { ...receipt }, originalStyles, appliedStyles, originalContentValue: image.style.getPropertyValue('content'),
+            originalContentPriority: image.style.getPropertyPriority('content') };
+          entries.set(image, entry);
+          image.addEventListener?.('load', read);
+          installedEntry = entry;
+          await new Promise(resolve => windowRef.requestAnimationFrame(resolve));
+          const after = image.getBoundingClientRect();
+          if (!valid() || !current(image, entry) || Math.abs(after.width - before.width) > .5 || Math.abs(after.height - before.height) > .5) {
+            remove(image, entry); return false;
+          }
+          return true;
+        } catch (_) {
+          if (installedEntry) remove(image, installedEntry);
+          else windowRef.URL.revokeObjectURL(objectUrl);
+          return false;
+        }
+      }
+    };
+  }
+
   return {
+    figureOriginalDisplaySourceIdentity,
+    createFigureOriginalDisplayManager,
+    bindFigureViewerViewport,
     safeFigureSource,
     parseFigureSrcset,
+    parseNcbiFigureTileshopSource,
+    parseNcbiFigureTileshopManifest,
+    validateNcbiFigureTileshopTiles,
     springerNatureFullImageSource,
     wikimediaOriginalImageSource,
     iiifOriginalImageSource,
     wordpressOriginalImageSource,
+    cellPressLargeImageSource,
     unscaledQueryImageSource,
     collectOriginalUrlVariants,
     collectFigureViewerLinks,

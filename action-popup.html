@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brevess</title>
+  <link rel="stylesheet" href="vendor/phosphor/icons.css">
+  <link rel="stylesheet" href="action-popup.css">
+  <link rel="stylesheet" href="ui-swiss.css">
+</head>
+<body data-ui-surface="action">
+  <main class="action-popup" aria-labelledby="popupTitle">
+    <header class="action-popup__header">
+      <img src="icons/icon48.png" width="40" height="40" alt="">
+      <div class="action-popup__heading">
+        <strong id="popupTitle">Brevess</strong>
+        <p id="pageTitle">正在读取当前页面…</p>
+      </div>
+    </header>
+
+    <div class="action-popup__actions">
+      <button id="startReading" class="action-popup__button action-popup__button--primary" type="button">
+        <i class="ph ph-compass action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>开始研读</strong><small>在侧栏打开当前文献</small></span>
+      </button>
+    </div>
+    <section class="page-tools" aria-labelledby="pageToolsTitle">
+      <div class="page-tools__heading"><h2 id="pageToolsTitle">网页工具</h2><span>无需打开侧栏</span></div>
+      <p class="page-tools__hint">开关会记住并应用于之后打开的网页</p>
+      <label class="page-tools__row" for="toolSemantic"><span>页面语义检索 <kbd id="semanticShortcut">J</kbd></span><input id="toolSemantic" type="checkbox" role="switch" disabled></label>
+      <label class="page-tools__row" for="toolSelection"><span>划句弹窗 · 翻译与高亮</span><input id="toolSelection" type="checkbox" role="switch" disabled></label>
+      <label class="page-tools__row" for="toolTranslation"><span>整页翻译 <small>含 Alt 段落翻译</small></span><input id="toolTranslation" type="checkbox" role="switch" disabled></label>
+      <div class="page-tools__actions">
+        <button id="openPageSearch" type="button" disabled>打开检索</button>
+        <button id="translatePage" type="button" disabled>翻译当前页</button>
+      </div>
+      <p id="pageToolsStatus" class="page-tools__hint" role="status" aria-live="polite">正在读取工具设置…</p>
+    </section>
+    <div class="action-popup__actions action-popup__actions--secondary">
+      <button id="openPdf" class="action-popup__button" type="button">
+        <i class="ph ph-file-magnifying-glass action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>打开 PDF</strong><small>选择本地文件或输入远程地址</small></span>
+      </button>
+      <button id="openHistory" class="action-popup__button" type="button">
+        <i class="ph ph-database action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>查看历史</strong><small>浏览本地保存的文献</small></span>
+      </button>
+      <button id="openWorkbench" class="action-popup__button" type="button">
+        <i class="ph ph-test-tube action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>课题工作台</strong><small>假说梳理与组图规划</small></span>
+      </button>
+      <button id="openSettings" class="action-popup__button" type="button">
+        <i class="ph ph-gear action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>打开设置</strong><small>管理模型与阅读工具</small></span>
+      </button>
+    </div>
+    <p id="pageStatus" class="action-popup__status" role="status" aria-live="polite" hidden></p>
+  </main>
+  <script src="core/i18n.js"></script>
+  <script src="action-popup.js"></script>
+</body>
+</html>

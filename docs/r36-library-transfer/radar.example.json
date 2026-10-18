@@ -1,0 +1,50 @@
+{
+  "schema": "brevess-library-transfer-v1",
+  "version": 1,
+  "kind": "radar",
+  "generatedAt": "2026-10-18T00:00:00.000Z",
+  "source": {
+    "app": "brevess",
+    "radarStateSchema": 1
+  },
+  "integrity": {
+    "algorithm": "fnv1a32",
+    "digest": "d605c192"
+  },
+  "payload": {
+    "radars": [
+      {
+        "id": "radar-example",
+        "name": "GBM neuron synapse",
+        "source": "pubmed",
+        "query": "glioblastoma[tiab] AND neuron[tiab]",
+        "enabled": true,
+        "intervalHours": 24,
+        "baselineDays": 30,
+        "editVersion": 1,
+        "createdAt": "2026-10-01T00:00:00.000Z",
+        "updatedAt": "2026-10-01T00:00:00.000Z",
+        "revisions": [
+          {
+            "number": 1,
+            "query": "glioblastoma[tiab] AND neuron[tiab]",
+            "baselineDays": 30,
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "warnings": [],
+            "articles": [
+              {
+                "id": "12345678",
+                "title": "Example glioma neuron paper",
+                "journal": "Nature",
+                "doi": "10.1000/example",
+                "authors": ["Example Author"],
+                "isBaseline": true,
+                "read": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

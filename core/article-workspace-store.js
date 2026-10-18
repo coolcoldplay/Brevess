@@ -7,7 +7,9 @@
   const WORKSPACE_ASSET_STORE_NAME = 'workspaceAssets';
   const WORKSPACE_TURN_STORE_NAME = 'workspaceTurns';
   const WORKSPACE_TOMBSTONE_STORE_NAME = 'workspaceTombstones';
+  const DOCUMENT_STORE_NAME = 'documents';
   const MAX_PAGE_SIZE = 10_000;
+  const INTERNAL_FIGURE_RETRY_STAGING_PREFIX = 'internal/figure-retry-staging/';
 
   function fail(code) {
     const error = new Error(code);
@@ -189,6 +191,63 @@
     return (hash >>> 0).toString(16).padStart(8, '0');
   }
 
+  function contentEqual(left, right) {
+    try { return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right)); }
+    catch (_) { return false; }
+  }
+
+  function documentRestoreHelpers() {
+    // document-store may load after this module in the shared browser namespace.
+    if (typeof shared.normalizeDocumentRecord !== 'function' ||
+        typeof shared.finalizeDocumentRecordForWrite !== 'function') {
+      fail('DOCUMENT_SCHEMA_UNAVAILABLE');
+    }
+    return shared;
+  }
+
+  function restoreDocumentId(value) {
+    if (typeof value !== 'string') fail('INVALID_DOCUMENT_ID');
+    return documentRestoreHelpers().normalizeDocumentRecord({ documentId: value }).documentId;
+  }
+
+  function cloneRestoreDocument(value) {
+    if (value !== null && !isPlainObject(value)) fail('INVALID_DOCUMENT_RESTORE_RECORD');
+    let visited = 0;
+    let characters = 0;
+    const seen = new Set();
+    function visit(item, depth = 0) {
+      if (++visited > 100000 || depth > 40) fail('WORKSPACE_RESTORE_TOO_LARGE');
+      if (typeof item === 'string') characters += item.length;
+      if (characters > 64 * 1024 * 1024) fail('WORKSPACE_RESTORE_TOO_LARGE');
+      if (item === null || item === undefined || ['string', 'number', 'boolean'].includes(typeof item)) return;
+      if ((!Array.isArray(item) && !isPlainObject(item)) || seen.has(item)) {
+        fail('INVALID_DOCUMENT_RESTORE_RECORD');
+      }
+      if (Array.isArray(item) && item.length > 100000) fail('WORKSPACE_RESTORE_TOO_LARGE');
+      seen.add(item);
+      for (const key of Object.keys(item)) {
+        characters += key.length;
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (!Object.hasOwn(descriptor, 'value')) fail('INVALID_DOCUMENT_RESTORE_RECORD');
+        visit(descriptor.value, depth + 1);
+      }
+      seen.delete(item);
+    }
+    visit(value);
+    return cloneValue(value);
+  }
+
+  function sameRestoreDocument(left, right) {
+    if (Object.is(left, right)) return true;
+    if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object' ||
+        Array.isArray(left) !== Array.isArray(right) ||
+        (Array.isArray(left) && left.length !== right.length)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return leftKeys.length === rightKeys.length && leftKeys.every((key, index) =>
+      key === rightKeys[index] && sameRestoreDocument(left[key], right[key]));
+  }
+
   function createIndexedDbArticleWorkspaceStore(indexedDbRef, options = {}) {
     if (typeof shared.runUserDataTransaction !== 'function' ||
         typeof shared.requestToPromise !== 'function') {
@@ -249,6 +308,274 @@
         });
     }
 
+    const restoreStoreNames = [
+      WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME,
+      WORKSPACE_TURN_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME
+    ];
+
+    async function readRestoreRows(transaction, name, id, maximum) {
+      const store = transaction.objectStore(name);
+      // The existing v4 workspaceId index bounds native reads to this workspace.
+      // The fallback supports the project's small in-memory IndexedDB fixture.
+      const records = typeof store.index === 'function'
+        ? await request(store.index('workspaceId').getAll(id, maximum + 1))
+        : await request(store.getAll());
+      const matching = records.filter(record => record.workspaceId === id);
+      if (matching.length > maximum) fail('WORKSPACE_RESTORE_TOO_LARGE');
+      return matching;
+    }
+
+    async function readRestoreState(transaction, id, documentId) {
+      const [workspace, assets, turns, tombstones, document] = await Promise.all([
+        request(transaction.objectStore(WORKSPACE_STORE_NAME).get(id)),
+        readRestoreRows(transaction, WORKSPACE_ASSET_STORE_NAME, id, 1000),
+        readRestoreRows(transaction, WORKSPACE_TURN_STORE_NAME, id, MAX_PAGE_SIZE),
+        readRestoreRows(transaction, WORKSPACE_TOMBSTONE_STORE_NAME, id, MAX_PAGE_SIZE),
+        documentId === undefined ? undefined
+          : request(transaction.objectStore(DOCUMENT_STORE_NAME).get(documentId))
+      ]);
+      return { workspaceId: id, workspace: workspace || null, assets, turns, tombstones,
+        ...(documentId === undefined ? {} : { documentId,
+          document: cloneRestoreDocument(document === undefined ? null : document) }) };
+    }
+
+    function restoreBaseline(state) {
+      return {
+        workspaceId: state.workspaceId,
+        workspace: cloneValue(state.workspace),
+        assets: state.assets.map(({ content, ...metadata }) => cloneValue(metadata))
+          .sort((left, right) => String(left.assetKey).localeCompare(String(right.assetKey))),
+        turns: state.turns.map(turn => ({
+          turnKey: turn.turnKey, workspaceId: turn.workspaceId,
+          workspaceGeneration: turn.workspaceGeneration, turnId: turn.turnId,
+          revision: turn.revision, sequence: turn.sequence,
+          createdAt: turn.createdAt, updatedAt: turn.updatedAt
+        })).sort((left, right) => String(left.turnKey).localeCompare(String(right.turnKey))),
+        tombstones: state.tombstones.map(cloneValue)
+          .sort((left, right) => String(left.tombstoneKey).localeCompare(String(right.tombstoneKey))),
+        ...(state.documentId === undefined ? {} : {
+          documentId: state.documentId, document: cloneRestoreDocument(state.document)
+        })
+      };
+    }
+
+    function comparableRestoreBaseline(baseline) {
+      const { lastAccessedAt, ...workspace } = baseline.workspace || {};
+      const { document, ...workspaceBaseline } = baseline;
+      return { ...workspaceBaseline, workspace: baseline.workspace ? workspace : null };
+    }
+
+    async function captureRestoreBaseline(value, options = {}) {
+      const id = workspaceId(value);
+      if (!isPlainObject(options)) fail('INVALID_DOCUMENT_RESTORE_BASELINE');
+      const documentId = Object.hasOwn(options, 'documentId')
+        ? restoreDocumentId(options.documentId) : undefined;
+      const stores = documentId === undefined ? restoreStoreNames : [...restoreStoreNames, DOCUMENT_STORE_NAME];
+      return run(stores, 'readonly', async transaction =>
+        restoreBaseline(await readRestoreState(transaction, id, documentId)));
+    }
+
+    function nextRestoreCounter(value) {
+      const current = value === undefined || value === null ? 0 : Number(value);
+      if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
+        fail('INVALID_WORKSPACE_RESTORE_STATE');
+      }
+      return current + 1;
+    }
+
+    async function commitRestoreIfUnchanged(input = {}) {
+      if (!isPlainObject(input)) fail('INVALID_WORKSPACE_RESTORE_BASELINE');
+      const normalized = normalizeWorkspace(input.identity);
+      const id = normalized.workspaceId;
+      if (!Number.isSafeInteger(normalized.workspaceGeneration) || normalized.workspaceGeneration < 1) {
+        fail('INVALID_WORKSPACE_GENERATION');
+      }
+      const baseline = input.expectedLocal;
+      if (!isPlainObject(baseline) || !Object.hasOwn(baseline, 'workspace') ||
+          (baseline.workspace !== null && !isPlainObject(baseline.workspace)) ||
+          !Array.isArray(baseline.assets) || !Array.isArray(baseline.turns) ||
+          !Array.isArray(baseline.tombstones)) fail('INVALID_WORKSPACE_RESTORE_BASELINE');
+      if (baseline.workspaceId !== id) fail('WORKSPACE_RESTORE_CONFLICT');
+      if (baseline.assets.length > 1000 || baseline.turns.length > MAX_PAGE_SIZE ||
+          baseline.tombstones.length > MAX_PAGE_SIZE) fail('WORKSPACE_RESTORE_TOO_LARGE');
+      const hasDocumentScope = Object.hasOwn(baseline, 'documentId');
+      const hasDocumentCandidate = Object.hasOwn(input, 'document');
+      if (hasDocumentScope !== Object.hasOwn(baseline, 'document') ||
+          (hasDocumentCandidate && !hasDocumentScope)) fail('INVALID_DOCUMENT_RESTORE_BASELINE');
+      const documentId = hasDocumentScope ? restoreDocumentId(baseline.documentId) : undefined;
+      const { document: baselineDocument, ...workspaceBaseline } = baseline;
+      const expected = safeValue(workspaceBaseline);
+      let documentCandidate;
+      if (hasDocumentScope) {
+        expected.documentId = documentId;
+        expected.document = cloneRestoreDocument(baselineDocument);
+        if (expected.document !== null && expected.document.documentId !== documentId) {
+          fail('WORKSPACE_RESTORE_CONFLICT');
+        }
+        if (hasDocumentCandidate) {
+          documentCandidate = cloneRestoreDocument(documentRestoreHelpers().normalizeDocumentRecord(
+            cloneRestoreDocument(input.document)));
+          if (documentCandidate.documentId !== documentId) fail('WORKSPACE_RESTORE_CONFLICT');
+        }
+      }
+      const assetInputs = input.assets === undefined ? [] : input.assets;
+      const turnInputs = input.turns === undefined ? [] : input.turns;
+      if (!Array.isArray(assetInputs)) fail('INVALID_WORKSPACE_RESTORE_ASSET');
+      if (!Array.isArray(turnInputs)) fail('INVALID_TURN');
+      if (assetInputs.length > 1000 || turnInputs.length > MAX_PAGE_SIZE) {
+        fail('WORKSPACE_RESTORE_TOO_LARGE');
+      }
+      const assetPaths = new Set();
+      const assets = Array.from(assetInputs, asset => {
+        if (!isPlainObject(asset) || !Object.hasOwn(asset, 'content')) {
+          fail('INVALID_WORKSPACE_RESTORE_ASSET');
+        }
+        const path = shared.normalizeWorkspaceRelativePath(asset.relativePath);
+        if (path.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)) {
+          fail('INVALID_WORKSPACE_RESTORE_ASSET');
+        }
+        if (assetPaths.has(path)) fail('DUPLICATE_WORKSPACE_ASSET');
+        assetPaths.add(path);
+        const content = safeValue(asset.content);
+        return { relativePath: path, content,
+          contentHash: String(asset.contentHash || contentFingerprint(content)) };
+      });
+      const turnIds = new Set();
+      const turns = Array.from(turnInputs, turn => {
+        if (!isPlainObject(turn)) fail('INVALID_TURN');
+        const value = safeValue(turn);
+        const turnId = boundedId(value.turnId, 'INVALID_TURN_ID');
+        if (turnIds.has(turnId)) fail('TURN_ALREADY_EXISTS');
+        turnIds.add(turnId);
+        if ((value.workspaceId !== undefined && value.workspaceId !== id) ||
+            (value.workspaceGeneration !== undefined &&
+              Number(value.workspaceGeneration) !== normalized.workspaceGeneration) ||
+            (value.turnKey !== undefined && value.turnKey !== turnKey(id, turnId))) {
+          fail('WORKSPACE_RESTORE_CONFLICT');
+        }
+        return { ...value, turnId };
+      });
+
+      const stores = hasDocumentScope ? [...restoreStoreNames, DOCUMENT_STORE_NAME] : restoreStoreNames;
+      const commit = () => run(stores, 'readwrite', async transaction => {
+        const state = await readRestoreState(transaction, id, documentId);
+        if (!contentEqual(comparableRestoreBaseline(restoreBaseline(state)),
+          comparableRestoreBaseline(expected)) || (hasDocumentScope &&
+            !sameRestoreDocument(state.document, expected.document))) fail('WORKSPACE_RESTORE_CONFLICT');
+        const current = state.workspace;
+        if (current?.deletionPending) fail('WORKSPACE_DELETION_PENDING');
+        if (current && Number(current.workspaceGeneration || 1) !== normalized.workspaceGeneration) {
+          fail('WORKSPACE_GENERATION_CONFLICT');
+        }
+        if (current && (current.canonicalUrl !== normalized.canonicalUrl ||
+            current.contentHash !== normalized.contentHash)) fail('WORKSPACE_RESTORE_CONFLICT');
+        if (!current && (state.assets.length || state.turns.length)) {
+          fail('INVALID_WORKSPACE_RESTORE_STATE');
+        }
+        for (const tombstone of state.tombstones) {
+          if (Number(tombstone.workspaceGeneration || 1) < normalized.workspaceGeneration) continue;
+          if (tombstone.entityType === 'workspace') fail('WORKSPACE_GENERATION_CONFLICT');
+          if ((tombstone.entityType === 'turn' && turnIds.has(String(tombstone.entityId))) ||
+              (tombstone.entityType === 'asset' && assetPaths.has(String(tombstone.entityId)))) {
+            fail('WORKSPACE_RESTORE_TOMBSTONE_CONFLICT');
+          }
+        }
+        let savedDocument;
+        if (hasDocumentCandidate) {
+          const helpers = documentRestoreHelpers();
+          const previousDocument = state.document === null ? null
+            : helpers.normalizeDocumentRecord(state.document);
+          savedDocument = cloneRestoreDocument(helpers.normalizeDocumentRecord(
+            helpers.finalizeDocumentRecordForWrite(documentCandidate, previousDocument)));
+        }
+        const timestamp = now();
+        const owner = current ? cloneValue(current) : {
+          ...normalized, createdAt: timestamp, updatedAt: timestamp, lastAccessedAt: timestamp,
+          summary: normalizeWorkspaceSummary(), assetSummaryByPath: {},
+          nextTurnSequence: 0, storageRevision: 0, memoryNeedsRebuild: false, deletionPending: false
+        };
+        const existingAssets = new Map(state.assets.map(asset => [asset.relativePath, asset]));
+        const existingTurns = new Map(state.turns.map(turn => [turn.turnId, turn]));
+        const occupiedSequences = new Set(state.turns.map(turn => Number(turn.sequence)));
+        if (existingAssets.size !== state.assets.length || existingTurns.size !== state.turns.length ||
+            occupiedSequences.size !== state.turns.length) fail('INVALID_WORKSPACE_RESTORE_STATE');
+        if (new Set([...existingAssets.keys(), ...assetPaths]).size > 1000 ||
+            new Set([...existingTurns.keys(), ...turnIds]).size > MAX_PAGE_SIZE) {
+          fail('WORKSPACE_RESTORE_TOO_LARGE');
+        }
+        const savedAssets = [];
+        const savedTurns = [];
+        const contributions = Object.assign(Object.create(null), owner.assetSummaryByPath || {});
+        let summary = normalizeWorkspaceSummary(owner.summary);
+        for (const asset of assets) {
+          const previous = existingAssets.get(asset.relativePath);
+          if (previous && Number(previous.workspaceGeneration || 1) !== normalized.workspaceGeneration) {
+            fail('WORKSPACE_GENERATION_CONFLICT');
+          }
+          const saved = {
+            assetKey: assetKey(id, asset.relativePath), workspaceId: id,
+            workspaceGeneration: normalized.workspaceGeneration,
+            relativePath: asset.relativePath, content: asset.content, contentHash: asset.contentHash,
+            revision: nextRestoreCounter(previous?.revision),
+            byteSize: byteSize(asset.content), createdAt: previous?.createdAt || timestamp,
+            updatedAt: timestamp
+          };
+          contributions[saved.relativePath] = workspaceAssetContribution(
+            saved.relativePath, saved.content, saved.byteSize);
+          owner.storageRevision = nextRestoreCounter(owner.storageRevision);
+          savedAssets.push(saved);
+        }
+        for (const turn of turns) {
+          const previous = existingTurns.get(turn.turnId);
+          if (previous && Number(previous.workspaceGeneration || 1) !== normalized.workspaceGeneration) {
+            fail('WORKSPACE_GENERATION_CONFLICT');
+          }
+          const sequence = previous ? Number(previous.sequence) : nextRestoreCounter(owner.nextTurnSequence);
+          if (!Number.isSafeInteger(sequence) || sequence < 1 ||
+              (!previous && occupiedSequences.has(sequence))) {
+            fail('INVALID_WORKSPACE_RESTORE_STATE');
+          }
+          const saved = {
+            ...(previous || {}), ...turn, turnKey: turnKey(id, turn.turnId),
+            workspaceId: id, workspaceGeneration: normalized.workspaceGeneration,
+            turnId: turn.turnId, sequence, revision: nextRestoreCounter(previous?.revision),
+            ...(!previous ? { createdAt: timestamp } : {}), updatedAt: timestamp
+          };
+          if (!previous) {
+            occupiedSequences.add(sequence);
+            owner.nextTurnSequence = sequence;
+            owner.storageRevision = nextRestoreCounter(owner.storageRevision);
+            summary.turnCount += 1;
+          }
+          summary.turnBytes = Math.max(0, summary.turnBytes - (previous ? byteSize(previous) : 0) + byteSize(saved));
+          savedTurns.push(saved);
+        }
+        if (!current || savedAssets.length || savedTurns.length) {
+          owner.assetSummaryByPath = contributions;
+          owner.summary = summarizeWorkspaceContributions(contributions, summary);
+          owner.updatedAt = timestamp;
+          // Everything above is validation and pure construction. All record
+          // writes below share this transaction, including owner summary/sequence.
+          for (const asset of savedAssets) {
+            await request(transaction.objectStore(WORKSPACE_ASSET_STORE_NAME).put(asset));
+          }
+          for (const turn of savedTurns) {
+            await request(transaction.objectStore(WORKSPACE_TURN_STORE_NAME).put(turn));
+          }
+          await request(transaction.objectStore(WORKSPACE_STORE_NAME).put(owner));
+        }
+        if (hasDocumentCandidate) {
+          await request(transaction.objectStore(DOCUMENT_STORE_NAME).put(savedDocument));
+        }
+        return { committed: true, workspace: cloneValue(owner),
+          assets: savedAssets.map(cloneValue), turns: savedTurns.map(cloneValue),
+          ...(hasDocumentCandidate ? { document: cloneRestoreDocument(savedDocument) } : {}) };
+      });
+      return hasDocumentScope
+        ? documentRestoreHelpers().withDocumentArchiveLock(indexedDbRef, documentId, commit)
+        : commit();
+    }
+
     async function getWorkspace(value) {
       const id = workspaceId(value);
       return run(WORKSPACE_STORE_NAME, 'readonly', async transaction => {
@@ -265,10 +592,99 @@
       });
     }
 
+
+    const sourceJournal = owner => owner.figureSourceWriteJournal || {schemaVersion:1,kind:'figure_source_write_journal',records:[]};
+    function sourceIdentity(owner, record, generation) {
+      if (!owner || owner.deletionPending) fail('WORKSPACE_NOT_FOUND');
+      if (!Number.isSafeInteger(generation) || generation < 1 || Number(owner.workspaceGeneration || 1) !== generation ||
+          (record && (record.workspaceGeneration !== generation || record.canonicalUrl !== owner.canonicalUrl || record.documentHash !== normalizeHash(owner.contentHash)))) fail('FIGURE_SOURCE_IDENTITY_CONFLICT');
+    }
+    async function sourceDigest(content) {
+      if (!globalThis.crypto?.subtle) fail('FIGURE_SOURCE_DIGEST_UNAVAILABLE');
+      const bytes = new TextEncoder().encode(JSON.stringify(stableValue(content)));
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+    }
+    function sourceWriteId(value) {
+      if (typeof value !== 'string' || !/^figure-source-write-[A-Za-z0-9-]{8,100}$/u.test(value)) fail('INVALID_FIGURE_SOURCE_WRITE_ID');
+      return value;
+    }
+    async function beginFigureSourceWrite(value, descriptor) {
+      const id=workspaceId(value); safeValue(descriptor);
+      const path=shared.normalizeWorkspaceRelativePath(descriptor.relativePath);
+      if (!/^figures\/supplemental\/[^/]+\.json$/u.test(path)) fail('INVALID_FIGURE_SOURCE_PATH');
+      if (!Number.isSafeInteger(descriptor.expectedRevision) || descriptor.expectedRevision<0 || typeof descriptor.expectedContentHash!=='string' || typeof descriptor.contentHash!=='string' || !descriptor.contentHash || descriptor.contentHash.length>300) fail('INVALID_FIGURE_SOURCE_BASE');
+      const record={writeId:sourceWriteId(descriptor.writeId),workspaceGeneration:descriptor.workspaceGeneration,canonicalUrl:shared.normalizeWorkspaceCanonicalUrl(descriptor.canonicalUrl),documentHash:normalizeHash(descriptor.documentHash),relativePath:path,expectedRevision:descriptor.expectedRevision,expectedContentHash:descriptor.expectedContentHash,contentHash:descriptor.contentHash,contentDigest:await sourceDigest(safeValue(descriptor.content))};
+      return run([WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME],'readwrite',async transaction=>{
+        const store=transaction.objectStore(WORKSPACE_STORE_NAME), owner=await request(store.get(id)); sourceIdentity(owner,record,record.workspaceGeneration);
+        const journal=cloneValue(sourceJournal(owner)), existing=journal.records.find(r=>r.writeId===record.writeId);
+        if(existing){if(Object.keys(record).some(k=>existing[k]!==record[k]))fail('FIGURE_SOURCE_WRITE_CONFLICT');return cloneValue(existing);}
+        if(journal.records.some(r=>r.relativePath===path && ['intent','committed'].includes(r.status)))fail('FIGURE_SOURCE_PATH_BUSY');
+        const current=await request(transaction.objectStore(WORKSPACE_ASSET_STORE_NAME).get(assetKey(id,path)));
+        if(Number(current?.revision||0)!==record.expectedRevision || String(current?.contentHash||'')!==record.expectedContentHash)fail('FIGURE_SOURCE_BASE_CONFLICT');
+        journal.records=journal.records.filter(r=>r.status!=='acknowledged');
+        if(journal.records.length>=128)fail('FIGURE_SOURCE_JOURNAL_FULL');
+        const saved={...record,status:'intent',directory:{status:'pending'}};journal.records.push(saved);
+        await request(store.put({...owner,figureSourceWriteJournal:journal}));return cloneValue(saved);
+      });
+    }
+    async function listFigureSourceWrites(value, options={}) {
+      const owner=await getWorkspace(value);sourceIdentity(owner,null,options.expectedWorkspaceGeneration);
+      return cloneValue(sourceJournal(owner).records);
+    }
+    async function changeFigureSourceWrite(value, writeId, options, action) {
+      const id=workspaceId(value);sourceWriteId(writeId);
+      return run([WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME],'readwrite',async transaction=>{
+        const store=transaction.objectStore(WORKSPACE_STORE_NAME),owner=await request(store.get(id));
+        const journal=cloneValue(sourceJournal(owner||{})),record=journal.records.find(r=>r.writeId===writeId);
+        sourceIdentity(owner,record,options.workspaceGeneration);if(!record)fail('FIGURE_SOURCE_WRITE_NOT_FOUND');
+        if(action==='fence'){if(record.status!=='intent')fail('FIGURE_SOURCE_ALREADY_COMMITTED');record.status='fenced';}
+        else {
+          const current=await request(transaction.objectStore(WORKSPACE_ASSET_STORE_NAME).get(assetKey(id,record.relativePath)));
+          if(record.status!=='committed' || !current || current.revision!==record.committedRevision || current.contentHash!==record.committedContentHash)fail('FIGURE_SOURCE_COMMIT_STALE');
+          if(action==='directory'){
+            if(options.revision!==record.committedRevision || options.contentHash!==record.committedContentHash || typeof options.verified!=='boolean')fail('FIGURE_SOURCE_COMMIT_STALE');
+            if(options.directoryRevision!==undefined && (!Number.isSafeInteger(options.directoryRevision) || options.directoryRevision<1))fail('FIGURE_SOURCE_COMMIT_STALE');
+            record.directory={status:options.verified?'verified':'unknown',errorCode:String(options.errorCode||'').slice(0,100),
+              ...(options.directoryRevision!==undefined?{revision:options.directoryRevision}:{})};
+          }else {if(record.directory.status!=='verified')fail('FIGURE_SOURCE_DIRECTORY_UNVERIFIED');record.status='acknowledged';}
+        }
+        await request(store.put({...owner,figureSourceWriteJournal:journal}));return cloneValue(record);
+      });
+    }
+    const markFigureSourceWriteDirectory=(value,id,options={})=>changeFigureSourceWrite(value,id,options,'directory');
+    const ackFigureSourceWrite=(value,id,options={})=>changeFigureSourceWrite(value,id,options,'ack');
+    const fenceFigureSourceWrite=(value,id,options={})=>changeFigureSourceWrite(value,id,options,'fence');
+
     async function putAsset(value, relativePath, content, conflict = {}) {
       const id = workspaceId(value);
       const path = shared.normalizeWorkspaceRelativePath(relativePath);
+      const expectedWorkspaceGeneration = conflict.expectedWorkspaceGeneration;
+      if (expectedWorkspaceGeneration !== undefined &&
+          (!Number.isSafeInteger(expectedWorkspaceGeneration) || expectedWorkspaceGeneration < 1)) {
+        fail('WORKSPACE_GENERATION_CONFLICT');
+      }
       const safeContent = safeValue(content);
+      const sourceId = conflict.figureSourceWriteId === undefined ? null : sourceWriteId(conflict.figureSourceWriteId);
+      const digest = sourceId ? await sourceDigest(safeContent) : null;
+      const hasSummaryContent = Object.prototype.hasOwnProperty.call(
+        conflict, 'summaryContent'
+      );
+      const summaryContent = hasSummaryContent
+        ? safeValue(conflict.summaryContent) : safeContent;
+      const requiredStaging = conflict.requiredStaging === undefined ? null : {
+        relativePath: shared.normalizeWorkspaceRelativePath(
+          conflict.requiredStaging?.relativePath
+        ),
+        revision: Number(conflict.requiredStaging?.revision),
+        contentHash: String(conflict.requiredStaging?.contentHash || '')
+      };
+      if (requiredStaging &&
+          (!requiredStaging.relativePath.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX) ||
+           !Number.isSafeInteger(requiredStaging.revision) || requiredStaging.revision < 1 ||
+           !requiredStaging.contentHash)) {
+        fail('STAGING_STALE');
+      }
       const key = assetKey(id, path);
       return run([WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME], 'readwrite',
         async transaction => {
@@ -276,7 +692,34 @@
           const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
           const owner = await request(workspaceStore.get(id));
           if (!owner || owner.deletionPending) fail('WORKSPACE_NOT_FOUND');
+          if (expectedWorkspaceGeneration !== undefined &&
+              Number(owner.workspaceGeneration || 1) !== expectedWorkspaceGeneration) {
+            fail('WORKSPACE_GENERATION_CONFLICT');
+          }
           const current = await request(assets.get(key));
+          const sourceRecord = sourceId ? sourceJournal(owner).records.find(r=>r.writeId===sourceId) : null;
+          if(sourceId){
+            if(!sourceRecord || sourceRecord.status!=='intent')fail('FIGURE_SOURCE_WRITE_INACTIVE');
+            sourceIdentity(owner,sourceRecord,sourceRecord.workspaceGeneration);
+            if(sourceRecord.relativePath!==path || sourceRecord.contentDigest!==digest || sourceRecord.contentHash!==String(conflict.contentHash||contentFingerprint(safeContent)) || sourceRecord.expectedRevision!==Number(current?.revision||0) || sourceRecord.expectedContentHash!==String(current?.contentHash||''))fail('FIGURE_SOURCE_BASE_CONFLICT');
+          }
+
+          let requiredStagingAsset = null;
+          if (requiredStaging) {
+            const staged = await request(assets.get(assetKey(id, requiredStaging.relativePath)));
+            if (!staged || staged.workspaceId !== id ||
+                Number(staged.workspaceGeneration || 0) !==
+                  Number(owner.workspaceGeneration || 1) ||
+                staged.relativePath !== requiredStaging.relativePath ||
+                Number(staged.revision || 0) !== requiredStaging.revision ||
+                String(staged.contentHash || '') !== requiredStaging.contentHash ||
+                staged.content?.kind !== 'figure_retry_candidate' ||
+                staged.content?.status !== 'pending_confirmation' ||
+                String(staged.content?.target?.relativePath || '') !== path) {
+              fail('STAGING_STALE');
+            }
+            requiredStagingAsset = staged;
+          }
           if (conflict.createOnly === true && current) {
             fail('ASSET_REVISION_CONFLICT');
           }
@@ -301,10 +744,13 @@
             createdAt: current?.createdAt || timestamp,
             updatedAt: timestamp
           };
-          const assetSummaryByPath = {
-            ...(owner.assetSummaryByPath || {}),
-            [path]: workspaceAssetContribution(path, safeContent, saved.byteSize)
-          };
+          const assetSummaryByPath = { ...(owner.assetSummaryByPath || {}) };
+          if (!path.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)) {
+            assetSummaryByPath[path] = workspaceAssetContribution(
+              path, summaryContent,
+              hasSummaryContent ? byteSize(summaryContent) : saved.byteSize
+            );
+          }
           const updatedOwner = {
             ...owner,
             storageRevision: Number(owner.storageRevision || 0) + 1,
@@ -312,7 +758,22 @@
             summary: summarizeWorkspaceContributions(assetSummaryByPath, owner.summary),
             assetSummaryByPath
           };
+          if(sourceRecord){
+            updatedOwner.figureSourceWriteJournal=cloneValue(sourceJournal(owner));
+            Object.assign(updatedOwner.figureSourceWriteJournal.records.find(r=>r.writeId===sourceId),{status:'committed',committedRevision:saved.revision,committedContentHash:saved.contentHash,directory:{status:'pending'}});
+          }
           await request(assets.put(saved));
+          if (requiredStagingAsset) {
+            await request(assets.put({
+              ...requiredStagingAsset,
+              figureRetryPromotion: {
+                status: 'promoted_pending_confirmation',
+                targetRelativePath: path,
+                mainRevision: saved.revision,
+                mainContentHash: saved.contentHash
+              }
+            }));
+          }
           await request(workspaceStore.put(updatedOwner));
           return cloneValue(saved);
         });
@@ -335,6 +796,348 @@
         return records.filter(record => record.workspaceId === id).map(cloneValue)
           .sort((first, second) => first.relativePath.localeCompare(second.relativePath));
       });
+    }
+
+    // Read only the requested catalog slice and the retry records required by
+    // publicWorkspaceAssets to project unconfirmed candidates back to their base.
+    // Both reads share one snapshot; no unrelated image payloads are materialized.
+    async function readPublicAssetCandidates(value, query = {}) {
+      const id = workspaceId(value);
+      const exact = query.relativePath !== undefined;
+      const path = exact ? shared.normalizeWorkspaceRelativePath(query.relativePath) : '';
+      const prefix = exact ? '' : String(query.prefix || '');
+      const keyRange = options.keyRange || globalThis.IDBKeyRange;
+      if (typeof keyRange?.bound !== 'function') fail('WORKSPACE_KEY_RANGE_UNAVAILABLE');
+      const prefixRange = selectedPrefix => {
+        const lower = assetKey(id, selectedPrefix);
+        let index = lower.length - 1;
+        while (lower.charCodeAt(index) === 0xffff) index -= 1;
+        const upper = lower.slice(0, index) + String.fromCharCode(lower.charCodeAt(index) + 1);
+        return keyRange.bound(lower, upper, false, true);
+      };
+      return run(WORKSPACE_ASSET_STORE_NAME, 'readonly', async transaction => {
+        const store = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
+        const [selected, staged] = await Promise.all([
+          request(exact ? store.get(assetKey(id, path)) : store.getAll(prefixRange(prefix))),
+          request(store.getAll(prefixRange(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)))
+        ]);
+        const records = new Map();
+        for (const record of [...(exact ? selected ? [selected] : [] : selected), ...staged]) {
+          if (record.workspaceId !== id || typeof record.relativePath !== 'string' ||
+              record.assetKey !== assetKey(id, record.relativePath)) continue;
+          if (!(exact ? record.relativePath === path : record.relativePath.startsWith(prefix)) &&
+              !record.relativePath.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)) continue;
+          records.set(record.assetKey, cloneValue(record));
+        }
+        return [...records.values()].sort((first, second) =>
+          first.relativePath.localeCompare(second.relativePath));
+      });
+    }
+
+    async function deleteAsset(value, relativePath, conflict = {}) {
+      const id = workspaceId(value);
+      const path = shared.normalizeWorkspaceRelativePath(relativePath);
+      const refreshSummaryPath = conflict.refreshSummaryPath === undefined
+        ? '' : shared.normalizeWorkspaceRelativePath(conflict.refreshSummaryPath);
+      const deleteRelatedStagingForPath = conflict.deleteRelatedStagingForPath === undefined
+        ? '' : shared.normalizeWorkspaceRelativePath(conflict.deleteRelatedStagingForPath);
+      const key = assetKey(id, path);
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME], 'readwrite',
+        async transaction => {
+          const workspaceStore = transaction.objectStore(WORKSPACE_STORE_NAME);
+          const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
+          const owner = await request(workspaceStore.get(id));
+          if (!owner || owner.deletionPending) fail('WORKSPACE_NOT_FOUND');
+          const current = await request(assets.get(key));
+          if (!current) {
+            // A finalize request couples deletion of the staging record to a CAS
+            // check of the promoted main asset.  Treat a missing staging record
+            // as a conflict so a raced/obsolete finalize can never confirm or
+            // mirror a candidate it no longer owns.
+            if (deleteRelatedStagingForPath) fail('ASSET_REVISION_CONFLICT');
+            return { deleted: false, alreadyMissing: true };
+          }
+          if (conflict.expectedRevision !== undefined &&
+              Number(current.revision || 0) !== Number(conflict.expectedRevision)) {
+            fail('ASSET_REVISION_CONFLICT');
+          }
+          if (conflict.expectedContentHash !== undefined &&
+              String(current.contentHash || '') !== String(conflict.expectedContentHash)) {
+            fail('ASSET_HASH_CONFLICT');
+          }
+          let relatedStaging = [];
+          if (deleteRelatedStagingForPath) {
+            const records = await request(assets.getAll());
+            const relatedMain = records.find(record =>
+              record.workspaceId === id &&
+              record.relativePath === deleteRelatedStagingForPath);
+            if (!relatedMain ||
+                Number(relatedMain.revision || 0) !==
+                  Number(conflict.relatedAssetExpectedRevision || 0)) {
+              fail('ASSET_REVISION_CONFLICT');
+            }
+            if (String(relatedMain.contentHash || '') !==
+                String(conflict.relatedAssetExpectedContentHash || '')) {
+              fail('ASSET_HASH_CONFLICT');
+            }
+            relatedStaging = records.filter(record =>
+              record.workspaceId === id &&
+              String(record.relativePath || '')
+                .startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX) &&
+              record.content?.kind === 'figure_retry_candidate' &&
+              record.content?.status === 'pending_confirmation' &&
+              String(record.content?.target?.relativePath || '') ===
+                deleteRelatedStagingForPath
+            );
+          }
+          const timestamp = now();
+          const assetSummaryByPath = { ...(owner.assetSummaryByPath || {}) };
+          delete assetSummaryByPath[path];
+          if (refreshSummaryPath) {
+            const refreshAsset = await request(assets.get(assetKey(id, refreshSummaryPath)));
+            if (!refreshAsset) fail('ASSET_REVISION_CONFLICT');
+            assetSummaryByPath[refreshSummaryPath] = workspaceAssetContribution(
+              refreshSummaryPath, refreshAsset.content, refreshAsset.byteSize
+            );
+          }
+          await request(assets.delete(key));
+          for (const related of relatedStaging) {
+            if (related.assetKey !== key) await request(assets.delete(related.assetKey));
+          }
+          await request(workspaceStore.put({
+            ...owner,
+            storageRevision: Number(owner.storageRevision || 0) + 1,
+            updatedAt: timestamp,
+            summary: summarizeWorkspaceContributions(assetSummaryByPath, owner.summary),
+            assetSummaryByPath
+          }));
+          return {
+            deleted: true,
+            relativePath: path,
+            revision: Number(current.revision || 0),
+            contentHash: String(current.contentHash || '')
+          };
+        });
+    }
+
+    async function reconcileFigureRetryWrite(value, relativePath, content, conflict = {}) {
+      const id = workspaceId(value);
+      const path = shared.normalizeWorkspaceRelativePath(relativePath);
+      if (path.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)) {
+        fail('ASSET_REVISION_CONFLICT');
+      }
+      const safeContent = safeValue(content);
+      const expectedStages = Array.isArray(conflict.pendingStages)
+        ? conflict.pendingStages.map(receipt => ({
+          relativePath: shared.normalizeWorkspaceRelativePath(receipt?.relativePath),
+          revision: Number(receipt?.revision || 0),
+          contentHash: String(receipt?.contentHash || '')
+        })) : [];
+      if (expectedStages.length > 100 || expectedStages.some(receipt =>
+        !receipt.relativePath.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX) ||
+        !Number.isSafeInteger(receipt.revision) || receipt.revision < 1 ||
+        !receipt.contentHash)) {
+        fail('ASSET_REVISION_CONFLICT');
+      }
+      const stage = conflict.stage === undefined ? null : {
+        relativePath: shared.normalizeWorkspaceRelativePath(conflict.stage?.relativePath),
+        candidateContent: safeValue(conflict.stage?.candidateContent),
+        candidateContentHash: String(conflict.stage?.candidateContentHash || '')
+      };
+      if (stage && !stage.relativePath.startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX)) {
+        fail('ASSET_REVISION_CONFLICT');
+      }
+      const key = assetKey(id, path);
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME], 'readwrite',
+        async transaction => {
+          const workspaceStore = transaction.objectStore(WORKSPACE_STORE_NAME);
+          const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
+          const [owner, current, allAssets] = await Promise.all([
+            request(workspaceStore.get(id)),
+            request(assets.get(key)),
+            request(assets.getAll())
+          ]);
+          if (!owner || owner.deletionPending) fail('WORKSPACE_NOT_FOUND');
+          if (Number(current?.revision || 0) !== Number(conflict.expectedRawRevision || 0)) {
+            fail('ASSET_REVISION_CONFLICT');
+          }
+          if (String(current?.contentHash || '') !==
+              String(conflict.expectedRawContentHash || '')) {
+            fail('ASSET_HASH_CONFLICT');
+          }
+          const actualStages = allAssets.filter(asset =>
+            asset?.workspaceId === id &&
+            String(asset?.relativePath || '').startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX) &&
+            asset?.content?.kind === 'figure_retry_candidate' &&
+            asset?.content?.status === 'pending_confirmation' &&
+            String(asset?.content?.target?.relativePath || '') === path
+          ).map(asset => ({
+            relativePath: String(asset.relativePath || ''),
+            revision: Number(asset.revision || 0),
+            contentHash: String(asset.contentHash || '')
+          }));
+          const receiptKey = receipt =>
+            `${receipt.relativePath}\u0000${receipt.revision}\u0000${receipt.contentHash}`;
+          const expectedKeys = expectedStages.map(receiptKey).sort();
+          const actualKeys = actualStages.map(receiptKey).sort();
+          if (expectedKeys.length !== actualKeys.length ||
+              expectedKeys.some((receipt, index) => receipt !== actualKeys[index])) {
+            fail('ASSET_REVISION_CONFLICT');
+          }
+          if (stage && allAssets.some(asset =>
+            asset?.workspaceId === id && asset?.relativePath === stage.relativePath &&
+            !actualStages.some(receipt => receipt.relativePath === stage.relativePath))) {
+            fail('ASSET_REVISION_CONFLICT');
+          }
+          const timestamp = now();
+          const shouldWriteMain = !stage || !current ||
+            !contentEqual(current.content, safeContent);
+          const saved = shouldWriteMain ? {
+            assetKey: key,
+            workspaceId: id,
+            workspaceGeneration: Number(owner.workspaceGeneration || 1),
+            relativePath: path,
+            content: safeContent,
+            contentHash: String(conflict.contentHash || contentFingerprint(safeContent)),
+            revision: Number(current?.revision || 0) + 1,
+            byteSize: byteSize(safeContent),
+            createdAt: current?.createdAt || timestamp,
+            updatedAt: timestamp
+          } : current;
+          const stagedContent = stage ? {
+            schemaVersion: 1,
+            kind: 'figure_retry_candidate',
+            status: 'pending_confirmation',
+            target: { relativePath: path },
+            base: {
+              revision: Number(saved.revision || 0),
+              contentHash: String(saved.contentHash || ''),
+              byteSize: Number(saved.byteSize || byteSize(saved.content)),
+              updatedAt: String(saved.updatedAt || ''),
+              content: cloneValue(saved.content)
+            },
+            candidate: {
+              content: cloneValue(stage.candidateContent),
+              contentHash: stage.candidateContentHash
+            }
+          } : null;
+          const staged = stage ? {
+            assetKey: assetKey(id, stage.relativePath),
+            workspaceId: id,
+            workspaceGeneration: Number(owner.workspaceGeneration || 1),
+            relativePath: stage.relativePath,
+            content: stagedContent,
+            contentHash: contentFingerprint(stagedContent),
+            revision: 1,
+            byteSize: byteSize(stagedContent),
+            createdAt: timestamp,
+            updatedAt: timestamp
+          } : null;
+          for (const receipt of actualStages) {
+            await request(assets.delete(assetKey(id, receipt.relativePath)));
+          }
+          if (shouldWriteMain) await request(assets.put(saved));
+          if (staged) await request(assets.put(staged));
+          const assetSummaryByPath = { ...(owner.assetSummaryByPath || {}) };
+          assetSummaryByPath[path] = workspaceAssetContribution(
+            path, saved.content, saved.byteSize
+          );
+          await request(workspaceStore.put({
+            ...owner,
+            storageRevision: Number(owner.storageRevision || 0) + 1,
+            updatedAt: timestamp,
+            summary: summarizeWorkspaceContributions(assetSummaryByPath, owner.summary),
+            assetSummaryByPath
+          }));
+          return {
+            asset: cloneValue(saved),
+            ...(staged ? { staged: cloneValue(staged) } : {})
+          };
+        });
+    }
+
+    async function sweepExpiredFigureRetryStaging(options = {}) {
+      const requestedTtl = Number(options.ttlMs);
+      const ttlMs = Number.isFinite(requestedTtl)
+        ? Math.max(60 * 60 * 1000, Math.min(requestedTtl, 30 * 24 * 60 * 60 * 1000))
+        : 7 * 24 * 60 * 60 * 1000;
+      const requestedBatch = Number(options.maxBatch);
+      const maxBatch = Number.isSafeInteger(requestedBatch)
+        ? Math.max(1, Math.min(requestedBatch, 100)) : 50;
+      const nowMs = Date.parse(now());
+      const cutoff = (Number.isFinite(nowMs) ? nowMs : Date.now()) - ttlMs;
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_ASSET_STORE_NAME], 'readwrite',
+        async transaction => {
+          const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
+          const [workspaces, records] = await Promise.all([
+            request(transaction.objectStore(WORKSPACE_STORE_NAME).getAll()),
+            request(assets.getAll())
+          ]);
+          const workspaceById = new Map(workspaces.map(item => [item.workspaceId, item]));
+          const assetByKey = new Map(records.map(item => [item.assetKey, item]));
+          const candidates = records.filter(record => {
+            if (!String(record?.relativePath || '')
+              .startsWith(INTERNAL_FIGURE_RETRY_STAGING_PREFIX) ||
+                record?.content?.kind !== 'figure_retry_candidate' ||
+                record?.content?.status !== 'pending_confirmation') return false;
+            // Promotion writes this receipt in the same transaction as the main
+            // candidate. Its presence means deletion would expose unconfirmed
+            // science, so bounded maintenance must leave it quarantined. Treat
+            // malformed receipt metadata as promoted too and fail closed.
+            if (Object.prototype.hasOwnProperty.call(record, 'figureRetryPromotion')) {
+              return false;
+            }
+            // Receipt-less records may come from an older extension version.
+            // Absence of a receipt is not proof that promotion never happened:
+            // delete only when the target still has the exact recorded base CAS
+            // inside this same transaction. Any missing/malformed/rebased state
+            // remains quarantined.
+            const owner = workspaceById.get(record.workspaceId);
+            const targetPath = String(record.content?.target?.relativePath || '');
+            const base = record.content?.base;
+            const baseRevision = Number(base?.revision);
+            const baseContentHash = String(base?.contentHash || '');
+            let expectedStageKey = '';
+            let targetAssetKey = '';
+            try {
+              expectedStageKey = assetKey(record.workspaceId, record.relativePath);
+              targetAssetKey = targetPath && !targetPath.startsWith(
+                INTERNAL_FIGURE_RETRY_STAGING_PREFIX
+              ) ? assetKey(record.workspaceId, targetPath) : '';
+            } catch (_) {
+              return false;
+            }
+            const main = targetAssetKey ? assetByKey.get(targetAssetKey) : null;
+            const exactUnpromotedBase = Boolean(
+              owner && !owner.deletionPending && main &&
+              record.assetKey === expectedStageKey &&
+              main.workspaceId === record.workspaceId &&
+              main.relativePath === targetPath &&
+              Number(record.workspaceGeneration || 0) ===
+                Number(owner.workspaceGeneration || 1) &&
+              Number(main.workspaceGeneration || 0) ===
+                Number(owner.workspaceGeneration || 1) &&
+              Number.isSafeInteger(baseRevision) && baseRevision >= 1 &&
+              baseContentHash && Number(main.revision || 0) === baseRevision &&
+              String(main.contentHash || '') === baseContentHash
+            );
+            if (!exactUnpromotedBase) return false;
+            const updatedAt = Date.parse(String(record.updatedAt || record.createdAt || ''));
+            return !Number.isFinite(updatedAt) || updatedAt <= cutoff;
+          }).sort((left, right) =>
+            String(left.updatedAt || left.createdAt || '')
+              .localeCompare(String(right.updatedAt || right.createdAt || '')));
+          const expired = candidates.slice(0, maxBatch);
+          for (const record of expired) {
+            await request(assets.delete(record.assetKey));
+          }
+          return {
+            deleted: expired.length,
+            remainingExpired: candidates.length > expired.length,
+            maxBatch,
+            ttlMs
+          };
+        });
     }
 
     async function appendTurn(value, input) {
@@ -386,6 +1189,8 @@
       return run([WORKSPACE_STORE_NAME, WORKSPACE_TURN_STORE_NAME], 'readwrite', async transaction => {
         const store = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
         const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
+        const owner = await request(workspaces.get(id));
+        if (owner?.deletionPending) fail('WORKSPACE_DELETION_PENDING');
         const current = await request(store.get(key));
         if (!current) fail('TURN_NOT_FOUND');
         if (conflict.expectedRevision !== undefined &&
@@ -401,7 +1206,6 @@
           updatedAt: now()
         };
         await request(store.put(saved));
-        const owner = await request(workspaces.get(id));
         if (owner) {
           await request(workspaces.put({
             ...owner,
@@ -467,13 +1271,14 @@
         async transaction => {
           const turns = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
           const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
+          const owner = await request(workspaces.get(id));
+          if (owner?.deletionPending) fail('WORKSPACE_DELETION_PENDING');
           const current = await request(turns.get(key));
           if (!current) return null;
           const tombstone = newTombstone(id, 'turn', idOfTurn,
             Number(current.workspaceGeneration || 1));
           await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).put(tombstone));
           await request(turns.delete(key));
-          const owner = await request(workspaces.get(id));
           if (owner) {
             await request(workspaces.put({
               ...owner,
@@ -502,13 +1307,52 @@
       });
     }
 
-    async function beginWorkspaceDeletion(value) {
+    async function beginWorkspaceDeletion(value, conflict = {}) {
       const id = workspaceId(value);
-      return run([WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME], 'readwrite',
+      if (!isPlainObject(conflict) ||
+          (conflict.expectedWorkspaceGeneration !== undefined &&
+            (!Number.isSafeInteger(conflict.expectedWorkspaceGeneration) ||
+              conflict.expectedWorkspaceGeneration < 1)) ||
+          (conflict.expectedStorageRevision !== undefined &&
+            (!Number.isSafeInteger(conflict.expectedStorageRevision) ||
+              conflict.expectedStorageRevision < 0)) ||
+          (conflict.expectedContentHash !== undefined &&
+            (typeof conflict.expectedContentHash !== 'string' ||
+              !conflict.expectedContentHash || conflict.expectedContentHash.length > 200))) {
+        fail('WORKSPACE_DELETION_CONFLICT');
+      }
+      const metadata = value => ({title:String(value.title || ''),canonicalUrl:String(value.canonicalUrl || ''),directoryName:String(value.directoryName || ''),aliases:cloneValue(value.aliases || []),revision:String(value.revision || ''),memoryNeedsRebuild:Boolean(value.memoryNeedsRebuild)});
+      const hasSnapshot = conflict.expectedWorkspaceMetadata !== undefined || conflict.expectedTurnRevisions !== undefined;
+      if (hasSnapshot) {
+        const expected = conflict.expectedWorkspaceMetadata, turns = conflict.expectedTurnRevisions;
+        if (!isPlainObject(expected) || !Array.isArray(expected.aliases) ||
+            ['title','canonicalUrl','directoryName','revision'].some(k => typeof expected[k] !== 'string') ||
+            typeof expected.memoryNeedsRebuild !== 'boolean' || !Array.isArray(turns) || turns.length > 100000 ||
+            turns.some(t => !isPlainObject(t) || typeof t.turnId !== 'string' || !t.turnId || t.turnId.length > 300 || !Number.isSafeInteger(t.revision) || t.revision < 1) ||
+            new Set(turns.map(t=>t.turnId)).size !== turns.length) fail('WORKSPACE_DELETION_CONFLICT');
+        safeValue(expected);safeValue(turns);
+      }
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME, WORKSPACE_TURN_STORE_NAME], 'readwrite',
         async transaction => {
           const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
           const current = await request(workspaces.get(id));
           if (!current) fail('WORKSPACE_NOT_FOUND');
+          if ((conflict.expectedWorkspaceGeneration !== undefined &&
+                Number(current.workspaceGeneration || 1) !== conflict.expectedWorkspaceGeneration) ||
+              (conflict.expectedStorageRevision !== undefined &&
+                Number(current.storageRevision || 0) !== conflict.expectedStorageRevision) ||
+              (conflict.expectedContentHash !== undefined &&
+                String(current.contentHash || '') !== conflict.expectedContentHash)) {
+            fail('WORKSPACE_DELETION_CONFLICT');
+          }
+          if (hasSnapshot) {
+            if (JSON.stringify(metadata(current)) !== JSON.stringify(metadata(conflict.expectedWorkspaceMetadata))) fail('WORKSPACE_DELETION_CONFLICT');
+            const turnsStore = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
+            const records = typeof turnsStore.index === 'function' ? await request(turnsStore.index('workspaceId').getAll(id)) : await request(turnsStore.getAll());
+            const tokens = records.filter(t=>t.workspaceId===id).map(t=>({turnId:t.turnId,revision:Number(t.revision || 0)})).sort((a,b)=>a.turnId.localeCompare(b.turnId));
+            const expected = conflict.expectedTurnRevisions.map(t=>({turnId:t.turnId,revision:t.revision})).sort((a,b)=>a.turnId.localeCompare(b.turnId));
+            if (JSON.stringify(tokens)!==JSON.stringify(expected)) fail('WORKSPACE_DELETION_CONFLICT');
+          }
           if (current.deletionPending && current.deletionTombstoneId) {
             const records = await request(
               transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).getAll()
@@ -528,7 +1372,35 @@
         });
     }
 
-    async function finalizeWorkspaceDeletion(value, tombstoneIdValue) {
+    async function preparedWorkspaceDeletion(transaction, id, deletionId, options = {}) {
+      const current = await request(transaction.objectStore(WORKSPACE_STORE_NAME).get(id));
+      if (!current) return null;
+      const generation = Number(current.workspaceGeneration || 1);
+      if (!current.deletionPending || current.deletionTombstoneId !== deletionId ||
+          (options.workspaceGeneration !== undefined &&
+            Number(options.workspaceGeneration) !== generation)) {
+        fail('WORKSPACE_DELETION_CONFLICT');
+      }
+      const tombstone = await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME)
+        .get(tombstoneKey(id, deletionId)));
+      if (!tombstone || tombstone.workspaceId !== id || tombstone.tombstoneId !== deletionId ||
+          tombstone.entityType !== 'workspace' || tombstone.entityId !== id ||
+          Number(tombstone.workspaceGeneration || 1) !== generation) {
+        fail('WORKSPACE_DELETION_CONFLICT');
+      }
+      return { workspace: cloneValue(current), tombstone: cloneValue(tombstone) };
+    }
+
+    // Validate before external deletion; finalization repeats this check in its
+    // write transaction so a stale request cannot remove a rebuilt workspace.
+    async function validateWorkspaceDeletion(value, tombstoneIdValue, options = {}) {
+      const id = workspaceId(value);
+      const deletionId = boundedId(tombstoneIdValue, 'INVALID_TOMBSTONE_ID');
+      return run([WORKSPACE_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME], 'readonly',
+        transaction => preparedWorkspaceDeletion(transaction, id, deletionId, options));
+    }
+
+    async function finalizeWorkspaceDeletion(value, tombstoneIdValue, options = {}) {
       const id = workspaceId(value);
       const deletionId = boundedId(tombstoneIdValue, 'INVALID_TOMBSTONE_ID');
       return run([
@@ -536,11 +1408,7 @@
         WORKSPACE_TURN_STORE_NAME, WORKSPACE_TOMBSTONE_STORE_NAME
       ], 'readwrite', async transaction => {
         const workspaces = transaction.objectStore(WORKSPACE_STORE_NAME);
-        const current = await request(workspaces.get(id));
-        if (!current) return false;
-        if (!current.deletionPending || current.deletionTombstoneId !== deletionId) {
-          fail('WORKSPACE_DELETION_CONFLICT');
-        }
+        if (!await preparedWorkspaceDeletion(transaction, id, deletionId, options)) return false;
         const assetsStore = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
         const turnsStore = transaction.objectStore(WORKSPACE_TURN_STORE_NAME);
         const [assets, turns] = await Promise.all([
@@ -598,17 +1466,27 @@
 
     return {
       ensureWorkspace,
+      captureRestoreBaseline,
+      commitRestoreIfUnchanged,
       getWorkspace,
       listWorkspaces,
       putAsset,
+      beginFigureSourceWrite, listFigureSourceWrites, markFigureSourceWriteDirectory, ackFigureSourceWrite, fenceFigureSourceWrite,
+      reconcileFigureRetryWrite,
+      sweepExpiredFigureRetryStaging,
       getAsset,
       listAssets,
+      readPublicAssetCandidates,
+      deleteAsset,
       appendTurn,
       updateTurn,
       pageTurns,
       deleteTurn,
       markMemoryRebuild,
+      supportsWorkspaceDeletionApprovalCas: true,
+      supportsWorkspaceDeletionApprovalSnapshotCas: true,
       beginWorkspaceDeletion,
+      validateWorkspaceDeletion,
       finalizeWorkspaceDeletion,
       getStorageStatistics,
       getWorkspaceGenerationState
@@ -620,6 +1498,7 @@
     WORKSPACE_ASSET_STORE_NAME,
     WORKSPACE_TURN_STORE_NAME,
     WORKSPACE_TOMBSTONE_STORE_NAME,
+    workspaceContentFingerprint: contentFingerprint,
     createIndexedDbArticleWorkspaceStore
   };
 });

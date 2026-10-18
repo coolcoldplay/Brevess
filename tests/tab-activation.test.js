@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const {
+  createBackgroundNavigationHarness
+} = require('./helpers/r28-old64-navigation.js');
 
 let activation = {};
 try {
@@ -119,5 +122,118 @@ test('legacy single-paper activation records remain readable', async () => {
     'https://publisher.example/new-paper',
     'https://publisher.example/legacy-paper'
   ]);
+});
+
+test('the actual background activation listener binds injection to the active tab generation', async () => {
+  const tab = {
+    id: 21,
+    windowId: 7,
+    url: 'https://example.org/article#methods',
+    status: 'complete'
+  };
+  const harness = createBackgroundNavigationHarness({ tabs: [tab] });
+
+  const response = await harness.emitRuntimeMessage({
+    type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+    tabId: tab.id,
+    url: 'https://example.org/article',
+    confirmedNonLiterature: true
+  });
+
+  assert.equal(response?.success, true);
+  const activationCall = harness.calls.find(call => call.type === 'activationEnsure');
+  assert.ok(activationCall);
+  assert.equal(activationCall.args[1], tab.id);
+  assert.equal(
+    activationCall.args[2].expectedUrl,
+    'https://example.org/article'
+  );
+  assert.equal(typeof activationCall.args[2].contextKey, 'string');
+  assert.equal(activationCall.args[2].isCurrent(), true);
+  assert.equal(harness.calls.some(call => call.type === 'sidePanelOptions'), true);
+});
+
+test('unconfirmed ordinary page cannot activate or inject content', async () => {
+  const tab = { id: 21, windowId: 7, url: 'https://example.org/article', status: 'complete' };
+  const harness = createBackgroundNavigationHarness({ tabs: [tab] });
+  const response = await harness.emitRuntimeMessage({ type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+    tabId: tab.id, url: tab.url });
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'SIDE_PANEL_CONFIRMATION_REQUIRED');
+  assert.equal(harness.calls.filter(call => call.type === 'activationEnsure').length, 0);
+});
+
+test('the real literature classifier admits a recognized article without ordinary-page confirmation', async () => {
+  const tab = { id: 23, windowId: 7,
+    url: 'https://www.nature.com/articles/s41586-024-00001-1', status: 'complete' };
+  const harness = createBackgroundNavigationHarness({ tabs: [tab] });
+  const response = await harness.emitRuntimeMessage({ type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+    tabId: tab.id, url: tab.url });
+  assert.equal(response.success, true);
+  const injection = harness.calls.filter(call => call.type === 'activationEnsure');
+  assert.equal(injection.length, 1);
+  assert.equal(injection[0].args[2].expectedUrl, tab.url);
+  assert.equal(injection[0].args[2].isCurrent(), true);
+});
+
+test('confirmed activation still rejects changed URL or window before injection', async () => {
+  for (const changed of [{ url: 'https://example.org/other' }, { windowId: 8 }]) {
+    const tab = { id: 21, windowId: 7, url: 'https://example.org/article', status: 'complete' };
+    const harness = createBackgroundNavigationHarness({ tabs: [tab],
+      onLoadSettings: async () => harness.replaceTab({ ...tab, ...changed }) });
+    const response = await harness.emitRuntimeMessage({ type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+      tabId: tab.id, url: tab.url, confirmedNonLiterature: true });
+    assert.equal(response.success, false);
+    assert.equal(response.error.code, 'SIDE_PANEL_TAB_CHANGED');
+    assert.equal(harness.calls.filter(call => call.type === 'activationEnsure').length, 0);
+  }
+});
+
+test('confirmed activation cannot authorize injection with a retired generation', async () => {
+  const tab = { id: 21, windowId: 7, url: 'https://example.org/article', status: 'complete' };
+  const harness = createBackgroundNavigationHarness({ tabs: [tab],
+    ensureContentScriptForActivation: async (_chrome, tabId, context) => {
+      assert.equal(context.isCurrent(), true);
+      await harness.emitUpdated(tabId, { status: 'loading', url: 'https://example.org/replaced' },
+        { ...tab, status: 'loading', url: 'https://example.org/replaced' });
+      assert.equal(context.isCurrent(), false);
+      const error = new Error('TAB_MESSAGE_NAVIGATION_STALE');
+      error.code = 'TAB_MESSAGE_NAVIGATION_STALE';
+      throw error;
+    } });
+  const response = await harness.emitRuntimeMessage({ type: 'SIDE_PANEL_ACTIVATE_CURRENT_TAB',
+    tabId: tab.id, url: tab.url, confirmedNonLiterature: true });
+  assert.equal(response.success, false);
+  assert.equal(response.error.code, 'TAB_MESSAGE_NAVIGATION_STALE');
+});
+
+test('the actual background update listener warms only a completed current document', async () => {
+  const tab = {
+    id: 22,
+    windowId: 7,
+    url: 'https://example.org/article?view=full#figure-1',
+    status: 'complete'
+  };
+  const harness = createBackgroundNavigationHarness({
+    isTabActivated: async () => true
+  });
+
+  await harness.emitUpdated(tab.id, { status: 'loading' }, {
+    ...tab,
+    status: 'loading'
+  });
+  await harness.flush();
+  assert.equal(harness.calls.some(call => call.type === 'recoveryMessage'), false);
+
+  await harness.emitUpdated(tab.id, { status: 'complete' }, tab);
+  await harness.flush();
+  const warm = harness.calls.find(call => call.type === 'recoveryMessage');
+  assert.ok(warm);
+  assert.equal(warm.args[1], tab.id);
+  assert.equal(warm.args[2].action, 'warmArticleIndex');
+  assert.equal(warm.args[2].expectedUrl, 'https://example.org/article?view=full');
+  assert.equal(warm.args[3].expectedUrl, 'https://example.org/article?view=full');
+  assert.equal(typeof warm.args[3].contextKey, 'string');
+  assert.equal(warm.args[3].isCurrent(), true);
 });
 

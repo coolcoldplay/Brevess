@@ -1,0 +1,72 @@
+{
+  "package": "lucide-static",
+  "version": "1.55.0",
+  "repository": "https://github.com/lucide-icons/lucide",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.55.0.tgz",
+  "integrity": "sha512-h18lunTFsIJWnY0FMRPjXeO9KcAtNi7fDqtqgWHOFbssfgUWsctn/pA7bpiyrd4g1DuBOJ24CsRnPfkYblwm/A==",
+  "githubApi": "403 rate limit; official npm release used",
+  "integrityVerified": true,
+  "icons": [
+    {
+      "name": "list-tree",
+      "packagePath": "package/icons/list-tree.svg",
+      "sha256": "77352d1d81a24dedbe7eb9c746c1fdf9d5a44a4dcdb7f6cbf31d6554bc208460",
+      "bytes": 435
+    },
+    {
+      "name": "highlighter",
+      "packagePath": "package/icons/highlighter.svg",
+      "sha256": "d36c6468c2057786a025a683c27e47798f7844b972032a52c60a222190cfaf99",
+      "bytes": 399
+    },
+    {
+      "name": "chart-no-axes-combined",
+      "packagePath": "package/icons/chart-no-axes-combined.svg",
+      "sha256": "9fcb36db9ba73b6817eff39700706ab4f0bd3135b22648805891a0523b62fddc",
+      "bytes": 525
+    },
+    {
+      "name": "chart-no-axes-column",
+      "packagePath": "package/icons/chart-no-axes-column.svg",
+      "sha256": "dbf7cc4854595ec2aaca9fd900aa978bc39a52a8ce5939e1d4cf3c520fa8d6a0",
+      "bytes": 371
+    },
+    {
+      "name": "expand",
+      "packagePath": "package/icons/expand.svg",
+      "sha256": "90c4b872ebe6b472cf74f5ee68dbc7d6cfa224b7df599a598c7f9e8e0103ef15",
+      "bytes": 487
+    },
+    {
+      "name": "message-circle-more",
+      "packagePath": "package/icons/message-circle-more.svg",
+      "sha256": "09bed5a05f676cff60baf705fde3862c3dfbf0706e02d7a13db9213acaefd80f",
+      "bytes": 514
+    },
+    {
+      "name": "message-square-more",
+      "packagePath": "package/icons/message-square-more.svg",
+      "sha256": "12e128f859060358db365ff25b6f6bc22f06ee3b180c508664715529fea3384e",
+      "bytes": 506
+    },
+    {
+      "name": "notebook-text",
+      "packagePath": "package/icons/notebook-text.svg",
+      "sha256": "5e1840b88bc83d093ae719b3a54aa10499d8a365d7257eabab730e2dcc873d26",
+      "bytes": 512
+    },
+    {
+      "name": "check",
+      "packagePath": "package/icons/check.svg",
+      "sha256": "de9546f5482b5f2b07c11933c19444bd58a96c29bd2c6e56b7c3ba013b03ab22",
+      "bytes": 315
+    },
+    {
+      "name": "x",
+      "packagePath": "package/icons/x.svg",
+      "sha256": "65b78d9fa306e2b6386fb9f3a9f10e1ba8067fa0d079046e1050db84f18f31f6",
+      "bytes": 332
+    }
+  ],
+  "treatment": "Complete source geometry. Only root sizing/class/id excluded from runtime attrs; original SVG bytes retained."
+}

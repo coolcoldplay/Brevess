@@ -51,6 +51,39 @@
       );
   }
 
+  const localArchiveTails = new WeakMap();
+  // Web Locks span extension workers/pages and store instances. File I/O is
+  // outside IDB transactions; document writers enter only after archive close.
+  function withDocumentArchiveLock(indexedDbRef, documentId, operation) {
+    const id = normalizeDocumentId(documentId);
+    const locks = globalThis.navigator?.locks;
+    if (locks?.request) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      return locks.request(`brevess:document-archive:v1:${DOCUMENT_DATABASE_NAME}:${id}`,
+        { mode: 'exclusive', signal: controller.signal }, async () => {
+          clearTimeout(timer);
+          return operation();
+        }).catch(error => {
+          if (controller.signal.aborted && error?.name === 'AbortError') fail('DOCUMENT_ARCHIVE_BUSY');
+          throw error;
+        }).finally(() => clearTimeout(timer));
+    }
+    // Realm-local fallback is for non-browser test adapters only. Real browser
+    // IDB without Web Locks must not silently lose cross-context protection.
+    if (globalThis.indexedDB && indexedDbRef === globalThis.indexedDB) {
+      return Promise.reject(Object.assign(new Error('DOCUMENT_ARCHIVE_COORDINATION_UNAVAILABLE'),
+        { code: 'DOCUMENT_ARCHIVE_COORDINATION_UNAVAILABLE' }));
+    }
+    let tails = localArchiveTails.get(indexedDbRef);
+    if (!tails) { tails = new Map(); localArchiveTails.set(indexedDbRef, tails); }
+    const pending = (tails.get(id) || Promise.resolve()).then(operation, operation);
+    const tail = pending.catch(() => undefined);
+    tails.set(id, tail);
+    tail.then(() => { if (tails.get(id) === tail) tails.delete(id); });
+    return pending;
+  }
+
   function normalizeText(value) {
     return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
   }
@@ -284,14 +317,20 @@
       });
     }
 
-    async function prepareDocument(input) {
+    async function prepareDocumentWithCreationInfo(input) {
       return serialize(async () => {
         const normalized = normalizeRecord(input);
-        const current = records.get(normalized.documentId) || null;
+        const createdFromAbsence = !records.has(normalized.documentId);
+        const current = createdFromAbsence ? null
+          : normalizeRecord(records.get(normalized.documentId));
         const saved = prepareRecord(normalized, current);
         records.set(saved.documentId, saved);
-        return cloneJsonLike(saved);
+        return { record: cloneJsonLike(saved), createdFromAbsence };
       });
+    }
+
+    async function prepareDocument(input) {
+      return (await prepareDocumentWithCreationInfo(input)).record;
     }
 
     async function setStudyType(documentId, studyType, metadata) {
@@ -366,6 +405,7 @@
       getDocument,
       putDocument,
       prepareDocument,
+      prepareDocumentWithCreationInfo,
       setStudyType,
       upsertAnnotation,
       deleteAnnotation,
@@ -421,12 +461,12 @@
 
     async function mutateDocument(documentId, operation) {
       const id = normalizeDocumentId(documentId);
-      return runTransaction('readwrite', async store => {
+      return withDocumentArchiveLock(indexedDbRef, id, () => runTransaction('readwrite', async store => {
         const current = await requestToPromise(store.get(id));
         const saved = await operation(current ? normalizeRecord(current) : null, id);
         await requestToPromise(store.put(saved));
         return cloneJsonLike(saved);
-      });
+      }));
     }
 
     async function putDocument(input) {
@@ -434,11 +474,23 @@
       return mutateDocument(normalized.documentId, current => finishPut(normalized, current));
     }
 
-    async function prepareDocument(input) {
+    async function prepareDocumentWithCreationInfo(input) {
       const normalized = normalizeRecord(input);
-      return mutateDocument(normalized.documentId, current =>
-        prepareRecord(normalized, current)
-      );
+      return withDocumentArchiveLock(indexedDbRef, normalized.documentId, () => runTransaction('readwrite', async store => {
+        const before = await requestToPromise(store.get(normalized.documentId));
+        // Only raw absence proves creation. Existing empty or invalid records
+        // cannot acquire this fact through truthiness or annotation contents.
+        const createdFromAbsence = before === undefined;
+        const current = createdFromAbsence ? null : normalizeRecord(before);
+        const saved = prepareRecord(normalized, current);
+        await requestToPromise(store.put(saved));
+        // runTransaction withholds this result until the transaction completes.
+        return { record: cloneJsonLike(saved), createdFromAbsence };
+      }));
+    }
+
+    async function prepareDocument(input) {
+      return (await prepareDocumentWithCreationInfo(input)).record;
     }
 
     async function setStudyType(documentId, studyType, metadata) {
@@ -508,6 +560,7 @@
       getDocument,
       putDocument,
       prepareDocument,
+      prepareDocumentWithCreationInfo,
       setStudyType,
       upsertAnnotation,
       deleteAnnotation,
@@ -523,6 +576,11 @@
     DOCUMENT_DATABASE_VERSION,
     DOCUMENT_STORE_NAME,
     META_STORE_NAME,
+    // Restore batches reuse the same validation/version rules inside their
+    // shared IndexedDB transaction; these helpers perform no I/O.
+    normalizeDocumentRecord: normalizeRecord,
+    finalizeDocumentRecordForWrite: finishPut,
+    withDocumentArchiveLock,
     createMemoryDocumentStore,
     createIndexedDbDocumentStore
   };

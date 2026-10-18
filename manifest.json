@@ -6,20 +6,39 @@
   "description": "__MSG_extensionDescription__",
   "default_locale": "zh_CN",
   "homepage_url": "https://github.com/coolcoldplay/Brevess",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "permissions": [
+    "alarms",
     "activeTab",
     "storage",
+    "unlimitedStorage",
     "scripting",
     "offscreen",
     "sidePanel",
-    "nativeMessaging"
+    "nativeMessaging",
+    "webNavigation"
   ],
   "host_permissions": [
+    "https://api.typesafe.ai/*",
     "https://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "file:///*"
   ],
+  "content_scripts": [{
+    "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "file:///*"],
+    "js": ["core/page-tools.js", "semantic-find-launcher.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }, {
+    "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "file:///*"],
+    "js": ["core/translation-source.js", "core/translation-checkpoint.js", "core/local-translator.js", "core/bilingual-translation-controller.js", "bilingual-translation-content.js"],
+    "css": ["bilingual-translation.css"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
   "background": {
     "service_worker": "background.js"
   },
@@ -28,6 +47,7 @@
     "open_in_tab": true
   },
   "action": {
+    "default_popup": "action-popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -46,7 +66,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["content.css", "vendor/phosphor/Phosphor.woff2"],
+      "resources": ["content.css", "semantic-find.css", "mechanism-drawing.css", "vendor/phosphor/Phosphor.woff2"],
       "matches": ["<all_urls>"]
     }
   ]

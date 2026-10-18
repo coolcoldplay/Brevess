@@ -3,6 +3,14 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  function thinkingConfig(config, request) {
+    const capability = config.__reasoningCapabilities;
+    const effort = String(request.reasoningEffort ?? config.reasoningEffort ?? 'auto');
+    if (capability?.supported !== true || capability.mode !== 'effort' ||
+        effort === 'auto' || !capability.levels.includes(effort)) return {};
+    return { thinkingConfig: { thinkingLevel: effort } };
+  }
+
   function createGeminiAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'gemini',
@@ -41,7 +49,8 @@
                 ]
               }],
               generationConfig: {
-                maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens)
+                maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+                ...thinkingConfig(config, request)
               }
             }),
             signal: request.signal,
@@ -71,7 +80,8 @@
             contents: [{ role: 'user', parts: userParts }],
             generationConfig: {
               responseMimeType: 'application/json',
-              maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens)
+              maxOutputTokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              ...thinkingConfig(config, request)
             }
           }),
           signal: request.signal,

@@ -3,6 +3,16 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  function reasoningBody(config, request) {
+    const capability = config.__reasoningCapabilities;
+    const level = String(request.reasoningEffort ?? config.reasoningEffort ?? 'auto');
+    if (capability?.supported !== true || level === 'auto' ||
+        !capability.levels.includes(level)) return {};
+    if (capability.mode === 'effort') return { reasoning_effort: level };
+    if (capability.mode === 'toggle') return { thinking: { type: level } };
+    return {};
+  }
+
   function createOpenAICompatibleAdapter(config, fetchImpl) {
     const adapter = {
       providerId: 'openai-compatible',
@@ -35,6 +45,7 @@
                 }
               ],
               max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+              ...reasoningBody(config, request),
               stream: true,
               stream_options: { include_usage: true }
             }),
@@ -60,6 +71,7 @@
             { role: 'user', content: shared.openAIChatUserContent(request.userPrompt, compatibleImages) }
           ],
           max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
+          ...reasoningBody(config, request),
           stream: false
         };
         if (config.jsonMode !== false) body.response_format = { type: 'json_object' };

@@ -72,10 +72,9 @@ test('canonical citation matching removes invalid controls and rejects absent ev
   assert.equal(findCanonicalQuoteSourceSpan('observed signal', 'invented result'), null);
 });
 
-test('verifies exact paragraph identity before weaker evidence locators', () => {
+test('keeps legacy HTML navigation compatible when only a stable paragraph id is supplied', () => {
   const result = verifyArticleChatEvidence({
     paragraphId: 'p-results-1',
-    quote: 'a quote that is not needed for an exact stable paragraph identity',
     documentRevision: 7
   }, createSnapshot());
 
@@ -84,6 +83,21 @@ test('verifies exact paragraph identity before weaker evidence locators', () => 
   assert.equal(result.candidateCount, 1);
   assert.equal(result.target.paragraphId, 'p-results-1');
   assert.equal(result.target.textHash, 'hash-results-1');
+});
+
+test('an identity-bearing citation cannot use tolerant matching for a forged quote', () => {
+  const result = verifyArticleChatEvidence({
+    paragraphId: 'p-removed',
+    sourceKey: 'removed:block',
+    textHash: 'removed-hash',
+    sectionTitle: 'Results',
+    quote: 'Heat stress markedly increased circulating IL-6 after 24 hours',
+    documentRevision: 7
+  }, createSnapshot());
+
+  assert.equal(result.status, 'missing');
+  assert.equal(result.candidateCount, 0);
+  assert.equal(result.target, null);
 });
 
 test('verifies sourceKey plus textHash when a paragraph id has drifted', () => {
@@ -164,14 +178,38 @@ test('reports missing evidence without inventing a target', () => {
   assert.equal(result.target, null);
 });
 
-test('reports stale evidence before matching against a different document revision', () => {
+test('rebinds stable evidence across a presentation-only document revision change', () => {
   const result = verifyArticleChatEvidence({
     paragraphId: 'p-results-1',
     documentRevision: 6
   }, createSnapshot());
 
+  assert.equal(result.status, 'verified');
+  assert.equal(result.matchMethod, 'paragraph-id');
+  assert.equal(result.rebound, true);
+  assert.equal(result.documentRevision, 7);
+  assert.equal(result.target.paragraphId, 'p-results-1');
+});
+
+test('reports stale only when a changed revision cannot be uniquely rebound', () => {
+  const result = verifyArticleChatEvidence({
+    paragraphId: 'p-removed',
+    quote: 'This sentence no longer exists in the refreshed article.',
+    documentRevision: 6
+  }, createSnapshot());
+
   assert.equal(result.status, 'stale');
   assert.equal(result.reason, 'DOCUMENT_REVISION_CHANGED');
-  assert.equal(result.documentRevision, 7);
+  assert.equal(result.target, null);
+});
+
+test('document hash mismatch remains a hard cross-document boundary', () => {
+  const result = verifyArticleChatEvidence({
+    paragraphId: 'p-results-1',
+    documentHash: 'sha256:old-document'
+  }, createSnapshot({ documentHash: 'sha256:new-document' }));
+
+  assert.equal(result.status, 'stale');
+  assert.equal(result.reason, 'DOCUMENT_CHANGED');
   assert.equal(result.target, null);
 });

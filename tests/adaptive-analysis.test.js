@@ -260,7 +260,7 @@ test('switching views reuses shared category cache and calls only missing catego
   const callsBeforeSwitch = harness.getAnnotationCalls();
   await harness.router.handle({
     type: 'LLM_UPDATE_PREFERENCES',
-    preferences: { readingViewId: 'critical_review' }
+    preferences: { readingViewId: 'review_synthesis' }
   });
   const mechanism = await harness.router.handle({
     type: 'LLM_ANALYZE_DOCUMENT', document: fixtureDocument
@@ -268,8 +268,8 @@ test('switching views reuses shared category cache and calls only missing catego
   assert.equal(quick.success, true);
   assert.equal(mechanism.success, true);
   assert.ok(harness.getAnnotationCalls() > callsBeforeSwitch);
-  assert.ok(mechanism.data.cachedCategoryIds.includes('limitation'));
-  assert.ok(mechanism.data.analyzedCategoryIds.includes('design_control'));
+  assert.ok(mechanism.data.cachedCategoryIds.includes('future'));
+  assert.ok(mechanism.data.analyzedCategoryIds.includes('review_scope_thesis'));
 });
 
 test('ledger failure preserves validated highlights', async () => {

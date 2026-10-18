@@ -6,8 +6,61 @@ const {
   createZipBlob,
   buildPptAgentPrompt,
   buildZoteroFigureNoteHtml,
-  buildZoteroChatNoteHtml
+  buildZoteroChatNoteHtml,
+  serializeMechanismGraphExport,
+  parseMechanismGraphExport
 } = require('../core/export-bundle.js');
+
+test('graph serialization accepts only the export DTO and contains zero provenance fields', () => {
+  const dto = {
+    schema: 'brevess.mechanism-graph', schemaVersion: 1,
+    nodes: [{ id: 'n0', label: 'Microglia' }, { id: 'n1', label: 'Clearance' }],
+    edges: [{
+      id: 'e0', from: 'n0', to: 'n1', label: 'decreases',
+      lineStyle: 'solid', contested: true, codes: ['N', 'C']
+    }],
+    components: [{ componentId: 'component-1', nodeIds: ['n0', 'n1'], edgeIds: ['e0'] }],
+    disconnectedEvidence: [], exclusions: []
+  };
+  dto.panelUid = 'private-uid';
+  dto.nodes[0].metadata = { sourceRefs: ['figure-1:A:purpose'] };
+  dto.nodes[0].label = `${'Microglia '.repeat(40)}\nPanel 2A ` +
+    '<svg onload="alert(1)"> click n0 "javascript:alert(1)"';
+  dto.edges[0].label = 'decreases\nclassDef hacked fill:<svg/onload=alert(1)>';
+  dto.edges[0].evidence = { claimId: 'private-claim', text: 'private evidence text' };
+  const serialized = serializeMechanismGraphExport(dto);
+  const parsed = JSON.parse(serialized);
+  assert.equal(parsed.schema, 'brevess.mechanism-graph');
+  assert.deepEqual(Object.keys(parsed).sort(), [
+    'components', 'disconnectedEvidence', 'edges', 'exclusions', 'nodes',
+    'schema', 'schemaVersion'
+  ]);
+  assert.doesNotMatch(serialized,
+    /panelUid|panelKey|claimId|sourceRefs|private-uid|private-claim|private evidence/iu);
+  assert.doesNotMatch(serialized,
+    /Panel\s*2A|<svg|onload|\bclick\b|classDef|javascript:|\r|\n/iu);
+  assert.ok([...parsed.nodes[0].label].length <= 120);
+  assert.ok([...parsed.edges[0].label].length <= 120);
+
+  let lengthGets = 0;
+  const safeNodes = parsed.nodes.map(node => ({ ...node }));
+  dto.nodes = new Proxy(safeNodes, {
+    get(target, key, receiver) {
+      if (key === 'length') lengthGets += 1;
+      return Reflect.get(target, key, receiver);
+    }
+  });
+  assert.doesNotThrow(() => serializeMechanismGraphExport(dto));
+  assert.equal(lengthGets, 0, 'array length must be read from an own data descriptor');
+  const revoked = Proxy.revocable(safeNodes, {});
+  revoked.revoke();
+  dto.nodes = revoked.proxy;
+  assert.throws(() => serializeMechanismGraphExport(dto),
+    /MECHANISM_GRAPH_EXPORT_INVALID/u);
+
+  assert.deepEqual(parseMechanismGraphExport(serialized), parsed,
+    'the safe graph JSON must be accepted by the adjacent import workflow');
+});
 
 test('stored ZIP writer keeps UTF-8 paths and payloads intact', async () => {
   const zip = await createZipBlob([
@@ -150,4 +203,25 @@ test('Zotero exports Figure interpretation and full-text Q&A as separate child n
     assert.doesNotMatch(html, /<pre>/);
     assert.doesNotMatch(html, /javascript:/i);
   });
+});
+
+test('Figure exports include safe recovery provenance and unresolved state only', () => {
+  const { buildFigureMarkdown } = require('../core/export-bundle.js');
+  const markdown = buildFigureMarkdown({
+    figureId: 'figure-1', figureLabel: 'Figure 1', panelHints: ['A', 'B'],
+    inputMode: 'caption_context', unresolvedPanels: ['B'],
+    providerPayload: { Authorization: 'Bearer secret', apiKey: 'sk-secret' },
+    standard: {
+      inputMode: 'caption_context', unresolvedPanels: ['B'],
+      panels: [{ panel: 'A' }, {
+        panel: 'B', status: 'not_identifiable',
+        reasonCode: 'insufficient_panel_evidence',
+        inputMode: 'caption_context', evidenceRefs: ['caption:panel_B']
+      }]
+    }
+  });
+  assert.match(markdown, /"inputMode": "caption_context"/u);
+  assert.match(markdown, /"unresolvedPanels": \[\s*"B"/u);
+  assert.match(markdown, /"reasonCode": "insufficient_panel_evidence"/u);
+  assert.doesNotMatch(markdown, /Bearer secret|sk-secret|Authorization|apiKey/u);
 });

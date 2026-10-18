@@ -25,9 +25,7 @@ test('defines a review synthesis view with grounded synthesis categories', () =>
   assert.ok(READING_VIEWS.review_synthesis);
   assert.deepEqual(READING_VIEWS.review_synthesis.categoryIds, [
     'review_scope_thesis', 'evidence_consensus', 'conflicting_evidence',
-    'heterogeneity_source', 'evidence_quality_certainty', 'integrative_framework',
-    'author_synthesis', 'knowledge_gap', 'evidence', 'conclusion',
-    'limitation', 'future'
+    'evidence_quality_certainty', 'future'
   ]);
   const catalog = createAdaptiveCategoryCatalog();
   for (const id of READING_VIEWS.review_synthesis.categoryIds) assert.ok(catalog[id]);

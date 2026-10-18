@@ -31,6 +31,40 @@ function createCollector(options = {}) {
   return { blocks, stream };
 }
 
+test('NDJSON later block reuses only an unambiguous verified citation from this turn', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  parser.push(JSON.stringify({ type: 'answer_block', block_id: 'a', markdown: 'Survival improved.[[1]]',
+    evidence: [{ marker: '1', paragraph_id: 'p1', source_key: 'results:1', text_hash: 'hash-1',
+      quote: citationSnapshot.paragraphs[0].text, section_path: ['Results'] }] }) + '\n');
+  parser.push(JSON.stringify({ type: 'answer_block', block_id: 'b', markdown: 'This is the observed endpoint.[[1]]', evidence: [] }) + '\n');
+  parser.push('{"type":"final","status":"completed"}\n');
+  assert.equal(parser.finish(), true);
+  assert.equal(parser.snapshot().blocks[1].evidence[0].verification.status, 'verified');
+  assert.equal(parser.snapshot().blocks[1].evidence[0].quote, citationSnapshot.paragraphs[0].text);
+});
+
+test('NDJSON never invents missing citations or inherits an unverified source', () => {
+  for (const hasPrior of [false, true]) {
+    const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+    if (hasPrior) parser.push(JSON.stringify({ type: 'answer_block', block_id: 'a',
+      markdown: 'Unsupported.[[1]]', evidence: [{ marker: '1', paragraph_id: 'missing',
+        source_key: 'missing', text_hash: 'missing', quote: 'Absent source.' }] }) + '\n');
+    assert.throws(() => parser.push(JSON.stringify({ type: 'answer_block', block_id: 'b',
+      markdown: 'New claim.[[1]]', evidence: [] }) + '\n'), /markers do not match/);
+  }
+});
+
+test('NDJSON ambiguous article-wide citation numbering remains rejected', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  for (const [index, quote] of [citationSnapshot.paragraphs[0].text, 'significantly improved survival'].entries()) {
+    parser.push(JSON.stringify({ type: 'answer_block', block_id: `b${index}`, markdown: `Claim ${index}.[[1]]`,
+      evidence: [{ marker: '1', paragraph_id: 'p1', source_key: 'results:1', text_hash: 'hash-1',
+        quote, section_path: ['Results'] }] }) + '\n');
+  }
+  assert.throws(() => parser.push(JSON.stringify({ type: 'answer_block', block_id: 'last',
+    markdown: 'Ambiguous claim.[[1]]', evidence: [] }) + '\n'), /markers do not match/);
+});
+
 test('stream coalescer does not emit an unfinished paragraph', () => {
   const { blocks, stream } = createCollector();
 
@@ -132,6 +166,29 @@ test('NDJSON parser accepts a model wrapping the stream in a Markdown JSON fence
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].blockId, 'block-fenced');
   assert.equal(parser.finish(), true);
+  assert.equal(parser.snapshot().final.status, 'completed');
+});
+
+test('NDJSON parser safely recovers pretty-printed and array-wrapped compatible records', () => {
+  const parser = createArticleChatNdjsonParser({ snapshot: citationSnapshot });
+  const records = [{
+    type: 'answer_block', block_id: 'block-pretty',
+    markdown: 'Treatment improved survival. [[1]]',
+    evidence: [{
+      marker: '1', paragraph_id: 'p1', source_key: 'results:1', text_hash: 'hash-1',
+      quote: 'Treatment significantly improved survival in the intervention group.',
+      section_path: ['Results']
+    }]
+  }, {
+    type: 'turn_summary', summary: 'Treatment improved survival.'
+  }, {
+    type: 'final', status: 'completed'
+  }];
+
+  assert.equal(parser.consumeCompatiblePayload(
+    `\`\`\`json\n${JSON.stringify(records, null, 2)}\n\`\`\``
+  ), true);
+  assert.equal(parser.snapshot().blocks[0].blockId, 'block-pretty');
   assert.equal(parser.snapshot().final.status, 'completed');
 });
 

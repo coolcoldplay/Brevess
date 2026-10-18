@@ -1,0 +1,119 @@
+{
+  "package": "@phosphor-icons/core",
+  "version": "2.1.1",
+  "license": "MIT",
+  "repository": "https://github.com/phosphor-icons/phosphor-core",
+  "tarball": "https://registry.npmjs.org/@phosphor-icons/core/-/core-2.1.1.tgz",
+  "integrity": "sha512-v4ARvrip4qBCImOE5rmPUylOEK4iiED9ZyKjcvzuezqMaiRASCHKcRIuvvxL/twvLpkfnEODCOJp5dM4eZilxQ==",
+  "extraVariants": {
+    "highlighter-circle": [
+      "bold"
+    ]
+  },
+  "integrityVerified": true,
+  "icons": [
+    {
+      "name": "regular/list-dashes",
+      "packagePath": "package/assets/regular/list-dashes.svg",
+      "sha256": "3c1182401db7687437913cbb2fbf17e5eeaad2a96f9420cd8247b02015ce3db2",
+      "bytes": 374
+    },
+    {
+      "name": "duotone/list-dashes",
+      "packagePath": "package/assets/duotone/list-dashes-duotone.svg",
+      "sha256": "1789c74f743016905b5f12b27a8a06d86698bb7de2d54d604e7d30292b50d306",
+      "bytes": 418
+    },
+    {
+      "name": "regular/highlighter",
+      "packagePath": "package/assets/regular/highlighter.svg",
+      "sha256": "a845539f79ae5c696b46f9a1142fb9180e46bd2098c0912f3b90a4365be9c730",
+      "bytes": 543
+    },
+    {
+      "name": "duotone/highlighter",
+      "packagePath": "package/assets/duotone/highlighter-duotone.svg",
+      "sha256": "ff3dca58418048962ea779471be94d3f3fcdbd8cdd0d6b2c1eb8319638efcdb9",
+      "bytes": 637
+    },
+    {
+      "name": "regular/highlighter-circle",
+      "packagePath": "package/assets/regular/highlighter-circle.svg",
+      "sha256": "3aabe4c17a8b222e388eb47f5179f610bf0a24e6890b79d9a8e91c950939a303",
+      "bytes": 396
+    },
+    {
+      "name": "duotone/highlighter-circle",
+      "packagePath": "package/assets/duotone/highlighter-circle-duotone.svg",
+      "sha256": "3750ce585938231e5c811965595cac3442532b5585db20c89542e915cfb79afa",
+      "bytes": 546
+    },
+    {
+      "name": "bold/highlighter-circle",
+      "packagePath": "package/assets/bold/highlighter-circle-bold.svg",
+      "sha256": "06c6f7b62a68f88b444527bc8379d186c90dbbd01a0ece9f7ffd359392abe1c4",
+      "bytes": 433
+    },
+    {
+      "name": "regular/image-square",
+      "packagePath": "package/assets/regular/image-square.svg",
+      "sha256": "73f5b6aa22a49ad093908151e8f606dd7c797a192cfb96b00c6519d45dffe936",
+      "bytes": 365
+    },
+    {
+      "name": "duotone/image-square",
+      "packagePath": "package/assets/duotone/image-square-duotone.svg",
+      "sha256": "7d05410b2d1874d7178ac58b51f285d5e4a13928de76431198114dfd1d0c7af1",
+      "bytes": 547
+    },
+    {
+      "name": "regular/images-square",
+      "packagePath": "package/assets/regular/images-square.svg",
+      "sha256": "8e5e386ab31eb04e0545e0d470b6c4be201946e1c253d5e4d50089f5a0161889",
+      "bytes": 455
+    },
+    {
+      "name": "duotone/images-square",
+      "packagePath": "package/assets/duotone/images-square-duotone.svg",
+      "sha256": "bfcff5f57ec323566efaedb87fde1ecdb59a18cd554697d82a36cbacf619b70a",
+      "bytes": 637
+    },
+    {
+      "name": "regular/chat-circle-dots",
+      "packagePath": "package/assets/regular/chat-circle-dots.svg",
+      "sha256": "2af44e36757c90c999e070065ae61c495c66c8e88f43c5f07964dc3367cad60d",
+      "bytes": 473
+    },
+    {
+      "name": "duotone/chat-circle-dots",
+      "packagePath": "package/assets/duotone/chat-circle-dots-duotone.svg",
+      "sha256": "361680d35411ce4611191eb4a24a1b7d309deee350a4faea1808bdcde5700045",
+      "bytes": 605
+    },
+    {
+      "name": "regular/chat-dots",
+      "packagePath": "package/assets/regular/chat-dots.svg",
+      "sha256": "d13a84b42137ad0771ea42d261ad58ad6e2cb2f3b36c88b18465a451e5e67bff",
+      "bytes": 463
+    },
+    {
+      "name": "duotone/chat-dots",
+      "packagePath": "package/assets/duotone/chat-dots-duotone.svg",
+      "sha256": "12ed362dd205ef7a16a96a88d92270887ce96aca961c609b457383e0e3074756",
+      "bytes": 586
+    },
+    {
+      "name": "regular/notebook",
+      "packagePath": "package/assets/regular/notebook.svg",
+      "sha256": "508be681b27a34b9388e748ca4b8800b4531a38bfb7d6cb390546cba6ea90208",
+      "bytes": 339
+    },
+    {
+      "name": "duotone/notebook",
+      "packagePath": "package/assets/duotone/notebook-duotone.svg",
+      "sha256": "909853345ec23bad2a2266140eb18666dac70824651a350a8af38fefe46367e2",
+      "bytes": 410
+    }
+  ],
+  "treatment": "Complete source geometry. Only root sizing/class/id excluded from runtime attrs; original SVG bytes retained."
+}

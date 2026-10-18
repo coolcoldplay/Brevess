@@ -1,0 +1,521 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "project-a",
+      "name": "演示 · 课题 A · 刺激与表型",
+      "question": "刺激通过因子 X 还是旁路 Y 驱动表型？",
+      "hypotheses": [
+        {
+          "id": "h1",
+          "name": "H1 · 因子 X 介导",
+          "nodes": [
+            {
+              "id": "h1-n1",
+              "label": "刺激",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n2",
+              "label": "因子 X",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n3",
+              "label": "表型响应",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n4",
+              "label": "旁路 Y",
+              "x": 355,
+              "y": 335,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "h1-e1",
+              "source": "h1-n1",
+              "target": "h1-n2",
+              "claim": "诱导",
+              "kind": "main",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": []
+            },
+            {
+              "id": "h1-e2",
+              "source": "h1-n2",
+              "target": "h1-n3",
+              "claim": "驱动",
+              "kind": "main",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": [
+                {
+                  "id": "h1-binding",
+                  "resourceId": "block-b",
+                  "types": [
+                    "correlation"
+                  ],
+                  "judgement": "相反结果：需区分条件",
+                  "review": true
+                }
+              ]
+            },
+            {
+              "id": "h1-e3",
+              "source": "h1-n1",
+              "target": "h1-n4",
+              "claim": "条件性旁路",
+              "kind": "branch",
+              "status": "pending",
+              "condition": "仅在因子 X 被抑制时成立",
+              "bindings": []
+            },
+            {
+              "id": "h1-e4",
+              "source": "h1-n4",
+              "target": "h1-n3",
+              "claim": "旁路驱动",
+              "kind": "branch",
+              "status": "pending",
+              "condition": "需与 H1 主线结果区分",
+              "bindings": []
+            },
+            {
+              "id": "h1-e5",
+              "source": "h1-n3",
+              "target": "h1-n2",
+              "claim": "响应反向抑制",
+              "kind": "feedback",
+              "status": "pending",
+              "condition": "持续刺激后的负反馈假设",
+              "bindings": []
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        },
+        {
+          "id": "h2",
+          "name": "H2 · 旁路竞争解释",
+          "nodes": [
+            {
+              "id": "h2-n1",
+              "label": "刺激",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h2-n2",
+              "label": "旁路 Y",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h2-n3",
+              "label": "表型响应",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "h2-e1",
+              "source": "h2-n1",
+              "target": "h2-n2",
+              "claim": "诱导",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": []
+            },
+            {
+              "id": "h2-e2",
+              "source": "h2-n2",
+              "target": "h2-n3",
+              "claim": "间接驱动",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": []
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        }
+      ],
+      "plans": [
+        {
+          "id": "plan-a",
+          "name": "方案 A · 主线叙事",
+          "hypothesisIds": [
+            "h1",
+            "h2"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fig1",
+              "title": "建立现象与研究边界",
+              "question": "刺激会在什么条件下改变表型？",
+              "transition": "为机制检验确定模型和时程",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p1",
+                  "title": "现象与分组",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e1",
+                      "revision": 0
+                    }
+                  ]
+                },
+                {
+                  "id": "p2",
+                  "title": "时间窗口",
+                  "x": 300,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            },
+            {
+              "id": "fig2",
+              "title": "区分介导与旁路解释",
+              "question": "因子 X 是否为必要环节？",
+              "transition": "用扰动和救援区分 H1 / H2",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p3",
+                  "title": "扰动与救援",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e2",
+                      "revision": 0
+                    },
+                    {
+                      "hypothesisId": "h2",
+                      "edgeId": "h2-e2",
+                      "revision": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fig1",
+            "mode": "board"
+          }
+        },
+        {
+          "id": "plan-b",
+          "name": "方案 B · 条件优先",
+          "hypothesisIds": [
+            "h1",
+            "h2"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fig2",
+              "title": "区分介导与旁路解释",
+              "question": "因子 X 是否为必要环节？",
+              "transition": "用扰动和救援区分 H1 / H2",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p3",
+                  "title": "扰动与救援",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e2",
+                      "revision": 0
+                    },
+                    {
+                      "hypothesisId": "h2",
+                      "edgeId": "h2-e2",
+                      "revision": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "fig1",
+              "title": "建立现象与研究边界",
+              "question": "刺激会在什么条件下改变表型？",
+              "transition": "为机制检验确定模型和时程",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p1",
+                  "title": "现象与分组",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e1",
+                      "revision": 0
+                    }
+                  ]
+                },
+                {
+                  "id": "p2",
+                  "title": "时间窗口",
+                  "x": 300,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fig2",
+            "mode": "story"
+          }
+        }
+      ],
+      "assets": [
+        {
+          "id": "own-demo",
+          "type": "asset",
+          "title": "我的草图 · 演示素材",
+          "image": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22480%22%20height%3D%22260%22%20viewBox%3D%220%200%20480%20260%22%3E%3Crect%20width%3D%22480%22%20height%3D%22260%22%20fill%3D%22%23f7f7f7%22%2F%3E%3Ctext%20x%3D%2222%22%20y%3D%2232%22%20font-size%3D%2218%22%20font-family%3D%22sans-serif%22%20fill%3D%22%23333%22%3E%E8%87%AA%E5%B7%B1%E7%9A%84%E8%8D%89%E5%9B%BE%20%C2%B7%20DEMO%3C%2Ftext%3E%3Crect%20x%3D%2230%22%20y%3D%2260%22%20width%3D%22420%22%20height%3D%22145%22%20fill%3D%22%23e3e3e3%22%2F%3E%3Cg%20fill%3D%22%23999%22%3E%3Ccircle%20cx%3D%2295%22%20cy%3D%22115%22%20r%3D%2224%22%2F%3E%3Ccircle%20cx%3D%22187%22%20cy%3D%22157%22%20r%3D%2220%22%2F%3E%3Ccircle%20cx%3D%22295%22%20cy%3D%22103%22%20r%3D%2227%22%2F%3E%3Ccircle%20cx%3D%22384%22%20cy%3D%22158%22%20r%3D%2219%22%2F%3E%3C%2Fg%3E%3Ctext%20x%3D%2222%22%20y%3D%22245%22%20font-size%3D%2213%22%20fill%3D%22%23777%22%20font-family%3D%22sans-serif%22%3E%E7%A4%BA%E6%84%8F%E7%B4%A0%E6%9D%90%20%C2%B7%20%E4%B8%8D%E4%BB%A3%E8%A1%A8%E7%A7%91%E7%A0%94%E7%BB%93%E6%9E%9C%3C%2Ftext%3E%3C%2Fsvg%3E",
+          "note": "演示自有素材；仅为草图，无实验结论。"
+        }
+      ],
+      "demonstration": true
+    },
+    {
+      "id": "project-b",
+      "name": "演示 · 课题 B · 时间依赖性",
+      "question": "同一刺激在不同时间窗口是否产生不同响应？",
+      "hypotheses": [
+        {
+          "id": "hb1",
+          "name": "H1 · 时间依赖响应",
+          "nodes": [
+            {
+              "id": "hb1-n1",
+              "label": "刺激",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "hb1-n2",
+              "label": "因子 X",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "hb1-n3",
+              "label": "表型响应",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "hb1-e1",
+              "source": "hb1-n1",
+              "target": "hb1-n2",
+              "claim": "诱导",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": []
+            },
+            {
+              "id": "hb1-e2",
+              "source": "hb1-n2",
+              "target": "hb1-n3",
+              "claim": "驱动",
+              "status": "pending",
+              "condition": "本课题模型 / 待实验",
+              "bindings": [
+                {
+                  "id": "hb1-binding",
+                  "resourceId": "block-b",
+                  "types": [
+                    "correlation"
+                  ],
+                  "judgement": "相反结果：需区分条件",
+                  "review": true
+                }
+              ]
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        }
+      ],
+      "plans": [
+        {
+          "id": "plan-c",
+          "name": "方案 A · 探索设计",
+          "hypothesisIds": [
+            "hb1"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fb1",
+              "title": "探索时间窗口",
+              "question": "响应是否依赖时间？",
+              "transition": "先探索，再确定机制",
+              "references": [],
+              "panels": [
+                {
+                  "id": "pb1",
+                  "title": "时间序列",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "确认响应及研究条件",
+                  "experiment": "对照组、扰动组；待补充样本量与统计方法",
+                  "claim": "拟检验刺激是否改变表型",
+                  "result": "尚无自己的实验结果",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fb1",
+            "mode": "board"
+          }
+        }
+      ],
+      "assets": [],
+      "demonstration": true
+    }
+  ],
+  "ui": {
+    "projectId": "project-a",
+    "mode": "hypothesis",
+    "hypothesisId": "h1",
+    "planId": "plan-a",
+    "resourceTab": "paper",
+    "search": "",
+    "leftWidth": 190,
+    "rightWidth": 320,
+    "auxHeight": 184,
+    "leftCollapsed": false
+  }
+}

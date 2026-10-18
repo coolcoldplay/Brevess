@@ -16,8 +16,10 @@
     studyProfile = null,
     resumeChunks = {},
     resumeParagraphs = {},
+    resumeDecisionRounds = {},
     onChunkComplete = async () => {},
     onParagraphComplete = async () => {},
+    onDecisionRoundComplete = async () => {},
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
     signal,
     waitIfPaused = async () => {},
@@ -41,6 +43,7 @@
     const resumedParagraphs = resumeParagraphs instanceof Map
       ? resumeParagraphs : new Map(Object.entries(resumeParagraphs || {}));
     const completedByChunk = new Map();
+    const decisionRounds = new Map(Object.entries(resumeDecisionRounds || {}));
     const retrySchedule = [2000, 5000, 12000, 25000];
     const workerLimit = Math.max(1, Math.min(6, Math.floor(Number(concurrency) || 1)));
     let completedChunks = 0;
@@ -48,6 +51,26 @@
     let checkpointTail = Promise.resolve();
     let paragraphCheckpointTail = Promise.resolve();
     let paragraphCheckpointError = null;
+    let decisionCheckpointTail = Promise.resolve();
+
+    const decisionCheckpoint = {
+      get: key => decisionRounds.get(key),
+      beforeRequest: checkpoint,
+      async put(completed) {
+        // Preserve a validated paid response even if the user paused or stopped.
+        // Dispatch and final chunk commits still pass through checkpoint().
+        const operation = decisionCheckpointTail.then(() => onDecisionRoundComplete(completed));
+        decisionCheckpointTail = operation.catch(() => {});
+        try { await operation; } catch (error) {
+          // A storage failure is not a failed model request and must never spend another call.
+          error.retryable = false;
+          error.code ||= 'ANALYSIS_CHECKPOINT_WRITE_FAILED';
+          throw error;
+        }
+        decisionRounds.set(completed.key, completed);
+        if (decisionRounds.size > 4096) decisionRounds.delete(decisionRounds.keys().next().value);
+      }
+    };
 
     function cancelledError() {
       return shared.operationError
@@ -102,6 +125,7 @@
     function shouldSplitAfterError(error, attempt, paragraphCount) {
       if (paragraphCount <= 1) return false;
       if (error?.code === 'OUTPUT_TRUNCATED' || error?.code === 'REQUEST_TIMEOUT') return true;
+      if (error?.code === 'INVALID_RESPONSE') return attempt >= 2;
       return error?.code === 'PROVIDER_UNAVAILABLE' && attempt >= 2;
     }
 
@@ -162,6 +186,7 @@
         const beforeCount = paragraphResults.size;
         const parser = shared.createHighlightNdjsonParser({
           categoryCodeMap: prompt.categoryCodeMap,
+          sentenceQuoteMap: prompt.sentenceQuoteMap,
           pendingIndices: prompt.pendingIndices,
           onParagraph: record => {
             const materialized = shared.materializeHighlightStreamRecord({
@@ -212,6 +237,7 @@
             paragraphs: chunk.paragraphs.filter((item, index) =>
               prompt.pendingIndices.includes(index)),
             outputUnits: prompt.pendingIndices.length,
+            structuredOutput: true,
             signal
           };
           for await (const event of adapter.generateTextStream(request)) {
@@ -271,7 +297,8 @@
           });
           return { split: children };
         }
-        if (!effectiveError.retryable || attempt > maxRetries ||
+        const recoverableFormatError = effectiveError.code === 'INVALID_RESPONSE';
+        if ((!effectiveError.retryable && !recoverableFormatError) || attempt > maxRetries ||
             continuation >= maximumContinuations) throw effectiveError;
         const waitMs = retryDelay(effectiveError, attempt - 1);
         attempt += 1;
@@ -320,7 +347,7 @@
       while (true) {
         try {
           await checkpoint();
-          response = await adapter.analyzeChunk({ ...request, signal });
+          response = await adapter.analyzeChunk({ ...request, signal, decisionCheckpoint });
           break;
         } catch (error) {
           if (signal?.aborted) throw cancelledError();
@@ -464,9 +491,11 @@
       let cursor = 0;
       let active = 0;
       let firstError = null;
+      let fatalError = null;
+      const failedChunks = [];
 
       const pump = () => {
-        while (!firstError && active < workerLimit && cursor < queue.length) {
+        while (!fatalError && active < workerLimit && cursor < queue.length) {
           const chunk = queue[cursor];
           cursor += 1;
           active += 1;
@@ -477,10 +506,25 @@
             }
           }).catch(error => {
             firstError ||= error;
+            failedChunks.push({ chunkId: chunk.chunkId, errorCode: error?.code || 'UNKNOWN_ERROR' });
+            // Malformed content in one chunk must not discard the rest of the document.
+            // Transport, authentication, cancellation and persistence failures stop dispatch.
+            if (error?.diagnosticType === 'HtmlResponse' ||
+                !['INVALID_RESPONSE', 'OUTPUT_TRUNCATED', 'JEV_LIMIT_EXCEEDED'].includes(error?.code)) {
+              fatalError ||= error;
+            }
+            report({ phase: 'chunk_failed', chunkId: chunk.chunkId, completedChunks,
+              totalChunks, errorCode: error?.code || 'UNKNOWN_ERROR' });
           }).finally(() => {
             active -= 1;
-            if (active === 0 && (firstError || cursor >= queue.length)) {
-              if (firstError) reject(firstError);
+            if (active === 0 && (fatalError || cursor >= queue.length)) {
+              if (firstError) {
+                const failure = fatalError || firstError;
+                failure.failedChunks = failedChunks;
+                failure.completedChunks = completedChunks;
+                failure.totalChunks = totalChunks;
+                reject(failure);
+              }
               else resolve();
               return;
             }

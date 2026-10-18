@@ -1,14 +1,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 require('../core/confidence-policy.js');
 require('../core/category-store.js');
 require('../core/adaptive-catalog.js');
+require('../core/reading-tools.js');
+const { LLM_TASK_IDS } = require('../core/llm-task-catalog.js');
 const {
-  TASK_ROUTE_KEYS,
   PROFILE_ID_PATTERN,
+  DEFAULT_FIGURE_PANEL_HEADER_FIELDS,
   createDefaultSettings,
+  normalizeFigurePanelHeaderFields,
   createTokenPolicy,
   normalizeTaskRoutes,
+  normalizeTaskPolicy,
+  migrateLegacyTaskRoutes,
+  createV5BackupPayload,
   normalizeProfile,
   legacyProfileId,
   mergeSettings,
@@ -38,9 +45,22 @@ function createMemoryStorage() {
   };
 }
 
-test('defaults to one empty v5 profile and regex mode until any profile is configured and consented', () => {
+test('CommonJS settings-store loads its task catalog without global preload order', () => {
+  const output = execFileSync(process.execPath, ['-e', [
+    "delete globalThis.SciLLM;",
+    "const store = require('./core/settings-store.js');",
+    "const settings = store.createDefaultSettings();",
+    "process.stdout.write(JSON.stringify({ version: settings.version, taskCount: Object.keys(settings.taskPolicies).length }));"
+  ].join(' ')], {
+    cwd: process.cwd(),
+    encoding: 'utf8'
+  });
+  assert.deepEqual(JSON.parse(output), { version: 6, taskCount: 18 });
+});
+
+test('defaults to version 6 task policies and regex mode until any profile is configured and consented', () => {
   const settings = createDefaultSettings();
-  assert.equal(settings.version, 5);
+  assert.equal(settings.version, 6);
   assert.deepEqual(settings.categoryOverrides, {});
   assert.deepEqual(settings.deletedBuiltInCategoryIds, []);
   assert.deepEqual(settings.studyTypeOverrides, {});
@@ -50,12 +70,32 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   assert.deepEqual(settings.profileOrder, ['profile_default_openai']);
   assert.equal(settings.profiles.profile_default_openai.config.apiKey, '');
   assert.equal(settings.profiles.profile_default_openai.contextWindowTokens, null);
-  assert.deepEqual(settings.taskRoutes, Object.fromEntries(
-    TASK_ROUTE_KEYS.map(taskId => [taskId, { mode: 'global', profileId: null }])
-  ));
+  assert.equal(settings.taskRoutes, undefined);
+  assert.deepEqual(Object.keys(settings.taskPolicies), LLM_TASK_IDS);
+  for (const [taskId, policy] of Object.entries(settings.taskPolicies)) {
+    assert.deepEqual(Object.keys(policy), [
+      'mode', 'profileId', 'reasoningEnabled', 'reasoningEffort',
+      'tokenRule', 'allowTextFallback'
+    ]);
+    assert.deepEqual(policy, {
+      mode: ['full_text_translation', 'navigation_title_translation'].includes(taskId) ? 'local' : 'global',
+      profileId: null,
+      reasoningEnabled: false,
+      reasoningEffort: 'auto',
+      tokenRule: 'auto',
+      allowTextFallback: false
+    });
+    assert.equal('apiKey' in policy, false);
+  }
   assert.equal(settings.mode, 'regex');
   assert.equal(settings.autoAnalyze, false);
   assert.equal(settings.autoCacheFigureImages, true);
+  assert.equal(settings.saveArticleWebSnapshot, true);
+  assert.equal(settings.literatureNoteTemplates.length, 7);
+  assert.equal(settings.lastLiteratureNoteTemplateId, 'basic_research');
+  assert.deepEqual(settings.selectionLlmActions.map(item => item.id), [
+    'translate', 'explain'
+  ]);
   assert.equal(settings.consentGranted, false);
   assert.equal(getEffectiveMode(settings), 'regex');
 
@@ -64,6 +104,378 @@ test('defaults to one empty v5 profile and regex mode until any profile is confi
   assert.equal(getEffectiveMode(settings), 'regex');
   settings.consentGranted = true;
   assert.equal(getEffectiveMode(settings), 'llm');
+});
+
+test('normalizes task policies to bounded catalog defaults without credentials', () => {
+  const profiles = {
+    profile_valid_text: { capabilities: { vision: false } },
+    profile_valid_vision: { capabilities: { vision: true } }
+  };
+  const invalid = normalizeTaskPolicy('document_highlight', {
+    mode: 'profile',
+    profileId: 'profile_missing',
+    reasoningEnabled: 'true',
+    reasoningEffort: 'extreme',
+    tokenRule: { mode: 'unlimited' },
+    allowTextFallback: true,
+    apiKey: 'must-not-copy',
+    customHeaders: { Authorization: 'must-not-copy' }
+  }, profiles);
+  assert.deepEqual(invalid, {
+    mode: 'global',
+    profileId: null,
+    reasoningEnabled: false,
+    reasoningEffort: 'auto',
+    tokenRule: 'auto',
+    allowTextFallback: false
+  });
+
+  const valid = normalizeTaskPolicy('figure_panel_interpretation', {
+    mode: 'profile',
+    profileId: 'profile_valid_vision',
+    reasoningEnabled: true,
+    reasoningEffort: 'xhigh',
+    tokenRule: 'auto',
+    allowTextFallback: true,
+    apiKey: 'must-not-copy'
+  }, profiles);
+  assert.deepEqual(valid, {
+    mode: 'profile',
+    profileId: 'profile_valid_vision',
+    reasoningEnabled: true,
+    reasoningEffort: 'xhigh',
+    tokenRule: 'auto',
+    allowTextFallback: true
+  });
+});
+
+test('preserves only a bounded custom token rule through v6 merge and storage round trips', async () => {
+  const settings = createDefaultSettings();
+  const sourceRule = {
+    input: {
+      safetyRatio: 0.9,
+      reservedTokens: 1024,
+      sourceCapTokens: 20000,
+      maxUnits: 12,
+      prompt: 'must-not-copy'
+    },
+    output: {
+      base: 1000,
+      perUnit: 500,
+      floor: 2048,
+      ceiling: 8192,
+      truncationRetries: 1,
+      retryMultiplier: 1.5,
+      schema: { apiKey: 'must-not-copy' }
+    },
+    apiKey: 'must-not-copy',
+    code: 'must-not-copy'
+  };
+  settings.taskPolicies.figure_walkthrough.tokenRule = sourceRule;
+
+  const merged = mergeSettings(settings);
+  assert.deepEqual(merged.taskPolicies.figure_walkthrough.tokenRule, {
+    input: {
+      safetyRatio: 0.9,
+      reservedTokens: 1024,
+      sourceCapTokens: 20000,
+      maxUnits: 12
+    },
+    output: {
+      base: 1000,
+      perUnit: 500,
+      floor: 2048,
+      ceiling: 8192,
+      truncationRetries: 1,
+      retryMultiplier: 1.5
+    }
+  });
+  assert.notEqual(merged.taskPolicies.figure_walkthrough.tokenRule, sourceRule);
+  assert.equal(/apiKey|prompt|schema|code/.test(
+    JSON.stringify(merged.taskPolicies.figure_walkthrough.tokenRule)
+  ), false);
+
+  const storage = createMemoryStorage();
+  await saveSettings(storage, merged);
+  const loaded = await loadSettings(storage);
+  assert.deepEqual(
+    loaded.taskPolicies.figure_walkthrough.tokenRule,
+    merged.taskPolicies.figure_walkthrough.tokenRule
+  );
+  assert.notEqual(
+    loaded.taskPolicies.figure_walkthrough.tokenRule,
+    merged.taskPolicies.figure_walkthrough.tokenRule
+  );
+});
+
+test('normalizes malformed custom token rules and rejects prototype injection', () => {
+  const malformed = normalizeTaskPolicy('figure_walkthrough', {
+    tokenRule: {
+      input: {
+        safetyRatio: Infinity,
+        reservedTokens: -30,
+        sourceCapTokens: 1e100,
+        maxUnits: 0
+      },
+      output: {
+        base: NaN,
+        perUnit: -1,
+        floor: 0,
+        ceiling: Infinity,
+        truncationRetries: 999,
+        retryMultiplier: 1
+      }
+    }
+  }, {});
+  assert.deepEqual(malformed.tokenRule, {
+    input: {
+      safetyRatio: 1,
+      reservedTokens: 0,
+      sourceCapTokens: 2000000,
+      maxUnits: 1
+    },
+    output: {
+      base: 3200,
+      perUnit: 0,
+      floor: 512,
+      ceiling: 24576,
+      truncationRetries: 10,
+      retryMultiplier: 1.75
+    }
+  });
+
+  const inherited = Object.create({
+    input: { sourceCapTokens: 1 },
+    output: { ceiling: 1 }
+  });
+  assert.equal(normalizeTaskPolicy('figure_walkthrough', {
+    tokenRule: inherited
+  }, {}).tokenRule, 'auto');
+
+  const injected = JSON.parse('{"input":{"__proto__":{"apiKey":"secret"}},"output":{}}');
+  assert.equal(normalizeTaskPolicy('figure_walkthrough', {
+    tokenRule: injected
+  }, {}).tokenRule, 'auto');
+});
+
+test('migrates every v5 task route to its approved version 6 task policies', () => {
+  const profiles = {
+    profile_fast: {
+      config: { reasoningEffort: 'xhigh' },
+      capabilities: { vision: false }
+    },
+    profile_text: {
+      config: { reasoningEnabled: true, reasoningEffort: 'high' },
+      capabilities: { vision: false }
+    },
+    profile_vision: {
+      config: { thinking: true, reasoningEffort: 'medium' },
+      capabilities: { vision: true }
+    }
+  };
+  const migrated = migrateLegacyTaskRoutes({
+    highlight: { mode: 'profile', profileId: 'profile_fast' },
+    summary: { mode: 'profile', profileId: 'profile_text' },
+    figure: {
+      mode: 'profile', profileId: 'profile_vision', allowTextFallback: true
+    },
+    crossFigure: { mode: 'global', profileId: 'profile_fast' }
+  }, profiles);
+
+  const expectedRouteGroups = {
+    document_highlight: 'profile_fast',
+    evidence_ledger_review: 'profile_fast',
+    paragraph_summary: 'profile_text',
+    article_outline_summary: 'profile_text',
+    abbreviation_translation: 'profile_text',
+    paper_research_logic: 'profile_text',
+    paper_innovations: 'profile_text',
+    paper_limitations: 'profile_text',
+    literature_note_autofill: 'profile_text',
+    article_chat: 'profile_text',
+    selection_chat: 'profile_text',
+    figure_walkthrough: 'profile_vision',
+    figure_panel_interpretation: 'profile_vision',
+    figure_panel_followup: 'profile_vision'
+  };
+  assert.deepEqual(Object.keys(migrated), LLM_TASK_IDS);
+  for (const [taskId, profileId] of Object.entries(expectedRouteGroups)) {
+    assert.equal(migrated[taskId].mode, 'profile', taskId);
+    assert.equal(migrated[taskId].profileId, profileId, taskId);
+  }
+  assert.equal(migrated.taskPolicies, undefined);
+  assert.equal(migrated.document_highlight.profileId, 'profile_fast');
+  assert.equal(migrated.evidence_ledger_review.profileId, 'profile_fast');
+  assert.equal(migrated.document_highlight.reasoningEnabled, false);
+  assert.equal(migrated.document_highlight.reasoningEffort, 'xhigh');
+  assert.equal(migrated.abbreviation_translation.profileId, 'profile_text');
+  assert.equal(migrated.figure_panel_followup.profileId, 'profile_vision');
+  assert.equal(migrated.cross_figure_mechanism.mode, 'global');
+  assert.equal(migrated.cross_figure_mechanism.profileId, null);
+  assert.equal(migrated.paragraph_summary.reasoningEnabled, true);
+  assert.equal(migrated.paragraph_summary.reasoningEffort, 'high');
+  assert.equal(migrated.figure_walkthrough.reasoningEnabled, true);
+  assert.equal(migrated.figure_walkthrough.reasoningEffort, 'medium');
+  assert.equal(migrated.figure_walkthrough.allowTextFallback, true);
+  assert.equal(migrated.cross_figure_mechanism.allowTextFallback, false);
+});
+
+test('mergeSettings promotes v5 taskRoutes to version 6 taskPolicies', () => {
+  const profile = normalizeProfile('profile_fast_route', {
+    name: 'Fast route',
+    providerId: 'openai',
+    config: { apiKey: 'local-secret', model: 'gpt-fast' },
+    capabilities: { vision: true }
+  });
+  const migrated = mergeSettings({
+    version: 5,
+    profiles: { profile_fast_route: profile },
+    profileOrder: ['profile_fast_route'],
+    globalProfileId: 'profile_fast_route',
+    taskRoutes: {
+      highlight: { mode: 'profile', profileId: 'profile_fast_route' },
+      summary: { mode: 'profile', profileId: 'profile_fast_route' },
+      figure: { mode: 'profile', profileId: 'profile_fast_route' },
+      crossFigure: { mode: 'global', profileId: null }
+    }
+  });
+
+  assert.equal(migrated.version, 6);
+  assert.equal(migrated.taskRoutes, undefined);
+  assert.equal(migrated.taskPolicies.document_highlight.profileId, 'profile_fast_route');
+  assert.equal(migrated.taskPolicies.evidence_ledger_review.profileId, 'profile_fast_route');
+  assert.equal(migrated.taskPolicies.abbreviation_translation.profileId, 'profile_fast_route');
+  assert.equal(migrated.taskPolicies.figure_panel_followup.profileId, 'profile_fast_route');
+  assert.equal(migrated.taskPolicies.cross_figure_mechanism.mode, 'global');
+});
+
+test('v5 global routes inherit explicit reasoning from the effective global profile', () => {
+  const profile = normalizeProfile('profile_global_reasoning', {
+    name: 'Global reasoning',
+    providerId: 'openai',
+    config: {
+      apiKey: 'local-key', model: 'gpt-global',
+      reasoningEnabled: true, reasoningEffort: 'high'
+    },
+    capabilities: { vision: true }
+  });
+  const migrated = mergeSettings({
+    version: 5,
+    profiles: { profile_global_reasoning: profile },
+    profileOrder: ['profile_global_reasoning'],
+    globalProfileId: 'profile_global_reasoning',
+    taskRoutes: {
+      highlight: { mode: 'global', profileId: null },
+      summary: { mode: 'global', profileId: null }
+    }
+  });
+
+  for (const taskId of [
+    'document_highlight', 'evidence_ledger_review', 'paragraph_summary',
+    'article_outline_summary', 'abbreviation_translation'
+  ]) {
+    assert.equal(migrated.taskPolicies[taskId].mode, 'global', taskId);
+    assert.equal(migrated.taskPolicies[taskId].profileId, null, taskId);
+    assert.equal(migrated.taskPolicies[taskId].reasoningEnabled, true, taskId);
+    assert.equal(migrated.taskPolicies[taskId].reasoningEffort, 'high', taskId);
+  }
+});
+
+test('public settings expose a read-only legacy taskRoutes projection', () => {
+  const settings = createDefaultSettings();
+  settings.taskPolicies.document_highlight = {
+    ...settings.taskPolicies.document_highlight,
+    mode: 'profile',
+    profileId: 'profile_default_openai'
+  };
+  settings.taskPolicies.paragraph_summary = {
+    ...settings.taskPolicies.paragraph_summary,
+    mode: 'profile',
+    profileId: 'profile_default_openai'
+  };
+  const publicSettings = toPublicSettings(settings);
+
+  assert.deepEqual(publicSettings.taskRoutes, {
+    highlight: { mode: 'profile', profileId: 'profile_default_openai' },
+    summary: { mode: 'profile', profileId: 'profile_default_openai' },
+    figure: { mode: 'global', profileId: null },
+    crossFigure: { mode: 'global', profileId: null }
+  });
+  publicSettings.taskRoutes.highlight.profileId = 'profile_missing';
+  const persisted = mergeSettings(publicSettings);
+  assert.equal(persisted.taskRoutes, undefined);
+  assert.equal(
+    persisted.taskPolicies.document_highlight.profileId,
+    'profile_default_openai'
+  );
+});
+
+test('v6 compatibility route patches persist when taskPolicies are absent', async () => {
+  const storage = createMemoryStorage();
+  const patch = createDefaultSettings();
+  delete patch.taskPolicies;
+  patch.taskRoutes = {
+    highlight: { mode: 'global', profileId: null },
+    summary: { mode: 'global', profileId: null },
+    figure: { mode: 'profile', profileId: 'profile_default_openai' },
+    crossFigure: { mode: 'global', profileId: null }
+  };
+
+  const saved = await saveSettings(storage, patch);
+
+  assert.equal(saved.taskRoutes, undefined);
+  for (const taskId of [
+    'figure_walkthrough', 'figure_panel_interpretation', 'figure_panel_followup'
+  ]) {
+    assert.equal(saved.taskPolicies[taskId].mode, 'profile', taskId);
+    assert.equal(
+      saved.taskPolicies[taskId].profileId,
+      'profile_default_openai',
+      taskId
+    );
+  }
+  assert.deepEqual(storage.values.sciLlmSettingsV2.taskPolicies, saved.taskPolicies);
+  assert.equal(storage.values.sciLlmSettingsV2.taskRoutes, undefined);
+});
+
+test('backs up normalized v5 settings once before the first v6 save', async () => {
+  const storage = createMemoryStorage();
+  storage.values.sciLlmSettingsV2 = {
+    version: 5,
+    profiles: {
+      profile_backup_route: {
+        name: 'Backup route',
+        providerId: 'openai',
+        config: { apiKey: 'backup-local-key', model: 'gpt-backup' },
+        capabilities: { vision: true }
+      }
+    },
+    profileOrder: ['profile_backup_route'],
+    globalProfileId: 'profile_backup_route',
+    taskRoutes: {
+      summary: { mode: 'profile', profileId: 'profile_backup_route' }
+    },
+    futureSetting: { preserve: true }
+  };
+  const payload = createV5BackupPayload(storage.values.sciLlmSettingsV2);
+  assert.equal(payload.version, 5);
+  assert.equal(payload.taskPolicies, undefined);
+  assert.deepEqual(payload.taskRoutes.summary, {
+    mode: 'profile', profileId: 'profile_backup_route'
+  });
+  assert.deepEqual(payload.futureSetting, { preserve: true });
+
+  const loaded = await loadSettings(storage);
+  await saveSettings(storage, loaded);
+  assert.deepEqual(storage.values.sciLlmSettingsV5Backup, payload);
+  assert.equal(storage.values.sciLlmSettingsV2.version, 6);
+  assert.equal(storage.values.sciLlmSettingsV2.taskRoutes, undefined);
+  assert.deepEqual(Object.keys(storage.values.sciLlmSettingsV2.taskPolicies), LLM_TASK_IDS);
+
+  const firstBackup = JSON.parse(JSON.stringify(storage.values.sciLlmSettingsV5Backup));
+  storage.values.sciLlmSettingsV2.futureSetting = { preserve: false };
+  await saveSettings(storage, storage.values.sciLlmSettingsV2);
+  assert.deepEqual(storage.values.sciLlmSettingsV5Backup, firstBackup);
 });
 
 test('persists only valid unique deleted built-in category ids', () => {
@@ -91,6 +503,112 @@ test('Figure original caching defaults on and preserves an explicit opt-out', ()
   );
 });
 
+test('normalizes offline snapshots, literature templates, remembered template, and selection actions', () => {
+  const merged = mergeSettings({
+    version: 5,
+    saveArticleWebSnapshot: false,
+    literatureNoteTemplates: [{
+      id: 'clinical_custom',
+      name: 'Clinical custom',
+      studyFamily: 'clinical',
+      fields: [{ id: 'population', label: 'Population' }]
+    }],
+    lastLiteratureNoteTemplateId: 'missing_template',
+    selectionLlmActions: [{
+      id: 'criticize', name: 'Critique', prompt: 'Identify unsupported claims.', enabled: true
+    }]
+  });
+
+  assert.equal(merged.saveArticleWebSnapshot, false);
+  assert.deepEqual(merged.literatureNoteTemplates.map(item => item.id), ['clinical_custom']);
+  assert.equal(merged.lastLiteratureNoteTemplateId, 'clinical_custom');
+  assert.deepEqual(merged.selectionLlmActions.map(item => item.id), ['criticize']);
+});
+
+test('Panel heading fields use the approved defaults and return fresh copies', () => {
+  const expected = {
+    evidenceType: true,
+    purpose: false,
+    experimentalMethods: true,
+    statisticalMethods: true,
+    comparison: false,
+    directObservation: false
+  };
+  const first = createDefaultSettings();
+  const second = createDefaultSettings();
+
+  assert.deepEqual(DEFAULT_FIGURE_PANEL_HEADER_FIELDS, expected);
+  assert.deepEqual(first.figurePanelHeaderFields, expected);
+  assert.notEqual(first.figurePanelHeaderFields, second.figurePanelHeaderFields);
+  first.figurePanelHeaderFields.evidenceType = false;
+  assert.equal(second.figurePanelHeaderFields.evidenceType, true);
+});
+
+test('strictly normalizes Panel heading fields and drops unknown keys', () => {
+  const source = {
+    evidenceType: false,
+    purpose: true,
+    experimentalMethods: 1,
+    statisticalMethods: 'true',
+    comparison: true,
+    directObservation: null,
+    unsupported: true
+  };
+  const normalized = normalizeFigurePanelHeaderFields(source);
+
+  assert.deepEqual(normalized, {
+    evidenceType: false,
+    purpose: true,
+    experimentalMethods: true,
+    statisticalMethods: true,
+    comparison: true,
+    directObservation: false
+  });
+  assert.equal(Object.hasOwn(normalized, 'unsupported'), false);
+  assert.notEqual(normalized, source);
+  source.purpose = false;
+  assert.equal(normalized.purpose, true);
+  assert.deepEqual(normalizeFigurePanelHeaderFields(null),
+    DEFAULT_FIGURE_PANEL_HEADER_FIELDS);
+  assert.deepEqual(normalizeFigurePanelHeaderFields([]),
+    DEFAULT_FIGURE_PANEL_HEADER_FIELDS);
+  assert.deepEqual(normalizeFigurePanelHeaderFields({
+    evidenceType: 'false', purpose: 1
+  }), DEFAULT_FIGURE_PANEL_HEADER_FIELDS);
+});
+
+test('merge and save normalize Panel heading fields without aliasing storage input', async () => {
+  const storedFields = { purpose: true, evidenceType: false, unknown: true };
+  const merged = mergeSettings({ version: 5, figurePanelHeaderFields: storedFields });
+  assert.deepEqual(merged.figurePanelHeaderFields, {
+    evidenceType: false,
+    purpose: true,
+    experimentalMethods: true,
+    statisticalMethods: true,
+    comparison: false,
+    directObservation: false
+  });
+  assert.notEqual(merged.figurePanelHeaderFields, storedFields);
+  assert.deepEqual(mergeSettings({ version: 5 }).figurePanelHeaderFields,
+    DEFAULT_FIGURE_PANEL_HEADER_FIELDS);
+
+  const storage = createMemoryStorage();
+  const saved = await saveSettings(storage, {
+    ...createDefaultSettings(),
+    figurePanelHeaderFields: { comparison: true, directObservation: true }
+  });
+  assert.deepEqual(saved.figurePanelHeaderFields, {
+    evidenceType: true,
+    purpose: false,
+    experimentalMethods: true,
+    statisticalMethods: true,
+    comparison: true,
+    directObservation: true
+  });
+  assert.notEqual(saved.figurePanelHeaderFields,
+    storage.values.sciLlmSettingsV2.figurePanelHeaderFields);
+});
+
 test('keyboard shortcuts default to the complete unique map and normalize overrides', () => {
   assert.deepEqual(createDefaultSettings().keyboardShortcuts, {
     figures: 'F',
@@ -98,6 +616,7 @@ test('keyboard shortcuts default to the complete unique map and normalize overri
     analysis: 'A',
     highlights: 'H',
     chat: 'Q',
+    semanticFind: 'J',
     zotero: 'Z',
     ppt: 'P',
     scanLocal: 'R',
@@ -178,7 +697,9 @@ test('normalizes an optional advanced context-window override independently of o
     tokenPolicy: { mode: 'manual', manualMax: 4096 }
   });
   assert.equal(profile.contextWindowTokens, 131072);
-  assert.equal(profile.tokenPolicy.manualMax, 4096);
+  assert.deepEqual(profile.tokenPolicy, {
+    mode: 'auto', autoCap: null, manualMax: null
+  });
 
   const invalid = normalizeProfile('profile_context_invalid', {
     name: 'Invalid context', providerId: 'deepseek',
@@ -210,7 +731,7 @@ test('stores four bounded editable Panel follow-up prompts with defaults for bla
 test('normalizes language, analysis modes, chat prompts, and Panel preset CRUD', () => {
   const defaults = createDefaultSettings();
   assert.equal(defaults.language, 'zh-CN');
-  assert.equal(defaults.analysisModes.length, 4);
+  assert.equal(defaults.analysisModes.length, 3);
   assert.ok(defaults.articleChatQuickPrompts.length >= 4);
   assert.equal(defaults.figurePanelFollowupPresets.length, 4);
   const merged = mergeSettings({
@@ -256,8 +777,10 @@ test('preserves an explicitly empty v5 profile collection', () => {
   assert.deepEqual(settings.profiles, {});
   assert.deepEqual(settings.profileOrder, []);
   assert.equal(settings.globalProfileId, '');
-  assert.deepEqual(settings.taskRoutes, Object.fromEntries(
-    TASK_ROUTE_KEYS.map(taskId => [taskId, { mode: 'global', profileId: null }])
+  assert.equal(settings.taskRoutes, undefined);
+  assert.deepEqual(Object.keys(settings.taskPolicies), LLM_TASK_IDS);
+  assert.ok(Object.entries(settings.taskPolicies).every(([taskId, policy]) =>
+    policy.mode === (['full_text_translation', 'navigation_title_translation'].includes(taskId) ? 'local' : 'global') && policy.profileId === null
   ));
 });
 
@@ -283,7 +806,10 @@ test('falls back to the default profile for malformed v5 profile collections', (
     assert.deepEqual(Object.keys(settings.profiles), ['profile_default_openai']);
     assert.deepEqual(settings.profileOrder, ['profile_default_openai']);
     assert.equal(settings.globalProfileId, 'profile_default_openai');
-    assert.deepEqual(settings.taskRoutes.figure, { mode: 'global', profileId: null });
+    assert.deepEqual(settings.taskPolicies.figure_walkthrough, {
+      mode: 'global', profileId: null, reasoningEnabled: false,
+      reasoningEffort: 'auto', tokenRule: 'auto', allowTextFallback: false
+    });
   });
 });
 
@@ -351,7 +877,7 @@ test('migrates complete v4 provider slots to deterministic legacy profiles', () 
   };
 
   const migrated = mergeSettings(v4);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(legacyProfileId('deepseek'), 'profile_legacy_deepseek');
   assert.equal(
     legacyProfileId('openai-compatible'),
@@ -376,10 +902,12 @@ test('migrates complete v4 provider slots to deterministic legacy profiles', () 
     mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(migrated.profiles.profile_legacy_deepseek.tokenPolicy, {
-    mode: 'auto', autoCap: 12288, manualMax: null
+    mode: 'auto', autoCap: null, manualMax: null
   });
-  assert.deepEqual(migrated.taskRoutes, Object.fromEntries(
-    TASK_ROUTE_KEYS.map(taskId => [taskId, { mode: 'global', profileId: null }])
+  assert.equal(migrated.taskRoutes, undefined);
+  assert.deepEqual(Object.keys(migrated.taskPolicies), LLM_TASK_IDS);
+  assert.ok(Object.entries(migrated.taskPolicies).every(([taskId, policy]) =>
+    policy.mode === (['full_text_translation', 'navigation_title_translation'].includes(taskId) ? 'local' : 'global') && policy.profileId === null
   ));
   assert.equal('providers' in migrated, false);
   assert.equal('providerId' in migrated, false);
@@ -421,16 +949,16 @@ test('normalizes token policies, profile identity, and task routes', () => {
     mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'auto', autoCap: 700 }), {
-    mode: 'auto', autoCap: 768, manualMax: null
+    mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'auto', autoCap: 999999, manualMax: 8192 }), {
-    mode: 'auto', autoCap: 999936, manualMax: null
+    mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'manual', manualMax: 1, autoCap: 8192 }), {
-    mode: 'manual', autoCap: null, manualMax: 512
+    mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'manual', manualMax: 'invalid' }), {
-    mode: 'manual', autoCap: null, manualMax: 4096
+    mode: 'auto', autoCap: null, manualMax: null
   });
   assert.deepEqual(createTokenPolicy({ mode: 'invalid', manualMax: 8192 }), {
     mode: 'auto', autoCap: null, manualMax: null
@@ -452,7 +980,7 @@ test('normalizes token policies, profile identity, and task routes', () => {
   assert.equal(profile.config.future, 1);
   assert.deepEqual(profile.capabilities, { vision: true });
   assert.deepEqual(profile.tokenPolicy, {
-    mode: 'manual', autoCap: null, manualMax: 4096
+    mode: 'auto', autoCap: null, manualMax: null
   });
 
   const profiles = { profile_valid_gateway_1: profile };
@@ -472,6 +1000,7 @@ test('normalizes token policies, profile identity, and task routes', () => {
 test('preserves JSON-like profile extensions while normalizing v5 settings', () => {
   const v5Settings = {
     ...createDefaultSettings(),
+    version: 5,
     profiles: {
       profile_future_openai: {
         id: 'conflicting-id',
@@ -490,7 +1019,7 @@ test('preserves JSON-like profile extensions while normalizing v5 settings', () 
   };
 
   const normalized = mergeSettings(v5Settings);
-  assert.equal(normalized.version, 5);
+  assert.equal(normalized.version, 6);
   assert.deepEqual(
     normalized.profiles.profile_future_openai.futureMetadata,
     { nested: [{ keep: true }] }
@@ -508,7 +1037,7 @@ test('preserves JSON-like profile extensions while normalizing v5 settings', () 
 
 test('treats finite future settings versions as opaque cloned payloads', () => {
   const futureSettings = {
-    version: 6,
+    version: 7,
     mode: 'llm',
     consentGranted: true,
     providerId: 'future-provider',
@@ -543,7 +1072,7 @@ test('treats finite future settings versions as opaque cloned payloads', () => {
   assert.deepEqual(futureSettings, snapshot);
   assert.deepEqual(mergeSettings(normalized), normalized);
   assert.equal(getEffectiveMode(normalized), 'regex');
-  assert.equal(getEffectiveMode({ version: 6, mode: 'llm', consentGranted: true }), 'regex');
+  assert.equal(getEffectiveMode({ version: 7, mode: 'llm', consentGranted: true }), 'regex');
 
   const publicFuture = toPublicSettings(normalized);
   const serialized = JSON.stringify(publicFuture);
@@ -617,7 +1146,7 @@ test('migrates v2 settings to reading-view defaults without losing provider conf
     }],
     providers: { deepseek: { apiKey: 'key', model: 'model' } }
   });
-  assert.equal(merged.version, 5);
+  assert.equal(merged.version, 6);
   assert.equal(merged.readingViewId, 'quick_story');
   assert.ok(!merged.viewCategoryOverrides.quick_story.add.includes('result'));
   assert.ok(!merged.viewCategoryOverrides.quick_story.remove.includes('result'));

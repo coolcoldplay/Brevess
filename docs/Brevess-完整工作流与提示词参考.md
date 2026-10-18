@@ -1,5 +1,74 @@
 # Brevess：完整工作流、内部原理与提示词参考
 
+<a id="current-code-map"></a>
+
+## 当前代码地图（2026-10-13，增量索引）
+
+R30 mono2图标增量：`sidebar-module-icons.js` 封装 Morphicons1.7.1 引擎与 Lucide1.55.0 原SVG，仍通过原 `BrevessIcons` API 接 `popup.js` 真实状态；没有新增任务监听或存储。许可/固定来源位于 `vendor/morphicons` 与 `vendor/lucide`，现有发行目录清单自动包含。`options.html/css` 缩小收款码、调整微信中心覆盖层及Issues字号；原二维码资源保持。验收包证据 `dist/Brevess-v1.0.1-r30-acceptance-20261013-mono2/ACCEPTANCE.md` 区分前台组件动效与后台完整包减少动画检查。
+
+R30 导航：`content.js::analyzeReviewOutlineWithLLM` 捕获实际准备来源、正文结构与文献身份，`validateNavigationArchiveContext` 通过 background 的精确 frame/documentId 回执持续核验；`core/background-router.js` 将选定输入指纹和 canonical 档案身份分开，并按 NFKC 检查真实结果保存。`core/review-outline-pipeline.js` 按块签名恢复检查点，`popup.js` 轮询检查点版本显示首批结果；完成数量、缓存与确认保存分别呈现。PLOS 的去 query 档案路径加入 documentId，新旧路径兼容只读、不迁移删除。入口：`tests/r30-navigation-archive.test.js`、`r30-navigation-live-binding.test.js`。
+
+R30 导航收尾：全局综合重试、页面摘要与章节摘要的缺省身份，统一在 `analyzeReviewOutlineWithLLM` 从当前已核对的 canonical 来源补齐，仅处理 undefined；显式错误、空值/null、旧准备来源仍拒绝。prepared 单段保留传入正文与 proof，同时绑定当前 structure，不能用省略重提取来省略来源校验。入口 `tests/r30-navigation-retry-identity.test.js`；独立浏览器真实 IDB/OPFS 写入与进程冷读实证见 `output/r30-20261013/qa/NAVIGATION-COLD-PERSISTENCE.md`，模型响应为受控夹具，用户目录与 popup 可见恢复另验。
+
+R30 解图：`popup.js::runFigureAnalysis` 保留完整目录分母，授权前绑定的可重试加载失败只重读一次，本地失败不被旧 backend idle/cancelled 进度覆盖。`core/figure-analysis.js` promptVersion 24 → `core/figure-workspace.js::createPanelEightFieldView` → popup 八字段展示与 `core/export-bundle.js` 导出；人工空值、笔记、原分组字段和观察来源沿用原存储。正式回归：`r30-figure-binding-entry.test.js`、`r30-panel-eight-field-contract.test.js`。
+
+R30 UI：`sidebar-module-icons.js/css` 由实际模块任务状态驱动五图标；`pdf-reader.html` 更多菜单加载 `pdf-figure-page-review.js` 非模态核对表，经 content 的既有页码选择/恢复链保存人工图像页，图注页另列参考。settings 左栏和品牌资源更新，不新增存储 schema 或权限。交互回归：`r30-settings-ui-browser.test.js`、`r30-figure-ui-browser.test.js`、`r30-pdf-page-review-browser.test.js`、`module-action-tools.test.js`。这些组件测试不代表真实模型与用户磁盘端到端通过；当前证据和未验范围仍见状态及唯一 FEEDBACK。
+
+TRANS055：manifest 第二组预载 core/local-translator.js → core/bilingual-translation-controller.js → bilingual-translation-content.js 及 bilingual-translation.css，默认仅挂监听，不扫描/调用模型；悬停 Alt 单段翻译无需侧栏。popup.js/html 全页图标经 core/tab-messenger.js v2 复用同一实例；state.enabled=全页、active=任意会话、mode=page/paragraph/off。适配器按源节点、去 hash 文档身份与原文绑定标题/正文/图注/PubMed 已加载摘录，视口优先、分片单飞；Alt 隐藏/原文变化/关闭/跨页取消，WeakMap 缓存只留页内。provider 只用官方 Translator，原网页确认下载和进度；异常标记/空译文仅有界细分重试，失败保留原文，无云回退/新依赖/权限/schema。已识别的外部沉浸式译文不作为翻译原文，不修改对方节点。译文和失败提示双标记 data-sci-plugin-ui/data-sci-translation；content.js 与 article/figure/semantic-find-dom/page-load-indicator-content 排除其源抽取、QA 偏移、J 和忙碌判断。侧栏样式 ui-swiss.css、独立网页样式 bilingual-translation.css、译名 core/i18n.js。入口 tests/trans055-*.test.js、scripts/verify-trans055-*.mjs；分层证据及当前 Edge 待验边界见 [最新验收](agent/takeover-2026-09-23/TRANS055-alt-acceptance.md)，PDF 与其他 R20 暂停不变。
+
+SEARCH024 r18增量：core/semantic-find-dom.js维护owner→稳定paragraphId、局部退休/原子新增队列；semantic-find-content.js.collectAdditionalCorpus将增量独立hash并以isHitCurrent绑定Range与手工保存；semantic-find-controller.js排队400ms单飞评分、映射operation局部句子ID、合并未变旧结果。J冷入口core/semantic-find-launcher.js→tab-messenger一次性deferArticlePreindex→content.js跳过初次论文预索引，显式warm/extract及PDF原分支仍保留。测试/证据见B/SEARCH024-retirement.md、SEARCH024-pubmed-frontend-followup.md、SEARCH024-launch-latency.md。
+
+UI026：background.js导入core/page-load-indicator.js，使用既有session激活状态和tabs/webNavigation生命周期；tab-messenger注入page-load-indicator-content.js，以document/URL/sequence确认当前标签DOM忙碌，再用OffscreenCanvas合成原PNG右下红点并chrome.action.setIcon。900ms安静恢复；不新增持久数据。receiver列入scripts/release-inventory.json。入口tests/page-load-indicator.test.js与scripts/verify-ui026-loading-icon.mjs；限界见B/UI026-loading-icon.md。
+
+9月25日当前增量索引（覆盖下表较早描述）：J由semantic-find-launcher.js冷启动，经core/tab-messenger.js注入core/semantic-find-dom.js→semantic-find-content.js通用可见DOM快照→semantic-find-controller.js→既有semantic-find-service评分；不依赖论文抽取或侧栏启用。HTML临时高亮不包裹DOM，确认保存仍要求canonical论文身份；PDF沿原索引。验证见tests/semantic-find-dom.test.js、scripts/verify-search024-dom.mjs及B/SEARCH024-core.md。
+
+NOTE016：core/article-extractor.js的articleCaptionSource/collectArticleCaptionSources统一Nature完整图注与content.js focusLiteratureNoteCaptionSource；reading-tools的限定默认HTML批量合同、research-evidence的note用途源保留及background-router一次repair接线见B/NOTE016-nature-caption-batch.md和NOTE016-output-contract-batch.md。NOTE015默认渲染与全局图标切换在popup/core/literature-note-editor；UI025顶部静态说明删除、刷新图标迁移保留原事件。历史textarea逐字段工具栏描述不代表当前展示。
+
+QA017/018：OpenAI使用原Responses检索；DeepSeek官方deepseek-flash新增独立Anthropic Messages web transport，经article-chat-web-sources的normalizeDeepSeekAnthropicWebResponse验证真实server search/result ID及精确URL，再沿用原turn来源回执。DS普通文本/JSON/图像仍Chat Completions；Responses内置搜索仍不可用。图像能力在provider-registry三个官方Flash别名核验；FIG023 content采图在跨源读取失败时复用既有fetchExportImageSource→EXPORT_FETCH_IMAGE_RESOURCE后台下载，保留图像校验及来源身份，预检返回allowTextFallback用于禁止静默文本降级。验收见B/QA017-Messages-browser-20260926.md和FIG023-r18-browser-chain-20260926.md。FIG019标题/组schema与缓存独立，旧科学限制不变。B为docs/agent/takeover-2026-09-23，实时状态仍只在FEEDBACK。
+
+依据：reliability worktree，HEAD `a932d14a96359a7d0170483c3d3e05ffbbe1251d` 加现有未提交源码；最近字节基线/变更见 [当前状态](superpowers/plans/2026-09-05-brevess-execution-status.md)。以下为现状索引，不是重构方案；后面的2.1.9/7月说明是历史参考，尤其“仅工具栏激活才注入”不能描述当前独立 J 入口，以 [manifest.json](../manifest.json) 为准。
+
+| 本轮领域 | 当前文件/符号与关系 | 验证入口/待核实 |
+|---|---|---|
+| 浏览器与UI入口 | [manifest.json](../manifest.json) 声明 background、side_panel、action 和 content_scripts；[background.js](../background.js) 管浏览器事件；[popup.html](../popup.html)/[popup.js](../popup.js) 是侧栏；[content.js](../content.js) 处理当前 HTML/PDF 提取、文档身份和动作 | tests/manifest.test.js；tests/content-llm-contract.test.js。独立J与研读激活不能混为一谈 |
+| UI-001 / UI-003 | popup.css → ui-swiss.css 层叠；缩略词UI在 abbreviation-dialog 子树。content.css 的出版社标识依赖 content.js / core/publisher-adapters.js | tests/ui-swiss-residuals.test.js；scripts/verify-abbreviation-feedback.mjs。Cell真实DOM已核实，content.setCellReaderFocusLayout随scope只改限定布局；popup按每tab代次保护异步启用；prepare探测双身份→tabs.connect专口→content逐port释放，实际Edge原生开关/切页13项通过，原事件未投递仍明确记录 |
+| QA-002 | content.js `runArticleChatTurn` → core/background-router.js → core/article-chat.js `compileArticleChatPrompt`；core/article-chat-context-planner.js 选上下文，core/article-chat-web-sources.js 管来源，providers/deepseek.js 有条件联网通路 | tests/article-chat.test.js、article-chat-web-sources.test.js。core/article-extractor.js extractArticleAuthorMetadata → content currentArticleChatAuthorContext → normalized authorMetadata → ARTICLE_CONTEXT.publication_metadata；规划阶段按预算裁剪。tests/article-author-context.test.js 与 scripts/verify-article-author-context.mjs；真实Cell仍待验收 |
+| FIG-004 / UI-005 / FIG-006 | core/figure-extractor.js 提取 → core/figure-analysis.js 结果合同 → core/figure-workspace.js 人工值/持久化投影 → popup.js `compactFigureResultConclusion` / `appendFigureWorkspaceOverview` 与证据块渲染 | tests/figure-analysis.test.js、figure-workspace.test.js、figure-evidence-block-layout.test.js。原始模型结果与解析后人工值不能互相覆盖。evidenceBlocksForView新增fieldStates显示元数据，保留人工空值/editedAt，原字符串/存储schema不变 |
+| NOTE-007 | popup.js 单字段生成/合并/textarea → content.js 请求 → core/background-router.js 缓存/Provider；core/reading-tools.js 归一化 schema 3 的字符串 values/status/evidence/fieldUpdatedAt | tests/literature-note-template-persistence.test.js、reading-tools.test.js；单字段forceRefresh贯通，批量仍保护已有值；NOTE011在compileLiteratureNoteAutofillPrompt按默认字段补结构指导，自定义prompt优先；生成缓存身份现v5（D-25），不改变笔记schema。popup.html加载core/literature-note-format.js → renderer.js → editor.js；renderLiteratureNoteDrawer装配textarea工具栏并清理旧组件，格式字符串经旧保存链往返，格式无语义变化保留来源；来源经sources.js可逆投影/source-editor.js保护编辑，source-storage.js核验新HTML回执保存canonical，export.js输出可读复制/MD；较早笔记402定向（400+子进程2分开通过）/最新21来源UI、最终复制181Node；PDF多locator已按序按钮/导出状态，真实原文/IME仍待验收 |
+| MECH-008 | content.js `buildCrossFigureLogicInput` → core/background-router.js 的证据提取、节点统一、关系映射、组装 → core/evidence-first-mechanism.js 检查点/预算 | tests/evidence-first-mechanism.test.js；scripts/verify-live-mechanism-extension.mjs → scripts/lib/mechanism-acceptance-input.mjs新增来源绑定/前置输入检查；正确Cell107Panel观察及131定向/旧夹具零API兼容见[批1](agent/takeover-2026-09-23/MECH-008-batch1.md)。当前按Panel路径，证据块综合仍为建议；真实Cell模型失败阶段未知 |
+| QA-012新增反馈 | core/article-chat-stream.js严格验证完整引用（每块128上限）→core/article-chat.js有界格式修复/已有JSON恢复→content.js准确失败提示→popup.css失败操作立即显示 | tests/article-chat-feedback-012.test.js；scripts/verify-chat-feedback-012.js。[批1](agent/takeover-2026-09-23/QA-012-batch1.md)438 Node/13实际UI、多轮长表格/重试删除/重开通过，真实原响应未取得；不改存储schema |
+| LIB-010 | options.html → options-local-library.js `renderArticles` → background.js query → core/local-reading-library.js；稳定身份沿core/article-workspace.js。content实际head→core/article-bibliography.js→article/bibliography.json；显式saveCurrentArticleWorkspaceNow结束→core/article-workspace-save.js合同→annotations/library-save-events.json，固定代次/revision/hash CAS；文库仅投影有证据字段 | tests/local-reading-library.test.js、options-local-library-contract.test.js、article-bibliography-checkpoint.test.js、local-library-save-checkpoint.test.js。标签普通annotations/library-tags.json→GET/SAVE CAS→全库ANY/ALL筛选分页已验证；出版字段真实19项见[第四批](agent/takeover-2026-09-23/LIB-010-batch4.md)。保存事件真实16/独立13项已验证，见[第五批](agent/takeover-2026-09-23/LIB-010-batch5.md)，partial/自动保存不推进成功时间；GET拒绝旧代次。受限目录打开已接 options→background专属RPC→core/workspace-directory-controller.js→directory-sync当前根/身份→workspace-directory-native-client.js→native-host/host.js WorkspaceDirectoryService；固定proof和host本地root映射仅显式bind写入，打开限workspaces文献目录，D-28授权；[批6](agent/takeover-2026-09-23/LIB-010-batch6.md)记录真实链路与OS替身边界 |
+
+UI014：core/literature-note-editor.js通过本地focusin/pointerdown管理临时data-active，popup.css只显示活动字段格式行，阅读态不占工具栏高度；SVG/B/A图标与core/i18n.js中英文tooltip沿用现有格式、选区和存储链。
+
+### NOTE011当前增量路径（2026-09-24）
+
+默认HTML基础研究main_findings单字段：content同次canonical body+typed figure-caption → reading-tools.resolveLiteratureNoteEvidencePolicy → router重复核定 → research-evidence完整图注优先，最多128000字符容纳正文 → 编译同上限且拒绝超限 → router以实际Profile窗口、任务输入cap、输出ceiling及完整schema/语言包装计容量 → 同policy schema/validator/fail-closed → receipt实际coverage和策略域缓存。compact仍18000字符并如实标partial；仅此策略cache key含LITERATURE_NOTE_HTML_FINDINGS_GUIDANCE_VERSION，旧v5非策略缓存键不变。popup经document/template receipt核验把最多32来源以既有每组12canonical字符串保存；schema3和用户人工字段不变。content.literatureNoteCaptionSourceRecords提供轻量来源索引；popup发专属literature-note-caption，content.focusLiteratureNoteCaptionSource要求当前文献hash/revision/id/sourceKey/textHash/唯一typed记录后要求唯一可见原FIGCAPTION的scientificInlineText精确匹配并直接聚焦，不再回退到正文heading。core/article-extractor.isExcludedContentElement仅为FIGCAPTION跳过adapter的精确figure外层排除，其它排除仍生效。PDF/普通body导航不改；多字段批量仍原balanced覆盖。测试入口note-main-findings-policy.test.js、note011-content-wiring.test.js、note011-router-policy.test.js，实际UI/模型结果以当前状态/台账为准。
+
+### 保存、同步、恢复（ARCH-009；已沿当前代码核实）
+
+权限查询permissionOnly且不请求授权时只读directorySync.status；不进入恢复扫描。真实恢复baseline守卫不变。实际保存/冷开证据见[本批](agent/takeover-2026-09-23/QA012-save-cold-reopen.md)。
+
+批17：directory-sync 的实际 IDB queue.put 在 documents+syncQueue 同事务核验 archive 标注；document-store.withDocumentArchiveLock 供真实文档写入、workspace-store.commitRestoreIfUnchanged 和 queue.withCurrentArchive/flush 共用，文件 close/索引/队列回执先于下一次同文档恢复。失效旧档案进入 conflicts；已有同名不同内容或写失败保留 pending。importer 在锁外运行，回锁重读两表。使用内建同源 Web Locks，不改DB版本；详见[批17](agent/takeover-2026-09-23/ARCH-009-batch17.md)。测试入口 tests/archive-queue-order.test.js、scripts/verify-archive-remaining-todo-native.mjs --expect-fixed；跨机器不在此锁保证内。
+
+批15/16：popup.isPristineFigureOnlyWorkspaceRestore 仅对严格默认草稿与无人工变化的自动基线转入旧档案发现，实际点击仍走原身份/回执/后台提交。content.createArticleWorkspaceEnsureResponse 的 bibliographyBaseline 是同归属当前DOM同步提取，popup与保存raw逐字段比较；不normalize掉编辑或清空。初始lifecycle0可生成epoch1，恢复仍要求epoch递增。旧auto决定兼容使用本次面板/身份证明，迟到probe重新核验用户决定；见[批15](agent/takeover-2026-09-23/ARCH-009-batch15.md)、[批16](agent/takeover-2026-09-23/ARCH-009-batch16.md)。
+
+批14：`content.planRestoredHtmlSemanticTurn`用同一结构记录的canonical/source ID、唯一精确原文及真实Range规划；`projectRestoredHtmlSemanticTurns`在已提交exact目标同步做专属turn临时显示，无annotation写入。显示不参与LLM反馈/activeEngine，删除和真实owner失效按模式清理。`core/article-extractor.js::scientificInlineText`排插件UI，防备注污染正文hash。真实25项显式恢复验收见[批14](agent/takeover-2026-09-23/ARCH-009-batch14.md)；普通冷开受原加载守卫约束。
+
+批12/13接续：content.inspectRestoredHtmlSemanticTurns只读核对已提交HTML semantic mark及实际范围；router私有plan.directorySources捕获规范化前来源，commit后镜像先复核本机版本，再由directory-sync.enqueueWorkspaceAsset的expectedDirectoryAsset校验磁盘和队列完整data/版本/身份，符合才推进目录版本。冲突保留双方并pending；未增加schema。[第十三批](agent/takeover-2026-09-23/ARCH-009-batch13.md)实际18项通过，不代表用户原生目录/14档案验收。
+
+- 保存：popup.js `saveCurrentArticleWorkspace` → content.js `saveArticleWorkspaceNow` → 浏览器工作区资产；再发 `ARTICLE_WORKSPACE_MIRROR_ALL` / `USER_DATA_SYNC_NOW` 到后台及可选目录。浏览器保存与目录同步是不同阶段。manifest/资产：core/article-workspace.js，目录与存储实现按任务再读 core/article-workspace-store.js、core/background-router.js。
+- 加载：popup.js `runArticleWorkspaceRestoreAction`为加载/扫描互斥并保留原panelContext；`loadCurrentArticleArchive` 先尝试 `restoreCurrentArticleWorkspaceFromDirectory`（ensure私有人工基线 → SCAN_RESTORE前私有存储基线/恢复计划 → content可信prepared请求 → 后台原子条件提交 → 最后同步身份/人工检查 → 页面apply）。主链由ARTICLE_WORKSPACE_COMMIT_PREPARED_RESTORE实现；旧receipt COMMIT仅兼容过渡且也必须有真实scan计划与CAS；只有未应用/未提交的正常返回才尝试 ARTICLE_ARCHIVE_LOAD。目录抛错不自动切到旧档案。两种来源新旧版本选择仍需实测。
+- 授权：content.js `createArticleWorkspaceRestoreAuthorization` / `validateArticleWorkspaceRestoreTarget` / `validateArticleArchiveRestoreTarget` 校验身份、代次和一次性时效；稳定 workspace、正文修订、生命周期及提交回执分开，不删除校验治 mismatch。ensure响应以createArticleWorkspaceEnsureResponse同步返回archiveIdentity；popup两个target builder使用此实时身份，旧content无字段才回退。
+- 本轮 ARCH-009：库已提交而页面变化则persistenceCommitted:true/workspaceApplied:false，保留页面与草稿，不重复COMMIT。documents与workspace资产同属v4，store可选五store同事务capture/commit；router构建候选，content `prepareCommittedArticleWorkspaceDocument` / `projectCommittedArticleWorkspaceDocument` 同步采用实际record并调用既有renderer。`retainCommittedArticleWorkspaceDocument`保护被拒绝页面的后续highlights/legacy保存；`buildCurrentArticleArchive`与后台ARTICLE_ARCHIVE_SAVE也核验标注，读回真实record后可保存。document-store.prepareDocumentWithCreationInfo同事务证明首次创建；background严格浏览器owner→router私有短期回执→content ensure/popup SCAN转发→五store CAS，导入撤销覆盖在途prepare。无回执旧空record/不同人工值继续拒绝；可信prepared恢复的PDF turn evidence已由projectRestoredNativePdfSemanticTurns调用同步renderer显示且禁止额外持久写回，未ready/无法定位保持待重建；HTML缺权威annotations边界已由第十四批限定投影接续。见[第十一批](agent/takeover-2026-09-23/ARCH-009-batch11.md)。见[第八批](agent/takeover-2026-09-23/ARCH-009-batch8.md)和[第九批](agent/takeover-2026-09-23/ARCH-009-batch9.md)，用户14项未读取。
+- 验证：tests/archive-feedback-commit.test.js；tests/reading-view-ui-contract.test.js、content-llm-contract.test.js、article-archive.test.js、article-workspace.test.js；scripts/verify-archive-feedback.mjs（隔离Edge、合成数据）。prepared/document专项为tests/article-workspace-atomic-document-restore.test.js、archive-prepared-document.test.js、archive-page-restore-review.test.js；真实脚本scripts/verify-prepared-workspace-browser.mjs，最新报告与准确字节见第八批。真实content/router/IDB/OPFS已从6项增至12项，不代表用户目录或完整Popup验收；tests/archive-feedback-load.test.js覆盖等待/失败卡片及跨页。
+
+### 本轮测试使用方式
+
+[package.json](../package.json) 的总入口是 `npm test` = `node --test tests/*.test.js`。受限环境可逐文件运行 `node --test --test-isolation=none tests/<file>.test.js`，避免子进程启动EPERM且每个文件单独进程；不得把定向通过称全仓通过。现有 scripts/verify-*.mjs 用 Playwright 隔离扩展配置，UI要求实际点击/显示；日志与截图在 output/playwright，属于被忽略证据，交接必须显式指向/携带。真实API/用户档案与fixture分别记录。
+
+## 历史详细说明（按需参考，不覆盖上面的当前代码地图）
+
 > 版本：2.1.9  
 > 文档对应代码版本：`2.1.9-figure-resilience-progressive-r1`  
 > 更新日期：2026-07-19  
@@ -159,7 +228,13 @@ LLM 模式要求用户保存至少一个可用 Profile，并明确同意发送�
 
 置信度阈值默认 0.80。移动阈值只会用最近一次保存的原始标注重新筛选和渲染，不会调用 API。
 
-### 5.4 正文缓存
+### 5.4 语义标注与呈现层分离
+
+48 个内置类别仍作为独立语义标注、缓存和反馈单位保存。呈现层集中映射为七个视觉家族：语境、问题、设计、证据、解释、验证、边界。内置阅读视图默认采用“核心”密度，也可切换“扩展”或“全部”；切换和临时隐藏家族都只重新渲染当前缓存，不产生 Provider 请求，并按论文与阅读视图保存。
+
+同一文本范围命中多个类别时只绘制一条主家族下划线，细分类别由短徽标和点击详情保留。视觉主家族按 `audit_warning > boundary > validation > evidence > interpretation > question > design > context` 确定，但不会改变底层 annotation。关系类别使用轻量正文锚点，详情卡片只读取已有 `relation_id`、slots、quote role、显示引文和支持引文；三个 inferred 批判类别进入“AI 审读”卡片。人工标注继续使用荧光背景，自定义类别继续使用用户颜色。
+
+### 5.5 正文缓存
 
 缓存以“文档结构哈希 + Provider + 模型 + Profile 行为签名 + 类别 ID/版本/有效定义 + Prompt/Chunker 版本 + 阅读视图/研究类型上下文”为基础。相同条件下再次运行时：
 
@@ -708,5 +783,7 @@ Return JSON only.
 3. 添加正向、拒绝和重试测试；
 4. 更新本文件的“提示词附录”；
 5. 在解压构建目录中重新运行自动测试与浏览器侧栏冒烟测试。
+
+生产 Prompt 还受 `benchmarks/baseline/prompt-manifest.lock` 和离线回归门禁保护。运行 `npm run baseline:verify` 校验冻结基线，运行 `npm run benchmark:prompts` 检查全部生产 Prompt、Schema、类别正反例、证据定位约束、Token 代理统计和 Zotero/MinerU 聚合代理结果。没有人工裁决的锁定输出集时，不报告精确率、召回率或 F1 提升，也不把模型生成标签称为人工金标准。
 
 本文件的代码源头：`core/prompt-compiler.js`、`core/figure-analysis.js`、`core/cross-figure-logic.js`、`core/review-outline.js`、`core/review-outline-pipeline.js`、`core/evidence-ledger.js`、`core/adaptive-catalog.js`、`core/background-router.js`、`core/analysis-pipeline.js`、`core/analysis-cache.js`、`core/task-profile-router.js`、`core/token-budget.js`、`providers/provider-utils.js`。

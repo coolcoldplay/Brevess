@@ -40,6 +40,18 @@ try {
     '_locales\zh_CN\messages.json',
     '_locales\en\messages.json',
     'icons\icon128.png',
+    'pdf-reader.html',
+    'pdf-reader.js',
+    'pdf-reader.css',
+    'pdf-native-reader.mjs',
+    'vendor\pdfjs\build\pdf.min.mjs',
+    'vendor\pdfjs\build\pdf.worker.min.mjs',
+    'offline-reader.html',
+    'offline-reader.js',
+    'offline-reader.css',
+    'action-popup.html',
+    'action-popup.js',
+    'action-popup.css',
     'LICENSE',
     'THIRD_PARTY_NOTICES.md'
   )) {

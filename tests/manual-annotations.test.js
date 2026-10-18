@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 require('../core/category-store.js');
 require('../core/adaptive-catalog.js');
+require('../core/tab-activation.js');
 const {
   MAX_NOTE_LENGTH,
   WARNING_ANNOTATIONS_PER_DOCUMENT,
@@ -11,7 +12,10 @@ const {
   normalizeManualAnnotation,
   normalizeDocumentRecord,
   locateAnnotationInBlocks,
-  makeCategorySnapshot
+  makeCategorySnapshot,
+  sameManualAnnotationRefreshIdentity,
+  manualAnnotationRefreshCommitMode,
+  manualAnnotationEventCommitMode
 } = require('../core/manual-annotations.js');
 
 function annotation(overrides = {}) {
@@ -33,6 +37,172 @@ function annotation(overrides = {}) {
     ...overrides
   };
 }
+
+test('manual summary refresh accepts the event state committed by its own prepare request', () => {
+  const identity = {
+    tabId: 41,
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+
+  assert.equal(sameManualAnnotationRefreshIdentity(identity, identity, 41), true);
+});
+
+test('manual summary refresh rejects foreign, stale, incomplete, and null event state', () => {
+  const response = {
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+  const committed = { tabId: 41, ...response };
+
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, tabId: 42 }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, documentId: `sha256:${'c'.repeat(64)}` }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, documentHash: `sha256:${'d'.repeat(64)}` }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, canonicalUrl: 'https://example.test/old' }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, contentWorldNonce: '2'.repeat(32) }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, documentEpoch: 8 }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity({ ...committed, documentHash: '' }, response, 41), false);
+  assert.equal(sameManualAnnotationRefreshIdentity(null, response, 41), false);
+});
+
+test('manual summary refresh commits only while the normalized tab document stays stable', () => {
+  const response = {
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+  const stable = {
+    expectedTabId: 41,
+    capturedTab: { id: 41, url: 'https://example.test/article#results' },
+    currentTab: { id: 41, url: 'https://example.test/article#discussion' },
+    response,
+    liveProof: { ...response },
+    committedState: null,
+    superseded: false
+  };
+
+  assert.equal(manualAnnotationRefreshCommitMode(stable), 'response');
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    currentTab: { id: 41, url: 'https://example.test/other' }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    currentTab: { id: 42, url: 'https://example.test/article' }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    response: { ...response, documentHash: '' }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    response: { ...response, canonicalUrl: '' }
+  }), null);
+});
+
+test('same-URL reload and SPA generation drift cannot pass the manual refresh commit gate', () => {
+  const response = {
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+  const stable = {
+    expectedTabId: 41,
+    capturedTab: { id: 41, url: 'https://example.test/article' },
+    currentTab: { id: 41, url: 'https://example.test/article' },
+    response,
+    liveProof: { ...response },
+    committedState: null,
+    superseded: false
+  };
+
+  assert.equal(manualAnnotationRefreshCommitMode(stable), 'response');
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    liveProof: { ...response, contentWorldNonce: '2'.repeat(32) }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    liveProof: { ...response, documentEpoch: 8 }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    liveProof: { ...response, documentHash: `sha256:${'c'.repeat(64)}` }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...stable,
+    liveProof: { ...response, contentWorldNonce: 'unbounded-or-malformed' }
+  }), null);
+});
+
+test('superseded manual summary refresh reuses only the exact self-event identity', () => {
+  const response = {
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+  const input = {
+    expectedTabId: 41,
+    capturedTab: { id: 41, url: 'https://example.test/article#results' },
+    currentTab: { id: 41, url: 'https://example.test/article#discussion' },
+    response,
+    liveProof: { ...response },
+    committedState: { tabId: 41, ...response },
+    superseded: true
+  };
+
+  assert.equal(manualAnnotationRefreshCommitMode(input), 'committed');
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...input,
+    committedState: {
+      ...input.committedState,
+      documentId: `sha256:${'c'.repeat(64)}`
+    }
+  }), null);
+  assert.equal(manualAnnotationRefreshCommitMode({
+    ...input,
+    currentTab: { id: 41, url: 'https://example.test/navigated' }
+  }), null);
+});
+
+test('manual annotation events update only an already verified exact content proof', () => {
+  const verified = {
+    tabId: 41,
+    documentId: `sha256:${'a'.repeat(64)}`,
+    documentHash: `sha256:${'b'.repeat(64)}`,
+    canonicalUrl: 'https://example.test/article',
+    contentWorldNonce: '1'.repeat(32),
+    documentEpoch: 7
+  };
+
+  assert.equal(manualAnnotationEventCommitMode(verified, verified, 41, 41), 'verified');
+  assert.equal(manualAnnotationEventCommitMode(null, verified, 41, 41), 'refresh');
+  assert.equal(manualAnnotationEventCommitMode(verified, {
+    ...verified,
+    contentWorldNonce: '2'.repeat(32)
+  }, 41, 41), 'refresh');
+  assert.equal(manualAnnotationEventCommitMode(verified, {
+    ...verified,
+    documentEpoch: 8
+  }, 41, 41), 'refresh');
+  assert.equal(manualAnnotationEventCommitMode(verified, {
+    ...verified,
+    documentHash: ''
+  }, 41, 41), 'refresh');
+  assert.equal(manualAnnotationEventCommitMode(verified, verified, 42, 41), 'ignore');
+});
 
 test('document identity normalizes Unicode and ignores tracking URL differences', async () => {
   const first = await createDocumentId({

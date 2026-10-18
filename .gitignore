@@ -25,9 +25,18 @@ tmp/
 # Private authoring and one-off local QA artifacts
 docs/social/
 docs/prompt-review/
+docs/agent/
+docs/coordination/
+docs/qa/
+docs/releases/
 design-qa.md
+reference/
 scripts/local-*
 scripts/private-*
+AGENTS.md
+.codex-dev-company-role.json
+icons/about/*-support-original.png
+BREVESS-*ACCEPTANCE.md
 
 # Coverage and logs
 coverage/

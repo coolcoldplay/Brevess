@@ -1,0 +1,47 @@
+{
+  "schema": "brevess-library-transfer-v1",
+  "version": 1,
+  "kind": "global-library",
+  "generatedAt": "2026-10-18T00:00:00.000Z",
+  "source": {
+    "app": "brevess",
+    "libraryView": "global",
+    "copiesBinary": false
+  },
+  "integrity": {
+    "algorithm": "fnv1a32",
+    "digest": "95789997"
+  },
+  "payload": {
+    "entries": [
+      {
+        "id": "local-example",
+        "stableId": "pmid:12345678",
+        "pmid": "12345678",
+        "doi": "10.1000/example",
+        "title": "Example glioma neuron paper",
+        "authors": "Example Author",
+        "journal": "Nature",
+        "kind": "local",
+        "sourceKind": "mixed",
+        "availability": "local",
+        "status": "complete",
+        "tags": ["glioma", "neuron"],
+        "sourceDocuments": [
+          {
+            "workspaceId": "workspace:example",
+            "workspaceGeneration": 1,
+            "documentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "hasOfflineSnapshot": true,
+            "offlineSnapshotStatus": "complete"
+          }
+        ],
+        "sources": {
+          "local": true,
+          "radar": true
+        },
+        "radarRead": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Brevess 离线文献</title>
+  <link rel="stylesheet" href="offline-reader.css">
+</head>
+<body>
+  <header class="offline-header">
+    <img src="icons/icon48.png" alt="">
+    <div><strong id="offlineArticleTitle">正在载入离线文献…</strong><small id="offlineArticleStatus" role="status" aria-live="polite">仅读取本机保存的网页快照</small></div>
+    <a id="offlineArticleOriginal" class="offline-original" target="_blank" rel="noopener noreferrer" hidden>在线原文</a>
+    <button id="offlineArticleStartReading" type="button" disabled>查看保存记录</button>
+    <button id="offlineArticleClose" type="button">关闭</button>
+  </header>
+  <main class="offline-main">
+    <iframe id="offlineArticleFrame" title="离线文献正文"
+      sandbox="allow-popups allow-top-navigation-by-user-activation"></iframe>
+  </main>
+  <details id="offlineArticleImages" class="offline-images" hidden>
+    <summary>查看本机保存的原图</summary>
+    <div id="offlineArticleImageList"></div>
+  </details>
+  <details id="offlineArticleReport" class="offline-images" hidden>
+    <summary>查看离线保存详情</summary>
+    <ul id="offlineArticleMissing"></ul>
+  </details>
+  <dialog id="offlineImageDialog" aria-label="本机保存的原图">
+    <button id="offlineImageClose" type="button">关闭原图</button>
+    <p id="offlineImageLabel"></p>
+    <img id="offlineImagePreview" alt="本机保存的原图">
+  </dialog>
+  <script src="core/i18n.js"></script>
+  <script src="core/offline-article-workspace.js"></script>
+  <script src="offline-reader.js"></script>
+</body>
+</html>

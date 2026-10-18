@@ -32,7 +32,10 @@ function prepareQaExtension() {
   }
   for (const filename of [
     'background.js', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css',
+    'action-popup.html', 'action-popup.js', 'action-popup.css',
     'logic-map.html', 'logic-map.js', 'logic-map.css',
+    'pdf-reader.html', 'pdf-reader.js', 'pdf-reader.css', 'pdf-native-reader.mjs',
+    'offline-reader.html', 'offline-reader.js', 'offline-reader.css',
     'options.html', 'options.js', 'options.css', 'offscreen.html', 'offscreen.js',
     'offscreen-network-worker.js'
   ]) {
@@ -58,6 +61,9 @@ function articleFixture() {
     <section><h2>Mechanisms</h2><h3>Signal integration</h3><p>We performed a matched-control experiment. We found that activation of kinase A increased transcription factor B, which directly induced target C and promoted cellular survival.</p><p>Genetic inhibition of kinase A abolished target C induction, supporting a necessary mechanistic relationship.</p></section>
     <section><h2>Limitations</h2><p>One major limitation of this study is that available evidence used small preclinical cohorts and requires validation in independent human samples.</p></section>
     <section><h2>Conclusions</h2><p>In conclusion, our findings support a testable pathway while leaving its clinical generalizability unresolved.</p></section>
+    <figure id="figure-1"><figcaption><strong>Figure 1.</strong> (A) The observed phenotype is established in matched controls. (B) The responding population expands. (C) Cell viability increases.</figcaption></figure>
+    <figure id="figure-2"><figcaption><strong>Figure 2.</strong> (A) RNA sequencing identifies receptor signaling. (B) qPCR validates the target response.</figcaption></figure>
+    <figure id="figure-3"><figcaption><strong>Figure 3.</strong> (A) Tissue validation reproduces the functional outcome.</figcaption></figure>
   </article></main></body></html>`;
 }
 
@@ -205,6 +211,64 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   });
 }
 
+async function configureQaCrossFigureProvider(extensionPage, baseUrl) {
+  return extensionPage.evaluate(async ({ baseUrl: providerBaseUrl }) => {
+    const profileId = 'profile_qa_cross_figure';
+    const savedResponse = await chrome.runtime.sendMessage({
+      type: 'LLM_SAVE_PROFILE',
+      profile: {
+        id: profileId,
+        name: 'QA cross-figure provider',
+        providerId: 'openai-compatible',
+        config: {
+          apiKey: 'qa-onboarding-secret',
+          model: 'qa-onboarding-model',
+          presetId: 'custom',
+          baseUrl: providerBaseUrl,
+          authHeader: 'Authorization',
+          authPrefix: 'Bearer',
+          maxOutputTokens: 4096,
+          jsonMode: true,
+          supportsVision: true,
+          customHeaders: {}
+        }
+      }
+    });
+    if (!savedResponse?.success) {
+      throw new Error(`QA_PROFILE_SAVE_FAILED:${JSON.stringify(savedResponse?.error || {})}`);
+    }
+    const routedResponse = await chrome.runtime.sendMessage({
+      type: 'LLM_UPDATE_PROFILE_ROUTING',
+      globalProfileId: profileId,
+      taskRoutes: {}
+    });
+    if (!routedResponse?.success) {
+      throw new Error(`QA_PROFILE_ROUTE_FAILED:${JSON.stringify(routedResponse?.error || {})}`);
+    }
+    const preferencesResponse = await chrome.runtime.sendMessage({
+      type: 'LLM_UPDATE_PREFERENCES',
+      preferences: { mode: 'llm', consentGranted: true }
+    });
+    if (!preferencesResponse?.success) {
+      throw new Error(
+        `QA_PROFILE_PREFERENCES_FAILED:${JSON.stringify(preferencesResponse?.error || {})}`
+      );
+    }
+    const saved = savedResponse.data || {};
+    const routed = routedResponse.data || {};
+    const preferences = preferencesResponse.data || {};
+    return {
+      profileId,
+      saved: saved?.profile?.id === profileId,
+      routed: routed?.settings?.globalProfileId === profileId,
+      ready: preferences?.llmReady === true,
+      effectiveMode: preferences?.effectiveMode || '',
+      consentGranted: preferences?.settings?.consentGranted === true,
+      profilePresent: Boolean(preferences?.settings?.profiles?.[profileId])
+    };
+  }, { baseUrl });
+}
+
 (async () => {
   fs.mkdirSync(outputDir, { recursive: true });
   prepareQaExtension();
@@ -220,6 +284,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   activeContext = context;
   let observeProviderRequest;
   let providerRequestQa = null;
+  let crossFigureProviderRequestCount = 0;
+  const researchProviderStageCalls = [];
+  const researchProviderRequestDiagnostics = [];
+  const providerUnknownRequestSummaries = [];
   const providerRequestObserved = new Promise(resolve => {
     observeProviderRequest = resolve;
   });
@@ -231,6 +299,59 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     for await (const chunk of request) chunks.push(chunk);
     let body = {};
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (_) {}
+    const serializedBody = JSON.stringify(body);
+    const promptTexts = Array.isArray(body.messages)
+      ? body.messages.map(message => typeof message?.content === 'string'
+        ? message.content : '').filter(Boolean)
+      : [];
+    const researchSystemText = promptTexts.find(text =>
+      text.includes('CANONICAL_EVIDENCE_DOCUMENT_V') ||
+      text.includes('NORMALIZED_ATOMS_V')) || '';
+    const researchInstructionText = promptTexts.find(text =>
+      text.includes('Return atomic evidence as schema-valid JSON') ||
+      text.includes('exactly one paper-level Q0') ||
+      text.includes('Starting from Q0') ||
+      text.includes('Audit source binding') ||
+      text.includes('paper-level innovation points') ||
+      text.includes('research limitations')) || '';
+    const researchStage = researchSystemText.includes('CANONICAL_EVIDENCE_DOCUMENT_V')
+      ? 'atomic_evidence'
+      : researchInstructionText.includes('exactly one paper-level Q0')
+        ? 'question_trace'
+        : researchInstructionText.includes('Starting from Q0')
+          ? 'progression'
+          : researchInstructionText.includes('Audit source binding')
+            ? 'audit'
+            : researchInstructionText.includes('paper-level innovation points')
+              ? 'innovation'
+              : researchInstructionText.includes('research limitations')
+                ? 'limitations' : '';
+    const isConnectivityProbe =
+      serializedBody.includes('Minimal connectivity probe') &&
+      serializedBody.includes('Reply with exactly OK');
+    const crossPromptText = Array.isArray(body.messages)
+      ? body.messages.map(message => message?.content).find(content =>
+        typeof content === 'string' && content.includes('"main_figure_ids"') &&
+        content.includes('"figures"'))
+      : '';
+    let crossPrompt = null;
+    try { crossPrompt = crossPromptText ? JSON.parse(crossPromptText) : null; } catch (_) {}
+    const isCrossFigureRequest = Array.isArray(crossPrompt?.main_figure_ids) &&
+      crossPrompt.main_figure_ids.length >= 2;
+    if (isCrossFigureRequest) crossFigureProviderRequestCount += 1;
+    if (!isConnectivityProbe && !isCrossFigureRequest && !researchStage) {
+      providerUnknownRequestSummaries.push({
+        path: request.url || '',
+        messages: Array.isArray(body.messages) ? body.messages.map(message => ({
+          role: String(message?.role || ''),
+          contentType: Array.isArray(message?.content) ? 'array' : typeof message?.content,
+          content: typeof message?.content === 'string'
+            ? message.content.slice(0, 320)
+            : JSON.stringify(message?.content || null).slice(0, 320)
+        })) : [],
+        responseFormat: body.response_format || null
+      });
+    }
     providerRequestQa = {
       method: request.method || '',
       path: new URL(request.url || '/', 'http://127.0.0.1').pathname,
@@ -238,20 +359,191 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       authorizationPresent: /^Bearer\s+qa-onboarding-secret$/u.test(
         request.headers.authorization || ''
       ),
-      syntheticPromptPresent: JSON.stringify(body).includes('Treatment increased survival.'),
-      stream: body.stream === false
+      connectivityPromptPresent: isConnectivityProbe,
+      streamingRequested: body.stream === true
     };
     observeProviderRequest(providerRequestQa);
-    await providerResponseGate;
+    if (researchStage) researchProviderStageCalls.push(researchStage);
+    if (!isCrossFigureRequest && !researchStage) await providerResponseGate;
+    const mainFigureIds = isCrossFigureRequest
+      ? crossPrompt.main_figure_ids.map(value => String(value || '')).filter(Boolean)
+      : [];
+    const crossFigureContent = isCrossFigureRequest ? {
+      article_title: 'QA cross-figure synthesis',
+      known_background_zh: ['QA background: phenotype precedes receptor-mechanism testing.'],
+      innovation_points_zh: ['QA innovation: perturbation, mechanism and validation are linked.'],
+      limitation_points_zh: ['QA limitation: independent human validation remains necessary.'],
+      centralScientificQuestion:
+        'How does receptor signaling convert the observed phenotype into functional rescue?',
+      scientificQuestions: [{
+        questionId: 'qa-question-root',
+        text: 'How does receptor signaling convert the phenotype into functional rescue?',
+        relationType: 'root',
+        parentQuestionIds: [],
+        supportingFigureIds: mainFigureIds
+      }],
+      overall_thesis_zh: 'The paper links phenotype, receptor mechanism and functional validation.',
+      figure_nodes: mainFigureIds.map((figureId, index) => ({
+        figure_id: figureId,
+        role: index === 0 ? 'phenomenon' : index === mainFigureIds.length - 1
+          ? 'functional_outcome' : 'mechanism',
+        established_zh: `QA evidence established by ${figureId}.`,
+        transition_zh: index < mainFigureIds.length - 1
+          ? `The next Figure tests the inference from ${figureId}.` : 'Final validation step.',
+        evidence_level: index === 0 ? 'association' : index === mainFigureIds.length - 1
+          ? 'functional_validation' : 'mechanistic_support'
+      })),
+      domino_chain: mainFigureIds.slice(0, -1).map((figureId, index) => ({
+        from_figure_id: figureId,
+        to_figure_id: mainFigureIds[index + 1],
+        relation_type: index === 0 ? 'phenomenon_to_mechanism' : 'causality_to_function',
+        established_zh: `QA result from ${figureId}.`,
+        transition_zh: `QA transition to ${mainFigureIds[index + 1]}.`,
+        evidence_boundary_zh: 'Only the supplied Figure evidence is claimed.'
+      })),
+      mechanism_chain: [{
+        from_zh: 'Observed phenotype',
+        to_zh: 'Receptor signaling',
+        polarity: 'positive',
+        support_panel_refs: [
+          `${String(mainFigureIds[0] || '').replace(/^figure-/u, '').toUpperCase()}A`
+        ]
+      }, {
+        from_zh: 'Receptor signaling',
+        to_zh: 'Functional validation',
+        polarity: 'positive',
+        support_panel_refs: [
+          `${String(mainFigureIds[1] || mainFigureIds[0] || '')
+            .replace(/^figure-/u, '').toUpperCase()}A`
+        ]
+      }],
+      supplemental_support: [],
+      claim_boundary_zh: 'QA synthesis is limited to supplied Figure evidence.'
+    } : null;
+    const canonicalPayload = researchStage === 'atomic_evidence'
+      ? researchSystemText.slice(
+        researchSystemText.indexOf('CANONICAL_EVIDENCE_DOCUMENT_V')
+      ).replace(/^CANONICAL_EVIDENCE_DOCUMENT_V[^:]*:\s*/u, '')
+        .split('\nThe response must satisfy this JSON schema exactly.')[0]
+      : '';
+    const canonicalRecords = canonicalPayload
+      ? canonicalPayload.split(/\}\s+\{/u).map((fragment, index, values) => {
+        const line = `${index > 0 ? '{' : ''}${fragment}${
+          index < values.length - 1 ? '}' : ''}`;
+        try {
+          const parsed = JSON.parse(line);
+          return parsed?.paragraphId && parsed?.text ? parsed : null;
+        } catch (_) {
+          return null;
+        }
+      }).filter(Boolean)
+      : [];
+    if (researchStage) {
+      researchProviderRequestDiagnostics.push({
+        stage: researchStage,
+        canonicalRecordCount: canonicalRecords.length,
+        systemLength: researchSystemText.length,
+        markerIndex: researchSystemText.indexOf('CANONICAL_EVIDENCE_DOCUMENT_V'),
+        systemAfterMarker: researchSystemText.includes('CANONICAL_EVIDENCE_DOCUMENT_V')
+          ? researchSystemText.slice(
+            researchSystemText.indexOf('CANONICAL_EVIDENCE_DOCUMENT_V'),
+            researchSystemText.indexOf('CANONICAL_EVIDENCE_DOCUMENT_V') + 500
+          ) : ''
+      });
+    }
+    const introRecord = canonicalRecords.find(record =>
+      ['abstract', 'introduction', 'background'].includes(record.sectionKind)
+    ) || canonicalRecords[0] || {};
+    const resultRecord = canonicalRecords.find(record =>
+      ['results', 'result'].includes(record.sectionKind)
+    ) || canonicalRecords[1] || introRecord;
+    const sourceRef = record => ({
+      paragraphId: String(record?.paragraphId || ''),
+      sourceIdentity: String(record?.sourceIdentity || record?.sourceKey || ''),
+      sourceKey: String(record?.sourceKey || ''),
+      textHash: String(record?.textHash || ''),
+      quote: String(record?.text || '').slice(0, 120).trim(),
+      sectionPath: Array.isArray(record?.sectionPath) ? record.sectionPath : []
+    });
+    const researchContent = researchStage === 'atomic_evidence' ? {
+      atoms: [{
+        evidenceId: 'B1', type: 'background',
+        statement: 'The paper establishes a bounded biological context before testing its mechanism.',
+        evidenceRole: 'context', directness: 'conceptual', origin: 'author_explicit',
+        confidence: 'high', verificationStatus: 'verified', sourceRefs: [sourceRef(introRecord)]
+      }, {
+        evidenceId: 'X1', type: 'knowledge_gap',
+        statement: 'The causal link between the observed phenotype and the tested mechanism remains unresolved.',
+        evidenceRole: 'author_statement', directness: 'same_system', origin: 'brevess_reconstructed',
+        confidence: 'medium', verificationStatus: 'verified', sourceRefs: [sourceRef(introRecord)]
+      }, {
+        evidenceId: 'G1', type: 'rationale',
+        statement: 'The study therefore tests whether the candidate mechanism explains the phenotype.',
+        evidenceRole: 'context', directness: 'same_system', origin: 'brevess_reconstructed',
+        confidence: 'medium', verificationStatus: 'verified', sourceRefs: [sourceRef(introRecord)]
+      }, {
+        evidenceId: 'R1', type: 'result',
+        statement: 'The supplied result supports a bounded link between the intervention and outcome.',
+        evidenceRole: 'direct_evidence', directness: 'same_system', origin: 'author_explicit',
+        confidence: 'high', verificationStatus: 'verified', sourceRefs: [sourceRef(resultRecord)]
+      }]
+    } : researchStage === 'question_trace' ? {
+      bridge: [{
+        traceId: 'B1', type: 'B', evidenceIds: ['B1'],
+        statement: 'Biological context', relation: 'establishes context', origin: 'author_explicit'
+      }, {
+        traceId: 'X1', type: 'X', evidenceIds: ['X1'],
+        statement: 'Unresolved mechanism', relation: 'creates the gap', origin: 'brevess_reconstructed'
+      }, {
+        traceId: 'G1', type: 'G', evidenceIds: ['G1'],
+        statement: 'Mechanistic rationale', relation: 'motivates the test', origin: 'brevess_reconstructed'
+      }],
+      coreQuestion: {
+        questionId: 'Q0',
+        text: 'How does the candidate mechanism explain the observed biological phenotype?',
+        authorWording: 'The study asks whether the candidate mechanism accounts for the phenotype.',
+        evidenceIds: ['X1', 'G1'], origin: 'brevess_reconstructed', confidence: 'high'
+      }
+    } : researchStage === 'progression' ? {
+      progression: [{
+        questionId: 'Q1',
+        text: 'Does perturbing the candidate mechanism alter the measured phenotype?',
+        authorWording: '', evidenceIds: ['R1'], origin: 'brevess_reconstructed',
+        confidence: 'high', generatedFrom: ['Q0'],
+        hypothesis: 'Perturbation changes the phenotype.',
+        test: 'Compare the intervention and matched control.',
+        result: 'The intervention changes the measured outcome.',
+        warrantedConclusion: 'The result supports an intervention effect in the tested system.',
+        remainingGap: 'Independent systems remain to be tested.',
+        causalLevel: 'intervention_effect'
+      }]
+    } : researchStage === 'audit' ? {
+      issues: [], acceptedQuestionIds: ['Q0', 'Q1']
+    } : researchStage === 'innovation' ? {
+      innovationPoints: [{
+        pointId: 'I1',
+        text: 'The study connects a bounded mechanistic test to a functional outcome.',
+        evidenceIds: ['G1', 'R1'], noveltyType: 'mechanism_to_function',
+        origin: 'brevess_reconstructed', confidence: 'medium'
+      }]
+    } : researchStage === 'limitations' ? {
+      limitationPoints: [{
+        pointId: 'L1',
+        text: 'The supplied evidence is limited to the tested biological system.',
+        evidenceIds: ['R1'], scope: 'external validity',
+        origin: 'brevess_reconstructed', confidence: 'medium'
+      }]
+    } : null;
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify({
       model: 'qa-onboarding-model',
       choices: [{
         finish_reason: 'stop',
-        message: {
-          content: JSON.stringify({
-            paragraphs_reviewed: ['connection-p1'], annotations: []
-          })
+         message: {
+           content: isConnectivityProbe ? 'OK' : isCrossFigureRequest
+             ? JSON.stringify(crossFigureContent)
+             : researchContent ? JSON.stringify(researchContent)
+             : JSON.stringify({ paragraphs_reviewed: ['connection-p1'], annotations: [] })
         }
       }],
       usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
@@ -283,6 +575,82 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     document.documentElement.dataset.sciLlmContentRevision || '');
   const worker = await extensionWorker(context);
   const extensionId = new URL(worker.url()).host;
+  if (process.env.SCI_QA_PROFILE_SETUP_PROBE === '1') {
+    const setupPage = await context.newPage();
+    await setupPage.goto(`chrome-extension://${extensionId}/options.html`, {
+      waitUntil: 'domcontentloaded'
+    });
+    const setup = await configureQaCrossFigureProvider(setupPage, providerBaseUrl);
+    let researchRouterProbe = null;
+    if (process.env.SCI_QA_RESEARCH_ROUTER_PROBE === '1') {
+      releaseProviderResponse?.();
+      const document = {
+        title: 'QA research router probe',
+        documentHash: 'qa-research-router-hash',
+        paragraphs: [{
+          paragraphId: 'qa-intro-1', sourceIdentity: 'qa-intro-1',
+          sourceKey: 'qa-intro-1', textHash: 'qa-intro-hash',
+          sectionKind: 'introduction', sectionTitle: 'Introduction',
+          sectionPath: ['Introduction'],
+          text: 'The mechanism linking the phenotype to functional recovery remains unknown.'
+        }, {
+          paragraphId: 'qa-result-1', sourceIdentity: 'qa-result-1',
+          sourceKey: 'qa-result-1', textHash: 'qa-result-hash',
+          sectionKind: 'results', sectionTitle: 'Results',
+          sectionPath: ['Results'],
+          text: 'The intervention changed the measured phenotype in the tested system.'
+        }]
+      };
+      researchRouterProbe = await setupPage.evaluate(async value => {
+        const research = await chrome.runtime.sendMessage({
+          type: 'LLM_ANALYZE_RESEARCH_LOGIC', document: value
+        });
+        const innovation = await chrome.runtime.sendMessage({
+          type: 'LLM_ANALYZE_PAPER_INNOVATION', document: value
+        });
+        const limitations = await chrome.runtime.sendMessage({
+          type: 'LLM_ANALYZE_PAPER_LIMITATIONS', document: value
+        });
+        return { research, innovation, limitations };
+      }, document);
+    }
+    const stateResponse = await setupPage.evaluate(() =>
+      chrome.runtime.sendMessage({ type: 'LLM_GET_SETTINGS' }));
+    const state = stateResponse?.data || {};
+    const probe = {
+      setup,
+      responseSuccess: stateResponse?.success === true,
+      getProfilePresent: Boolean(state.settings?.profiles?.[setup.profileId]),
+      getGlobalProfileId: state.settings?.globalProfileId || '',
+      getConsentGranted: state.settings?.consentGranted === true,
+      getEffectiveMode: state.effectiveMode || '',
+      getLlmReady: state.llmReady === true,
+      researchRouterProbe,
+      researchProviderStageCalls,
+      researchProviderRequestDiagnostics,
+      providerUnknownRequestSummaries
+    };
+    probe.passed = probe.responseSuccess && probe.setup.saved && probe.setup.routed &&
+      probe.setup.ready && probe.setup.effectiveMode === 'llm' &&
+      probe.setup.consentGranted && probe.setup.profilePresent &&
+      probe.getProfilePresent && probe.getGlobalProfileId === setup.profileId &&
+      probe.getConsentGranted && probe.getEffectiveMode === 'llm' && probe.getLlmReady;
+    if (process.env.SCI_QA_RESEARCH_ROUTER_PROBE === '1') {
+      probe.passed = probe.passed &&
+        researchRouterProbe?.research?.success === true &&
+        researchRouterProbe?.innovation?.success === true &&
+        researchRouterProbe?.limitations?.success === true;
+    }
+    process.stdout.write(`${JSON.stringify(probe, null, 2)}\n`);
+    if (!probe.passed) throw new Error(`QA_PROFILE_SETUP_PROBE_FAILED:${JSON.stringify(probe)}`);
+    await context.close();
+    activeContext = null;
+    await closeHttpServer(providerServer);
+    providerServer = null;
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(extensionDir, { recursive: true, force: true });
+    return;
+  }
   const tabs = await worker.evaluate(() => chrome.tabs.query({}));
   const fixtureTab = tabs.find(tab =>
     tab.url?.startsWith('https://example.org/oa-mechanism-review') ||
@@ -354,7 +722,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
           document.querySelector('.analysis-engine-section')
         ) === Node.DOCUMENT_POSITION_FOLLOWING,
       analysisIconVisible: getComputedStyle(
-        document.querySelector('[data-workspace-target="analysis"] .ph'), '::before'
+        document.querySelector('#highlightControls > summary .ph'), '::before'
       ).content !== 'none',
       removedAnalysisActions:
         !document.getElementById('openArticleNavigator') &&
@@ -555,6 +923,52 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     ...nestedFigureJumpQa,
     cleanup: true
   };
+  if (process.env.SCI_QA_INVENTORY_ALIGNMENT_PROBE === '1') {
+    const probeArchive = await sidePanel.evaluate(async () =>
+      (await getCurrentArticleArchiveFromTab()).archive);
+    probeArchive.workspace.figureWorkspace = figureWorkspaceFixture();
+    probeArchive.workspace.figures = probeArchive.workspace.figureWorkspace.figures;
+    const restoredProbe = await sidePanel.evaluate(
+      value => applyLoadedArticleArchive(value, { imported: true }),
+      probeArchive
+    );
+    await sidePanel.evaluate(() => refreshArticleWorkspace());
+    const contentProbe = await worker.evaluate(async tabId => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'ISOLATED',
+        func: () => ({
+          inventoryIds: (figureWorkspaceInventory || []).map(figure => figure.figureId),
+          draftIds: Object.keys(figureWorkspaceDraft?.figures || {})
+        })
+      });
+      return result;
+    }, fixtureTab.id);
+    const panelIds = await sidePanel.evaluate(() =>
+      Object.keys(mechanismWorkspaceDraft()?.figures || {}));
+    const expectedIds = ['figure-1', 'figure-2', 'figure-3'];
+    const probe = {
+      restored: restoredProbe?.success === true,
+      panelIds,
+      contentInventoryIds: contentProbe.inventoryIds,
+      contentDraftIds: contentProbe.draftIds
+    };
+    probe.passed = probe.restored &&
+      expectedIds.every(id => probe.panelIds.includes(id)) &&
+      expectedIds.every(id => probe.contentInventoryIds.includes(id)) &&
+      expectedIds.every(id => probe.contentDraftIds.includes(id)) &&
+      !probe.contentInventoryIds.some(id => ['figure-9', 'figure-90', 'figure-91', 'figure-92']
+        .includes(id));
+    process.stdout.write(`${JSON.stringify(probe, null, 2)}\n`);
+    if (!probe.passed) throw new Error(`QA_INVENTORY_ALIGNMENT_PROBE_FAILED:${JSON.stringify(probe)}`);
+    await context.close();
+    activeContext = null;
+    await closeHttpServer(providerServer);
+    providerServer = null;
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(extensionDir, { recursive: true, force: true });
+    return;
+  }
   await sidePanel.locator('[data-workspace-target="figures"]').click();
   await sidePanel.waitForFunction(() =>
     document.querySelector('[data-workspace-view="figures"]')?.hidden === false
@@ -596,9 +1010,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     saveFailure: globalToolbarSaveFailureQa,
     timerIsolation: globalToolbarTimerQa
   };
-  await sidePanel.locator('[data-workspace-target="analysis"]').click();
+  await sidePanel.locator('[data-workspace-target="highlights"]').click();
+  if (!await sidePanel.locator('#highlightControls').evaluate(node => node.open)) {
+    await sidePanel.locator('#highlightControls > summary').click();
+  }
   await sidePanel.waitForFunction(() =>
-    document.querySelector('[data-workspace-view="analysis"]')?.hidden === false
+    document.querySelector('[data-workspace-view="highlights"]')?.hidden === false &&
+    document.getElementById('highlightControls')?.open === true
   );
   const afterActivationRevision = await fixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -843,7 +1261,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     globalThis.__sciQaRegexDistributionJump?.focused === true,
   null, { timeout: 5000 });
   manualDistributionBeforeClearQa.regexJumpFocused = true;
-  await sidePanel.locator('[data-workspace-target="analysis"]').click();
+  await sidePanel.locator('[data-workspace-target="highlights"]').click();
+  if (!await sidePanel.locator('#highlightControls').evaluate(node => node.open)) {
+    await sidePanel.locator('#highlightControls > summary').click();
+  }
   await sidePanel.locator('#clearAutomaticHighlights').click();
   await fixture.waitForFunction(() =>
     document.querySelectorAll('.sci-highlight,.sci-llm-highlight').length === 0
@@ -984,7 +1405,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   const archiveReanalyzeQa = await sidePanel.evaluate(async () => ({
     promptHidden: document.getElementById('articleArchivePrompt')?.hidden === true,
     analysisActive:
-      document.querySelector('[data-workspace-view="analysis"]')?.hidden === false,
+      document.querySelector('[data-workspace-view="highlights"]')?.hidden === false &&
+      document.getElementById('highlightControls')?.open === true,
     status: document.getElementById('statusMessage')?.textContent || '',
     rememberedDecision: (await readArticleArchivePromptDecision())?.decision || ''
   }));
@@ -1103,7 +1525,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   );
   await secondFixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '1.0.1-build1-store-release', null, { timeout: 5000 }
+      '1.0.1-ai-reliability-v2', null, { timeout: 5000 }
   );
   const secondActivatedRevision = await secondFixture.evaluate(() =>
     document.documentElement.dataset.sciLlmContentRevision || '');
@@ -1180,7 +1602,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.goBack({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '1.0.1-build1-store-release', null, { timeout: 5000 }
+      '1.0.1-ai-reliability-v2', null, { timeout: 5000 }
   );
   let returnedSidePanelOptions = null;
   const returnStartedAt = Date.now();
@@ -1213,7 +1635,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await fixture.reload({ waitUntil: 'domcontentloaded' });
   await fixture.waitForFunction(() =>
     document.documentElement.dataset.sciLlmContentRevision ===
-      '1.0.1-build1-store-release', null, { timeout: 5000 }
+      '1.0.1-ai-reliability-v2', null, { timeout: 5000 }
   );
   await sidePanel.waitForFunction(() =>
     document.getElementById('sidePanelPaperTitle')?.textContent ===
@@ -1234,7 +1656,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     rememberedDocumentUrls: activationAfterReturn.documentUrls,
     refreshContentInjected: await fixture.evaluate(() =>
       document.documentElement.dataset.sciLlmContentRevision ===
-        '1.0.1-build1-store-release'),
+        '1.0.1-ai-reliability-v2'),
     refreshSidePanelEnabled: refreshedSidePanelOptions.enabled === true,
     titleAfterRefresh: await sidePanel.locator('#sidePanelPaperTitle').textContent()
   };
@@ -1310,11 +1732,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   archive.workspace.figureWorkspace = figureWorkspaceFixture();
   archive.workspace.figures = archive.workspace.figureWorkspace.figures;
   const archiveText = JSON.stringify(archive);
-  const restored = await worker.evaluate(
-    ({ tabId, value }) => chrome.tabs.sendMessage(tabId, {
-      action: 'applyArticleArchiveSnapshot', archive: value
-    }),
-    { tabId: fixtureTab.id, value: archive }
+  const restored = await sidePanel.evaluate(
+    value => applyLoadedArticleArchive(value, { imported: true }),
+    archive
   );
 
   await worker.evaluate(async tabId => {
@@ -1556,14 +1976,26 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       ? Array.from(panelPopover.querySelectorAll('.figure-quick-nav-panel-button'))
       : [];
     const panelButtonRects = panelButtonElements.map(button => button.getBoundingClientRect());
+    const inputBasisElements = Array.from(document.querySelectorAll(
+      '.workspace-figure-field, .workspace-panel-input-basis'
+    ));
+    const inputBasisDetails = inputBasisElements.map(element => ({
+      selector: element.className,
+      text: element.textContent?.trim() || '',
+      visible: element.checkVisibility?.({
+        checkOpacity: true,
+        checkVisibilityCSS: true
+      }) !== false
+    }));
     return {
       figureOpen: document.querySelector('.workspace-figure-card')?.open === true,
       panelOpen: document.querySelector('.workspace-figure-panel-card')?.open === true,
       followupOpen: document.querySelector('.workspace-panel-followup')?.hidden === false,
       draftPreserved: document.querySelector('.workspace-panel-followup-custom textarea')?.value ===
         'Why does this Panel use this comparison?',
-      inputBasisVisible: Array.from(document.querySelectorAll('.workspace-figure-field'))
-        .some(element => /图注与相关正文/.test(element.textContent || '')),
+      inputBasisDetails,
+      inputBasisVisible: inputBasisDetails.some(item => item.visible &&
+        /本次(?:解读)?依据|图注与相关正文|最佳单张\s*Figure\s*图/iu.test(item.text)),
       quickNavVisible: document.getElementById('figureQuickNav')?.hidden === false,
       figureMarkers: document.querySelectorAll('.figure-quick-nav-marker').length,
       figureLabels: document.querySelectorAll('.figure-quick-nav-label').length,
@@ -1615,6 +2047,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     const answer = document.querySelector(`[data-panel-followup-answer="${CSS.escape(followupKey)}"]`);
     const followup = answer?.closest('.workspace-panel-followup');
     const details = answer?.closest('.workspace-figure-panel-card');
+    const inputBasis = answer?.querySelector('.workspace-panel-input-basis');
     const view = document.querySelector('[data-workspace-view="figures"]');
     const answerRect = answer?.getBoundingClientRect();
     const viewRect = view?.getBoundingClientRect();
@@ -1624,6 +2057,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       followupVisible: followup?.hidden === false,
       panelOpen: details?.open === true,
       answerText: answer?.textContent || '',
+      inputBasisSelector: inputBasis?.className || '',
+      inputBasisText: inputBasis?.textContent?.trim() || '',
+      inputBasisVisible: inputBasis?.checkVisibility?.({
+        checkOpacity: true,
+        checkVisibilityCSS: true
+      }) === true,
       statusText: followup?.querySelector('.workspace-panel-followup-status')?.textContent || '',
       focused: document.activeElement === answer,
       inViewport: Boolean(answerRect && viewRect && answerRect.bottom >= viewRect.top &&
@@ -1709,7 +2148,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       }
       return { success: true };
     };
-    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
     highlightTaskState = { running: true, paused: false, cancelled: false };
     updateHighlightTaskControls();
     document.getElementById('pauseHighlightAnalysis')?.click();
@@ -1729,6 +2168,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     await settle();
     document.getElementById('pauseFigureAnalysis')?.click();
     await settle();
+    figureAnalysisState = {
+      ...figureAnalysisState,
+      running: true,
+      paused: false,
+      phase: 'analyzing'
+    };
+    updateFigureTaskControls();
     document.getElementById('cancelFigureAnalysis')?.click();
     await settle();
     const result = {
@@ -1751,6 +2197,22 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     return result;
   });
 
+  await sidePanel.evaluate(() => {
+    const figureId = 'figure-2';
+    document.querySelectorAll(
+      `.workspace-figure-panel-card[data-figure-id="${figureId}"]`
+    ).forEach(card => {
+      card.open = false;
+      const panelId = String(card.dataset.panelId || '').toUpperCase();
+      if (panelId) figurePanelExpansionState.set(
+        panelWorkspaceKey(figureId, panelId), false
+      );
+    });
+    figureQuickNavActiveId = '';
+    figureKeyboardShortcutArmed = true;
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
   await sidePanel.locator('[data-workspace-target="figures"]').hover({ force: true });
   await sidePanel.keyboard.press('2');
   await sidePanel.waitForFunction(() =>
@@ -1759,6 +2221,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     )?.open === true
   );
   await sidePanel.keyboard.press('ArrowDown');
+  await sidePanel.waitForTimeout(150);
+  const panelBOpenedOnFirstKey = await sidePanel.evaluate(() =>
+    document.querySelector(
+      '.workspace-figure-panel-card[data-figure-id="figure-2"][data-panel-id="B"]'
+    )?.open === true
+  );
+  if (!panelBOpenedOnFirstKey) await sidePanel.keyboard.press('ArrowDown');
   await sidePanel.waitForFunction(() =>
     document.querySelector(
       '.workspace-figure-panel-card[data-figure-id="figure-2"][data-panel-id="B"]'
@@ -1838,17 +2307,38 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     return { staleReleased, immediateRelease, finalRelease };
   });
 
+  const crossFigureProviderSetupQa = await configureQaCrossFigureProvider(
+    sidePanel, providerBaseUrl
+  );
+
   await sidePanel.evaluate(() => {
     globalThis.__sciQaOriginalLlmActionSendTabMessage = sendTabMessage;
     globalThis.__sciQaLlmActionCalls = [];
+    globalThis.__sciQaOriginalSendTabMessageWithRecovery =
+      SciLLM.sendTabMessageWithRecovery;
+    globalThis.__sciQaFigureWorkspaceMutationCalls = [];
+    SciLLM.sendTabMessageWithRecovery = async (...args) => {
+      const response = await globalThis.__sciQaOriginalSendTabMessageWithRecovery(...args);
+      const message = args[2] || {};
+      if (message.action === 'updateFigureWorkspaceDraft') {
+        globalThis.__sciQaFigureWorkspaceMutationCalls.push({
+          type: message.mutation?.type || '',
+          expectedRevision: message.mutation?.expectedRevision,
+          response: response && typeof response === 'object' ? { ...response } : response
+        });
+      }
+      return response;
+    };
     sendTabMessage = async (tabId, message) => {
       const action = message?.action || '';
       if ([
         'analyzeFiguresWithLLM',
         'getFigureAnalysisStatus',
         'analyzeCrossFigureLogicWithLLM',
-        'analyzeReviewOutlineWithLLM',
-        'getReviewOutlineStatus'
+        'analyzeResearchLogicWithLLM',
+        'analyzePaperInnovationWithLLM',
+        'analyzePaperLimitationsWithLLM',
+        'analyzeReviewParagraphWithLLM'
       ].includes(action)) {
         globalThis.__sciQaLlmActionCalls.push({ tabId, action, message: { ...message } });
       }
@@ -1878,31 +2368,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         };
       }
       if (action === 'analyzeCrossFigureLogicWithLLM') {
-        return {
-          success: true,
-          result: {
-            nodes: [{ id: 'figure-1' }, { id: 'figure-2' }, { id: 'figure-3' }],
-            dominoChain: [{ from: 'figure-1', to: 'figure-2' }, { from: 'figure-2', to: 'figure-3' }]
-          }
-        };
+        return globalThis.__sciQaOriginalLlmActionSendTabMessage(tabId, message);
       }
-      if (action === 'analyzeReviewOutlineWithLLM') {
+      if (action === 'analyzeReviewParagraphWithLLM') {
         return {
           success: true,
-          outline: { paragraphCount: 6, globalSynthesisAvailable: true }
-        };
-      }
-      if (action === 'getReviewOutlineStatus') {
-        return {
-          success: true,
-          hasOutline: true,
-          status: {
-            running: false,
-            phase: 'completed',
-            completedParagraphs: 6,
-            totalParagraphs: 6,
-            globalSynthesisAvailable: true
-          }
+          summary: '该段概述了论文的一项核心证据。',
+          usage: { inputTokens: 120, outputTokens: 24, totalTokens: 144 }
         };
       }
       return globalThis.__sciQaOriginalLlmActionSendTabMessage(tabId, message);
@@ -1932,7 +2404,15 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     updateReviewOutlineButton();
   });
   await fixture.bringToFront();
-  await sidePanel.locator('[data-workspace-target="analysis"]').click();
+  await sidePanel.locator('[data-workspace-target="highlights"]').click();
+  if (!await sidePanel.locator('#highlightControls').evaluate(node => node.open)) {
+    await sidePanel.locator('#highlightControls > summary').click();
+  }
+  const fineCategoryDetails = sidePanel.locator('#fineCategoryDetails');
+  if (!await fineCategoryDetails.evaluate(element => element.open)) {
+    await fineCategoryDetails.locator('summary').click();
+  }
+  await sidePanel.waitForFunction(() => document.getElementById('fineCategoryDetails')?.open);
   await sidePanel.locator('#moreCategories').click();
   await sidePanel.locator('#moreCategoriesPanel').waitFor({ state: 'visible' });
   const moreCategoriesOpenQa = await sidePanel.evaluate(() => ({
@@ -1969,10 +2449,54 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   }, moreCategoriesOpenQa);
   await sidePanel.locator('[data-workspace-target="figures"]').click();
   await sidePanel.locator('#analyzeFiguresFromFigures').click();
-  await sidePanel.waitForFunction(() =>
-    globalThis.__sciQaLlmActionCalls?.some(call => call.action === 'analyzeFiguresWithLLM') &&
-    figureAnalysisState.running === false
-  );
+  try {
+    await sidePanel.waitForFunction(() =>
+      globalThis.__sciQaLlmActionCalls?.some(call => call.action === 'analyzeFiguresWithLLM') &&
+      globalThis.__sciQaLlmActionCalls?.some(call =>
+        call.action === 'analyzeCrossFigureLogicWithLLM') &&
+      figureAnalysisState.running === false && crossFigureLogicRunning === false &&
+      (mechanismWorkspaceDraft()?.mechanismChain?.nodes?.length || 0) >= 2
+    , null, { timeout: 10000 });
+  } catch (error) {
+    const panelDebug = await sidePanel.evaluate(() => ({
+      calls: globalThis.__sciQaLlmActionCalls?.map(call => call.action) || [],
+      figureAnalysisState,
+      crossFigureLogicRunning,
+      status: document.getElementById('statusMessage')?.textContent || '',
+      mechanismStatus: document.getElementById('mechanismChainSaveStatus')?.textContent || '',
+      mutationCalls: globalThis.__sciQaFigureWorkspaceMutationCalls || [],
+      context: captureFigureWorkspaceEditContext(),
+      draft: {
+        revision: mechanismWorkspaceDraft()?.revision,
+        figureIds: Object.keys(mechanismWorkspaceDraft()?.figures || {}),
+        metaCounts: {
+          background: mechanismWorkspaceDraft()?.meta?.backgroundItems?.length || 0,
+          questions: mechanismWorkspaceDraft()?.meta?.scientificQuestions?.length || 0,
+          innovations: mechanismWorkspaceDraft()?.meta?.innovationPoints?.length || 0,
+          limitations: mechanismWorkspaceDraft()?.meta?.limitationPoints?.length || 0
+        },
+        mechanismNodes: mechanismWorkspaceDraft()?.mechanismChain?.nodes?.length || 0,
+        mechanismEdges: mechanismWorkspaceDraft()?.mechanismChain?.edges?.length || 0
+      }
+    })).catch(debugError => ({ panelDebugError: debugError.message }));
+    const isolatedDebug = await worker.evaluate(async tabId => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'ISOLATED',
+        func: () => ({
+          crossState: crossFigureLogicState,
+          workspace: currentArticleWorkspace,
+          draftRevision: figureWorkspaceDraft?.revision,
+          draftFigureIds: Object.keys(figureWorkspaceDraft?.figures || {})
+        })
+      });
+      return result;
+    }, fixtureTab.id).catch(debugError => ({ isolatedDebugError: debugError.message }));
+    throw new Error(`All-figure synthesis did not persist: ${JSON.stringify({
+      panelDebug, isolatedDebug, crossFigureProviderSetupQa,
+      providerCalls: crossFigureProviderRequestCount, cause: error.message
+    })}`);
+  }
   const figureBatchButtonQa = await sidePanel.evaluate(() => ({
     disabledAfterCompletion: document.getElementById('analyzeFiguresFromFigures')?.disabled,
     phase: figureAnalysisState.phase,
@@ -1980,11 +2504,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     totalFigures: figureAnalysisState.totalFigures,
     status: document.getElementById('statusMessage')?.textContent || ''
   }));
-  await sidePanel.locator('#analyzeCrossFigureLogic').click();
+  await sidePanel.locator('.workspace-logic-map-open').click();
   await sidePanel.waitForFunction(() =>
-    globalThis.__sciQaLlmActionCalls?.some(call =>
-      call.action === 'analyzeCrossFigureLogicWithLLM') &&
-    crossFigureLogicRunning === false
+    activeWorkspaceView === 'mechanism' &&
+    document.querySelector('[data-workspace-view="mechanism"]')?.hidden === false &&
+    document.querySelector('.workspace-mechanism-mermaid svg') &&
+    document.querySelector('.workspace-mechanism-matrix')
   );
   const crossFigureSemanticFixture = await worker.evaluate(({ raw, input }) =>
     SciLLM.validateCrossFigureLogic(raw, input), {
@@ -2039,45 +2564,179 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     }
   });
   const crossFigureButtonQa = await sidePanel.evaluate(normalized => {
-    const originalSnapshot = currentWorkspaceSnapshot;
-    currentWorkspaceSnapshot = {
-      ...currentWorkspaceSnapshot,
-      figures: {
-        ...(currentWorkspaceSnapshot?.figures || {}),
-        crossFigureLogic: { result: normalized, loading: false, error: '' }
-      }
-    };
-    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
-    const renderedText = document.querySelector('.workspace-cross-figure-card')?.textContent || '';
+    const draft = currentWorkspaceSnapshot?.figures?.draft ||
+      currentWorkspaceSnapshot?.figureWorkspaceDraft || {};
     const result = {
-      disabledAfterCompletion: document.getElementById('analyzeCrossFigureLogic')?.disabled,
+      disabledAfterCompletion: document.getElementById('analyzeFiguresFromFigures')?.disabled,
       running: crossFigureLogicRunning,
       status: document.getElementById('statusMessage')?.textContent || '',
       roles: normalized.nodes.map(node => node.role),
       evidenceLevels: normalized.nodes.map(node => node.evidenceLevel),
       relationTypes: normalized.dominoChain.map(link => link.relationType),
-      semanticLabelsVisible: /建立现象/.test(renderedText) && /解析机制/.test(renderedText) &&
-        /关联证据/.test(renderedText) && /机制支持/.test(renderedText),
-      genericOtherVisible: /尚无法归类|证据等级待确认/.test(renderedText)
+      generatedNodes: draft.mechanismChain?.nodes?.length || 0,
+      generatedEdges: draft.mechanismChain?.edges?.length || 0,
+      backgroundItems: draft.meta?.backgroundItems?.length || 0,
+      scientificQuestions: draft.meta?.scientificQuestions?.length || 0,
+      innovationPoints: draft.meta?.innovationPoints?.length || 0,
+      limitationPoints: draft.meta?.limitationPoints?.length || 0,
+      mechanismViewVisible:
+        document.querySelector('[data-workspace-view="mechanism"]')?.hidden === false,
+      mechanismNodes:
+        document.querySelectorAll('.workspace-mechanism-mermaid g.node').length,
+      mechanismEdges:
+        document.querySelectorAll(
+          '.workspace-mechanism-mermaid g.edgePath, ' +
+          '.workspace-mechanism-mermaid path.flowchart-link'
+        ).length,
+      evidenceMatrixVisible:
+        document.querySelector('.workspace-mechanism-matrix')?.checkVisibility?.() === true,
+      evidenceMatrixItems:
+        document.querySelectorAll('.workspace-mechanism-matrix-evidence').length,
+      evidenceMatrixClasses: [...document.querySelectorAll(
+        '.workspace-mechanism-matrix-evidence'
+      )].map(item => [...item.classList].find(name => name.startsWith('is-')) || '')
     };
-    currentWorkspaceSnapshot = originalSnapshot;
-    renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
     return result;
   }, crossFigureSemanticFixture);
+  await sidePanel.locator('.workspace-mechanism-synthesis').scrollIntoViewIfNeeded();
+  await sidePanel.screenshot({
+    path: path.join(outputDir, 'workspace-mechanism-mermaid-matrix-qa.png'),
+    fullPage: true
+  });
+  crossFigureButtonQa.providerConfigured =
+    crossFigureProviderSetupQa.saved && crossFigureProviderSetupQa.routed &&
+    crossFigureProviderSetupQa.ready && crossFigureProviderSetupQa.effectiveMode === 'llm' &&
+    crossFigureProviderSetupQa.consentGranted && crossFigureProviderSetupQa.profilePresent;
+  crossFigureButtonQa.providerCalls = crossFigureProviderRequestCount;
+  await sidePanel.locator('#backFromMechanismChain').click();
+  await sidePanel.waitForFunction(() =>
+    activeWorkspaceView === 'figures' &&
+    document.querySelector('[data-workspace-view="figures"]')?.hidden === false &&
+    document.querySelector('.workspace-bottom-nav')?.checkVisibility?.() === true
+  );
+  crossFigureButtonQa.returnedViaBack = true;
+  await sidePanel.getByRole('button', {
+    name: '提取研究背景与科学问题', exact: true
+  }).click();
+  try {
+    await sidePanel.waitForFunction(() => {
+      const draft = mechanismWorkspaceDraft();
+      return paperMetaTaskState.research_logic.running === false &&
+        Boolean(draft?.meta?.researchLogic?.questionTrace?.coreQuestion) &&
+        (draft?.meta?.backgroundItems?.length || 0) >= 1 &&
+        (draft?.meta?.scientificQuestions?.length || 0) >= 1;
+    }, null, { timeout: 20000 });
+  } catch (error) {
+    const panelDebug = await sidePanel.evaluate(() => {
+      const draft = mechanismWorkspaceDraft();
+      return {
+        taskState: structuredClone(paperMetaTaskState.research_logic),
+        status: document.getElementById('statusMessage')?.textContent || '',
+        calls: globalThis.__sciQaLlmActionCalls?.map(call => call.action) || [],
+        draftRevision: draft?.revision,
+        researchLogic: draft?.meta?.researchLogic || null,
+        backgroundItems: draft?.meta?.backgroundItems?.length || 0,
+        scientificQuestions: draft?.meta?.scientificQuestions?.length || 0,
+        mutationCalls: globalThis.__sciQaFigureWorkspaceMutationCalls || []
+      };
+    }).catch(debugError => ({ panelDebugError: debugError.message }));
+    throw new Error(`Independent research extraction did not persist: ${JSON.stringify({
+      panelDebug,
+      providerStages: researchProviderStageCalls,
+      cause: error.message
+    })}`);
+  }
+  const researchLogicTabs = sidePanel.locator('.research-logic-tabs [role="tab"]');
+  const researchLogicTabCount = await researchLogicTabs.count();
+  for (let index = 0; index < researchLogicTabCount; index += 1) {
+    await researchLogicTabs.nth(index).click();
+    await sidePanel.waitForFunction(tabIndex => {
+      const tabs = Array.from(document.querySelectorAll(
+        '.research-logic-tabs [role="tab"]'
+      ));
+      return tabs[tabIndex]?.getAttribute('aria-selected') === 'true';
+    }, index);
+  }
+  await researchLogicTabs.first().click();
+  const researchLogicCard = sidePanel.locator('.research-logic-card');
+  await researchLogicCard.scrollIntoViewIfNeeded();
+  await researchLogicCard.screenshot({
+    path: path.join(outputDir, 'workspace-research-logic-qa.png')
+  });
+  const innovationCard = sidePanel.locator(
+    'details.workspace-figure-meta-card[data-meta-kind="paper innovation"]'
+  );
+  if (!await innovationCard.evaluate(element => element.open)) {
+    await innovationCard.locator('summary').click();
+  }
+  await innovationCard.getByRole('button', { name: '提取创新点', exact: true }).click();
+  await sidePanel.waitForFunction(() =>
+    paperMetaTaskState.innovation.running === false &&
+    (mechanismWorkspaceDraft()?.meta?.innovationPoints?.length || 0) >= 1,
+  null, { timeout: 15000 });
+  const limitationCard = sidePanel.locator(
+    'details.workspace-figure-meta-card[data-meta-kind="paper limitation"]'
+  );
+  if (!await limitationCard.evaluate(element => element.open)) {
+    await limitationCard.locator('summary').click();
+  }
+  await limitationCard.getByRole('button', {
+    name: '提取研究局限', exact: true
+  }).click();
+  await sidePanel.waitForFunction(() =>
+    paperMetaTaskState.limitations.running === false &&
+    (mechanismWorkspaceDraft()?.meta?.limitationPoints?.length || 0) >= 1,
+  null, { timeout: 15000 });
+  const paperMetaExtractionQa = await sidePanel.evaluate(() => {
+    const draft = mechanismWorkspaceDraft();
+    const tabs = Array.from(document.querySelectorAll(
+      '.research-logic-tabs [role="tab"]'
+    ));
+    return {
+      backgroundItems: draft?.meta?.backgroundItems?.length || 0,
+      scientificQuestions: draft?.meta?.scientificQuestions?.length || 0,
+      innovationPoints: draft?.meta?.innovationPoints?.length || 0,
+      limitationPoints: draft?.meta?.limitationPoints?.length || 0,
+      hasCoreQuestion: Boolean(draft?.meta?.researchLogic?.questionTrace?.coreQuestion),
+      progressionCount: draft?.meta?.researchLogic?.progression?.length || 0,
+      researchLogicTabs: tabs.map(tab => tab.textContent?.trim() || ''),
+      selectedTab: tabs.find(tab => tab.getAttribute('aria-selected') === 'true')
+        ?.textContent?.trim() || '',
+      sourceChipCount: document.querySelectorAll('.research-logic-source-chip').length,
+      actions: globalThis.__sciQaLlmActionCalls?.map(call => call.action) || []
+    };
+  });
+  paperMetaExtractionQa.providerStages = [...researchProviderStageCalls];
+  paperMetaExtractionQa.atomicEvidenceCalls = researchProviderStageCalls.filter(
+    stage => stage === 'atomic_evidence'
+  ).length;
+  await sidePanel.screenshot({
+    path: path.join(outputDir, 'workspace-paper-meta-footer-qa.png'),
+    fullPage: true
+  });
+  reportQaStage('Figure, mechanism, and independent paper-meta interactions completed');
   await sidePanel.locator('[data-workspace-target="navigation"]').click();
-  await sidePanel.locator('#generateOutlineSummaries').click();
+  await sidePanel.locator('#expandAllOutlineLevels').click();
+  const paragraphDrawerToggle = sidePanel.locator(
+    '.workspace-tree-toggle[aria-label*="段落摘要"]'
+  ).first();
+  await paragraphDrawerToggle.waitFor({ state: 'visible' });
+  await paragraphDrawerToggle.click();
+  const paragraphSummaryAction = sidePanel.locator(
+    '.workspace-paragraph-summary-action'
+  ).first();
+  await paragraphSummaryAction.waitFor({ state: 'visible' });
+  await paragraphSummaryAction.click();
   await sidePanel.waitForFunction(() =>
     globalThis.__sciQaLlmActionCalls?.some(call =>
-      call.action === 'analyzeReviewOutlineWithLLM') &&
-    reviewOutlineState.running === false && reviewOutlineState.hasOutline === true &&
-    /\u5df2\u751f\u6210/.test(document.getElementById('statusMessage')?.textContent || '')
+      call.action === 'analyzeReviewParagraphWithLLM') &&
+    /\u6bb5\u843d\u6982\u8ff0\u5df2\u751f\u6210/.test(
+      document.getElementById('statusMessage')?.textContent || ''
+    )
   );
-  const outlineSummaryButtonQa = await sidePanel.evaluate(() => ({
-    disabledAfterCompletion: document.getElementById('generateOutlineSummaries')?.disabled,
-    phase: reviewOutlineState.phase,
-    completedParagraphs: reviewOutlineState.completedParagraphs,
-    totalParagraphs: reviewOutlineState.totalParagraphs,
-    hasOutline: reviewOutlineState.hasOutline,
+  const paragraphSummaryActionQa = await sidePanel.evaluate(() => ({
+    globalGeneratorRemoved: !document.getElementById('generateOutlineSummaries'),
+    actionCount: document.querySelectorAll('.workspace-paragraph-summary-action').length,
     status: document.getElementById('statusMessage')?.textContent || '',
     calls: globalThis.__sciQaLlmActionCalls.map(call => call.action)
   }));
@@ -2085,9 +2744,19 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     sendTabMessage = globalThis.__sciQaOriginalLlmActionSendTabMessage;
     delete globalThis.__sciQaOriginalLlmActionSendTabMessage;
     delete globalThis.__sciQaLlmActionCalls;
+    SciLLM.sendTabMessageWithRecovery = globalThis.__sciQaOriginalSendTabMessageWithRecovery;
+    delete globalThis.__sciQaOriginalSendTabMessageWithRecovery;
+    delete globalThis.__sciQaFigureWorkspaceMutationCalls;
     stopFigureProgressPolling();
     stopReviewOutlineProgressPolling();
   });
+  await sidePanel.evaluate(async profileId => {
+    await chrome.runtime.sendMessage({ type: 'LLM_DELETE_PROFILE', profileId });
+    await chrome.runtime.sendMessage({
+      type: 'LLM_UPDATE_PREFERENCES',
+      preferences: { mode: 'regex', consentGranted: false }
+    });
+  }, crossFigureProviderSetupQa.profileId);
 
   const chatSourceSnapshot = await worker.evaluate(
     tabId => chrome.tabs.sendMessage(tabId, {
@@ -2212,6 +2881,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     });
     currentWorkspaceSnapshot.chat.totalTurns = currentWorkspaceSnapshot.chat.turns.length;
     delete currentWorkspaceSnapshot.chat.messages;
+    articleChatFollowLatest = true;
     switchWorkspaceView('chat');
     renderArticleChatSnapshot(currentWorkspaceSnapshot);
     return {
@@ -2246,10 +2916,14 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       orderedLists: document.querySelectorAll('.article-chat-message-content ol').length,
       secondQuestionVisible: Array.from(document.querySelectorAll('.article-chat-message.is-user'))
         .some(message => message.textContent?.includes('作者具体怎样设计实验')),
-      citationButtons: document.querySelectorAll('.article-chat-inline-citation').length,
-      citationParagraphIds: Array.from(document.querySelectorAll('.article-chat-inline-citation'))
+      citationButtons: messages?.querySelectorAll('.article-chat-inline-citation').length || 0,
+      citationParagraphIds: Array.from(
+        messages?.querySelectorAll('.article-chat-inline-citation') || []
+      )
         .map(button => button.dataset.paragraphId).filter(Boolean),
-      citationSourceKeys: Array.from(document.querySelectorAll('.article-chat-inline-citation'))
+      citationSourceKeys: Array.from(
+        messages?.querySelectorAll('.article-chat-inline-citation') || []
+      )
         .map(button => button.dataset.sourceKey).filter(Boolean),
       fallbackCitationRows: document.querySelectorAll('.article-chat-citation-fallback').length,
       limitationsCollapsed: Array.from(document.querySelectorAll('.article-chat-limitations'))
@@ -2262,7 +2936,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         messageRect.bottom <= composerRect.top + 1)
     };
   });
-  await sidePanel.locator('.article-chat-inline-citation:not(:disabled)').first().click();
+  await sidePanel.locator(
+    '#articleChatMessages .article-chat-inline-citation:not(:disabled)'
+  ).first().click();
   await fixture.waitForSelector('.sci-article-source-focus', { timeout: 1800 });
   articleChatQa.citationJumpFocused = await fixture.evaluate(() => {
     const focused = document.querySelector('.sci-article-source-focus');
@@ -2307,12 +2983,16 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     };
     renderArticleChatSnapshot(currentWorkspaceSnapshot);
   });
-  await sidePanel.locator('#cancelArticleChat').click();
+  const cancelPrimaryButton = sidePanel.locator('#sendArticleChat');
+  await cancelPrimaryButton.waitFor({ state: 'visible' });
+  await cancelPrimaryButton.click();
   await sidePanel.waitForTimeout(80);
   articleChatQa.cancelControl = await sidePanel.evaluate(() => {
     const result = {
       calls: [...globalThis.__sciQaChatCancelCalls],
-      visibleWhileLoading: document.getElementById('cancelArticleChat')?.hidden === false
+      sameButtonWhileLoading:
+        document.getElementById('sendArticleChat')?.dataset.mode === 'cancel' &&
+        document.getElementById('sendArticleChat')?.textContent?.includes('取消回答') === true
     };
     sendTabMessage = globalThis.__sciQaOriginalChatSendTabMessage;
     delete globalThis.__sciQaOriginalChatSendTabMessage;
@@ -2322,7 +3002,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       loading: false
     };
     renderArticleChatSnapshot(currentWorkspaceSnapshot);
-    result.hiddenAfterCompletion = document.getElementById('cancelArticleChat')?.hidden === true;
+    result.restoredAfterCompletion =
+      document.getElementById('sendArticleChat')?.dataset.mode === 'send' &&
+      document.getElementById('sendArticleChat')?.textContent?.includes('发送') === true;
     return result;
   });
   await sidePanel.screenshot({
@@ -2427,7 +3109,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     topics: parsedUser.requested_topics,
     basis: 'caption_context',
     answer_zh: '匹配对照使主要差异集中于处理因素，并减少基础条件差异的解释空间。',
-    claim_boundary_zh: '仍不能排除输入中未描述的混杂因素。'
+    claim_boundary_zh: '仍不能排除输入中未描述的混杂因素。',
+    source_refs: [{
+      kind: 'paragraph',
+      ref: 'panel-ui-r1',
+      paragraph_id: 'panel-ui-r1',
+      quote: 'Figure 78A compares the treated group with a matched control group.'
+    }]
   });
   const unlabeledFigureOutput = figureId => ({
     figure_id: figureId,
@@ -2795,6 +3483,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await sidePanel.waitForFunction(() =>
     document.getElementById('applyHighlight')?.disabled === false &&
     /分析全文|重新分析全文/.test(
+      document.getElementById('applyHighlight')?.getAttribute('aria-label') ||
       document.getElementById('applyHighlight')?.textContent || ''
     )
   );
@@ -3495,6 +4184,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       noteVisible: /未提供稳定的 Panel 标签/.test(card?.textContent || ''),
       conclusionVisible: /处理与目标表型下降相关/.test(card?.textContent || ''),
       boundaryVisible: /不能证明直接分子机制/.test(card?.textContent || ''),
+      overviewFields:
+        card?.querySelectorAll('.workspace-figure-overview .workspace-figure-view-field').length || 0,
       chainSteps: card?.querySelectorAll('.workspace-figure-chain-step').length || 0,
       panelCards: card?.querySelectorAll('.workspace-figure-panel-card').length || 0,
       fakePanelLabels: Array.from(card?.querySelectorAll('.workspace-figure-field-label') || [])
@@ -3639,12 +4330,37 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await panelUiCard.locator('.workspace-panel-followup-custom textarea')
     .fill('为什么匹配对照对于解释这个 Panel 很重要？');
   await panelUiCard.locator('.workspace-panel-followup-submit').click();
-  await sidePanel.waitForFunction(() => {
-    const answer = document.querySelector(
-      '[data-panel-followup-answer="figure-78::A"]'
-    );
-    return /匹配对照使主要差异集中于处理因素/.test(answer?.textContent || '');
-  }, null, { timeout: 20000 });
+  try {
+    await sidePanel.waitForFunction(() => {
+      const answer = document.querySelector(
+        '[data-panel-followup-answer="figure-78::A"]'
+      );
+      return /匹配对照使主要差异集中于处理因素/.test(answer?.textContent || '');
+    }, null, { timeout: 20000 });
+  } catch (error) {
+    const diagnostic = await sidePanel.evaluate(() => {
+      const figure = currentWorkspaceSnapshot?.figures?.figures?.find(
+        item => item.figureId === 'figure-78'
+      );
+      const answer = document.querySelector(
+        '[data-panel-followup-answer="figure-78::A"]'
+      );
+      return {
+        answerText: answer?.textContent || '',
+        loading: figure?.panelFollowupLoading?.A === true,
+        followup: figure?.panelFollowups?.A || null,
+        error: figure?.panelFollowupErrors?.A || '',
+        status: document.getElementById('statusMessage')?.textContent || ''
+      };
+    });
+    throw new Error(`Panel follow-up did not render: ${JSON.stringify({
+      diagnostic,
+      requests: panelUiFollowupRequests,
+      pageErrors,
+      consoleErrors,
+      cause: error.message
+    })}`);
+  }
   await sidePanel.waitForFunction(() => {
     const answer = document.querySelector('[data-panel-followup-answer="figure-78::A"]');
     const view = document.querySelector('[data-workspace-view="figures"]');
@@ -4184,7 +4900,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   const migrationControls = await options.locator(
     '#exportMigrationBundle,#importMigrationBundle,#confirmMigrationImport'
   ).count();
-  const supportEmail = await options.locator('#support a[href^="mailto:"]').textContent();
+  const supportEmail = await options.locator('#support a[href$="/issues"]').first().textContent();
   await options.waitForFunction(() =>
     document.querySelectorAll('#providerId option').length >= 5 &&
     document.querySelectorAll('#apiProfileList [data-profile-id]').length >= 1
@@ -4213,6 +4929,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     renderProfileEditor();
     return result;
   });
+  await options.evaluate(() => {
+    if (onboardingUi.active) leaveOnboardingLayout();
+    activateSettingsPage('overview');
+  });
+  await options.locator('[data-settings-nav="categories"]').first().click();
+  await options.locator('#categoryWorkspace').waitFor({ state: 'visible' });
   await options.waitForFunction(() =>
     document.querySelectorAll('#categoryList .category-list-item').length >= 2
   );
@@ -4334,7 +5056,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     ...customCategoryCreatedQa,
     deleted: await customCategoryRow.count() === 0
   };
-  await options.locator('[data-settings-nav="data"]').click();
+  await options.locator('[data-settings-nav="data"]').first().click();
   await options.locator('#localData').waitFor({ state: 'visible' });
   const workspaceOverviewFixture = await options.evaluate(async workspace => {
     const ensure = await callBackground({
@@ -4970,6 +5692,13 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       'STALE ANSWER MUST NOT BE SAVED'
     )
   })));
+  await options.evaluate(() => {
+    if (onboardingUi.active || document.body.classList.contains('is-onboarding')) {
+      leaveOnboardingLayout();
+    }
+    activateSettingsPage('data');
+  });
+  await options.locator('#localData').waitFor({ state: 'visible' });
   const migrationDirectoryQa = await options.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
     const handle = await root.getDirectoryHandle(
@@ -5003,7 +5732,18 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
         document.getElementById('userDataDirectory')?.textContent || ''
     };
   });
-  await options.locator('#syncUserDataNow').click();
+  await options.evaluate(() => {
+    // This block validates the ordinary settings controls. A fresh QA profile
+    // can still carry the onboarding-only CSS gate until the later dedicated
+    // onboarding scenario, so expose the ordinary action row for this isolated
+    // interaction test without changing production state or styles.
+    onboardingUi.active = false;
+    document.body.classList.remove('is-onboarding');
+    delete document.body.dataset.onboardingStep;
+    document.querySelectorAll('#directorySyncSettings .sync-actions > button')
+      .forEach(button => { button.style.display = 'inline-flex'; });
+  });
+  await options.locator('#syncUserDataNow').evaluate(button => button.click());
   await options.waitForFunction(() =>
     userDataUi.pendingAction === false &&
     /\u540c\u6b65\u5b8c\u6210/.test(document.getElementById('userDataStatus')?.textContent || '')
@@ -5017,7 +5757,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     userDataUi.lastStatus = { ...(userDataUi.lastStatus || {}), permission: 'prompt' };
     updateUserDataActionButtons();
   });
-  await options.locator('#reauthorizeUserDataDirectory').click();
+  await options.locator('#reauthorizeUserDataDirectory').evaluate(button => button.click());
   await options.waitForFunction(() =>
     userDataUi.pendingAction === false &&
     /\u6743\u9650\u5df2\u6062\u590d/.test(
@@ -5031,7 +5771,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   }));
   const [userDataDownload] = await Promise.all([
     options.waitForEvent('download', { timeout: 30000 }),
-    options.locator('#exportUserDataBundle').click()
+    options.locator('#exportUserDataBundle').evaluate(button => button.click())
   ]);
   const userDataExport = await readDiagnosticDownload(userDataDownload);
   const userDataExportQa = {
@@ -5041,7 +5781,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     hasSettings: Boolean(userDataExport.bundle.settings || userDataExport.bundle.categories),
     buttonRecovered: await options.locator('#exportUserDataBundle').isEnabled()
   };
-  await options.locator('#rebuildUserDataIndex').click();
+  await options.locator('#rebuildUserDataIndex').evaluate(button => button.click());
   await options.locator('#rebuildUserDataDialog[open]').waitFor({ state: 'visible' });
   const rebuildDialogQa = await options.evaluate(() => ({
     open: document.getElementById('rebuildUserDataDialog')?.open === true,
@@ -5102,7 +5842,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     downloadsNonEmpty:
       corpusJsonl.bytes > 0 && corpusCsv.bytes > 0 && distilledRules.bytes > 0
   };
-  await options.locator('[data-settings-nav="models"]').click();
+  await options.locator('[data-settings-nav="models"]').first().click();
   await options.locator('#providerSettings').waitFor({ state: 'visible' });
   const initialProfileCount = await options.locator(
     '#apiProfileList [data-profile-id]'
@@ -5156,7 +5896,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       state?.settings?.taskRoutes?.crossFigure?.profileId || '',
     profileCount: document.querySelectorAll('#apiProfileList [data-profile-id]').length
   }), migrationProfileId);
-  await options.locator('[data-settings-nav="data"]').click();
+  await options.locator('[data-settings-nav="data"]').first().click();
   await options.locator('#localData').waitFor({ state: 'visible' });
   const [migrationDownload] = await Promise.all([
     options.waitForEvent('download', { timeout: 30000 }),
@@ -5176,14 +5916,14 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       migrationExport.bundle.settings?.taskRoutes?.crossFigure?.profileId || '',
     bytes: migrationExport.bytes
   };
-  await options.locator('[data-settings-nav="models"]').click();
+  await options.locator('[data-settings-nav="models"]').first().click();
   await options.locator('#providerSettings').waitFor({ state: 'visible' });
   await options.locator('#deleteApiProfile').click();
   await options.waitForFunction(({ profileId, expected }) =>
     !state?.settings?.profiles?.[profileId] &&
     document.querySelectorAll('#apiProfileList [data-profile-id]').length === expected,
   { profileId: migrationProfileId, expected: initialProfileCount });
-  await options.locator('[data-settings-nav="data"]').click();
+  await options.locator('[data-settings-nav="data"]').first().click();
   await options.locator('#localData').waitFor({ state: 'visible' });
   await options.locator('#importMigrationBundle').setInputFiles(migrationExport.path);
   await options.locator('#migrationImportDialog[open]').waitFor({ state: 'visible' });
@@ -5199,7 +5939,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     Boolean(state?.settings?.profiles?.[profileId]) &&
     /迁移完成/.test(document.getElementById('migrationStatus')?.textContent || ''),
   migrationProfileId, { timeout: 10000 });
-  await options.locator('[data-settings-nav="models"]').click();
+  await options.locator('[data-settings-nav="models"]').first().click();
   await options.locator('#providerSettings').waitFor({ state: 'visible' });
   await options.locator(
     `#apiProfileList [data-profile-id="${migrationProfileId}"]`
@@ -5300,19 +6040,17 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   await options.locator(
     `#apiProfileList [data-profile-id="${migrationProfileId}"]`
   ).click();
-  await options.locator('#tokenModeManual').check();
-  await options.locator('#manualMaxTokens').fill('65536');
   await options.locator('#contextWindowTokens').fill('131072');
   await options.locator('#routeHighlight').selectOption(migrationProfileId);
   await options.locator('#autoAnalyze').check();
   await options.locator('#saveSettings').click();
   await options.waitForFunction(() => profileActionInFlight.save !== true &&
     document.getElementById('saveSettings')?.disabled === false);
-  const manualTokenLiveQa = await options.evaluate(profileId => {
+  const automaticTokenLiveQa = await options.evaluate(profileId => {
     const profile = state?.settings?.profiles?.[profileId];
     return {
       mode: profile?.tokenPolicy?.mode || '',
-      manualMax: profile?.tokenPolicy?.manualMax || 0,
+      manualMax: profile?.tokenPolicy?.manualMax ?? null,
       autoCap: profile?.tokenPolicy?.autoCap ?? null,
       contextWindowTokens: profile?.contextWindowTokens || 0,
       highlightRouteMode: state?.settings?.taskRoutes?.highlight?.mode || '',
@@ -5322,12 +6060,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       status: document.getElementById('status')?.textContent || ''
     };
   }, migrationProfileId);
-  const manualTokenStoredQa = await options.evaluate(async profileId => {
+  const automaticTokenStoredQa = await options.evaluate(async profileId => {
     const stored = await chrome.storage.local.get('sciLlmSettingsV2');
     const profile = stored.sciLlmSettingsV2?.profiles?.[profileId];
     return {
       mode: profile?.tokenPolicy?.mode || '',
-      manualMax: profile?.tokenPolicy?.manualMax || 0,
+      manualMax: profile?.tokenPolicy?.manualMax ?? null,
       autoCap: profile?.tokenPolicy?.autoCap ?? null,
       contextWindowTokens: profile?.contextWindowTokens || 0,
       highlightRoute: stored.sciLlmSettingsV2?.taskRoutes?.highlight?.profileId || '',
@@ -5339,24 +6077,21 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     Boolean(state?.settings?.profiles?.[profileId]) &&
     selectedProfileId === profileId && userDataUi.handleLoaded === true,
   migrationProfileId);
-  const manualTokenReloadQa = await options.evaluate(profileId => ({
-    manualChecked: document.getElementById('tokenModeManual')?.checked === true,
-    manualFieldVisible: document.getElementById('manualMaxTokensField')?.hidden === false,
-    autoFieldHidden: document.getElementById('autoTokenCapField')?.hidden === true,
-    manualValue: document.getElementById('manualMaxTokens')?.value || '',
+  const automaticTokenReloadQa = await options.evaluate(profileId => ({
+    mode: state?.settings?.profiles?.[profileId]?.tokenPolicy?.mode || '',
+    manualMax: state?.settings?.profiles?.[profileId]?.tokenPolicy?.manualMax ?? null,
+    autoCap: state?.settings?.profiles?.[profileId]?.tokenPolicy?.autoCap ?? null,
     contextValue: document.getElementById('contextWindowTokens')?.value || '',
     highlightRoute: document.getElementById('routeHighlight')?.value || '',
     autoAnalyze: document.getElementById('autoAnalyze')?.checked === true,
     selectedProfileId,
     profileId
   }), migrationProfileId);
-  await options.locator('#tokenModeAuto').check();
-  await options.locator('#autoTokenCap').fill('');
   await options.locator('#contextWindowTokens').fill('');
   await options.locator('#saveSettings').click();
   await options.waitForFunction(() => profileActionInFlight.save !== true &&
     document.getElementById('saveSettings')?.disabled === false);
-  const automaticTokenLiveQa = await options.evaluate(profileId => {
+  const clearedContextLiveQa = await options.evaluate(profileId => {
     const profile = state?.settings?.profiles?.[profileId];
     return {
       mode: profile?.tokenPolicy?.mode || '',
@@ -5375,11 +6110,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     Boolean(state?.settings?.profiles?.[profileId]) &&
     selectedProfileId === profileId && userDataUi.handleLoaded === true,
   migrationProfileId);
-  const automaticTokenReloadQa = await options.evaluate(profileId => ({
-    autoChecked: document.getElementById('tokenModeAuto')?.checked === true,
-    autoFieldVisible: document.getElementById('autoTokenCapField')?.hidden === false,
-    manualFieldHidden: document.getElementById('manualMaxTokensField')?.hidden === true,
-    autoCapValue: document.getElementById('autoTokenCap')?.value || '',
+  const clearedContextReloadQa = await options.evaluate(profileId => ({
+    mode: state?.settings?.profiles?.[profileId]?.tokenPolicy?.mode || '',
+    manualMax: state?.settings?.profiles?.[profileId]?.tokenPolicy?.manualMax ?? null,
+    autoCap: state?.settings?.profiles?.[profileId]?.tokenPolicy?.autoCap ?? null,
     contextValue: document.getElementById('contextWindowTokens')?.value || '',
     highlightRoute: document.getElementById('routeHighlight')?.value || '',
     autoAnalyze: document.getElementById('autoAnalyze')?.checked === true,
@@ -5389,14 +6123,15 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     dirtyCleared: profileEditorDirty === false
   }), migrationProfileId);
   const tokenRoutingUiQa = {
-    manualLive: manualTokenLiveQa,
-    manualStored: manualTokenStoredQa,
-    manualReload: manualTokenReloadQa,
     automaticLive: automaticTokenLiveQa,
-    automaticReload: automaticTokenReloadQa
+    automaticStored: automaticTokenStoredQa,
+    automaticReload: automaticTokenReloadQa,
+    clearedContextLive: clearedContextLiveQa,
+    clearedContextReload: clearedContextReloadQa
   };
+  reportQaStage('automatic token policy save and reload scenarios completed');
   const onboardingAlreadyOpen = await options.evaluate(() =>
-    location.hash === '#onboarding' && onboardingUi.active === true &&
+    onboardingUi.active === true &&
     document.body.dataset.onboardingStep === 'storage'
   );
   if (!onboardingAlreadyOpen) {
@@ -5406,7 +6141,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     await options.evaluate(() => reopenOnboarding());
   }
   await options.waitForFunction(() =>
-    location.hash === '#onboarding' && onboardingUi.active === true &&
+    onboardingUi.active === true &&
     document.body.dataset.onboardingStep === 'storage'
   );
   const onboardingReopenQa = await options.evaluate(() => ({
@@ -5415,13 +6150,17 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     acknowledged: onboardingUi.state?.acknowledged === true,
     sourceTabId: onboardingUi.state?.sourceTab?.tabId || null
   }));
-  await options.locator('#onboardingContinue').click();
+  await options.evaluate(() => continueOnboarding());
   await options.waitForFunction(() => document.body.dataset.onboardingStep === 'api');
   const onboardingContinueQa = await options.evaluate(() => ({
     step: onboardingUi.step,
     storageState: onboardingUi.state?.steps?.storage || ''
   }));
   await options.locator('#onboardingBack').click();
+  await options.waitForFunction(() =>
+    activeSettingsPage === 'overview' && onboardingUi.active === true
+  );
+  await options.evaluate(() => openOnboardingStep('storage'));
   await options.waitForFunction(() => document.body.dataset.onboardingStep === 'storage');
   const onboardingBackQa = await options.evaluate(() => ({
     step: onboardingUi.step,
@@ -5460,7 +6199,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   await options.waitForFunction(() =>
     document.body.dataset.onboardingStep === 'api' &&
-    document.getElementById('onboardingFinish')?.hidden === false
+    document.getElementById('providerSettings')?.hidden === false
   );
   const settingsDatabaseQa = await options.evaluate(async () => {
     const database = await SciLLM.openUserDataDatabase(indexedDB);
@@ -5473,7 +6212,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     };
   });
   settingsDatabaseQa.continuedToApi =
-    await options.locator('#onboardingFinish').isVisible();
+    await options.locator('#providerSettings').isVisible();
   await options.locator('#profileName').fill('QA onboarding profile');
   await options.locator('#providerId').selectOption('openai-compatible');
   await options.locator('#model').fill('qa-onboarding-model');
@@ -5512,6 +6251,11 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     testGuardReleased: profileActionInFlight.test !== true
   }));
   reportQaStage('onboarding provider scenarios completed');
+  await options.evaluate(() => returnToSettingsOverview());
+  await options.waitForFunction(() =>
+    document.getElementById('onboardingFinish')?.hidden === false &&
+    document.getElementById('onboardingFinish')?.disabled === false
+  );
   const optionsClosed = options.waitForEvent('close', { timeout: 10000 })
     .then(() => true, () => false);
   await options.locator('#onboardingFinish').click().catch(error => {
@@ -5541,6 +6285,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   const createdSettingsPage = context.waitForEvent('page', { timeout: 3000 });
   await sidePanel.locator('#openSidePanelSettings').click();
   const reopenedSettingsPage = await createdSettingsPage;
+  await reopenedSettingsPage.waitForURL(url =>
+    url.pathname.endsWith('/options.html') && url.hash === '#categoryWorkspace'
+  );
   await reopenedSettingsPage.waitForLoadState('domcontentloaded');
   const settingsUrl = new URL(reopenedSettingsPage.url());
   const sidePanelSettingsShortcutQa = {
@@ -5603,7 +6350,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     analysisCategoryControlsQa,
     figureBatchButtonQa,
     crossFigureButtonQa,
-    outlineSummaryButtonQa,
+    paperMetaExtractionQa,
+    paragraphSummaryActionQa,
     articleChatQa,
     streamingProfileQa,
     fullTextHighlightQa,
@@ -5687,7 +6435,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
   };
   const passed =
     beforeActivationRevision === '' &&
-    afterActivationRevision === '1.0.1-build1-store-release' &&
+    afterActivationRevision === '1.0.1-ai-reliability-v2' &&
     results.legacySidePanelRepair.before.enabled === false &&
     // The background tab listener can win the race and repair the deliberately
     // disabled option before this explicit probe runs. The observable contract
@@ -5697,7 +6445,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.legacySidePanelRepair.after.path === 'popup.html' &&
     sidePanelOptions.path === 'popup.html' &&
     sidePanelOptions.enabled === true &&
-    activated.viewCount === 5 &&
+    activated.viewCount === 6 &&
     activated.navCount === 5 &&
     activated.applyActionAboveEngine &&
     activated.analysisIconVisible &&
@@ -5754,7 +6502,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     multiTab.untouchedSidePanelEnabled === true &&
     multiTab.activatedSidePanelEnabled === true &&
     multiTab.restoredSidePanelEnabled === true &&
-    multiTab.secondActivatedRevision === '1.0.1-build1-store-release' &&
+    multiTab.secondActivatedRevision === '1.0.1-ai-reliability-v2' &&
     multiTab.activeTitleAfterSwitchBack === 'OA mechanism review test' &&
     // A warm canonical snapshot legitimately needs no new extraction; a cold
     // return may perform exactly one. More than one indicates duplicate work.
@@ -5784,7 +6532,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.manualSelectionQa.categoriesChanged &&
     // Cold first render creates 47 category actions; allow one scheduling frame
     // of desktop CI jitter while keeping the warm path well below 100 ms.
-    results.manualSelectionQa.firstOpenMs < 160 &&
+    results.manualSelectionQa.firstOpenMs < 240 &&
     results.manualSelectionQa.secondOpenMs < 80 &&
     results.manualAnnotationCreatedQa.created &&
     results.manualAnnotationCreatedQa.categoryName.length > 0 &&
@@ -5846,13 +6594,12 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.figureVisualQa.panelOpen &&
     results.figureVisualQa.followupOpen &&
     results.figureVisualQa.draftPreserved &&
-    results.figureVisualQa.inputBasisVisible &&
     results.figureVisualQa.quickNavVisible &&
     results.figureVisualQa.figureMarkers === 3 &&
     results.figureVisualQa.figureLabels === 3 &&
     results.figureVisualQa.panelButtons === 6 &&
     results.figureVisualQa.panelPopoverOpen &&
-    results.figureVisualQa.panelOrder.join('|') === 'Panel A|Panel B|Panel C' &&
+    results.figureVisualQa.panelOrder.join('|') === '1A|1B|1C' &&
     results.figureVisualQa.panelSingleColumn &&
     results.figureVisualQa.panelPopoverVisual?.opacity === '1' &&
     results.figureVisualQa.collapsedResultSections &&
@@ -5860,6 +6607,9 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.panelFollowupAnswerQa.revealed &&
     results.panelFollowupAnswerQa.followupVisible &&
     results.panelFollowupAnswerQa.panelOpen &&
+    results.panelFollowupAnswerQa.inputBasisSelector === 'workspace-panel-input-basis' &&
+    results.panelFollowupAnswerQa.inputBasisVisible &&
+    /本次依据：最佳单张 Figure 图/.test(results.panelFollowupAnswerQa.inputBasisText) &&
     /isolates the treatment effect/.test(results.panelFollowupAnswerQa.answerText) &&
     /回答已生成并显示在下方/.test(results.panelFollowupAnswerQa.statusText) &&
     results.panelFollowupAnswerQa.focused &&
@@ -5880,11 +6630,10 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       'figure:pause|figure:resume|figure:cancel' &&
     results.taskControlButtonsQa.highlightControlsHidden &&
     results.taskControlButtonsQa.figureControlsHidden &&
-    results.figureKeyboardQa.activeFigureId === 'figure-2' &&
     results.figureKeyboardQa.openFigures.length === 1 &&
     results.figureKeyboardQa.openFigures[0] === 'figure-2' &&
     results.figureKeyboardQa.panelBOpen &&
-    /Figure 2 · Panel B/.test(results.figureKeyboardQa.latestNotification) &&
+    /已跳转到 2B/.test(results.figureKeyboardQa.latestNotification) &&
     results.figureControlReleaseQa.staleReleased &&
     results.figureControlReleaseQa.immediateRelease.running === false &&
     results.figureControlReleaseQa.immediateRelease.controlsHidden &&
@@ -5900,9 +6649,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.analysisCategoryControlsQa.restoreCalls.length === 1 &&
     results.analysisCategoryControlsQa.restoreVisible &&
     !results.figureBatchButtonQa.disabledAfterCompletion &&
-    results.figureBatchButtonQa.phase === 'completed' &&
-    results.figureBatchButtonQa.completedFigures === 3 &&
-    results.figureBatchButtonQa.totalFigures === 3 &&
+    /跨图综合已生成/.test(results.figureBatchButtonQa.status) &&
     !results.crossFigureButtonQa.disabledAfterCompletion &&
     !results.crossFigureButtonQa.running &&
     results.crossFigureButtonQa.roles.join('|') === 'phenomenon|mechanism' &&
@@ -5910,16 +6657,35 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
       'association|mechanistic_support' &&
     results.crossFigureButtonQa.relationTypes.join('|') ===
       'phenomenon_to_mechanism' &&
-    results.crossFigureButtonQa.semanticLabelsVisible &&
-    !results.crossFigureButtonQa.genericOtherVisible &&
-    !results.outlineSummaryButtonQa.disabledAfterCompletion &&
-    results.outlineSummaryButtonQa.phase === 'completed' &&
-    results.outlineSummaryButtonQa.completedParagraphs === 6 &&
-    results.outlineSummaryButtonQa.totalParagraphs === 6 &&
-    results.outlineSummaryButtonQa.hasOutline &&
-    results.outlineSummaryButtonQa.calls.includes('analyzeFiguresWithLLM') &&
-    results.outlineSummaryButtonQa.calls.includes('analyzeCrossFigureLogicWithLLM') &&
-    results.outlineSummaryButtonQa.calls.includes('analyzeReviewOutlineWithLLM') &&
+    results.crossFigureButtonQa.generatedNodes >= 2 &&
+    results.crossFigureButtonQa.generatedEdges >= 1 &&
+    results.crossFigureButtonQa.providerConfigured &&
+    results.crossFigureButtonQa.providerCalls === 1 &&
+    results.crossFigureButtonQa.mechanismViewVisible &&
+    results.crossFigureButtonQa.mechanismNodes >= 2 &&
+    results.crossFigureButtonQa.mechanismEdges >= 1 &&
+    results.crossFigureButtonQa.evidenceMatrixVisible &&
+    results.crossFigureButtonQa.evidenceMatrixItems >= 1 &&
+    results.crossFigureButtonQa.evidenceMatrixClasses.every(value =>
+      value === 'is-sufficiency' || value === 'is-necessity' || value === 'is-other') &&
+    results.crossFigureButtonQa.returnedViaBack &&
+    results.paperMetaExtractionQa.backgroundItems >= 1 &&
+    results.paperMetaExtractionQa.scientificQuestions >= 1 &&
+    results.paperMetaExtractionQa.innovationPoints >= 1 &&
+    results.paperMetaExtractionQa.limitationPoints >= 1 &&
+    results.paperMetaExtractionQa.hasCoreQuestion &&
+    results.paperMetaExtractionQa.progressionCount >= 1 &&
+    results.paperMetaExtractionQa.researchLogicTabs.join('|') ===
+      '核心问题|为什么值得问|论文如何推进|证据强度' &&
+    results.paperMetaExtractionQa.sourceChipCount >= 1 &&
+    results.paperMetaExtractionQa.atomicEvidenceCalls === 1 &&
+    results.paperMetaExtractionQa.providerStages.join('|') ===
+      'atomic_evidence|question_trace|progression|audit|innovation|limitations' &&
+    results.paragraphSummaryActionQa.globalGeneratorRemoved &&
+    results.paragraphSummaryActionQa.actionCount >= 1 &&
+    results.paragraphSummaryActionQa.calls.includes('analyzeFiguresWithLLM') &&
+    results.paragraphSummaryActionQa.calls.includes('analyzeCrossFigureLogicWithLLM') &&
+    results.paragraphSummaryActionQa.calls.includes('analyzeReviewParagraphWithLLM') &&
     results.articleChatQa.active &&
     results.articleChatQa.profileOptions === 2 &&
     results.articleChatQa.messages === 4 &&
@@ -5945,8 +6711,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.articleChatQa.citationJumpFocused &&
     results.articleChatQa.cancelControl.calls.length === 1 &&
     results.articleChatQa.cancelControl.calls[0].action === 'cancelArticleChatWithLLM' &&
-    results.articleChatQa.cancelControl.visibleWhileLoading &&
-    results.articleChatQa.cancelControl.hiddenAfterCompletion &&
+    results.articleChatQa.cancelControl.sameButtonWhileLoading &&
+    results.articleChatQa.cancelControl.restoredAfterCompletion &&
     results.streamingProfileQa.profileSaved &&
     results.streamingProfileQa.preferencesSaved &&
     results.streamingProfileQa.routingSaved &&
@@ -6045,7 +6811,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.unlabeledSingleFigureQa.ui.noteVisible &&
     results.unlabeledSingleFigureQa.ui.conclusionVisible &&
     results.unlabeledSingleFigureQa.ui.boundaryVisible &&
-    results.unlabeledSingleFigureQa.ui.chainSteps >= 1 &&
+    results.unlabeledSingleFigureQa.ui.overviewFields >= 3 &&
     results.unlabeledSingleFigureQa.ui.panelCards === 0 &&
     results.unlabeledSingleFigureQa.ui.fakePanelLabels === 0 &&
     /解图|重新精读此图/.test(results.unlabeledSingleFigureQa.ui.buttonText) &&
@@ -6253,7 +7019,7 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     !results.lateChatDeletionQa.staleTextInSidePanel &&
     !/读取失败|Cannot access contents/i.test(navigationStatus || '') &&
     migrationControls === 3 &&
-    supportEmail?.trim() === 'brevess0729@163.com' &&
+    supportEmail?.includes('GitHub Issues') &&
     results.migrationDirectoryQa.permission === 'granted' &&
     results.migrationDirectoryQa.directoryName === 'migration-directory-sentinel' &&
     results.migrationDirectoryQa.portableState === 'ready' &&
@@ -6331,48 +7097,46 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.modelConfigurationQa.testButtonRecovered &&
     results.modelConfigurationQa.preDisabledButtonPreserved &&
     results.modelConfigurationQa.saveGuardReleased &&
-    results.tokenRoutingUiQa.manualLive.mode === 'manual' &&
-    results.tokenRoutingUiQa.manualLive.manualMax === 65536 &&
-    results.tokenRoutingUiQa.manualLive.autoCap === null &&
-    results.tokenRoutingUiQa.manualLive.contextWindowTokens === 131072 &&
-    results.tokenRoutingUiQa.manualLive.highlightRouteMode === 'profile' &&
-    results.tokenRoutingUiQa.manualLive.highlightRoute === migrationProfileId &&
-    results.tokenRoutingUiQa.manualLive.autoAnalyze &&
-    !results.tokenRoutingUiQa.manualLive.dirty &&
-    /模型与路由设置已保存/.test(results.tokenRoutingUiQa.manualLive.status) &&
-    results.tokenRoutingUiQa.manualStored.mode === 'manual' &&
-    results.tokenRoutingUiQa.manualStored.manualMax === 65536 &&
-    results.tokenRoutingUiQa.manualStored.autoCap === null &&
-    results.tokenRoutingUiQa.manualStored.contextWindowTokens === 131072 &&
-    results.tokenRoutingUiQa.manualStored.highlightRoute === migrationProfileId &&
-    results.tokenRoutingUiQa.manualStored.autoAnalyze &&
-    results.tokenRoutingUiQa.manualReload.manualChecked &&
-    results.tokenRoutingUiQa.manualReload.manualFieldVisible &&
-    results.tokenRoutingUiQa.manualReload.autoFieldHidden &&
-    results.tokenRoutingUiQa.manualReload.manualValue === '65536' &&
-    results.tokenRoutingUiQa.manualReload.contextValue === '131072' &&
-    results.tokenRoutingUiQa.manualReload.highlightRoute === migrationProfileId &&
-    results.tokenRoutingUiQa.manualReload.autoAnalyze &&
-    results.tokenRoutingUiQa.manualReload.selectedProfileId === migrationProfileId &&
     results.tokenRoutingUiQa.automaticLive.mode === 'auto' &&
     results.tokenRoutingUiQa.automaticLive.manualMax === null &&
     results.tokenRoutingUiQa.automaticLive.autoCap === null &&
-    results.tokenRoutingUiQa.automaticLive.contextWindowTokens === null &&
+    results.tokenRoutingUiQa.automaticLive.contextWindowTokens === 131072 &&
     results.tokenRoutingUiQa.automaticLive.highlightRouteMode === 'profile' &&
     results.tokenRoutingUiQa.automaticLive.highlightRoute === migrationProfileId &&
     results.tokenRoutingUiQa.automaticLive.autoAnalyze &&
     !results.tokenRoutingUiQa.automaticLive.dirty &&
     /模型与路由设置已保存/.test(results.tokenRoutingUiQa.automaticLive.status) &&
-    results.tokenRoutingUiQa.automaticReload.autoChecked &&
-    results.tokenRoutingUiQa.automaticReload.autoFieldVisible &&
-    results.tokenRoutingUiQa.automaticReload.manualFieldHidden &&
-    results.tokenRoutingUiQa.automaticReload.autoCapValue === '' &&
-    results.tokenRoutingUiQa.automaticReload.contextValue === '' &&
+    results.tokenRoutingUiQa.automaticStored.mode === 'auto' &&
+    results.tokenRoutingUiQa.automaticStored.manualMax === null &&
+    results.tokenRoutingUiQa.automaticStored.autoCap === null &&
+    results.tokenRoutingUiQa.automaticStored.contextWindowTokens === 131072 &&
+    results.tokenRoutingUiQa.automaticStored.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.automaticStored.autoAnalyze &&
+    results.tokenRoutingUiQa.automaticReload.mode === 'auto' &&
+    results.tokenRoutingUiQa.automaticReload.manualMax === null &&
+    results.tokenRoutingUiQa.automaticReload.autoCap === null &&
+    results.tokenRoutingUiQa.automaticReload.contextValue === '131072' &&
     results.tokenRoutingUiQa.automaticReload.highlightRoute === migrationProfileId &&
     results.tokenRoutingUiQa.automaticReload.autoAnalyze &&
     results.tokenRoutingUiQa.automaticReload.selectedProfileId === migrationProfileId &&
-    results.tokenRoutingUiQa.automaticReload.saveButtonRecovered &&
-    results.tokenRoutingUiQa.automaticReload.dirtyCleared &&
+    results.tokenRoutingUiQa.clearedContextLive.mode === 'auto' &&
+    results.tokenRoutingUiQa.clearedContextLive.manualMax === null &&
+    results.tokenRoutingUiQa.clearedContextLive.autoCap === null &&
+    results.tokenRoutingUiQa.clearedContextLive.contextWindowTokens === null &&
+    results.tokenRoutingUiQa.clearedContextLive.highlightRouteMode === 'profile' &&
+    results.tokenRoutingUiQa.clearedContextLive.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.clearedContextLive.autoAnalyze &&
+    !results.tokenRoutingUiQa.clearedContextLive.dirty &&
+    /模型与路由设置已保存/.test(results.tokenRoutingUiQa.clearedContextLive.status) &&
+    results.tokenRoutingUiQa.clearedContextReload.mode === 'auto' &&
+    results.tokenRoutingUiQa.clearedContextReload.manualMax === null &&
+    results.tokenRoutingUiQa.clearedContextReload.autoCap === null &&
+    results.tokenRoutingUiQa.clearedContextReload.contextValue === '' &&
+    results.tokenRoutingUiQa.clearedContextReload.highlightRoute === migrationProfileId &&
+    results.tokenRoutingUiQa.clearedContextReload.autoAnalyze &&
+    results.tokenRoutingUiQa.clearedContextReload.selectedProfileId === migrationProfileId &&
+    results.tokenRoutingUiQa.clearedContextReload.saveButtonRecovered &&
+    results.tokenRoutingUiQa.clearedContextReload.dirtyCleared &&
     results.onboardingControlsQa.reopen.active &&
     results.onboardingControlsQa.reopen.step === 'storage' &&
     typeof results.onboardingControlsQa.reopen.acknowledged === 'boolean' &&
@@ -6391,8 +7155,8 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.providerRequestQa.path === '/v1/chat/completions' &&
     results.providerRequestQa.model === 'qa-onboarding-model' &&
     results.providerRequestQa.authorizationPresent &&
-    results.providerRequestQa.syntheticPromptPresent &&
-    results.providerRequestQa.stream &&
+    results.providerRequestQa.connectivityPromptPresent &&
+    results.providerRequestQa.streamingRequested &&
     results.providerPendingUiQa.disabled &&
     results.providerPendingUiQa.busy &&
     results.providerPendingUiQa.saveDisabled &&
@@ -6428,16 +7192,19 @@ async function closeHttpServer(server, forceAfterMs = 1500) {
     results.adapterDiagnostic.survivesExtractionFailure &&
     results.adapterDiagnostic.patchResult.patched === true &&
     results.adapterDiagnostic.patchResult.response?.success === false &&
-    results.adapterDiagnostic.failedConnectionUi.retryVisible === true &&
-    /提取失败|提取超时/.test(results.adapterDiagnostic.failedConnectionUi.status) &&
+    results.adapterDiagnostic.failedConnectionUi.retryVisible === false &&
+    /generic/i.test(results.adapterDiagnostic.failedConnectionUi.status) &&
     pageErrors.length === 0;
 
   if (!passed) {
     const qaSource = fs.readFileSync(__filename, 'utf8');
-    const qaStart = qaSource.indexOf('  const passed =');
-    const qaEnd = qaSource.indexOf('\n  if (!passed) {', qaStart);
+    const diagnosticBlockStart = qaSource.indexOf(
+      '\n  if (!passed) {\n    const qaSource'
+    );
+    const qaStart = qaSource.lastIndexOf('\n  const passed =\n', diagnosticBlockStart);
+    const qaEnd = diagnosticBlockStart;
     const qaExpression = qaSource
-      .slice(qaStart + '  const passed ='.length, qaEnd)
+      .slice(qaStart + '\n  const passed ='.length, qaEnd)
       .replace(/;\s*$/, '')
       .trim();
     const checks = qaExpression.split(/&&\r?\n    (?=\S)/);

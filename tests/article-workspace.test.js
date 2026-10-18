@@ -107,6 +107,44 @@ test('workspace paths reject traversal, absolute, reserved, control, and credent
   });
 });
 
+test('publisher titles ending in hyphens at the directory limit preserve manifest identity and assets', async () => {
+  const titles = [
+    'ACOX2 destabilizes the MRE11-RAD50-NBS1 complex and boosts anticancer immunity via the cGAS-STING pathway',
+    ...[1, 2, 3].map(count => 'X'.repeat(92 - count) + '-'.repeat(count) + 'continued')
+  ];
+  for (const title of titles) {
+    const identity = await createArticleWorkspaceIdentity({
+      title, canonicalUrl: 'https://link.springer.com/article/10.1186/s12943-025-02420-9',
+      contentHash: 'b'.repeat(64)
+    });
+    const assets = [{ path: 'notes/literature.json', revision: 3, type: 'json',
+      contentHash: 'retained-user-edits', updatedAt: '2026-10-11T00:00:00.000Z' }];
+    const manifest = createWorkspaceManifest(identity, assets);
+    const restored = validateWorkspaceManifest(JSON.parse(JSON.stringify(manifest)));
+    assert.equal(restored.directoryName, identity.directoryName);
+    assert.equal(restored.workspaceId, identity.workspaceId);
+    assert.equal(restored.contentHash, identity.contentHash);
+    assert.deepEqual(restored.assets, assets);
+    assert.deepEqual(validateWorkspaceIndex(createWorkspaceIndex([restored])),
+      createWorkspaceIndex([manifest]));
+    const wrongHash = (identity.workspaceId.endsWith('0') ? '1' : '0').repeat(64);
+    assert.throws(() => validateWorkspaceManifest({ ...manifest, workspaceId: `workspace:${wrongHash}` }),
+      /INVALID_WORKSPACE_DIRECTORY/);
+  }
+});
+
+test('workspace credential rejection reports only the safe key path', () => {
+  let failure = null;
+  try {
+    assertWorkspaceSafeValue({ analysis: { provider: { api_key: 'never-log-this' } } });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.code, 'WORKSPACE_CONTAINS_CREDENTIALS');
+  assert.equal(failure?.keyPath, 'analysis.provider.api_key');
+  assert.doesNotMatch(JSON.stringify(failure), /never-log-this/);
+});
+
 test('workspace manifests expose only relative assets and exact identity matching ignores titles', async () => {
   const workspace = await createArticleWorkspaceIdentity({
     canonicalUrl: 'https://example.org/paper', doi: '10.1000/example',

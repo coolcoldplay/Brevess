@@ -1,0 +1,24 @@
+{
+  "package": "Templarian/MaterialDesign",
+  "version": "f08b713c8eef826e6bfe826c65240326546648ea",
+  "repository": "https://github.com/Templarian/MaterialDesign",
+  "commit": "f08b713c8eef826e6bfe826c65240326546648ea",
+  "license": "Pictogrammers Free License; icons Apache-2.0",
+  "integrityVerified": true,
+  "licenseSha256": "3bae6305bcaa6d10219b999f65c342034c2d40b1c0e8567fa08605e73ccba829",
+  "icons": [
+    {
+      "name": "marker",
+      "sourcePath": "svg/marker.svg",
+      "sourceUrl": "https://raw.githubusercontent.com/Templarian/MaterialDesign/f08b713c8eef826e6bfe826c65240326546648ea/svg/marker.svg",
+      "sha256": "e2e44b5d4efff3da6ebde473a15d104043cd00b5e9d23496fc9df7ad121d6fe8",
+      "bytes": 380
+    }
+  ],
+  "fullLicense": {
+    "file": "LICENSE-Apache-2.0.txt",
+    "sourceUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "treatment": "Complete source fill geometry. Renderer may apply fill currentColor without adding an outline stroke."
+}

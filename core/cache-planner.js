@@ -74,6 +74,7 @@
       model: input.model,
       figureId: input.figureId,
       figureHash: input.figureHash,
+      inputMode: input.inputMode === 'figure_image' ? 'figure_image' : 'caption_context',
       analysisDepth: input.analysisDepth === 'deep' ? 'deep' : 'standard',
       figureVersion: input.figureVersion
     };
@@ -90,6 +91,7 @@
       promptVersion: input.promptVersion
     };
     if (input.studyTypeSignature) context.studyTypeSignature = input.studyTypeSignature;
+    if (input.analysisStrategy) context.analysisStrategy = input.analysisStrategy;
     if (input.scopeSignature) context.scopeSignature = input.scopeSignature;
     if (input.profileSignature) context.profileSignature = input.profileSignature;
     return 'review-outline:' + stableHash(context);
@@ -104,6 +106,7 @@
       promptVersion: input.promptVersion
     };
     if (input.studyTypeSignature) context.studyTypeSignature = input.studyTypeSignature;
+    if (input.analysisStrategy) context.analysisStrategy = input.analysisStrategy;
     if (input.scopeSignature) context.scopeSignature = input.scopeSignature;
     if (input.profileSignature) context.profileSignature = input.profileSignature;
     return 'review-progress:' + stableHash(context);

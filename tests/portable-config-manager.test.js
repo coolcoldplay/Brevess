@@ -29,6 +29,15 @@ function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
 
+async function waitForCondition(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
 function createStorage(initial = {}) {
   const data = clone(initial);
   const sets = [];
@@ -628,6 +637,7 @@ test('debounce merges user changes, exact restore callbacks are suppressed, and 
   assert.equal(manager.publicStatus().pending, true);
   assert.equal(manager.scheduleBackup({ [SETTINGS_KEY]: { newValue: { user: 'changed-again' } } }), true);
   assert.equal(manager.scheduleBackup({ [ABBREVIATION_KEY]: { newValue: restoredAbbreviations } }), true);
+  assert.equal(await waitForCondition(() => directorySync.casWrites.length === 1), true);
   await new Promise(resolve => setTimeout(resolve, 45));
   assert.equal(directorySync.casWrites.length, 1);
 
@@ -653,7 +663,7 @@ test('a real user change is not swallowed when no restore callback was observed'
   assert.equal(manager.scheduleBackup({
     [SETTINGS_KEY]: { newValue: { actualUserEdit: true } }
   }), true);
-  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(await waitForCondition(() => directorySync.casWrites.length === 1), true);
   assert.equal(directorySync.casWrites.length, 1);
 });
 
