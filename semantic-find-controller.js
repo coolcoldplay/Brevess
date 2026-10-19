@@ -3,6 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+  const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
   const DEFAULT_THRESHOLD = 0.7;
   const MAX_SESSION_SENTENCES = 10000;
   const ADDITIONAL_DEBOUNCE_MS = 400;
@@ -118,13 +119,13 @@
       const kind = corpus?.identity?.kind;
       if (kind === 'html') {
         const message = String(corpus.coverageMessage || '当前网页可搜索文本；具体范围以本次索引为准。');
-        refs.scope.textContent = `无需打开侧栏 · ${message}`;
+        refs.scope.textContent = t(`无需打开侧栏 · ${message}`);
       } else if (kind === 'pdf') {
-        refs.scope.textContent = '范围：当前 PDF 已索引文本（含未显示页）。';
+        refs.scope.textContent = t('范围：当前 PDF 已索引文本（含未显示页）。');
       } else {
-        refs.scope.textContent = '无需打开侧栏；搜索范围将在读取当前页面后显示。';
+        refs.scope.textContent = t('无需打开侧栏；搜索范围将在读取当前页面后显示。');
       }
-      if (corpus && sourceNotice) refs.scope.textContent += ` ${sourceNotice}`;
+      if (corpus && sourceNotice) refs.scope.textContent += ` ${t(sourceNotice)}`;
     }
 
     function updateSourceNotice(message) {
@@ -679,6 +680,7 @@
     function buildUi() {
       const panel = make('section');
       panel.className = 'sci-semantic-find';
+      panel.setAttribute('data-brevess-interface', '');
       panel.setAttribute('data-sci-plugin-ui', 'true');
       panel.setAttribute('role', 'search');
       panel.setAttribute('aria-label', '语义查找');
@@ -863,11 +865,15 @@
       if (destroyed) return;
       closeController();
       destroyed = true;
+      unsubscribeLanguage?.();
       rootNode?.remove?.();
       rootNode = null;
       refs = {};
     }
 
+    const unsubscribeLanguage = globalThis.SciLLM?.onInterfaceLanguageChange?.(() => {
+      if (openState && !destroyed) { updateScope(); updateReadout(); }
+    });
     return Object.freeze({
       open,
       close: closeController,

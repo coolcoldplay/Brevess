@@ -98,7 +98,7 @@ body[data-ui-surface] :is(button, a, input, select, textarea, summary):focus-vis
   outline-offset: 3px;
 }
 
-/* Settings: one numbered, horizontal navigation rail with all nine sections. */
+/* Settings: numbered navigation for all settings modules. */
 [data-ui-surface="settings"] .topbar { background: #fff; backdrop-filter: none; }
 [data-ui-surface="settings"] .topbar-inner { width: min(1480px, calc(100% - 80px)); }
 [data-ui-surface="settings"] .brand-mark { border: 0; border-radius: 0; background: transparent; }
@@ -110,7 +110,7 @@ body[data-ui-surface] :is(button, a, input, select, textarea, summary):focus-vis
 [data-ui-surface="settings"] .settings-sidebar {
   position: static;
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(11, minmax(0, 1fr));
   margin-bottom: 36px;
   padding: 0;
   border: 0;

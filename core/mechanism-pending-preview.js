@@ -4,6 +4,8 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared, host) {
   'use strict';
+  const t = value => host.SciLLM?.translateInterfaceText?.(value) || value;
+  const authored = node => { node.setAttribute('data-i18n-ignore', ''); return node; };
 
   const RELATION_KIND = Object.freeze({ causal: '因果', correlative: '相关' });
   const POLARITY = Object.freeze({
@@ -34,7 +36,7 @@
     unqualified_causal_test: '现有实验设计不足以支持因果关系'
   });
 
-  function reviewReason(value) { return REVIEW_REASON[value] || value; }
+  function reviewReason(value) { return REVIEW_REASON[value] ? t(REVIEW_REASON[value]) : value; }
 
   function text(value, fallback = '') {
     const normalized = String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
@@ -53,8 +55,8 @@
   function relationNature(relation) {
     const status = relation.relationStatus === 'counter_only'
       ? '仅有反向证据，不绘入已确认机制' : '有支持证据';
-    return `${RELATION_KIND[relation.relationKind] || '关系性质未确定'} · ` +
-      `${POLARITY[relation.polarity] || '方向未确定'} · ${status}`;
+    return `${t(RELATION_KIND[relation.relationKind] || '关系性质未确定')} · ` +
+      `${t(POLARITY[relation.polarity] || '方向未确定')} · ${t(status)}`;
   }
 
   function relationContext(relation) {
@@ -65,20 +67,20 @@
       ['剂量', relation.context.dose]
     ].filter(([, value]) => text(value));
     return fields.length
-      ? fields.map(([label, value]) => `${label}：${text(value)}`).join('；')
-      : '实验上下文未提供';
+      ? fields.map(([label, value]) => `${t(label)}: ${text(value)}`).join('; ')
+      : t('实验上下文未提供');
   }
 
   function panelEvidenceItem(assignment) {
     const references = assignment.sourceRefs.length
-      ? `；来源：${assignment.sourceRefs.join('、')}` : '；来源定位未提供';
+      ? `; ${t('来源')}: ${assignment.sourceRefs.join('、')}` : `; ${t('来源定位未提供')}`;
     return {
       panelKey: assignment.panelKey,
-      evidenceClass: EVIDENCE_CLASS[assignment.evidenceClass] || '证据类型未确定',
-      role: ROLE[assignment.role] || '作用未确定',
+      evidenceClass: t(EVIDENCE_CLASS[assignment.evidenceClass] || '证据类型未确定'),
+      role: t(ROLE[assignment.role] || '作用未确定'),
       sourceRefs: [...assignment.sourceRefs],
-      label: `${assignment.panelKey} · ${EVIDENCE_CLASS[assignment.evidenceClass] || '证据类型未确定'}` +
-        ` · ${ROLE[assignment.role] || '作用未确定'}${references}`
+      label: `${assignment.panelKey} · ${t(EVIDENCE_CLASS[assignment.evidenceClass] || '证据类型未确定')}` +
+        ` · ${t(ROLE[assignment.role] || '作用未确定')}${references}`
     };
   }
 
@@ -90,7 +92,7 @@
     const relationsById = new Map(preview.relations.map(relation => [
       relation.relationId, relation
     ]));
-    const label = nodeId => nodesById.get(nodeId)?.label || '未知节点';
+    const label = nodeId => nodesById.get(nodeId)?.label || t('未知节点');
     const relations = preview.relations.map(relation => {
       const evidence = relation.assignments.map(panelEvidenceItem);
       return {
@@ -142,14 +144,14 @@
       if (usage.relationIds.length) continue;
       const claim = claimsById.get(usage.claimId);
       const disposition = dispositionsByPanel.get(usage.panelKey);
-      const reason = disposition?.reason ? `；原因：${reviewReason(disposition.reason)}` : '';
+      const reason = disposition?.reason ? `; ${t('原因')}: ${reviewReason(disposition.reason)}` : '';
       nonRelationEvidence.push({
         key: `usage:${usage.claimId}`,
         panelKey: usage.panelKey,
-        kind: USAGE_KIND[usage.usageKind] || '无关系证据',
+        kind: t(USAGE_KIND[usage.usageKind] || '无关系证据'),
         nodes: usage.nodeIds.map(label),
         detail: claim?.sourceRefs?.length
-          ? `来源：${claim.sourceRefs.join('、')}${reason}` : `来源定位未提供${reason}`
+          ? `${t('来源')}: ${claim.sourceRefs.join('、')}${reason}` : `${t('来源定位未提供')}${reason}`
       });
     }
     for (const unresolved of preview.unresolvedClaims || []) {
@@ -157,10 +159,10 @@
       nonRelationEvidence.push({
         key: `unresolved:${unresolved.claimId}`,
         panelKey: unresolved.panelKey,
-        kind: '未解析证据',
+        kind: t('未解析证据'),
         nodes: [],
-        detail: `原因：${reviewReason(unresolved.reason)}` +
-          (claim?.sourceRefs?.length ? `；来源：${claim.sourceRefs.join('、')}` : '')
+        detail: `${t('原因')}: ${reviewReason(unresolved.reason)}` +
+          (claim?.sourceRefs?.length ? `; ${t('来源')}: ${claim.sourceRefs.join('、')}` : '')
       });
     }
     const representedPanels = new Set([
@@ -175,10 +177,10 @@
       nonRelationEvidence.push({
         key: `panel:${disposition.panelKey}`,
         panelKey: disposition.panelKey,
-        kind: PANEL_STATUS[disposition.status] || 'Panel 状态未确定',
+        kind: t(PANEL_STATUS[disposition.status] || 'Panel 状态未确定'),
         nodes: disposition.nodeIds.map(label),
-        detail: related.length ? `候选关系：${related.join('；')}`
-          : disposition.reason ? `原因：${reviewReason(disposition.reason)}` : '未形成关系边'
+        detail: related.length ? `${t('候选关系')}: ${related.join('；')}`
+          : disposition.reason ? `${t('原因')}: ${reviewReason(disposition.reason)}` : t('未形成关系边')
       });
     }
     const allKnownPanels = new Set([
@@ -198,7 +200,7 @@
       panelCoverageKnown: Array.isArray(preview.panelDispositions),
       mermaidDefinition: typeof shared.createMechanismAuditMermaidDefinition === 'function'
         ? shared.createMechanismAuditMermaidDefinition(graph, {
-            direction: 'LR', language: 'zh-CN', generatedRelationLabels: true
+            direction: 'LR', language: host.SciLLM?.getInterfaceLanguage?.() || 'zh-CN', generatedRelationLabels: true
           }) : ''
     };
   }
@@ -328,7 +330,7 @@
       return;
     }
     const list = element('ul', 'workspace-mechanism-audit-list');
-    for (const item of items) list.append(element('li', '', item));
+    for (const item of items) list.append(authored(element('li', '', item)));
     container.append(list);
   }
 
@@ -352,11 +354,11 @@
     for (const relation of model.relations) {
       const row = element('tr');
       row.dataset.relationId = relation.relationId;
-      const source = element('td', 'mechanism-pending-preview-source', relation.sourceLabel);
+      const source = authored(element('td', 'mechanism-pending-preview-source', relation.sourceLabel));
       source.dataset.label = '上游节点';
       const nature = element('td', 'mechanism-pending-preview-nature', relation.nature);
       nature.dataset.label = '关系性质';
-      const target = element('td', 'mechanism-pending-preview-target', relation.targetLabel);
+      const target = authored(element('td', 'mechanism-pending-preview-target', relation.targetLabel));
       target.dataset.label = '下游节点';
       const panels = element('td', 'mechanism-pending-preview-panels');
       panels.dataset.label = '支持 Panel 与来源';
@@ -369,7 +371,7 @@
           const item = element('li', 'mechanism-pending-preview-panel-item');
           const heading = element('div', 'mechanism-pending-preview-panel-heading');
           heading.append(
-            element('strong', 'mechanism-pending-preview-panel-key', evidence.panelKey),
+            authored(element('strong', 'mechanism-pending-preview-panel-key', evidence.panelKey)),
             element('span', 'mechanism-pending-preview-panel-role',
               `${evidence.evidenceClass} · ${evidence.role}`)
           );
@@ -394,7 +396,7 @@
             ? `来源字段 ${evidence.sourceRefs.length}` : '来源定位未提供'));
           if (evidence.sourceRefs.length) {
             const sourceList = element('ul', 'workspace-mechanism-audit-list');
-            for (const sourceRef of evidence.sourceRefs) sourceList.append(element('li', '', sourceRef));
+            for (const sourceRef of evidence.sourceRefs) sourceList.append(authored(element('li', '', sourceRef)));
             sources.append(sourceList);
           }
           item.append(sources);
@@ -402,7 +404,7 @@
         }
         panels.append(list);
       }
-      const context = element('td', 'mechanism-pending-preview-context', relation.context);
+      const context = authored(element('td', 'mechanism-pending-preview-context', relation.context));
       context.dataset.label = '实验上下文';
       row.append(source, nature, target, panels, context);
       body.append(row);
@@ -424,11 +426,12 @@
     const model = createMechanismPendingPreviewModel(value);
     if (!model || !host.document?.createElement) return null;
     const section = element('section', 'workspace-mechanism-synthesis mechanism-pending-preview');
+    section.setAttribute('data-brevess-interface', '');
     section.dataset.previewStatus = model.status;
     section.dataset.canonicalDigest = model.canonicalDigest;
     const heading = element('header', 'mechanism-pending-preview-heading');
     heading.append(
-      element('h3', '', options.title || '待核验预览（尚未替换已保存机制网络）'),
+      options.title ? authored(element('h3', '', options.title)) : element('h3', '', '待核验预览（尚未替换已保存机制网络）'),
       element('p', 'workspace-mechanism-matrix-help',
         '此处仅展示生成候选；核验完成前，已保存机制网络保持不变。')
     );
@@ -444,7 +447,7 @@
     const diagram = element('div', 'mermaid workspace-mechanism-mermaid mechanism-pending-preview-diagram');
     diagram.dataset.pendingPreviewDiagram = 'true';
     diagram.dataset.viewMode = 'fit-width';
-    if (model.mermaidDefinition) diagram.textContent = model.mermaidDefinition;
+    if (model.mermaidDefinition) { authored(diagram); diagram.textContent = model.mermaidDefinition; }
     else {
       diagram.classList.remove('mermaid');
       diagram.textContent = model.relations.length
@@ -457,8 +460,8 @@
     nodeRegion.append(element('summary', '',
       `未形成关系的候选节点（${model.disconnectedNodes.length}）`));
     appendList(nodeRegion, model.disconnectedNodes.map(node =>
-      `${node.label}（${({ entity: '生物实体', intervention: '干预', outcome: '结果',
-        state: '状态', process: '过程' })[node.nodeType] || '机制节点'}）`), '没有可展示的候选节点。');
+      `${node.label} (${t(({ entity: '生物实体', intervention: '干预', outcome: '结果',
+        state: '状态', process: '过程' })[node.nodeType] || '机制节点')})`), '没有可展示的候选节点。');
     graphSection.append(nodeRegion);
     section.append(graphSection, createEvidenceTable(model));
 
@@ -468,7 +471,7 @@
     nonRelationDetails.append(element('summary', '',
       `未解析或无关系的 Panel 证据（${model.nonRelationEvidence.length}）`));
     appendList(nonRelationDetails, model.nonRelationEvidence.map(item => {
-      const nodes = item.nodes.length ? `；节点：${item.nodes.join('、')}` : '';
+      const nodes = item.nodes.length ? `; ${t('节点')}: ${item.nodes.join('、')}` : '';
       return `${item.panelKey} · ${item.kind}${nodes}；${item.detail}`;
     }), '没有记录未解析或无关系的 Panel 证据。');
     nonRelation.append(nonRelationDetails);
@@ -496,6 +499,7 @@
       diagram.querySelector('svg')?.setAttribute('aria-label', '待核验机制节点与关系图');
     } catch (_) {
       diagram.classList.remove('mermaid');
+      diagram.removeAttribute('data-i18n-ignore');
       diagram.textContent = '候选关系图渲染失败；节点、关系和 Panel 证据仍可在下方核验。';
     }
     return section;

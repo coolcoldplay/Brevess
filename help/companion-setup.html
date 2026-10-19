@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Codex setup · Brevess</title>
+  <link rel="stylesheet" href="../ui-swiss.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; font-size: 15px; line-height: 1.65; }
+    a { color: inherit; text-underline-offset: .2em; }
+    .help-header { border-bottom: 1px solid var(--swiss-line); }
+    .help-header-inner { max-width: 1180px; margin: auto; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+    .brand img { width: 32px; height: 32px; }
+    .brand strong, .brand small { display: block; }
+    .brand small { color: var(--swiss-muted); font-size: 12px; }
+    .back { font-size: 13px; white-space: nowrap; }
+    .help-layout { max-width: 1180px; margin: auto; padding: 44px 28px 72px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 42px; }
+    nav { align-self: start; position: sticky; top: 24px; }
+    nav ol { list-style: none; padding: 0; margin: 0; }
+    nav a { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--swiss-line); text-decoration: none; font-size: 13px; }
+    nav span { color: var(--swiss-muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+    main { min-width: 0; max-width: 790px; }
+    .eyebrow { margin: 0 0 12px; color: var(--swiss-muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0 0 18px; font-size: clamp(30px, 4vw, 43px); line-height: 1.12; letter-spacing: -.035em; }
+    .lead { font-size: 18px; line-height: 1.55; margin: 0 0 28px; }
+    h2 { font-size: 23px; letter-spacing: -.025em; line-height: 1.3; margin: 0 0 18px; }
+    h3 { font-size: 16px; margin: 24px 0 10px; }
+    section { padding: 28px 0; border-top: 1px solid var(--swiss-line); scroll-margin-top: 24px; }
+    p { margin: 0 0 16px; }
+    ul, ol { margin: 0 0 18px; padding-left: 24px; }
+    li { margin-bottom: 12px; }
+    li p { margin-top: 10px; }
+    code { font-family: "Cascadia Code", Consolas, monospace; font-size: .88em; overflow-wrap: anywhere; }
+    pre { max-width: 100%; padding: 16px; background: var(--swiss-soft); border: 1px solid var(--swiss-line); overflow-x: auto; line-height: 1.6; }
+    pre code { overflow-wrap: normal; }
+    .note { padding: 16px 18px; border-left: 3px solid var(--swiss-ink); background: var(--swiss-soft); }
+    .note p:last-child { margin-bottom: 0; }
+    dl { margin: 0 0 20px; }
+    dt { font-weight: 700; margin-top: 16px; }
+    dd { margin: 4px 0 0; }
+    footer { color: var(--swiss-muted); font-size: 12px; border-top: 1px solid var(--swiss-line); padding-top: 20px; }
+    @media (max-width: 760px) {
+      .help-header-inner { padding: 16px 20px; flex-wrap: wrap; gap: 12px; }
+      .help-layout { display: block; padding: 28px 20px 48px; }
+      nav { position: static; margin: 0 0 32px; }
+      nav ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+      nav a { min-height: 52px; }
+    }
+    @media print { nav, .back { display: none; } .help-layout { display: block; padding: 20px 0; } main { max-width: none; } pre { white-space: pre-wrap; } }
+  </style>
+</head>
+<body data-ui-surface="help">
+  <header class="help-header">
+    <div class="help-header-inner">
+      <a class="brand" href="../options.html#page=models" aria-label="Brevess model settings">
+        <img src="../icons/icon128.png" alt="" width="32" height="32">
+        <span><strong>Brevess</strong><small>Brevity · Evidence · Essence</small></span>
+      </a>
+      <a class="back" href="../options.html#page=models">Back to model settings</a>
+    </div>
+  </header>
+  <div class="help-layout">
+    <nav aria-label="On this page">
+      <ol>
+        <li><a href="#install"><span>01</span>Install on Windows</a></li>
+        <li><a href="#sign-in"><span>02</span>Sign in and verify</a></li>
+        <li><a href="#data"><span>03</span>Data and permissions</a></li>
+        <li><a href="#images"><span>04</span>Figure image input</a></li>
+        <li><a href="#events"><span>05</span>Progress and results</a></li>
+        <li><a href="#remove"><span>06</span>Sign out or uninstall</a></li>
+      </ol>
+    </nav>
+    <main>
+      <p class="eyebrow">Local connection · Windows · Brevess 1.0.1</p>
+      <h1>Set up Local Codex</h1>
+      <p class="lead">Connect Brevess to Codex App Server through Chromium Native Messaging for article questions and figure analysis.</p>
+      <p>The extension does not read or store plaintext sign-in tokens. Codex App Server keeps the extension’s authentication state in <code>%LOCALAPPDATA%\BrevessCodexBridge\codex-home</code>, separate from desktop Codex and the Codex CLI.</p>
+
+      <section id="install" aria-labelledby="install-title">
+        <h2 id="install-title">01 / Install on Windows</h2>
+        <ol>
+          <li>Install Codex and confirm that this command works in PowerShell:
+            <pre><code>codex --version</code></pre>
+          </li>
+          <li>Open <code>edge://extensions/</code> or <code>chrome://extensions/</code> in your browser. Copy the current 32-character extension ID shown on the Brevess card.</li>
+          <li>Open PowerShell in the extension build’s <code>native-host</code> folder. Replace <code>YOUR_ACTUAL_EXTENSION_ID</code> below with the ID you just copied, then run:
+            <pre><code>powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId YOUR_ACTUAL_EXTENSION_ID</code></pre>
+          </li>
+          <li>Reload Brevess at <code>edge://extensions/</code> or <code>chrome://extensions/</code>, then continue with sign-in below.</li>
+        </ol>
+        <div class="note">
+          <p><strong>Use the ID displayed by your browser.</strong> The Edge store installation has a fixed store ID. Loading a store ZIP from a GitHub Release as an unpacked extension can produce another ID based on its folder path. Always pass the actual ID shown on the extension management page to <code>install.ps1</code>.</p>
+        </div>
+      </section>
+
+      <section id="sign-in" aria-labelledby="sign-in-title">
+        <h2 id="sign-in-title">02 / Sign in and verify</h2>
+        <ol>
+          <li>Open Brevess settings and create a profile. Choose <strong>Local Codex</strong> as its provider and use <code>auto</code> for the model.</li>
+          <li>Under <strong>Extension-specific Codex session</strong>, select <strong>Sign in / Sign in again</strong> and complete authorization in the browser.</li>
+          <li>When the status shows that you are signed in, save the profile and select <strong>Test connection</strong>. This runs one real, short model turn without saving a thread.</li>
+          <li>In the model selector at the bottom of the article Q&amp;A view, select this profile.</li>
+        </ol>
+        <h3>If the settings page cannot open sign-in</h3>
+        <p>Run the fallback script from the same <code>native-host</code> folder:</p>
+        <pre><code>powershell -ExecutionPolicy Bypass -File .\login.ps1</code></pre>
+        <p>Do not substitute a normal <code>codex login</code> command. By default, that signs in to the CLI’s own <code>CODEX_HOME</code>, not the extension’s isolated directory.</p>
+      </section>
+
+      <section id="data" aria-labelledby="data-title">
+        <h2 id="data-title">03 / Data and permissions</h2>
+        <ul>
+          <li>Each paper and Codex profile pair is associated with a Codex thread. Thread mappings are stored in <code>%LOCALAPPDATA%\BrevessCodexBridge\threads.json</code>.</li>
+          <li>Codex manages the extension-specific sign-in state. Neither the extension nor the bridge exports sign-in tokens.</li>
+          <li>Desktop Codex, the Codex CLI and the extension do not share refresh tokens, preventing concurrent refreshes from invalidating one another’s sessions.</li>
+          <li>Codex threads start with a read-only sandbox and an approval policy that never requests approval. The prompt prohibits command, file, network, MCP and code-editing tools. The bridge also disables shell execution and web search.</li>
+          <li>The extension still divides article text according to its retrieval plan. Only the context needed for the current question is sent to Codex.</li>
+        </ul>
+      </section>
+
+      <section id="images" aria-labelledby="images-title">
+        <h2 id="images-title">04 / Figure image input</h2>
+        <p>Local Codex is registered as a vision model. Before figure analysis, the page extracts and compresses the original figure images, then sends them to the local bridge through Native Messaging.</p>
+        <p>The bridge creates temporary images for the current request only in <code>%LOCALAPPDATA%\BrevessCodexBridge\turn-images</code> and passes them to Codex App Server as <code>localImage</code> inputs. These images are deleted immediately after the model turn completes, fails or is canceled.</p>
+        <p>If cross-origin restrictions, a sign-in wall or a loading timeout prevents image access, Brevess explicitly falls back to captions and article text. It records <code>visionFallback</code> in the figure result and does not present a text-only result as visual analysis.</p>
+      </section>
+
+      <section id="events" aria-labelledby="events-title">
+        <h2 id="events-title">05 / Progress and results</h2>
+        <p>When Local Codex generates Figure, Panel or cross-figure results, Brevess writes live progress and final results to a local event channel:</p>
+        <dl>
+          <dt>Latest state</dt>
+          <dd><code>%LOCALAPPDATA%\BrevessCodexBridge\reader-events\latest.json</code></dd>
+          <dt>Append-only event stream</dt>
+          <dd><code>%LOCALAPPDATA%\BrevessCodexBridge\reader-events\events.ndjson</code></dd>
+        </dl>
+        <p>The Local Codex status area in settings shows the actual paths. Events contain page identity, task progress and model results; they do not contain API keys, sign-in tokens or Base64 image data. At 16 MB, the event log rotates to <code>events.previous.ndjson</code>.</p>
+        <p>Desktop Codex can read these files when needed, without depending on whether the browser sidebar’s DOM permits automation.</p>
+      </section>
+
+      <section id="remove" aria-labelledby="remove-title">
+        <h2 id="remove-title">06 / Sign out or uninstall</h2>
+        <p>To end only the extension-specific session, use <strong>Sign out of extension session</strong> in the Local Codex session controls. Desktop and command-line Codex sessions are unaffected.</p>
+        <p>To remove the bridge registration from both Edge and Chrome, run the uninstall script from the extension build’s <code>native-host</code> folder:</p>
+        <pre><code>powershell -ExecutionPolicy Bypass -File .\uninstall.ps1</code></pre>
+        <p>The script does not automatically delete <code>%LOCALAPPDATA%\BrevessCodexBridge</code>, so the thread mappings remain recoverable.</p>
+      </section>
+      <footer>Bundled English setup guide for Brevess. Installation, sign-in, connection testing and uninstallation are actions you perform separately; this help page does not run them.</footer>
+    </main>
+  </div>
+</body>
+</html>

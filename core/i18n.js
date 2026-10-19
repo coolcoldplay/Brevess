@@ -1,9 +1,58 @@
 (function attach(root, factory) {
+  if (root.SciLLM?.INTERFACE_I18N_REVISION === 'r37-en-2' && !(typeof module === 'object' && module.exports)) return;
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const EN = Object.freeze({
+    '选择供应商并填写 API Key 即可接入，自动使用默认模型。具体模型与功能选项在下方表格设置。': 'Choose a provider and enter your API key to connect using its default model. Choose models and options for each feature in the table below.',
+    '供应商': 'Provider',
+    '已保存连接': 'Saved connections',
+    '当前连接的默认模型': 'Default model for the selected connection',
+    '当前连接': 'Selected connection',
+    '默认连接': 'Default connection',
+    '默认模型': 'Default model',
+    '连接与模型': 'Connection and model',
+    '思考': 'Thinking',
+    '未开启': 'Off',
+    '不支持': 'Unavailable',
+    '默认模型与在线模型目录': 'Default model and model directory',
+    '连接测试详情': 'Connection test details',
+    '额外测试（可选）': 'Additional tests (optional)',
+    '各功能默认沿用默认连接与模型；可分别选择具体模型，设置思考、推理强度、联网和 Token 规则。': 'Features inherit the default connection and model. Choose a model, thinking, reasoning effort, web search and token rules for each feature.',
+    '保存功能设置': 'Save feature settings',
+    '功能设置已保存。': 'Feature settings saved.',
+    '请完成连接设置后重试。': 'Complete the connection settings and try again.',
+    '保存失败，请检查连接设置。': 'Could not save. Check the connection settings.',
+    '此功能或当前模型暂不支持联网。': 'Web search is not supported by this feature or model in this build.',
+    '作为此功能的默认联网选项，可在问答中临时调整。': 'Default web search setting for this feature. You can change it for an individual conversation.',
+    '保存文件夹': 'Save folder',
+    '选择文献文件的保存位置；保存的正文、笔记和图片可用于离线阅读与备份。': 'Choose where to save article files. Saved text, notes and images are available for offline reading and backup.',
+    '尚未写入': 'Not written yet',
+    '未能完成文件夹设置，请检查文件夹读写权限后重试。': 'Folder setup could not finish. Check read/write access and try again.',
+    '未能恢复文件夹访问权限，请重新选择目录并允许读写。': 'Folder access could not be restored. Select the folder again and allow read/write access.',
+    '选择保存文件夹': 'Choose a save folder',
+    '选择一次目录，之后点击侧栏“保存”即可写入文献文件，无需绑定本机路径或手动同步。': 'Choose a folder once, then click Save in the sidebar to write your article files. No path binding or manual sync is needed.',
+    '文件保存在所选目录内的 Brevess 文件夹；已有 Brevess 或 SCI-Highlighter 数据目录会直接沿用。': 'Files are saved in a Brevess folder inside your selection. An existing Brevess or SCI-Highlighter data folder is used directly.',
+    '高级设置 · 可选备份与目录维护': 'Advanced · Optional backup and folder maintenance',
+    '恢复文件夹访问权限': 'Restore folder access',
+    '可选：在文件管理器中打开文献目录': 'Optional: open article folders in File Explorer',
+    '仅用于“打开文件夹”快捷按钮，不影响文献保存。需要此功能时，再填写 Brevess 或 SCI-Highlighter 数据目录的完整本机路径。': 'Only needed for the Open folder shortcut; article saving is unaffected. To enable the shortcut, enter the full local path of your Brevess or SCI-Highlighter data folder.',
+    '模型配置备份（可选）': 'Model configuration backup (optional)',
+    '需要换电脑恢复 API Key、模型设置、MinerU Token 和全局缩略词表时，可自行创建口令加密备份。不启用也能保存文献；遗忘口令无法恢复备份中的凭据。': 'Optionally create a passphrase-protected backup to restore API keys, model settings, the MinerU token and global abbreviations on another computer. Article saving does not require this backup. Lost passphrases cannot recover backed-up credentials.',
+    '可选：备份 API Key 与模型配置，方便换电脑恢复。不影响文献保存。': 'Optional: back up API keys and model settings for another computer. Article saving is unaffected.',
+    '模型配置备份已加密；需要恢复配置时再解锁。不影响文献保存。': 'The model backup is encrypted. Unlock it when you want to restore settings. Article saving is unaffected.',
+    '文件夹已选好，但文件尚未写入完成。请检查目录权限后点击保存重试。': 'The folder is selected, but some files have not been written. Check folder access and click Save to retry.',
+    '文件夹已就绪。之后点击侧栏“保存”，即可将文献文件写入此处，无需绑定路径或手动同步。': 'Your folder is ready. Click Save in the sidebar to write article files here. No path binding or manual sync is needed.',
+    '待写入文件': 'Pending files',
+    '上次写入': 'Last written',
+    '重试写入文件': 'Retry file writes',
+    '正在写入本地文件夹…': 'Writing to the local folder…',
+    '文件已写入本地文件夹。': 'Files have been written to the local folder.',
+    '文件尚未全部写入；内容仍保存在浏览器中，请重试保存。': 'Some files have not been written. Your content remains in the browser; retry saving.',
+    '写入本地文件夹': 'Write to the local folder',
+    '文件写入未完成，内容仍保存在浏览器中，请重试保存': 'Files have not been fully written. Your content remains in the browser; retry saving',
+    '本次结果已保存在浏览器，但尚未完整写入所选文件夹。': 'Your work is saved in the browser but has not been fully written to the selected folder.',
     '网页工具': 'Page tools',
     '无需打开侧栏': 'No sidebar required',
     '开关会记住并应用于之后打开的网页': 'Remember these choices for pages opened later',
@@ -1797,6 +1846,8 @@
   });
 
   const EN_PATTERNS = Object.freeze([
+    [/^文件写入未完成（(.+)），内容仍保存在浏览器中，请重试保存$/u, match => `Files have not been fully written (${match[1]}). Your content remains in the browser; retry saving`],
+    [/^本次结果已保存在浏览器，但尚未完整写入所选文件夹。(.+)$/u, match => `Your work is saved in the browser but has not been fully written to the selected folder. ${translateString(match[1], 'en')}`],
     [/^正在核对笔记 (\d+) \/ (\d+)…$/u, match => `Checking notes ${match[1]} / ${match[2]}…`],
     [/^本次生成的笔记已完成一次证据核对，修订 (\d+) 处。$/u, match => `One evidence review of the generated notes is complete; ${match[1]} corrections.`],
     [/^Panel 覆盖待补：(.+)$/u, match => `Panel coverage incomplete: ${match[1]}`],
@@ -1804,7 +1855,7 @@
     // Anchored UI templates only. Captured names, IDs and error details remain
     // verbatim unless the entire detail is an exact known interface string.
     [/^浏览器正在准备本地翻译资源：(\d+)%（需要时下载）$/u,
-      match => `The browser is preparing local translation resources: ${match[1]}% (downloaded if needed)`],
+      match => `Preparing local translation resources: ${match[1]}% (downloaded when needed)`],
     [/^本地翻译失败：(.+)$/u, match => `Local translation failed: ${EN[match[1]] || match[1]}`],
     [/^保存失败：(.+)。草稿仍保留，可重试。$/u,
       match => `Save failed: ${EN[match[1]] || match[1]}. Your draft was retained; you can retry.`],
@@ -1961,9 +2012,14 @@
   const textSources = new WeakMap();
   const translatedText = new WeakMap();
   const attributeSources = new WeakMap();
+  const additionalTranslations = Object.create(null);
+  const additionalPatterns = [...EN_PATTERNS];
+  const observedRoots = new Map();
+  const languageListeners = new Set();
   let language = 'zh-CN';
-  let observer = null;
+  let languageRevision = 0;
   let applying = false;
+  let interfaceRoot = null;
 
   function normalizeLanguage(value) {
     return String(value || '').toLowerCase().startsWith('en') ? 'en' : 'zh-CN';
@@ -2012,9 +2068,18 @@
     if (targetLanguage !== 'en') return String(value || '');
     const input = String(value || '');
     const trimmed = input.trim();
-    let translated = EN[trimmed];
-    if (!translated) {
-      for (const [pattern, renderer] of EN_PATTERNS) {
+    let translated = additionalTranslations[trimmed] || EN[trimmed];
+    if (!translated && trimmed.endsWith('：')) {
+      const label = trimmed.slice(0, -1);
+      const value = additionalTranslations[label] || EN[label];
+      if (value) translated = value + ':';
+    }
+    if (!translated && /[\u3400-\u9fff]/u.test(trimmed)) {
+      for (const [pattern, renderer] of additionalPatterns) {
+        if (pattern.brevessRequiredFragments?.some(fragment => !trimmed.includes(fragment))) continue;
+        // Long prose uses exact catalog entries or the linear template matcher.
+        // Unbounded legacy regular expressions must not process whole documents.
+        if (trimmed.length > 4096 && !pattern.brevessLinearTemplate) continue;
         const match = trimmed.match(pattern);
         if (!match) continue;
         translated = renderer(match);
@@ -2027,6 +2092,45 @@
     return `${start}${translated}${end}`;
   }
 
+  // Match literal-delimited placeholders in linear time. Adjacent placeholders
+  // have no recoverable boundary, so retain their combined value as one unit.
+  // This also prevents user content from being split or normalized by i18n.
+  function compileInterfaceTemplate([source, target, translatedArgs = []]) {
+    const pieces = String(source).split(/((?:\{\d+\})+)/g);
+    const groups = [];
+    for (let i = 1; i < pieces.length; i += 2) groups.push(pieces[i]);
+    const pattern = {
+      brevessLinearTemplate: true,
+      brevessRequiredFragments: pieces.filter((_, i) => i % 2 === 0).filter(Boolean),
+      [Symbol.match](input) {
+        const value = String(input);
+        if (!value.startsWith(pieces[0])) return null;
+        let cursor = pieces[0].length;
+        const match = [value];
+        for (let i = 1; i < pieces.length; i += 2) {
+          const next = pieces[i + 1];
+          const last = i + 2 >= pieces.length;
+          const end = last ? (value.endsWith(next) ? value.length - next.length : -1) : value.indexOf(next, cursor);
+          if (end < cursor) return null;
+          match.push(value.slice(cursor, end));
+          cursor = end + next.length;
+        }
+        return cursor === value.length ? match : null;
+      }
+    };
+    return [pattern, match => {
+      const values = new Map();
+      groups.forEach((group, index) => {
+        const ids = [...group.matchAll(/\{(\d+)\}/g)].map(item => Number(item[1]));
+        const raw = match[index + 1] || '';
+        const rendered = ids.length === 1 && translatedArgs.includes(ids[0]) ? translateString(raw, 'en') : raw;
+        values.set(group, rendered);
+      });
+      return String(target).replace(/(?:\{\d+\})+/g, group => values.has(group) ? values.get(group)
+        : group.replace(/\{\d+\}/g, token => values.get(token) ?? token));
+    }];
+  }
+
   // Article content belongs to the document, not the interface dictionary.
   // Exclude entire PDF subtrees, including TextLayers rendered off-DOM.
   const pdfContentSelector = '#pdfNativeViewer, #pdfReaderArticle, .pdf-native-text-layer';
@@ -2035,8 +2139,19 @@
     return element?.closest?.(pdfContentSelector) || null;
   }
 
+  // Explicit boundaries protect article text and user-authored values even
+  // when they happen to be identical to a built-in interface label.
+  function ignoredContent(node) {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    return element?.closest?.('[data-i18n-ignore], [translate="no"], [contenteditable="true"]') || null;
+  }
+
   function applyTextNode(node) {
-    if (pdfContentRoot(node)) return;
+    if (pdfContentRoot(node) || ignoredContent(node) || node.parentElement?.closest?.('script, style, textarea, pre, code')) return;
+    // Generated answers contain both prose and controls. Keep prose verbatim;
+    // controls opt back in so citation and disclosure labels remain localized.
+    const content = node.parentElement?.closest?.('[data-i18n-user-content]');
+    if (content && !node.parentElement?.closest?.('button, summary, [data-i18n-interface-text]')) return;
     const current = node.nodeValue || '';
     const last = translatedText.get(node);
     if (!textSources.has(node) || (last !== undefined && current !== last)) {
@@ -2049,15 +2164,22 @@
   }
 
   function applyAttributes(element) {
+    if (ignoredContent(element)) return;
     const contentRoot = pdfContentRoot(element);
     if (contentRoot && contentRoot !== element) return;
-    const names = ['placeholder', 'title', 'aria-label'];
+    const names = ['placeholder', 'title', 'aria-label', 'alt'];
     let sources = attributeSources.get(element);
     if (!sources) {
       sources = {};
       attributeSources.set(element, sources);
     }
+    if (element.hasAttribute('data-i18n-href-en')) {
+      if (!('href' in sources)) sources.href = element.getAttribute('href');
+      const href = language === 'en' ? element.getAttribute('data-i18n-href-en') : sources.href;
+      if (element.getAttribute('href') !== href) element.setAttribute('href', href);
+    }
     names.forEach(name => {
+      if ((element.getAttribute('data-i18n-ignore-attributes') || '').split(/\s+/u).includes(name)) return;
       if (!element.hasAttribute?.(name)) return;
       const current = element.getAttribute(name) || '';
       const marker = `${name}Translated`;
@@ -2072,8 +2194,8 @@
     });
   }
 
-  function applyTree(rootNode = document) {
-    if (!rootNode || applying) return;
+  function applyTree(rootNode = globalThis.document) {
+    if (!rootNode || applying || ignoredContent(rootNode)) return;
     if (pdfContentRoot(rootNode)) {
       if (rootNode.nodeType === Node.ELEMENT_NODE) applyAttributes(rootNode);
       return;
@@ -2084,6 +2206,7 @@
         rootNode,
         NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
         { acceptNode(node) {
+          if (ignoredContent(node)) return NodeFilter.FILTER_REJECT;
           if (!pdfContentRoot(node)) return NodeFilter.FILTER_ACCEPT;
           if (node.nodeType === Node.ELEMENT_NODE) applyAttributes(node);
           return NodeFilter.FILTER_REJECT;
@@ -2095,16 +2218,17 @@
         else if (node.nodeType === Node.ELEMENT_NODE) applyAttributes(node);
         node = walker.nextNode();
       }
-      if (document.documentElement.lang !== language) document.documentElement.lang = language;
+      if (rootNode === document && document.documentElement.lang !== language) document.documentElement.lang = language;
     } finally {
       applying = false;
     }
   }
 
-  function observeInterface(rootNode = document.body) {
-    observer?.disconnect();
-    if (!rootNode || typeof MutationObserver !== 'function') return;
-    observer = new MutationObserver(records => {
+  function observeInterfaceRoot(rootNode) {
+    if (!rootNode || typeof MutationObserver !== 'function') return () => {};
+    applyTree(rootNode);
+    if (observedRoots.has(rootNode)) return observedRoots.get(rootNode).dispose;
+    const observer = new MutationObserver(records => {
       if (applying) return;
       records.forEach(record => {
         if (record.target?.isConnected === false) return;
@@ -2122,33 +2246,80 @@
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['placeholder', 'title', 'aria-label']
+      attributeFilter: ['placeholder', 'title', 'aria-label', 'alt']
     });
+    const dispose = () => { observer.disconnect(); observedRoots.delete(rootNode); };
+    observedRoots.set(rootNode, { observer, dispose });
+    return dispose;
   }
 
-  function setInterfaceLanguage(value, rootNode = document) {
-    language = normalizeLanguage(value);
+  function setInterfaceLanguage(value, rootNode = globalThis.document) {
+    languageRevision++;
+    const selected = normalizeLanguage(value);
+    const changed = selected !== language;
+    language = selected;
+    interfaceRoot = rootNode;
     applyTree(rootNode);
-    observeInterface(document.body);
+    if (rootNode) observeInterfaceRoot(rootNode);
+    for (const root of observedRoots.keys()) applyTree(root);
+    if (changed) for (const listener of languageListeners) {
+      try { listener(language); } catch (_) { /* A view must not block other views. */ }
+    }
     return language;
   }
 
-  async function bootstrapInterfaceLanguage(runtime = globalThis.chrome?.runtime) {
+  function registerInterfaceTranslations(entries = {}, patterns = []) {
+    Object.assign(additionalTranslations, entries);
+    additionalPatterns.push(...patterns);
+    // Specific complete messages must precede generic “{value} failed” rules,
+    // regardless of which view loaded its catalog first.
+    const specificity = pattern => {
+      const literal = pattern.brevessRequiredFragments?.join('') || String(pattern.source || '')
+        .replace(/\[[^\]]*\]/g, '').replace(/\\[dDsSwWbB]/g, '').replace(/[^\p{L}\p{N} ]/gu, '');
+      return (literal.match(/[\u3400-\u9fff]/gu)?.length || 0) * 8 + literal.length;
+    };
+    additionalPatterns.sort((a, b) => specificity(b[0]) - specificity(a[0]));
+    for (const root of observedRoots.keys()) applyTree(root);
+  }
+
+  function onInterfaceLanguageChange(listener) {
+    languageListeners.add(listener);
+    return () => languageListeners.delete(listener);
+  }
+
+  // The existing settings key is shared by every extension surface. Reading
+  // changes updates open views without persisting translations or new schemas.
+  globalThis.chrome?.storage?.onChanged?.addListener?.((changes, area) => {
+    if (area !== 'local' || !changes.sciLlmSettingsV2?.newValue?.language) return;
+    setInterfaceLanguage(changes.sciLlmSettingsV2.newValue.language, interfaceRoot);
+  });
+
+  async function bootstrapInterfaceLanguage(runtime = globalThis.chrome?.runtime, rootNode = globalThis.document) {
     if (!runtime?.sendMessage || typeof document === 'undefined') return language;
+    const requestedAt = languageRevision;
     try {
       const response = await runtime.sendMessage({ type: 'LLM_GET_SETTINGS' });
+      if (requestedAt !== languageRevision) return language;
       const value = response?.success === false ? null : (response?.data || response);
       const selected = value?.settings?.language || value?.language || 'zh-CN';
-      return setInterfaceLanguage(selected);
+      return setInterfaceLanguage(selected, rootNode);
     } catch (_) {
-      return setInterfaceLanguage('zh-CN');
+      if (requestedAt !== languageRevision) return language;
+      return setInterfaceLanguage('zh-CN', rootNode);
     }
   }
 
   return {
+    INTERFACE_I18N_REVISION: 'r37-en-2',
     INTERFACE_TRANSLATIONS_EN: EN,
     normalizeInterfaceLanguage: normalizeLanguage,
     translateInterfaceText: translateString,
+    registerInterfaceTranslations,
+    compileInterfaceTemplate,
+    applyInterfaceTranslations: applyTree,
+    observeInterfaceRoot,
+    getInterfaceLanguage: () => language,
+    onInterfaceLanguageChange,
     setInterfaceLanguage,
     bootstrapInterfaceLanguage,
     outputLanguageContract,

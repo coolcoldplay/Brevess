@@ -172,7 +172,7 @@ test('reinjects the content script and retries when a tab has no message receive
     'sendMessage',
     'sendMessage'
   ]);
-  assert.deepEqual(calls[4][2], ['content.css', 'semantic-find.css', 'bilingual-translation.css']);
+  assert.deepEqual(calls[4][2], ['content.css', 'semantic-find.css', 'bilingual-translation.css', 'sharing/sharing.css']);
   assert.deepEqual(calls[5][2], messenger.CONTENT_SCRIPT_FILES);
   assert.ok(
     calls[5][2].indexOf('core/article-structure.js') <

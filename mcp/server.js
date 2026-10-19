@@ -264,7 +264,10 @@ function sendError(response, error) {
   sendJson(response, Number(error?.status) || 500, { ok: false, error: value });
 }
 
-function connectPage({ url, extensionId, scopes, bridge, tokenSource }) {
+function connectPage({ url, extensionId, scopes, bridge, tokenSource, language = 'zh-CN' }) {
+  const english = String(language).startsWith('en');
+  const ui = (zh, en) => english ? en : zh;
+  const languageLink = value => { const target = new URL(url); target.searchParams.set('lang', value); return target.href; };
   const workbench = extensionId
     ? `chrome-extension://${extensionId}/workbench/index.html?mcpServer=${encodeURIComponent(url)}&mcpToken=${encodeURIComponent(new URL(url).searchParams.get('token') || '')}`
     : '';
@@ -277,11 +280,11 @@ function connectPage({ url, extensionId, scopes, bridge, tokenSource }) {
   }[char]));
   const json = JSON.stringify({ url, extensionId, scopes, bridge, tokenSource }, null, 2);
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${english ? 'en' : 'zh-CN'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BREVESS MCP 连接</title>
+<title>${ui('BREVESS MCP 连接', 'BREVESS MCP connection')}</title>
 <style>
 body{font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:880px;margin:40px auto;padding:0 24px;color:#17202a;background:#f7f9fb}
 main{background:#fff;border:1px solid #dbe3ea;border-radius:14px;padding:28px 30px;box-shadow:0 12px 40px rgba(35,52,70,.08)}
@@ -292,15 +295,16 @@ a.button{display:inline-block;background:#174d66;color:#fff;padding:10px 16px;bo
 </head>
 <body><main>
 <h1>BREVESS MCP</h1>
-<p>本机 MCP endpoint：<code>${escaped(url.replace(/\/connect.*$/u, ''))}</code></p>
+<nav aria-label="${ui('语言', 'Language')}"><a href="${escaped(languageLink('en'))}" lang="en">English</a> · <a href="${escaped(languageLink('zh-CN'))}" lang="zh-CN">简体中文</a></nav>
+<p>${ui('本机 MCP endpoint：', 'Local MCP endpoint:')}<code>${escaped(url.replace(/\/connect.*$/u, ''))}</code></p>
 <p>Scope：<strong>${escaped(scopes.join(', '))}</strong></p>
-${workbench ? `<p><a class="button" href="${escaped(workbench)}">打开课题工作台并配对 MCP</a></p>` : '<p class="warn">未能从 manifest 推导扩展 ID。安装扩展后，从 Workbench 页面使用下方参数手动连接。</p>'}
-<p class="muted">连接页含短时本机 token，不会上传。请勿把此 URL 发给其他设备。Workbench 页需要保持打开；关闭后，写操作会返回 <code>BRIDGE_UNAVAILABLE</code>，不会静默重试。</p>
-<h2>当前状态</h2><pre>${escaped(json)}</pre>
-<h2>Bridge 参数</h2>
+${workbench ? `<p><a class="button" href="${escaped(workbench)}">${ui('打开课题工作台并配对 MCP', 'Open the workbench and pair MCP')}</a></p>` : `<p class="warn">${ui('未能从 manifest 推导扩展 ID。安装扩展后，从 Workbench 页面使用下方参数手动连接。', 'The extension ID could not be derived from the manifest. Install the extension, then connect manually from the workbench using the parameters below.')}</p>`}
+<p class="muted">${ui('连接页含短时本机 token，不会上传。请勿把此 URL 发给其他设备。Workbench 页需要保持打开；关闭后，写操作会返回', 'This page contains a temporary local token that is not uploaded. Do not send this URL to other devices. Keep the workbench open; when it closes, write operations return')} <code>BRIDGE_UNAVAILABLE</code>${ui('，不会静默重试。', ' without retrying silently.')}</p>
+<h2>${ui('当前状态', 'Current status')}</h2><pre>${escaped(json)}</pre>
+<h2>${ui('Bridge 参数', 'Bridge parameters')}</h2>
 <pre>mcpServer=${escaped(url.replace(/\/connect.*$/u, ''))}
 mcpToken=${escaped(new URL(url).searchParams.get('token') || '')}</pre>
-<p class="muted">Token 文件：<code>${escaped(tokenSource)}</code></p>
+<p class="muted">${ui('Token 文件：', 'Token file:')}<code>${escaped(tokenSource)}</code></p>
 </main></body></html>`;
 }
 
@@ -365,7 +369,8 @@ function createHttpServer(options) {
           extensionId,
           scopes: allowWrite ? ['read', 'write'] : ['read'],
           bridge: hub.status(),
-          tokenSource: connectPagePath
+          tokenSource: connectPagePath,
+          language: requestUrl.searchParams.get('lang') || (/^en\b/i.test(String(request.headers['accept-language'] || '')) ? 'en' : 'zh-CN')
         });
         response.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',

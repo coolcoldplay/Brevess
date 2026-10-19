@@ -127,7 +127,8 @@ async function loadState() {
     }
     renderPageTools();
     toolsNotice(currentState.pageTools?.supported ? '开启开关后，按需检索、划句或翻译。' : '请在普通网页使用；浏览器内部页面及 PDF 请使用对应阅读入口。');
-    setStatus(currentState.readable
+    // The tools status already explains unsupported pages; avoid a duplicate footer.
+    setStatus(currentState.readable || currentState.pageTools
       ? ''
       : '当前页面暂不支持直接研读，仍可查看历史或设置。');
   } catch (error) {

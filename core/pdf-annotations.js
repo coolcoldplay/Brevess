@@ -586,9 +586,11 @@
         hit.style.height = `${rect.bottom - rect.top}px`;
         hit.style.setProperty?.('--pdf-annotation-color',
           String(annotation.categorySnapshot?.color || '#F2D978'));
-        hit.title = String(annotation.note || annotation.categorySnapshot?.name || 'PDF 高亮');
+        const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
+        hit.setAttribute('data-i18n-ignore', '');
+        hit.title = String(annotation.note || annotation.categorySnapshot?.name || t('PDF 高亮'));
         hit.setAttribute('aria-label',
-          `${annotation.categorySnapshot?.name || 'PDF'}高亮：${normalized.quote.slice(0, 100)}`);
+          t(`${annotation.categorySnapshot?.name || 'PDF'}高亮：${normalized.quote.slice(0, 100)}`));
         hit.addEventListener('click', event => {
           event.preventDefault?.();
           event.stopPropagation?.();

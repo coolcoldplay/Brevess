@@ -1,8 +1,8 @@
 (function attach(root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(root) {
   const RESEARCH_LOGIC_MAP_KIND = 'brevess-research-logic-map';
   const RESEARCH_LOGIC_MAP_SCHEMA_VERSION = 4;
   const RESEARCH_LOGIC_MAP_INDEX_PATH = 'logic-maps/index.json';
@@ -1388,9 +1388,9 @@
       : '未标注 Panel';
   }
 
-  function roleLabel(value) {
+  function roleLabel(value, translate = value => value) {
     const normalized = text(value, 160).toLowerCase();
-    return ({
+    const builtIn = ({
       problem_setup: '问题建立',
       phenomenon: '现象发现',
       association: '关联证据',
@@ -1405,7 +1405,8 @@
       intervention_effect: '干预效应',
       functional_validation: '功能验证',
       other: '综合证据'
-    })[normalized] || text(value, 160) || '论证步骤';
+    })[normalized];
+    return builtIn ? translate(builtIn) : text(value, 160) || translate('论证步骤');
   }
 
   function supplementalRoleLabel(value) {
@@ -1723,7 +1724,11 @@
     ].join('');
   }
 
-  function buildResearchLogicMapSvg(input) {
+  function buildResearchLogicMapSvg(input, options = {}) {
+    // Localize only SVG interface labels. The normalized map and authored text
+    // remain unchanged; callers may explicitly export in either language.
+    const language = options.language || root.SciLLM?.getInterfaceLanguage?.() || 'zh-CN';
+    const t = value => root.SciLLM?.translateInterfaceText?.(value, language) || value;
     const map = normalizeResearchLogicMap(input);
     const width = 1600;
     const margin = 60;
@@ -1755,7 +1760,7 @@
         `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${height}" ` +
         `rx="18" fill="${fill}" stroke="#c5d6df"/>`,
         `<text class="section-title" x="${margin + 24}" y="${y + 39}">` +
-        `${escapeXml(title)}</text>`
+        `${escapeXml(t(title))}</text>`
       );
       let itemY = y + 72;
       layouts.forEach(lines => {
@@ -1788,7 +1793,7 @@
       parts.push(
         `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${height}" ` +
         'rx="18" fill="#edf7f5" stroke="#b9d8d1"/>',
-        `<text class="section-title" x="${margin + 24}" y="${y + 39}">机制链</text>`
+        `<text class="section-title" x="${margin + 24}" y="${y + 39}">${escapeXml(t('机制链'))}</text>`
       );
       map.meta.mechanismEdges.forEach((edge, index) => {
         const rowTop = y + 66 + index * rowHeight;
@@ -1803,9 +1808,9 @@
         const dashed = edge.effect === 'associate' || edge.evidence !== 'strong';
         const evidenceClass = dashed ? 'is-weak' : 'is-strong';
         const dashAttribute = dashed ? ' stroke-dasharray="13 10"' : '';
-        const relation = edge.effect === 'promote'
-          ? '促进' : edge.effect === 'inhibit' ? '抑制' : '相关';
-        const evidence = edge.evidence === 'strong' ? '强证据' : '弱证据';
+        const relation = t(edge.effect === 'promote'
+          ? '促进' : edge.effect === 'inhibit' ? '抑制' : '相关');
+        const evidence = t(edge.evidence === 'strong' ? '强证据' : '弱证据');
         const sourceLines = wrapSvgText(edge.sourceId, nodeWidth - 32, 18, 2);
         const targetLines = wrapSvgText(edge.targetId, nodeWidth - 32, 18, 2);
         parts.push(
@@ -1857,10 +1862,10 @@
             ? `Panel ${point.locator.values.join('、') || '—'}`
             : point.locator.kind === 'time-range'
               ? `${point.locator.startSeconds}–${point.locator.endSeconds}s`
-              : point.locator.value || '表格范围待补充';
-          const value = `${locator} · ${point.observation || '观察待补充'}` +
+              : point.locator.value || t('表格范围待补充');
+          const value = `${locator} · ${point.observation || t('观察待补充')}` +
             `${point.argumentRole ? ` · ${point.argumentRole}` : ''}` +
-            `${point.limitation ? ` · 边界：${point.limitation}` : ''}`;
+            `${point.limitation ? ` · ${t(`边界：${point.limitation}`)}` : ''}`;
           return {
             labelLines: wrapSvgText(
               `${groupIndex + 1}. ${group.title}`,
@@ -1890,10 +1895,10 @@
         `<text class="figure" x="${margin + 26}" y="${y + 48}">` +
         `${escapeXml(step.figureLabel)}</text>`,
         `<text class="role" x="${margin + 260}" y="${y + 48}">` +
-        `${escapeXml(roleLabel(step.role || step.evidenceLevel))}</text>`
+        `${escapeXml(roleLabel(step.role || step.evidenceLevel, t))}</text>`
       );
       let rowY = y + 88;
-      parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">本图要解决的问题</text>`);
+      parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">${escapeXml(t('本图要解决的问题'))}</text>`);
       rowY += 32;
       questionLayouts.forEach(lines => {
         parts.push(`<text class="bullet" x="${margin + 36}" y="${rowY}">•</text>`);
@@ -1903,7 +1908,7 @@
         ));
         rowY += Math.max(28, lines.length * 28) + 6;
       });
-      parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">本图证明</text>`);
+      parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">${escapeXml(t('本图证明'))}</text>`);
       rowY += 32;
       proofLayouts.forEach(lines => {
         parts.push(`<text class="bullet strong" x="${margin + 36}" y="${rowY}">•</text>`);
@@ -1914,7 +1919,7 @@
         rowY += Math.max(30, lines.length * 29) + 6;
       });
       if (pointLayouts.length) {
-        parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">证据组与证据点</text>`);
+        parts.push(`<text class="label" x="${margin + 28}" y="${rowY}">${escapeXml(t('证据组与证据点'))}</text>`);
         rowY += 34;
         pointLayouts.forEach(layout => {
           layout.labelLines.forEach((line, lineIndex) => parts.push(

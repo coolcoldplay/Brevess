@@ -352,6 +352,7 @@
             if (!notice) {
                 notice = document.createElement('section');
                 notice.className = 'sci-translation-notice';
+                notice.setAttribute('data-brevess-interface', '');
                 notice.setAttribute('data-sci-plugin-ui', '');
                 notice.setAttribute('aria-label', 'Brevess 双语阅读');
                 const text = document.createElement('span');
@@ -646,6 +647,7 @@
             if (!record.failure?.isConnected) {
                 record.failure = document.createElement('div');
                 record.failure.className = 'sci-bilingual-error';
+                record.failure.setAttribute('data-brevess-interface', '');
                 record.failure.setAttribute('data-sci-plugin-ui', '');
                 record.failure.setAttribute('data-sci-translation', '');
                 record.failure.setAttribute('lang', 'zh');
@@ -763,6 +765,7 @@
                 ['awaiting-user', 'unavailable'].includes(state.phase)) return;
             const spinner = document.createElement('span');
             spinner.className = 'sci-bilingual-pending';
+            spinner.setAttribute('data-brevess-interface', '');
             spinner.setAttribute('data-sci-plugin-ui', '');
             spinner.setAttribute('data-sci-translation', '');
             spinner.setAttribute('role', 'status');

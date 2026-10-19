@@ -154,4 +154,23 @@
     ],
     "detail": "演示整理片段。预览确认节点复用；跨条件迁入应保留待复核。"
   }
-];const api={getResearchWorkbenchPrototypeCatalog:()=>structuredClone(resources)};if(typeof module==="object"&&module.exports)module.exports=api;Object.assign(root.SciLLM ||= {},api);})(globalThis);
+];
+// This getter creates fresh builtin demonstration material for an explicit
+// prototype import. It never visits or rewrites stored/imported user objects.
+const displayFields=new Set(['title','subtitle','condition','detail','label','claim','judgement']);
+const builtinImageIds=new Set(['figure-a1','figure-b2','panel-a1a','panel-a1b','panel-b2a','panel-b2b']);
+const builtinImageLabels=['示意素材 · 不代表科研结果','原文 Panel 1A · DEMO','原文 Panel 1B · DEMO','原文 Panel 2A · DEMO','原文 Panel 2B · DEMO'];
+function getResearchWorkbenchPrototypeCatalog(){
+  const result=structuredClone(resources);
+  if(root.SciLLM?.getInterfaceLanguage?.()!=='en')return result;
+  const visit=value=>{if(!value||typeof value!=='object')return;for(const [key,child]of Object.entries(value)){
+    if(displayFields.has(key)&&typeof child==='string')value[key]=root.SciLLM.translateInterfaceText?.(child,'en')||child;
+    // Exact labels in this immutable builtin SVG only; never parse user images.
+    else if(key==='image'&&builtinImageIds.has(value.id)&&child===resources.find(row=>row.id===value.id)?.image){
+      value[key]=builtinImageLabels.reduce((image,label)=>image.replaceAll(encodeURIComponent(label),encodeURIComponent(root.SciLLM.translateInterfaceText?.(label,'en')||label)),child);
+    }
+    else if(child&&typeof child==='object')visit(child);
+  }};
+  visit(result);return result;
+}
+const api={getResearchWorkbenchPrototypeCatalog};if(typeof module==="object"&&module.exports)module.exports=api;Object.assign(root.SciLLM ||= {},api);})(globalThis);

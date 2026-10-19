@@ -57,3 +57,13 @@ Desktop.ini
 .vscode/
 .idea/
 
+
+# Private service deployment and development material
+sharing-service/
+server/
+deploy/
+features/
+secrets/
+backups/
+*.brvbak
+docs/superpowers/

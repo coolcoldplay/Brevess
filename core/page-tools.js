@@ -4,7 +4,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const PAGE_TOOLS_STORAGE_KEY = 'sciPageToolsV1';
-  const defaults = Object.freeze({ semantic: true, selection: false, pageTranslation: true });
+  const defaults = Object.freeze({ semantic: true, selection: true, pageTranslation: true });
   function normalizePageToolsSettings(value = {}) {
     return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) =>
       [key, typeof value?.[key] === 'boolean' ? value[key] : fallback]));

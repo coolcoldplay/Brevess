@@ -66,6 +66,7 @@
       listeners.push(() => target.removeEventListener(type, handler, options));
     };
     const element = make('div', 'literature-note-editor');
+    element.setAttribute('data-brevess-interface', '');
     element.dataset.active = 'false';
     Object.assign(element.style, { display: 'grid', gap: '4px', gridColumn: '1 / -1', minWidth: '0', width: '100%', boxSizing: 'border-box' });
     const toolbar = make('div', 'literature-note-editor-toolbar');
@@ -74,6 +75,7 @@
     const status = make('div', 'literature-note-editor-status');
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.setAttribute('aria-atomic', 'true');
     const preview = make('div', 'literature-note-editor-preview');
+    preview.setAttribute('data-i18n-user-content', '');
     preview.setAttribute('role', 'region'); preview.setAttribute('aria-label', t('笔记预览'));
     preview.tabIndex = 0; preview.hidden = true;
     Object.assign(preview.style, { minWidth: '0', overflowWrap: 'anywhere' });

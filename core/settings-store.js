@@ -537,7 +537,17 @@
       reasoningEnabled,
       reasoningEffort,
       tokenRule,
-      allowTextFallback: visionTask && input.allowTextFallback === true
+      allowTextFallback: visionTask && input.allowTextFallback === true,
+      // Optional overrides bind to a connection, so switching the global
+      // provider never carries another provider's model ID into its request.
+      ...(typeof input.model === 'string' && input.model.trim() &&
+          input.model.trim().length <= 256 && !/[\u0000-\u001f\u007f]/u.test(input.model) &&
+          Object.prototype.hasOwnProperty.call(availableProfiles, String(input.modelProfileId || ''))
+        ? { model: input.model.trim(), modelProfileId: String(input.modelProfileId),
+          modelProviderId: String(input.modelProviderId || availableProfiles[input.modelProfileId]?.providerId || ''),
+          modelPresetId: String(input.modelPresetId ?? availableProfiles[input.modelProfileId]?.config?.presetId ?? '') } : {}),
+      ...(['article_chat', 'selection_chat'].includes(taskId) && typeof input.webSearchEnabled === 'boolean'
+        ? { webSearchEnabled: input.webSearchEnabled } : {})
     };
   }
 

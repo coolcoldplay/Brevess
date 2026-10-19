@@ -3,6 +3,23 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+  const exportI18n = typeof module === 'object' && module.exports ? require('./i18n-export.js') : null;
+  let activeExportLanguage = '';
+  const exportApi = () => globalThis.SciLLM || exportI18n || {};
+  const exportLocale = () => activeExportLanguage || exportApi().getInterfaceLanguage?.() || 'zh-CN';
+  function exportBuiltinText(value) {
+    return (exportApi().translateExportBuiltin || exportI18n?.translateExportBuiltin)?.(value, exportLocale()) ?? value;
+  }
+  function exportBuiltinTemplate(parts, ...values) {
+    const format = exportApi().formatExportBuiltin || exportI18n?.formatExportBuiltin;
+    return format ? format(parts, values, exportLocale()) : parts.reduce((text, part, i) => text + part + (i < values.length ? values[i] : ''), '');
+  }
+  function withExportLanguage(input, options, operation) {
+    const previous = activeExportLanguage;
+    activeExportLanguage = options?.outputLanguage || options?.interfaceLanguage || options?.language ||
+      input?.outputLanguage || input?.interfaceLanguage || previous || exportApi().getInterfaceLanguage?.() || 'zh-CN';
+    try { return operation(); } finally { activeExportLanguage = previous; }
+  }
   const encoder = new TextEncoder();
   const SENSITIVE_KEY = /^(?:api[-_]?key|authorization|token|secret|password|dataurl)$/i;
 
@@ -345,15 +362,15 @@
       `# ${title}`,
       '',
       `- Figure ID: ${figure.figureId || ''}`,
-      `- Panels: ${panels || '未标注'}`,
-      `- 图像文件: ${(figure.imageFiles || []).join(', ') || '未能打包；参见 sourceUrls'}`,
+      `- Panels: ${panels || exportBuiltinText('未标注')}`,
+      exportBuiltinTemplate`- 图像文件: ${(figure.imageFiles || []).join(', ') || exportBuiltinText('未能打包；参见 sourceUrls')}`,
       '',
-      '## 图注',
+      exportBuiltinText('## 图注'),
       '',
-      String(figure.caption || '无'),
+      String(figure.caption || exportBuiltinText('无')),
       '',
       ...figurePanelEightFieldMarkdown(figure),
-      '## 本图全部解读数据',
+      exportBuiltinText('## 本图全部解读数据'),
       '',
       '```json',
       JSON.stringify(cloneExportValue({
@@ -379,10 +396,10 @@
         : fallback;
     };
     return {
-      language: bounded('language', '中文', 100),
+      language: bounded('language', exportBuiltinText('中文'), 100),
       durationMinutes: bounded('durationMinutes', '25–35', 100),
       slideCount: bounded('slideCount', '24–34', 100),
-      audience: bounded('audience', '科研组会 / Journal Club', 1000),
+      audience: bounded('audience', exportBuiltinText('科研组会 / Journal Club'), 1000),
       template: bounded('template', '', 2000),
       focusFigures: bounded('focusFigures', '', 2000),
       narration: exportOwnData(input, 'narration') === true,
@@ -441,6 +458,10 @@
     const customization = normalizePptExportCustomization(
       options.customization || bundle.customization
     );
+    if (String(exportLocale()).toLowerCase().startsWith('en')) {
+      const buildEnglish = exportApi().buildEnglishPptAgentPrompt || exportI18n?.buildEnglishPptAgentPrompt;
+      if (buildEnglish) return buildEnglish(bundle, customization);
+    }
     return [
       '# 正式 Journal Club PPT 制作任务（给 Codex 或其他 AI）',
       '',
@@ -663,7 +684,7 @@
       .toLowerCase().replace(/\s+/g, '-');
     return [
       `<h2 id="sci-note-${escapeHtml(anchor)}">${escapeHtml(title)}</h2>`,
-      body || '<p><em>暂无内容。</em></p>'
+      body || exportBuiltinText('<p><em>暂无内容。</em></p>')
     ].join('');
   }
 
@@ -714,7 +735,7 @@
   function zoteroNoteLabel(key) {
     const normalized = String(key || '').replace(/_([a-z])/g, (_, letter) =>
       letter.toUpperCase());
-    if (ZOTERO_NOTE_LABELS[normalized]) return ZOTERO_NOTE_LABELS[normalized];
+    if (ZOTERO_NOTE_LABELS[normalized]) return exportBuiltinText(ZOTERO_NOTE_LABELS[normalized]);
     return normalized
       .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
       .replace(/_/g, ' ')
@@ -766,7 +787,7 @@
       output.push(`<p>${zoteroInlineMarkup(trimmed)}</p>`);
     });
     closeList();
-    return output.join('') || '<p><em>暂无内容。</em></p>';
+    return output.join('') || exportBuiltinText('<p><em>暂无内容。</em></p>');
   }
 
   const ZOTERO_NOTE_TOKEN_LABELS = Object.freeze({
@@ -820,18 +841,18 @@
 
   function zoteroDisplayToken(value) {
     const text = String(value ?? '').trim();
-    return ZOTERO_NOTE_TOKEN_LABELS[text] || text;
+    return ZOTERO_NOTE_TOKEN_LABELS[text] ? exportBuiltinText(ZOTERO_NOTE_TOKEN_LABELS[text]) : text;
   }
 
   function zoteroCompactValue(value, depth = 0) {
-    if (depth > 3) return '<em>内容已精简</em>';
-    if (!zoteroHasValue(value)) return '<em>未提供</em>';
-    if (typeof value === 'boolean') return value ? '是' : '否';
+    if (depth > 3) return exportBuiltinText('<em>内容已精简</em>');
+    if (!zoteroHasValue(value)) return exportBuiltinText('<em>未提供</em>');
+    if (typeof value === 'boolean') return value ? exportBuiltinText('是') : exportBuiltinText('否');
     if (typeof value === 'number') return escapeHtml(value);
     if (typeof value === 'string') {
       const lines = value.replace(/\r\n?/g, '\n').split('\n')
         .map(line => line.trim()).filter(Boolean);
-      if (!lines.length) return '<em>未提供</em>';
+      if (!lines.length) return exportBuiltinText('<em>未提供</em>');
       if (lines.length > 1 && lines.every(line => /^([-*]|\d+[.)])\s+/.test(line))) {
         return `<ul>${lines.map(line =>
           `<li>${zoteroInlineMarkup(line.replace(/^([-*]|\d+[.)])\s+/, ''))}</li>`
@@ -841,7 +862,7 @@
     }
     if (Array.isArray(value)) {
       const items = value.filter(zoteroHasValue);
-      if (!items.length) return '<em>未提供</em>';
+      if (!items.length) return exportBuiltinText('<em>未提供</em>');
       return `<ul>${items.map(item =>
         `<li>${zoteroCompactValue(item, depth + 1)}</li>`).join('')}</ul>`;
     }
@@ -851,7 +872,7 @@
       return zoteroHasValue(nested) && !ZOTERO_NOTE_INTERNAL_KEYS.has(normalizedKey) &&
         !/(?:^|_)(?:cache|diagnostic|metadata|operation)(?:_|$)/i.test(key);
     });
-    if (!entries.length) return '<em>未提供</em>';
+    if (!entries.length) return exportBuiltinText('<em>未提供</em>');
     return `<ul>${entries.map(([key, nested]) => [
       `<li><strong>${escapeHtml(zoteroNoteLabel(key) || key)}：</strong>`,
       zoteroCompactValue(nested, depth + 1),
@@ -886,7 +907,7 @@
     const methods = zoteroFirstValue(panel, ['methods', 'method', 'techniques']);
     const values = [];
     const category = zoteroDisplayToken(panel?.methodCategory || '');
-    if (category) values.push(`类别：${category}`);
+    if (category) values.push(exportBuiltinTemplate`类别：${category}`);
     if (Array.isArray(methods)) {
       methods.forEach(method => {
         if (typeof method === 'string') values.push(method);
@@ -912,37 +933,39 @@
       const projected = project({ ...panel,
         purpose: zoteroPanelField(panel, 'purpose', ['experimentalPurpose', 'aim']),
         phenotypeName: zoteroPanelField(panel, 'phenotypeName', ['phenotype']),
-        methods: methodValues.filter(value => !value.startsWith('类别：')),
+        methods: methodValues.filter(value => !value.startsWith(exportBuiltinText('类别：'))),
         experimentalMethods: panel.experimentalMethods,
         design: zoteroPanelField(panel, 'design', ['experimentalDesign']),
         comparison: zoteroPanelField(panel, 'comparison', ['comparisonRelationship']),
         directObservation: zoteroPanelField(panel, 'directObservation', ['observation', 'result']),
         localInference: zoteroPanelField(panel, 'localInference', ['inference'])
       });
-      return [...projected.map(field => [field.label, field.value?.length
-        ? (field.key === 'directObservation' ? `${field.value}\n${field.sourceLabel}` : field.value)
-        : field.emptyLabel || '未报告']),
-        ['笔记', zoteroFirstValue(panel, ['note'])],
-        ['旧论证角色', zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
-        ['方法类别（兼容保留）', zoteroDisplayToken(zoteroFirstValue(panel, ['methodCategory']))],
-        ['全文作用（兼容保留）', zoteroPanelField(panel, 'contribution', ['roleInArgument'])],
-        ['结论边界', zoteroFirstValue(panel, ['claimBoundary'])],
-        ['追问结论', zoteroFirstValue(followup, ['answer', 'summary'])],
-        ['追问边界', zoteroFirstValue(followup, ['claimBoundary', 'caveat'])]];
+      const fieldValue = field => String(exportLocale()).toLowerCase().startsWith('en') && field.kind === 'components' && Array.isArray(field.components)
+        ? field.components.filter(component => component.value).map(component => `${exportBuiltinText(component.label)}: ${component.value}`).join('\n')
+        : field.key === 'directObservation' ? `${field.value}\n${exportBuiltinText(field.sourceLabel)}` : field.value;
+      return [...projected.map(field => [exportBuiltinText(field.label), field.value?.length
+        ? fieldValue(field) : exportBuiltinText(field.emptyLabel) || exportBuiltinText('未报告')]),
+        [exportBuiltinText('笔记'), zoteroFirstValue(panel, ['note'])],
+        [exportBuiltinText('旧论证角色'), zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
+        [exportBuiltinText('方法类别（兼容保留）'), zoteroDisplayToken(zoteroFirstValue(panel, ['methodCategory']))],
+        [exportBuiltinText('全文作用（兼容保留）'), zoteroPanelField(panel, 'contribution', ['roleInArgument'])],
+        [exportBuiltinText('结论边界'), zoteroFirstValue(panel, ['claimBoundary'])],
+        [exportBuiltinText('追问结论'), zoteroFirstValue(followup, ['answer', 'summary'])],
+        [exportBuiltinText('追问边界'), zoteroFirstValue(followup, ['claimBoundary', 'caveat'])]];
     }
     return [
-      ['论证角色', zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
-      ['研究对象/表型', zoteroFirstValue(panel, ['phenotypeName', 'phenotype'])],
-      ['实验目的', zoteroFirstValue(panel, ['purpose', 'experimentalPurpose', 'aim'])],
-      ['方法', methodValues],
-      ['实验设计', zoteroFirstValue(panel, ['design', 'experimentalDesign'])],
-      ['比较关系', zoteroFirstValue(panel, ['comparison', 'comparisonRelationship'])],
-      ['直接观察', zoteroFirstValue(panel, ['directObservation', 'observation', 'result'])],
-      ['局部推断', zoteroFirstValue(panel, ['localInference', 'inference'])],
-      ['全文作用', zoteroFirstValue(panel, ['contribution', 'roleInArgument'])],
-      ['结论边界', zoteroFirstValue(panel, ['claimBoundary'])],
-      ['追问结论', zoteroFirstValue(followup, ['answer', 'summary'])],
-      ['追问边界', zoteroFirstValue(followup, ['claimBoundary', 'caveat'])]
+      [exportBuiltinText('论证角色'), zoteroDisplayToken(zoteroFirstValue(panel, ['role']))],
+      [exportBuiltinText('研究对象/表型'), zoteroFirstValue(panel, ['phenotypeName', 'phenotype'])],
+      [exportBuiltinText('实验目的'), zoteroFirstValue(panel, ['purpose', 'experimentalPurpose', 'aim'])],
+      [exportBuiltinText('方法'), methodValues],
+      [exportBuiltinText('实验设计'), zoteroFirstValue(panel, ['design', 'experimentalDesign'])],
+      [exportBuiltinText('比较关系'), zoteroFirstValue(panel, ['comparison', 'comparisonRelationship'])],
+      [exportBuiltinText('直接观察'), zoteroFirstValue(panel, ['directObservation', 'observation', 'result'])],
+      [exportBuiltinText('局部推断'), zoteroFirstValue(panel, ['localInference', 'inference'])],
+      [exportBuiltinText('全文作用'), zoteroFirstValue(panel, ['contribution', 'roleInArgument'])],
+      [exportBuiltinText('结论边界'), zoteroFirstValue(panel, ['claimBoundary'])],
+      [exportBuiltinText('追问结论'), zoteroFirstValue(followup, ['answer', 'summary'])],
+      [exportBuiltinText('追问边界'), zoteroFirstValue(followup, ['claimBoundary', 'caveat'])]
     ];
   }
 
@@ -970,7 +993,7 @@
       byPanel.set(label, mergeExportPanelEvidence(byPanel.get(label), panel));
     }
     return [...byPanel].flatMap(([id, panel]) => [
-      `## Panel ${id} 八字段`, '',
+      exportBuiltinTemplate`## Panel ${id} 八字段`, '',
       ...zoteroPanelRows(panel, figure.panelFollowups?.[id]).filter(([, value]) =>
         value !== undefined && value !== null && value !== '').map(([label, value]) =>
         `- ${label}：${Array.isArray(value) ? value.join('；') : String(value).replace(/\n/g, '；')}`), ''
@@ -998,16 +1021,16 @@
     const metrics = (Array.isArray(figure.images) ? figure.images : [])
       .map((image, index) => {
         const dimensions = image.pixelWidth && image.pixelHeight
-          ? `${image.pixelWidth} × ${image.pixelHeight} px` : '尺寸未知';
+          ? `${image.pixelWidth} × ${image.pixelHeight} px` : exportBuiltinText('尺寸未知');
         const size = Number(image.byteLength) > 0
-          ? `${(Number(image.byteLength) / 1024 / 1024).toFixed(1)} MB` : '大小未知';
-        return `原图 ${index + 1}：${dimensions}，${size}`;
+          ? `${(Number(image.byteLength) / 1024 / 1024).toFixed(1)} MB` : exportBuiltinText('大小未知');
+        return exportBuiltinTemplate`原图 ${index + 1}：${dimensions}，${size}`;
       });
     const summary = zoteroCompactTable([
-      ['本图问题', analysis.figureQuestion],
-      ['核心结论', analysis.coreConclusion],
-      ['图的组织', analysis.authorAssembly],
-      ['结论边界', analysis.claimBoundary]
+      [exportBuiltinText('本图问题'), analysis.figureQuestion],
+      [exportBuiltinText('核心结论'), analysis.coreConclusion],
+      [exportBuiltinText('图的组织'), analysis.authorAssembly],
+      [exportBuiltinText('结论边界'), analysis.claimBoundary]
     ]);
     const panels = [...panelByLabel.entries()].map(([label, panel]) => {
       const followup = panelFollowups[label] || panelFollowups[`Panel ${label}`] || {};
@@ -1020,29 +1043,29 @@
     }).join('');
     const panelGroups = Array.isArray(analysis.panelGroups) && analysis.panelGroups.length
       ? [
-        '<h4>Panel 组合</h4>',
+        exportBuiltinText('<h4>Panel 组合</h4>'),
         zoteroCompactTable(analysis.panelGroups.map(group => [
           (Array.isArray(group.panels) ? group.panels : []).join('、'),
           group.groupGoal,
           group.groupConclusion
-        ]), ['Panels', '组合目标', '组合结论'])
+        ]), ['Panels', exportBuiltinText('组合目标'), exportBuiltinText('组合结论')])
       ].join('') : '';
     const argumentChain = Array.isArray(analysis.argumentChain) &&
       analysis.argumentChain.length
       ? [
-        '<h4>本图证据链</h4>',
+        exportBuiltinText('<h4>本图证据链</h4>'),
         zoteroCompactTable(analysis.argumentChain.map(step => [
           (Array.isArray(step.panels) ? step.panels : []).join('、'),
           step.established,
           step.handoff,
           zoteroDisplayToken(step.evidenceLevel)
-        ]), ['Panels', '已建立', '下一步问题', '证据等级'])
+        ]), ['Panels', exportBuiltinText('已建立'), exportBuiltinText('下一步问题'), exportBuiltinText('证据等级')])
       ].join('') : '';
     return [
       metrics.length
-        ? `<p><strong>快照图像：</strong>${escapeHtml(metrics.join('；'))}</p>` : '',
+        ? exportBuiltinTemplate`<p><strong>快照图像：</strong>${escapeHtml(metrics.join('；'))}</p>` : '',
       summary,
-      panels ? `<h3>Panel 分解</h3>${panels}` : '',
+      panels ? exportBuiltinTemplate`<h3>Panel 分解</h3>${panels}` : '',
       panelGroups,
       argumentChain
     ].join('');
@@ -1054,19 +1077,19 @@
     const parts = [];
     if (logic.overallThesis) {
       parts.push(
-        `<p><strong>全文主线：</strong>${zoteroCompactValue(logic.overallThesis)}</p>`
+        exportBuiltinTemplate`<p><strong>全文主线：</strong>${zoteroCompactValue(logic.overallThesis)}</p>`
       );
     }
     if (Array.isArray(logic.nodes) && logic.nodes.length) {
       parts.push(
-        '<h3>各图角色</h3>',
+        exportBuiltinText('<h3>各图角色</h3>'),
         zoteroCompactTable(logic.nodes.map(node => [
           node.figureLabel || node.figureId,
           zoteroDisplayToken(node.role),
           node.established,
           node.transition,
           zoteroDisplayToken(node.evidenceLevel)
-        ]), ['Figure', '角色', '建立了什么', '如何衔接', '证据等级'])
+        ]), ['Figure', exportBuiltinText('角色'), exportBuiltinText('建立了什么'), exportBuiltinText('如何衔接'), exportBuiltinText('证据等级')])
       );
     }
     if (Array.isArray(logic.dominoChain) && logic.dominoChain.length) {
@@ -1075,7 +1098,7 @@
       const narrativeSteps = logic.dominoChain.filter(step =>
         typeof step === 'string' || typeof step === 'number');
       parts.push(
-        '<h3>主图串解</h3>',
+        exportBuiltinText('<h3>主图串解</h3>'),
         structuredSteps.length ? zoteroCompactTable(structuredSteps.map(step => [
           `${step.fromFigureLabel || step.fromFigureId || ''} → ${
             step.toFigureLabel || step.toFigureId || ''}`,
@@ -1083,29 +1106,29 @@
           step.established,
           step.transition,
           step.evidenceBoundary
-        ]), ['连接', '关系', '前图建立', '推进逻辑', '证据边界']) : '',
+        ]), [exportBuiltinText('连接'), exportBuiltinText('关系'), exportBuiltinText('前图建立'), exportBuiltinText('推进逻辑'), exportBuiltinText('证据边界')]) : '',
         narrativeSteps.length ? zoteroCompactValue(narrativeSteps) : ''
       );
     }
     if (Array.isArray(logic.supplementalSupport) && logic.supplementalSupport.length) {
       parts.push(
-        '<h3>补充图支持</h3>',
+        exportBuiltinText('<h3>补充图支持</h3>'),
         zoteroCompactTable(logic.supplementalSupport.map(item => [
           item.figureLabel || item.figureId,
           item.supportsFigureLabel || item.supportsFigureId,
           item.contribution
-        ]), ['补充图', '支持主图', '贡献'])
+        ]), [exportBuiltinText('补充图'), exportBuiltinText('支持主图'), exportBuiltinText('贡献')])
       );
     }
     if (Array.isArray(logic.residualGaps) && logic.residualGaps.length) {
       parts.push(
-        '<h3>尚未解决的问题</h3>',
+        exportBuiltinText('<h3>尚未解决的问题</h3>'),
         zoteroCompactValue(logic.residualGaps)
       );
     }
     if (logic.claimBoundary) {
       parts.push(
-        `<p><strong>总体证据边界：</strong>${
+        exportBuiltinTemplate`<p><strong>总体证据边界：</strong>${
           zoteroCompactValue(logic.claimBoundary)
         }</p>`
       );
@@ -1120,20 +1143,20 @@
       if (['http:', 'https:'].includes(parsed.protocol)) sourceUrl = parsed.href;
     } catch (_) {}
     return [
-      `<div data-sci-reader-note="${escapeHtml(kind)}">`,
+      `<div data-sci-reader-note="${escapeHtml(kind)}" style="overflow-wrap:anywhere;max-width:100%">`,
       `<h1>${kind === 'figure-interpretation'
-        ? 'Brevess：图解'
-        : 'Brevess：全文问答'}</h1>`,
+        ? exportBuiltinText('Brevess：图解')
+        : exportBuiltinText('Brevess：全文问答')}</h1>`,
       `<h2>${escapeHtml(input.title || '')}</h2>`,
       sourceUrl
-        ? `<p><a href="${escapeHtml(sourceUrl)}">打开论文原网页</a></p>`
+        ? exportBuiltinTemplate`<p><a href="${escapeHtml(sourceUrl)}">打开论文原网页</a></p>`
         : ''
     ].join('');
   }
 
   function zoteroNoteFooter(input) {
     return [
-      `<p><small>由 Brevess 于 ${escapeHtml(
+      exportBuiltinTemplate`<p><small>由 Brevess 于 ${escapeHtml(
         input.exportedAt || new Date().toISOString()
       )} 导出。</small></p>`,
       '</div>'
@@ -1155,14 +1178,14 @@
     const crossFigure = zoteroCrossFigureHtml(input.crossFigureLogic);
     return [
       zoteroNoteSourceHeader(input, 'figure-interpretation'),
-      `<p><strong>内容概览：</strong>${figures.length} 张 Figure；${
+      exportBuiltinTemplate`<p><strong>内容概览：</strong>${figures.length} 张 Figure；${
         Number(input.embeddedImageCount) || 0
       } 张高清原图已嵌入增强网页快照。</p>`,
-      quickLinks ? `<p><strong>快速跳转：</strong>${quickLinks}</p>` : '',
-      noteSection('主图串解', crossFigure),
+      quickLinks ? exportBuiltinTemplate`<p><strong>快速跳转：</strong>${quickLinks}</p>` : '',
+      noteSection(exportBuiltinText('主图串解'), crossFigure),
       noteSection(
-        'Figure 与 Panel 解读',
-        figureHtml || '<p><em>尚未生成图解内容。</em></p>'
+        exportBuiltinText('Figure 与 Panel 解读'),
+        figureHtml || exportBuiltinText('<p><em>尚未生成图解内容。</em></p>')
       ),
       zoteroNoteFooter(input)
     ].join('');
@@ -1175,17 +1198,17 @@
         .map(block => zoteroMarkdownHtml(block.markdown || ''))
         .join('');
       return [
-        `<h3>问答 ${index + 1}</h3>`,
-        `<blockquote><strong>问题</strong><br>${zoteroInlineMarkup(turn.question || '')}</blockquote>`,
-        `<div><strong>回答</strong>${blocks || zoteroMarkdownHtml(turn.summary || '无回答')}</div>`
+        exportBuiltinTemplate`<h3>问答 ${index + 1}</h3>`,
+        exportBuiltinTemplate`<blockquote><strong>问题</strong><br>${zoteroInlineMarkup(turn.question || '')}</blockquote>`,
+        exportBuiltinTemplate`<div><strong>回答</strong>${blocks || zoteroMarkdownHtml(turn.summary || exportBuiltinText('无回答'))}</div>`
       ].join('');
     }).join('');
     return [
       zoteroNoteSourceHeader(input, 'fulltext-qa'),
-      `<p><strong>内容概览：</strong>${turns.length} 轮全文问答。</p>`,
+      exportBuiltinTemplate`<p><strong>内容概览：</strong>${turns.length} 轮全文问答。</p>`,
       noteSection(
-        '全文问答',
-        chatHtml || '<p><em>尚未生成全文问答内容。</em></p>'
+        exportBuiltinText('全文问答'),
+        chatHtml || exportBuiltinText('<p><em>尚未生成全文问答内容。</em></p>')
       ),
       zoteroNoteFooter(input)
     ].join('');
@@ -1199,13 +1222,13 @@
     let source = '';
     try { const url = new URL(String(input.url || '')); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) source = url.href; } catch (_) {}
     return [
-      '<div data-sci-reader-note="reading-content"><h1>Brevess：高亮备注与译文</h1>',
+      exportBuiltinText('<div data-sci-reader-note="reading-content" style="overflow-wrap:anywhere;max-width:100%"><h1>Brevess：高亮备注与译文</h1>'),
       `<h2>${escapeHtml(input.title || '')}</h2>`,
-      source ? `<p><a href="${escapeHtml(source)}">打开论文原网页</a></p>` : '',
+      source ? exportBuiltinTemplate`<p><a href="${escapeHtml(source)}">打开论文原网页</a></p>` : '',
       snapshot ? `<p>${snapshot.status === 'complete' && !translations.some(value => value.partial)
-        ? '已确认译文已保留。' : '翻译尚未全部完成；仅保留已确认内容，未译部分仍为原文。'}</p>` : '',
-      ...annotations.map((value, index) => `<h3>备注 ${index + 1}</h3><blockquote>${escapeHtml(value.quote || '原句未提供')}</blockquote><p style="white-space:pre-wrap">${escapeHtml(value.note)}</p>`),
-      ...translations.map((value, index) => `<h3>译文 ${index + 1}${value.partial ? '（部分完成）' : ''}</h3><blockquote>${escapeHtml(value.sourceText || '')}</blockquote><p lang="zh" style="white-space:pre-wrap">${escapeHtml(value.translatedText || '')}</p>`),
+        ? exportBuiltinText('已确认译文已保留。') : exportBuiltinText('翻译尚未全部完成；仅保留已确认内容，未译部分仍为原文。')}</p>` : '',
+      ...annotations.map((value, index) => exportBuiltinTemplate`<h3>备注 ${index + 1}</h3><blockquote>${escapeHtml(value.quote || exportBuiltinText('原句未提供'))}</blockquote><p style="white-space:pre-wrap">${escapeHtml(value.note)}</p>`),
+      ...translations.map((value, index) => exportBuiltinTemplate`<h3>译文 ${index + 1}${value.partial ? exportBuiltinText('（部分完成）') : ''}</h3><blockquote>${escapeHtml(value.sourceText || '')}</blockquote><p lang="zh" style="white-space:pre-wrap">${escapeHtml(value.translatedText || '')}</p>`),
       zoteroNoteFooter(input)
     ].join('');
   }
@@ -1221,26 +1244,26 @@
 
   function buildZoteroFallbackReadme(input = {}) {
     return [
-      '# Zotero 增强快照离线包',
+      exportBuiltinText('# Zotero 增强快照离线包'),
       '',
-      `论文：${input.title || ''}`,
-      `原文：${input.url || ''}`,
+      exportBuiltinTemplate`论文：${input.title || ''}`,
+      exportBuiltinTemplate`原文：${input.url || ''}`,
       '',
-      '此包在 Zotero 桌面端未运行、Connector HTTP 服务不可用或直接导入失败时生成。',
+      exportBuiltinText('此包在 Zotero 桌面端未运行、Connector HTTP 服务不可用或直接导入失败时生成。'),
       '',
-      '## 文件',
+      exportBuiltinText('## 文件'),
       '',
-      '- `snapshot.html`：保留出版社布局、高亮、备注正文与原句回链、已确认译文和可获取的 Figure 原图；部分翻译明确标记。',
-      '- `notes/SCI-Reader-Figure-Interpretation.html`：主图串解、Figure 与 Panel 图解；',
-      '- `notes/SCI-Reader-Fulltext-QA.html`：独立保存全文问答；',
-      ...(input.readingNoteIncluded ? ['- `notes/SCI-Reader-Reading-Content.html`：独立备份高亮备注、引用原句和已确认译文；'] : []),
-      '- `metadata.json`：论文和导出信息。',
+      exportBuiltinText('- `snapshot.html`：保留出版社布局、高亮、备注正文与原句回链、已确认译文和可获取的 Figure 原图；部分翻译明确标记。'),
+      exportBuiltinText('- `notes/SCI-Reader-Figure-Interpretation.html`：主图串解、Figure 与 Panel 图解；'),
+      exportBuiltinText('- `notes/SCI-Reader-Fulltext-QA.html`：独立保存全文问答；'),
+      ...(input.readingNoteIncluded ? [exportBuiltinText('- `notes/SCI-Reader-Reading-Content.html`：独立备份高亮备注、引用原句和已确认译文；')] : []),
+      exportBuiltinText('- `metadata.json`：论文和导出信息。'),
       '',
-      '## 手工导入',
+      exportBuiltinText('## 手工导入'),
       '',
-      '1. 在 Zotero 中先用浏览器 Connector 保存原论文，或新建网页条目。',
-      '2. 将 `snapshot.html` 拖到该条目上作为附件。',
-      '3. 分别打开 `notes` 下的 HTML，复制正文并在 Zotero 条目下新建对应子笔记。',
+      exportBuiltinText('1. 在 Zotero 中先用浏览器 Connector 保存原论文，或新建网页条目。'),
+      exportBuiltinText('2. 将 `snapshot.html` 拖到该条目上作为附件。'),
+      exportBuiltinText('3. 分别打开 `notes` 下的 HTML，复制正文并在 Zotero 条目下新建对应子笔记。'),
       ''
     ].join('\n');
   }
@@ -1255,14 +1278,14 @@
     escapeHtml,
     crc32,
     createZipBlob,
-    buildFigureMarkdown,
-    normalizePptExportCustomization,
-    buildPptExportPreview,
-    buildPptAgentPrompt,
-    buildZoteroFigureNoteHtml,
-    buildZoteroChatNoteHtml,
-    buildZoteroReadingNoteHtml,
-    buildZoteroNoteHtml,
-    buildZoteroFallbackReadme
+    buildFigureMarkdown: (input = {}, options = {}) => withExportLanguage(input, options, () => buildFigureMarkdown(input)),
+    normalizePptExportCustomization: (input = {}, options = {}) => withExportLanguage(input, options, () => normalizePptExportCustomization(input)),
+    buildPptExportPreview: (input = {}, options = {}) => withExportLanguage(input, options, () => buildPptExportPreview(input, options)),
+    buildPptAgentPrompt: (input = {}, options = {}) => withExportLanguage(input, options, () => buildPptAgentPrompt(input, options)),
+    buildZoteroFigureNoteHtml: (input = {}, options = {}) => withExportLanguage(input, options, () => buildZoteroFigureNoteHtml(input)),
+    buildZoteroChatNoteHtml: (input = {}, options = {}) => withExportLanguage(input, options, () => buildZoteroChatNoteHtml(input)),
+    buildZoteroReadingNoteHtml: (input = {}, options = {}) => withExportLanguage(input, options, () => buildZoteroReadingNoteHtml(input)),
+    buildZoteroNoteHtml: (input = {}, options = {}) => withExportLanguage(input, options, () => buildZoteroNoteHtml(input)),
+    buildZoteroFallbackReadme: (input = {}, options = {}) => withExportLanguage(input, options, () => buildZoteroFallbackReadme(input))
   };
 });

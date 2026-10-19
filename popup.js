@@ -3499,7 +3499,7 @@ const ARTICLE_WORKSPACE_SAVE_STAGES = Object.freeze([
     { id: 'content', label: '正文与问答' },
     { id: 'figures', label: '图解与笔记' },
     { id: 'offline', label: '离线正文快照' },
-    { id: 'sync', label: '本地目录同步' }
+    { id: 'sync', label: '写入本地文件夹' }
 ]);
 let activeArticleWorkspaceSaveOperationId = '';
 let articleWorkspaceSaveProgressDismissTimer = null;
@@ -3845,6 +3845,7 @@ let reviewOutlineState = {
 let reviewOutlineProgressTimer = null;
 let matchCounts = {}; // 存储匹配计数
 let activeWorkspaceView = 'navigation';
+let workspaceNavigationIntentRevision = 0;
 const LITERATURE_NOTE_STORAGE_KEY = 'sciLiteratureNotesV1';
 const LITERATURE_NOTE_WORKSPACE_PATH = 'annotations/literature-note.json';
 let literatureNoteDocumentState = null;
@@ -4386,6 +4387,7 @@ const abbreviationDrafts = new Map();
 let abbreviationGestureDisposers = [];
 const abbreviationFieldLabels = { meaningZh: "中文全称", definitionZh: "含义" };
 let articleChatSelectedProfileId = '';
+let articleChatWebSearchCustomized = false;
 let articleChatWebSearchEnabled = false;
 let articleChatWebSearchMode = 'off';
 let articleChatAttachments = [];
@@ -5357,7 +5359,7 @@ function renderInactiveTabState(tab = null) {
     const status = document.getElementById('sidePanelDocumentStatus');
     const navigationStatus = document.getElementById('articleNavigationStatus');
     const retry = document.getElementById('retryArticlePreparation');
-    if (title) title.textContent = tab?.title || '当前页面';
+    if (title) { title.textContent = tab?.title || t('当前页面'); title.setAttribute('translate', 'no'); }
     if (statusText) statusText.textContent = '此标签页尚未激活，点击侧栏任意位置即可激活';
     if (navigationStatus) navigationStatus.textContent = '点击侧栏后读取当前论文结构';
     status?.classList.remove('is-error', 'is-ready');
@@ -5426,6 +5428,8 @@ async function activateCurrentTabFromSidePanel() {
 
 function setupInactiveTabClickActivation() {
     document.addEventListener('click', event => {
+        // Account access does not depend on activating a paper in the current tab.
+        if (event.target?.closest?.('#openBrevessAccount')) return;
         if (!panelUiReady || activePanelTabContext.activated ||
             inactiveTabActivationPromise) return;
         event.preventDefault();
@@ -6234,11 +6238,12 @@ function collapseAllFigurePanels() {
 }
 
 function openWorkspaceView(viewId) {
+    workspaceNavigationIntentRevision += 1;
     if (viewId !== 'notes') {
         literatureNoteNavigationActivationController?.cancel?.();
     }
     switchWorkspaceView(viewId);
-    if (viewId !== 'notes') void refreshArticleWorkspace();
+    if (viewId !== 'notes') void refreshArticleWorkspace({ preserveUiState: true });
     if (viewId === 'analysis' || viewId === 'highlights') void refreshManualAnnotationSummary();
 }
 
@@ -6558,7 +6563,7 @@ function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSna
         remove.title = '从本文缩略词表移除';
         remove.setAttribute('aria-label', '从本文缩略词表移除 ' + entry.abbreviation);
         remove.addEventListener('click', async () => {
-            if (!confirm('从本文缩略词表移除 ' + entry.abbreviation + '？')) return;
+            if (!confirm(t('从本文缩略词表移除 {0}？').replace('{0}', entry.abbreviation))) return;
             if (!isCurrentAbbreviationBinding(binding, true)) return;
             remove.disabled = true;
             try {
@@ -6811,6 +6816,11 @@ function appendAbbreviationLookupSite(site, selected = false) {
     const fields = createWorkspaceElement('div', 'abbreviation-lookup-fields');
     const name = document.createElement('input');
     name.value = site.name; name.maxLength = 60; name.required = true;
+    if (site.id === 'bing' && site.name === '必应' && site.url === 'https://www.bing.com/search?q={query}') {
+        name._brevessBuiltinLookupName = { raw: site.name, displayed: t(site.name) };
+        name.value = name._brevessBuiltinLookupName.displayed;
+        radio.setAttribute('aria-label', '默认网站：' + name.value);
+    }
     name.placeholder = '网站名称'; name.dataset.siteField = 'name'; name.setAttribute('aria-label', '网站名称');
     name.addEventListener('input', () => radio.setAttribute('aria-label', '默认网站：' + (name.value || '新网站')));
     const url = document.createElement('input');
@@ -6830,6 +6840,22 @@ function appendAbbreviationLookupSite(site, selected = false) {
     row.append(radio, fields, remove); list.append(row);
 }
 
+function abbreviationLookupNameToSave(input) {
+    const builtin = input._brevessBuiltinLookupName;
+    return builtin && input.value === builtin.displayed ? builtin.raw : input.value;
+}
+
+function refreshAbbreviationLookupNames() {
+    for (const input of document.querySelectorAll('#abbreviationLookupSites [data-site-field=name]')) {
+        const builtin = input._brevessBuiltinLookupName;
+        if (!builtin) continue;
+        if (input.value !== builtin.displayed) { delete input._brevessBuiltinLookupName; continue; }
+        input.value = builtin.displayed = t(builtin.raw);
+        input.closest('.abbreviation-lookup-site').querySelector('input[type=radio]')
+            .setAttribute('aria-label', '默认网站：' + input.value);
+    }
+}
+
 async function showAbbreviationLookupSettings() {
     const binding = abbreviationBinding();
     try {
@@ -6844,6 +6870,7 @@ async function showAbbreviationLookupSettings() {
 }
 
 function setupAbbreviationDialogs() {
+    SciLLM.onInterfaceLanguageChange?.(refreshAbbreviationLookupNames);
     const main = document.getElementById('articleAbbreviationDialog');
     const lookup = document.getElementById('abbreviationLookupDialog');
     const invalidate = () => {
@@ -6877,7 +6904,7 @@ function setupAbbreviationDialogs() {
         try {
             const sites = [...document.querySelectorAll('.abbreviation-lookup-site')].map(row => ({
                 id: row.dataset.siteId,
-                name: row.querySelector('[data-site-field=name]').value,
+                name: abbreviationLookupNameToSave(row.querySelector('[data-site-field=name]')),
                 url: row.querySelector('[data-site-field=url]').value
             }));
             const defaultSiteId = document.querySelector('input[name=abbreviation-lookup-default]:checked')?.value;
@@ -9482,6 +9509,7 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
     (distribution.rows || []).forEach(row => {
         const block = createWorkspaceElement('section', 'workspace-distribution-row');
         const title = createWorkspaceElement('button', 'workspace-distribution-title', row.title);
+        title.setAttribute('translate', 'no');
         title.type = 'button';
         title.addEventListener('click', () => void focusWorkspaceSource({
             kind: 'section', sectionId: row.sectionId
@@ -9591,10 +9619,9 @@ function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot
 function appendFigureWorkspaceField(parent, label, value) {
     if (!value) return;
     const row = createWorkspaceElement('p', 'workspace-figure-field');
-    row.append(
-        createWorkspaceElement('strong', '', `${label}\uff1a`),
-        document.createTextNode(String(value))
-    );
+    const content = createWorkspaceElement('span', '', String(value));
+    content.setAttribute('translate', 'no');
+    row.append(createWorkspaceElement('strong', '', `${label}\uff1a`), content);
     parent.appendChild(row);
 }
 
@@ -9781,6 +9808,89 @@ function bindFigureWorkspaceNameEditor(target, descriptor, value, label) {
     });
 }
 
+function buildPanelNoteSharingRequest(context, descriptor, text, title = '') {
+    const target = buildFigureWorkspaceEditTarget(context);
+    if (!descriptor?.figureId || !descriptor?.panelId || descriptor.field !== 'note') {
+        throw new Error('Panel 笔记来源无效');
+    }
+    const source = { documentHash: target.contentHash,
+        figureId: String(descriptor.figureId), panelId: String(descriptor.panelId) };
+    try {
+        const url = new URL(target.canonicalUrl);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+            url.search = ''; url.hash = ''; source.url = url.href;
+        }
+    } catch (_) {}
+    return { kind: 'panel_note', localKey: JSON.stringify(['panel_note', target.workspaceId,
+        target.workspaceGeneration, target.contentHash, descriptor.figureId, descriptor.panelId]),
+        title: String(title || `${descriptor.figureId} · Panel ${descriptor.panelId} 笔记`),
+        text: String(text ?? ''), source };
+}
+
+function appendPanelNoteSharingControl(row, descriptor, text) {
+    if (descriptor.scope !== 'panel' || descriptor.field !== 'note' || !descriptor.panelId) return;
+    const context = captureFigureWorkspaceEditContext();
+    let request;
+    try { request = buildPanelNoteSharingRequest(context, descriptor, text); }
+    catch (_) { return; } // Legacy/unbound sources remain local until their existing identity is resolved.
+    const control = createWorkspaceElement('button', 'workspace-panel-note-sharing', '可见性：仅个人可见');
+    control.type = 'button'; control.dataset.panelId = descriptor.panelId;
+    const refresh = () => Promise.resolve(globalThis.BrevessSharing?.getLocalState?.(request.localKey)).then(state => {
+        if (!control.isConnected) return;
+        const label = ({ private: '仅个人可见', group: '课题组内共享', public: '公开' })[state?.visibility] || '仅个人可见';
+        const unverified = state?.resourceId && state.verified !== true;
+        control.textContent = unverified ? '可见性（点击核验）' : `可见性：${label}`;
+        control.title = unverified ? `上次记录：${label}；当前权限需服务核验` : label;
+        control.setAttribute('aria-label', `设置 Panel ${descriptor.panelId} 笔记可见性${unverified ? '，点击核验' : `，当前${label}`}`);
+    }).catch(() => { control.textContent = '设置可见性'; });
+    control.addEventListener('pointerdown', event => event.stopPropagation());
+    control.addEventListener('dblclick', event => event.stopPropagation());
+    control.addEventListener('click', async event => {
+        if (!event.isTrusted) return;
+        event.preventDefault(); event.stopPropagation();
+        if (!isCurrentFigureWorkspaceEditContext(context)) {
+            showStatus('当前文献已变化，请重新打开 Panel 笔记。', 'error'); return;
+        }
+        if (row.querySelector('textarea') || figureWorkspaceInlineEditController.getState()?.active?.dirty) {
+            showStatus('请先保存正在编辑的笔记，再设置可见性。', 'error'); return;
+        }
+        if (!globalThis.BrevessSharing?.open) { showStatus('共享模块尚未就绪，请重新打开侧栏。', 'error'); return; }
+        control.disabled = true;
+        try { await globalThis.BrevessSharing.open(request); await refresh(); }
+        catch (_) { showStatus('无法打开共享设置；笔记仍保存在本机。', 'error'); }
+        finally { control.disabled = false; }
+    });
+    row.appendChild(control); void refresh();
+}
+
+function appendPanelCommentControl(row, descriptor) {
+    const context = captureFigureWorkspaceEditContext();
+    let request;
+    try { request = buildPanelNoteSharingRequest(context, descriptor, ''); } catch (_) { return; }
+    const reader = createWorkspaceElement('button', 'workspace-panel-reader-notes', '评论');
+    reader.type = 'button'; reader.setAttribute('aria-label', `查看 Panel ${descriptor.panelId} 评论`);
+    reader.addEventListener('click', async event => {
+        if (!event.isTrusted) return;
+        event.preventDefault(); event.stopPropagation();
+        if (!isCurrentFigureWorkspaceEditContext(context)) return showStatus('当前文献已变化，请重新打开 Panel。', 'error');
+        if (!globalThis.BrevessSharing?.openReader) return showStatus('读者笔记模块尚未就绪，请重新打开侧栏。', 'error');
+        reader.disabled = true;
+        try {
+            const query = { kind: 'panel_note', source: { documentHash: request.source.documentHash,
+                figureId: request.source.figureId, panelId: request.source.panelId } };
+            const result = await globalThis.BrevessSharing.discover(query);
+            if (!isCurrentFigureWorkspaceEditContext(context)) return;
+            reader.textContent = `评论 ${result.resources?.length || 0}`;
+            await globalThis.BrevessSharing.openReader({ ...query, allowStart: true, titleIsInterface: true,
+                onValidateSource: source => isCurrentFigureWorkspaceEditContext(context) &&
+                    source.documentHash === request.source.documentHash && source.figureId === descriptor.figureId && source.panelId === descriptor.panelId,
+                title: `${descriptor.figureId} · Panel ${descriptor.panelId} 评论` });
+        } catch (error) { showStatus(error.message || '读者笔记暂不可用。', 'error'); }
+        finally { reader.disabled = false; }
+    });
+    row.appendChild(reader);
+}
+
 function appendFigureWorkspaceViewField(parent, field, identity = {}) {
     const row = createWorkspaceElement(
         'section',
@@ -9817,12 +9927,14 @@ function appendFigureWorkspaceViewField(parent, field, identity = {}) {
     target.setAttribute('aria-keyshortcuts', 'Enter Space');
     if (values.length) {
         const list = createWorkspaceElement('ul', 'workspace-figure-view-list');
+        list.setAttribute('translate', 'no');
         values.forEach(value => list.appendChild(createWorkspaceElement('li', '', value)));
         target.appendChild(list);
     } else if (String(field?.value || '').trim()) {
         target.appendChild(createWorkspaceElement(
             'span', 'workspace-figure-view-value', String(field.value)
         ));
+        target.lastElementChild.setAttribute('translate', 'no');
     } else {
         const placeholder = createWorkspaceElement(
             'span', 'workspace-figure-empty-value', field?.emptyLabel || '尚未填写'
@@ -9847,6 +9959,7 @@ function appendFigureWorkspaceViewField(parent, field, identity = {}) {
         }
     });
     row.appendChild(target);
+    if (field?.key === 'note' && identity.panelId) appendPanelNoteSharingControl(row, descriptor, editValue);
     parent.appendChild(row);
 }
 
@@ -10451,8 +10564,10 @@ function appendFigurePanelSummary(summary, viewPanel, {
 }
 
 function panelFollowupPresetOptions() {
-    return (Array.isArray(llmSettingsState?.settings?.figurePanelFollowupPresets)
-        ? llmSettingsState.settings.figurePanelFollowupPresets : [])
+    const settings = SciLLM.localizeBuiltinSettings?.(llmSettingsState?.settings || {},
+        SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language) || llmSettingsState?.settings || {};
+    return (Array.isArray(settings.figurePanelFollowupPresets)
+        ? settings.figurePanelFollowupPresets : [])
         .filter(preset => preset?.id && preset?.name && preset?.prompt)
         .map(preset => ({
             id: String(preset.id),
@@ -11428,9 +11543,18 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
     if (block?.provenance === 'manual') {
         const manual = createWorkspaceElement('section', 'manual-evidence-detail');
         manual.appendChild(createWorkspaceElement('p', 'workspace-source-note', '人工证据块'));
+        const appendManualField = (parent, name, value) => {
+            const row = createWorkspaceElement('p');
+            row.appendChild(createWorkspaceElement('span', '', name));
+            row.appendChild(document.createTextNode(': '));
+            const authored = createWorkspaceElement('span', '', value);
+            authored.setAttribute('translate', 'no');
+            row.appendChild(authored);
+            parent.appendChild(row);
+        };
         for (const [field, name] of [['title', '标题'], ['method', '方法与对照'], ['observation', '观察结果'], ['conclusion', '结论']]) {
             const value = typeof block[field] === 'string' ? block[field] : String(block[field]?.value || '');
-            if (value) manual.appendChild(createWorkspaceElement('p', '', `${name}：${value}`));
+            if (value) appendManualField(manual, name, value);
         }
         body.appendChild(manual);
         if (block.originalSource) {
@@ -11440,7 +11564,7 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
             for (const [field, name] of [['groupGoal', '原共同目标'], ['groupConclusion', '原组小结'], ['established', '原推断']]) {
                 const prior = block.originalSource[field];
                 const text = typeof prior === 'string' ? prior : String(prior?.value || '');
-                if (text) history.appendChild(createWorkspaceElement('p', '', `${name}：${text}`));
+                if (text) appendManualField(history, name, text);
             }
             body.appendChild(history);
         }
@@ -11712,6 +11836,7 @@ function appendFigurePanelCatalog(parent, figure, result, view) {
             ? '围绕此 Panel 继续追问'
             : llmUnavailableMessage('Panel 追问');
         actions.append(ask);
+        appendPanelCommentControl(actions, { scope: 'panel', field: 'note', figureId: figure.figureId, panelId });
         appendFigureWorkspaceViewPanelFields(panelDetails, viewPanel);
         const extra = createWorkspaceElement('details', 'workspace-panel-compatibility');
         extra.appendChild(createWorkspaceElement('summary', '', '解读依据与补充信息'));
@@ -12735,7 +12860,7 @@ function hideFigureCaptionSidebar(figureId = '') {
 
 function isEditableKeyboardTarget(target) {
     return target instanceof Element && Boolean(target.closest(
-        'input, textarea, select, option, [contenteditable]:not([contenteditable="false"]), [role="textbox"], dialog'
+        'input, textarea, select, option, [contenteditable]:not([contenteditable="false"]), [role="textbox"], dialog, [data-brevess-sharing]'
     ));
 }
 
@@ -13708,9 +13833,9 @@ async function importMechanismNetworkFile(file) {
         let legacyChain = null;
         if (importKind.kind === 'legacy_graph') {
             legacyGraph = SciLLM.parseMechanismGraphExport(jsonText);
-            if (!confirm(
+            if (!confirm(t(
                 '这是旧版机制图 JSON。继续导入会丢失 Panel 证据、别名与审计信息。是否继续？'
-            )) {
+            ))) {
                 showStatus('已取消旧版机制图导入。', 'info');
                 return {
                     success: false,
@@ -14807,7 +14932,7 @@ const mechanismMermaidFocusHandoff = createMechanismMermaidFocusHandoff({
 
 function interfaceLanguage() {
     return SciLLM.normalizeInterfaceLanguage?.(
-        llmSettingsState?.settings?.language || 'zh-CN'
+        SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language || 'zh-CN'
     ) || 'zh-CN';
 }
 
@@ -16774,7 +16899,7 @@ function renderResearchLogicMapSnapshot(container, snapshot) {
         onLocate: openMechanismChainWorkspace,
         onAnalyze: () => {
             if (requested || crossFigureLogicRunning) return;
-            if (hasResult && !confirm('已有图表梳理内容。是否重新用 AI 生成？原有内容会保留，生成结果需审核后应用。')) return;
+            if (hasResult && !confirm(t('已有图表梳理内容。是否重新用 AI 生成？原有内容会保留，生成结果需审核后应用。'))) return;
             requested = true;
             button.disabled = true;
             button.setAttribute('aria-busy', 'true');
@@ -18635,16 +18760,17 @@ function reconcileArticleWorkspaceSnapshot(current, incoming) {
 function renderArticleWorkspaceSnapshot(snapshot) {
     snapshot = reconcileArticleWorkspaceSnapshot(currentWorkspaceSnapshot, snapshot);
     currentWorkspaceSnapshot = snapshot || null;
+    void syncSharedHighlightNoteControls();
     workspaceGeneration = Math.max(1,
         Number(snapshot?.localWorkspace?.workspaceGeneration) || workspaceGeneration || 1
     );
     const status = document.getElementById('articleNavigationStatus');
     const title = document.getElementById('sidePanelPaperTitle');
     const statusText = document.getElementById('sidePanelDocumentStatusText');
-    if (title) title.textContent = snapshot?.title || '当前页面';
+    if (title) { title.textContent = snapshot?.title || t('当前页面'); title.setAttribute('translate', 'no'); }
     const diagnostics = snapshot?.diagnostics || {};
-    const publisher = ({ 'pdf-workspace': 'PDF 文献', generic: '网页文献' })[snapshot?.publisherFamily]
-        || snapshot?.publisherFamily || '网页文献';
+    const publisher = t(({ 'pdf-workspace': 'PDF 文献', generic: '网页文献' })[snapshot?.publisherFamily]
+        || snapshot?.publisherFamily || '网页文献');
     const semanticNavigation = normalizePopupPdfSemanticNavigation(currentPdfSemanticNavigation, snapshot);
     const semanticCounts = popupPdfSemanticNavigationCounts(semanticNavigation);
     const summary = `${publisher} · ` +
@@ -18829,12 +18955,16 @@ function renderArticleChatProfileOptions() {
     if (!select) return;
     const profiles = getArticleChatProfiles();
     const preferred = articleChatSelectedProfileId ||
+        (llmSettingsState?.settings?.taskPolicies?.article_chat?.mode === 'profile'
+            ? llmSettingsState.settings.taskPolicies.article_chat.profileId : '') ||
         llmSettingsState?.settings?.globalProfileId || profiles[0]?.[0] || '';
     select.replaceChildren();
     profiles.forEach(([profileId, profile]) => {
         const option = document.createElement('option');
         option.value = profileId;
-        option.textContent = `${profile?.name || '未命名模型'} · ${profile?.config?.model || ''}`;
+        const taskPolicy = llmSettingsState?.settings?.taskPolicies?.article_chat;
+        const taskModel = SciLLM.taskModelForProfile?.(taskPolicy, profile, profileId);
+        option.textContent = `${profile?.name || '未命名模型'} · ${taskModel || profile?.config?.model || ''}`;
         select.appendChild(option);
     });
     if (!profiles.length) {
@@ -18982,8 +19112,10 @@ function selectedWorkspaceAnalysisSectionIds(snapshot = currentWorkspaceSnapshot
 }
 
 function articleChatQuickPrompts() {
-    return (Array.isArray(llmSettingsState?.settings?.articleChatQuickPrompts)
-        ? llmSettingsState.settings.articleChatQuickPrompts : [])
+    const settings = SciLLM.localizeBuiltinSettings?.(llmSettingsState?.settings || {},
+        SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language) || llmSettingsState?.settings || {};
+    return (Array.isArray(settings.articleChatQuickPrompts)
+        ? settings.articleChatQuickPrompts : [])
         .filter(item => item?.id && item?.name && item?.prompt)
         .map(item => ({
             id: String(item.id),
@@ -19770,6 +19902,7 @@ function createArticleChatMermaid(source) {
 
 function renderArticleChatMarkdown(value, context = {}) {
     const root = createWorkspaceElement('div', 'article-chat-message-content');
+    root.setAttribute('data-i18n-user-content', '');
     const renderContext = { ...context, citationIndexes: new Set() };
     const lines = normalizeArticleChatMarkdown(value).split('\n');
     let index = 0;
@@ -20272,6 +20405,7 @@ function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
     }
 
     const questionContent = element.querySelector('.article-chat-question .article-chat-message-content');
+    questionContent?.setAttribute('translate', 'no');
     if (questionContent && questionContent.textContent !== String(turn.question || '')) {
         questionContent.textContent = String(turn.question || '');
     }
@@ -20462,6 +20596,7 @@ function renderArticleChatAttachmentChips() {
     for (const attachment of articleChatAttachments) {
         const chip = createWorkspaceElement('span', 'article-chat-attachment-chip');
         const name = createWorkspaceElement('span', '', attachment.name);
+        name.setAttribute('translate', 'no');
         name.title = `${attachment.name} · ${Math.ceil(attachment.byteLength / 1024)} KB`;
         const remove = createWorkspaceElement('button', '', '×');
         remove.type = 'button'; remove.setAttribute('aria-label', `移除附件 ${attachment.name}`);
@@ -20501,9 +20636,21 @@ function syncArticleChatWebSearchToggle(
 ) {
     const webSearchToggle = document.getElementById('articleChatWebSearch');
     if (!webSearchToggle) return;
+    const settings = llmSettingsState?.settings;
+    const profileId = articleChatSelectedProfileId || (settings?.taskPolicies?.article_chat?.mode === 'profile'
+        ? settings.taskPolicies.article_chat.profileId : settings?.globalProfileId);
+    const profile = settings?.profiles?.[profileId];
+    const config = { ...profile?.config };
+    config.model = SciLLM.taskModelForProfile?.(settings?.taskPolicies?.article_chat, profile, profileId) || config.model;
+    const supported = SciLLM.supportsTaskWebSearch?.(profile?.providerId, config, 'article_chat') === true;
+    if (supported && !articleChatWebSearchCustomized) {
+        articleChatWebSearchEnabled = settings?.taskPolicies?.article_chat?.webSearchEnabled === true;
+        articleChatWebSearchMode = articleChatWebSearchEnabled ? 'on' : 'off';
+    }
+    if (!supported) { articleChatWebSearchEnabled = false; articleChatWebSearchMode = 'off'; }
     const enabled = articleChatWebSearchMode !== 'off';
     const label = { off: '联网关闭', on: '联网开启', auto: '按需联网' }[articleChatWebSearchMode] || '联网关闭';
-    webSearchToggle.disabled = false;
+    webSearchToggle.disabled = !supported;
     webSearchToggle.setAttribute('aria-pressed', String(enabled));
     webSearchToggle.setAttribute(
         'aria-label',
@@ -20974,7 +21121,7 @@ function renderArticleConnectionStage(message, title = '') {
     const paperTitle = document.getElementById('sidePanelPaperTitle');
     const statusText = document.getElementById('sidePanelDocumentStatusText');
     const connectionStatus = document.getElementById('sidePanelDocumentStatus');
-    if (paperTitle && title) paperTitle.textContent = title;
+    if (paperTitle && title) { paperTitle.textContent = title; paperTitle.setAttribute('translate', 'no'); }
     if (statusText) statusText.textContent = message;
     connectionStatus?.classList.remove('is-error', 'is-ready');
     const retry = document.getElementById('retryArticlePreparation');
@@ -21017,7 +21164,7 @@ function renderArticleConnectionFailure(error) {
     const statusText = document.getElementById('sidePanelDocumentStatusText');
     const connectionStatus = document.getElementById('sidePanelDocumentStatus');
     const retry = document.getElementById('retryArticlePreparation');
-    if (paperTitle) paperTitle.textContent = currentWorkspaceSnapshot?.title || '当前论文';
+    if (paperTitle) { paperTitle.textContent = currentWorkspaceSnapshot?.title || t('当前论文'); paperTitle.setAttribute('translate', 'no'); }
     if (statusText) {
         const loadingMessage = {
             ARTICLE_BROWSER_LOADING: '页面尚未完成加载，请稍后重新提取',
@@ -21169,12 +21316,14 @@ async function refreshArticleWorkspace(options = {}) {
 async function performArticleWorkspaceRefresh({
     announce = false,
     forceRefresh = false,
+    preserveUiState = false,
     signal,
     onError = () => {},
     isCurrentOwner = () => true,
     panelContext = capturePanelContext()
 } = {}) {
     const requestId = ++workspaceRefreshSequence;
+    const navigationIntentRevision = workspaceNavigationIntentRevision;
     const pdfSelectionRevision = typeof workspacePdfAnalysisSelectionRevision === 'undefined'
         ? 0 : workspacePdfAnalysisSelectionRevision;
     const pdfSelectionPending = panelContext.pdfMode === true &&
@@ -21253,7 +21402,9 @@ async function performArticleWorkspaceRefresh({
         );
         articleSourceRefreshPending = null;
         const snapshot = renderArticleWorkspaceSnapshot(refreshedSnapshot);
-        restoreSnapshotSidePanelUiState(response.sidePanelUiState);
+        if (!preserveUiState && navigationIntentRevision === workspaceNavigationIntentRevision) {
+            restoreSnapshotSidePanelUiState(response.sidePanelUiState);
+        }
         if (response.pendingParagraphNoteReveal) {
             void revealParagraphNoteInNavigation(response.pendingParagraphNoteReveal, panelContext).catch(error => {
                 if (isCurrentPanelContext(panelContext)) showStatus('定位段落笔记失败：' + error.message, 'error');
@@ -21370,7 +21521,7 @@ function setArticleArchivePrompt(probe = null) {
     prompt.hidden = !probe?.found;
     if (!probe?.found) return;
     const parts = [];
-    if (probe.savedAt) parts.push(`保存于 ${new Date(probe.savedAt).toLocaleString('zh-CN')}`);
+    if (probe.savedAt) parts.push(`保存于 ${new Date(probe.savedAt).toLocaleString(interfaceLanguage() === 'en' ? 'en-US' : 'zh-CN')}`);
     if (probe.annotationCount) parts.push(`${probe.annotationCount} 条手动标注`);
     if (probe.hasLlmAnalysis) parts.push('含 AI 全文分析');
     if (probe.hasReviewOutline) parts.push('含逐段摘要');
@@ -22287,8 +22438,8 @@ function directorySyncFailureMessage(result = {}) {
     const detail = String(result.message || result.lastError || '').trim();
     const suffix = [path, code || type, detail].filter(Boolean).join('：');
     return suffix
-        ? `目录写入未完成（${suffix}），数据仍保留在待同步队列中`
-        : '目录写入未完成，数据仍保留在待同步队列中，可稍后重试';
+        ? `文件写入未完成（${suffix}），内容仍保存在浏览器中，请重试保存`
+        : '文件写入未完成，内容仍保存在浏览器中，请重试保存';
 }
 
 async function saveCurrentArticleWorkspace() {
@@ -22420,7 +22571,7 @@ async function saveCurrentArticleWorkspace() {
             });
             if (saved?.success) {
                 showStatus(
-                    '本次结果已保存在浏览器；文件夹同步尚未完成。' +
+                    '本次结果已保存在浏览器，但尚未完整写入所选文件夹。' +
                     String(error?.message || '请查看文件夹权限或稍后重新保存。'),
                     'warning'
                 );
@@ -22969,12 +23120,10 @@ async function clearCurrentArticleWorkspace() {
         return;
     }
     const counts = currentWorkspaceSnapshot?.diagnostics || {};
-    const accepted = confirm(
-        `确定清除“${currentWorkspaceSnapshot?.title || '当前论文'}”的本地工作区吗？\n` +
-        `包含 ${currentWorkspaceSnapshot?.chat?.totalTurns || 0} 轮问答、` +
-        `${currentWorkspaceSnapshot?.figures?.totalFigures || 0} 个 Figure 结果和` +
-        `${counts.paragraphCount || 0} 段正文索引。此操作不可撤销。`
-    );
+    const accepted = confirm(t('确定清除“{0}”的本地工作区吗？\n包含 {1} 轮问答、{2} 个 Figure 结果和{3} 段正文索引。此操作不可撤销。')
+        .replace(/\{(\d+)\}/g, (_, index) => [currentWorkspaceSnapshot?.title || t('当前论文'),
+            currentWorkspaceSnapshot?.chat?.totalTurns || 0, currentWorkspaceSnapshot?.figures?.totalFigures || 0,
+            counts.paragraphCount || 0][Number(index)]));
     if (!accepted) return;
     if (button) button.disabled = true;
     try {
@@ -23190,7 +23339,72 @@ async function initializeCurrentArticle({ retry = false } = {}) {
     }
 }
 
+let sharingHighlightControlRevision = 0;
+function setupSharedHighlightNoteControls() {
+    const host = document.getElementById('workspace-highlights');
+    if (!host || document.getElementById('sharing-public-notes-toggle')) return;
+    const section = createWorkspaceElement('section', 'sharing-public-note-controls');
+    const label = createWorkspaceElement('label', '', '');
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.id = 'sharing-public-notes-toggle';
+    label.append(toggle, document.createTextNode('查看公开备注')); section.appendChild(label);
+    const scope = document.createElement('select'); scope.id = 'sharing-public-notes-scope'; scope.setAttribute('aria-label', '公开备注作者范围');
+    for (const [value, text] of [['all', '全部可见'], ['group', '仅课题组成员']]) {
+        const option = document.createElement('option'); option.value = value; option.textContent = text; scope.appendChild(option);
+    }
+    const groups = document.createElement('select'); groups.id = 'sharing-public-notes-group';
+    groups.setAttribute('aria-label', '选择课题组'); groups.hidden = true;
+    const status = createWorkspaceElement('p', '', '默认关闭；开启后可点击正文虚线句子阅读与交流，需要登录。');
+    status.setAttribute('role', 'status'); section.append(scope, groups, status); host.prepend(section);
+    let sequence = 0;
+    const apply = async () => {
+        sharingHighlightControlRevision += 1;
+        const seq = ++sequence; toggle.disabled = true;
+        try {
+            const tab = await queryPanelTargetTab();
+            if (!tab?.id) throw new Error('请先打开一篇文献');
+            const response = await sendTabMessage(tab.id, { action: 'SET_SHARED_HIGHLIGHT_NOTES',
+                enabled: toggle.checked, groupId: scope.value === 'group' ? groups.value : '' });
+            if (seq !== sequence) return;
+            if (!response?.success) throw new Error(response?.error || '公开备注暂不可用');
+            toggle.checked = response.enabled;
+            status.textContent = response.enabled ? `已显示 ${response.count || 0} 处讨论；点击正文虚线句子阅读与交流。` : '已关闭公开备注；自己的高亮保持不变。';
+        } catch (error) { if (seq === sequence) { toggle.checked = false; status.textContent = error.message; } }
+        finally { if (seq === sequence) toggle.disabled = false; }
+    };
+    toggle.addEventListener('change', event => { if (event.isTrusted) void apply(); });
+    scope.addEventListener('change', async event => {
+        if (!event.isTrusted) return;
+        groups.hidden = scope.value !== 'group';
+        if (scope.value === 'group') {
+            try {
+                const rows = (await globalThis.BrevessSharingClient.api('/api/groups')).groups || [];
+                groups.replaceChildren();
+                for (const row of rows) { const option = document.createElement('option'); option.value = row.id; option.textContent = row.name; option.setAttribute('translate', 'no'); groups.appendChild(option); }
+                if (!rows.length) throw new Error('当前账号尚未加入课题组');
+            } catch (error) { status.textContent = error.message; scope.value = 'all'; groups.hidden = true; }
+        }
+        if (toggle.checked) void apply();
+    });
+    groups.addEventListener('change', event => { if (event.isTrusted && toggle.checked) void apply(); });
+    chrome.runtime.onMessage.addListener(message => {
+        if (message?.type === 'BREVESS_SHARING_SESSION_CHANGED') { sequence++; sharingHighlightControlRevision++; toggle.checked = false; toggle.disabled = false; groups.replaceChildren(); status.textContent = '账号已变化，请重新开启查看公开备注。'; }
+    });
+}
+
+async function syncSharedHighlightNoteControls() {
+    const toggle = document.getElementById('sharing-public-notes-toggle');
+    if (!toggle || toggle.disabled) return;
+    const context = capturePanelContext();
+    const revision = sharingHighlightControlRevision;
+    try {
+        const response = await sendTabMessage(context.tabId, { action: 'GET_SHARED_HIGHLIGHT_NOTES' });
+        if (!isCurrentPanelContext(context) || toggle.disabled || revision !== sharingHighlightControlRevision) return;
+        toggle.checked = response?.enabled === true;
+    } catch (_) { if (isCurrentPanelContext(context) && revision === sharingHighlightControlRevision) toggle.checked = false; }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    setupSharedHighlightNoteControls();
     setupSidePanelNotificationCenter();
     setupSidePanelMoreTools();
     setupSidebarFocusMode();
@@ -23313,6 +23527,11 @@ async function sendLlmMessage(message) {
 async function loadLlmSettings() {
     try {
         llmSettingsState = await sendLlmMessage({ type: 'LLM_GET_SETTINGS' });
+        if (!articleChatWebSearchCustomized) {
+            articleChatWebSearchEnabled = llmSettingsState.settings.taskPolicies?.article_chat?.webSearchEnabled === true;
+            articleChatWebSearchMode = articleChatWebSearchEnabled ? 'on' : 'off';
+            syncArticleChatWebSearchToggle();
+        }
         figurePanelHeaderFieldsState = normalizePopupFigurePanelHeaderFields(
             llmSettingsState.settings.figurePanelHeaderFields
         );
@@ -24213,6 +24432,7 @@ function currentLiteratureNoteExport(format) {
     const templateId = literatureNoteDocumentState?.templateId;
     const template = literatureNoteTemplates().find(item => item.id === templateId);
     const result = SciLLM.createLiteratureNoteExport({
+        language: SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language,
         template, values: literatureNoteDocumentState?.valuesByTemplate?.[templateId] || {},
         fieldEvidence: literatureNoteDocumentState?.fieldEvidenceByTemplate?.[templateId] || {}, format
     });
@@ -24335,6 +24555,8 @@ function renderLiteratureNoteDrawer() {
         const option = document.createElement('option');
         option.value = item.id;
         option.textContent = item.name;
+        const builtin = SciLLM.DEFAULT_LITERATURE_NOTE_TEMPLATES?.find(entry => entry.id === item.id);
+        if (!builtin || builtin.name !== item.name) option.setAttribute('translate', 'no');
         select.appendChild(option);
     });
     select.value = template.id;
@@ -24366,12 +24588,21 @@ function renderLiteratureNoteDrawer() {
         const title = document.createElement('span');
         title.className = 'literature-note-field-title';
         title.textContent = field.label;
+        const builtinField = SciLLM.DEFAULT_LITERATURE_NOTE_TEMPLATES?.find(entry => entry.id === template.id)?.fields?.find(entry => entry.id === field.id);
+        if (!builtinField || builtinField.label !== field.label) title.setAttribute('translate', 'no');
         heading.append(selector, title);
         const textarea = document.createElement('textarea');
         textarea.dataset.literatureNoteField = field.id;
         textarea.setAttribute('aria-label', field.label);
         textarea.maxLength = 12000;
         textarea.placeholder = field.placeholder || `记录${field.label}…`;
+        const protectedAttributes = [];
+        if (!builtinField || builtinField.label !== field.label) protectedAttributes.push('aria-label');
+        if (field.placeholder && (!builtinField || builtinField.placeholder !== field.placeholder)) protectedAttributes.push('placeholder');
+        if (!field.placeholder && (!builtinField || builtinField.label !== field.label)) {
+            textarea.placeholder = t('记录内容…');
+        }
+        if (protectedAttributes.length) textarea.setAttribute('data-i18n-ignore-attributes', protectedAttributes.join(' '));
         textarea.value = String(values[field.id] || '');
         textarea.style.gridColumn = '1 / -1';
         const fieldStatus = statuses[field.id];
@@ -26666,6 +26897,8 @@ function openCategoryRuleEditor(categoryId) {
 }
 
 function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
+        const builtinName = SciLLM.getBuiltinCatalog?.('zh-CN')?.categories?.[key]?.name;
+        const customName = rule.builtIn === false || rule.isBuiltIn === false || !builtinName || rule.name !== builtinName;
         const item = document.createElement('div');
         item.className = analysisMode === 'llm'
             ? 'category-item category-item-compact'
@@ -26676,6 +26909,10 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
         checkbox.id = `cat-${key}${idSuffix}`;
         checkbox.checked = Boolean(checked);
         checkbox.setAttribute('aria-label', `${checkbox.checked ? '停用' : '启用'}${rule.name}`);
+        if (customName) {
+            checkbox.setAttribute('aria-label', `${t(checkbox.checked ? '停用' : '启用')} ${rule.name}`);
+            checkbox.setAttribute('translate', 'no');
+        }
         checkbox.addEventListener('change', async (e) => {
             const targetViewId = readingViewId;
             try {
@@ -26705,6 +26942,7 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
         const nameDiv = document.createElement('div');
         nameDiv.className = 'category-name';
         nameDiv.textContent = rule.name;
+        if (customName) nameDiv.setAttribute('translate', 'no');
         
         // 显示匹配计数
         if (matchCounts[key] !== undefined && matchCounts[key] > 0) {
@@ -30951,6 +31189,7 @@ function setupEventListeners() {
         renderArticleChatSnapshot(currentWorkspaceSnapshot);
     });
     document.getElementById('articleChatWebSearch')?.addEventListener('click', () => {
+        articleChatWebSearchCustomized = true;
         articleChatWebSearchMode = { off: 'on', on: 'auto', auto: 'off' }[articleChatWebSearchMode] || 'off';
         articleChatWebSearchEnabled = articleChatWebSearchMode === 'on';
         syncArticleChatWebSearchToggle();
@@ -31199,7 +31438,7 @@ function formatNotificationTokenUsage(value) {
     if (value?.taskSummaryText) return String(value.taskSummaryText).slice(0, 550);
     const usage = normalizedNotificationTokenUsage(value);
     if (!usage) return '';
-    const number = token => Math.round(token).toLocaleString('zh-CN');
+    const number = token => Math.round(token).toLocaleString(interfaceLanguage() === 'en' ? 'en-US' : 'zh-CN');
     return `${usage.estimated ? '估算 ' : ''}Token：输入 ${number(usage.inputTokens)}` +
         ` · 输出 ${number(usage.outputTokens)} · 总计 ${number(usage.totalTokens)}` +
         (usage.requests > 1 ? ` · ${usage.requests} 次调用` : '');

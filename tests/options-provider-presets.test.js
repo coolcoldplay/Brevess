@@ -11,6 +11,7 @@ const draftTrackingSource = `const settingsDraftRevisions = new Map(); let setti
   script.slice(script.indexOf('function markProfileEditorDirty('), script.indexOf('function canLeaveProfileEditor('));
 const { getProviderReasoningCapabilities } = require('../providers/provider-registry.js');
 const i18n = require('../core/i18n.js');
+require('../core/i18n-options.js');
 const taskCatalog = require('../core/llm-task-catalog.js');
 
 test('DeepSeek V4 presets expose low, high, and max reasoning strengths', () => {
@@ -184,6 +185,9 @@ test('unrelated settings state refreshes preserve unsaved per-task policy drafts
     literatureUrlDirty: false,
     document: { getElementById(id) { return elements[id]; } },
     SciLLM: { setInterfaceLanguage() {} },
+    interfaceText: value => value,
+    builtinEditorLanguage: () => 'en',
+    relocalizeBuiltinEditors() {},
     profileEntries() { return [['profile_a', { id: 'profile_a' }]]; },
     profileById() { return { id: 'profile_a' }; },
     syncTaskPolicyDraftsFromState() { syncCount += 1; taskPolicyDrafts.clear(); },
@@ -498,7 +502,7 @@ test('new profiles default to registry vision capability and unknown providers a
   assert.doesNotMatch(addSource, /providerId !== ['"]openai-compatible['"]/);
 });
 
-test('Figure settings allow text profiles and show caption/body capability while strict visual tasks stay guarded', () => {
+test('Figure connections remain selectable while strict visual capability is checked against the selected task model', () => {
   const context = {
     document: { createElement: () => ({}) },
     providerVisionCapability: (_provider, config) => config.supportsVision === true,
@@ -527,7 +531,7 @@ test('Figure settings allow text profiles and show caption/body capability while
   const strict = { requirements: { vision: true } };
   const options = [];
   context.appendTaskProfileOption({appendChild: option => options.push(option)}, strict, 'text-profile', { name: 'Text model', config: {} });
-  assert.equal(options[0].disabled, true);
+  assert.equal(options[0].disabled, false, 'a connection may offer another model with vision');
   assert.equal(context.taskPolicyStatus(strict, {}).key, 'mismatch');
   assert.match(script, /definition\.requirements\?\.vision\s*===\s*true/);
   assert.match(script, /能力不匹配/);

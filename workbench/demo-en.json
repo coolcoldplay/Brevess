@@ -1,0 +1,521 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "project-a",
+      "name": "Demo · Project A · Stimulus and phenotype",
+      "question": "Does the stimulus drive the phenotype through factor X or bypass Y?",
+      "hypotheses": [
+        {
+          "id": "h1",
+          "name": "H1 · Mediated by factor X",
+          "nodes": [
+            {
+              "id": "h1-n1",
+              "label": "Stimulus",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n2",
+              "label": "Factor X",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n3",
+              "label": "Phenotypic response",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h1-n4",
+              "label": "Bypass Y",
+              "x": 355,
+              "y": 335,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "h1-e1",
+              "source": "h1-n1",
+              "target": "h1-n2",
+              "claim": "induces",
+              "kind": "main",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": []
+            },
+            {
+              "id": "h1-e2",
+              "source": "h1-n2",
+              "target": "h1-n3",
+              "claim": "drives",
+              "kind": "main",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": [
+                {
+                  "id": "h1-binding",
+                  "resourceId": "block-b",
+                  "types": [
+                    "correlation"
+                  ],
+                  "judgement": "Opposite result: distinguish the conditions",
+                  "review": true
+                }
+              ]
+            },
+            {
+              "id": "h1-e3",
+              "source": "h1-n1",
+              "target": "h1-n4",
+              "claim": "Conditional bypass",
+              "kind": "branch",
+              "status": "pending",
+              "condition": "Applies only when factor X is inhibited",
+              "bindings": []
+            },
+            {
+              "id": "h1-e4",
+              "source": "h1-n4",
+              "target": "h1-n3",
+              "claim": "Bypass-driven",
+              "kind": "branch",
+              "status": "pending",
+              "condition": "Distinguish from the H1 main-path result",
+              "bindings": []
+            },
+            {
+              "id": "h1-e5",
+              "source": "h1-n3",
+              "target": "h1-n2",
+              "claim": "Response inhibits upstream",
+              "kind": "feedback",
+              "status": "pending",
+              "condition": "Negative-feedback hypothesis after sustained stimulation",
+              "bindings": []
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        },
+        {
+          "id": "h2",
+          "name": "H2 · Competing bypass explanation",
+          "nodes": [
+            {
+              "id": "h2-n1",
+              "label": "Stimulus",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h2-n2",
+              "label": "Bypass Y",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "h2-n3",
+              "label": "Phenotypic response",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "h2-e1",
+              "source": "h2-n1",
+              "target": "h2-n2",
+              "claim": "induces",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": []
+            },
+            {
+              "id": "h2-e2",
+              "source": "h2-n2",
+              "target": "h2-n3",
+              "claim": "Indirect driver",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": []
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        }
+      ],
+      "plans": [
+        {
+          "id": "plan-a",
+          "name": "Plan A · Main narrative",
+          "hypothesisIds": [
+            "h1",
+            "h2"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fig1",
+              "title": "Establish the phenomenon and study boundaries",
+              "question": "Under which conditions does the stimulus change the phenotype?",
+              "transition": "Define the model and time course for mechanistic tests",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p1",
+                  "title": "Phenomenon and groups",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e1",
+                      "revision": 0
+                    }
+                  ]
+                },
+                {
+                  "id": "p2",
+                  "title": "Time window",
+                  "x": 300,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            },
+            {
+              "id": "fig2",
+              "title": "Distinguish mediation from the bypass explanation",
+              "question": "Is factor X necessary?",
+              "transition": "Distinguish H1 / H2 using perturbation and rescue",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p3",
+                  "title": "Perturbation and rescue",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e2",
+                      "revision": 0
+                    },
+                    {
+                      "hypothesisId": "h2",
+                      "edgeId": "h2-e2",
+                      "revision": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fig1",
+            "mode": "board"
+          }
+        },
+        {
+          "id": "plan-b",
+          "name": "Plan B · Conditions first",
+          "hypothesisIds": [
+            "h1",
+            "h2"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fig2",
+              "title": "Distinguish mediation from the bypass explanation",
+              "question": "Is factor X necessary?",
+              "transition": "Distinguish H1 / H2 using perturbation and rescue",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p3",
+                  "title": "Perturbation and rescue",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e2",
+                      "revision": 0
+                    },
+                    {
+                      "hypothesisId": "h2",
+                      "edgeId": "h2-e2",
+                      "revision": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "fig1",
+              "title": "Establish the phenomenon and study boundaries",
+              "question": "Under which conditions does the stimulus change the phenotype?",
+              "transition": "Define the model and time course for mechanistic tests",
+              "references": [],
+              "panels": [
+                {
+                  "id": "p1",
+                  "title": "Phenomenon and groups",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": [
+                    {
+                      "hypothesisId": "h1",
+                      "edgeId": "h1-e1",
+                      "revision": 0
+                    }
+                  ]
+                },
+                {
+                  "id": "p2",
+                  "title": "Time window",
+                  "x": 300,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fig2",
+            "mode": "story"
+          }
+        }
+      ],
+      "assets": [
+        {
+          "id": "own-demo",
+          "type": "asset",
+          "title": "My sketch · Demo asset",
+          "image": "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22480%22%20height%3D%22260%22%20viewBox%3D%220%200%20480%20260%22%3E%3Crect%20width%3D%22480%22%20height%3D%22260%22%20fill%3D%22%23f7f7f7%22%2F%3E%3Ctext%20x%3D%2222%22%20y%3D%2232%22%20font-size%3D%2218%22%20font-family%3D%22sans-serif%22%20fill%3D%22%23333%22%3E%E8%87%AA%E5%B7%B1%E7%9A%84%E8%8D%89%E5%9B%BE%20%C2%B7%20DEMO%3C%2Ftext%3E%3Crect%20x%3D%2230%22%20y%3D%2260%22%20width%3D%22420%22%20height%3D%22145%22%20fill%3D%22%23e3e3e3%22%2F%3E%3Cg%20fill%3D%22%23999%22%3E%3Ccircle%20cx%3D%2295%22%20cy%3D%22115%22%20r%3D%2224%22%2F%3E%3Ccircle%20cx%3D%22187%22%20cy%3D%22157%22%20r%3D%2220%22%2F%3E%3Ccircle%20cx%3D%22295%22%20cy%3D%22103%22%20r%3D%2227%22%2F%3E%3Ccircle%20cx%3D%22384%22%20cy%3D%22158%22%20r%3D%2219%22%2F%3E%3C%2Fg%3E%3Ctext%20x%3D%2222%22%20y%3D%22245%22%20font-size%3D%2213%22%20fill%3D%22%23777%22%20font-family%3D%22sans-serif%22%3E%E7%A4%BA%E6%84%8F%E7%B4%A0%E6%9D%90%20%C2%B7%20%E4%B8%8D%E4%BB%A3%E8%A1%A8%E7%A7%91%E7%A0%94%E7%BB%93%E6%9E%9C%3C%2Ftext%3E%3C%2Fsvg%3E",
+          "note": "Demo-owned asset: a sketch only, with no experimental conclusions."
+        }
+      ],
+      "demonstration": true
+    },
+    {
+      "id": "project-b",
+      "name": "Demo · Project B · Time dependence",
+      "question": "Does the same stimulus produce different responses in different time windows?",
+      "hypotheses": [
+        {
+          "id": "hb1",
+          "name": "H1 · Time-dependent response",
+          "nodes": [
+            {
+              "id": "hb1-n1",
+              "label": "Stimulus",
+              "x": 70,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "hb1-n2",
+              "label": "Factor X",
+              "x": 355,
+              "y": 145,
+              "kind": "bio"
+            },
+            {
+              "id": "hb1-n3",
+              "label": "Phenotypic response",
+              "x": 640,
+              "y": 145,
+              "kind": "bio"
+            }
+          ],
+          "edges": [
+            {
+              "id": "hb1-e1",
+              "source": "hb1-n1",
+              "target": "hb1-n2",
+              "claim": "induces",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": []
+            },
+            {
+              "id": "hb1-e2",
+              "source": "hb1-n2",
+              "target": "hb1-n3",
+              "claim": "drives",
+              "status": "pending",
+              "condition": "Project model / awaiting experiment",
+              "bindings": [
+                {
+                  "id": "hb1-binding",
+                  "resourceId": "block-b",
+                  "types": [
+                    "correlation"
+                  ],
+                  "judgement": "Opposite result: distinguish the conditions",
+                  "review": true
+                }
+              ]
+            }
+          ],
+          "papers": [],
+          "revision": 0,
+          "view": {
+            "zoom": 1,
+            "x": 0,
+            "y": 0,
+            "selection": []
+          }
+        }
+      ],
+      "plans": [
+        {
+          "id": "plan-c",
+          "name": "Plan A · Exploratory design",
+          "hypothesisIds": [
+            "hb1"
+          ],
+          "references": [],
+          "figures": [
+            {
+              "id": "fb1",
+              "title": "Explore time windows",
+              "question": "Is the response time-dependent?",
+              "transition": "Explore first, then establish the mechanism",
+              "references": [],
+              "panels": [
+                {
+                  "id": "pb1",
+                  "title": "Time series",
+                  "x": 35,
+                  "y": 50,
+                  "w": 230,
+                  "h": 185,
+                  "purpose": "Confirm the response and study conditions",
+                  "experiment": "Control and perturbation groups; sample size and statistical method still to be defined",
+                  "claim": "Test whether the stimulus changes the phenotype",
+                  "result": "No owned experimental results yet",
+                  "status": "planned",
+                  "references": [],
+                  "ownAssetId": null,
+                  "links": []
+                }
+              ]
+            }
+          ],
+          "history": [],
+          "view": {
+            "zoom": 0.85,
+            "x": 0,
+            "y": 0,
+            "selection": [],
+            "figureId": "fb1",
+            "mode": "board"
+          }
+        }
+      ],
+      "assets": [],
+      "demonstration": true
+    }
+  ],
+  "ui": {
+    "projectId": "project-a",
+    "mode": "hypothesis",
+    "hypothesisId": "h1",
+    "planId": "plan-a",
+    "resourceTab": "paper",
+    "search": "",
+    "leftWidth": 190,
+    "rightWidth": 320,
+    "auxHeight": 184,
+    "leftCollapsed": false
+  }
+}

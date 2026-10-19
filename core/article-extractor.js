@@ -218,9 +218,21 @@
     return { text: output.join(''), rawStarts, rawEnds };
   }
 
+  let sourceReadCache = null;
+
+  function withSourceReadCache(read) {
+    const previous = sourceReadCache;
+    // Extraction is synchronous. These weak maps live for this read only;
+    // edits, translation changes and subsequent extractions always reread DOM.
+    sourceReadCache = { text: new WeakMap(), canonical: new WeakMap(), excluded: new WeakMap(), ancestors: new WeakMap() };
+    try { return read(); }
+    finally { sourceReadCache = previous; }
+  }
+
   function isScientificInlineTextExcluded(node) {
     if (node?.nodeType === 8) return true;
     const element = node?.nodeType === 3 ? node.parentElement : node;
+    if (element && sourceReadCache?.excluded.has(element)) return sourceReadCache.excluded.get(element);
     // Cell embeds bibliography flyouts inside body paragraphs. Keep the
     // reference-citations wrapper and author/year control; only omit details.
     // Do not reuse EXCLUDED_ANCESTOR_SELECTOR here: its broad citation match
@@ -228,11 +240,14 @@
     const selector = `${SOURCE_UI_SELECTOR},${INJECTED_TRANSLATION_SELECTOR},` +
       '.reference-citations .dropBlock__holder,.reference-citations .citation,' +
       '.reference-citations .citation-content';
-    return Boolean(element?.closest?.(selector) || element?.matches?.(selector));
+    const excluded = Boolean(element?.closest?.(selector) || element?.matches?.(selector));
+    if (element) sourceReadCache?.excluded.set(element, excluded);
+    return excluded;
   }
 
   function scientificInlineText(element) {
     if (!element) return '';
+    if (sourceReadCache?.text.has(element)) return sourceReadCache.text.get(element);
     const visit = node => {
       if (!node) return '';
       if (isScientificInlineTextExcluded(node)) return '';
@@ -249,14 +264,19 @@
       if (tagName === 'BR') return ' ';
       return content;
     };
-    return visit(element).replace(/\s+/g, ' ').trim();
+    const text = visit(element).replace(/\s+/g, ' ').trim();
+    sourceReadCache?.text.set(element, text);
+    return text;
   }
 
   function canonicalContentText(element) {
-    return scientificInlineText(element)
+    if (element && sourceReadCache?.canonical.has(element)) return sourceReadCache.canonical.get(element);
+    const text = scientificInlineText(element)
       .replace(/<\/?(?:sup|sub)>/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
+    if (element) sourceReadCache?.canonical.set(element, text);
+    return text;
   }
 
   // Extraction and source navigation must derive a caption from the same DOM
@@ -748,8 +768,12 @@
     return 'paragraph';
   }
 
-  function scoreContentRoot(root, adapter = null) {
-    const elements = collectContentElements(root, adapter);
+  function scoreContentRoot(root, adapter = null, elementsByRoot = null) {
+    let elements = elementsByRoot?.get(root);
+    if (!elements) {
+      elements = collectContentElements(root, adapter);
+      elementsByRoot?.set(root, elements);
+    }
     let score = 0;
     elements.forEach(element => {
       const text = normalizeTextWithOffsets(canonicalContentText(element)).text;
@@ -783,8 +807,16 @@
 
   function closestSafely(element, selector) {
     if (!element?.closest || !selector) return null;
+    const cached = sourceReadCache?.ancestors.get(element);
+    if (cached?.has(selector)) return cached.get(selector);
     try {
-      return element.closest(selector);
+      const match = element.closest(selector);
+      if (sourceReadCache) {
+        const selectors = cached || new Map();
+        selectors.set(selector, match);
+        if (!cached) sourceReadCache.ancestors.set(element, selectors);
+      }
+      return match;
     } catch (_) {
       return null;
     }
@@ -824,7 +856,18 @@
     return candidates;
   }
 
-  function selectContentRoot(documentRef, adapter = null) {
+  function selectContentRoot(documentRef, adapter = null, options = {}) {
+    // One synchronous extraction pass can compare the same winning root many
+    // times. Reuse its elements and score only within this call, never across
+    // DOM changes or subsequent reads.
+    const elementsByRoot = options.elementsByRoot || new Map();
+    const scores = new Map();
+    const score = candidate => {
+      if (!scores.has(candidate)) {
+        scores.set(candidate, scoreContentRoot(candidate, adapter, elementsByRoot));
+      }
+      return scores.get(candidate);
+    };
     const candidates = getContentRootCandidates(documentRef, adapter);
     const specificCandidates = [];
     const seenSpecific = new Set();
@@ -836,7 +879,7 @@
       });
     });
     const bestSpecific = specificCandidates.reduce((best, candidate) => (
-      !best || scoreContentRoot(candidate, adapter) > scoreContentRoot(best, adapter)
+      !best || score(candidate) > score(best)
         ? candidate : best
     ), null);
     if (bestSpecific && specificCandidates.length > 1) {
@@ -845,20 +888,20 @@
           fragment === candidate || candidate?.contains?.(fragment)
         ).length;
         if (containedSpecificCount < 2) return best;
-        const score = scoreContentRoot(candidate, adapter);
+        const candidateScore = score(candidate);
         if (!best || containedSpecificCount > best.containedSpecificCount ||
-            (containedSpecificCount === best.containedSpecificCount && score > best.score)) {
-          return { candidate, containedSpecificCount, score };
+            (containedSpecificCount === best.containedSpecificCount && candidateScore > best.score)) {
+          return { candidate, containedSpecificCount, score: candidateScore };
         }
         return best;
       }, null);
-      if (consolidated && consolidated.score > scoreContentRoot(bestSpecific, adapter)) {
+      if (consolidated && consolidated.score > score(bestSpecific)) {
         return consolidated.candidate;
       }
     }
     if (bestSpecific) return bestSpecific;
     return candidates.reduce((best, candidate) => (
-      !best || scoreContentRoot(candidate, adapter) > scoreContentRoot(best, adapter)
+      !best || score(candidate) > score(best)
         ? candidate : best
     ), null) || documentRef.body;
   }
@@ -1353,8 +1396,9 @@
   }
 
   function extractArticleFromRoot(documentRef, adapter, options = {}) {
-    const root = selectContentRoot(documentRef, adapter);
-    const elements = collectContentElements(root, adapter);
+    const elementsByRoot = new Map();
+    const root = selectContentRoot(documentRef, adapter, { elementsByRoot });
+    const elements = elementsByRoot.get(root) || collectContentElements(root, adapter);
     const records = stripArticleTitleHeading(
       buildRecordsFromElements(elements),
       documentRef?.title || ''
@@ -1414,6 +1458,10 @@
   }
 
   function extractArticleStructure(documentRef, options = {}) {
+    return withSourceReadCache(() => readArticleStructure(documentRef, options));
+  }
+
+  function readArticleStructure(documentRef, options = {}) {
     const locationLike = options.locationLike || documentRef?.location || {};
     const adapter = typeof shared.selectPublisherAdapter === 'function'
       ? shared.selectPublisherAdapter(locationLike, documentRef)
@@ -1797,6 +1845,10 @@
   }
 
   function extractArticle(documentRef, options = {}) {
+    return withSourceReadCache(() => readArticleRecords(documentRef, options));
+  }
+
+  function readArticleRecords(documentRef, options = {}) {
     if (isLikelyNonArticleChallenge(documentRef)) return [];
     const adapter = options.adapter || (
       typeof shared.selectPublisherAdapter === 'function'

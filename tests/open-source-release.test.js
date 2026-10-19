@@ -37,12 +37,12 @@ test('repository contains the complete AGPL release documentation', () => {
   ]) assert.match(notices, new RegExp(filename.replace(/[./]/g, '\\$&')));
 });
 
-test('unpacked build carries license, notices, and source instructions through its shared inventory', async () => {
+test('browser build carries license, notices, and source instructions without requiring downloaded native binaries', async () => {
   const buildScript = read('scripts/build-unpacked-extension.ps1');
   assert.match(buildScript, /Copy-BrevessReleaseFiles/);
   assert.match(buildScript, /-Profile \$PackageVariant/);
   const { releaseInventory } = await import('../scripts/release-inventory.mjs');
-  const shipped = new Set(releaseInventory(root, 'full').map(entry => entry.path));
+  const shipped = new Set(releaseInventory(root, 'browser').map(entry => entry.path));
   for (const filename of [
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'OPEN_SOURCE.md', 'README.md', 'INSTALL.md'
   ]) {

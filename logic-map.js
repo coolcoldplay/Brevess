@@ -28,6 +28,20 @@
   let mechanismRenderFrame = null;
 
   const byId = id => document.getElementById(id);
+  const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
+  // Authored scientific content may happen to equal a UI label. Keep it out of
+  // the interface observer; only the surrounding, known UI message is translated.
+  function authoredText(node, value, emptyLabel = '') {
+    node.setAttribute('data-i18n-ignore', '');
+    node.textContent = value || t(emptyLabel);
+    return node;
+  }
+  const authoredSpan = (value, emptyLabel) => authoredText(document.createElement('span'), value, emptyLabel);
+  function mixedText(node, message) {
+    node.setAttribute('data-i18n-ignore', '');
+    node.textContent = t(message);
+    return node;
+  }
   const text = (value, maximum = 12000) => String(value || '')
     .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
   function safeMechanismDisplayLabel(value) {
@@ -244,7 +258,7 @@
       list.appendChild(item);
     } else values.forEach(value => {
       const item = document.createElement('li');
-      item.textContent = value;
+      authoredText(item, value);
       list.appendChild(item);
     });
     parent.appendChild(list);
@@ -264,7 +278,7 @@
     const heading = document.createElement('div');
     heading.className = 'chain-label';
     const copy = document.createElement('span');
-    copy.append(icon(iconName), document.createTextNode(label));
+    copy.append(icon(iconName), mixedText(document.createElement('span'), label));
     heading.appendChild(copy);
     card.appendChild(heading);
     appendBullets(card, items);
@@ -288,7 +302,7 @@
       list.appendChild(empty);
     } else items.forEach(question => {
       const row = document.createElement('li');
-      row.appendChild(document.createTextNode(question.text || '未命名科学问题'));
+      row.appendChild(authoredSpan(question.text, '未命名科学问题'));
       const relationType = relationLabels[question.relationType] || relationLabels.root;
       const parentQuestionIds = Array.isArray(question.parentQuestionIds)
         ? question.parentQuestionIds : [];
@@ -296,14 +310,14 @@
         ? question.supportingFigureIds : [];
       const relation = document.createElement('span');
       relation.className = 'evidence-role';
-      relation.textContent = `关系：${relationType}` + (
+      mixedText(relation, `关系：${relationType}` + (
         parentQuestionIds.length
           ? `；上游：${parentQuestionIds.map(id => byQuestionId.get(id) || id).join('、')}`
           : '；上游：无'
-      );
+      ));
       const support = document.createElement('span');
       support.className = 'evidence-limitation';
-      support.textContent = `支持 Figure：${supportingFigureIds.join('、') || '待补充'}`;
+      mixedText(support, `支持 Figure：${supportingFigureIds.join('、') || t('待补充')}`);
       row.append(relation, support);
       list.appendChild(row);
     });
@@ -314,9 +328,9 @@
     if (locator?.kind === 'time-range') {
       return `${Number(locator.startSeconds) || 0}s–${Number(locator.endSeconds) || 0}s`;
     }
-    if (locator?.kind === 'table-range') return locator.value || '表格范围待补充';
+    if (locator?.kind === 'table-range') return locator.value || t('表格范围待补充');
     const values = Array.isArray(locator?.values) ? locator.values.filter(Boolean) : [];
-    return values.length ? `Panel ${values.join('、')}` : 'Panel 待补充';
+    return values.length ? `Panel ${values.join('、')}` : t('Panel 待补充');
   }
 
   function evidenceGroupCard(group, stepId) {
@@ -327,10 +341,10 @@
     selectionAttributes(card, 'evidence-group', { stepId, groupId: group.groupId });
     const heading = document.createElement('header');
     const title = document.createElement('strong');
-    title.textContent = fallback(group.title, '证据组');
+    authoredText(title, group.title, '证据组');
     const method = document.createElement('span');
     method.className = 'evidence-group-method';
-    method.textContent = group.method || '';
+    authoredText(method, group.method);
     heading.append(title, method);
     card.appendChild(heading);
     const points = document.createElement('ul');
@@ -344,18 +358,18 @@
       const row = document.createElement('li');
       const locator = document.createElement('span');
       locator.className = 'evidence-locator';
-      locator.textContent = locatorLabel(point.locator);
-      row.append(locator, document.createTextNode(fallback(point.observation, '观察结果待补充')));
+      authoredText(locator, locatorLabel(point.locator));
+      row.append(locator, authoredSpan(point.observation, '观察结果待补充'));
       if (point.argumentRole) {
         const role = document.createElement('span');
         role.className = 'evidence-role';
-        role.textContent = `论证作用：${point.argumentRole}`;
+        mixedText(role, `论证作用：${point.argumentRole}`);
         row.appendChild(role);
       }
       if (point.limitation) {
         const limitation = document.createElement('span');
         limitation.className = 'evidence-limitation';
-        limitation.textContent = `边界：${point.limitation}`;
+        mixedText(limitation, `边界：${point.limitation}`);
         row.appendChild(limitation);
       }
       if (point.needsManualSplit) {
@@ -370,7 +384,7 @@
     if (group.groupConclusion) {
       const conclusion = document.createElement('p');
       conclusion.className = 'evidence-group-conclusion';
-      conclusion.textContent = `共同支持：${group.groupConclusion}`;
+      mixedText(conclusion, `共同支持：${group.groupConclusion}`);
       card.appendChild(conclusion);
     }
     return card;
@@ -395,10 +409,10 @@
     const copy = document.createElement('div');
     copy.className = 'figure-heading-copy';
     const title = document.createElement('b');
-    title.textContent = fallback(step.figureLabel, `Figure ${index + 1}`);
+    authoredText(title, step.figureLabel, `Figure ${index + 1}`);
     const meta = document.createElement('span');
-    meta.textContent = [step.role, step.evidenceLevel, `${step.evidenceGroups.length} 组证据`]
-      .filter(Boolean).join(' · ');
+    authoredText(meta, [step.role, step.evidenceLevel, t(`${step.evidenceGroups.length} 组证据`)]
+      .filter(Boolean).join(' · '));
     copy.append(title, meta);
     const actions = document.createElement('div');
     actions.className = 'figure-actions';
@@ -470,13 +484,13 @@
       list.appendChild(empty);
     } else logicMap.meta.finalConclusions.forEach(conclusion => {
       const item = document.createElement('li');
-      item.appendChild(document.createTextNode(conclusion.text));
+      item.appendChild(authoredSpan(conclusion.text));
       const linked = logicMap.meta.scientificQuestions.filter(question =>
         conclusion.questionIds.includes(question.questionId));
       if (linked.length) {
         const links = document.createElement('span');
         links.className = 'conclusion-question-links';
-        links.textContent = `回应：${linked.map(question => question.text).join('；')}`;
+        mixedText(links, `回应：${linked.map(question => question.text).join('；')}`);
         item.appendChild(links);
       }
       list.appendChild(item);
@@ -517,7 +531,7 @@
       kind.className = 'supplemental-kind';
       kind.textContent = supplementalTypeLabel(item.type);
       const label = document.createElement('b');
-      label.textContent = item.label;
+      authoredText(label, item.label);
       title.append(kind, label);
       const collapse = document.createElement('button');
       collapse.type = 'button';
@@ -534,7 +548,7 @@
       card.appendChild(header);
       const summary = document.createElement('p');
       summary.className = 'supplemental-summary';
-      summary.textContent = fallback(item.summary || textItems(item.proofItems)[0],
+      authoredText(summary, item.summary || textItems(item.proofItems)[0],
         '待补充该材料证明或支持的内容');
       card.appendChild(summary);
       const groups = document.createElement('div');
@@ -548,10 +562,10 @@
           supplementalId: item.supplementalId, groupId: group.groupId
         });
         const name = document.createElement('strong');
-        name.textContent = fallback(group.title, '补充证据组');
+        authoredText(name, group.title, '补充证据组');
         const method = document.createElement('span');
         method.className = 'evidence-group-method';
-        method.textContent = group.method || '';
+        authoredText(method, group.method);
         const pointList = document.createElement('ul');
         pointList.className = 'evidence-point-list';
         if (!group.evidencePoints.length) {
@@ -563,19 +577,18 @@
           const row = document.createElement('li');
           const locator = document.createElement('span');
           locator.className = 'evidence-locator';
-          locator.textContent = locatorLabel(point.locator);
-          row.append(locator, document.createTextNode(
-            fallback(point.observation, '观察结果待补充')));
+          authoredText(locator, locatorLabel(point.locator));
+          row.append(locator, authoredSpan(point.observation, '观察结果待补充'));
           if (point.argumentRole) {
             const role = document.createElement('span');
             role.className = 'evidence-role';
-            role.textContent = `论证作用：${point.argumentRole}`;
+            mixedText(role, `论证作用：${point.argumentRole}`);
             row.appendChild(role);
           }
           if (point.limitation) {
             const limitation = document.createElement('span');
             limitation.className = 'evidence-limitation';
-            limitation.textContent = `边界：${point.limitation}`;
+            mixedText(limitation, `边界：${point.limitation}`);
             row.appendChild(limitation);
           }
           if (point.needsManualSplit) {
@@ -588,13 +601,12 @@
         });
         const conclusion = document.createElement('p');
         conclusion.className = 'evidence-group-conclusion';
-        conclusion.textContent = `共同支持：${fallback(group.groupConclusion,
-          '待补充证据组结论')}`;
+        mixedText(conclusion, `共同支持：${group.groupConclusion || t('待补充证据组结论')}`);
         groupCard.append(name, method, pointList, conclusion);
         if (group.limitation) {
           const limitation = document.createElement('p');
           limitation.className = 'evidence-limitation';
-          limitation.textContent = `组级边界：${group.limitation}`;
+          mixedText(limitation, `组级边界：${group.limitation}`);
           groupCard.appendChild(limitation);
         }
         groups.appendChild(groupCard);
@@ -685,7 +697,7 @@
     if (!edges.length) {
       const empty = document.createElement('p');
       empty.className = 'empty-copy';
-      empty.textContent = fallback(logicMap.meta.mechanismChain, '当前证据尚不足以形成机制链');
+      authoredText(empty, logicMap.meta.mechanismChain, '当前证据尚不足以形成机制链');
       chain.appendChild(empty);
       return;
     }
@@ -701,10 +713,10 @@
       row.dataset.lineStyle = dashed ? 'dashed' : 'solid';
       const sourceNode = document.createElement('span');
       sourceNode.className = 'mechanism-node';
-      sourceNode.textContent = safeMechanismDisplayLabel(edge.sourceId);
+      authoredText(sourceNode, safeMechanismDisplayLabel(edge.sourceId));
       const targetNode = document.createElement('span');
       targetNode.className = 'mechanism-node';
-      targetNode.textContent = safeMechanismDisplayLabel(edge.targetId);
+      authoredText(targetNode, safeMechanismDisplayLabel(edge.targetId));
       const connector = document.createElement('span');
       connector.className = 'mechanism-edge-track';
       const arrowId = `mechanism-promote-arrow-${index}`;
@@ -742,9 +754,10 @@
   }
 
   function renderCanvas() {
-    byId('logicMapArticleTitle').textContent = logicMap.meta.articleTitle || '当前论文';
-    document.title = `${logicMap.meta.title || '论文论证地图'} · Brevess`;
-    byId('logicMapClaimBoundary').textContent = fallback(logicMap.meta.claimBoundary, '尚未填写结论边界');
+    authoredText(byId('logicMapArticleTitle'), logicMap.meta.articleTitle, '当前论文');
+    document.title = `${logicMap.meta.title || t('论文论证地图')} · Brevess`;
+    document.querySelector('title')?.setAttribute('data-i18n-ignore', '');
+    authoredText(byId('logicMapClaimBoundary'), logicMap.meta.claimBoundary, '尚未填写结论边界');
     byId('logicMapCanvas').style.setProperty('--map-zoom', String(logicMap.view.zoom));
     byId('logicMapZoomValue').textContent = `${Math.round(logicMap.view.zoom * 100)}%`;
     byId('logicMapShell').classList.toggle('is-editor-collapsed', logicMap.view.editorCollapsed);
@@ -774,7 +787,7 @@
     section.className = 'editor-section';
     const header = document.createElement('header');
     const heading = document.createElement('h3');
-    heading.textContent = title;
+    mixedText(heading, title);
     header.appendChild(heading);
     if (actions.length) {
       const holder = document.createElement('div');
@@ -805,14 +818,21 @@
     return input;
   }
 
+  function authoredSection(title, actions = []) {
+    const section = editorSection('', actions);
+    authoredText(section.querySelector('h3'), title);
+    return section;
+  }
+
   function editorSelect(parent, labelText, value, choices, onChange) {
     const label = document.createElement('label');
     label.appendChild(document.createTextNode(labelText));
     const select = document.createElement('select');
-    choices.forEach(([choiceValue, choiceLabel]) => {
+    choices.forEach(([choiceValue, choiceLabel, authored]) => {
       const option = document.createElement('option');
       option.value = choiceValue;
-      option.textContent = choiceLabel;
+      if (authored) authoredText(option, choiceLabel);
+      else option.textContent = choiceLabel;
       select.appendChild(option);
     });
     select.value = value || choices[0]?.[0] || '';
@@ -945,7 +965,7 @@
         });
         label.append(
           checkbox,
-          document.createTextNode(parentQuestion.text || parentQuestion.questionId)
+          authoredSpan(parentQuestion.text || parentQuestion.questionId)
         );
         parents.appendChild(label);
       });
@@ -1037,7 +1057,7 @@
   function createEvidenceGroup(ownerId, index) {
     const groupId = uid(`${ownerId}-evidence`);
     return {
-      groupId, title: `证据组 ${index + 1}`, method: '', groupConclusion: '', limitation: '',
+      groupId, title: t(`证据组 ${index + 1}`), method: '', groupConclusion: '', limitation: '',
       evidencePoints: [createEvidencePoint(groupId)]
     };
   }
@@ -1107,7 +1127,7 @@
   }
 
   function renderEvidenceGroupEditor(body, step, group) {
-    const section = editorSection(`${step.figureLabel} · ${group.title || '证据组'}`, [
+    const section = authoredSection(`${step.figureLabel} · ${group.title || t('证据组')}`, [
       button('删除组', () => {
         step.evidenceGroups = step.evidenceGroups.filter(item => item.groupId !== group.groupId);
         logicMap.supplementalMaterials.forEach(item => {
@@ -1168,7 +1188,7 @@
             : conclusion.questionIds.filter(id => id !== question.questionId);
           markObjectEdited(conclusion, 'questionIds'); markChanged(); scheduleCanvasRender();
         });
-        label.append(checkbox, document.createTextNode(question.text || '未命名科学问题'));
+        label.append(checkbox, authoredSpan(question.text, '未命名科学问题'));
         links.appendChild(label);
       });
       section.appendChild(links);
@@ -1184,17 +1204,17 @@
   }
 
   function optionListForSteps() {
-    return [['', '暂不连接'], ...logicMap.steps.map(step => [step.stepId, step.figureLabel])];
+    return [['', '暂不连接'], ...logicMap.steps.map(step => [step.stepId, step.figureLabel, true])];
   }
   function optionListForAllGroups() {
     return [['', '暂不连接'], ...logicMap.steps.flatMap(step =>
       step.evidenceGroups.map(group => [
-        `${step.stepId}::${group.groupId}`, `${step.figureLabel} · ${group.title}`
+        `${step.stepId}::${group.groupId}`, `${step.figureLabel} · ${group.title}`, true
       ]))];
   }
 
   function renderSupplementalEditor(body, item) {
-    const section = editorSection(`${supplementalTypeLabel(item.type)} · ${item.label}`, [
+    const section = authoredSection(`${t(supplementalTypeLabel(item.type))} · ${item.label}`, [
       button('删除', () => deleteSupplemental(item.supplementalId), { className: 'danger' })
     ]);
     editorSelect(section, '材料类型', item.type, [
@@ -1219,7 +1239,7 @@
       const row = document.createElement('div');
       row.className = 'evidence-point-editor';
       const header = document.createElement('header');
-      header.append(document.createTextNode(group.title || `证据组 ${index + 1}`),
+      header.append(authoredSpan(group.title, `证据组 ${index + 1}`),
         button('编辑', () => setSelection('supplemental-group', {
           supplementalId: item.supplementalId, groupId: group.groupId
         })));
@@ -1238,7 +1258,7 @@
   }
 
   function renderSupplementalGroupEditor(body, item, group) {
-    const section = editorSection(`${item.label} · ${group.title}`, [
+    const section = authoredSection(`${item.label} · ${group.title}`, [
       button('返回整图', () => setSelection('supplemental', { supplementalId: item.supplementalId })),
       button('删除组', () => {
         item.evidenceGroups = item.evidenceGroups.filter(candidate => candidate.groupId !== group.groupId);
@@ -1706,7 +1726,8 @@
 
   async function load() {
     if (previewMode) {
-      logicMap = createPreviewMap();
+      logicMap = globalThis.SciLLM?.localizeLogicMapDemo?.(
+        createPreviewMap(), globalThis.SciLLM?.getInterfaceLanguage?.()) || createPreviewMap();
       if (previewData) {
         const previewUrl = new URL(previewData, location.origin);
         if (previewUrl.origin !== location.origin) throw new Error('PREVIEW_DATA_MUST_BE_SAME_ORIGIN');
@@ -1743,9 +1764,9 @@
     setSaveStatus('saved', '已安全保存到浏览器');
   }
 
-  load().catch(error => {
+  globalThis.SciLLM?.onInterfaceLanguageChange?.(() => { if (logicMap) render(); });
+  Promise.resolve(globalThis.SciLLM?.bootstrapInterfaceLanguage?.()).then(load).catch(error => {
     byId('logicMapApp').setAttribute('aria-busy', 'false');
     setSaveStatus('error', `载入失败：${error.message}`);
   });
 })();
-void globalThis.SciLLM?.bootstrapInterfaceLanguage?.();

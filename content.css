@@ -2165,3 +2165,8 @@ html[data-sci-reader-single-column="true"] :is(
 #sci-manual-toolbar .sci-selection-pane .sci-manual-abbreviation-panel p { font-size: 11px; line-height: 1.5; }
 #sci-manual-toolbar.sci-selection-surface :is(button,textarea,input,select,summary):focus-visible { outline: 2px solid #536d68; outline-offset: 2px; }
 #sci-manual-toolbar.sci-selection-surface button:disabled { opacity: .55; cursor: default; }
+#sci-manual-toolbar .sci-selection-note-sharing-controls { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; padding-top: 7px; border-top: 1px solid #e8e8e8; color: #646464; font-size: 11px; }
+#sci-manual-toolbar .sci-selection-note-sharing { white-space: normal; text-align: left; max-width: 100%; padding: 4px 7px; color: #202020; background: #f4f4f4; border: 1px solid #d5d5d5; border-radius: 0; }
+.sci-shared-note-sentence { text-decoration-line: underline !important; text-decoration-style: dashed !important; text-decoration-color: #646464 !important; text-decoration-thickness: 1.5px !important; text-underline-offset: 4px; cursor: pointer; }
+.sci-shared-note-sentence:focus-visible { outline: 1px dashed #646464; outline-offset: 3px; }
+.sci-shared-note-focus { outline: 2px solid #202020; outline-offset: 4px; }

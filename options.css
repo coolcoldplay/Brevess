@@ -456,6 +456,8 @@ input[type="color"] { padding: 4px; cursor: pointer; }
 .sync-metrics dt { color: var(--muted); font-size: 10px; font-weight: 700; }
 .sync-metrics dd { margin: 4px 0 0; color: var(--graphite); font-size: 13px; font-weight: 760; }
 .sync-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.directory-primary-actions { margin-top: 14px; }
+.directory-advanced-settings { margin-top: 18px; }
 .sync-actions .button { min-width: 108px; }
 .migration-import-label { display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; }
 .migration-warning { border-left-color: #a86d18; background: #fff8e8; color: #654b25; }
@@ -641,12 +643,14 @@ input[type="color"] { padding: 4px; cursor: pointer; }
 .task-policy-table th, .task-policy-table td { padding:10px 9px; border-bottom:1px solid var(--line-soft); vertical-align:middle; text-align:left; }
 .task-policy-table thead th { position:sticky; top:0; z-index:1; color:var(--muted); background:#F6F8FA; font-size:11px; font-weight:800; }
 .task-policy-table tbody tr:last-child > * { border-bottom:0; }
-.task-policy-table thead th:nth-child(1), .task-policy-table tbody th { width:18%; }
+.task-policy-table thead th:nth-child(1), .task-policy-table tbody th { width:17%; }
 .task-policy-table thead th:nth-child(2) { width:30%; }
 .task-policy-table thead th:nth-child(3) { width:9%; }
-.task-policy-table thead th:nth-child(4) { width:14%; }
-.task-policy-table thead th:nth-child(5) { width:13%; }
-.task-policy-table thead th:nth-child(6) { width:12%; }
+.task-policy-table thead th:nth-child(4) { width:12%; }
+.task-policy-table thead th:nth-child(5) { width:10%; }
+.task-policy-table thead th:nth-child(6) { width:10%; }
+.task-policy-table thead th:nth-child(7) { width:12%; }
+.task-policy-table input[data-task-policy-model] { width:100%; min-width:0; margin-top:7px; }
 .task-policy-table tbody th strong, .task-policy-table tbody th small { display:block; }
 .task-policy-table tbody th strong { color:var(--ink); font-size:12px; }
 .task-policy-table tbody th small { margin-top:3px; color:#8A5A12; font-size:10px; }
@@ -884,13 +888,13 @@ body[data-ui-surface="settings"] .settings-frame {
 [data-ui-surface="settings"] .settings-nav-group > button[data-settings-nav] {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);
-  grid-template-rows: 22px 16px;
+  grid-template-rows: auto auto;
   align-content: center;
   align-items: center;
   column-gap: 12px;
   row-gap: 0;
   min-width: 0;
-  height: 64px;
+  height: auto;
   min-height: 64px;
   padding: 10px 12px;
   border: 0;

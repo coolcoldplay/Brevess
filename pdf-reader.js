@@ -1,4 +1,18 @@
 (function initializePdfReader() {
+  const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
+  let subtitleSource = '';
+  let subtitleIsAuthoredValue = false;
+  function setPdfReaderSubtitle(message, authoredValueOnly = false) {
+    subtitleSource = String(message || '');
+    subtitleIsAuthoredValue = authoredValueOnly;
+    const subtitle = element('pdfReaderSubtitle');
+    if (!subtitle) return;
+    subtitle.setAttribute('data-i18n-ignore', '');
+    subtitle.textContent = subtitleIsAuthoredValue ? subtitleSource : t(subtitleSource);
+  }
+  globalThis.SciLLM?.onInterfaceLanguageChange?.(() => {
+    if (subtitleSource) setPdfReaderSubtitle(subtitleSource, subtitleIsAuthoredValue);
+  });
   const params = new URLSearchParams(location.search);
   const sourceUrl = SciLLM.normalizePdfSourceUrl(params.get('source'));
   const sourceTitle = String(params.get('title') || '').normalize('NFKC').trim();
@@ -370,7 +384,7 @@
           sourceKind: capture.sourceKind,
           fileHandle: capture.sourceHandle,
           openedHash: capture.openedHash,
-          confirm: message => globalThis.confirm(message),
+          confirm: message => globalThis.confirm(t(message)),
         })
         : await SciLLM.saveAnnotatedPdfCopy({
           ...common,
@@ -660,7 +674,7 @@
         String(result?.url || '')
       )) throw new Error('PDF_TRANSLATION_URL_INVALID');
       document.documentElement.dataset.pdfTranslationReady = 'true';
-      element('pdfReaderSubtitle').textContent = '正在进入可直接沉浸翻译的阅读视图…';
+      setPdfReaderSubtitle('正在进入可直接沉浸翻译的阅读视图…');
       globalThis.location.replace(result.url);
       return true;
     } catch (error) {
@@ -924,10 +938,12 @@
     });
     state.documentTitle = resolved;
     document.title = resolved;
+    document.querySelector('title')?.setAttribute('data-i18n-ignore', '');
     const subtitle = element('pdfReaderSubtitle');
     const pageCount = Number(globalThis.__brevessNativePdfDocument?.pageCount) || 0;
-    if (subtitle) subtitle.textContent = pageCount
-      ? `${resolved} · ${pageCount} 页` : resolved;
+    if (subtitle) {
+      setPdfReaderSubtitle(pageCount ? `${resolved} · ${pageCount} 页` : resolved, !pageCount);
+    }
     return resolved;
   }
 
@@ -2383,7 +2399,8 @@
       throw new Error('PDF_MARKDOWN_EMPTY');
     }
     document.title = readerTitle;
-    element('pdfReaderSubtitle').textContent = `${readerTitle} · PDF 解析工作区`;
+    document.querySelector('title')?.setAttribute('data-i18n-ignore', '');
+    setPdfReaderSubtitle(`${readerTitle} · PDF 解析工作区`);
     document.documentElement.dataset.pdfWorkspaceRendered = 'true';
     document.documentElement.dataset.pdfWorkspaceReady = 'false';
     document.documentElement.dataset.pdfSourceUrl = workspaceSourceUrl();

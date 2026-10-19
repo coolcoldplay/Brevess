@@ -1,4 +1,5 @@
 importScripts(
+  'core/sharing-background.js',
   'core/literature-radar-model.js',
   'core/literature-radar-store.js',
   'core/literature-radar-pubmed.js',
@@ -6,6 +7,12 @@ importScripts(
   'core/literature-radar-background.js',
   'core/literature-radar-ai.js',
   'core/i18n.js',
+  'core/i18n-extension.js',
+    'core/i18n-reader.js',
+    'core/i18n-reader-extra.js',
+    'core/i18n-system.js',
+    'core/i18n-tools.js',
+    'core/i18n-reader-patterns.js',
   'core/onboarding.js',
   'core/tab-activation.js',
   'core/page-tools.js',
@@ -3475,3 +3482,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // RADAR-001: rebuild alarms on worker activation and resume due literature checks.
 BrevessRadar.installRadarBackground({ keepAlive: task => SciLLM.keepAliveUntil(task, chrome) });
+BrevessSharingBackground.install(chrome);

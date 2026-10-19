@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { functionSource } = require('./helpers/r28-full07-source.js');
 
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
@@ -508,10 +509,17 @@ test('manual mutations push fresh counts to the active side panel without pollin
   assert.match(popup, /applyManualAnnotationStateEvent\(message\.event, sender\.tab\.id\)/);
   assert.match(popup, /MANUAL_ANNOTATION_STATE_CHANGED[\s\S]{0,300}void refreshArticleWorkspace\(\)/);
   assert.match(popup, /manualSummarySequence \+= 1/);
-  assert.match(
-    popup,
-    /function openWorkspaceView\(viewId\)[\s\S]{0,180}viewId === 'analysis'[\s\S]{0,80}refreshManualAnnotationSummary/
-  );
+  let summaryRefreshes = 0;
+  const navigation = {
+    workspaceNavigationIntentRevision: 0,
+    literatureNoteNavigationActivationController: { cancel() {} },
+    switchWorkspaceView() {}, refreshArticleWorkspace() {},
+    refreshManualAnnotationSummary() { summaryRefreshes += 1; },
+  };
+  vm.runInNewContext(functionSource(popup, 'openWorkspaceView') + ';this.navigate = openWorkspaceView;', navigation);
+  navigation.navigate('analysis'); assert.equal(summaryRefreshes, 1);
+  navigation.navigate('highlights'); assert.equal(summaryRefreshes, 2);
+  navigation.navigate('figures'); navigation.navigate('notes'); assert.equal(summaryRefreshes, 2);
 });
 
 test('unverified manual events never publish state and coalesce through double-prepare proof', () => {

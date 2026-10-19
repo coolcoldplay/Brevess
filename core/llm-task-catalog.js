@@ -85,7 +85,35 @@
     });
   }
 
+  function taskModelForProfile(policy, profile, profileId) {
+    if (!policy || !profile || !profileId) return '';
+    return policy?.modelProfileId === profileId &&
+      (!policy.modelProviderId || policy.modelProviderId === profile?.providerId) &&
+      (policy.modelPresetId === undefined || policy.modelPresetId === String(profile?.config?.presetId || ''))
+      ? String(policy.model || '').trim() : '';
+  }
+
+  // Mirrors the adapters implemented by this build; it is not a claim that
+  // every service/model offers a general web-search API.
+  function supportsTaskWebSearch(providerId, config = {}, taskId) {
+    if (!['article_chat', 'selection_chat'].includes(taskId)) return false;
+    if (providerId === 'deepseek-harness') return ['deepseek-flash', 'deepseek-v4-pro'].includes(config.model);
+    if (!['openai', 'deepseek'].includes(providerId)) return false;
+    if (providerId === 'deepseek' && config.model !== 'deepseek-flash') return false;
+    if (!String(config.baseUrl || '').trim()) return true;
+    try {
+      const url = new URL(config.baseUrl);
+      const paths = providerId === 'openai' ? ['/v1/responses']
+        : ['/responses', '/chat/completions', '/v1/chat/completions'];
+      return url.protocol === 'https:' && url.hostname === `api.${providerId}.com` &&
+        !url.port && !url.username && !url.password && !url.search && !url.hash &&
+        paths.includes(url.pathname.replace(/\/+$/u, ''));
+    } catch { return false; }
+  }
+
   return Object.freeze({
+    supportsTaskWebSearch,
+    taskModelForProfile,
     LLM_TASK_IDS,
     TASK_DEFINITIONS,
     getLlmTaskDefinition,

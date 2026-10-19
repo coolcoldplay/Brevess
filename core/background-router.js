@@ -2685,7 +2685,10 @@
         reasoningEnabled: policy.reasoningEnabled === true,
         reasoningEffort: policy.reasoningEffort,
         tokenRule,
-        allowTextFallback: policy.allowTextFallback === true
+        allowTextFallback: policy.allowTextFallback === true,
+        ...(policy.model && policy.modelProfileId ? { model: policy.model, modelProfileId: policy.modelProfileId,
+          modelProviderId: policy.modelProviderId, modelPresetId: policy.modelPresetId } : {}),
+        ...(typeof policy.webSearchEnabled === 'boolean' ? { webSearchEnabled: policy.webSearchEnabled } : {})
       }
     });
   }
@@ -11654,8 +11657,16 @@
       };
     }
 
+    function taskMessageWithWebDefault(settings, message, taskId) {
+      if (message.webSearch !== undefined || settings?.taskPolicies?.[taskId]?.webSearchEnabled !== true) return message;
+      const routed = settingsForExplicitProfile(settings, message.profileId, taskId);
+      const route = shared.resolveTaskProfile(routed, taskId);
+      return shared.supportsTaskWebSearch?.(route.providerId, route.config, taskId)
+        ? { ...message, webSearch: { enabled: true, mode: 'on' } } : message;
+    }
+
     async function askSelection(settings, message, context) {
-      const input = shared.normalizeSelectionAiInput(message);
+      const input = shared.normalizeSelectionAiInput(taskMessageWithWebDefault(settings, message, 'selection_chat'));
       if (shared.normalizeOperationId?.(input.operationId) !== input.operationId) {
         const error = new Error('Selection operation ID is invalid');
         error.code = 'INVALID_SETTINGS';
@@ -11703,7 +11714,8 @@
     }
 
     async function askArticle(settings, message, context) {
-      const input = shared.normalizeArticleChatInput(message);
+      const input = shared.normalizeArticleChatInput(message.selectionEvidence ? message
+        : taskMessageWithWebDefault(settings, message, 'article_chat'));
       if (settings?.consentGranted !== true) {
         const error = new Error('Article content sharing consent is required');
         error.code = 'LLM_NOT_READY';
@@ -18169,7 +18181,9 @@
 
       if (message.type === 'USER_DATA_SYNC_NOW') {
         requireDirectorySync('flush');
-        return runWithPortableConfigReady(async () => {
+        // Ordinary document files use the same permission/conflict checks as
+        // automatic writes. Credential backup is optional and has its own CAS
+        // path; directorySync excludes its encrypted envelope from this queue.
           let result = await directorySync.flush(importUserDataAsset);
           if (message.drain === true) {
             for (let attempt = 0; attempt < 5 &&
@@ -18181,7 +18195,6 @@
             }
           }
           return result;
-        });
       }
 
       if (message.type === 'USER_DATA_REBUILD_INDEX') {

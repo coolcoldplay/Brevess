@@ -1298,7 +1298,7 @@ test('new chat and migration controls use bundled visible icons', () => {
   assert.match(chat, /aria-label="问答"/);
   assert.match(send, /aria-labelledby="sendArticleChatLabel"/);
   assert.match(chat, /<svg[^>]*viewBox="0 0 24 24"[^>]*aria-hidden="true"/);
-  assert.match(chat, /<path d="[^"]+"/);
+  assert.match(chat, /<path\b[^>]*\bd="[^"]+"/);
   assert.match(send, /<i class="ph ph-paper-plane-tilt" aria-hidden="true"><\/i>/);
   assert.match(send, /<span id="sendArticleChatLabel">发送<\/span>/);
   assert.match(options, /id="exportMigrationBundle"[\s\S]*ph-export/);
@@ -1315,10 +1315,27 @@ test('popup restores an in-flight outline job when reopened', () => {
   assert.match(script, /setInterval\([^,]+,\s*600\)/s);
 });
 
-test('popup explains that completed outline checkpoints survive a terminal failure', () => {
-  const script = read('popup.js');
-  assert.match(script, /已完成部分已保存/);
-  assert.match(script, /重新点击将从断点继续/);
+test('popup distinguishes confirmed outline saves from cached checkpoints after failure', async () => {
+  for (const [progress, expected, absent] of [
+    [{ saveConfirmed: true }, /档案保存队列已确认，重新点击可恢复/, /档案保存尚未确认/],
+    [{ checkpointCached: true }, /已生成段落已有缓存，档案保存尚未确认；重试会复用缓存/, /档案保存队列已确认/],
+    [{}, /论文大纲生成失败/, /重新点击可恢复|重试会复用缓存/]
+  ]) {
+    const statuses = [];
+    const run = executablePopupFunction('runReviewOutlineAnalysis', {
+      currentWorkspaceSnapshot: {}, reviewOutlineTaskGeneration: 1,
+      capturePanelContext: () => ({ tabId: 1 }), isCurrentReviewOutlineTask: () => true,
+      requireUsableLlm: () => true, selectedWorkspaceAnalysisSectionIds: () => [],
+      preparedDocumentState: null,
+      prepareArticleForAdaptiveAnalysis: async () => { throw new Error('Synthetic failure'); },
+      refreshReviewOutlineProgress: async () => progress, showStatus: (...args) => statuses.push(args),
+      stopReviewOutlineProgressPolling() {}, reviewOutlineState: {}, updateReviewOutlineButton() {}
+    });
+    await run();
+    assert.match(statuses.at(-1)[0], expected);
+    assert.doesNotMatch(statuses.at(-1)[0], absent);
+    assert.equal(statuses.at(-1)[1], 'error');
+  }
 });
 
 test('popup treats outline generation as a neutral article feature', () => {
@@ -1499,7 +1516,7 @@ test('popup is a full-height native side-panel workspace with five internal view
     assert.match(button, /role="tab"/);
     assert.match(button, /aria-selected="(?:true|false)"/);
     assert.match(button, /<svg[^>]*viewBox="0 0 24 24"[^>]*aria-hidden="true"/);
-    assert.match(button, /<path d="[^"]+"/);
+    assert.match(button, /<path\b[^>]*\bd="[^"]+"/);
     const panelId = button.match(/aria-controls="([^"]+)"/)[1];
     assert.ok(html.includes(`id="${panelId}"`));
   }
@@ -1569,8 +1586,22 @@ test('side panel ignores stale workspace refreshes after the active tab changes'
   const script = read('popup.js');
   assert.match(script, /let workspaceRefreshSequence\s*=\s*0/);
   assert.match(script, /const requestId\s*=\s*\+\+workspaceRefreshSequence/);
-  assert.match(script, /requestId\s*!==\s*workspaceRefreshSequence/);
-  assert.match(script, /currentTab\?\.id\s*!==\s*tab\.id/);
+  const refresh = executablePopupFunction('performArticleWorkspaceRefresh').toString();
+  const guard = refresh.match(/const isCurrent = snapshot => ([\s\S]*?);/)?.[1];
+  assert.ok(guard, 'owned refresh must guard every asynchronous result');
+  for (const [aborted, currentSequence, panelCurrent, ownerCurrent, expected] of [
+    [false, 5, true, true, true], [true, 5, true, true, false],
+    [false, 6, true, true, false], [false, 5, false, true, false],
+    [false, 5, true, false, false]
+  ]) {
+    assert.equal(vm.runInNewContext(guard, {
+      signal: { aborted }, requestId: 5, workspaceRefreshSequence: currentSequence,
+      panelContext: {}, snapshot: {}, isCurrentPanelContext: () => panelCurrent,
+      isCurrentOwner: () => ownerCurrent
+    }), expected);
+  }
+  assert.match(refresh, /await sendTabMessage\([\s\S]*?\n\s*if \(!isCurrent\(\)\) return null/);
+  assert.match(refresh, /await SciLLM\.ensureCompatibleContentRevision\([\s\S]*?\n\s*if \(!isCurrent\(\)\) return null/);
 });
 
 test('navigation first render opens exact root Results and preserves explicit manual expansion choices', () => {
@@ -1616,9 +1647,9 @@ test('side panel auto-restores a readable local workspace before showing a legac
   const initializeStart = script.indexOf('async function initializeCurrentArticle');
   const initializeEnd = script.indexOf("\ndocument.addEventListener('DOMContentLoaded'", initializeStart);
   const initialize = script.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /await tryAutoRestoreCurrentArticleWorkspace/);
+  assert.match(initialize, /await awaitArticlePreparationOperation\(tryAutoRestoreCurrentArticleWorkspace/);
   assert.ok(
-    initialize.indexOf('await tryAutoRestoreCurrentArticleWorkspace') <
+    initialize.indexOf('await awaitArticlePreparationOperation(tryAutoRestoreCurrentArticleWorkspace') <
       initialize.indexOf('probeCurrentArticleArchive'),
     'directory auto-restore must run before the optional legacy archive prompt'
   );
@@ -1665,7 +1696,7 @@ test('activation creates only a non-destructive article baseline after local res
   );
   const initializeSource = popupSource.slice(initializeStart, initializeEnd);
   const restoreIndex = initializeSource.indexOf(
-    'await tryAutoRestoreCurrentArticleWorkspace'
+    'await awaitArticlePreparationOperation(tryAutoRestoreCurrentArticleWorkspace'
   );
   const baselineIndex = initializeSource.indexOf(
     "action: 'saveArticleWorkspaceBaseline'"
@@ -1711,7 +1742,7 @@ test('side-panel activation is local-first and never waits for an LLM document p
   const end = popup.indexOf("\ndocument.addEventListener('DOMContentLoaded'", start);
   const initialize = popup.slice(start, end);
   assert.ok(start >= 0 && end > start);
-  assert.match(initialize, /await refreshArticleWorkspace\(\{\s*throwOnError:\s*true,\s*forceRefresh:\s*retry\s*\}\)/);
+  assert.match(initialize, /await refreshArticleWorkspace\(\{\s*throwOnError:\s*true,\s*forceRefresh:\s*retry,\s*panelContext:\s*initialization\.context,\s*signal\s*\}\)/);
   assert.doesNotMatch(initialize, /prepareCurrentArticleForTypeChoice/);
 });
 
@@ -1765,10 +1796,12 @@ test('navigation exposes a local high-precision abbreviation table', () => {
   assert.match(html, /id="articleAbbreviationAlphabetNav"/);
   assert.match(html, /<th scope="col">缩写<\/th>/);
   assert.match(html, /<th scope="col">英文全称<\/th>/);
-  assert.match(html, /<span>中文含义<\/span>/);
+  assert.match(html, /<span>中文全称<\/span>/);
+  assert.match(html, /<span>含义<\/span>/);
+  assert.match(html, /id="defineArticleAbbreviations"/);
   assert.match(html, /id="translateArticleAbbreviations"/);
   assert.match(html, /id="importArticleAbbreviationsToGlobal"/);
-  assert.match(html, /id="importGlobalAbbreviationMemoryButton"/);
+  assert.match(html, /id="configureAbbreviationLookup"/);
   assert.match(html, /id="exportGlobalAbbreviationMemory"/);
   assert.match(html, /core\/abbreviation-extractor\.js/);
   assert.match(script, /function showArticleAbbreviationTable/);
@@ -1778,7 +1811,9 @@ test('navigation exposes a local high-precision abbreviation table', () => {
   assert.match(script, /LLM_TRANSLATE_ABBREVIATIONS/);
   assert.match(script, /ABBREVIATION_MEMORY_MERGE/);
   assert.match(script, /createGlobalAbbreviationMemoryExport/);
-  assert.match(script, /parseGlobalAbbreviationMemoryImport/);
+  assert.match(script, /getElementById\('configureAbbreviationLookup'\)\.addEventListener\('click', \(\) => void showAbbreviationLookupSettings\(\)\)/);
+  assert.equal(typeof require('../core/abbreviation-extractor.js').parseGlobalAbbreviationMemoryImport, 'function',
+    'legacy dictionary import remains available at the compatibility boundary');
   assert.match(script, /未调用 LLM/);
   assert.match(script, /function jumpToArticleAbbreviationSource/);
   assert.match(script, /function renderArticleAbbreviationAlphabetNav/);
@@ -1837,7 +1872,7 @@ test('outline summaries preserve default, customized, and explicit batch scopes 
       preparedDocumentState: { documentId: 'prepared-A', documentHash: 'prepared-hash-A', document: { paragraphs: [] } },
       currentWorkspaceSnapshot: snapshot, reviewOutlineState: {},
       workspaceAnalysisSelectionPending: new Map(), sidebarRuntimeDocumentBinding: null,
-      SciLLM: { normalizeTabDocumentUrl: value => new URL(value).href },
+      SciLLM: { normalizeTabDocumentUrl: value => new URL(value).href, formatReviewSynthesisNotice: () => '' },
       showStatus: (...args) => statuses.push(args), updateReviewOutlineButton() {},
       startReviewOutlineProgressPolling() {}, stopReviewOutlineProgressPolling() {},
       isSidebarOperationStopping: () => false,
@@ -1854,7 +1889,11 @@ test('outline summaries preserve default, customized, and explicit batch scopes 
         return { success: true, outline: { paragraphCount: 0 } };
       },
       acceptSidebarRuntimeTask() {}, refreshArticleWorkspace: async () => {}, persistCurrentArticleArchive: async () => {},
-      refreshReviewOutlineProgress: async () => { throw new Error('unexpected failure path'); }
+      refreshReviewOutlineProgress: async (tabId, announce, panelContext, operationId) => {
+        assert.equal(tabId, 41); assert.equal(announce, false);
+        assert.equal(panelContext.key, 'paper-A'); assert.equal(operationId, 'outline-A');
+        return { saveConfirmed: true };
+      }
     });
     vm.runInContext('globalThis.refreshSidebarRuntimeDocumentBinding = ' + bindingSource + ';\n' +
       'globalThis.selectedWorkspaceAnalysisSectionIds = ' + selectionSource + ';\n' +
@@ -3274,7 +3313,7 @@ test('single-field literature-note generation replaces only its stable target', 
 
   assert.deepEqual(plain(result), {
     counts: { filled: 1, missing: 0, preserved: 1, invalid: 0 },
-    changedFields: ['target'], sourceWarnings: []
+    changedFields: ['target'], preservedFields: ['untouched'], sourceWarnings: []
   });
   assert.equal(state.valuesByTemplate.custom_note.target, 'Regenerated target');
   assert.equal(state.valuesByTemplate.custom_note.untouched, 'Reader keeps this');
@@ -4464,7 +4503,7 @@ test('literature-note result updates fields in place without disturbing active s
   assert.equal(active.input.selectionEnd, 5);
   assert.equal(active.input.scrollTop, 31);
   assert.equal(generated.input.value, 'Grounded value');
-  assert.equal(generated.status.textContent, '已由正文证据填写');
+  assert.equal(generated.status.textContent, 'AI 生成已填写');
   assert.deepEqual(resized, ['generated']);
 });
 
@@ -4534,7 +4573,8 @@ test('literature-note drawer renders AI status outside empty textareas', () => {
   assert.match(renderBody, /literature-note-field-status/);
   assert.match(renderBody, /fieldStatusByTemplate/);
   assert.match(renderBody, /fieldStatus === 'missing'\s*\?\s*t\('正文未提供'\)/);
-  assert.match(renderBody, /label\.append\(title, textarea, statusText\)/);
+  assert.match(renderBody, /heading\.append\(selector, title\)/);
+  assert.match(renderBody, /label\.append\(heading, textarea, statusText\)/);
   assert.doesNotMatch(renderBody, /textarea\.value\s*=.*正文未提供/);
   assert.match(inputBody, /applyLiteratureNoteManualInput/);
   assert.match(inputBody, /resizeLiteratureNoteTextarea\(input\)/);
@@ -4549,11 +4589,15 @@ test('literature-note drawer renders AI status outside empty textareas', () => {
   assert.match(css, /\.literature-note-field-status\.is-missing/);
   assert.match(css, /\.literature-note-field-status\.is-supported/);
   assert.match(renderBody, /resizeLiteratureNoteTextarea\(textarea\)/);
-  assert.match(renderBody, /dataset\.generateLiteratureNoteField\s*=\s*field\.id/);
+  assert.match(renderBody, /selector\.dataset\.literatureNoteFieldSelector\s*=\s*field\.id/);
+  assert.match(renderBody, /selector\.setAttribute\('aria-keyshortcuts', 'Shift\+Enter'\)/);
   assert.match(renderBody, /AI 生成/);
   assert.match(script, /async function autofillLiteratureNoteFieldWithLLM\(/);
-  assert.match(script, /replaceFieldIds:\s*\[targetField\.id\]/);
-  assert.match(script, /requestTemplate[\s\S]*fields:\s*\[targetField\]/);
+  assert.match(script, /replaceFieldIds:\s*targetField\s*\?\s*\[targetField\.id\]\s*:\s*\[\.\.\.checkpointFields\]/);
+  assert.match(script, /const applicationFields = targetField \? \[targetField\]/);
+  assert.match(script, /const applicationTemplate = \{ \.\.\.template, fields: applicationFields \}/);
+  assert.match(script, /const requestTemplate = builtinHtmlTemplate \? template : applicationTemplate/);
+  assert.match(script, /const requestedFieldIds =[\s\S]*?applicationTemplate\.fields\.map\(field => field\.id\)/);
   assert.match(script, /validateLiteratureNoteGenerationReceipt/);
   assert.match(script, /new ResizeObserver\([\s\S]*resizeLiteratureNoteTextareas/);
   assert.match(script, /addEventListener\('resize',[\s\S]*resizeLiteratureNoteTextareas/);

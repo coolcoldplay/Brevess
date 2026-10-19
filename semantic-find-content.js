@@ -214,7 +214,7 @@
                 mark.dataset.score = String(item.score);
                 mark.dataset.current = String(item.id === selectedId);
                 mark.style.backgroundColor = `rgba(255,187,35,${SciLLM.semanticFindScoreAlpha(item.score)})`;
-                mark.title = `模型匹配分值 ${item.score.toFixed(3)} · 点击选择高亮类别`;
+                mark.title = SciLLM.translateInterfaceText?.(`模型匹配分值 ${item.score.toFixed(3)} · 点击选择高亮类别`) || `模型匹配分值 ${item.score.toFixed(3)} · 点击选择高亮类别`;
                 mark.setAttribute('aria-label', mark.title);
                 mark.addEventListener('mousedown', event => event.preventDefault());
                 mark.addEventListener('click', event => {

@@ -203,6 +203,8 @@
     }
 
     const config = cloneJsonLike(effectiveProfile.config || {});
+    const taskModel = shared.taskModelForProfile?.(policy, effectiveProfile, effectiveProfileId);
+    if (taskModel) config.model = taskModel;
     const normalizedTokenPolicy = normalizeEffectiveTokenPolicy(
       effectiveProfile.tokenPolicy, effectiveProfile.providerId, config
     );

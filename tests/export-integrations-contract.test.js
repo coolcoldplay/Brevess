@@ -120,7 +120,7 @@ test('background loads Zotero integration and content injection loads ZIP helper
   const background = read('background.js');
   const messenger = read('core/tab-messenger.js');
   assert.match(background, /core\/zotero-connector\.js/);
-  const resourceBranchStart = background.indexOf("if (['EXPORT_FETCH_IMAGE_RESOURCE', 'EXPORT_FETCH_SNAPSHOT_RESOURCE', 'EXPORT_RESOLVE_IMAGE_CANDIDATES'].includes(message?.type))");
+  const resourceBranchStart = background.indexOf("if (['EXPORT_DECODE_TIFF_RESOURCE', 'EXPORT_FETCH_IMAGE_RESOURCE', 'EXPORT_FETCH_SNAPSHOT_RESOURCE', 'EXPORT_RESOLVE_IMAGE_CANDIDATES'].includes(message?.type))");
   const legacyBranchStart = background.indexOf("if (message?.type === 'FIGURE_RESOLVE_IMAGE_CANDIDATES')", resourceBranchStart);
   const zoteroBranchStart = background.indexOf("if (message?.type === 'ZOTERO_IMPORT_ENHANCED_SNAPSHOT')", legacyBranchStart);
   const routedBranchStart = background.indexOf('if (ROUTED_MESSAGE_TYPES.has(message?.type))', zoteroBranchStart);

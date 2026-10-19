@@ -9,6 +9,15 @@ const {
   outputLanguageContract,
   localizeGeneratedFallback
 } = require('../core/i18n.js');
+// These surfaces load the shared account dictionary after the base catalog.
+require('../core/i18n-sharing.js');
+
+test('directory write failures and optional setup are translated without losing details', () => {
+  assert.equal(translateInterfaceText('文件写入未完成（IO_ERROR），内容仍保存在浏览器中，请重试保存', 'en'),
+    'Files have not been fully written (IO_ERROR). Your content remains in the browser; retry saving');
+  assert.equal(translateInterfaceText('本次结果已保存在浏览器，但尚未完整写入所选文件夹。文件写入未完成，内容仍保存在浏览器中，请重试保存', 'en'),
+    'Your work is saved in the browser but has not been fully written to the selected folder. Files have not been fully written. Your content remains in the browser; retry saving');
+});
 
 test('normalizes the global language and translates known interface text', () => {
   assert.equal(normalizeInterfaceLanguage('en-US'), 'en');

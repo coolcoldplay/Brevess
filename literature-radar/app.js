@@ -5,7 +5,7 @@
   let enrichment;
   let state, selected = null, revisionNumber = null, filter = 'new', limit = 40, editing = null, lastRender = '', background = false;
   const text = (id, value) => { $(id).textContent = value; };
-  const dateTime = at => at ? new Date(at).toLocaleString('zh-CN', { hour12: false }) : '尚未检查';
+  const dateTime = at => at ? new Date(at).toLocaleString(globalThis.SciLLM?.getInterfaceLanguage?.() || 'zh-CN', { hour12: false }) : '尚未检查';
   const element = (tag, className, value) => {
     const node = document.createElement(tag); if (className) node.className = className;
     if (value !== undefined) node.textContent = value; return node;
@@ -26,7 +26,8 @@
     for (const radar of state.radars) {
       const revision = R.radarRevision(radar), unread = revision.articles.filter(p => !p.isBaseline && !p.read).length;
       const button = element('button', 'tracker'); button.type = 'button'; button.setAttribute('aria-pressed', String(radar.id === selected));
-      button.append(element('strong', '', radar.name), element('small', unread ? 'tracker-new' : '', `${unread} 篇未读新增 · ${!radar.enabled ? '已暂停' : radar.intervalHours ? '每 ' + radar.intervalHours + ' 小时' : '仅手动'}`));
+      const radarName = element('strong', '', radar.name); radarName.setAttribute('translate', 'no');
+      button.append(radarName, element('small', unread ? 'tracker-new' : '', `${unread} 篇未读新增 · ${!radar.enabled ? '已暂停' : radar.intervalHours ? '每 ' + radar.intervalHours + ' 小时' : '仅手动'}`));
       button.addEventListener('click', () => { selected = radar.id; revisionNumber = null; limit = 40; void safe(() => refresh(true)); }); list.append(button);
     }
     const radar = current(); $('empty').hidden = !!radar; $('radar-detail').hidden = !radar;
@@ -36,6 +37,7 @@
     enrichment?.prepare(radar, revision, state);
     const active = state.active?.expiresAt > Date.now(), mine = active && state.active.id === radar.id;
     text('radar-name', radar.name); text('query-preview', revision.query);
+    $('radar-name').setAttribute('translate', 'no'); $('query-preview').setAttribute('translate', 'no');
     text('scan-state', mine ? '正在检查 PubMed…' : latest.error ? '最近检查失败 · 原进度已保留' : !latest.baselineAt ? '待建立首次基线' : '已建立基线 · 持续追踪新增');
     text('toggle-radar', radar.enabled ? '暂停自动检查' : '启用自动检查');
     $('check-radar').disabled = !!active; text('check-radar', mine ? '检查中…' : '立即检查');
@@ -62,6 +64,7 @@
       const article = element('article', 'paper');
       const label = element('div', 'paper-label'); label.append(element('span', 'badge' + (!paper.isBaseline && !paper.read ? ' badge-new' : ''), paper.isBaseline ? '基线' : paper.read ? '新增 · 已读' : '新增 · 未读'), element('span', '', `PMID ${paper.id}`));
       const title = element('h3'), link = element('a', '', paper.title || '未提供标题');
+      if (paper.title) title.setAttribute('translate', 'no');
       link.href = `https://pubmed.ncbi.nlm.nih.gov/${paper.id}/`; link.target = '_blank'; link.rel = 'noopener noreferrer'; title.append(link);
       article.append(label, title, element('p', '', [paper.journal, paper.publicationDate].filter(Boolean).join(' · ')));
       if (paper.authors?.length) article.append(element('p', '', paper.authors.slice(0, 5).join(', ') + (paper.authors.length > 5 ? ' et al.' : '')));
@@ -123,6 +126,8 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void tick(); });
   window.addEventListener('focus', () => { void tick(); });
   enrichment = window.BrevessRadarUI.create({store, adapter, service, refresh, notice});
+  void globalThis.SciLLM?.bootstrapInterfaceLanguage?.();
+  globalThis.SciLLM?.onInterfaceLanguageChange?.(() => { if (state) render(); });
   void safe(async () => { await refresh(true); await tick(); });
   setInterval(() => safe(() => refresh()), 2000);
   setInterval(tick, 60000);

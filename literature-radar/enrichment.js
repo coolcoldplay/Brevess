@@ -38,9 +38,9 @@
     function bilingual(original,paper,part){
       const key=`${viewKey}:${paper.id}:${part}`,source=part==='title'?paper.title:R.radarAbstractText(paper);
       const block=node('div','bilingual-block');block.dataset.translationPart=part;block.dataset.pmid=paper.id;block.tabIndex=0;
-      block.title='鼠标指向或聚焦本块，按下并松开 Alt 显示/隐藏中文对照';block.append(original);
+      block.title='鼠标指向或聚焦本块，按下并松开 Alt 显示/隐藏中文对照';original.setAttribute('translate','no');block.append(original);
       const saved=paper.translations?.[part];
-      if(saved?.sourceText===source&&!hiddenTranslations.has(key)){const zh=node('div','translation-zh');zh.append(node('small','','中文对照'),node('p','',saved.translatedText));block.append(zh);block.classList.add('has-translation');}
+      if(saved?.sourceText===source&&!hiddenTranslations.has(key)){const zh=node('div','translation-zh'), translated=node('p','',saved.translatedText);translated.setAttribute('translate','no');zh.append(node('small','','中文对照'),translated);block.append(zh);block.classList.add('has-translation');}
       const target={key,source,paper,part,id:selected.id,revision:revision.number};
       block.addEventListener('mouseenter',()=>{hover=target;});block.addEventListener('mouseleave',()=>{if(hover?.key===key)hover=null;});
       block.addEventListener('focus',()=>{hover=target;});block.addEventListener('blur',()=>{if(hover?.key===key)hover=null;});

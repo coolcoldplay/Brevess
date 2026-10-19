@@ -6,6 +6,7 @@
     <title>Brevess</title>
     <link rel="stylesheet" href="vendor/phosphor/icons.css">
     <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="sharing/sharing.css">
     <link rel="stylesheet" href="ui-swiss.css">
     <link rel="stylesheet" href="manual-evidence-block-editor.css">
     <link rel="stylesheet" href="vendor/semantic-icons-r42/icons.css">
@@ -42,6 +43,8 @@
           aria-label="开启本地英中双语阅读" title="开启本地英中双语阅读" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 5h12M9 3v2M12 5c-1 5-4 8-8 10M5 8c1 3 3 5 6 7M13 21l4-10 4 10M14.5 17h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <button id="openBrevessAccount" class="side-panel-tool-button brevess-account-entry" type="button"
+          aria-label="账号与课题组" title="账号与课题组">账号</button>
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
           aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
           <i class="ph ph-gear" aria-hidden="true"></i>
@@ -818,6 +821,12 @@
     <script src="core/literature-note-editor.js"></script>
     <script src="core/literature-note-field-selection.js"></script>
     <script src="core/i18n.js"></script>
+    <script src="core/i18n-extension.js"></script>
+<script src="core/i18n-reader.js"></script>
+<script src="core/i18n-reader-extra.js"></script>
+<script src="core/i18n-system.js"></script>
+<script src="core/i18n-tools.js"></script>
+<script src="core/i18n-reader-patterns.js"></script>
     <script src="core/figure-extractor.js"></script>
     <script src="core/figure-analysis.js"></script>
     <script src="core/figure-result-binding.js"></script>
@@ -839,6 +848,22 @@
     <script src="vendor/semantic-icons-r42/resources.js"></script>
     <script src="vendor/semantic-icons-r42/icons.js"></script>
     <script src="sidebar-module-icons.js"></script>
+    <script src="core/i18n-sharing.js"></script>
+    <script src="sharing/client.js"></script>
+    <script src="sharing/dialog.js"></script>
+    <script src="core/llm-task-catalog.js"></script>
+    <script src="core/token-budget.js"></script>
+    <script src="core/tts-service.js"></script>
+    <script src="core/category-store.js"></script>
+    <script src="core/adaptive-catalog.js"></script>
+    <script src="core/settings-store.js"></script>
+
+
+
+
+    <script src="core/i18n-builtins.js"></script>
+    <script src="core/i18n-export.js"></script>
+    <script src="sharing/account-entry.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

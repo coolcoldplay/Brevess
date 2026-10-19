@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 require('../core/confidence-policy.js');
 require('../core/category-store.js');
 require('../core/adaptive-catalog.js');
@@ -45,17 +46,34 @@ function createMemoryStorage() {
   };
 }
 
+test('optional task model and web settings survive round trips; old/null/invalid policies remain safe', () => {
+  const settings = createDefaultSettings();
+  const id = settings.globalProfileId;
+  const custom = normalizeTaskPolicy('article_chat', { mode: 'global', model: ' custom-model-v2 ',
+    modelProfileId: id, webSearchEnabled: true }, settings.profiles);
+  assert.equal(custom.model, 'custom-model-v2');
+  assert.equal(custom.modelProviderId, 'openai');
+  assert.equal(custom.webSearchEnabled, true);
+  assert.deepEqual(normalizeTaskPolicy('article_chat', JSON.parse(JSON.stringify(custom)), settings.profiles), custom);
+  for (const invalid of [null, {}, { model: '', modelProfileId: id }, { model: 'x', modelProfileId: 'missing' },
+    { model: 'x\nsecret', modelProfileId: id }, { model: 'x'.repeat(257), modelProfileId: id }]) {
+    assert.equal(normalizeTaskPolicy('article_chat', invalid, settings.profiles).model, undefined);
+  }
+  assert.equal(normalizeTaskPolicy('figure_walkthrough', { webSearchEnabled: true }, settings.profiles).webSearchEnabled, undefined);
+  assert.equal(normalizeTaskPolicy('selection_chat', { webSearchEnabled: false }, settings.profiles).webSearchEnabled, false);
+});
+
 test('CommonJS settings-store loads its task catalog without global preload order', () => {
   const output = execFileSync(process.execPath, ['-e', [
     "delete globalThis.SciLLM;",
     "const store = require('./core/settings-store.js');",
     "const settings = store.createDefaultSettings();",
-    "process.stdout.write(JSON.stringify({ version: settings.version, taskCount: Object.keys(settings.taskPolicies).length }));"
+    "process.stdout.write(JSON.stringify({ version: settings.version, taskIds: Object.keys(settings.taskPolicies) }));"
   ].join(' ')], {
-    cwd: process.cwd(),
+    cwd: path.resolve(__dirname, '..'),
     encoding: 'utf8'
   });
-  assert.deepEqual(JSON.parse(output), { version: 6, taskCount: 18 });
+  assert.deepEqual(JSON.parse(output), { version: 6, taskIds: LLM_TASK_IDS });
 });
 
 test('defaults to version 6 task policies and regex mode until any profile is configured and consented', () => {

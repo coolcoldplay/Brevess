@@ -24,6 +24,10 @@
     return node;
   }
 
+  const text = value => SciLLM.translateInterfaceText?.(value) ?? String(value || '');
+  function preserveUserText(node) { node.dataset.i18nIgnore = ''; return node; }
+  function userElement(tag, className, content) { return preserveUserText(element(tag, className, content)); }
+
   function button(label, className, onClick) {
     const node = element('button', className, label);
     node.type = 'button';
@@ -86,7 +90,7 @@
 
   function date(value) {
     if (!value || Number.isNaN(Date.parse(value))) return '未知';
-    return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value));
+    return new Intl.DateTimeFormat(SciLLM.getInterfaceLanguage?.() === 'en' ? 'en' : 'zh-CN', { dateStyle: 'medium' }).format(new Date(value));
   }
 
   function createShell(root) {
@@ -305,7 +309,7 @@
     const placeholder = element('option', '', valid.length ? '选择标签…' : '暂无标签，可在文献行添加');
     placeholder.value = '';
     choice.replaceChildren(placeholder);
-    valid.forEach(tag => { const option = element('option', '', tag); option.value = tag; choice.append(option); });
+    valid.forEach(tag => { const option = userElement('option', '', tag); option.value = tag; choice.append(option); });
   }
 
   async function readTagBase(workspaceId, generation) {
@@ -402,7 +406,7 @@
       } finally { setBusy(false); }
     });
     const close = button('关闭', 'button quiet compact-button', () => {
-      if (session.busy || (tagEditorDirty(session) && !globalThis.confirm('放弃当前文献未保存的标签草稿？'))) return;
+      if (session.busy || (tagEditorDirty(session) && !globalThis.confirm(text('放弃当前文献未保存的标签草稿？')))) return;
       state.tagEditor = null; panel.hidden = true; panel.replaceChildren();
     });
     const refresh = button('读取最新标签', 'button quiet compact-button', () => readLatest(false));
@@ -586,11 +590,12 @@
 
   function coverageText(coverage) {
     const available = ['notes', 'fulltext', 'abstract', 'method', 'caption']
-      .filter(scope => coverage?.[scope]).map(scope => SCOPE_LABELS[scope]);
+      .filter(scope => coverage?.[scope]).map(scope => text(SCOPE_LABELS[scope]));
     const missing = ['fulltext', 'abstract', 'method', 'caption']
-      .filter(scope => !coverage?.[scope]).map(scope => SCOPE_LABELS[scope]);
-    return `已保存：${available.join('、') || '仅标题'}` +
-      (missing.length ? ` · 未覆盖：${missing.join('、')}` : '');
+      .filter(scope => !coverage?.[scope]).map(scope => text(SCOPE_LABELS[scope]));
+    const separator = SciLLM.getInterfaceLanguage?.() === 'en' ? ', ' : '、';
+    return text(`已保存：${available.join(separator) || text('仅标题')}`) +
+      (missing.length ? ` ${text(`· 未覆盖：${missing.join(separator)}`)}` : '');
   }
 
   function appendArticleSourceActions(information, item, container) {
@@ -670,12 +675,12 @@
       const title = element('h4');
       const readingSource = hasSources
         ? item.sourceDocuments.find(source => source.hasOfflineSnapshot) || item.sourceDocuments[0] : item;
-      title.append(savedArticleLink(readingSource, item.title));
+      title.append(preserveUserText(savedArticleLink(readingSource, item.title)));
       heading.append(title);
       appendOfflineReadingActions(heading, information, readingSource);
       information.append(heading);
       if (Array.isArray(item.authors) && item.authors.length) {
-        information.append(element('p', 'local-library__meta', item.authors.map(author => author.literal).join('；')));
+        information.append(userElement('p', 'local-library__meta', item.authors.map(author => author.literal).join('；')));
       }
       if (item.publisherUrl) {
         const publisherLink = safeArticleLink(item.publisherUrl, '出版社页面');
@@ -688,7 +693,7 @@
       if (tags.length) {
         const list = element('ul', 'local-library__article-tags');
         list.setAttribute('aria-label', hasSources ? '来源标签汇总' : '文献标签');
-        tags.forEach(tag => list.append(element('li', '', tag)));
+        tags.forEach(tag => list.append(userElement('li', '', tag)));
         information.append(list);
       }
       if (hasSources) appendArticleSources(information, item, container);
@@ -699,19 +704,23 @@
       details.append(element('p', 'local-library__meta', coverageText(item.coverage)));
       if (item.hitScopes?.length) {
         details.append(element('p', 'local-library__hits',
-          `命中范围：${item.hitScopes.map(scope => SCOPE_LABELS[scope]).join('、')}`));
+          `命中范围：${item.hitScopes.map(scope => text(SCOPE_LABELS[scope])).join(', ')}`));
       }
       (item.snippets || []).forEach(hit => {
         const snippet = element('p', 'local-library__snippet');
-        snippet.append(element('strong', '', `${hit.sourceLabel ? `${hit.sourceLabel} · ` : ''}${SCOPE_LABELS[hit.scope]} · ${hit.label || '命中'}`));
-        snippet.append(document.createTextNode(` ${hit.text}`));
+        const heading = element('strong');
+        if (hit.sourceLabel) heading.append(userElement('span', '', hit.sourceLabel), document.createTextNode(' · '));
+        heading.append(element('span', '', SCOPE_LABELS[hit.scope]), document.createTextNode(' · '),
+          hit.label ? userElement('span', '', hit.label) : element('span', '', '命中'));
+        snippet.append(heading, userElement('span', '', ` ${hit.text}`));
         details.append(snippet);
       });
       information.append(details);
       card.append(information,
         element('td', 'local-library__article-publication', recordedText(item.publicationDate) +
           (item.publicationDate && item.publicationDateKind === 'cover' ? '（封面日期）' : '')),
-        element('td', 'local-library__article-journal', recordedText(item.journal)),
+        item.journal ? userElement('td', 'local-library__article-journal', recordedText(item.journal))
+          : element('td', 'local-library__article-journal', '未记录'),
         element('td', 'local-library__article-saved', recordedText(item.savedAt)));
       body.append(card);
     });
@@ -736,9 +745,9 @@
     const body = element('tbody');
     items.forEach(item => {
       const itemRow = element('tr');
-      itemRow.append(element('td', 'local-library__abbr', item.abbreviation));
-      itemRow.append(element('td', 'local-library__full-name', item.fullName));
-      itemRow.append(element('td', 'local-library__meaning', item.meaningZh || '—'));
+      itemRow.append(userElement('td', 'local-library__abbr', item.abbreviation));
+      itemRow.append(userElement('td', 'local-library__full-name', item.fullName));
+      itemRow.append(userElement('td', 'local-library__meaning', item.meaningZh || '—'));
       itemRow.append(element('td', 'local-library__date', date(item.firstImportedAt)));
       itemRow.append(element('td', 'local-library__number', item.documentCount));
       itemRow.append(element('td', 'local-library__number', item.totalCount));
@@ -791,7 +800,7 @@
             const list = element('ul');
             data.items.forEach(hit => {
               const line = element('li');
-              line.append(safeArticleLink(hit.url, hit.title));
+              line.append(preserveUserText(safeArticleLink(hit.url, hit.title)));
               line.append(document.createTextNode(`：${hit.count} 次`));
               list.append(line);
             });
@@ -833,7 +842,7 @@
       manage.append(button('编辑', 'button quiet compact-button', () =>
         openAbbreviationEditor(root, item)));
       manage.append(button('删除', 'button quiet compact-button', async () => {
-        if (!globalThis.confirm(`从全局词库删除 ${item.abbreviation}？`)) return;
+        if (!globalThis.confirm(text(`从全局词库删除 ${item.abbreviation}？`))) return;
         try {
           await mutateAbbreviation({ action: 'delete', entryId: item.id });
           await load(root);
@@ -899,8 +908,8 @@
         const covered = Number(data.totals?.coverage?.[state.scope]) || 0;
         const matched = hasMatched && (state.tags.length || state.query.trim())
           ? `当前匹配覆盖 ${Number(data.matchedCoverage[state.scope]) || 0} / ${data.matchedCount} 篇；` : '';
-        status.textContent = matched + `全库${SCOPE_LABELS[state.scope]}可检索覆盖 ${covered} / ${totalArticles} 篇；` +
-          `未保存该部分的文献不会产生该范围命中。`;
+        status.textContent = text(matched) + text(`全库${text(SCOPE_LABELS[state.scope])}可检索覆盖 ${covered} / ${totalArticles} 篇；`) +
+          text('未保存该部分的文献不会产生该范围命中。');
       } else if (state.kind === 'articles' && (state.tags.length || state.query.trim())) {
         status.textContent = `匹配 ${data.matchedCount ?? data.total} 篇文献 · 全库 ${totalArticles} 篇。`;
       } else {
@@ -924,6 +933,10 @@
   }
 
   globalThis.mountLocalReadingLibrary = mountLocalReadingLibrary;
+  SciLLM.onInterfaceLanguageChange?.(() => {
+    const root = document.getElementById('localReadingLibrary');
+    if (root?.dataset.libraryMounted === 'true') load(root);
+  });
   globalThis.addEventListener('beforeunload', event => {
     if (!tagEditorDirty() && !state.tagEditor?.busy) return;
     event.preventDefault(); event.returnValue = '';

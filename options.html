@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
   <link rel="stylesheet" href="options.css">
   <link rel="stylesheet" href="options-local-library.css">
+  <link rel="stylesheet" href="sharing/sharing.css">
   <link rel="stylesheet" href="ui-swiss.css">
 </head>
 <body data-ui-surface="settings">
@@ -43,21 +44,22 @@
       <div class="settings-nav-group">
         <span class="settings-nav-label">开始使用</span>
         <button type="button" data-settings-nav="overview" aria-selected="true"><span class="settings-nav-number" aria-hidden="true">01</span><i class="ph ph-compass" aria-hidden="true"></i><span class="settings-nav-title">设置概览</span></button>
-        <button type="button" data-settings-nav="storage" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">02</span><i class="ph ph-folder-open" aria-hidden="true"></i><span class="settings-nav-title">本地保存</span><small id="settingsNavStorageState">可选</small></button>
-        <button type="button" data-settings-nav="models" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">03</span><i class="ph ph-chats-circle" aria-hidden="true"></i><span class="settings-nav-title">模型与连接</span><small id="settingsNavModelState">待配置</small></button>
+        <button type="button" data-settings-nav="account" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">02</span><i class="ph ph-user-circle" aria-hidden="true"></i><span class="settings-nav-title">账号管理</span></button>
+        <button type="button" data-settings-nav="storage" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">03</span><i class="ph ph-folder-open" aria-hidden="true"></i><span class="settings-nav-title">本地保存</span><small id="settingsNavStorageState">可选</small></button>
+        <button type="button" data-settings-nav="models" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">04</span><i class="ph ph-chats-circle" aria-hidden="true"></i><span class="settings-nav-title">模型与连接</span><small id="settingsNavModelState">待配置</small></button>
       </div>
       <div class="settings-nav-group">
         <span class="settings-nav-label">阅读与分析</span>
-        <button type="button" data-settings-nav="workbench" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">04</span><i class="ph ph-squares-four" aria-hidden="true"></i><span class="settings-nav-title">课题工作台</span></button>
-        <button type="button" data-settings-nav="modes" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">05</span><i class="ph ph-gear" aria-hidden="true"></i><span class="settings-nav-title">阅读场景</span></button>
-        <button type="button" data-settings-nav="categories" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">06</span><i class="ph ph-highlighter" aria-hidden="true"></i><span class="settings-nav-title">高亮类别</span></button>
-        <button type="button" data-settings-nav="reading" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">07</span><i class="ph ph-note-pencil" aria-hidden="true"></i><span class="settings-nav-title">PDF 与阅读工具</span></button>
+        <button type="button" data-settings-nav="workbench" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">05</span><i class="ph ph-squares-four" aria-hidden="true"></i><span class="settings-nav-title">课题工作台</span></button>
+        <button type="button" data-settings-nav="modes" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">06</span><i class="ph ph-gear" aria-hidden="true"></i><span class="settings-nav-title">阅读场景</span></button>
+        <button type="button" data-settings-nav="categories" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">07</span><i class="ph ph-highlighter" aria-hidden="true"></i><span class="settings-nav-title">高亮类别</span></button>
+        <button type="button" data-settings-nav="reading" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">08</span><i class="ph ph-note-pencil" aria-hidden="true"></i><span class="settings-nav-title">PDF 与阅读工具</span></button>
       </div>
       <div class="settings-nav-group">
         <span class="settings-nav-label">系统</span>
-        <button type="button" data-settings-nav="shortcuts" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">08</span><i class="ph ph-floppy-disk" aria-hidden="true"></i><span class="settings-nav-title">快捷键</span></button>
-        <button type="button" data-settings-nav="data" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">09</span><i class="ph ph-database" aria-hidden="true"></i><span class="settings-nav-title">数据与备份</span></button>
-        <button type="button" data-settings-nav="about" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">10</span><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i><span class="settings-nav-title">关于与反馈</span></button>
+        <button type="button" data-settings-nav="shortcuts" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">09</span><i class="ph ph-floppy-disk" aria-hidden="true"></i><span class="settings-nav-title">快捷键</span></button>
+        <button type="button" data-settings-nav="data" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">10</span><i class="ph ph-database" aria-hidden="true"></i><span class="settings-nav-title">数据与备份</span></button>
+        <button type="button" data-settings-nav="about" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">11</span><i class="ph ph-file-magnifying-glass" aria-hidden="true"></i><span class="settings-nav-title">关于与反馈</span></button>
       </div>
     </aside>
     <div class="settings-content">
@@ -66,6 +68,7 @@
         <span>设置页面</span>
         <select id="settingsMobilePage">
           <option value="overview">设置概览</option>
+          <option value="account">账号管理</option>
           <option value="storage">本地保存</option>
           <option value="models">模型与连接</option>
           <option value="workbench">课题工作台</option>
@@ -78,6 +81,10 @@
         </select>
       </label>
   <main class="settings-shell">
+    <section id="accountSettings" class="settings-panel settings-account" data-settings-page="account" aria-labelledby="accountSettingsHeading" hidden>
+      <div class="settings-panel-heading"><div><p class="section-kicker">BREVESS 账号</p><h1 id="accountSettingsHeading">账号管理</h1><p>管理登录、邮箱、密码和课题组，插件各模块共用登录状态。</p></div></div>
+      <div id="settingsAccountContent" class="sharing-page"><p role="status">正在加载账号管理…</p></div>
+    </section>
     <section id="researchWorkbenchSettings" class="settings-panel workbench-settings" data-settings-page="workbench" aria-labelledby="workbenchSettingsHeading" hidden>
       <div class="workbench-settings__header">
         <div><h2 id="workbenchSettingsHeading">课题工作台</h2><p>假说梳理 · 组图规划</p></div>
@@ -449,7 +456,7 @@
         <div>
           <p class="section-kicker">Local storage · 可选</p>
           <h1 id="localStorageSettingsHeading">本地保存目录</h1>
-          <p>把论文工作区镜像到你授权的文件夹，便于离线阅读、手动备份和迁移。浏览器本地数据仍是主数据源。</p>
+          <p>选择文献文件的保存位置；保存的正文、笔记和图片可用于离线阅读与备份。</p>
         </div>
       </div>
       <div id="storageSettingsBody" class="local-data-layout"></div>
@@ -527,8 +534,8 @@
         <span id="credentialState" class="credential-state">尚未配置</span>
       </div>
       <div id="apiProfilesSettings" class="settings-section">
-        <div class="section-heading"><div><h3>模型连接</h3><p>配置名称、服务商、凭据和模型保存在本机；测试只发送内置合成内容。</p></div></div>
-        <ol class="provider-setup-steps" aria-label="接入配置流程">
+        <div class="section-heading"><div><h3>模型连接</h3><p>选择供应商并填写 API Key 即可接入，自动使用默认模型。具体模型与功能选项在下方表格设置。</p></div></div>
+        <ol hidden class="provider-setup-steps" aria-label="接入配置流程">
           <li><strong>1 · 保存配置</strong><span id="providerConfigurationStep">待配置</span></li>
           <li><strong>2 · 读取目录</strong><span id="providerDirectoryStep">可手填模型 ID</span></li>
           <li><strong>3 · 选择模型</strong><span id="providerModelStep">待选择</span></li>
@@ -536,54 +543,30 @@
         </ol>
         <div class="api-profile-layout">
           <aside class="api-profile-rail" aria-label="API Profile 列表">
-            <div class="api-profile-list-heading"><strong>Profiles</strong><button id="addApiProfile" class="button quiet compact-button" type="button">新增</button></div>
+            <div class="api-profile-list-heading"><strong>已保存连接</strong><button id="addApiProfile" class="button quiet compact-button" type="button">新增</button></div>
             <div id="apiProfileList" class="api-profile-list" role="listbox" aria-label="API Profile 列表"></div>
           </aside>
           <div class="api-profile-editor">
-            <div class="profile-editor-heading">
-              <label class="field"><span>配置名称</span><input id="profileName" type="text" autocomplete="off" placeholder="例如：主力模型"><small>输入后按 Enter 或移开焦点即可单独保存名称。</small></label>
-              <div class="profile-editor-actions"><button id="duplicateApiProfile" class="button quiet compact-button" type="button">复制</button><button id="deleteApiProfile" class="button quiet compact-button" type="button">删除</button></div>
-            </div>
             <div class="profile-connection-fields">
               <div class="form-grid two-columns">
-                <label class="field"><span>Provider</span><select id="providerId"></select><small>国内服务商已独立列出；“自定义兼容接口”用于其他 OpenAI 兼容服务。</small></label>
-                <div class="field model-discovery-field">
-                  <span>模型 ID（可手动输入）</span>
-                  <div class="model-discovery-row">
-                    <input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID">
-                    <select id="modelSuggestionsSelect" aria-label="选择联网获取的模型"
-                      title="选择联网获取的模型">
-                      <option value="">在线模型</option>
-                    </select>
-                    <button id="refreshModels" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span id="modelDiscoveryActionLabel">联网获取</span></button>
-                  </div>
-                  <datalist id="modelSuggestions"></datalist>
-                  <input id="modelDirectorySearch" type="search" autocomplete="off" aria-label="筛选模型候选" placeholder="搜索目录或内置候选（不修改模型 ID）">
-                  <small id="modelInputHint">可直接填写服务商提供的完整模型 ID，包括未出现在候选列表中的新模型。保存和调用均以左侧输入框为准。</small>
-                  <small id="modelDiscoveryStatus" role="status" aria-live="polite">选择 Provider 后会读取目录；内置候选、目录模型与手填 ID 分别标注，目录不代表能力验证。</small>
-                </div>
+                <label class="field"><span>供应商</span><select id="providerId"></select><small>国内服务商已独立列出；“自定义兼容接口”用于其他 OpenAI 兼容服务。</small></label>
                 <label id="apiKeyField" class="field"><span>API Key</span><input id="apiKey" type="password" autocomplete="new-password" placeholder="粘贴 API Key"><small>Key 仅保存在本机扩展存储中；保存后不会再次回显。</small></label>
                 <p id="typesafeScopeHint" class="support-message" hidden><strong>TypeSafe Jev</strong> 用于文本概率判定，不支持生成问答、笔记或解图；请前往<a id="typesafeTaskRoutingLink" href="#taskRoutingSettings">按功能指定模型 → 语义查找</a>，将此 Profile 指定给语义查找或文献高亮。</p>
-                <label id="reasoningEffortField" class="field" hidden><span>推理强度</span>
+                <div hidden><label id="reasoningEffortField" class="field" hidden><span>推理强度</span>
                   <select id="reasoningEffort"></select>
                   <small id="reasoningEffortHint">仅在当前服务商与模型支持时发送推理参数。</small>
-                </label>
+                </label></div>
               </div>
               <div id="compatibleFields" class="compatible-fields" hidden>
                 <label id="compatiblePresetField" class="field"><span>接口预设</span><select id="compatiblePreset"></select><small id="compatiblePresetHint">选择后自动填入服务地址与默认模型；API Key 不会被修改。</small></label>
                 <label class="field"><span>Base URL</span><input id="baseUrl" type="url" placeholder="https://gateway.example/v1"><small>仅允许 HTTPS；本机服务可使用 http://localhost 或 http://127.0.0.1。</small></label>
-                <div class="form-grid two-columns">
-                  <label class="field"><span>鉴权请求头</span><input id="authHeader" type="text" value="Authorization"></label>
-                  <label class="field"><span>Key 前缀</span><input id="authPrefix" type="text" value="Bearer" placeholder="留空表示无前缀"></label>
-                </div>
-                <label class="check-field compact"><input id="jsonMode" type="checkbox" checked><span>接口支持 <code>response_format: json_object</code></span></label>
-                <label class="check-field compact"><input id="supportsVision" type="checkbox"><span>该兼容模型支持图片输入（仅在服务商明确支持时开启）</span></label>
+
               </div>
               <div id="codexLocalFields" class="compatible-fields" hidden>
                 <p class="support-message"><strong>本机 Codex</strong> 使用插件专用的 Codex 登录空间，不读取桌面 Codex、CLI 或其他程序的令牌，也不会在插件中保存 API Key。请在这里单独登录一次，避免多个 Codex 进程争用刷新令牌。</p>
                 <div class="open-source-links codex-bridge-links">
                   <a class="support-email" href="https://github.com/coolcoldplay/Brevess/releases/latest/download/Brevess-Codex-Bridge-Windows-x64.zip" target="_blank" rel="noreferrer">下载 Windows 本机 Codex 桥（可选）</a>
-                  <a class="support-email" href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" target="_blank" rel="noreferrer">查看安装说明</a>
+                  <a class="support-email" href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noreferrer">查看安装说明</a>
                 </div>
                 <div class="codex-auth-card">
                   <div>
@@ -616,6 +599,17 @@
             </div>
             <details id="profileAdvancedSettings" class="settings-disclosure profile-advanced-settings">
               <summary>高级连接设置</summary>
+<div id="compatibleAdvancedFields" hidden>                <div class="form-grid two-columns">
+                  <label class="field"><span>鉴权请求头</span><input id="authHeader" type="text" value="Authorization"></label>
+                  <label class="field"><span>Key 前缀</span><input id="authPrefix" type="text" value="Bearer" placeholder="留空表示无前缀"></label>
+                </div>
+                <label class="check-field compact"><input id="jsonMode" type="checkbox" checked><span>接口支持 <code>response_format: json_object</code></span></label>
+                <label class="check-field compact"><input id="supportsVision" type="checkbox"><span>该兼容模型支持图片输入（仅在服务商明确支持时开启）</span></label></div>
+            <div class="profile-editor-heading">
+              <label class="field"><span>配置名称</span><input id="profileName" type="text" autocomplete="off" placeholder="例如：主力模型"><small>输入后按 Enter 或移开焦点即可单独保存名称。</small></label>
+              <div class="profile-editor-actions"><button id="duplicateApiProfile" class="button quiet compact-button" type="button">复制</button><button id="deleteApiProfile" class="button quiet compact-button" type="button">删除</button></div>
+            </div>
+
               <fieldset class="token-policy-fieldset">
                 <legend>Token 策略</legend>
                 <p class="support-message">输出 Token 由插件根据任务、模型容量和截断重试自动分配，无需手动设置上限。</p>
@@ -637,21 +631,52 @@
             <span>仅文本配置：额外测试结构化推理（可选；视觉配置会自动测试）</span>
           </label>
         </div>
-        <fieldset class="provider-probe-selection">
+        <details class="settings-disclosure"><summary>额外测试（可选）</summary><fieldset class="provider-probe-selection">
           <legend>选择额外测试项</legend>
           <p>基础文本始终测试；图片配置沿用自动图片与结构化检查。额外测试各自调用模型。</p>
           <label class="check-field compact"><input id="testPlainJson" type="checkbox"><span>文本 JSON（普通提示）</span></label>
           <label class="check-field compact"><input id="testStructuredSchema" type="checkbox"><span>文本 JSON Schema（样例校验）</span></label>
-        </fieldset>
+        </fieldset></details>
         <div id="providerConnectionStatus" class="provider-connection-status">
           <strong>操作反馈</strong>
           <div id="status" class="status" role="status" aria-live="polite">尚未测试连接</div>
         </div>
-        <div class="provider-capability-results" aria-live="polite">
+        <details class="settings-disclosure"><summary>连接测试详情</summary><div class="provider-capability-results" aria-live="polite">
           <strong>本页能力验证结果</strong>
           <p>结果只对当前配置有效；修改配置需重新测试。未测试、跳过与不支持均不会计作通过。</p>
           <ul id="providerProbeResults" class="provider-probe-results"></ul>
+        </div></details>
+      </div>
+      <div id="taskRoutingSettings" class="settings-section task-routing-section">
+        <div class="section-heading"><div><h3>按功能指定模型</h3><p>各功能默认沿用默认连接与模型；可分别选择具体模型，设置思考、推理强度、联网和 Token 规则。</p></div></div>
+        <div class="form-grid two-columns">
+          <label class="field"><span>默认连接</span><select id="globalProfileId"></select></label>
         </div>
+        <p class="support-message">以下是未保存的编辑预览；点击保存后生效。全局默认仅用于明确选择继承全局的任务。原文与导航翻译默认使用浏览器本地翻译，专用配置失效时不会转用其他模型。</p>
+        <details class="settings-disclosure"><summary>默认模型与在线模型目录</summary><p id="connectionModelOwner" class="support-message"></p>                <div class="field model-discovery-field">
+                  <span>当前连接的默认模型</span>
+                  <div class="model-discovery-row">
+                    <input id="model" type="text" list="modelSuggestions" autocomplete="off" placeholder="选择或输入模型 ID">
+                    <select id="modelSuggestionsSelect" aria-label="选择联网获取的模型"
+                      title="选择联网获取的模型">
+                      <option value="">在线模型</option>
+                    </select>
+                    <button id="refreshModels" class="button quiet compact-button" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span id="modelDiscoveryActionLabel">联网获取</span></button>
+                  </div>
+                  <datalist id="modelSuggestions"></datalist>
+                  <input id="modelDirectorySearch" type="search" autocomplete="off" aria-label="筛选模型候选" placeholder="搜索目录或内置候选（不修改模型 ID）">
+                  <small id="modelInputHint">可直接填写服务商提供的完整模型 ID，包括未出现在候选列表中的新模型。保存和调用均以左侧输入框为准。</small>
+                  <small id="modelDiscoveryStatus" role="status" aria-live="polite">选择 Provider 后会读取目录；内置候选、目录模型与手填 ID 分别标注，目录不代表能力验证。</small>
+                </div>
+</details>
+        <div id="taskPolicyModules"></div>
+        <div class="settings-actions"><button id="saveTaskRouting" class="button primary" type="button">保存功能设置</button></div>
+        <p id="taskRoutingStatus" role="status" aria-live="polite"></p>
+        <div hidden aria-hidden="true">
+          <table id="llmTaskPolicyTable"><tbody id="llmTaskPolicyTableBody"></tbody></table>
+          <details id="advancedTaskRouting"><table><tbody id="llmAdvancedTaskPolicyTableBody"></tbody></table></details>
+        </div>
+        <p class="support-message">解图支持已配置的生成模型：多模态模型读取原图，纯文本模型使用正文与图注。</p>
       </div>
       <details id="modelBehaviorAdvanced" class="settings-section settings-disclosure model-behavior-settings">
         <summary>高级：正文分析方式</summary>
@@ -722,19 +747,6 @@
         <p id="pdfMineruStatus" class="support-message" role="status" aria-live="polite">
           未点击增强识别时，PDF 不会发送到 MinerU；原页阅读、查找和本地文字索引仍可直接使用。
         </p>
-      </div>
-      <div id="taskRoutingSettings" class="settings-section task-routing-section">
-        <div class="section-heading"><div><h3>按功能指定模型</h3><p>每个用户可见的 AI 功能都可独立指定模型、推理强度和 Token 规则；未单独指定时使用全局默认。</p></div></div>
-        <div class="form-grid two-columns">
-          <label class="field"><span>全局默认 Profile</span><select id="globalProfileId"></select></label>
-        </div>
-        <p class="support-message">以下是未保存的编辑预览；点击保存后生效。全局默认仅用于明确选择继承全局的任务。原文与导航翻译默认使用浏览器本地翻译，专用配置失效时不会转用其他模型。</p>
-        <div id="taskPolicyModules"></div>
-        <div hidden aria-hidden="true">
-          <table id="llmTaskPolicyTable"><tbody id="llmTaskPolicyTableBody"></tbody></table>
-          <details id="advancedTaskRouting"><table><tbody id="llmAdvancedTaskPolicyTableBody"></tbody></table></details>
-        </div>
-        <p class="support-message">解图支持已配置的生成模型：多模态模型读取原图，纯文本模型使用正文与图注。</p>
       </div>
       <div id="articleChatPromptSettings" class="settings-section chat-quick-prompt-settings">
         <div class="section-heading">
@@ -926,8 +938,8 @@
         <section id="directorySyncSettings" class="settings-section local-data-section" aria-labelledby="directorySyncHeading">
           <div class="section-heading local-data-heading">
             <div>
-              <h3 id="directorySyncHeading">目录镜像</h3>
-              <p>本机数据库仍是主数据源；目录授权不可用时，修改会留在待同步队列中。</p>
+              <h3 id="directorySyncHeading">保存文件夹</h3>
+              <p>选择一次目录，之后点击侧栏“保存”即可写入文献文件，无需绑定本机路径或手动同步。</p>
             </div>
             <span id="userDataPermission" class="permission-badge" data-permission="unconfigured">未选择</span>
           </div>
@@ -936,9 +948,17 @@
             <strong id="userDataDirectory">尚未选择目录</strong>
           </div>
           <p id="userDataSupportMessage" class="support-message" role="status" aria-live="polite" hidden></p>
+          <div class="sync-actions directory-primary-actions" aria-label="选择保存文件夹">
+            <button id="chooseUserDataDirectory" class="button primary" type="button"><i class="ph ph-folder" aria-hidden="true"></i>选择目录</button>
+            <button id="reauthorizeUserDataDirectory" class="button quiet" type="button" hidden><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>恢复文件夹访问权限</button>
+          </div>
+          <p class="support-message">文件保存在所选目录内的 Brevess 文件夹；已有 Brevess 或 SCI-Highlighter 数据目录会直接沿用。</p>
+          <div id="userDataStatus" class="status local-data-status" role="status" aria-live="polite"></div>
+          <details id="directoryAdvancedSettings" class="settings-disclosure directory-advanced-settings">
+            <summary>高级设置 · 可选备份与目录维护</summary>
           <section id="nativeDirectorySettings" class="native-directory-settings" aria-labelledby="nativeDirectoryHeading">
-            <h4 id="nativeDirectoryHeading">在文件管理器中打开文献目录</h4>
-            <p id="nativeDirectoryHelp">首次使用需显式绑定本机路径。填写所选保存位置内实际数据根（Brevess 或兼容的 SCI-Highlighter 文件夹）的完整绝对路径，不是论文子目录，也不一定是上方选择的外层文件夹。浏览器只提供目录名，无法替你推算路径。</p>
+            <h4 id="nativeDirectoryHeading">可选：在文件管理器中打开文献目录</h4>
+            <p id="nativeDirectoryHelp">仅用于“打开文件夹”快捷按钮，不影响文献保存。需要此功能时，再填写 Brevess 或 SCI-Highlighter 数据目录的完整本机路径。</p>
             <label class="native-directory-path-field" for="nativeDirectoryPath">
               <span>实际数据根绝对路径</span>
               <input id="nativeDirectoryPath" type="text" autocomplete="off" spellcheck="false" aria-describedby="nativeDirectoryHelp" placeholder="例如 D:\论文资料\Brevess">
@@ -949,14 +969,14 @@
             </div>
             <p id="nativeDirectoryStatus" class="native-directory-status" role="status" aria-live="polite">尚未检查。绑定只核验现有目录，不会选择新的保存位置或创建文献文件夹。</p>
             <p class="native-directory-help">需要支持目录打开功能的本机助手；旧版请随插件一起更新。此处不会自动安装助手。
-              <a href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" target="_blank" rel="noopener noreferrer">查看本机助手安装说明</a>
+              <a href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noopener noreferrer">查看本机助手安装说明</a>
             </p>
           </section>
           <section class="portable-config-card" aria-labelledby="portableConfigHeading">
             <div class="portable-config-heading">
               <div>
-                <h4 id="portableConfigHeading">加密配置备份</h4>
-                <p>API Key、模型设置、MinerU PDF 解析设置与 Token、全局缩略词表以加密形式存放在所选目录；遗忘口令无法恢复密文凭据。</p>
+                <h4 id="portableConfigHeading">模型配置备份（可选）</h4>
+                <p>需要换电脑恢复 API Key、模型设置、MinerU Token 和全局缩略词表时，可自行创建口令加密备份。不启用也能保存文献；遗忘口令无法恢复备份中的凭据。</p>
               </div>
               <span id="portableConfigState" class="portable-config-state" data-state="disabled">未启用</span>
             </div>
@@ -973,18 +993,16 @@
             </div>
           </section>
           <dl class="sync-metrics" aria-label="目录同步状态">
-            <div><dt>待同步</dt><dd id="userDataPendingCount">0</dd></div>
+            <div><dt>待写入文件</dt><dd id="userDataPendingCount">0</dd></div>
             <div><dt>冲突</dt><dd id="userDataConflictCount">0</dd></div>
-            <div class="sync-time"><dt>上次成功同步</dt><dd id="userDataLastSync">尚未同步</dd></div>
+            <div class="sync-time"><dt>上次写入</dt><dd id="userDataLastSync">尚未写入</dd></div>
           </dl>
           <div class="sync-actions" aria-label="本地数据操作">
-            <button id="chooseUserDataDirectory" class="button secondary" type="button"><i class="ph ph-folder" aria-hidden="true"></i>选择目录</button>
-            <button id="reauthorizeUserDataDirectory" class="button quiet" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>重新授权</button>
-            <button id="syncUserDataNow" class="button primary" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>立即同步</button>
+            <button id="syncUserDataNow" class="button secondary" type="button"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>重试写入文件</button>
             <button id="rebuildUserDataIndex" class="button quiet" type="button"><i class="ph ph-database" aria-hidden="true"></i>从目录重建</button>
             <button id="exportUserDataBundle" class="button secondary" type="button"><i class="ph ph-download" aria-hidden="true"></i>导出 JSON 备份</button>
           </div>
-          <div id="userDataStatus" class="status local-data-status" role="status" aria-live="polite"></div>
+          </details>
         </section>
 
         <section class="settings-section local-data-section migration-section" aria-labelledby="migrationHeading">
@@ -1150,6 +1168,14 @@
   <script src="core/literature-url.js"></script>
   <script src="core/selection-tts.js"></script>
   <script src="core/i18n.js"></script>
+    <script src="core/i18n-extension.js"></script>
+<script src="core/i18n-reader.js"></script>
+<script src="core/i18n-reader-extra.js"></script>
+<script src="core/i18n-system.js"></script>
+<script src="core/i18n-tools.js"></script>
+<script src="core/i18n-reader-patterns.js"></script>
+<script src="core/i18n-options.js"></script>
+<script src="core/i18n-sharing.js"></script>
   <script src="core/user-data-database.js"></script>
   <script src="core/privacy-sanitizer.js"></script>
   <script src="core/directory-sync.js"></script>
@@ -1210,8 +1236,19 @@
   <script src="core/token-budget.js"></script>
   <script src="providers/provider-registry.js"></script>
   <script src="options-workbench.js"></script>
-  <script src="options.js"></script>
+  <script src="core/category-store.js"></script>
+    <script src="core/adaptive-catalog.js"></script>
+    <script src="core/settings-store.js"></script>
+
+
+
+
+    <script src="core/i18n-builtins.js"></script>
+    <script src="core/i18n-export.js"></script>
+    <script src="options.js"></script>
   <script src="core/local-library-tags.js"></script>
   <script src="options-local-library.js"></script>
+  <script src="sharing/client.js"></script>
+  <script src="sharing/page.js"></script>
 </body>
 </html>

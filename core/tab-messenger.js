@@ -4,6 +4,15 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const CONTENT_SCRIPT_FILES = [
+    'core/i18n.js',
+    'core/i18n-extension.js',
+    'core/i18n-reader.js',
+    'core/i18n-reader-extra.js',
+    'core/i18n-system.js',
+    'core/i18n-tools.js',
+    'core/i18n-reader-patterns.js',
+    'core/i18n-sharing.js',
+    'core/i18n-content.js',
     'core/page-tools.js',
     'core/task-telemetry.js',
     'core/operation-control.js',
@@ -54,6 +63,7 @@
     'core/article-workspace-save.js',
     'core/article-archive.js',
     'core/export-bundle.js',
+    'core/i18n-export.js',
     'core/mechanism-canvas-model.js',
     'core/research-workbench-canvas-interaction.js',
     'core/mechanism-drawing-layout.js',
@@ -70,14 +80,34 @@
     'core/local-translator.js',
     'core/bilingual-translation-controller.js',
     'bilingual-translation-content.js',
+    'core/llm-task-catalog.js',
+    'core/token-budget.js',
+    'core/tts-service.js',
+    'core/adaptive-catalog.js',
+    'core/settings-store.js',
+    'core/i18n-builtins.js',
+
+
+
+
+    'sharing/client.js',
+    'sharing/dialog.js',
     'content.js',
     'semantic-find-content.js',
     'page-load-indicator-content.js'
   ];
-  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css'];
+  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css', 'sharing/sharing.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.1-reliability-r34-figure-retry-v18';
+    '1.0.1-visibility-sharing-r37-v26';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.1-visibility-sharing-r37-v25',
+    '1.0.1-visibility-sharing-r37-v24',
+    '1.0.1-visibility-sharing-r37-v23',
+    '1.0.1-visibility-sharing-r37-v22',
+    '1.0.1-visibility-sharing-r37-v21',
+    '1.0.1-visibility-sharing-r37-v20',
+    '1.0.1-visibility-sharing-r37-v19',
+    '1.0.1-reliability-r34-figure-retry-v18',
     '1.0.1-reliability-r33-figure-source-v17',
     '1.0.1-reliability-r32-paragraph-notes-v16',
     '1.0.1-reliability-r31-evidence-v15',

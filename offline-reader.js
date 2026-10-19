@@ -1,4 +1,6 @@
 (async () => {
+  const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
+  await globalThis.SciLLM?.bootstrapInterfaceLanguage?.();
   const title = document.getElementById('offlineArticleTitle');
   const status = document.getElementById('offlineArticleStatus');
   const frame = document.getElementById('offlineArticleFrame');
@@ -49,6 +51,7 @@
     if (/^https?:\/\//i.test(saved.data.snapshot?.url || '')) { original.href = saved.data.snapshot.url; original.hidden = false; }
     startReading.disabled = false;
     title.textContent = parsed.title || 'Brevess 离线文献';
+    if (parsed.title) title.setAttribute('data-i18n-ignore', '');
     status.textContent = metadata?.complete === true
       ? '已从本机恢复网页、样式与阅读图片 · 点击“查看保存记录”可在侧栏阅读已保存结果 · 离线只读'
       : metadata?.complete === false
@@ -57,7 +60,8 @@
     const missingList = document.getElementById('offlineArticleMissing');
     for (const item of metadata?.missingResources || []) {
       const line = document.createElement('li');
-      line.textContent = `${item.kind || '资源'}：${item.url || '嵌入资源'}（${item.reason || '未保存'}）`;
+      line.setAttribute('data-i18n-ignore', '');
+      line.textContent = `${t(item.kind || '资源')}: ${item.url || t('嵌入资源')} (${t(item.reason || '未保存')})`;
       missingList.append(line);
     }
     if (missingList.childElementCount) document.getElementById('offlineArticleReport').hidden = false;
@@ -67,11 +71,14 @@
       const dataUrl = source.getAttribute('data-brevess-original-image') || source.getAttribute('src') || '';
       if (!/^data:image\/(?:avif|gif|jpe?g|png|webp|bmp|tiff?);base64,[a-z0-9+/]+={0,2}$/i.test(dataUrl) || seen.has(dataUrl)) continue;
       seen.add(dataUrl);
-      const label = source.alt || `图片 ${seen.size}`;
+      const label = source.alt || t(`图片 ${seen.size}`);
       const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+      button.setAttribute('data-i18n-ignore', '');
       button.addEventListener('click', () => {
-        document.getElementById('offlineImageLabel').textContent = label;
+        const heading = document.getElementById('offlineImageLabel');
+        heading.setAttribute('data-i18n-ignore', ''); heading.textContent = label;
         const preview = document.getElementById('offlineImagePreview'); preview.src = dataUrl; preview.alt = label;
+        preview.setAttribute('data-i18n-ignore', '');
         imageDialog.showModal();
       });
       imageList.append(button);
@@ -82,4 +89,3 @@
     status.textContent = error.message;
   }
 })();
-void globalThis.SciLLM?.bootstrapInterfaceLanguage?.();

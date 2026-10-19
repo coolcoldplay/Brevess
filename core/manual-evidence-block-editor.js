@@ -4,6 +4,17 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   'use strict';
+  const t = input => globalThis.SciLLM?.translateInterfaceText?.(input) || input;
+  function authored(node) { node.setAttribute?.('data-i18n-ignore', ''); return node; }
+  function labeledContent(doc, label, content) {
+    if (!doc.createTextNode) {
+      const line = doc.createElement('p'); line.textContent = `${t(label)}：${content}`; return authored(line);
+    }
+    const line = doc.createElement('p'), name = doc.createElement('span'), value = doc.createElement('span');
+    name.textContent = label; value.textContent = content;
+    line.append(name, doc.createTextNode(': '), authored(value));
+    return line;
+  }
   const fields = [['title', '标题'], ['method', '方法与对照'], ['observation', '观察结果'], ['conclusion', '结论']];
   function value(raw) {
     if (Array.isArray(raw)) return raw.slice(0, 64).map(item => typeof item === 'string' ? item : String(item?.value || '')).filter(Boolean).join('；');
@@ -25,22 +36,23 @@
     };
     const label = panelIds => options.panelLabel?.(panelIds) || (panelIds || []).join('、');
     const history = element('details', '', 'manual-evidence-archive');
+    history.setAttribute?.('data-brevess-interface', '');
     history.append(element('summary', `证据块合并历史（${entries.length}）`));
     history.append(element('p', '合并前的来源记录，只读保留。历史说明不会自动成为当前结论，原联系仍需复核。', 'manual-evidence-note'));
     for (const entry of entries) {
       const block = entry.block || {};
       const target = (options.blocks || []).find(item => item.id === entry.mergedIntoBlockId);
       const item = element('details', '', 'manual-evidence-detail');
-      item.append(element('summary', `${label(block.panelIds) || '原证据块'} → ${target ? label(target.panelIds) : '已变更的证据块'}`));
+      item.append(authored(element('summary', `${label(block.panelIds) || t('原证据块')} → ${target ? label(target.panelIds) : t('已变更的证据块')}`)));
       const values = manualEvidenceEditorValues(block, entry.panels || []);
-      for (const [field, name] of fields) item.append(element('p', `${name}：${values[field] || '未填写'}`));
+      for (const [field, name] of fields) item.append(labeledContent(doc, name, values[field] || t('未填写')));
       if (block.originalSource) {
         const prior = element('details', '', 'manual-evidence-detail');
         prior.append(element('summary', '接管前的来源记录'));
-        prior.append(element('p', `原 Panel：${label(block.originalPanelIds)}`));
+        prior.append(labeledContent(doc, '原 Panel', label(block.originalPanelIds)));
         for (const [field, name] of [['groupGoal', '原共同目标'], ['groupConclusion', '原组小结'], ['established', '原推断']]) {
           const text = value(block.originalSource[field]);
-          if (text) prior.append(element('p', `${name}：${text}`));
+          if (text) prior.append(labeledContent(doc, name, text));
         }
         item.append(prior);
       }
@@ -102,6 +114,7 @@
       const context = options.getContext();
       const dialog = doc.createElement('dialog');
       dialog.className = 'manual-evidence-dialog';
+      dialog.setAttribute('data-brevess-interface', '');
       const editTitle = block ? '调整分组与说明' : '手动组合 Panel';
       dialog.setAttribute('aria-label', editTitle);
       const state = { dialog, context, focus: doc.activeElement, busy: false };
@@ -109,7 +122,8 @@
       const element = (tag, text, className = '') => {
         const node = doc.createElement(tag); node.textContent = text; node.className = className; return node;
       };
-      const heading = element('h3', `${figure.figureLabel || 'Figure'} · ${editTitle}`);
+      const heading = element('h3', '');
+      heading.append(authored(element('span', figure.figureLabel || 'Figure')), doc.createTextNode(' · '), element('span', editTitle));
       const note = element('p', '选择原图中共同支持一项结论的 Panel。说明可留空，保存后可直接拖到机制图联系上。', 'manual-evidence-note');
       const form = doc.createElement('form');
       const choices = element('fieldset', ''); choices.append(element('legend', '选择 Panel（可多选）'));
@@ -184,7 +198,7 @@
         const mergeSource = doc.createElement('select'); mergeSource.setAttribute('aria-label', '合并另一个证据块');
         const empty = element('option', '选择当前 Figure 的其他块'); empty.value = ''; mergeSource.append(empty);
         for (const other of blocks.filter(item => item.id !== block.id && item.kind !== 'transition' && item.sourceType !== 'bridge' && item.panelIds?.length)) {
-          const option = element('option', `${other.panelIds.join('、')} · ${manualEvidenceEditorValues(other).title || '未填写标题'}`);
+          const option = authored(element('option', `${other.panelIds.join('、')} · ${manualEvidenceEditorValues(other).title || t('未填写标题')}`));
           option.value = other.id; mergeSource.append(option);
         }
         mergeLabel.append(mergeSource); regroup.append(mergeLabel);

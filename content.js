@@ -1,6 +1,6 @@
 // 内容脚本 - 在网页上执行高亮
 document.documentElement.dataset.sciLlmContentRevision =
-    '1.0.1-reliability-r34-figure-retry-v18';
+    '1.0.1-visibility-sharing-r37-v26';
 
 function canonicalArticlePreindexUrl(value = globalThis.location?.href || '') {
     return String(value || '').replace(/#.*/, '');
@@ -983,6 +983,12 @@ class SciPaperHighlighter {
         heading.style.cssText =
             `font-weight:600;margin-bottom:4px;color:${categoryColor};`;
         heading.textContent = categoryName;
+        const tooltipCategoryId = annotation?.categoryId || match.category || element?.dataset?.categoryId;
+        const builtinTooltipName = SciLLM.getBuiltinCatalog?.('zh-CN')?.categories?.[tooltipCategoryId]?.name;
+        const hasAuthoredCategoryName = annotation?.categorySnapshot?.name || match.name || element?.dataset?.categoryName;
+        if (hasAuthoredCategoryName && (!builtinTooltipName || builtinTooltipName.normalize('NFKC') !== categoryName.normalize('NFKC'))) {
+            heading.setAttribute('translate', 'no');
+        }
         const children = [heading];
         const matchedKeyword = String(
             match.matchedKeyword || annotation?.sourceQuery || ''
@@ -4435,7 +4441,7 @@ function normalizeFigureRecoveryProgressFields(progress = {}) {
 
 function translateFigureRecoveryText(value) {
     return SciLLM.translateInterfaceText?.(
-        value, llmPresentationState.language || 'zh-CN'
+        value, SciLLM.getInterfaceLanguage?.() || llmPresentationState.language || 'zh-CN'
     ) || String(value || '');
 }
 
@@ -4581,7 +4587,7 @@ function formatFigureProviderAttemptSuffix(progress = {}) {
     const attempt = Number.isFinite(suppliedAttempt) && suppliedAttempt > 0
         ? Math.max(0, Math.min(limit || 96, Math.floor(suppliedAttempt))) : 0;
     return attempt > 0 && limit > 0
-        ? `（模型尝试 ${attempt}/${limit}）`
+        ? translateFigureRecoveryText(`（模型尝试 ${attempt}/${limit}）`)
         : '';
 }
 
@@ -6124,6 +6130,8 @@ let currentManualAnalysisModeId = '';
 let currentManualPreparedAnalysisModeId = '';
 let currentManualSelectionActions = [];
 let currentManualSelectionProfileId = '';
+let currentManualSelectionWebSearchEnabled = false;
+let currentManualSelectionWebSearchSupported = false;
 let currentManualUnresolved = [];
 let currentManualSelection = null;
 let currentManualSelectionUi = null;
@@ -6286,6 +6294,9 @@ function isPageShortcutEditableTarget(target) {
 }
 
 function handleSidePanelGlobalShortcut(event) {
+    // Closed-shadow editors retarget keyboard events to their host. Keep typed
+    // comments out of page/side-panel shortcut handlers without exposing shadow contents.
+    if (event.target?.closest?.('[data-brevess-sharing]')) return;
     if (pageToolEnabled('semantic') && globalThis.__brevessSemanticFind?.handleKeydown(event)) return;
     if (event.defaultPrevented ||
         event.isComposing || event.repeat || event.ctrlKey || event.metaKey ||
@@ -6573,11 +6584,17 @@ function applyManualAnalysisSettings(publicState = {}, { prepared = false } = {}
     currentManualAnalysisModes = toolbarSettings.modes;
     currentManualAnalysisModeId = toolbarSettings.selectedModeId;
     currentManualSelectionActions = SciLLM.normalizeSelectionActions?.(
-        publicState?.settings?.selectionLlmActions
+        (SciLLM.localizeBuiltinSettings?.(publicState?.settings || {}, publicState?.settings?.language)
+            || publicState?.settings)?.selectionLlmActions
     ) || [];
-    currentManualSelectionProfileId = String(
-        publicState?.settings?.globalProfileId || ''
-    );
+    const selectionPolicy = publicState?.settings?.taskPolicies?.selection_chat || {};
+    currentManualSelectionProfileId = String(selectionPolicy.mode === 'profile'
+        ? selectionPolicy.profileId || '' : publicState?.settings?.globalProfileId || '');
+    const selectionProfile = publicState?.settings?.profiles?.[currentManualSelectionProfileId];
+    const selectionConfig = { ...selectionProfile?.config };
+    selectionConfig.model = SciLLM.taskModelForProfile?.(selectionPolicy, selectionProfile, currentManualSelectionProfileId) || selectionConfig.model;
+    currentManualSelectionWebSearchSupported = SciLLM.supportsTaskWebSearch?.(selectionProfile?.providerId, selectionConfig, 'selection_chat') === true;
+    currentManualSelectionWebSearchEnabled = currentManualSelectionWebSearchSupported && selectionPolicy.webSearchEnabled === true;
     currentManualActiveCategories = manualCategoriesForAnalysisMode(
         currentManualAnalysisModeId
     );
@@ -7633,11 +7650,13 @@ function appendUnresolvedManualList(toolbar) {
             const summary = document.createElement('span');
             summary.className = 'sci-manual-unresolved-summary';
             summary.textContent = `${categoryName} · ${annotation.quote.slice(0, 64)}`;
+            summary.setAttribute('translate', 'no');
             button.appendChild(summary);
             if (annotation.note) {
                 const visibleNote = document.createElement('span');
                 visibleNote.className = 'sci-manual-unresolved-note';
                 visibleNote.textContent = annotation.note;
+            visibleNote.setAttribute('translate', 'no');
                 if (visibleNote.textContent.length > 240) {
                     visibleNote.textContent = `${visibleNote.textContent.slice(0, 240)}…`;
                 }
@@ -7851,6 +7870,236 @@ function manualAnnotationSourceIdentity(annotation) {
         annotation?.endOffset, annotation?.pdfAnchor || null]);
 }
 
+function buildManualNoteSharingRequest(record, annotation, documentHash = '') {
+    if (!record?.documentId || !annotation?.annotationId) throw new Error('标注尚未保存');
+    const source = { annotationId: String(annotation.annotationId),
+        documentHash: String(documentHash || annotation.pdfAnchor?.documentHash || record.documentId) };
+    if (typeof record.doi === 'string' && /^10\.\d{4,9}\/\S+$/u.test(record.doi)) source.doi = record.doi;
+    if (typeof annotation.quote === 'string' && annotation.quote.trim()) {
+        source.quote = annotation.quote.slice(0, 500);
+        source.prefix = String(annotation.prefix || '').slice(-120);
+        source.suffix = annotation.quote.length <= 500 ? String(annotation.suffix || '').slice(0, 120) : '';
+        if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(String(annotation.blockFingerprint || ''))) source.blockFingerprint = annotation.blockFingerprint;
+        if (Number.isSafeInteger(annotation.startOffset) && annotation.startOffset >= 0) {
+            source.startOffset = annotation.startOffset; source.endOffset = annotation.startOffset + source.quote.length;
+        }
+    }
+    try {
+        const url = new URL(record.canonicalUrl);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+            url.search = ''; url.hash = ''; source.url = url.href;
+        }
+    } catch (_) {}
+    return { kind: 'highlight_note',
+        localKey: JSON.stringify(['highlight_note', record.documentId, source.documentHash, annotation.annotationId]),
+        title: String(record.title || '高亮备注'), text: String(annotation.note ?? ''), source };
+}
+
+function sharedNoteDocumentHash() {
+    return String(currentManualDocument?.documentHash || currentManualDocument?.record?.documentHash || currentManualDocument?.documentId || '');
+}
+
+function locateSharedHighlightNote(source, { scroll = true } = {}) {
+    const normalize = value => String(value || '').replace(/^sha256:/iu, '').toLowerCase();
+    if (!source?.documentHash || normalize(source.documentHash) !== normalize(sharedNoteDocumentHash()) || !source.quote) return null;
+    currentManualBlocks.forEach(block => { if (block.element?.isConnected) block.text = manualReadableText(block.element); });
+    const location = SciLLM.locateAnnotationInBlocks?.(source, currentManualBlocks);
+    if (location?.status !== 'located') return null;
+    const block = currentManualBlocks.find(item => item.blockId === location.blockId);
+    if (!block?.element?.isConnected) return null;
+    if (scroll) {
+        block.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        block.element.classList.add('sci-shared-note-focus');
+        setTimeout(() => block.element?.classList.remove('sci-shared-note-focus'), 2500);
+    }
+    return block;
+}
+
+const sharedHighlightNoteView = { enabled: false, groupId: '', generation: 0, timer: null,
+    documentHash: '', navigation: '', account: '', count: 0 };
+
+function clearSharedHighlightNoteMarkers() {
+    const marks = Array.from(document.querySelectorAll('.sci-shared-note-sentence'));
+    const roots = marks.map(mark => mark.parentElement).filter(Boolean);
+    withArticleStructureInternalRewriteRoots(roots, () => {
+        for (const mark of marks) mark.replaceWith(...mark.childNodes);
+    });
+    sharedHighlightNoteView.count = 0;
+}
+
+function stopSharedHighlightNotes() {
+    sharedHighlightNoteView.enabled = false;
+    sharedHighlightNoteView.generation += 1;
+    clearInterval(sharedHighlightNoteView.timer); sharedHighlightNoteView.timer = null;
+    clearSharedHighlightNoteMarkers();
+}
+
+function sharedHighlightNoteState() {
+    if (sharedHighlightNoteView.enabled && (sharedHighlightNoteView.documentHash !== sharedNoteDocumentHash() ||
+        sharedHighlightNoteView.navigation !== contentNavigationIdentity())) stopSharedHighlightNotes();
+    return { enabled: sharedHighlightNoteView.enabled, groupId: sharedHighlightNoteView.groupId,
+        documentHash: sharedHighlightNoteView.documentHash, count: sharedHighlightNoteView.count };
+}
+
+function renderSharedHighlightNoteSentence(source, location, query, epoch) {
+    const block = currentManualBlocks.find(item => item.blockId === location.blockId);
+    if (!block?.element?.isConnected) return false;
+    const nodes = collectManualTextNodes(block.element);
+    const text = nodes.map(node => node.textContent || '').join('');
+    if (text.slice(location.startOffset, location.endOffset) !== source.quote) return false;
+    // Wrap each text fragment in place: never clone, replace, or flatten the user's own marks.
+    let offset = 0; const parts = [];
+    for (const node of nodes) {
+        const end = offset + node.length;
+        if (end > location.startOffset && offset < location.endOffset) parts.push({ node,
+            start: Math.max(0, location.startOffset - offset), end: Math.min(node.length, location.endOffset - offset) });
+        offset = end;
+    }
+    const open = event => {
+        if (!event.isTrusted || event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        if (!sharedHighlightNoteView.enabled || epoch !== sharedHighlightNoteView.generation ||
+            sharedHighlightNoteView.documentHash !== sharedNoteDocumentHash() ||
+            sharedHighlightNoteView.navigation !== contentNavigationIdentity() ||
+            !locateSharedHighlightNote(source, { scroll: false })) return stopSharedHighlightNotes();
+        void globalThis.BrevessSharing.openReader({ ...query, title: '本句评论', titleIsInterface: true, source: {
+            documentHash: source.documentHash, quote: source.quote,
+            ...(source.blockFingerprint ? { blockFingerprint: source.blockFingerprint } : {}),
+            ...(Number.isSafeInteger(source.startOffset) ? { startOffset: source.startOffset, endOffset: source.endOffset } : {})
+        }, onLocate: anchor => { if (!locateSharedHighlightNote(anchor)) showManualStatus('来源位置无法安全确认', 'error'); } });
+    };
+    withArticleStructureInternalRewriteRoots([block.element], () => {
+        for (const part of parts.reverse()) {
+            if (part.end < part.node.length) part.node.splitText(part.end);
+            const node = part.start ? part.node.splitText(part.start) : part.node;
+            const mark = document.createElement('span'); mark.className = 'sci-shared-note-sentence';
+            mark.tabIndex = 0; mark.setAttribute('role', 'button'); mark.setAttribute('aria-label', '查看本句评论');
+            mark.addEventListener('click', open, true); mark.addEventListener('keydown', open, true);
+            node.replaceWith(mark); mark.appendChild(node);
+        }
+    });
+    return parts.length > 0;
+}
+
+async function refreshSharedHighlightNotes(epoch) {
+    const state = sharedHighlightNoteView;
+    if (!state.enabled || epoch !== state.generation || state.refreshing === epoch) return;
+    if (state.documentHash !== sharedNoteDocumentHash() || state.navigation !== contentNavigationIdentity()) {
+        stopSharedHighlightNotes(); return;
+    }
+    state.refreshing = epoch;
+    try {
+        const auth = await globalThis.BrevessSharingClient.getSession();
+        const account = JSON.stringify([auth.endpoint, auth.user?.id]);
+        if (!auth.user || state.account && state.account !== account) throw new Error('账号已变化，请重新开启查看公开备注');
+        const query = { kind: 'highlight_note', source: { documentHash: state.documentHash },
+            ...(state.groupId ? { groupId: state.groupId } : { visibility: 'public' }) };
+        const resources = [];
+        let offset = 0;
+        do {
+            const result = await globalThis.BrevessSharing.discover(offset ? { ...query, offset, limit: 100 } : query);
+            if (!state.enabled || epoch !== state.generation) return;
+            if (state.documentHash !== sharedNoteDocumentHash() || state.navigation !== contentNavigationIdentity()) throw new Error('文献已变化');
+            resources.push(...(result.resources || []));
+            if (!result.hasMore) break;
+            if (!Number.isSafeInteger(result.nextOffset) || result.nextOffset <= offset || result.nextOffset > 10000) {
+                throw new Error('公开备注分页无法完整加载，请缩小课题组筛选范围后重试。');
+            }
+            offset = result.nextOffset;
+        } while (true);
+        const latestAuth = await globalThis.BrevessSharingClient.getSession();
+        if (JSON.stringify([latestAuth.endpoint, latestAuth.user?.id]) !== account) throw new Error('账号已变化，请重新开启查看公开备注');
+        if (!state.enabled || epoch !== state.generation) return;
+        if (state.documentHash !== sharedNoteDocumentHash() || state.navigation !== contentNavigationIdentity()) throw new Error('文献已变化');
+        state.account = account; clearSharedHighlightNoteMarkers();
+        const seen = new Set();
+        for (const row of resources) {
+            if (!state.groupId && row.visibility !== 'public' || state.groupId &&
+                !(row.visibility === 'public' || row.visibility === 'group' && row.groupId === state.groupId)) continue;
+            if (!String(row.text || '').trim() && !(row.commentCount > 0)) continue;
+            const block = locateSharedHighlightNote(row.source, { scroll: false });
+            if (!block) continue;
+            const location = SciLLM.locateAnnotationInBlocks(row.source, currentManualBlocks);
+            const key = JSON.stringify([location.blockId, location.startOffset, location.endOffset, row.source.quote]);
+            if (seen.has(key)) continue; seen.add(key);
+            if (renderSharedHighlightNoteSentence(row.source, location, query, epoch)) state.count += 1;
+        }
+    } catch (error) {
+        if (epoch === state.generation) { stopSharedHighlightNotes(); throw error; }
+    } finally {
+        if (state.refreshing === epoch) delete state.refreshing;
+    }
+}
+
+async function setSharedHighlightNotes({ enabled, groupId = '' } = {}) {
+    stopSharedHighlightNotes(); sharedHighlightNoteView.groupId = String(groupId || '');
+    if (!enabled) return sharedHighlightNoteState();
+    const epoch = sharedHighlightNoteView.generation;
+    await prepareManualDocument({ throwOnError: true });
+    if (epoch !== sharedHighlightNoteView.generation) return sharedHighlightNoteState();
+    Object.assign(sharedHighlightNoteView, { enabled: true, documentHash: sharedNoteDocumentHash(),
+        navigation: contentNavigationIdentity(), account: '' });
+    await refreshSharedHighlightNotes(epoch);
+    if (sharedHighlightNoteView.enabled && epoch === sharedHighlightNoteView.generation) {
+        sharedHighlightNoteView.timer = setInterval(() => {
+            void refreshSharedHighlightNotes(epoch).catch(() => {});
+        }, 15000);
+    }
+    return sharedHighlightNoteState();
+}
+
+function appendManualNoteSharingControls(host, surface, note, announce, translateUi = value => value) {
+    host.replaceChildren();
+    const record = currentManualDocument?.record;
+    const annotations = surface.annotations.map(item =>
+        record?.annotations?.find(saved => saved.annotationId === item.annotationId &&
+            manualAnnotationSourceIdentity(saved) === manualAnnotationSourceIdentity(item))).filter(Boolean);
+    if (!annotations.length) {
+        host.textContent = translateUi('新备注默认仅个人可见；保存后可逐条设置可见性。');
+        return;
+    }
+    for (const annotation of annotations) {
+        const request = buildManualNoteSharingRequest(record, annotation, currentManualDocument?.documentHash);
+        const sourceIdentity = manualAnnotationSourceIdentity(annotation);
+        const control = document.createElement('button');
+        control.type = 'button'; control.className = 'sci-selection-note-sharing';
+        control.dataset.annotationId = annotation.annotationId;
+        const prefix = annotations.length > 1 ? `标注 ${annotations.indexOf(annotation) + 1} · ` : '';
+        const renderState = state => {
+            if (!control.isConnected) return;
+            const label = ({ private: '仅个人可见', group: '课题组内共享', public: '公开' })[state?.visibility] || '仅个人可见';
+            const unverified = state?.resourceId && state.verified !== true;
+            control.textContent = translateUi(unverified ? `${prefix}可见性（点击核验）` : `${prefix}可见性：${label}`);
+            control.title = translateUi(unverified ? `上次记录：${label}；当前权限需服务核验` : label);
+            control.setAttribute('aria-label', translateUi(`${prefix}设置高亮备注可见性${unverified ? '，点击核验' : `，当前${label}`}`));
+        };
+        const refresh = () => Promise.resolve(globalThis.BrevessSharing?.getLocalState?.(request.localKey))
+            .then(renderState).catch(() => { control.textContent = translateUi(`${prefix}设置可见性`); });
+        control.textContent = translateUi(`${prefix}可见性：仅个人可见`);
+        control.addEventListener('click', async event => {
+            if (!event.isTrusted) return;
+            if (!surface.validSource()) { announce('页面正文已变化，请重新打开标注', true, 'note'); return; }
+            const saved = manualAnnotationById(annotation.annotationId);
+            if (!saved || manualAnnotationSourceIdentity(saved) !== sourceIdentity) {
+                announce('标注来源已变化，请重新打开标注', true, 'note'); return;
+            }
+            // Match the persisted annotation's Unicode form without trimming edits or rewriting either value.
+            if (String(note.value ?? '').normalize('NFKC') !== String(saved.note ?? '').normalize('NFKC')) {
+                announce('请先保存备注，再设置可见性；当前编辑内容仍保留。', true, 'note'); return;
+            }
+            if (!globalThis.BrevessSharing?.open) { announce('共享模块尚未就绪，请重新打开页面', true, 'note'); return; }
+            control.disabled = true;
+            try {
+                await globalThis.BrevessSharing.open(buildManualNoteSharingRequest(
+                    currentManualDocument.record, saved, currentManualDocument.documentHash));
+                await refresh();
+            } catch (_) { announce('无法打开共享设置；备注仍保存在本机。', true, 'note'); }
+            finally { control.disabled = false; }
+        });
+        host.appendChild(control); void refresh();
+    }
+}
+
 function selectionSurfaceExistingAnnotationCurrent(descriptor) {
     const original = descriptor.existingAnnotation;
     const current = original && manualAnnotationById(original.annotationId);
@@ -7872,7 +8121,7 @@ function openManualAnnotationSurface(annotation, mark, llmMark) {
 
 function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) {
     const translateUi = value => SciLLM.translateInterfaceText?.(String(value || ''),
-        typeof llmPresentationState === 'undefined' ? 'zh-CN' : llmPresentationState.language || 'zh-CN') || String(value || '');
+        SciLLM.getInterfaceLanguage?.() || (typeof llmPresentationState === 'undefined' ? 'zh-CN' : llmPresentationState.language || 'zh-CN')) || String(value || '');
     closeManualSelectionToolbar();
     const toolbarDescriptor = { ...descriptor,
         manualAnalysisModeId: descriptor.manualAnalysisModeId || currentManualAnalysisModeId || '' };
@@ -8122,6 +8371,7 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
     const noteFooter = node('div', 'sci-selection-note-footer'); noteFooter.append(save);
     if (existingAnnotation) {
         const quote = node('blockquote', 'sci-selection-note-quote'); quote.textContent = existingAnnotation.quote || '';
+            quote.setAttribute('translate', 'no');
         const categoryLabel = node('div', 'sci-selection-note-category');
         categoryLabel.textContent = selectedCategory.name || selectedCategory.categoryId;
         panes.note.append(quote, categoryLabel);
@@ -8148,7 +8398,9 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
         });
         noteFooter.append(remove);
     }
-    panes.note.append(note, noteHint, noteFooter);
+    const noteSharing = node('div', 'sci-selection-note-sharing-controls');
+    panes.note.append(note, noteHint, noteFooter, noteSharing);
+    appendManualNoteSharingControls(noteSharing, surface, note, announce, translateUi);
     const prepareAnnotation = () => {
         if (!toolbarDescriptor.pendingAnnotation) return Promise.resolve();
         if (annotationPreparation) return annotationPreparation;
@@ -8186,6 +8438,7 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
             const categoryLabel = panes.note.querySelector('.sci-selection-note-category');
             if (categoryLabel) categoryLabel.textContent = category.name || category.categoryId;
             palette.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.categoryId === category.categoryId)));
+            appendManualNoteSharingControls(noteSharing, surface, note, announce, translateUi);
             announce('已保存', false, 'note');
         } catch (error) { announce('保存失败：' + error.message + '。草稿仍保留，可重试。', true, 'note'); }
         finally {
@@ -8217,6 +8470,8 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
     actionSelect.addEventListener('change', selectPrompt);
     const webLabel = node('label', 'sci-selection-web-label');
     const web = node('input', 'sci-selection-web'); web.type = 'checkbox';
+    web.checked = currentManualSelectionWebSearchEnabled;
+    web.disabled = !currentManualSelectionWebSearchSupported;
     webLabel.append(web, document.createTextNode(translateUi('允许联网检索')));
     promptDetails.append(promptSummary, prompt,
         node('p', 'sci-selection-hint', '仅用于本次请求。默认提示词请在设置中修改。'), webLabel);
@@ -8265,6 +8520,7 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
                     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || seen.has(url.href)) continue;
                     seen.add(url.href);
                     const link = node('a', ''); link.textContent = String(source.title || url.hostname);
+            link.setAttribute('translate', 'no');
                     link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
                     links.appendChild(link);
                 }
@@ -8679,8 +8935,8 @@ function appendAiPresentationCards(section, sample) {
             `${shortLabel || category.categoryName || category.categoryId}`;
         card.appendChild(title);
         appendAiCardField(card, '原始类别', category.categoryId);
-        appendAiCardField(card, '来源', '当前论文正文');
-        appendAiCardField(card, 'relation_id', category.relationId || '未提供（关系不完整）');
+        appendAiCardField(card, '来源', readerInterfaceText('当前论文正文'));
+        appendAiCardField(card, 'relation_id', category.relationId || readerInterfaceText('未提供（关系不完整）'));
         if (sample.presentationMode === 'audit_warning') {
             appendAuditWarningEvidence(card, sample, category);
         } else {
@@ -8694,7 +8950,10 @@ function appendAiCardField(card, label, value) {
     const row = document.createElement('p');
     const strong = document.createElement('b');
     strong.textContent = `${label}：`;
-    row.append(strong, document.createTextNode(String(value || '未提供')));
+    const body = document.createElement('span');
+    body.setAttribute('translate', 'no');
+    body.textContent = String(value || readerInterfaceText('未提供'));
+    row.append(strong, body);
     card.appendChild(row);
 }
 
@@ -8708,6 +8967,7 @@ function appendRelationEvidence(card, sample, category) {
             term.textContent = slot.name;
             const description = document.createElement('dd');
             description.textContent = String(slot.value || '未提供');
+            if (slot.value) description.setAttribute('translate', 'no');
             list.append(term, description);
         });
         card.appendChild(list);
@@ -8722,14 +8982,15 @@ function appendRelationEvidence(card, sample, category) {
         supports.slice(0, 12).forEach(span => {
             const item = document.createElement('li');
             item.textContent = `${span.quoteRole ? `[${span.quoteRole}] ` : ''}${span.quote}`;
+            item.setAttribute('translate', 'no');
             list.appendChild(item);
         });
         card.append(heading, list);
     }
     appendAiCardField(card, '证据状态',
         category.relationId && slots.length
-            ? '已保留结构化关系；请逐条核对显示引文与支持引文。'
-            : '证据不足或关系字段不完整，不能据此扩展科学结论。');
+            ? readerInterfaceText('已保留结构化关系；请逐条核对显示引文与支持引文。')
+            : readerInterfaceText('证据不足或关系字段不完整，不能据此扩展科学结论。'));
 }
 
 function appendAuditWarningEvidence(card, sample, category) {
@@ -8739,16 +9000,16 @@ function appendAuditWarningEvidence(card, sample, category) {
     ];
     const claim = spans.find(span => span.quoteRole === 'claim');
     const evidence = spans.filter(span => span.quoteRole === 'evidence');
-    appendAiCardField(card, '作者主张', claim?.quote || '结构化结果未提供 claim 引文');
+    appendAiCardField(card, '作者主张', claim?.quote || readerInterfaceText('结构化结果未提供 claim 引文'));
     appendAiCardField(card, '支持证据', evidence.length
         ? evidence.map(span => span.quote).join('；')
-        : '结构化结果未提供 evidence 引文');
-    appendAiCardField(card, '模型认为的问题', category.reasonZh || '未提供具体问题说明');
+        : readerInterfaceText('结构化结果未提供 evidence 引文'));
+    appendAiCardField(card, '模型认为的问题', category.reasonZh || readerInterfaceText('未提供具体问题说明'));
     const slots = (Array.isArray(category.slots) ? category.slots : [])
         .map(slot => `${slot.name}=${slot.value}`).join('；');
-    appendAiCardField(card, '为什么适用', slots || category.reasonZh || '未提供结构化适用依据');
+    appendAiCardField(card, '为什么适用', slots || category.reasonZh || readerInterfaceText('未提供结构化适用依据'));
     appendAiCardField(card, '当前仍不能确定',
-        '未被原文引文和结构化字段支持的信息不作推断；该警告不是校准后的统计概率。');
+        readerInterfaceText('未被原文引文和结构化字段支持的信息不作推断；该警告不是校准后的统计概率。'));
 }
 
 function showHighlightContextPopover(mark, options = {}) {
@@ -8918,6 +9179,7 @@ function handleManualKeyDown(event) {
 }
 
 function handleManualOutsideClick(event) {
+    if (manualClosest(event.target, '.sci-shared-note-sentence')) return;
     if (isInsideManualTransientUi(event.target)) return;
     // A drag's click follows pointerup/mouseup. It completes this selection,
     // not a new outside interaction. A new pointerdown always retires the lease.
@@ -8970,6 +9232,7 @@ function handleNativePdfAnnotationActivate(event) {
 }
 
 function disableManualAnnotationUi() {
+    stopSharedHighlightNotes();
     htmlHighlightCheckpointEpoch += 1;
     clearTimeout(manualSelectionTimer);
     clearTimeout(manualPrepareTimer);
@@ -9086,7 +9349,7 @@ function formatNotificationTokenUsage(value) {
     if (value?.taskSummaryText) return String(value.taskSummaryText).slice(0, 550);
     const usage = mergeNotificationTokenUsage(value);
     if (!usage) return '';
-    const number = token => Math.round(token).toLocaleString('zh-CN');
+    const number = token => Math.round(token).toLocaleString(SciLLM.getInterfaceLanguage?.() === 'en' ? 'en-US' : 'zh-CN');
     return `${usage.estimated ? '估算 ' : ''}Token：输入 ${number(usage.inputTokens)}` +
         ` · 输出 ${number(usage.outputTokens)} · 总计 ${number(usage.totalTokens)}` +
         (usage.requests > 1 ? ` · ${usage.requests} 次调用` : '');
@@ -22460,7 +22723,7 @@ function articleChatRequestQuestion(turn) {
         '请找出正文中所有直接匹配该意图的重要原文句子。',
         '回答要简短；每个匹配必须附带可逐字回定位的原文证据 citation。',
         '不要用推测补足证据，不要返回只在标题、作者、导航、参考文献或附加界面中出现的内容。'
-    ].join('\n');
+    ].map(readerInterfaceText).join('\n');
 }
 
 function paintNativePdfSemanticChatPage(entry, pageNumber) {
@@ -27389,7 +27652,7 @@ function isArticleStructureMutation(mutation) {
         }
         const selector =
             'article,section,h1,h2,h3,h4,h5,h6,[role="heading"],p,li,caption,' +
-            'blockquote,dd,[role="paragraph"],div[class*="paragraph" i],div[class*="para" i]';
+            'blockquote,dd,[role="paragraph"],div[class*="paragraph" i],div[class*="para" i],.sci-shared-note-sentence';
         const selectors = [selector, ...(sourceAdapter?.headingSelectors || []),
             ...(sourceAdapter?.paragraphSelectors || [])];
         const candidates = [element];
@@ -27458,6 +27721,7 @@ function startArticleStructureObserver() {
         if (!mutations.some(isArticleStructureMutation)) return;
         articleStructureLastMutationAt = Date.now();
         articleStructureChangeSequence += 1;
+        if (sharedHighlightNoteView.enabled) stopSharedHighlightNotes();
         globalThis.__brevessSemanticFind?.invalidate('正文已变化，请重新搜索。');
         // Invalidate immediately, before the debounce, so a click cannot reuse
         // text from the previous DOM epoch. Ads and plugin UI are filtered out.
@@ -32598,6 +32862,7 @@ function captureOfflineArticleSnapshot(captured = {}) {
         documentIdentity: contentDocumentIdentity, navigationIdentity: contentNavigationIdentity(),
         collected: captured.collected || collectCompleteExportFigures(),
         faithfulCapture: SciLLM.captureFaithfulPageSnapshot({
+            language: SciLLM.getInterfaceLanguage?.(),
             document, articleRoot: resolveFaithfulSnapshotArticleRoot(), title: article.title,
             documentUrl: sourceUrl, annotations,
             exportSnapshot: translator?.captureExportSnapshot?.({
@@ -36202,6 +36467,7 @@ function renderHighlightDistribution(container, structure) {
         jump.type = 'button';
         jump.className = 'sci-highlight-matrix-section';
         jump.textContent = row.title;
+            jump.setAttribute('translate', 'no');
         jump.addEventListener('click', () => {
             if (activeNativePdfStructure()) {
                 void focusArticleWorkspaceSource({ kind: 'section', sectionId: row.sectionId })
@@ -36332,6 +36598,7 @@ function renderPdfSemanticOutline(container, context) {
         jump.type = 'button';
         jump.className = 'sci-article-node-jump';
         jump.textContent = section.title || '未命名章节';
+        if (section.title) jump.setAttribute('translate', 'no');
         jump.disabled = !sectionTarget;
         jump.addEventListener('click', async () => {
             await focusFromButton(jump, sectionTarget);
@@ -36454,6 +36721,7 @@ function renderArticleOutline(container, structure) {
         jump.type = 'button';
         jump.className = 'sci-article-node-jump';
         jump.textContent = node.title || '未命名章节';
+        if (node.title) jump.setAttribute('translate', 'no');
         jump.addEventListener('click', () => focusArticleSource(node.anchor));
         row.appendChild(jump);
 
@@ -36485,6 +36753,7 @@ function renderArticleOutline(container, structure) {
                 const summary = document.createElement('p');
                 summary.className = 'sci-article-section-summary';
                 summary.textContent = sectionSummary.summary;
+            summary.setAttribute('translate', 'no');
                 children.appendChild(summary);
             }
             (structureParagraphs.get(node.sectionId) || []).forEach(paragraph => {
@@ -36495,6 +36764,7 @@ function renderArticleOutline(container, structure) {
                 button.type = 'button';
                 button.className = 'sci-article-paragraph-summary';
                 button.textContent = paragraphSummary.summary || '暂无摘要';
+        if (paragraphSummary.summary) button.setAttribute('translate', 'no');
                 button.addEventListener('click', () => focusArticleSource(paragraph.anchor));
                 children.appendChild(button);
             });
@@ -36747,6 +37017,7 @@ function renderReviewOutlinePanel(outline) {
         const title = document.createElement('span');
         title.className = 'sci-review-outline-title';
         title.textContent = node.title || '未命名章节';
+        if (node.title) title.setAttribute('translate', 'no');
         summary.appendChild(title);
         if (node.sectionRole) {
             const role = document.createElement('span');
@@ -36771,6 +37042,7 @@ function renderReviewOutlinePanel(outline) {
                 const summaryText = document.createElement('span');
                 summaryText.className = 'sci-review-outline-paragraph-summary';
                 summaryText.textContent = paragraph.summary || '暂无摘要';
+        if (paragraph.summary) summaryText.setAttribute('translate', 'no');
                 item.append(role, summaryText);
                 if (paragraph.keyPoint) {
                     const keyPoint = document.createElement('small');
@@ -37139,10 +37411,10 @@ async function analyzeReviewOutlineWithLLM(options = {}) {
                     preparedOutlineParagraphs.length
             );
             const coverageNotice = outlineSectionCount
-                ? '，已锁定 ' + outlineSectionCount + ' 个正文章节'
+                ? readerInterfaceText('，已锁定 ' + outlineSectionCount + ' 个正文章节')
                 : '';
             const exclusionNotice = excludedOutlineUnitCount
-                ? '，已排除 ' + excludedOutlineUnitCount + ' 个网页功能区或非正文单元'
+                ? readerInterfaceText('，已排除 ' + excludedOutlineUnitCount + ' 个网页功能区或非正文单元')
                 : '';
             updateReviewOutlineStatus({
                 phase: 'review_map', totalParagraphs: paragraphs.length,
@@ -37639,17 +37911,17 @@ function collectCompleteExportFigures() {
 }
 
 function buildExportChatMarkdown(chat = {}) {
-    const lines = ['# 文献全文问答', ''];
+    const lines = [readerInterfaceText('# 文献全文问答'), ''];
     (Array.isArray(chat.turns) ? chat.turns : []).forEach((turn, index) => {
-        lines.push(`## 问答 ${index + 1}`, '', `**问题：** ${turn.question || ''}`, '');
+        lines.push(readerInterfaceText('## 问答 {0}').replace('{0}', index + 1), '', `${readerInterfaceText('**问题：**')} ${turn.question || ''}`, '');
         const blocks = Array.isArray(turn.answerBlocks) ? turn.answerBlocks : [];
         if (blocks.length) {
             blocks.forEach(block => lines.push(String(block.markdown || ''), ''));
         } else {
-            lines.push(String(turn.summary || '无回答'), '');
+            lines.push(String(turn.summary || readerInterfaceText('无回答')), '');
         }
     });
-    if (!(chat.turns || []).length) lines.push('暂无全文问答。', '');
+    if (!(chat.turns || []).length) lines.push(readerInterfaceText('暂无全文问答。'), '');
     return lines.join('\n');
 }
 
@@ -37673,7 +37945,12 @@ function buildPptBundleReadme(bundle) {
         '请先核对 `manifest.json` 中的 `missingImageFigureIds`。缺图时不要凭空重建，',
         '应回到论文页面下载原图后再制作 PPT。',
         ''
-    ].join('\n');
+    ].map(line => readerInterfaceText(line)).join('\n');
+}
+
+function readerInterfaceText(value) {
+    return globalThis.SciLLM?.translateInterfaceText?.(value,
+        globalThis.SciLLM?.getInterfaceLanguage?.() || llmPresentationState.language) || String(value || '');
 }
 
 let preparedPptMaterialExport = null;
@@ -38199,7 +38476,7 @@ function appendSnapshotAnnotationAppendix(targetBody, annotations) {
     const section = outputDocument.createElement('section');
     section.id = 'sci-reader-snapshot-annotations';
     const heading = outputDocument.createElement('h2');
-    heading.textContent = `Brevess：手动高亮与注释（${annotations.length}）`;
+    heading.textContent = readerInterfaceText(`Brevess：手动高亮与注释（${annotations.length}）`);
     section.appendChild(heading);
     const list = outputDocument.createElement('ol');
     annotations.forEach(annotation => {
@@ -38213,7 +38490,7 @@ function appendSnapshotAnnotationAppendix(targetBody, annotations) {
         item.appendChild(quote);
         if (String(annotation.note || '').trim()) {
             const note = outputDocument.createElement('p');
-            note.textContent = `注释：${annotation.note}`;
+            note.textContent = `${readerInterfaceText('注释：')}${annotation.note}`;
             item.appendChild(note);
         }
         list.appendChild(item);
@@ -38983,6 +39260,7 @@ async function exportEnhancedSnapshotToZotero(options = {}) {
     const chatNoteHtml = SciLLM.buildZoteroChatNoteHtml(sharedNoteInput);
     assertSource(true);
     const faithfulSnapshot = await SciLLM.exportFaithfulPageSnapshot({
+        language: SciLLM.getInterfaceLanguage?.(),
         document,
         articleRoot: resolveFaithfulSnapshotArticleRoot(),
         title: article.title,
@@ -39368,6 +39646,22 @@ function applyAndPublishFigureProgressEvent(progress = {}) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request?.type === 'BREVESS_SHARING_SESSION_CHANGED') {
+        if (sender?.id === chrome.runtime.id) stopSharedHighlightNotes();
+        sendResponse({ success: sender?.id === chrome.runtime.id }); return false;
+    }
+    if (['SET_SHARED_HIGHLIGHT_NOTES', 'GET_SHARED_HIGHLIGHT_NOTES'].includes(request?.action)) {
+        if (sender?.id !== chrome.runtime.id || sender?.tab ||
+            !String(sender?.url || '').startsWith(chrome.runtime.getURL(''))) {
+            sendResponse({ success: false, error: 'SHARING_CONTROL_SOURCE_INVALID' }); return false;
+        }
+        if (request.action === 'GET_SHARED_HIGHLIGHT_NOTES') {
+            sendResponse({ success: true, ...sharedHighlightNoteState() }); return false;
+        }
+        setSharedHighlightNotes(request).then(state => sendResponse({ success: true, ...state }))
+            .catch(error => sendResponse({ success: false, enabled: false, error: error.message }));
+        return true;
+    }
     // Extension readers also receive runtime broadcasts; only the background owns this route.
     // Its bridge sends prepare/focus actions to the selected reader with the guards below.
     if (request?.type === 'RESEARCH_WORKBENCH_LOCATE_SOURCE') return false;
@@ -39725,10 +40019,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             let message = '正在生成逐段摘要（' + completedParagraphs + '/' + totalParagraphs + '）…';
             if (progress.phase === 'review_retry') {
                 const seconds = Math.max(1, Math.ceil((Number(progress.waitMs) || 0) / 1000));
-                const stageName = progress.stage === 'reduce' ? '全局组织综合' : '逐段摘要';
-                const reason = ({ INVALID_RESPONSE: '返回格式不符合要求', REQUEST_TIMEOUT: '请求超时',
+                const stageName = readerInterfaceText(progress.stage === 'reduce' ? '全局组织综合' : '逐段摘要');
+                const reason = readerInterfaceText(({ INVALID_RESPONSE: '返回格式不符合要求', REQUEST_TIMEOUT: '请求超时',
                     RATE_LIMITED: '遇到服务限流', PROVIDER_UNAVAILABLE: '服务暂不可用',
-                    NETWORK_ERROR: '网络连接失败', OUTPUT_TRUNCATED: '返回内容被截断' })[progress.errorCode] || '请求失败';
+                    NETWORK_ERROR: '网络连接失败', OUTPUT_TRUNCATED: '返回内容被截断' })[progress.errorCode] || '请求失败');
                 message = progress.errorCode === 'INVALID_RESPONSE'
                     ? stageName + '格式不符合要求，正在自动纠正，' + seconds + ' 秒后重试…'
                     : stageName + reason + '，' + seconds + ' 秒后重试…';

@@ -5906,6 +5906,14 @@ body[data-ui-surface="sidebar"] #translateNavigationTitles[data-translation-stat
   animation: navigation-title-work 1100ms linear infinite; pointer-events: none;
 }
 @keyframes navigation-title-work { to { --navigation-title-angle: 360deg; } }
+.workspace-panel-note-sharing { display: block; max-width: 100%; margin-top: 7px; padding: 4px 7px; white-space: normal; text-align: left; color: #202020; background: #f4f4f4; border: 1px solid #d5d5d5; border-radius: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.workspace-panel-note-sharing:focus-visible { outline: 2px solid #202020; outline-offset: 2px; }
+.workspace-panel-note-sharing:disabled { opacity: .55; cursor: default; }
+.workspace-panel-reader-notes { max-width: 100%; white-space: normal; margin-top: 5px; padding: 4px 7px; color: #202020; background: #fff; border: 1px solid #d5d5d5; border-radius: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.sharing-public-note-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; border: 1px solid #d5d5d5; border-radius: 0; margin-bottom: 10px; }
+.sharing-public-note-controls label { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; }
+.sharing-public-note-controls select { max-width: 100%; padding: 4px; font: inherit; font-size: 12px; }
+.sharing-public-note-controls p { flex-basis: 100%; margin: 0; color: #646464; font-size: 11px; line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   :is(
     #translateNavigationTitles[data-translation-state="running"],

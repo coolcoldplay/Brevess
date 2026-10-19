@@ -1,0 +1,136 @@
+/* Match the final BREVESS sidebar theme; keep document styles surface-scoped. */
+#openBrevessAccount { display:inline-flex; align-items:center; justify-content:center; width:auto; min-width:48px; padding:0 7px; flex:0 0 auto; font-size:12px; white-space:nowrap; }
+.brevess-account-entry::before { content:''; display:inline-block; width:6px; height:6px; margin-right:5px; border:1px solid currentColor; border-radius:50%; vertical-align:middle; }
+.brevess-account-entry[data-signed-in=true]::before { background:currentColor; }
+:host { all: initial; color-scheme: light; }
+.sharing-dialog, .sharing-page {
+  --sharing-ink: #202020; --sharing-muted: #646464; --sharing-line: #d5d5d5;
+  --sharing-soft: #f4f4f4; --sharing-radius: 0px;
+  font: 13px/1.6 Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--sharing-ink); color-scheme: light;
+}
+.sharing-dialog *, .sharing-page * { box-sizing: border-box; }
+.sharing-dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; padding: 20px; border: 1px solid var(--sharing-line); border-radius: var(--sharing-radius); box-shadow: 0 16px 56px #0003; background: #fff; }
+.sharing-dialog::backdrop { background: #0003; }
+.sharing-dialog header, .sharing-dialog footer, .sharing-page header, .sharing-page .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sharing-dialog header { align-items: flex-start; }
+.sharing-dialog header > div, .sharing-page header > div, .sharing-page .row > * { min-width: 0; }
+.sharing-dialog h2 { margin: 0; font-size: 18px; line-height: 1.45; font-weight: 650; overflow-wrap: anywhere; }
+.sharing-dialog h3, .sharing-page h3 { font-size: 14px; margin: 0 0 8px; }
+.sharing-dialog h4 { font-size: 13px; margin: 14px 0 5px; }
+.sharing-dialog p, .sharing-page p { overflow-wrap: anywhere; }
+.sharing-dialog .eyebrow, .sharing-page .eyebrow { margin: 0 0 5px; color: var(--sharing-ink); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.sharing-dialog button, .sharing-page button, .sharing-page .button { max-width: 100%; min-height: 30px; border: 1px solid var(--sharing-line); border-radius: var(--sharing-radius); padding: 5px 10px; color: var(--sharing-ink); background: #fff; font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
+.sharing-dialog button:hover:not(:disabled), .sharing-page button:hover:not(:disabled), .sharing-page .button:hover { background: #ededed; }
+.sharing-dialog .primary, .sharing-page .primary, .sharing-dialog .reader-tabs [aria-selected="true"] { background: var(--sharing-ink); color: #fff; border-color: var(--sharing-ink); }
+.sharing-dialog .primary:hover:not(:disabled), .sharing-page .primary:hover:not(:disabled), .sharing-dialog .reader-tabs [aria-selected="true"]:hover { background: #363636; }
+.sharing-dialog button:disabled, .sharing-page button:disabled { opacity: .5; cursor: default; }
+.sharing-dialog :is(button,input,select,textarea,summary,a):focus-visible, .sharing-page :is(button,input,select,textarea,summary,a):focus-visible { outline: 2px solid var(--sharing-ink); outline-offset: 2px; }
+.sharing-dialog .icon-button { flex: 0 0 28px; min-height: 28px; font-size: 20px; padding: 0; line-height: 26px; }
+.sharing-dialog label, .sharing-page label { display: block; margin: 12px 0; font-size: 12px; font-weight: 600; }
+.sharing-dialog select, .sharing-dialog textarea, .sharing-page input, .sharing-page select { display: block; width: 100%; min-width: 0; max-width: 100%; margin-top: 5px; border: 1px solid var(--sharing-line); border-radius: var(--sharing-radius); padding: 7px 8px; background: #fff; color: var(--sharing-ink); font: inherit; font-size: 13px; line-height: 1.5; }
+.sharing-dialog textarea { resize: vertical; min-height: 84px; font-weight: 400; }
+.sharing-dialog .muted, .sharing-page .muted { font-size: 12px; color: var(--sharing-muted); font-weight: 400; }
+.sharing-dialog .privacy-note { margin: 14px 0; padding: 10px 12px; border: 1px solid #e8e8e8; background: var(--sharing-soft); font-size: 12px; }
+.sharing-dialog details { margin: 16px 0; border: 1px solid var(--sharing-line); border-radius: var(--sharing-radius); padding: 10px 12px; }
+.sharing-dialog summary { cursor: pointer; font-weight: 600; }
+.sharing-dialog .preview { overflow: visible; max-height: none; padding-top: 10px; }
+.sharing-dialog pre, .sharing-page pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 8px 0; }
+.sharing-dialog a, .sharing-page a { color: var(--sharing-ink); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.sharing-dialog footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid #e8e8e8; flex-wrap: wrap; }
+.sharing-dialog footer a { font-size: 12px; }
+.sharing-dialog footer > div { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.sharing-dialog .message, .sharing-page .message { color: #5d4c2a; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.sharing-dialog .message:empty, .sharing-page .message:empty { display: none; }
+.sharing-dialog .reader-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+.sharing-dialog .reader-tabs button { flex: 1 1 0; padding: 5px 7px; }
+.sharing-dialog .reader-list { max-height: none; overflow: visible; }
+.sharing-dialog .reader-note { border-top: 1px solid var(--sharing-line); padding: 14px 0; }
+.sharing-dialog .reader-note:first-child { border-top: 0; padding-top: 4px; }
+.sharing-dialog .reader-note header { flex-wrap: wrap; gap: 4px 10px; }
+.sharing-dialog .reader-note header strong { font-size: 13px; }
+.sharing-dialog .reader-note header time { color: var(--sharing-muted); font-size: 11px; }
+.sharing-dialog .reader-badge { display: inline-block; font-size: 11px; background: #ededed; padding: 1px 6px; margin-left: 7px; white-space: nowrap; }
+.sharing-dialog .reader-note-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; font-size: 13px; line-height: 1.8; }
+.sharing-dialog .reader-note blockquote, .sharing-dialog .reader-sentence { margin: 12px 0; border-left: 3px solid #aaa; padding: 8px 10px; color: var(--sharing-muted); background: var(--sharing-soft); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sharing-dialog .reader-note button { font-size: 12px; padding: 4px 8px; }
+.sharing-dialog .reader-comments { margin-top: 14px; border-top: 1px solid #e8e8e8; padding-top: 12px; }
+.sharing-dialog .reader-comments h3 { margin: 0 0 10px; font-size: 13px; }
+.sharing-dialog .reader-comment { padding: 10px; margin: 8px 0; background: var(--sharing-soft); border: 1px solid #e8e8e8; }
+.sharing-dialog .reader-comment .reader-note-text { font-size: 13px; margin: 8px 0; }
+.sharing-dialog .reader-comment-form { margin-top: 12px; }
+.sharing-dialog .reader-comment-actions { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+.sharing-dialog .reader-comment-actions small { flex: 1 1 160px; color: var(--sharing-muted); font-size: 11px; }
+.sharing-dialog .reader-comment-actions .primary { flex: 0 0 auto; margin-left: auto; }
+.sharing-dialog .reader-start-form { padding: 12px; background: #fafafa; border: 1px solid var(--sharing-line); border-radius: var(--sharing-radius); margin-top: 14px; }
+.sharing-dialog details .reader-start-form { padding: 0; border: 0; background: transparent; }
+.sharing-dialog .reader-start-form h3 { margin: 0 0 8px; font-size: 14px; }
+.sharing-dialog .reader-start-form textarea { min-height: 100px; }
+.sharing-dialog .reader-note .reader-like { margin: 2px 6px 2px 0; background: #fff; color: var(--sharing-ink); }
+.sharing-dialog .reader-note .reader-like[aria-pressed="true"] { background: var(--sharing-ink); color: #fff; border-color: var(--sharing-ink); font-weight: 600; }
+.sharing-dialog.reader-dialog > label { margin: 10px 0; }
+.sharing-page { margin: 0; min-height: 100vh; background: #fafafa; }
+.sharing-page .shell { max-width: 1120px; margin: auto; padding: 26px 24px; }
+.sharing-page .shell > header { padding-bottom: 16px; border-bottom: 1px solid var(--sharing-line); align-items: flex-end; }
+.sharing-page h1 { font-size: 24px; font-weight: 650; margin: 0; line-height: 1.4; }
+.sharing-page h2 { font-size: 16px; margin: 0 0 12px; }
+.sharing-page .intro { max-width: 800px; color: var(--sharing-muted); font-size: 13px; margin: 16px 0; }
+.sharing-page .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; margin-top: 20px; }
+.sharing-page .layout > * { min-width: 0; }
+.sharing-page .card { background: #fff; border: 1px solid var(--sharing-line); padding: 18px; margin-bottom: 16px; }
+.sharing-page .resources { list-style: none; margin: 0; padding: 0; }
+.sharing-page .resource { padding: 12px 0; border-top: 1px solid #e8e8e8; }
+.sharing-page .resource:first-child { border: 0; }
+.sharing-page .resource button { text-align: left; width: 100%; font-weight: 600; background: var(--sharing-soft); }
+.sharing-page .resource small { display: block; color: var(--sharing-muted); font-size: 11px; margin-top: 5px; }
+.sharing-page .group { border-top: 1px solid var(--sharing-line); margin-top: 14px; padding-top: 14px; }
+.sharing-page .members { padding-left: 18px; font-size: 12px; }
+.sharing-page .members li { margin: 7px 0; }
+.sharing-page .members button { min-height: 25px; font-size: 11px; padding: 2px 6px; margin-left: 7px; }
+.sharing-page .tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.sharing-page .tag { background: #ededed; font-size: 11px; padding: 2px 7px; }
+.sharing-page .resource-body { max-height: none; overflow: visible; }
+.sharing-page .read-title { margin-top: 14px; }
+.sharing-page .warning { border-left: 3px solid #aaa; padding-left: 10px; color: var(--sharing-muted); font-size: 12px; }
+.sharing-page .shared-block { padding: 12px; border: 1px solid #e8e8e8; margin: 10px 0; background: #fafafa; }
+.sharing-page .shared-block h4 { margin: 0 0 6px; }
+.sharing-page .shared-block .tag { margin-left: 8px; }
+.sharing-page .shared-block pre { margin-bottom: 0; }
+.sharing-page [hidden], .sharing-dialog [hidden] { display: none !important; }
+.sharing-page .account-card > details, .sharing-page #signed-in > details { margin: 14px 0; padding: 10px 0; border-top: 1px solid #e8e8e8; border-bottom: 1px solid #e8e8e8; }
+.sharing-page .account-card summary { cursor: pointer; font-weight: 600; }
+.sharing-page .account-tabs { display: flex; gap: 0; margin: 18px 0 8px; border-bottom: 1px solid var(--sharing-line); }
+.sharing-page .account-tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; background: none; padding: 8px; }
+.sharing-page .account-tabs button[aria-pressed="true"] { font-weight: 700; border-bottom-color: var(--sharing-ink); }
+.sharing-page .text-button { border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.sharing-page .account-card form > button { margin: 4px 4px 4px 0; }
+.sharing-page .account-card input { font-size: 14px; }
+.sharing-page #account-link-panel { border-top: 1px solid var(--sharing-line); margin-top: 16px; padding-top: 16px; }
+.sharing-page #load-more { margin-top: 14px; }
+.settings-account .sharing-page { min-height:0; background:transparent; }
+.settings-account .sharing-page > header { justify-content:flex-end; }
+.settings-account .sharing-page .layout { display:block; margin-top:16px; }
+.settings-account .sharing-page .layout > aside { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:18px; }
+.settings-account .sharing-page .layout > aside > * { min-width:0; }
+.settings-account #settings-account-signed-in > details { margin:14px 0; padding:10px 0; border-block:1px solid #e8e8e8; }
+@media(max-width:1000px){.settings-account .sharing-page .layout > aside { grid-template-columns:minmax(0,1fr); }}
+/* Preserve the workbench's own soft corners and pale yellow information tint. */
+:host(.brevess-sharing-workbench) .sharing-dialog { --sharing-ink: #252525; --sharing-line: #d8d8d8; --sharing-radius: 5px; font: 13.5px/1.55 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; width: min(720px, calc(100vw - 32px)); padding: 23px; border-color: #ccc; border-radius: 9px; }
+:host(.brevess-sharing-workbench) .sharing-dialog .privacy-note { background: #fffdf2; border-color: #e7e2d2; }
+:host(.brevess-sharing-workbench) .sharing-dialog .reader-badge { border-radius: 3px; }
+@media (max-width: 760px) {
+  .sharing-page .layout { grid-template-columns: minmax(0, 1fr); }
+  .sharing-page .shell { padding: 20px 16px; }
+}
+@media (max-width: 480px) {
+  .sharing-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 14px; }
+  .sharing-dialog h2 { font-size: 16px; }
+  .sharing-dialog footer { gap: 10px; }
+  .sharing-dialog footer > a { flex-basis: 100%; }
+  .sharing-dialog .reader-comment-actions small { flex-basis: 100%; }
+  .sharing-page .shell { padding: 16px 12px; }
+  .sharing-page .shell > header { align-items: flex-start; }
+  .sharing-page .shell > header > button { flex: 0 0 auto; }
+  .sharing-page h1 { font-size: 21px; }
+  .sharing-page .card { padding: 14px; }
+}

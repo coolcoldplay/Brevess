@@ -216,6 +216,37 @@ test('selection popup routes temporary instructions without modifying settings o
   } finally { globalThis.SciLLM.runSelectionAi = original; }
 });
 
+test('feature model reaches provider payload and web default respects an explicit off choice', async () => {
+  const requests = [], inputs = [];
+  const router = createBackgroundRouter({ storageArea: createMemoryStorage(), fetchImpl: async (_url, options) => {
+    requests.push(JSON.parse(options.body)); return jsonResponse({ output_text: '{}' });
+  } });
+  await configureOpenAIRouter(router);
+  const current = (await router.handle({ type: 'LLM_GET_SETTINGS' })).data.settings;
+  const routed = await router.handle({ type: 'LLM_UPDATE_PROFILE_ROUTING', globalProfileId: current.globalProfileId,
+    taskPolicies: { ...current.taskPolicies, selection_chat: { ...current.taskPolicies.selection_chat,
+      model: 'gpt-5-mini', modelProfileId: current.globalProfileId, reasoningEnabled: true, reasoningEffort: 'high', webSearchEnabled: true } } });
+  assert.equal(routed.success, true, JSON.stringify(routed));
+  const original = globalThis.SciLLM.runSelectionAi;
+  globalThis.SciLLM.runSelectionAi = async (input, options) => {
+    inputs.push(input.webSearch.enabled);
+    await options.adapter.generateJson({ systemPrompt: 'Synthetic fixture', userPrompt: 'test',
+      responseSchema: { type: 'object', properties: {}, additionalProperties: false }, maxOutputTokens: 256 });
+    return { status: 'completed', answerBlocks: [] };
+  };
+  try {
+    for (const [index, extra] of [{}, { webSearch: { enabled: false } }].entries()) {
+      const response = await router.handle({ type: 'LLM_ASK_SELECTION', operationId: `task-model-${index}`, turnId: `task-model-${index}`,
+        selectedText: 'Synthetic sentence.', prompt: 'Explain.', ...extra });
+      assert.equal(response.success, true, JSON.stringify(response));
+    }
+    assert.deepEqual(inputs, [true, false]);
+    assert.ok(requests.length === 2 && requests.every(body => body.model === 'gpt-5-mini' && body.reasoning.effort === 'high'));
+    const after = (await router.handle({ type: 'LLM_GET_SETTINGS' })).data.settings;
+    assert.equal(after.profiles[current.globalProfileId].config.model, 'gpt-5.1');
+  } finally { globalThis.SciLLM.runSelectionAi = original; }
+});
+
 test('selection popup rejects empty input and missing consent without a model call', async () => {
   let calls = 0;
   const router = createBackgroundRouter({ storageArea: createMemoryStorage(),
@@ -21377,7 +21408,7 @@ test('routes status, flush, rebuild imports, and a credential-free user-data bun
   );
 });
 
-test('manual directory actions use the authoritative portable gate before touching disk', async () => {
+test('document writes work without optional backup while directory rebuild remains guarded', async () => {
   for (const authoritativeStatus of [
     { state: 'locked', pending: false },
     { state: 'ready', pending: true },
@@ -21409,11 +21440,10 @@ test('manual directory actions use the authoritative portable gate before touchi
     const synced = await router.handle({ type: 'USER_DATA_SYNC_NOW' });
     const rebuilt = await router.handle({ type: 'USER_DATA_REBUILD_INDEX' });
 
-    assert.equal(synced.success, false, authoritativeStatus.state);
-    assert.equal(synced.error.code, 'PORTABLE_CONFIG_NOT_READY');
+    assert.equal(synced.success, true, authoritativeStatus.state);
     assert.equal(rebuilt.success, false, authoritativeStatus.state);
     assert.equal(rebuilt.error.code, 'PORTABLE_CONFIG_NOT_READY');
-    assert.equal(directorySync.flushCalls, 0);
+    assert.equal(directorySync.flushCalls, 1);
     assert.equal(rebuildCalls, 0);
     assert.doesNotMatch(JSON.stringify([synced, rebuilt]), /private-state-detail/);
   }

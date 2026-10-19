@@ -316,7 +316,7 @@ test('local Codex emits one normalized usage record from native token telemetry'
       streamTurn() {
         return {
           async *[Symbol.asyncIterator]() {
-            yield { type: 'text_delta', text: '{"ok":true}' };
+            yield { type: 'json_final', text: '{"ok":true}' };
             yield {
               type: 'usage',
               usage: {
@@ -1633,7 +1633,7 @@ test('structured reasoning probe activates reasoning in every supported provider
       streamTurn(input) {
         turn = input;
         return (async function * stream() {
-          yield { type: 'text_delta', text: probeValue };
+          yield { type: 'json_final', text: probeValue };
           yield { type: 'completed', finishReason: 'stop' };
         })();
       },

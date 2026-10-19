@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
   "version": "1.0.1",
+  "version_name": "1.0.1 R37 shared notes and model settings r4",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA+B4vL4I4bJQVURPfrGIV4YjSJ5h0NQBP3NY72ZyN26DX0ffpmTMlRpc1DKaNj21pjN46/Ig1MYu2b3ReoBdQKgzrKMDPACu1GoOOnF37ei79fJXPCovCaMRBXQrEYgsaYCf6RmTlkU98qQQjV6o211akZO0l7Ba4OrNQzUzULFP+AF88rl45cpjRtVFgsM6/duDnnQVWWCaKv1nLtvJvNRfO2AsydO0354f/iI3Ikirpx61xxWP0y/6uElWsqGI6Sm135IG8E+ahF4juNciziGmX+cgRDz2QN+KAdxL2GVewdmTU5AHC2/r9N5kf5JQkvYKb+5Ar0nLQBb31/ChmEQIDAQAB",
   "description": "__MSG_extensionDescription__",
   "default_locale": "zh_CN",
@@ -27,18 +28,58 @@
     "http://127.0.0.1/*",
     "file:///*"
   ],
-  "content_scripts": [{
-    "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "file:///*"],
-    "js": ["core/page-tools.js", "semantic-find-launcher.js"],
-    "run_at": "document_idle",
-    "all_frames": false
-  }, {
-    "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "file:///*"],
-    "js": ["core/translation-source.js", "core/translation-checkpoint.js", "core/local-translator.js", "core/bilingual-translation-controller.js", "bilingual-translation-content.js"],
-    "css": ["bilingual-translation.css"],
-    "run_at": "document_idle",
-    "all_frames": false
-  }],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "file:///*"
+      ],
+      "js": [
+        "core/i18n.js",
+        "core/i18n-extension.js",
+        "core/i18n-reader.js",
+        "core/i18n-reader-extra.js",
+        "core/i18n-system.js",
+        "core/i18n-tools.js",
+        "core/i18n-reader-patterns.js",
+        "core/i18n-content.js",
+        "core/page-tools.js",
+        "semantic-find-launcher.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "file:///*"
+      ],
+      "js": [
+        "core/i18n.js",
+        "core/i18n-extension.js",
+        "core/i18n-reader.js",
+        "core/i18n-reader-extra.js",
+        "core/i18n-system.js",
+        "core/i18n-tools.js",
+        "core/i18n-reader-patterns.js",
+        "core/i18n-content.js",
+        "core/translation-source.js",
+        "core/translation-checkpoint.js",
+        "core/local-translator.js",
+        "core/bilingual-translation-controller.js",
+        "bilingual-translation-content.js"
+      ],
+      "css": [
+        "bilingual-translation.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -66,8 +107,16 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["content.css", "semantic-find.css", "mechanism-drawing.css", "vendor/phosphor/Phosphor.woff2"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "content.css",
+        "semantic-find.css",
+        "mechanism-drawing.css",
+        "sharing/sharing.css",
+        "vendor/phosphor/Phosphor.woff2"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

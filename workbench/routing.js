@@ -1,5 +1,18 @@
 (function(root,factory){const api=factory(typeof module==='object'&&module.exports?require('./model.js'):root.Workbench);if(typeof module==='object'&&module.exports)module.exports=api;Object.assign(root.Workbench ||= {},api);})(globalThis,M=>{
   'use strict';
+  const T=value=>globalThis.SciLLM?.translateInterfaceText?.(value)||value;
+  const textFonts=new Map();let textContext;
+  function measureWorkbenchText(value,className='edge-label'){
+    const key=className.split(' ')[0],size=({'node-title':15,'object-subtitle':13,'edge-label':14,'panel-body':14})[key]||14;
+    if(globalThis.document?.body&&typeof globalThis.getComputedStyle==='function'){
+      let font=textFonts.get(key);
+      if(!font){const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),text=document.createElementNS(ns,'text');svg.setAttribute('style','position:fixed;width:0;height:0;visibility:hidden;pointer-events:none');text.setAttribute('class',className);svg.append(text);document.body.append(svg);const style=getComputedStyle(text);font=`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;svg.remove();textFonts.set(key,font);}
+      textContext ||= document.createElement('canvas').getContext('2d');
+      if(textContext){textContext.font=font;return textContext.measureText(String(value)).width;}
+    }
+    // Node has no renderer; use the same CSS pixel size and a conservative width.
+    return Array.from(String(value)).reduce((width,c)=>width+size*(/[\u0000-\u007f]/.test(c)?(/[MW@#%&]/.test(c)?.95:/[ilI1.,' ]/.test(c)?.35:.65):1),0);
+  }
   const SIDES=['top','right','bottom','left'],DIR={top:{x:0,y:-1},right:{x:1,y:0},bottom:{x:0,y:1},left:{x:-1,y:0}},EPS=.001;
   function autoPorts(a,b){a=M.rect(a);b=M.rect(b);const dx=b.x+b.w/2-a.x-a.w/2,dy=b.y+b.h/2-a.y-a.h/2;return Math.abs(dx)/(a.w+b.w)>=Math.abs(dy)/(a.h+b.h)?{source:{side:dx>=0?'right':'left',offset:.5},target:{side:dx>=0?'left':'right',offset:.5}}:{source:{side:dy>=0?'bottom':'top',offset:.5},target:{side:dy>=0?'top':'bottom',offset:.5}};}
   function port(node,value,fallback){const r=M.rect(node),p=SIDES.includes(value?.side)?{side:value.side,offset:Math.max(0,Math.min(1,M.finite(value.offset,.5)))}:fallback;return {...p,x:p.side==='left'?r.x:p.side==='right'?r.x+r.w:r.x+r.w*p.offset,y:p.side==='top'?r.y:p.side==='bottom'?r.y+r.h:r.y+r.h*p.offset};}
@@ -10,7 +23,7 @@
   function orthogonal(points){return segments(points).every(([a,b])=>Math.abs(a.x-b.x)<EPS||Math.abs(a.y-b.y)<EPS);}
   function turnCount(points){let turns=0;for(let i=1;i<points.length-1;i++){const a=points[i-1],b=points[i],c=points[i+1];if((a.x===b.x&&b.y===c.y)||(a.y===b.y&&b.x===c.x))turns++;}return turns;}
   function rounded(points,radius=6){if(!points.length)return '';let path=`M ${points[0].x} ${points[0].y}`;for(let i=1;i<points.length-1;i++){const a=points[i-1],b=points[i],c=points[i+1],ab=Math.hypot(b.x-a.x,b.y-a.y),bc=Math.hypot(c.x-b.x,c.y-b.y),r=Math.min(radius,ab/2,bc/2);const p={x:b.x+(a.x-b.x)*r/ab,y:b.y+(a.y-b.y)*r/ab},q={x:b.x+(c.x-b.x)*r/bc,y:b.y+(c.y-b.y)*r/bc};path+=` L ${p.x} ${p.y} Q ${b.x} ${b.y} ${q.x} ${q.y}`;}if(points.length>1)path+=` L ${points.at(-1).x} ${points.at(-1).y}`;return path;}
-  function labelInfo(edge){const kind=['branch','feedback'].includes(edge.kind)?edge.kind:'main',prefix=kind==='branch'?'分支':kind==='feedback'?'↺ 反馈':'主线',chars=Array.from(String(edge.claim||'待检验联系')),claim=chars.length>11?chars.slice(0,11).join('')+'…':chars.join(''),text=prefix+' · '+claim,types=new Set((edge.bindings||[]).flatMap(b=>b.types||[]));const width=Array.from(text).reduce((sum,c)=>sum+(/[\u0000-\u007f]/.test(c)?(/[MW@#%&]/.test(c)?10:/[ilI1.,' ]/.test(c)?4:/[A-Z]/.test(c)?8:7):11),0);return {text,kind,w:Math.max(92,width+16+(types.has('sufficient')||types.has('necessary')?20:0)),h:24};}
+  function labelInfo(edge){const kind=['branch','feedback'].includes(edge.kind)?edge.kind:'main',prefix=T(kind==='branch'?'分支':kind==='feedback'?'↺ 反馈':'主线'),chars=Array.from(String(edge.claim||T('待检验联系'))),claim=chars.length>11?chars.slice(0,11).join('')+'…':chars.join(''),text=prefix+' · '+claim,types=new Set((edge.bindings||[]).flatMap(b=>b.types||[]));const width=measureWorkbenchText(text);return {text,kind,w:Math.max(92,Math.ceil(width)+18+(types.has('sufficient')||types.has('necessary')?20:0)),h:24};}
   const inflate=(r,gap)=>({x:r.x-gap,y:r.y-gap,w:r.w+gap*2,h:r.h+gap*2});
   const overlaps=(a,b)=>a.x<b.x+b.w-EPS&&a.x+a.w>b.x+EPS&&a.y<b.y+b.h-EPS&&a.y+a.h>b.y+EPS;
   const boxAt=(info,p)=>({x:p.x-info.w/2,y:p.y-info.h/2,w:info.w,h:info.h});
@@ -93,5 +106,5 @@
     return result;
   }
   function routeAll(nodes,edges){const map={},previous=[],lanes=new Map(),groups=new Map(),effective=new Map();const sorted=[...edges].sort((a,b)=>a.id.localeCompare(b.id));for(const e of sorted){const a=nodes.find(n=>n.id===e.source),b=nodes.find(n=>n.id===e.target);if(!a||!b)continue;const defaults=autoPorts(a,b),copy={...e};effective.set(e.id,copy);for(const end of ['source','target'])if(!SIDES.includes(e[end+'Port']?.side)){const key=e[end]+'/'+defaults[end].side;const group=groups.get(key)||[];group.push({edge:copy,end,side:defaults[end].side});groups.set(key,group);}}for(const group of groups.values())group.forEach((item,index)=>item.edge[item.end+'Port']={side:item.side,offset:group.length===1?.5:(index+1)/(group.length+1)});for(const e of sorted){const key=[e.source,e.target].sort().join('/'),lane=lanes.get(key)||0;lanes.set(key,lane+1);const r=route(effective.get(e.id)||e,nodes,previous,lane);map[e.id]=r;if(!r.blocked)previous.push(r);}placeLabels(nodes,sorted,map);return map;}
-  return {SIDES,autoPorts,port,portForPoint:M.portForPoint,segmentHits:hits,segments,orthogonal,turnCount,rounded,labelInfo,route,routeAll};
+  return {SIDES,autoPorts,port,portForPoint:M.portForPoint,segmentHits:hits,segments,orthogonal,turnCount,rounded,measureWorkbenchText,labelInfo,route,routeAll};
 });

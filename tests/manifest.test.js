@@ -73,12 +73,13 @@ test('manifest opens a deliberate action popup before native side-panel activati
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.equal(manifest.action.default_popup, 'action-popup.html');
   assert.deepEqual(manifest.side_panel, { default_path: 'popup.html' });
+  const interfaceLanguageScripts = ['core/i18n.js', 'core/i18n-extension.js', 'core/i18n-reader.js', 'core/i18n-reader-extra.js', 'core/i18n-system.js', 'core/i18n-tools.js', 'core/i18n-reader-patterns.js', 'core/i18n-content.js'];
   assert.deepEqual(manifest.content_scripts, [{
     matches: ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*', 'file:///*'],
-    js: ['core/page-tools.js', 'semantic-find-launcher.js'], run_at: 'document_idle', all_frames: false
+    js: [...interfaceLanguageScripts, 'core/page-tools.js', 'semantic-find-launcher.js'], run_at: 'document_idle', all_frames: false
   }, {
     matches: ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*', 'file:///*'],
-    js: ['core/translation-source.js', 'core/translation-checkpoint.js', 'core/local-translator.js', 'core/bilingual-translation-controller.js', 'bilingual-translation-content.js'],
+    js: [...interfaceLanguageScripts, 'core/translation-source.js', 'core/translation-checkpoint.js', 'core/local-translator.js', 'core/bilingual-translation-controller.js', 'bilingual-translation-content.js'],
     css: ['bilingual-translation.css'], run_at: 'document_idle', all_frames: false
   }], 'J and Alt entry points are available before sidebar activation; neither starts a model on page load');
   assert.deepEqual(manifest.host_permissions, [
@@ -452,7 +453,7 @@ test('action popup exposes three privacy-safe reading choices', () => {
   assert.match(css, /overflow-x:\s*hidden/);
   assert.match(css, /\.action-popup\s*\{[^}]*box-sizing:\s*border-box/s);
   assert.match(css, /\.action-popup\s*\{[^}]*width:\s*360px/s);
-  assert.match(css, /\.action-popup\s*\{[^}]*padding:\s*16px/s);
+  assert.match(css, /\.action-popup\s*\{[^}]*padding:\s*12px/s);
   assert.match(css, /\.action-popup__actions\s*\{[^}]*gap:\s*10px/s);
   assert.match(css, /\.action-popup__button\s*\{[^}]*min-height:\s*64px/s);
   assert.match(css, /\.action-popup__button\s*\{[^}]*padding:\s*12px/s);

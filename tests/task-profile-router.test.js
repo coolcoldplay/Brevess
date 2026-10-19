@@ -48,6 +48,41 @@ function settingsFixture() {
   };
 }
 
+test('per-feature model overrides change the real route and cache identity without changing the connection', () => {
+  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const settings = settingsFixture();
+  const previous = resolveTaskProfile(settings, 'paragraph_summary');
+  settings.taskPolicies.paragraph_summary = policy({ model: 'deepseek-v4-pro', modelProfileId: 'profile_global',
+    modelProviderId: 'deepseek', modelPresetId: '', reasoningEnabled: true, reasoningEffort: 'high' });
+  const result = resolveTaskProfile(settings, 'paragraph_summary');
+  assert.equal(result.model, 'deepseek-v4-pro');
+  assert.equal(result.config.model, 'deepseek-v4-pro');
+  assert.equal(result.effectiveReasoning.enabled, true);
+  assert.notEqual(result.profileSignature, previous.profileSignature);
+  assert.equal(settings.profiles.profile_global.config.model, 'deepseek-v4-flash');
+  assert.equal(resolveTaskProfile(settings, 'document_highlight').model, 'deepseek-v4-flash');
+  settings.globalProfileId = 'profile_vision';
+  assert.equal(resolveTaskProfile(settings, 'paragraph_summary').model, 'gpt-5-mini');
+  settings.globalProfileId = 'profile_global';
+  settings.profiles.profile_global = profile('profile_global', 'openai', { model: 'gpt-5-mini', apiKey: 'synthetic' });
+  assert.equal(resolveTaskProfile(settings, 'paragraph_summary').model, 'gpt-5-mini');
+});
+
+test('web search capability follows implemented task, provider, model and official endpoint boundaries', () => {
+  const { supportsTaskWebSearch, taskModelForProfile } = require('../core/llm-task-catalog.js');
+  assert.equal(taskModelForProfile(undefined, undefined, undefined), '');
+  assert.equal(taskModelForProfile(null, null, ''), '');
+  assert.equal(supportsTaskWebSearch('openai', { model: 'gpt-5-mini' }, 'article_chat'), true);
+  assert.equal(supportsTaskWebSearch('openai', { baseUrl: 'https://example.com/v1/responses' }, 'article_chat'), false);
+  assert.equal(supportsTaskWebSearch('openai', { baseUrl: 'https://api.openai.com/v1/responses?key=x' }, 'article_chat'), false);
+  assert.equal(supportsTaskWebSearch('deepseek', { model: 'deepseek-flash' }, 'selection_chat'), true);
+  assert.equal(supportsTaskWebSearch('deepseek', { model: 'deepseek-v4-flash' }, 'article_chat'), false);
+  assert.equal(supportsTaskWebSearch('deepseek', { model: 'deepseek-flash' }, 'figure_walkthrough'), false);
+  assert.equal(supportsTaskWebSearch('gemini', {}, 'article_chat'), false);
+  const policy = { model: 'qwen-plus', modelProfileId: 'p', modelProviderId: 'openai-compatible', modelPresetId: 'qwen' };
+  assert.equal(taskModelForProfile(policy, { providerId: 'openai-compatible', config: { presetId: 'kimi' } }, 'p'), '');
+});
+
 test('routes an exact Figure task policy and returns normalized effective reasoning', () => {
   const { resolveTaskProfile } = require('../core/task-profile-router.js');
   const routed = resolveTaskProfile(settingsFixture(), 'figure_walkthrough');

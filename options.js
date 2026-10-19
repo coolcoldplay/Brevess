@@ -17,13 +17,16 @@ const TASK_REASONING_LABELS = Object.freeze({
   xhigh: '极高', max: '最高'
 });
 const TRANSLATION_TASK_POLICY_IDS = new Set(['full_text_translation', 'navigation_title_translation']);
+// Old paper-level extraction controls were replaced by literature-note autofill.
+// Keep their persisted IDs and policies for existing data, but omit them from editing.
+const RETIRED_TASK_POLICY_IDS = new Set(['paper_research_logic', 'paper_innovations', 'paper_limitations']);
 const TASK_POLICY_MODULES = Object.freeze([
-  { id: 'general', label: '全局与通用', tasks: ['full_text_translation', 'abbreviation_translation'] },
+  { id: 'general', label: '全局与通用', tasks: ['full_text_translation', 'abbreviation_translation', 'literature_radar_query'] },
   { id: 'navigation', label: '导航', tasks: ['navigation_title_translation', 'article_outline_summary'] },
   { id: 'reading', label: '摘句与高亮', tasks: ['document_highlight', 'semantic_find', 'paragraph_summary', 'evidence_ledger_review'] },
   { id: 'figure', label: '图表', tasks: ['figure_walkthrough', 'figure_panel_interpretation', 'figure_panel_followup', 'cross_figure_mechanism'] },
   { id: 'chat', label: '问答', tasks: ['article_chat', 'selection_chat'] },
-  { id: 'paper_review', label: '笔记', tasks: ['literature_note_autofill', 'paper_research_logic', 'paper_innovations', 'paper_limitations'] }
+  { id: 'paper_review', label: '笔记', tasks: ['literature_note_autofill'] }
 ]);
 const COMMON_TASK_POLICY_IDS = new Set([
   'article_chat', 'selection_chat', 'figure_walkthrough',
@@ -43,6 +46,69 @@ const TOKEN_RULE_FIELD_SPECS = Object.freeze({
 });
 
 let state = null;
+const builtinEditorSnapshots = new Map();
+let categoryBuiltinEditorSnapshot = null;
+let analysisModeBuiltinEditorSnapshot = null;
+
+function builtinEditorLanguage() {
+  return SciLLM.getInterfaceLanguage?.() || state?.settings?.language || 'zh-CN';
+}
+
+function builtinEditorDisplaySnapshot(value) {
+  // Textarea values normalize CRLF in the DOM. Compare against that displayed
+  // form while retaining the original raw bytes separately for untouched fields.
+  if (typeof value === 'string') return value.replace(/\r\n?/g, '\n');
+  if (Array.isArray(value)) return value.map(builtinEditorDisplaySnapshot);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .map(([key, item]) => [key, builtinEditorDisplaySnapshot(item)]));
+  return value;
+}
+
+function builtinEditorRows(key, rows) {
+  const raw = structuredClone(rows);
+  const displayed = SciLLM.localizeBuiltinSettings?.({ [key]: raw }, builtinEditorLanguage())?.[key] || raw;
+  builtinEditorSnapshots.set(key, { raw, displayed: builtinEditorDisplaySnapshot(displayed) });
+  return displayed;
+}
+
+function restoreBuiltinEditorRows(key, rows) {
+  const snapshot = builtinEditorSnapshots.get(key);
+  return snapshot && SciLLM.restoreBuiltinEdits
+    ? SciLLM.restoreBuiltinEdits(rows, snapshot.raw, snapshot.displayed) : rows;
+}
+
+function displayBuiltinCategory(category) {
+  // Stored overrides contain the entire form, including untouched defaults.
+  // Exact baseline comparisons localize those defaults while custom bytes remain intact.
+  return SciLLM.localizeBuiltinCategory?.(category, builtinEditorLanguage()) || category;
+}
+
+function displayBuiltinAnalysisMode(mode) {
+  return SciLLM.localizeBuiltinSettings?.({ analysisModes: [mode] }, builtinEditorLanguage())?.analysisModes[0] || mode;
+}
+
+function relocalizeBuiltinEditors(language) {
+  const groups = [
+    ['figurePanelFollowupPresets', collectPanelFollowupPresets, renderPanelFollowupPresets],
+    ['articleChatQuickPrompts', collectArticleChatQuickPrompts, renderArticleChatQuickPrompts],
+    ['literatureNoteTemplates', collectLiteratureNoteTemplates, renderLiteratureNoteTemplates],
+    ['selectionLlmActions', collectSelectionLlmActions, renderSelectionLlmActions]
+  ];
+  const drafts = groups.filter(([key]) => builtinEditorSnapshots.has(key))
+    .map(([key, collect, render]) => ({ key, rows: collect(true), render }));
+  if (analysisModeBuiltinEditorSnapshot) syncAnalysisModeDraftFromEditor();
+  const categoryDraft = categoryEditor.detail && categoryBuiltinEditorSnapshot ? collectCategoryOverride() : null;
+  const categoryWasDirty = categoryEditor.dirty;
+  SciLLM.setInterfaceLanguage(language);
+  drafts.forEach(({ rows, render }) => render(rows));
+  if (analysisModeBuiltinEditorSnapshot) renderAnalysisModeEditor();
+  if (categoryDraft) {
+    populateCategoryEditor({ ...categoryEditor.detail,
+      category: { ...categoryEditor.detail.category, ...categoryDraft } });
+    categoryEditor.dirty = categoryWasDirty;
+  }
+  if (state) renderCategoryList();
+}
 let selectedProfileId = '';
 let profileEditorDirty = false;
 const profileDirtyFields = new Set();
@@ -138,10 +204,15 @@ const codexAuthUi = {
 const harnessAuthUi = { pending: false, generation: 0, binding: '' };
 let pendingMigrationBundle = null;
 const SETTINGS_PAGE_ORDER = [
-  'overview', 'storage', 'models', 'workbench', 'modes',
+  'overview', 'account', 'storage', 'models', 'workbench', 'modes',
   'categories', 'reading', 'shortcuts', 'data', 'about'
 ];
 const SETTINGS_PAGE_COPY = Object.freeze({
+  account: {
+    eyebrow: 'BREVESS 账号',
+    title: '账号管理',
+    subtitle: '管理登录、邮箱、密码和课题组，插件各模块共用登录状态。'
+  },
   workbench: {
     eyebrow: 'Brevess · 课题工作台',
     title: '假说梳理与组图规划',
@@ -247,7 +318,7 @@ function bindEvents() {
   });
   document.getElementById('globalLanguage').addEventListener('change', async event => {
     const language = event.currentTarget.value;
-    SciLLM.setInterfaceLanguage(language);
+    relocalizeBuiltinEditors(language);
     try {
       const updated = await callBackground({
         type: 'LLM_UPDATE_PREFERENCES',
@@ -306,6 +377,13 @@ function bindEvents() {
     document.getElementById(id).addEventListener('change', markCompatiblePresetCustom);
   });
   document.getElementById('saveSettings').addEventListener('click', () => persistForm(false));
+  document.getElementById('saveTaskRouting')?.addEventListener('click', async () => {
+    const status = document.getElementById('taskRoutingStatus');
+    try {
+      const result = await persistForm(false);
+      if (status) status.textContent = interfaceText(result ? '功能设置已保存。' : '请完成连接设置后重试。');
+    } catch (_) { if (status) status.textContent = interfaceText('保存失败，请检查连接设置。'); }
+  });
   document.getElementById('typesafeTaskRoutingLink')
     ?.addEventListener('click', revealTypesafeTaskRouting);
   (document.getElementById('taskPolicyModules') ? ['taskPolicyModules'] :
@@ -1054,6 +1132,7 @@ function activateSettingsPage(page, { updateHash = true, animate = true } = {}) 
   const mobileNumber = document.getElementById('settingsMobileNumber');
   if (mobileNumber) mobileNumber.textContent = String(nextIndex + 1).padStart(2, '0');
   document.body.dataset.activeSettingsPage = nextPage;
+  window.dispatchEvent(new CustomEvent('brevess-settings-pagechange', { detail: { page: nextPage } }));
   const copy = SETTINGS_PAGE_COPY[nextPage];
   if (copy) {
     document.getElementById('settingsPageEyebrow').textContent = copy.eyebrow;
@@ -1623,6 +1702,7 @@ const nativeDirectoryUi = { pending: false };
 
 function openNativeDirectorySettings() {
   activateSettingsPage('storage', { animate: false });
+  document.getElementById('directoryAdvancedSettings').open = true;
   const section = document.getElementById('nativeDirectorySettings');
   section?.scrollIntoView({ behavior: 'auto', block: 'center' });
   document.getElementById('nativeDirectoryPath')?.focus({ preventScroll: true });
@@ -1708,9 +1788,9 @@ function permissionLabel(permission) {
 }
 
 function formatLastSync(value) {
-  if (!value) return '尚未同步';
+  if (!value) return '尚未写入';
   const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : '尚未同步';
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : '尚未写入';
 }
 
 async function skipOnboardingStepByName(step) {
@@ -1848,8 +1928,8 @@ function renderPortableConfigStatus(status) {
   }[effectiveState] || '未启用';
   const noticeText = {
     ready: '配置凭据已加密保存，可在受信任设备上用口令恢复。',
-    missing: '配置备份待创建；创建完成前不会同步当前默认配置。',
-    locked: '配置备份待解锁；解锁完成前不会同步当前默认配置。',
+    missing: '可选：备份 API Key 与模型配置，方便换电脑恢复。不影响文献保存。',
+    locked: '模型配置备份已加密；需要恢复配置时再解锁。不影响文献保存。',
     pending: '正在安全处理加密配置，请稍候。',
     unavailable: '目录不可用，已停止配置同步。',
     error: '配置备份同步失败，已安全停止。',
@@ -2098,7 +2178,9 @@ function updateUserDataActionButtons() {
   document.getElementById('reauthorizeUserDataDirectory').disabled =
     pending || !configured || !userDataUi.directoryHandle || permission === 'granted';
   document.getElementById('syncUserDataNow').disabled =
-    pending || !configured || permission !== 'granted' || !portableAllowsSync;
+    pending || !configured || permission !== 'granted';
+  document.getElementById('reauthorizeUserDataDirectory').hidden =
+    !configured || permission === 'granted';
   document.getElementById('rebuildUserDataIndex').disabled =
     pending || !configured || permission !== 'granted' || !portableAllowsSync;
   document.getElementById('exportUserDataBundle').disabled = pending;
@@ -2230,34 +2312,6 @@ async function activatePortableConfigFromStatusCard({
 }
 // Portable config activation: end.
 
-async function preparePortableConfigForDirectory({ call = callBackground,
-  openDialog = openPortableConfigDialog, reloadSettings = refreshPortableSettings,
-  refreshStatus = () => refreshUserDataStatus({ rethrow: true }),
-  isOnboardingActive = () => onboardingUi.active,
-  markStorageCompleted = () => setOnboardingStepState('storage', 'completed'),
-  finishActivation = completePortableConfigActivation,
-  renderStatus = renderPortableConfigStatus } = {}) {
-  let status = await call({ type: 'PORTABLE_CONFIG_PROBE' });
-  renderStatus(status);
-  let mode = '';
-  if (status?.state === 'missing' || status?.state === 'locked') {
-    mode = status.state === 'missing' ? 'create' : 'unlock';
-    const dialogResult = await openDialog(mode);
-    if (dialogResult?.cancelled === true) {
-      return { ready: false, cancelled: true, status };
-    }
-    status = dialogResult;
-    renderStatus(status);
-    if (status?.state !== 'ready') return { ready: false, status };
-  }
-  if (status?.state !== 'ready') return { ready: false, status };
-  await finishActivation({
-    settingsRestored: mode === 'unlock', call, reloadSettings, refreshStatus,
-    isOnboardingActive, markStorageCompleted
-  });
-  return { ready: true, status };
-}
-
 async function chooseUserDataDirectory() {
   if (userDataUi.pendingAction) return;
   if (typeof window.showDirectoryPicker !== 'function') {
@@ -2275,28 +2329,32 @@ async function chooseUserDataDirectory() {
     handleSaved = true;
     userDataUi.directoryHandle = handle;
     userDataUi.handleLoaded = true;
-    const prepared = await preparePortableConfigForDirectory();
-    if (!prepared.ready) {
-      await refreshUserDataStatus();
-      if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
-        const pendingState = prepared.status.state === 'missing' ? '创建' : '解锁';
-        showUserDataStatus(`目录已保存，配置备份待${pendingState}；完成前不会同步。`, 'info');
-      } else {
-        showUserDataStatus('目录已保存，但加密配置状态异常；已安全停止同步。', 'error');
-      }
-      return;
-    }
-    showUserDataStatus('目录已保存，加密配置已就绪并完成本地数据同步。', 'success');
+    await completeDirectorySelection();
   } catch (error) {
     if (handleSaved) await refreshUserDataStatus();
     if (error?.name === 'AbortError' && !handleSaved) {
       showUserDataStatus('已取消选择，现有目录设置没有改变。', 'info');
     } else {
-      showUserDataStatus(`选择目录失败：${portableConfigErrorText(error)}`, 'error');
+      showUserDataStatus('未能完成文件夹设置，请检查文件夹读写权限后重试。', 'error');
     }
   } finally {
     setUserDataActionPending(false);
   }
+}
+
+async function completeDirectorySelection() {
+  const result = await callBackground({ type: 'USER_DATA_SYNC_NOW', drain: true });
+  // Refresh optional backup state without opening a passphrase dialog. An
+  // unreadable credential backup must not prevent ordinary article writes.
+  try { await callBackground({ type: 'PORTABLE_CONFIG_PROBE' }); } catch (_) {}
+  await refreshUserDataStatus();
+  if (result.permission !== 'granted' || Number(result.failed) > 0 || Number(result.pendingCount) > 0) {
+    showUserDataStatus('文件夹已选好，但文件尚未写入完成。请检查目录权限后点击保存重试。', 'error');
+    return false;
+  }
+  if (onboardingUi.active) await setOnboardingStepState('storage', 'completed');
+  showUserDataStatus('文件夹已就绪。之后点击侧栏“保存”，即可将文献文件写入此处，无需绑定路径或手动同步。', 'success');
+  return true;
 }
 
 async function unlockPortableConfig() {
@@ -2330,7 +2388,7 @@ async function rotatePortableConfigPassphrase() {
 async function forgetPortableConfigKey() {
   if (userDataUi.pendingAction || userDataUi.portableConfigStatus?.state !== 'ready') return;
   const confirmed = window.confirm(
-    '确定遗忘本机保存的配置密钥吗？密文备份会保留，但下次使用必须重新输入口令。'
+    interfaceText('确定遗忘本机保存的配置密钥吗？密文备份会保留，但下次使用必须重新输入口令。')
   );
   if (!confirmed) return;
   setUserDataActionPending(true);
@@ -2398,19 +2456,10 @@ async function reauthorizeUserDataDirectory() {
       await refreshUserDataStatus();
       return;
     }
-    const prepared = await preparePortableConfigForDirectory();
-    if (prepared.ready) {
-      showUserDataStatus('目录权限已恢复，加密配置已就绪并完成同步。', 'success');
-    } else if (prepared.status?.state === 'missing' || prepared.status?.state === 'locked') {
-      await refreshUserDataStatus();
-      showUserDataStatus('目录权限已恢复，但配置备份仍待创建或解锁。', 'info');
-    } else {
-      await refreshUserDataStatus();
-      showUserDataStatus('目录权限已恢复，但加密配置状态异常；已停止同步。', 'error');
-    }
+    await completeDirectorySelection();
   } catch (error) {
     await refreshUserDataStatus();
-    showUserDataStatus(`重新授权失败：${portableConfigErrorText(error)}`, 'error');
+    showUserDataStatus('未能恢复文件夹访问权限，请重新选择目录并允许读写。', 'error');
   } finally {
     setUserDataActionPending(false);
   }
@@ -2418,17 +2467,18 @@ async function reauthorizeUserDataDirectory() {
 
 async function syncUserDataNow() {
   if (userDataUi.pendingAction) return;
-  if (rejectBlockedManualDirectoryAction()) return;
   setUserDataActionPending(true);
-  showUserDataStatus('正在同步本地数据…', 'info');
+  showUserDataStatus('正在写入本地文件夹…', 'info');
   try {
-    const result = await callBackground({ type: 'USER_DATA_SYNC_NOW' });
+    const result = await callBackground({ type: 'USER_DATA_SYNC_NOW', drain: true });
     if (await refreshAfterPortableConfigNotReady(result, '同步已停止')) return;
     await refreshUserDataStatus();
     if (result.permission !== 'granted') {
       showUserDataStatus('目录需要重新授权后才能同步。', 'error');
+    } else if (Number(result.failed) > 0 || Number(result.pendingCount) > 0) {
+      showUserDataStatus('文件尚未全部写入；内容仍保存在浏览器中，请重试保存。', 'error');
     } else {
-      showUserDataStatus(`同步完成：写入 ${result.written || 0} 项。`, 'success');
+      showUserDataStatus('文件已写入本地文件夹。', 'success');
     }
   } catch (error) {
     if (await refreshAfterPortableConfigNotReady(error, '同步已停止')) return;
@@ -2640,6 +2690,7 @@ function createArticleWorkspaceCard(item) {
   const title = document.createElement('strong');
   title.className = 'article-workspace-title';
   title.textContent = item.title || '未命名论文';
+  if (item.title) title.dataset.i18nIgnore = '';
   const state = document.createElement('span');
   state.className = 'article-workspace-state';
   state.dataset.state = item.syncState || 'local-only';
@@ -2855,9 +2906,9 @@ function workspaceDeleteConfirmation(items) {
   }, { chat: 0, figures: 0, panels: 0, bytes: 0 });
   const names = items.length <= 3
     ? `\n\n${items.map(item => `“${item.title || '未命名论文'}”`).join('\n')}` : '';
-  return `确认清除 ${items.length} 篇论文的本地工作区吗？${names}\n\n` +
-    `将删除 ${totals.chat} 轮问答、${totals.figures} 个 Figure、` +
-    `${totals.panels} 个 Panel，共约 ${formatWorkspaceBytes(totals.bytes)}。此操作不可撤销。`;
+  return interfaceText(`确认清除 ${items.length} 篇论文的本地工作区吗？${names}`) + '\n\n' +
+    interfaceText(`将删除 ${totals.chat} 轮问答、${totals.figures} 个 Figure、`) +
+    interfaceText(`${totals.panels} 个 Panel，共约 ${formatWorkspaceBytes(totals.bytes)}。此操作不可撤销。`);
 }
 
 async function ensureArticleWorkspaceDetails(items) {
@@ -3093,7 +3144,7 @@ async function confirmMigrationImport(event) {
 
 function unifiedCategoryEntries() {
   return (Array.isArray(state?.availableCategories) ? state.availableCategories : [])
-    .filter(category => category?.categoryId);
+    .filter(category => category?.categoryId).map(displayBuiltinCategory);
 }
 
 function renderCategoryList() {
@@ -3132,6 +3183,7 @@ function renderCategoryList() {
     copy.className = 'category-list-copy';
     const name = document.createElement('strong');
     name.textContent = category.name;
+    name.dataset.i18nIgnore = '';
     const id = document.createElement('small');
     id.textContent = category.categoryId;
     copy.append(name, id);
@@ -3299,8 +3351,12 @@ async function loadCategory(categoryId) {
 }
 
 function populateCategoryEditor(detail) {
-  const { category, metadata, promptPreview } = detail;
+  const { metadata } = detail;
+  const category = displayBuiltinCategory(detail.category);
+  const promptPreview = SciLLM.compileLocalizedCategoryPromptPreview?.(category, builtinEditorLanguage()) || detail.promptPreview;
+  categoryBuiltinEditorSnapshot = { raw: structuredClone(detail.category), displayed: builtinEditorDisplaySnapshot(category) };
   document.getElementById('categoryInspectorTitle').textContent = category.name;
+  document.getElementById('categoryInspectorTitle').dataset.i18nIgnore = '';
   document.getElementById('categoryInspectorId').textContent = category.categoryId;
   document.getElementById('categoryInspectorSwatch').style.backgroundColor = category.color;
   const badge = document.getElementById('categoryOverrideBadge');
@@ -3399,17 +3455,19 @@ function linesFrom(id) {
 }
 
 function collectCategoryOverride() {
-  return {
-    name: valueOf('categoryName'),
+  const rawValue = id => document.getElementById(id).value;
+  const rawLines = id => rawValue(id).split(/\r?\n/).filter(line => line.trim());
+  const edited = {
+    name: rawValue('categoryName'),
     color: valueOf('categoryColor'),
     enabledEngines: checkedEngineValues(),
     prompt: {
-      definition: valueOf('categoryDefinition'),
-      decisionQuestion: valueOf('categoryDecisionQuestion'),
-      includeWhen: linesFrom('categoryIncludeWhen'),
-      excludeWhen: linesFrom('categoryExcludeWhen'),
-      positiveExamples: linesFrom('categoryPositiveExamples'),
-      negativeExamples: linesFrom('categoryNegativeExamples'),
+      definition: rawValue('categoryDefinition'),
+      decisionQuestion: rawValue('categoryDecisionQuestion'),
+      includeWhen: rawLines('categoryIncludeWhen'),
+      excludeWhen: rawLines('categoryExcludeWhen'),
+      positiveExamples: rawLines('categoryPositiveExamples'),
+      negativeExamples: rawLines('categoryNegativeExamples'),
       requiredSlots: linesFrom('categoryRequiredSlots'),
       allowedQuoteRoles: linesFrom('categoryAllowedQuoteRoles'),
       spanPolicy: valueOf('categorySpanPolicy'),
@@ -3425,6 +3483,8 @@ function collectCategoryOverride() {
       wholeWord: checked('categoryRegexWholeWord')
     }
   };
+  return categoryBuiltinEditorSnapshot && SciLLM.restoreBuiltinEdits
+    ? SciLLM.restoreBuiltinEdits(edited, categoryBuiltinEditorSnapshot.raw, categoryBuiltinEditorSnapshot.displayed) : edited;
 }
 
 function exportCategoryModule() {
@@ -3862,6 +3922,7 @@ function renderCustomCategories() {
     text.className = 'category-summary';
     const name = document.createElement('strong');
     name.textContent = category.name;
+    name.dataset.i18nIgnore = '';
     const detail = document.createElement('span');
     detail.textContent = category.persistence === 'one-off' ? '仅本次会话' : '长期保存';
     text.append(name, detail);
@@ -3891,7 +3952,7 @@ function renderDeletedBuiltInCategories() {
   const section = document.getElementById('deletedBuiltInCategorySection');
   const container = document.getElementById('deletedBuiltInCategoriesList');
   const categories = Array.isArray(state?.deletedBuiltInCategories)
-    ? state.deletedBuiltInCategories
+    ? state.deletedBuiltInCategories.map(displayBuiltinCategory)
     : [];
   section.hidden = categories.length === 0;
   container.replaceChildren();
@@ -3962,9 +4023,9 @@ async function deleteCategory(categoryId, { requireConfirmation = false } = {}) 
   const builtIn = category.builtIn !== false;
   if (requireConfirmation &&
       !confirm(
-        `确认永久删除${builtIn ? '内置' : '自定义'}类别“` +
-        `${category.name || categoryId}”吗？\n\n` +
-        '删除后将不再参与正则、LLM 或手动标注；已有标注会保留类别快照。'
+        interfaceText(`确认永久删除${interfaceText(builtIn ? '内置' : '自定义')}类别“`) +
+        interfaceText(`${category.name || categoryId}”吗？`) + '\n\n' +
+        interfaceText('删除后将不再参与正则、LLM 或手动标注；已有标注会保留类别快照。')
       )) {
     return;
   }
@@ -4056,6 +4117,8 @@ function applyState(nextState, { replaceTaskPolicyDrafts = false, replaceDrafts 
     analysisModeEditorDirty = false;
   }
   const hasTaskPolicyDrafts = taskPolicyDrafts.size > 0;
+  const nextLanguage = nextState.settings?.language || 'zh-CN';
+  if (state && nextLanguage !== builtinEditorLanguage()) relocalizeBuiltinEditors(nextLanguage);
   state = nextState;
   const entries = profileEntries();
   if (!profileById(selectedProfileId)) {
@@ -4107,8 +4170,8 @@ function applyState(nextState, { replaceTaskPolicyDrafts = false, replaceDrafts 
   if (!keyboardShortcutEditorDirty) {
     renderKeyboardShortcutSettings(state.settings?.keyboardShortcuts);
   }
-  const highlightModeLabel = state.effectiveMode === 'llm'
-    ? '高亮：LLM' : '高亮：正则';
+  const highlightModeLabel = interfaceText(state.effectiveMode === 'llm'
+    ? '高亮：LLM' : '高亮：正则');
   document.getElementById('effectiveMode').textContent = state.llmReady === true
     ? `${highlightModeLabel} · LLM 已配置`
     : `${highlightModeLabel} · LLM 功能未就绪`;
@@ -4155,7 +4218,7 @@ function renderKeyboardShortcutSettings(shortcuts) {
     input.spellcheck = false;
     input.maxLength = 1;
     input.dataset.shortcutAction = definition.actionId;
-    input.setAttribute('aria-label', `${definition.label}快捷键`);
+    input.setAttribute('aria-label', interfaceText(`${interfaceText(definition.label)}快捷键`));
     input.value = normalized[definition.actionId] || '';
     input.placeholder = '停用';
     row.append(copy, input);
@@ -4306,6 +4369,7 @@ function renderPanelFollowupPresetEmptyState() {
 function renderPanelFollowupPresets(presets) {
   const list = document.getElementById('panelFollowupPresetList');
   if (!list) return;
+  presets = builtinEditorRows('figurePanelFollowupPresets', presets);
   list.replaceChildren();
   (Array.isArray(presets) ? presets : []).forEach(preset => {
     list.appendChild(createPanelFollowupPresetRow(preset));
@@ -4327,15 +4391,16 @@ function addPanelFollowupPreset() {
   markProfileEditorDirty('panelFollowupPresetList');
 }
 
-function collectPanelFollowupPresets() {
-  return [...document.querySelectorAll('#panelFollowupPresetList .named-prompt-row')]
+function collectPanelFollowupPresets(includeIncomplete = false) {
+  const rows = [...document.querySelectorAll('#panelFollowupPresetList .named-prompt-row')]
     .map((row, index) => ({
       id: String(row.dataset.panelPresetId || `panel_prompt_${index + 1}`),
       topic: String(row.dataset.panelPresetTopic || ''),
-      name: row.querySelector('[data-panel-preset-name]')?.value.trim() || '',
-      prompt: row.querySelector('[data-panel-preset-prompt]')?.value.trim() || ''
+      name: row.querySelector('[data-panel-preset-name]')?.value || '',
+      prompt: row.querySelector('[data-panel-preset-prompt]')?.value || ''
     }))
-    .filter(item => item.name && item.prompt);
+    .filter(item => includeIncomplete || (item.name.trim() && item.prompt.trim()));
+  return restoreBuiltinEditorRows('figurePanelFollowupPresets', rows);
 }
 
 function panelFollowupPromptMap(presets) {
@@ -4382,7 +4447,7 @@ function createArticleChatQuickPromptRow(prompt = {}) {
   remove.className = 'button danger quiet compact-button named-prompt-delete';
   remove.dataset.deleteQuickPrompt = '';
   remove.textContent = '删除';
-  remove.setAttribute('aria-label', `删除快捷提示词${prompt.name ? `：${prompt.name}` : ''}`);
+  remove.setAttribute('aria-label', `${interfaceText('删除快捷提示词')}${prompt.name ? `: ${prompt.name}` : ''}`);
 
   row.append(nameField, promptField, remove);
   return row;
@@ -4400,6 +4465,7 @@ function renderArticleChatQuickPromptEmptyState() {
 function renderArticleChatQuickPrompts(prompts) {
   const list = document.getElementById('articleChatQuickPromptList');
   if (!list) return;
+  prompts = builtinEditorRows('articleChatQuickPrompts', prompts);
   list.replaceChildren();
   (Array.isArray(prompts) ? prompts : []).forEach(prompt => {
     list.appendChild(createArticleChatQuickPromptRow(prompt));
@@ -4421,14 +4487,15 @@ function addArticleChatQuickPrompt() {
   markProfileEditorDirty('articleChatQuickPromptList');
 }
 
-function collectArticleChatQuickPrompts() {
-  return [...document.querySelectorAll('#articleChatQuickPromptList .named-prompt-row')]
+function collectArticleChatQuickPrompts(includeIncomplete = false) {
+  const rows = [...document.querySelectorAll('#articleChatQuickPromptList .named-prompt-row')]
     .map((row, index) => ({
       id: String(row.dataset.quickPromptId || `prompt_${index + 1}`),
-      name: row.querySelector('[data-quick-prompt-name]')?.value.trim() || '',
-      prompt: row.querySelector('[data-quick-prompt-text]')?.value.trim() || ''
+      name: row.querySelector('[data-quick-prompt-name]')?.value || '',
+      prompt: row.querySelector('[data-quick-prompt-text]')?.value || ''
     }))
-    .filter(item => item.name && item.prompt);
+    .filter(item => includeIncomplete || (item.name.trim() && item.prompt.trim()));
+  return restoreBuiltinEditorRows('articleChatQuickPrompts', rows);
 }
 
 function nextLiteratureNoteFieldId(templateRow, requested = '') {
@@ -4476,7 +4543,7 @@ function duplicateCategoryPayload(categoryId, category, draft) {
   while (existingIds.has(duplicateId)) duplicateId = `${baseId}_${suffix++}`;
   return {
     categoryId: duplicateId,
-    name: `${draft.name || category.name || categoryId} 副本`,
+    name: `${draft.name || category.name || categoryId} ${interfaceText('副本')}`,
     color: draft.color || category.color,
     enabledEngines: [...(draft.enabledEngines || category.enabledEngines || [])],
     definition: draft.prompt.definition,
@@ -4503,7 +4570,7 @@ async function duplicateSelectedCategory() {
   const payload = duplicateCategoryPayload(
     sourceId,
     categoryEditor.detail.category,
-    collectCategoryOverride()
+    displayBuiltinCategory({ ...categoryEditor.detail.category, ...collectCategoryOverride() })
   );
   setCategoryPending(true);
   setCategoryStatus('working', '正在复制完整类别规则…');
@@ -4647,7 +4714,7 @@ function createLiteratureNoteTemplateRow(template = {}) {
   const fieldList = document.createElement('div');
   fieldList.className = 'literature-note-field-list';
   const fields = Array.isArray(template.fields) && template.fields.length
-    ? template.fields : [{ label: '新字段', prompt: '' }];
+    ? template.fields : [{ label: interfaceText('新字段'), prompt: '' }];
   fields.forEach(field => fieldList.appendChild(createLiteratureNoteFieldRow(field, row)));
   editor.append(editorHeading, fieldList);
   row.append(header, editor);
@@ -4720,10 +4787,12 @@ function syncLiteratureNoteTemplateNavigation(preferredId = '') {
     button.type = 'button';
     button.dataset.literatureTemplateTarget = id;
     button.textContent = name;
+    button.dataset.i18nIgnore = '';
     nav.appendChild(button);
     const option = document.createElement('option');
     option.value = id;
     option.textContent = name;
+    option.dataset.i18nIgnore = '';
     selector.appendChild(option);
   });
   return activateLiteratureNoteTemplate(previousId || rows[0]?.dataset.literatureTemplateId || '');
@@ -4741,6 +4810,7 @@ function renderLiteratureNoteTemplateEmptyState() {
 function renderLiteratureNoteTemplates(templates) {
   const list = document.getElementById('literatureNoteTemplateList');
   if (!list) return;
+  templates = builtinEditorRows('literatureNoteTemplates', templates);
   const description = document.getElementById('literatureNoteTemplateDescription');
   if (description) {
     description.textContent = interfaceText(
@@ -4762,8 +4832,8 @@ function addLiteratureNoteTemplate() {
   list.querySelector('.named-prompt-empty')?.remove();
   const row = createLiteratureNoteTemplateRow({
     id: `template_${Date.now().toString(36)}`,
-    name: '自定义文献', studyFamily: 'custom',
-    fields: [{ id: 'key_point', label: '关键内容' }]
+    name: interfaceText('自定义文献'), studyFamily: 'custom',
+    fields: [{ id: 'key_point', label: interfaceText('关键内容') }]
   });
   list.appendChild(row);
   syncLiteratureNoteTemplateNavigation(row.dataset.literatureTemplateId);
@@ -4776,7 +4846,7 @@ function addLiteratureNoteTemplate() {
 function addLiteratureNoteField(templateRow) {
   const list = templateRow?.querySelector('.literature-note-field-list');
   if (!list) return;
-  const row = createLiteratureNoteFieldRow({ label: '新字段', prompt: '' }, templateRow);
+  const row = createLiteratureNoteFieldRow({ label: interfaceText('新字段'), prompt: '' }, templateRow);
   list.appendChild(row);
   row.querySelector('[data-literature-field-label]')?.focus();
   updateLiteratureNoteDeleteStates();
@@ -4784,31 +4854,32 @@ function addLiteratureNoteField(templateRow) {
   markProfileEditorDirty('literatureNoteTemplateList');
 }
 
-function collectLiteratureNoteTemplates() {
-  return [...document.querySelectorAll(
+function collectLiteratureNoteTemplates(includeIncomplete = false) {
+  const rows = [...document.querySelectorAll(
     '#literatureNoteTemplateList .literature-note-template-row'
   )]
     .map((row, index) => {
       const fields = [...row.querySelectorAll('[data-literature-note-field-row]')]
         .map((fieldRow, fieldIndex) => ({
           id: String(fieldRow.dataset.literatureFieldId || `field_${fieldIndex + 1}`),
-          label: fieldRow.querySelector('[data-literature-field-label]')?.value.trim() || '',
-          prompt: fieldRow.querySelector('[data-literature-field-prompt]')?.value.trim() || '',
+          label: fieldRow.querySelector('[data-literature-field-label]')?.value || '',
+          prompt: fieldRow.querySelector('[data-literature-field-prompt]')?.value || '',
           placeholder: fieldRow.querySelector(
             '[data-literature-field-placeholder]'
-          )?.value.trim() || '',
+          )?.value || '',
           multiline: fieldRow.querySelector(
             '[data-literature-field-multiline]'
           )?.checked !== false,
           required: fieldRow.querySelector('[data-literature-field-required]')?.checked === true
-        })).filter(field => field.label);
+        })).filter(field => includeIncomplete || field.label.trim());
       return {
         id: String(row.dataset.literatureTemplateId || `template_${index + 1}`),
-        name: row.querySelector('[data-literature-template-name]')?.value.trim() || '',
+        name: row.querySelector('[data-literature-template-name]')?.value || '',
         studyFamily: String(row.dataset.literatureStudyFamily || 'custom'),
         fields
       };
-    }).filter(item => item.name && item.fields.length);
+    }).filter(item => includeIncomplete || (item.name.trim() && item.fields.length));
+  return restoreBuiltinEditorRows('literatureNoteTemplates', rows);
 }
 
 function createSelectionLlmActionRow(action = {}) {
@@ -4867,6 +4938,7 @@ function renderSelectionLlmActionEmptyState() {
 function renderSelectionLlmActions(actions) {
   const list = document.getElementById('selectionLlmActionList');
   if (!list) return;
+  actions = builtinEditorRows('selectionLlmActions', actions);
   list.replaceChildren();
   (Array.isArray(actions) ? actions : []).forEach(action => {
     list.appendChild(createSelectionLlmActionRow(action));
@@ -4880,21 +4952,22 @@ function addSelectionLlmAction() {
   list.querySelector('.named-prompt-empty')?.remove();
   const row = createSelectionLlmActionRow({
     id: `action_${Date.now().toString(36)}`,
-    name: '分析', prompt: '请分析所选文段，并说明结论边界。', enabled: true
+    name: interfaceText('分析'), prompt: interfaceText('请分析所选文段，并说明结论边界。'), enabled: true
   });
   list.appendChild(row);
   row.querySelector('[data-selection-action-name]')?.focus();
   markProfileEditorDirty('selectionLlmActionList');
 }
 
-function collectSelectionLlmActions() {
-  return [...document.querySelectorAll('#selectionLlmActionList .named-prompt-row')]
+function collectSelectionLlmActions(includeIncomplete = false) {
+  const rows = [...document.querySelectorAll('#selectionLlmActionList .named-prompt-row')]
     .map((row, index) => ({
       id: String(row.dataset.selectionActionId || `action_${index + 1}`),
-      name: row.querySelector('[data-selection-action-name]')?.value.trim() || '',
-      prompt: row.querySelector('[data-selection-action-prompt]')?.value.trim() || '',
+      name: row.querySelector('[data-selection-action-name]')?.value || '',
+      prompt: row.querySelector('[data-selection-action-prompt]')?.value || '',
       enabled: row.querySelector('[data-selection-action-enabled]')?.checked !== false
-    })).filter(item => item.name && item.prompt);
+    })).filter(item => includeIncomplete || (item.name.trim() && item.prompt.trim()));
+  return restoreBuiltinEditorRows('selectionLlmActions', rows);
 }
 
 function currentAnalysisModeDraft() {
@@ -4923,9 +4996,12 @@ function showAnalysisModeStatus(message, type = 'info') {
 function syncAnalysisModeDraftFromEditor() {
   const mode = currentAnalysisModeDraft();
   if (!mode) return;
-  mode.name = document.getElementById('analysisModeName')?.value.trim() || mode.name;
-  mode.description =
-    document.getElementById('analysisModeDescription')?.value.trim() || '';
+  const edited = { name: document.getElementById('analysisModeName')?.value ?? mode.name,
+    description: document.getElementById('analysisModeDescription')?.value ?? '' };
+  const snapshot = analysisModeBuiltinEditorSnapshot;
+  const restored = snapshot?.raw.id === mode.id && SciLLM.restoreBuiltinEdits
+    ? SciLLM.restoreBuiltinEdits(edited, snapshot.raw, snapshot.displayed) : edited;
+  mode.name = restored.name; mode.description = restored.description;
   mode.categoryIds = [...document.querySelectorAll(
     '#analysisModeCategoryList input[type="checkbox"]:checked'
   )].map(input => input.value);
@@ -4935,7 +5011,7 @@ function renderAnalysisModeList() {
   const list = document.getElementById('analysisModeList');
   if (!list) return;
   list.replaceChildren();
-  analysisModeEditorModes.forEach(mode => {
+  analysisModeEditorModes.map(displayBuiltinAnalysisMode).forEach(mode => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'analysis-mode-list-item';
@@ -4943,10 +5019,11 @@ function renderAnalysisModeList() {
     button.setAttribute('role', 'option');
     button.setAttribute('aria-selected', String(mode.id === selectedAnalysisModeId));
     const name = document.createElement('strong');
-    name.textContent = mode.name || '未命名场景';
+    name.textContent = mode.name || interfaceText('未命名场景');
+    name.dataset.i18nIgnore = '';
     const count = document.createElement('small');
-    count.textContent = `${isBuiltInAnalysisMode(mode.id) ? '内置' : '自定义'} · ` +
-      `${mode.categoryIds?.length || 0} 个类别 · ${mode.id}`;
+    count.textContent = `${interfaceText(isBuiltInAnalysisMode(mode.id) ? '内置' : '自定义')} · ` +
+      interfaceText(`${mode.categoryIds?.length || 0} 个类别 · ${mode.id}`);
     button.append(name, count);
     list.appendChild(button);
   });
@@ -4972,7 +5049,7 @@ function renderDeletedBuiltInAnalysisModes() {
   const list = document.getElementById('deletedBuiltInAnalysisModeList');
   if (!section || !list) return;
   const activeIds = new Set(analysisModeEditorModes.map(mode => mode.id));
-  const deleted = analysisModeDefaults().filter(mode => !activeIds.has(mode.id));
+  const deleted = analysisModeDefaults().filter(mode => !activeIds.has(mode.id)).map(displayBuiltinAnalysisMode);
   section.hidden = deleted.length === 0;
   list.replaceChildren();
   deleted.forEach(mode => {
@@ -4982,6 +5059,7 @@ function renderDeletedBuiltInAnalysisModes() {
     copy.className = 'deleted-built-in-copy';
     const name = document.createElement('strong');
     name.textContent = mode.name || mode.id;
+    name.dataset.i18nIgnore = '';
     const id = document.createElement('span');
     id.textContent = mode.id;
     copy.append(name, id);
@@ -5010,11 +5088,13 @@ function renderAnalysisModeCategoryList(mode) {
   list.replaceChildren();
   (state?.availableCategories || [])
     .filter(category => category?.categoryId && category.retired !== true)
+    .map(displayBuiltinCategory)
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'))
     .forEach(category => {
       const label = document.createElement('label');
       label.className = 'analysis-mode-category-option';
       label.title = `${category.name || category.categoryId} · ${category.categoryId}`;
+      label.dataset.i18nIgnore = '';
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.value = category.categoryId;
@@ -5033,7 +5113,10 @@ function renderAnalysisModeCategoryList(mode) {
 function renderAnalysisModeEditor() {
   renderAnalysisModeList();
   renderDeletedBuiltInAnalysisModes();
-  const mode = currentAnalysisModeDraft();
+  const rawMode = currentAnalysisModeDraft();
+  const mode = rawMode ? displayBuiltinAnalysisMode(rawMode) : null;
+  analysisModeBuiltinEditorSnapshot = rawMode
+    ? { raw: structuredClone(rawMode), displayed: builtinEditorDisplaySnapshot(mode) } : null;
   const name = document.getElementById('analysisModeName');
   const id = document.getElementById('analysisModeId');
   const description = document.getElementById('analysisModeDescription');
@@ -5064,7 +5147,7 @@ function addAnalysisMode() {
   while (analysisModeEditorModes.some(mode => mode.id === id)) id = `${base}_${suffix++}`;
   analysisModeEditorModes.push({
     id,
-    name: '新阅读场景',
+    name: interfaceText('新阅读场景'),
     description: '',
     categoryIds: []
   });
@@ -5077,8 +5160,9 @@ function addAnalysisMode() {
 
 function duplicateAnalysisMode() {
   syncAnalysisModeDraftFromEditor();
-  const source = currentAnalysisModeDraft();
-  if (!source) return;
+  const rawSource = currentAnalysisModeDraft();
+  if (!rawSource) return;
+  const source = displayBuiltinAnalysisMode(rawSource);
   let id = `mode_${Date.now().toString(36)}`;
   let suffix = 2;
   const baseId = id;
@@ -5087,7 +5171,7 @@ function duplicateAnalysisMode() {
   }
   analysisModeEditorModes.push({
     id,
-    name: `${source.name || '阅读场景'} 副本`,
+    name: `${source.name || interfaceText('阅读场景')} ${interfaceText('副本')}`,
     description: source.description || '',
     categoryIds: [...new Set(source.categoryIds || [])]
   });
@@ -5114,7 +5198,7 @@ function restoreAnalysisModeById(modeId) {
 function restoreCurrentAnalysisMode() {
   const mode = currentAnalysisModeDraft();
   if (!mode || !isBuiltInAnalysisMode(mode.id)) return;
-  if (!confirm(`恢复内置场景“${mode.name}”的默认名称、说明和类别组合？`)) return;
+  if (!confirm(interfaceText(`恢复内置场景“${displayBuiltinAnalysisMode(mode).name}”的默认名称、说明和类别组合？`))) return;
   restoreAnalysisModeById(mode.id);
 }
 
@@ -5125,8 +5209,8 @@ function deleteAnalysisMode() {
   }
   const mode = currentAnalysisModeDraft();
   if (!mode || !confirm(
-    `删除阅读场景“${mode.name}”？类别规则与历史高亮不会被删除。` +
-    (isBuiltInAnalysisMode(mode.id) ? '\n\n内置场景可在本页恢复。' : '')
+    interfaceText(`删除阅读场景“${displayBuiltinAnalysisMode(mode).name}”？类别规则与历史高亮不会被删除。`) +
+    (isBuiltInAnalysisMode(mode.id) ? '\n\n' + interfaceText('内置场景可在本页恢复。') : '')
   )) return;
   analysisModeEditorModes = analysisModeEditorModes.filter(item => item.id !== mode.id);
   selectedAnalysisModeId = analysisModeEditorModes[0]?.id || '';
@@ -5136,7 +5220,7 @@ function deleteAnalysisMode() {
 }
 
 function resetAnalysisModes() {
-  if (!confirm('恢复全部内置阅读场景的默认名称、说明和类别组合？自定义场景会保留。')) return;
+  if (!confirm(interfaceText('恢复全部内置阅读场景的默认名称、说明和类别组合？自定义场景会保留。'))) return;
   const builtInIds = new Set(analysisModeDefaults().map(mode => mode.id));
   const customModes = analysisModeEditorModes
     .filter(mode => !builtInIds.has(mode.id));
@@ -5280,6 +5364,13 @@ function renderModelSuggestions(providerId = document.getElementById('providerId
 
 function handleProviderChange() {
   const descriptor = providerSelectionDescriptor();
+  const nameInput = document.getElementById('profileName');
+  const previous = profileById(selectedProfileId);
+  const oldDefaultName = state?.providers?.[previous?.providerId]?.label;
+  if (nameInput && ['新 Profile', 'New Profile', oldDefaultName].includes(nameInput.value)) {
+    nameInput.value = (descriptor.providerId === 'openai-compatible'
+      ? compatiblePresetFor(descriptor.presetId)?.label : state?.providers?.[descriptor.providerId]?.label) || descriptor.providerId;
+  }
   const model = document.getElementById('model');
   if (model.dataset.providerId && model.dataset.providerId !== descriptor.selection) {
     const preset = descriptor.providerId === 'openai-compatible'
@@ -5304,7 +5395,9 @@ function renderProvider() {
   const localCodex = providerId === 'codex-local';
   const localHarness = providerId === 'deepseek-harness';
   const typesafe = providerId === 'typesafe';
-  document.getElementById('compatibleFields').hidden = !compatible;
+  document.getElementById('compatibleFields').hidden = !compatible || descriptor.presetId !== 'custom';
+  const compatibleAdvanced = document.getElementById('compatibleAdvancedFields');
+  if (compatibleAdvanced) compatibleAdvanced.hidden = !compatible;
   document.getElementById('codexLocalFields').hidden = !localCodex;
   document.getElementById('harnessLocalFields').hidden = !localHarness;
   document.getElementById('apiKeyField').hidden = localCodex || localHarness;
@@ -5732,6 +5825,7 @@ async function refreshProviderModels({ auto = false } = {}) {
     if (!isCurrentModelDiscovery(request)) return;
     autoSelectFirstDiscoveredModel(models);
     renderModelSuggestions(descriptor.selection);
+    renderTaskPolicyTable();
     setModelDiscoveryStatus(
       descriptor.providerId === 'deepseek-harness'
         ? `已读取 ${models.length} 个官方本机模型；当前登录可用性请使用“测试连接”验证。`
@@ -5886,14 +5980,14 @@ function friendlyError(error) {
     INDEXEDDB_UPGRADE_BLOCKED: '本地数据库正在被旧页面占用，请关闭其他插件设置页后重试'
   };
   if (error.code === 'INVALID_RESPONSE' && error.diagnosticType === 'HtmlResponse') {
-    return '连接到了网页而不是 API；请检查校园网认证、代理/VPN、杀毒软件拦截或 Base URL';
+    return interfaceText('连接到了网页而不是 API；请检查校园网认证、代理/VPN、杀毒软件拦截或 Base URL');
   }
   if (error.code === 'INVALID_RESPONSE' && ['connectivity', 'plain_json', 'structured_schema', 'vision_input', 'json_output', 'reasoning_structured'].includes(error.probeId)) {
     const reason = error.diagnosticType === 'JSON_PARSE_FAILED' ? 'JSON 解析失败' :
       error.diagnosticType === 'JSON_CONTRACT_MISMATCH' ? 'JSON 内容不符合探针约定' : '响应未通过该探针校验';
     return `${error.probeId} · ${interfaceText(reason)}`;
   }
-  return messages[error.code] || error.message;
+  return messages[error.code] ? interfaceText(messages[error.code]) : error.message;
 }
 
 function showStatus(message, type) {
@@ -5954,7 +6048,7 @@ function renderProviderWorkflow() {
     if (id !== 'web_search') {
       const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button quiet compact-button';
       retry.textContent = interfaceText('单项复测'); retry.disabled = record?.pending === true;
-      retry.setAttribute('aria-label', `${label} · ${interfaceText('单项复测')}`);
+      retry.setAttribute('aria-label', `${interfaceText(label)} · ${interfaceText('单项复测')}`);
       retry.addEventListener('click', () => testProvider(id)); row.appendChild(retry);
     }
     host.appendChild(row);
@@ -6034,7 +6128,7 @@ function settingsDraftScope(fieldId) {
   if (['autoCacheFigureImages', 'saveArticleWebSnapshot'].includes(fieldId)) return 'storage';
   if (['panelFollowupPresetList', 'articleChatQuickPromptList',
     'literatureNoteTemplateList', 'selectionLlmActionList'].includes(fieldId)) return fieldId;
-  if (['globalProfileId', 'llmTaskPolicyTableBody', 'llmAdvancedTaskPolicyTableBody',
+  if (['globalProfileId', 'taskPolicyModules', 'llmTaskPolicyTableBody', 'llmAdvancedTaskPolicyTableBody',
     'copyTaskTokenRule', 'taskTokenRuleDialog'].includes(fieldId)) return 'routing';
   return 'profile';
 }
@@ -6080,7 +6174,7 @@ function canLeaveProfileEditor(action = 'switch') {
   if (!settingsDraftIsDirty('profile') && !settingsDraftIsDirty('routing')) return true;
   const message = '当前 Profile 有未保存修改，是否放弃并继续？';
   const canConfirm = typeof window !== 'undefined' && typeof window.confirm === 'function';
-  if (canConfirm && window.confirm(message)) {
+  if (canConfirm && window.confirm(interfaceText(message))) {
     clearProfileEditorDirty(['profile', 'routing']);
     const globalSelect = document.getElementById('globalProfileId');
     if (globalSelect) globalSelect.value = state?.settings?.globalProfileId || '';
@@ -6168,8 +6262,6 @@ function profileEntries() {
 }
 
 function profileOptionLabel(profile) {
-  const model = profile?.config?.model || profile?.model;
-  const vision = providerVisionCapability(profile?.providerId, profile?.config || {});
   const providerLabel = profile?.providerId === 'openai-compatible'
     ? (compatiblePresetFor(profile?.config?.presetId)?.label ||
       state?.providers?.[profile?.providerId]?.label)
@@ -6177,8 +6269,7 @@ function profileOptionLabel(profile) {
   const name = profile?.name || interfaceText('未命名');
   const provider = providerLabel ? interfaceText(providerLabel)
     : (profile?.providerId || interfaceText('未选服务商'));
-  return [name, ...(name === provider ? [] : [provider]),
-    model || interfaceText('未填写模型'), interfaceText(vision ? '视觉' : '仅文本')].join(' · ');
+  return [name, ...(name === provider ? [] : [provider])].join(' · ');
 }
 
 function renderProfileList() {
@@ -6193,6 +6284,7 @@ function renderProfileList() {
     item.setAttribute('role', 'option');
     item.setAttribute('aria-selected', String(id === selectedProfileId));
     item.textContent = profileOptionLabel(profile);
+    item.dataset.i18nIgnore = '';
     list.appendChild(item);
   });
   if (!profileEntries().length) {
@@ -6213,7 +6305,7 @@ function renderProviderOptions() {
   const current = select.value;
   select.replaceChildren();
   const directGroup = document.createElement('optgroup');
-  directGroup.label = '常用服务商';
+  directGroup.label = interfaceText('常用服务商');
   Object.entries(state.providers)
     .filter(([providerId]) => providerId !== 'openai-compatible')
     .forEach(([providerId, definition]) => {
@@ -6225,7 +6317,7 @@ function renderProviderOptions() {
   select.appendChild(directGroup);
 
   const domesticGroup = document.createElement('optgroup');
-  domesticGroup.label = '国内模型服务商';
+  domesticGroup.label = interfaceText('国内模型服务商');
   compatiblePresets().filter(preset => preset.id !== 'custom').forEach(preset => {
     const option = document.createElement('option');
     option.value = `${COMPATIBLE_PROVIDER_VALUE_PREFIX}${preset.id}`;
@@ -6235,7 +6327,7 @@ function renderProviderOptions() {
   select.appendChild(domesticGroup);
 
   const customGroup = document.createElement('optgroup');
-  customGroup.label = '其他接口';
+  customGroup.label = interfaceText('其他接口');
   const custom = document.createElement('option');
   custom.value = 'openai-compatible';
   custom.textContent = state.providers['openai-compatible']?.label ||
@@ -6345,7 +6437,10 @@ function syncTaskPolicyDraftsFromState() {
       tokenRule: cloneTaskTokenRule(
         SciLLM.normalizeTaskTokenRule(taskId, saved.tokenRule)
       ),
-      allowTextFallback: saved.allowTextFallback === true
+      allowTextFallback: saved.allowTextFallback === true,
+      ...(saved.model && saved.modelProfileId ? { model: saved.model, modelProfileId: saved.modelProfileId,
+        modelProviderId: saved.modelProviderId, modelPresetId: saved.modelPresetId } : {}),
+      ...(typeof saved.webSearchEnabled === 'boolean' ? { webSearchEnabled: saved.webSearchEnabled } : {})
     });
   });
 }
@@ -6389,7 +6484,12 @@ function profileForTaskPolicy(profileId) {
     model: document.getElementById('model')?.value.trim() || ''
   };
   if (descriptor.providerId === 'openai-compatible') {
+    config.presetId = descriptor.presetId;
+    config.baseUrl = document.getElementById('baseUrl')?.value.trim() || '';
     config.supportsVision = document.getElementById('supportsVision')?.checked === true;
+  } else {
+    delete config.presetId;
+    if (descriptor.providerId !== profile.providerId) delete config.baseUrl;
   }
   return { ...profile, providerId: descriptor.providerId, config };
 }
@@ -6399,7 +6499,10 @@ function effectiveTaskProfile(policy) {
   const globalId = document.getElementById('globalProfileId')?.value ||
     state?.settings?.globalProfileId || '';
   const profileId = policy.mode === 'profile' ? policy.profileId : globalId;
-  return { profileId, profile: profileForTaskPolicy(profileId) };
+  const original = profileForTaskPolicy(profileId);
+  const taskModel = SciLLM.taskModelForProfile?.(policy, original, profileId);
+  const profile = taskModel ? { ...original, config: { ...original.config, model: taskModel } } : original;
+  return { profileId, profile };
 }
 
 function profileSupportsTaskDefinition(profile, definition) {
@@ -6439,20 +6542,16 @@ function taskPolicyStatus(definition, policy) {
 
 function appendTaskProfileOption(select, definition, profileId, profile, label) {
   const option = document.createElement('option');
-  const visionRequired = definition.requirements?.vision === true &&
-    definition.requirements?.captionContext !== true;
-  const profileSupportsVision = providerVisionCapability(
-    profile?.providerId,
-    profile?.config || {}
-  );
+  const profileSupportsVision = providerVisionCapability(profile?.providerId, profile?.config || {});
   const supportsTask = profileSupportsTaskDefinition(profile, definition);
   option.value = profileId;
   option.textContent = label || profileOptionLabel(profile);
-  option.disabled = !supportsTask || (visionRequired && !profileSupportsVision);
+  // A connection can offer both text and vision models. Model capability is
+  // evaluated after the per-task model is selected, not at connection choice.
+  option.disabled = !supportsTask;
   if (!supportsTask) {
     option.textContent += ` · ${interfaceText('不支持此类文本判定')}`;
   }
-  else if (option.disabled) option.textContent += ` · ${interfaceText('不支持图片')}`;
   else if (definition.requirements?.captionContext === true && !profileSupportsVision) {
     option.textContent += ` · ${interfaceText('正文与图注解读')}`;
   }
@@ -6506,12 +6605,25 @@ function tokenRuleButtonLabel(rule) {
   return interfaceText(rule === 'auto' ? '自动' : '自定义');
 }
 
+function taskModelCandidates(profileId, profile) {
+  const preset = profile?.providerId === 'openai-compatible' ? compatiblePresetFor(profile.config?.presetId) : null;
+  const selection = profileId === selectedProfileId ? providerSelectionDescriptor().selection
+    : preset && preset.id !== 'custom' ? `compatible:${preset.id}` : profile?.providerId;
+  const revision = modelDiscoveryRevisions.get(profileId) || 0;
+  const cache = discoveredModels.get(`${profileId}|${selection}|${revision ? `revision:${revision}` : ''}`);
+  return [...new Set([profile?.config?.model, preset?.defaultModel,
+    ...(state?.providers?.[profile?.providerId]?.models || []), ...(cache?.models || []).map(item => item.id)]
+    .filter(Boolean))];
+}
+
 function renderTaskPolicyTable() {
   const body = document.getElementById('llmTaskPolicyTableBody');
   const advancedBody = document.getElementById('llmAdvancedTaskPolicyTableBody');
   const globalSelect = document.getElementById('globalProfileId');
   if (!body || !globalSelect || !state?.settings) return;
   const entries = profileEntries();
+  const owner = document.getElementById('connectionModelOwner');
+  if (owner) owner.textContent = `${interfaceText('当前连接')}：${profileOptionLabel(profileForTaskPolicy(selectedProfileId))}`;
   const currentGlobal = globalSelect.value || state.settings.globalProfileId || entries[0]?.[0] || '';
   globalSelect.replaceChildren();
   entries.forEach(([profileId, profile]) => {
@@ -6548,7 +6660,7 @@ function renderTaskPolicyTable() {
       wrap.setAttribute('aria-label', interfaceText(module.label));
       const table = document.createElement('table'); table.className = 'task-policy-table';
       const head = document.createElement('thead'); const headerRow = document.createElement('tr');
-      ['功能', '模型选择', '推理', '推理强度', 'Token 规则', '编辑预览'].forEach(label => {
+      ['功能', '连接与模型', '思考', '推理强度', '联网', 'Token 规则', '编辑预览'].forEach(label => {
         const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = interfaceText(label); headerRow.appendChild(cell);
       });
       head.appendChild(headerRow);
@@ -6557,7 +6669,7 @@ function renderTaskPolicyTable() {
       table.append(head, moduleBody); wrap.appendChild(table); section.append(heading, wrap); moduleHost.appendChild(section);
     });
   }
-  SciLLM.TASK_DEFINITIONS.forEach(definition => {
+  SciLLM.TASK_DEFINITIONS.filter(definition => !RETIRED_TASK_POLICY_IDS.has(definition.id)).forEach(definition => {
     const copy = taskPolicyUiText(definition);
     const policy = taskPolicyDraft(definition.id);
     const row = document.createElement('tr');
@@ -6601,7 +6713,20 @@ function renderTaskPolicyTable() {
     profileSelect.value = policy.mode === 'local' ? '__local_translation__' : policy.mode === 'profile' ? policy.profileId || '__missing_translation_profile__' : '';
     modelCell.appendChild(profileSelect);
 
-    const { profile } = effectiveTaskProfile(policy);
+    const { profileId, profile } = effectiveTaskProfile(policy);
+    const modelInput = document.createElement('input');
+    modelInput.type = 'text'; modelInput.autocomplete = 'off'; modelInput.maxLength = 256;
+    modelInput.dataset.taskPolicyModel = definition.id;
+    modelInput.setAttribute('aria-label', `${copy.label} · ${interfaceText('模型 ID（可手动输入）')}`);
+    modelInput.value = SciLLM.taskModelForProfile?.(policy, profile, profileId) || '';
+    modelInput.placeholder = `${interfaceText('默认模型')}：${profileForTaskPolicy(profileId)?.config?.model || '—'}`;
+    modelInput.disabled = policy.mode === 'local';
+    const models = document.createElement('datalist'); models.id = `task-models-${definition.id}`;
+    modelInput.setAttribute('list', models.id);
+    taskModelCandidates(profileId, profile).forEach(model => {
+      const option = document.createElement('option'); option.value = model; models.appendChild(option);
+    });
+    modelCell.append(modelInput, models);
     const { reasoningToggle, effortSelect } = createTaskReasoningControls(
       definition, policy, profile
     );
@@ -6609,11 +6734,23 @@ function renderTaskPolicyTable() {
     const reasoningLabel = document.createElement('label');
     reasoningLabel.className = 'task-policy-toggle';
     const reasoningText = document.createElement('span');
-    reasoningText.textContent = interfaceText(reasoningToggle.checked ? '开启' : '关闭');
+    reasoningText.textContent = interfaceText(reasoningToggle.checked ? '开启' : '未开启');
     reasoningLabel.append(reasoningToggle, reasoningText);
     reasoningCell.appendChild(reasoningLabel);
     const effortCell = document.createElement('td');
     effortCell.appendChild(effortSelect);
+
+    const webCell = document.createElement('td');
+    const web = document.createElement('input'); web.type = 'checkbox';
+    web.dataset.taskPolicyWeb = definition.id;
+    web.setAttribute('aria-label', `${copy.label} · ${interfaceText('联网')}`);
+    web.disabled = !profile || SciLLM.supportsTaskWebSearch?.(profile.providerId, profile.config, definition.id) !== true;
+    web.checked = !web.disabled && policy.webSearchEnabled === true;
+    const webLabel = document.createElement('label'); webLabel.className = 'task-policy-toggle';
+    const webText = document.createElement('span');
+    webText.textContent = interfaceText(web.disabled ? '不支持' : web.checked ? '开启' : '未开启');
+    webLabel.title = interfaceText(web.disabled ? '此功能或当前模型暂不支持联网。' : '作为此功能的默认联网选项，可在问答中临时调整。');
+    webLabel.append(web, webText); webCell.appendChild(webLabel);
 
     const tokenCell = document.createElement('td');
     const tokenButton = document.createElement('button');
@@ -6632,7 +6769,7 @@ function renderTaskPolicyTable() {
     statusLabel.textContent = status.label;
     statusCell.appendChild(statusLabel);
 
-    row.append(featureCell, modelCell, reasoningCell, effortCell, tokenCell, statusCell);
+    row.append(featureCell, modelCell, reasoningCell, effortCell, webCell, tokenCell, statusCell);
     if (moduleBodies.has(definition.id)) {
       moduleBodies.get(definition.id).appendChild(row);
     } else if (advancedBody && !COMMON_TASK_POLICY_IDS.has(definition.id)) {
@@ -6647,12 +6784,23 @@ function renderTaskPolicyTable() {
 function handleTaskPolicyTableChange(event) {
   const target = event.target;
   const taskId = target.dataset.taskPolicyProfile ||
-    target.dataset.taskPolicyReasoning || target.dataset.taskPolicyEffort;
+    target.dataset.taskPolicyReasoning || target.dataset.taskPolicyEffort ||
+    target.dataset.taskPolicyModel || target.dataset.taskPolicyWeb;
   if (!taskId || !SciLLM.LLM_TASK_IDS.includes(taskId)) return;
   const policy = taskPolicyDraft(taskId);
   if (target.dataset.taskPolicyProfile) {
     policy.mode = TRANSLATION_TASK_POLICY_IDS.has(taskId) && target.value === '__local_translation__' ? 'local' : target.value ? 'profile' : 'global';
     policy.profileId = policy.mode === 'profile' ? target.value : null;
+    delete policy.model; delete policy.modelProfileId; delete policy.modelProviderId; delete policy.modelPresetId;
+  } else if (target.dataset.taskPolicyModel) {
+    policy.model = target.value.trim();
+    policy.modelProfileId = effectiveTaskProfile(policy).profileId;
+    const connection = profileForTaskPolicy(policy.modelProfileId);
+    policy.modelProviderId = connection?.providerId || '';
+    policy.modelPresetId = String(connection?.config?.presetId || '');
+    if (!policy.model) { delete policy.model; delete policy.modelProfileId; }
+  } else if (target.dataset.taskPolicyWeb) {
+    policy.webSearchEnabled = target.checked === true;
   } else if (target.dataset.taskPolicyReasoning) {
     policy.reasoningEnabled = target.checked === true;
     const rowEffort = target.closest('tr')?.querySelector('[data-task-policy-effort]');
@@ -6688,7 +6836,8 @@ function setTaskTokenRuleDialogValues(rule) {
 function renderTaskTokenCopyTargets() {
   const container = document.getElementById('taskTokenCopyTargets');
   container.replaceChildren();
-  SciLLM.TASK_DEFINITIONS.filter(definition => definition.id !== activeTaskTokenRuleId)
+  SciLLM.TASK_DEFINITIONS.filter(definition => definition.id !== activeTaskTokenRuleId &&
+    !RETIRED_TASK_POLICY_IDS.has(definition.id))
     .forEach(definition => {
       const copy = taskPolicyUiText(definition);
       const label = document.createElement('label');
@@ -6702,7 +6851,7 @@ function renderTaskTokenCopyTargets() {
 }
 
 function openTaskTokenRuleDialog(taskId) {
-  if (!SciLLM.LLM_TASK_IDS.includes(taskId)) return;
+  if (!SciLLM.LLM_TASK_IDS.includes(taskId) || RETIRED_TASK_POLICY_IDS.has(taskId)) return;
   activeTaskTokenRuleId = taskId;
   const definition = SciLLM.getLlmTaskDefinition(taskId);
   const copy = taskPolicyUiText(definition);
@@ -6898,6 +7047,13 @@ function collectProfile() {
   delete config.apiKeyMask;
   delete config.customHeaderNames;
   config.model = document.getElementById('model').value.trim();
+  // A custom gateway may not publish a default model. The first explicitly
+  // selected task model can initialize its default without another setup step.
+  if (!config.model) {
+    const draftProfile = { ...current, providerId, config: { ...config, presetId: descriptor.presetId || '' } };
+    config.model = [...taskPolicyDrafts.values()].map(policy =>
+      SciLLM.taskModelForProfile?.(policy, draftProfile, selectedProfileId)).find(Boolean) || '';
+  }
   const enteredKey = document.getElementById('apiKey').value
     .replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
   if (enteredKey) config.apiKey = enteredKey;
@@ -6948,6 +7104,10 @@ function collectProfile() {
 
 function collectTaskPolicies() {
   return Object.fromEntries(SciLLM.LLM_TASK_IDS.map(taskId => {
+    if (RETIRED_TASK_POLICY_IDS.has(taskId)) {
+      const saved = state?.settings?.taskPolicies?.[taskId];
+      return [taskId, JSON.parse(JSON.stringify(saved || taskPolicyDraft(taskId)))];
+    }
     const policy = taskPolicyDraft(taskId);
     const { profile } = effectiveTaskProfile(policy);
     const capability = profile && typeof SciLLM.getProviderReasoningCapabilities === 'function'
@@ -6968,7 +7128,10 @@ function collectTaskPolicies() {
         ? normalizedReasoning.effort : 'auto',
       tokenRule: cloneTaskTokenRule(policy.tokenRule),
       allowTextFallback: SciLLM.getLlmTaskDefinition(taskId).requirements?.vision === true &&
-        policy.allowTextFallback === true
+        policy.allowTextFallback === true,
+      ...(policy.model && policy.modelProfileId ? { model: policy.model, modelProfileId: policy.modelProfileId,
+        modelProviderId: policy.modelProviderId, modelPresetId: policy.modelPresetId } : {}),
+      ...(typeof policy.webSearchEnabled === 'boolean' ? { webSearchEnabled: policy.webSearchEnabled } : {})
     }];
   }));
 }
@@ -6983,7 +7146,7 @@ async function addApiProfile() {
   try {
     const result = await callBackground({
       type: 'LLM_SAVE_PROFILE',
-      profile: { id: baseId, name: '新 Profile', providerId,
+      profile: { id: baseId, name: state.providers?.[providerId]?.label || providerId, providerId,
         config: { model: state.providers?.[providerId]?.defaultModel || '' },
         capabilities: { vision },
         tokenPolicy: { mode: 'auto', autoCap: null, manualMax: null } }
@@ -7062,7 +7225,15 @@ async function persistForm(silent) {
     const consentGranted = document.getElementById('consentGranted').checked;
     const preferredMode = firstConfiguration && consentGranted
       ? 'llm' : document.getElementById('analysisMode').value;
-    const globalProfileId = document.getElementById('globalProfileId').value;
+    let globalProfileId = document.getElementById('globalProfileId').value;
+    const globalProfile = profileById(globalProfileId);
+    const globalConfigured = globalProfile &&
+      (['codex-local', 'deepseek-harness'].includes(globalProfile.providerId) || globalProfile.config?.hasApiKey === true) &&
+      String(globalProfile.config?.model || '').trim();
+    if (firstConfiguration && !globalConfigured && profile.config.model) {
+      globalProfileId = profile.id;
+      document.getElementById('globalProfileId').value = profile.id;
+    }
     globalProfileIdSnapshot = globalProfileId;
     const taskPolicies = collectTaskPolicies();
     const figurePanelFollowupPresets = collectPanelFollowupPresets();

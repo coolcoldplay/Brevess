@@ -5,6 +5,7 @@
   Object.assign(root.SciLLM || (root.SciLLM = {}), api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
+  const fallbackI18n = typeof module === 'object' && module.exports ? require('./i18n-export.js') : {};
 
   const CSP = "default-src 'none'; script-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; connect-src 'none'; media-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
   const LIMITS = Object.freeze({ maxHtmlBytes: 64 * 1024 * 1024, maxResourceBytes: 40 * 1024 * 1024,
@@ -156,6 +157,11 @@
 
   // Capture only a caller-selected trusted article subtree, never a whole account page.
   function captureFaithfulPageSnapshot(options = {}) {
+    const api = globalThis.SciLLM || {};
+    const locale = options.outputLanguage || options.interfaceLanguage || options.language || api.getInterfaceLanguage?.() || 'zh-CN';
+    const text = value => (api.translateExportBuiltin || fallbackI18n.translateExportBuiltin)?.(value, locale) ?? value;
+    const message = (parts, ...values) => (api.formatExportBuiltin || fallbackI18n.formatExportBuiltin)?.(parts, values, locale)
+      ?? parts.reduce((result, part, index) => result + part + (values[index] ?? ''), '');
     const source = options.document;
     const article = options.articleRoot;
     if (!source?.implementation?.createHTMLDocument || !article || ['html', 'body'].includes(tagOf(article)) ||
@@ -287,7 +293,7 @@
         const candidate = annotations.get(attr(live, 'data-annotation-id'));
         const normalized = value => String(value || '').replace(/\s+/gu, ' ').trim();
         const annotation = candidate && (!candidate.quote || normalized(candidate.quote) === normalized(live.textContent)) ? candidate : null;
-        const parts = [attr(live, 'title'), annotation?.categorySnapshot?.name, annotation?.note ? `备注：${annotation.note}` : ''].filter(Boolean);
+        const parts = [attr(live, 'title'), annotation?.categorySnapshot?.name, annotation?.note ? message`备注：${annotation.note}` : ''].filter(Boolean);
         if (parts.length) clone.setAttribute('title', Array.from(new Set(parts)).join('\n'));
         if (annotation) {
           const id = String(annotation.id || annotation.annotationId);
@@ -426,7 +432,8 @@
     const appendix = output.createElement('section');
     appendix.setAttribute('id', freshId('brevess-reading-notes'));
     appendix.setAttribute('data-brevess-export-snapshot-version', '1');
-    appendix.setAttribute('style', 'display:block!important;visibility:visible!important;color:#222!important;background:#fff!important;padding:1em!important');
+    if (String(locale).toLowerCase().startsWith('en')) appendix.setAttribute('lang', 'en');
+    appendix.setAttribute('style', 'display:block!important;visibility:visible!important;color:#222!important;background:#fff!important;padding:1em!important;overflow-wrap:anywhere!important;max-width:100%!important;box-sizing:border-box!important');
     const textElement = (tag, text) => { const node = output.createElement(tag); node.textContent = String(text || ''); return node; };
     const canLinkHighlight = node => {
       for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
@@ -436,25 +443,25 @@
       return !containsLink(node);
     };
     let hasNoteLinks = false;
-    appendix.appendChild(textElement('h2', '高亮备注与译文'));
+    appendix.appendChild(textElement('h2', text('高亮备注与译文')));
     if (options.exportSnapshot) {
       capture.report.exportSnapshotVersion = 1;
       capture.report.translationStatus = options.exportSnapshot.status === 'pending' ? 'pending' :
         options.exportSnapshot.status === 'partial' || translations.some(entry => entry.partial) ? 'partial' : translations.length ? 'complete' : 'pending';
-      appendix.appendChild(textElement('p', capture.report.translationStatus === 'complete' ? '已确认译文已保留。' : '翻译尚未全部完成；仅保留已确认内容，未译部分仍为原文。'));
+      appendix.appendChild(textElement('p', text(capture.report.translationStatus === 'complete' ? '已确认译文已保留。' : '翻译尚未全部完成；仅保留已确认内容，未译部分仍为原文。')));
     }
     for (const [index, entry] of translations.entries()) {
       const target = translatedClones.get(entry.sourceKey);
       const translated = output.createElement('div');
       translated.setAttribute('lang', entry.targetLanguage);
       translated.setAttribute('style', 'display:block!important;visibility:visible!important;color:#333!important;background:#f6f8fa!important;padding:.5em!important;white-space:pre-wrap!important');
-      translated.appendChild(textElement('small', entry.partial ? '译文（部分完成）' : '译文'));
+      translated.appendChild(textElement('small', text(entry.partial ? '译文（部分完成）' : '译文')));
       translated.appendChild(textElement('p', entry.translatedText));
       if (target?.parentNode) {
         target.parentNode.insertBefore(translated, target.nextSibling);
         capture.report.preservedTranslations++;
       } else {
-        appendix.appendChild(textElement('h3', `译文 ${index + 1}（原文位置未匹配）`));
+        appendix.appendChild(textElement('h3', message`译文 ${index + 1}（原文位置未匹配）`));
         appendix.appendChild(textElement('blockquote', entry.sourceText)); appendix.appendChild(translated);
         capture.report.unmatchedTranslations++;
         warn(capture.report, 'Some confirmed translations have no matching source paragraph in the captured article; their source text and translation are preserved in the appendix.');
@@ -466,15 +473,15 @@
       const match = noteAnchors.get(id);
       const noteId = freshId(`brevess-note-${index + 1}`);
       const section = output.createElement('section'); section.setAttribute('id', noteId);
-      section.appendChild(textElement('h3', `备注 ${index + 1}${match ? '' : '（原文位置未匹配）'}`));
-      section.appendChild(textElement('blockquote', annotation.quote || match?.node.textContent || '原句未提供'));
+      section.appendChild(textElement('h3', message`备注 ${index + 1}${match ? '' : text('（原文位置未匹配）')}`));
+      section.appendChild(textElement('blockquote', annotation.quote || match?.node.textContent || text('原句未提供')));
       const body = textElement('p', annotation.note); body.setAttribute('style', 'white-space:pre-wrap!important'); section.appendChild(body);
-      const back = textElement('a', match ? '返回高亮原句' : '打开论文原网页');
+      const back = textElement('a', text(match ? '返回高亮原句' : '打开论文原网页'));
       if (match || capture.documentUrl) { back.setAttribute('href', match ? `#${match.anchor}` : capture.documentUrl); section.appendChild(back); }
       if (match) {
         const link = output.createElement('a'); link.setAttribute('href', `#${noteId}`);
         link.setAttribute('class', 'brevess-static-note-link');
-        link.setAttribute('aria-label', `查看备注 ${index + 1}`);
+        link.setAttribute('aria-label', message`查看备注 ${index + 1}`);
         if (canLinkHighlight(match.node)) {
           // Move the cloned children, preserving formatting and exact continuous
           // source text even when a selection ends in the middle of a word.
@@ -486,7 +493,7 @@
         } else {
           // Never nest or replace a publisher anchor. An independent appendix
           // entry keeps the original paragraph and href unchanged.
-          link.textContent = `查看备注 ${index + 1}`;
+          link.textContent = message`查看备注 ${index + 1}`;
           const entry = output.createElement('p'); entry.appendChild(link); appendix.appendChild(entry);
         }
         hasNoteLinks = true;

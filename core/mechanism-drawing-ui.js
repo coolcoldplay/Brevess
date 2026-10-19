@@ -5,6 +5,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(host, interaction) {
   'use strict';
+  const t = value => host.SciLLM?.translateInterfaceText?.(value) || value;
 
   const EVIDENCE_MIME = 'application/x-brevess-evidence-block';
   const NODE_WIDTH = 168;
@@ -179,6 +180,7 @@
     const win = doc.defaultView || host;
     const shell = doc.createElement('section');
     shell.className = 'md-shell';
+    shell.setAttribute('data-brevess-interface', '');
     shell.hidden = true;
     shell.setAttribute('aria-label', '手动绘制图表梳理');
     shell.innerHTML = `<header class="md-header"><div><strong>图表梳理</strong><span class="md-subtitle">手动绘制</span></div><div class="md-header-actions"><button type="button" data-action="expand" aria-pressed="false">展开</button><button type="button" data-action="close" aria-label="关闭图表梳理">关闭</button></div></header>
@@ -206,13 +208,28 @@
     let initialFitDone = false, initialFitScheduled = false, fitObserver = null;
     let layoutCacheKey = '', layoutCache = {};
     const apiHost = () => host.SciLLM || {};
+    // Only generated controls are translated. Scientific labels remain exact,
+    // including labels such as “保存” that also occur in the UI dictionary.
+    function protectAuthoredLabels(scope = shell) {
+      const selector = '.md-node-label, .md-edge-title, .md-evidence, .md-matrix-scroll th:not(.md-corner), .md-story-heading strong, .md-story > p, .md-story-ticks button, .md-binding-editor > strong, .md-menu-label, [data-field="edge-from"] option, [data-field="edge-to"] option, [data-field="edge-choice"] option, .md-source-picker option[value]:not([value=""]), [data-story-field="selected"] option[value], .md-story-evidence-group > p';
+      scope.querySelectorAll(selector).forEach(node => {
+        const accessible = node.getAttribute('aria-label');
+        if (accessible) node.setAttribute('aria-label', t(accessible));
+        node.setAttribute('data-i18n-ignore', '');
+      });
+      scope.querySelectorAll('[data-story-member]').forEach(input => input.closest('label')?.setAttribute('data-i18n-ignore', ''));
+    }
+    listeners.push(apiHost().observeInterfaceRoot?.(shell) || (() => {}));
+    listeners.push(apiHost().onInterfaceLanguageChange?.(() => {
+      render(); if (status) notify(status, errorStatus);
+    }) || (() => {}));
     const edgeById = id => list(snapshot.edges).find(edge => edge.id === id);
     const nodeById = id => list(snapshot.nodes).find(node => node.id === id);
     const bindingById = id => list(snapshot.edges).flatMap(edge => list(edge.evidence)).find(binding => binding.id === id);
     const sourceFor = binding => { const match = resolveMechanismDrawingEvidenceSource(snapshot, binding); return match && match.kind === 'active' ? match.source : undefined; };
     const edgeName = edge => `${nodeLabel(nodeById(edge.from))} → ${nodeLabel(nodeById(edge.to))}`;
     const contextOf = value => text(value && value.contextKey);
-    function notify(message, failed) { status = message; errorStatus = !!failed; $('.md-status').textContent = message; $('.md-status').classList.toggle('md-error', errorStatus); }
+    function notify(message, failed) { status = message; errorStatus = !!failed; $('.md-status').setAttribute('data-i18n-ignore', ''); $('.md-status').textContent = t(message); $('.md-status').classList.toggle('md-error', errorStatus); }
 
     function dispatch(command, after) {
       if (destroyed) return Promise.resolve(null);
@@ -264,9 +281,9 @@
     }
 
     function chip(binding) {
-      const types = list(binding.types).map(type => TYPE_NAMES[type]).filter(Boolean).join('、') || '未分类';
-      const review = binding.unresolved ? '，原证据暂不可用' : binding.needsReview ? '，待复核' : '';
-      return `<button type="button" class="md-evidence ${mechanismDrawingEvidenceClass(binding.types)}${binding.unresolved ? ' md-unresolved' : ''}" data-binding="${esc(binding.id)}" data-focus-key="binding:${esc(binding.id)}" aria-label="${esc(binding.panelLabel || '未命名证据')}，${esc(types + review)}。点击定位；右键或 Shift+F10 更改">${esc(binding.panelLabel || '未命名证据')}</button>`;
+      const types = list(binding.types).map(type => t(TYPE_NAMES[type])).filter(Boolean).join(' / ') || t('未分类');
+      const review = binding.unresolved ? t('原证据暂不可用') : binding.needsReview ? t('待复核') : '';
+      return `<button type="button" data-i18n-ignore class="md-evidence ${mechanismDrawingEvidenceClass(binding.types)}${binding.unresolved ? ' md-unresolved' : ''}" data-binding="${esc(binding.id)}" data-focus-key="binding:${esc(binding.id)}" aria-label="${esc(binding.panelLabel || t('未命名证据'))}, ${esc(types)}${review ? ', ' + esc(review) : ''}. ${esc(t('点击定位；右键或 Shift+F10 更改'))}">${esc(binding.panelLabel || t('未命名证据'))}</button>`;
     }
     function focusedState() {
       const active = shell.getRootNode().activeElement || doc.activeElement;
@@ -383,6 +400,7 @@
       }).join('');
       $('.md-empty').hidden = !!scene.nodes.length;
       renderNodeEditor();
+      protectAuthoredLabels();
       transform();
     }
     function renderMatrix() {
@@ -397,7 +415,7 @@
       }).join('')}</tr>`).join('')}</tbody></table>`;
     }
     function renderInspector() {
-      if (storyDraft) { renderStoryEditor(); return; }
+      if (storyDraft) { renderStoryEditor(); protectAuthoredLabels(); return; }
       const edge = edgeById(selectedEdgeId), node = selectedNodes.size === 1 ? nodeById(Array.from(selectedNodes)[0]) : null;
       inspector.hidden = !edge && !selectedNodes.size;
       if (inspector.hidden) { inspector.innerHTML = ''; return; }
@@ -421,6 +439,7 @@
       const focus = focusedState(), matrixOffset = { x: matrixScroll.scrollLeft, y: matrixScroll.scrollTop }, inspectorOffset = inspector.scrollTop;
       scene = selectMechanismDrawingScene(snapshot, view);
       renderStory(); renderGraph(); renderMatrix(); renderInspector(); addRelationContextFields(); updateToolbar();
+      protectAuthoredLabels();
       matrixScroll.scrollLeft = matrixOffset.x; matrixScroll.scrollTop = matrixOffset.y; inspector.scrollTop = inspectorOffset;
       restoreFocus(focus);
     }
@@ -463,10 +482,10 @@
       const archived = match && match.kind === 'archive';
       const unavailable = binding.unresolved || (!binding.legacy && (!match || archived));
       const archiveNote = archived ? `<p class="md-help">合并前的来源记录（只读）${match.contentMatched ? '' : '；这是合并前最后保存的历史来源，当前绑定仍需复核。'}</p>` : '';
-      tooltip.innerHTML = `<strong>${esc(binding.panelLabel || source.panelLabel || '证据')}</strong>${archiveNote}${source.title ? `<p>${esc(source.title)}</p>` : ''}${[['方法', source.method], ['观察', source.observation], ['结论', source.conclusion]].filter(([, value]) => value).map(([label, value]) => `<p><b>${label}</b> ${esc(value)}</p>`).join('')}<p>此联系的证据类型：${esc(list(binding.types).map(type => TYPE_NAMES[type]).filter(Boolean).join('、') || '未分类')}</p>${unavailable ? '<p>原证据块暂不可用；请复核、替换或移除绑定。</p>' : '<p class="md-help">点击在解图中定位 · 右键更改</p>'}`;
+      tooltip.innerHTML = `<strong data-i18n-ignore>${esc(binding.panelLabel || source.panelLabel || t('证据'))}</strong>${archiveNote}${source.title ? `<p data-i18n-ignore>${esc(source.title)}</p>` : ''}${[['方法', source.method], ['观察', source.observation], ['结论', source.conclusion]].filter(([, value]) => value).map(([label, value]) => `<p><b>${label}</b> <span data-i18n-ignore>${esc(value)}</span></p>`).join('')}<p>此联系的证据类型：${esc(list(binding.types).map(type => t(TYPE_NAMES[type])).filter(Boolean).join(' / ') || t('未分类'))}</p>${unavailable ? '<p>原证据块暂不可用；请复核、替换或移除绑定。</p>' : '<p class="md-help">点击在解图中定位 · 右键更改</p>'}`;
       tooltip.hidden = false;
       const owner = edgeById(binding.edgeId);
-      if (owner) { const relationship = doc.createElement('p'); relationship.textContent = `${edgeName(owner)} · ${owner.label || '联系'}${owner.context && owner.context.summary ? ` · ${owner.context.summary}` : ''}`; tooltip.insertBefore(relationship, tooltip.children[1] || null); }
+      if (owner) { const relationship = doc.createElement('p'); relationship.setAttribute('data-i18n-ignore', ''); relationship.textContent = `${edgeName(owner)} · ${owner.label || t('联系')}${owner.context && owner.context.summary ? ` · ${owner.context.summary}` : ''}`; tooltip.insertBefore(relationship, tooltip.children[1] || null); }
       if (binding.needsReview) { const review = doc.createElement('p'); review.className = 'md-error'; review.textContent = '联系或原证据已变化，请复核此处证据类型。'; tooltip.appendChild(review); }
       if (binding.legacy) { const legacy = doc.createElement('p'); legacy.className = 'md-help'; legacy.textContent = '既有单 Panel 引用'; tooltip.appendChild(legacy); }
       const rect = element.getBoundingClientRect(), base = shell.getBoundingClientRect();
@@ -480,6 +499,7 @@
       menuBindingId = id; tooltip.hidden = true;
       menu.innerHTML = `<div class="md-menu-label">${esc(binding.panelLabel || '证据')}</div><button type="button" role="menuitem" data-menu-action="locate">在解图中定位</button>${Object.entries(TYPE_NAMES).map(([type, label]) => `<button type="button" role="menuitemcheckbox" aria-checked="${list(binding.types).includes(type)}" data-menu-type="${type}">${list(binding.types).includes(type) ? '✓ ' : ''}${label}</button>`).join('')}<button type="button" role="menuitem" data-menu-action="replace">替换证据</button><button type="button" role="menuitem" class="md-danger" data-menu-action="remove">移除此证据</button>`;
       menu.hidden = false;
+      protectAuthoredLabels(menu);
       const base = shell.getBoundingClientRect();
       menu.style.left = `${clamp(x - base.left, 8, Math.max(8, base.width - 186))}px`;
       menu.style.top = `${clamp(y - base.top, 8, Math.max(8, base.height - menu.offsetHeight - 8))}px`;
@@ -497,7 +517,7 @@
       const existing = list(snapshot.edges).find(edge => edge.from === from && edge.to === to);
       if (existing && !allowParallel) { selectEdge(existing.id); notify('已选中现有联系；不同条件下的关系可用“另建联系”。'); return; }
       const id = uid('edge');
-      dispatch({ type: 'add_edge', edge: { id, from, to, label: '联系', polarity: 'neutral' } }, () => { selectEdge(id); const input = $('[data-field="edge-label"]'); if (input) { input.focus(); input.select(); } });
+      dispatch({ type: 'add_edge', edge: { id, from, to, label: t('联系'), polarity: 'neutral' } }, () => { selectEdge(id); const input = $('[data-field="edge-label"]'); if (input) { input.focus(); input.select(); } });
     }
     async function addNode() {
       const context = previousContext, session = previousSession;
@@ -508,7 +528,7 @@
         layoutGraph();
         const rect = canvas.getBoundingClientRect(), origin = worldPoint(rect.left + 12, rect.top + 12);
         const position = mechanismDrawingFindNodePosition(positions, { ...origin, width: Math.max(0, rect.width - 24) / viewport.zoom, height: Math.max(0, rect.height - 24) / viewport.zoom });
-        return { type: 'add_node', node: { id, label: '新节点' }, position };
+        return { type: 'add_node', node: { id, label: t('新节点') }, position };
       }, () => {
         clearNodeEditor(); selectedNodes = new Set([id]); selectedEdgeId = ''; selectedBindingId = ''; storyDraft = null;
         panMode = false; connectMode = false; spaceDown = false; connectingFrom = ''; render();
@@ -614,7 +634,7 @@
     }
     function editStoryField(target) {
       if (!storyDraft) return;
-      if (target.dataset.storyField === 'selected') { storyEditorIndex = Number(target.value); renderStoryEditor(); return; }
+      if (target.dataset.storyField === 'selected') { storyEditorIndex = Number(target.value); renderStoryEditor(); protectAuthoredLabels(); return; }
       const stage = storyDraft.stages[storyEditorIndex]; if (!stage) return;
       const field = target.dataset.storyField;
       if (field === 'title' || field === 'summary') { stage[field] = target.value; return; }
@@ -625,20 +645,20 @@
       if (member === 'nodeIds' && !target.checked) stage.edgeIds = list(stage.edgeIds).filter(id => { const edge = edgeById(id); return edge && edge.from !== target.value && edge.to !== target.value; });
       if (member === 'nodeIds' || member === 'edgeIds') stage.bindingIds = list(stage.bindingIds).filter(id => { const binding = bindingById(id); return binding && list(stage.edgeIds).includes(binding.edgeId); });
       if (member === 'figureIds') delete stage.figureLabel; // The model derives canonical F / FS labels.
-      renderStoryEditor();
+      renderStoryEditor(); protectAuthoredLabels();
     }
     function onStoryAction(action) {
       if (!storyDraft) return;
       if (action === 'cancel') { storyDraft = null; renderInspector(); return; }
       if (action === 'add') {
         if (storyDraft.stages.length >= 64) { notify('最多可设置 64 个论证步骤。', true); return; }
-        storyDraft.stages.push({ id: uid('step'), title: `步骤 ${storyDraft.stages.length + 1}`, summary: '', figureIds: [], nodeIds: scene.nodes.map(node => node.id), edgeIds: scene.edges.map(edge => edge.id), bindingIds: scene.edges.flatMap(edge => list(edge.evidence).map(binding => binding.id)) });
-        storyEditorIndex = storyDraft.stages.length - 1; renderStoryEditor(); const input = $('[data-story-field="title"]'); if (input) { input.focus(); input.select(); } return;
+        storyDraft.stages.push({ id: uid('step'), title: t(`步骤 ${storyDraft.stages.length + 1}`), summary: '', figureIds: [], nodeIds: scene.nodes.map(node => node.id), edgeIds: scene.edges.map(edge => edge.id), bindingIds: scene.edges.flatMap(edge => list(edge.evidence).map(binding => binding.id)) });
+        storyEditorIndex = storyDraft.stages.length - 1; renderStoryEditor(); protectAuthoredLabels(); const input = $('[data-story-field="title"]'); if (input) { input.focus(); input.select(); } return;
       }
-      if (action === 'remove') { storyDraft.stages.splice(storyEditorIndex, 1); storyEditorIndex = Math.max(0, Math.min(storyEditorIndex, storyDraft.stages.length - 1)); renderStoryEditor(); return; }
+      if (action === 'remove') { storyDraft.stages.splice(storyEditorIndex, 1); storyEditorIndex = Math.max(0, Math.min(storyEditorIndex, storyDraft.stages.length - 1)); renderStoryEditor(); protectAuthoredLabels(); return; }
       if (action === 'up' || action === 'down') {
         const next = storyEditorIndex + (action === 'up' ? -1 : 1); if (next < 0 || next >= storyDraft.stages.length) return;
-        [storyDraft.stages[next], storyDraft.stages[storyEditorIndex]] = [storyDraft.stages[storyEditorIndex], storyDraft.stages[next]]; storyEditorIndex = next; renderStoryEditor(); return;
+        [storyDraft.stages[next], storyDraft.stages[storyEditorIndex]] = [storyDraft.stages[storyEditorIndex], storyDraft.stages[next]]; storyEditorIndex = next; renderStoryEditor(); protectAuthoredLabels(); return;
       }
       if (action === 'save') {
         const title = $('[data-story-field="title"]'), summary = $('[data-story-field="summary"]'), selected = storyDraft.stages[storyEditorIndex];

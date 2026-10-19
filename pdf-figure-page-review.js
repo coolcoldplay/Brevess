@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   const api = globalThis.SciLLM = globalThis.SciLLM || {};
+  const t = value => api.translateInterfaceText?.(value) || value;
 
   // Nonmodal UI; save/focus adapters keep the existing PDF identity, source,
   // manual-selection and disk-confirmation guards authoritative.
@@ -40,6 +41,7 @@
     saveButton.dataset.reviewSaveAll = '';
     const feedback = make('p', 'pdf-figure-page-review-feedback');
     feedback.dataset.reviewBatchStatus = '';
+    feedback.setAttribute('data-i18n-ignore', '');
     feedback.setAttribute('role', 'status');
     feedback.setAttribute('aria-live', 'polite');
     footer.append(saveButton, feedback);
@@ -65,7 +67,7 @@
       body.replaceChildren();
       const owner = context.native || context.identity || context.catalog || context;
       if (draftOwner !== owner) { drafts.clear(); draftOwner = owner; }
-      feedback.textContent = '';
+      feedback.textContent = t('');
       const entries = [];
       saveButton.disabled = !context.figures?.length;
       if (!context.figures?.length) {
@@ -88,7 +90,9 @@
         const name = make('th');
         name.setAttribute('scope', 'row');
         const label = figure.figureLabel || figure.figureId;
-        name.append(make('strong', '', label));
+        const nameText = make('strong', '', label);
+        nameText.setAttribute('data-i18n-ignore', '');
+        name.append(nameText);
         const captionPages = (figure.captionPageNumbers || []).join(', ');
         if (captionPages) name.append(make('small', '', '图注 p. ' + captionPages));
         const cell = make('td');
@@ -107,7 +111,7 @@
         const pagesBar = make('div', 'pdf-figure-page-review-links');
         const candidateHint = make('small', 'pdf-figure-page-review-candidates');
         if (!manual && figure.artworkPageCandidates?.length) candidateHint.textContent = '自动候选 p. ' + figure.artworkPageCandidates.join(', ');
-        if (figure.artworkRestoreError) feedback.textContent += label + '：' + figure.artworkRestoreError + ' ';
+        if (figure.artworkRestoreError) feedback.textContent += t(label + ': ' + t(figure.artworkRestoreError) + ' ');
         function drawLinks() {
           pagesBar.replaceChildren();
           let pages;
@@ -124,8 +128,8 @@
                 const result = await focus(figure, page, context);
                 assertCurrent(context, token);
                 if (result?.success !== true || result.focused === false) throw new Error('无法定位此页，请用阅读器页码框查看。');
-                feedback.textContent = '正在查看物理第 ' + page + ' 页';
-              } catch (error) { if (token === epoch && !panel.hidden) feedback.textContent = error.message; }
+                feedback.textContent = t('正在查看物理第 ' + page + ' 页');
+              } catch (error) { if (token === epoch && !panel.hidden) feedback.textContent = t(error.message); }
             });
             pagesBar.append(button);
           }
@@ -133,7 +137,7 @@
         input.addEventListener('input', () => {
           drafts.set(figure.figureId, { value: input.value, sourceIdentity });
           input.removeAttribute('aria-invalid');
-          feedback.textContent = '';
+          feedback.textContent = t('');
           drawLinks();
         });
         entries.push({ figure, label, input, drawLinks, sourceIdentity, hasManualPages: manual && initial?.length > 0 });
@@ -170,13 +174,13 @@
             catch (error) {
               entry.input.setAttribute('aria-invalid', 'true');
               entry.input.focus();
-              throw new Error(entry.label + '：' + error.message);
+              throw new Error(entry.label + ': ' + t(error.message));
             }
           }
-          if (!selected.length) { feedback.textContent = '没有可保存页码 · ' + unspecified + ' 张未指定；原记录未改动。'; return; }
+          if (!selected.length) { feedback.textContent = t('没有可保存页码 · ' + unspecified + ' 张未指定；原记录未改动。'); return; }
           saveButton.disabled = true;
           entries.forEach(entry => { entry.input.disabled = true; });
-          feedback.textContent = '正在保存 ' + selected.length + ' 张 Figure…';
+          feedback.textContent = t('正在保存 ' + selected.length + ' 张 Figure…');
           const receipts = [];
           let validated = true;
           if (typeof saveBatch === 'function') {
@@ -198,7 +202,7 @@
               catch (error) { result = { success: false, error: error.message }; }
               assertCurrent(context, token);
               receipts.push({ entry, result });
-              feedback.textContent = '已收到回执 ' + receipts.length + '/' + selected.length;
+              feedback.textContent = t('已收到回执 ' + receipts.length + '/' + selected.length);
             }
           }
           let saved = 0;
@@ -213,13 +217,13 @@
             } else {
               drafts.set(entry.figure.figureId, { value: entry.input.value, sourceIdentity: entry.sourceIdentity });
               entry.input.setAttribute('aria-invalid', 'true');
-              failures.push(entry.label + '：' + (result?.error || '保存失败，请重试'));
+              failures.push(entry.label + ': ' + t(result?.error || '保存失败，请重试'));
             }
           }
-          feedback.textContent = (!validated ? '整表校验失败，未保存任何行' : failures.length ? '部分保存' : '已保存') + ' · ' + saved + '/' + selected.length + ' 张 · ' + unspecified + ' 张未指定' +
-            (failures.length ? '；失败（草稿已保留）：' + failures.join('；') : '。');
+          feedback.textContent = t((!validated ? '整表校验失败，未保存任何行' : failures.length ? '部分保存' : '已保存') + ' · ' + saved + '/' + selected.length + ' 张 · ' + unspecified + ' 张未指定' +
+            (failures.length ? '；失败（草稿已保留）：' + failures.join('；') : '。'));
         } catch (error) {
-          if (token === epoch && !panel.hidden) feedback.textContent = error.message;
+          if (token === epoch && !panel.hidden) feedback.textContent = t(error.message);
         } finally {
           if (token === epoch && !panel.hidden) {
             saveButton.disabled = false;
@@ -232,7 +236,7 @@
       const token = ++epoch;
       panel.hidden = false;
       saveButton.disabled = true;
-      feedback.textContent = '';
+      feedback.textContent = t('');
       body.replaceChildren(make('p', 'pdf-figure-page-review-empty', '正在读取 Figure 与已保存页码…'));
       closeButton.focus();
       try {

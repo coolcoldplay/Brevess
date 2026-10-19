@@ -90,7 +90,7 @@ test('exposes named API profiles and a per-feature model policy table', () => {
   ].forEach(id => assert.match(html, new RegExp(`id="${id}"`)));
   ['routeHighlight', 'routeSummary', 'routeFigure', 'routeCrossFigure']
     .forEach(id => assert.doesNotMatch(html, new RegExp(`id="${id}"`)));
-  for (const column of ['功能', '模型选择', '推理', '推理强度', 'Token 规则', '编辑预览']) {
+  for (const column of ['功能', '连接与模型', '思考', '推理强度', '联网', 'Token 规则', '编辑预览']) {
     assert.ok(script.includes(`'${column}'`), column);
   }
   ['tokenModeManual', 'autoTokenCap', 'manualMaxTokens']
@@ -102,15 +102,19 @@ test('exposes named API profiles and a per-feature model policy table', () => {
   const editorEnd = html.indexOf('task-routing-section');
   assert.ok(editorStart >= 0 && editorEnd > editorStart);
   const editor = html.slice(editorStart, editorEnd);
-  ['providerId', 'model', 'apiKey', 'compatibleFields', 'compatiblePreset']
+  ['providerId', 'apiKey', 'compatibleFields', 'compatiblePreset']
     .forEach(id => assert.match(editor, new RegExp(`id="${id}"`)));
+  assert.doesNotMatch(editor, /id="model"/);
+  assert.match(html.slice(editorEnd), /id="model"/);
+  assert.match(script, /dataset\.taskPolicyModel/);
+  assert.match(script, /dataset\.taskPolicyWeb/);
   ['LLM_SAVE_PROFILE', 'LLM_UPDATE_PROFILE_ROUTING', 'LLM_DUPLICATE_PROFILE',
     'LLM_DELETE_PROFILE'].forEach(type => assert.match(script, new RegExp(type)));
   assert.match(script, /SciLLM\.LLM_TASK_IDS/);
   assert.match(script, /SciLLM\.TASK_DEFINITIONS/);
   assert.match(script, /function renderTaskPolicyTable\(/);
   assert.match(script, /function collectTaskPolicies\(/);
-  assert.match(html, /每个用户可见的 AI 功能都可独立指定模型/);
+  assert.match(html, /各功能默认沿用默认连接与模型/);
   assert.match(html, /上下文窗口.*高级/);
   assert.match(script, /contextWindowTokens/);
 });
@@ -293,7 +297,7 @@ test('settings load the unified IndexedDB schema before directory persistence', 
   const html = read('options.html');
   const database = html.indexOf('core/user-data-database.js');
   const directory = html.indexOf('core/directory-sync.js');
-  const application = html.indexOf('options.js');
+  const application = html.indexOf('src="options.js"');
   assert.ok(database >= 0, 'settings must load the shared user-data database module');
   assert.ok(database < directory, 'database schema must load before directory sync');
   assert.ok(directory < application, 'directory sync must load before settings behavior');
@@ -760,7 +764,7 @@ test('local data controls form one accessible section and load the shared direct
   const html = read('options.html');
   const css = read('options.css');
   const directoryScript = html.indexOf('core/directory-sync.js');
-  const optionsScript = html.indexOf('options.js');
+  const optionsScript = html.indexOf('src="options.js"');
   assert.ok(directoryScript >= 0 && directoryScript < optionsScript);
   [
     'userDataDirectory', 'userDataPermission', 'userDataPendingCount',
@@ -803,98 +807,38 @@ test('portable encrypted settings expose an accessible safe passphrase workflow'
   });
   assert.match(html, /autocomplete=["']current-password["']/);
   assert.match(html, /autocomplete=["']new-password["']/);
-  assert.match(html, /API Key、模型设置、MinerU PDF 解析设置与 Token、全局缩略词表以加密形式存放在所选目录/);
-  assert.match(html, /遗忘口令无法恢复密文凭据/);
+  assert.match(html, /API Key、模型设置、MinerU Token 和全局缩略词表/);
+  assert.match(html, /遗忘口令无法恢复备份中的凭据/);
   assert.match(script, /function openPortableConfigDialog\(mode\)/);
   assert.match(css, /\.portable-config-card\s*\{/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
 
-test('portable directory preparation probes before any drained sync and gates every non-ready path', async () => {
+test('directory setup succeeds only after disk writes without any passphrase workflow', async () => {
   const script = read('options.js');
-  const chooseStart = script.indexOf('async function chooseUserDataDirectory(');
-  const chooseEnd = script.indexOf('\n}', chooseStart) + 2;
-  const chooseSource = script.slice(chooseStart, chooseEnd);
-  const pickerIndex = chooseSource.indexOf('window.showDirectoryPicker');
-  const saveIndex = chooseSource.indexOf('SciLLM.saveDirectoryHandle');
-  const prepareIndex = chooseSource.indexOf('preparePortableConfigForDirectory');
-  assert.ok(pickerIndex >= 0 && pickerIndex < saveIndex && saveIndex < prepareIndex);
-  assert.doesNotMatch(chooseSource.slice(0, prepareIndex), /USER_DATA_SYNC_NOW/);
-  const start = script.indexOf('async function preparePortableConfigForDirectory(');
-  const end = script.indexOf('\n}', start) + 2;
-  const activationStart = script.indexOf('// Portable config activation: start.');
-  const activationEnd = script.indexOf('// Portable config activation: end.');
-  assert.ok(start >= 0 && end > start);
-  assert.ok(activationStart >= 0 && activationEnd > activationStart);
-  const source = `${script.slice(activationStart, activationEnd)}\n${script.slice(start, end)}`;
-
-  async function run(probeState, dialogResult, {
-    failReload = false, events = []
-  } = {}) {
-    const secret = 'cached-ready-secret';
-    const context = { Error };
-    vm.runInNewContext(`${source}\nglobalThis.prepare = preparePortableConfigForDirectory;`, context);
-    const result = await context.prepare({
-      call: async message => {
-        events.push(['call', message.type, message.drain]);
-        if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: probeState };
-        return { permission: 'granted' };
-      },
-      openDialog: async mode => {
-        events.push(['dialog', mode]);
-        return dialogResult;
-      },
-      reloadSettings: async () => {
-        events.push(['reload', 'reload']);
-        if (failReload) throw new Error(secret);
-      },
-      refreshStatus: async () => { events.push(['refresh', 'status']); },
-      isOnboardingActive: () => true,
-      markStorageCompleted: async () => { events.push(['onboarding', 'completed']); },
-      renderStatus: status => { events.push(['render', status?.state]); }
-    });
-    return { events, result, secret };
-  }
-
-  const cached = await run('ready');
-  assert.deepEqual(cached.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'ready', 'USER_DATA_SYNC_NOW', 'status',
-    'completed'
-  ]);
-  assert.equal(cached.events.find(event => event[1] === 'USER_DATA_SYNC_NOW')[2], true);
-
-  const created = await run('missing', { state: 'ready' });
-  assert.deepEqual(created.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'missing', 'create', 'ready',
-    'USER_DATA_SYNC_NOW', 'status', 'completed'
-  ]);
-
-  const unlocked = await run('locked', { state: 'ready' });
-  assert.deepEqual(unlocked.events.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload',
-    'USER_DATA_SYNC_NOW', 'status', 'completed'
-  ]);
-
-  const cachedFailureEvents = [];
-  await assert.rejects(
-    run('locked', { state: 'ready' }, { failReload: true, events: cachedFailureEvents }),
-    /cached-ready-secret/
-  );
-  assert.deepEqual(cachedFailureEvents.map(event => event[1]), [
-    'PORTABLE_CONFIG_PROBE', 'locked', 'unlock', 'ready', 'reload'
-  ]);
-
-  for (const [state, dialogResult] of [
-    ['locked', { cancelled: true }], ['locked', { state: 'locked' }],
-    ['missing', { state: 'error' }], ['error', undefined],
-    ['unavailable', undefined]
+  const start = script.indexOf('async function completeDirectorySelection(');
+  const source = script.slice(start, script.indexOf('\n}', start) + 2);
+  for (const result of [
+    { permission: 'granted', failed: 0, pendingCount: 0 },
+    { permission: 'prompt', failed: 0, pendingCount: 2 },
+    { permission: 'granted', failed: 1, pendingCount: 1 },
+    { permission: 'granted', failed: 0, pendingCount: 1 }
   ]) {
-    const blocked = await run(state, dialogResult);
-    assert.equal(
-      blocked.events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false,
-      `${state} must never sync until portable settings are ready`
-    );
-    assert.equal(blocked.result.ready, false);
+    const calls = [], notices = [];
+    const context = {
+      callBackground: async message => { calls.push(message); return result; },
+      refreshUserDataStatus: async () => calls.push('refresh'),
+      onboardingUi: { active: true },
+      setOnboardingStepState: async () => calls.push('complete'),
+      showUserDataStatus: (message, type) => notices.push(type)
+    };
+    vm.runInNewContext(source + '\nglobalThis.run = completeDirectorySelection;', context);
+    const ready = result.permission === 'granted' && !result.failed && !result.pendingCount;
+    assert.equal(await context.run(), ready);
+    assert.equal(calls[0].type, 'USER_DATA_SYNC_NOW');
+    assert.equal(calls[0].drain, true);
+    assert.equal(calls.includes('complete'), ready);
+    assert.equal(notices.at(-1), ready ? 'success' : 'error');
   }
 });
 
@@ -1001,7 +945,7 @@ test('deferred portable activation finishes create and unlock safely before onbo
   assert.equal(restoreEvents.some(event => event[0] === 'portable-reload'), false);
 });
 
-test('portable settings refresh rejects safely and initial unlock stops before sync', async () => {
+test('portable settings refresh preserves authoritative reload and draft replacement', async () => {
   const script = read('options.js');
   const refreshStart = script.indexOf('async function refreshPortableSettings(');
   const refreshEnd = script.indexOf('\n}', refreshStart) + 2;
@@ -1025,86 +969,6 @@ test('portable settings refresh rejects safely and initial unlock stops before s
     ['call', 'LLM_GET_SETTINGS'], ['apply', 'restored-profile', true]
   ]);
 
-  const activationStart = script.indexOf('// Portable config activation: start.');
-  const activationEnd = script.indexOf('// Portable config activation: end.');
-  const prepareStart = script.indexOf('async function preparePortableConfigForDirectory(');
-  const prepareEnd = script.indexOf('\n}', prepareStart) + 2;
-  const chooseStart = script.indexOf('async function chooseUserDataDirectory(');
-  const chooseEnd = script.indexOf('\n}', chooseStart) + 2;
-  const events = [];
-  const notices = [];
-  const secret = 'initial-restore-secret';
-  let probeState = 'locked';
-  const context = {
-    userDataUi: { pendingAction: false, directoryHandle: null, handleLoaded: false },
-    onboardingUi: { active: true },
-    window: {
-      showDirectoryPicker: async () => {
-        events.push(['picker']);
-        return { name: 'chosen' };
-      }
-    },
-    SciLLM: {
-      saveDirectoryHandle: async () => { events.push(['save-handle']); }
-    },
-    indexedDB: {},
-    callBackground: async message => {
-      events.push(['call', message.type, message.drain]);
-      if (message.type === 'PORTABLE_CONFIG_PROBE') return { state: probeState };
-      return { permission: 'granted' };
-    },
-    openPortableConfigDialog: async mode => {
-      events.push(['dialog', mode]);
-      return { state: 'ready' };
-    },
-    refreshPortableSettings: async () => {
-      events.push(['portable-reload']);
-      throw Object.assign(new Error(secret), { code: 'SETTINGS_RESTORE_FAILED' });
-    },
-    refreshSettings: async () => { events.push(['legacy-reload']); },
-    refreshUserDataStatus: async () => { events.push(['refresh-status']); },
-    setOnboardingStepState: async () => { events.push(['onboarding-complete']); },
-    setUserDataActionPending: value => events.push(['pending', value]),
-    renderPortableConfigStatus: status => events.push(['render', status.state]),
-    showUserDataStatus: (message, type) => notices.push([message, type]),
-    portableConfigErrorText: () => '无法完成加密配置操作，请稍后重试。',
-    Error
-  };
-  const source = `${script.slice(activationStart, activationEnd)}\n` +
-    `${script.slice(prepareStart, prepareEnd)}\n${script.slice(chooseStart, chooseEnd)}\n` +
-    'globalThis.choose = chooseUserDataDirectory;';
-  vm.runInNewContext(source, context);
-  await context.choose();
-  assert.deepEqual(events.filter(event => [
-    'picker', 'save-handle', 'call', 'dialog', 'render', 'portable-reload'
-  ].includes(event[0])), [
-    ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
-    ['render', 'locked'], ['dialog', 'unlock'], ['render', 'ready'],
-    ['portable-reload']
-  ]);
-  assert.equal(events.some(event => event[1] === 'USER_DATA_SYNC_NOW'), false);
-  assert.equal(events.filter(event => event[0] === 'refresh-status').length, 1);
-  assert.equal(events.some(event => event[0] === 'onboarding-complete'), false);
-  assert.equal(events.some(event => event[0] === 'legacy-reload'), false);
-  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
-  assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
-
-  events.length = 0;
-  notices.length = 0;
-  probeState = 'ready';
-  await context.choose();
-  assert.deepEqual(events.filter(event => [
-    'picker', 'save-handle', 'call', 'dialog', 'render', 'portable-reload',
-    'refresh-status'
-  ].includes(event[0])), [
-    ['picker'], ['save-handle'], ['call', 'PORTABLE_CONFIG_PROBE', undefined],
-    ['render', 'ready'], ['call', 'USER_DATA_SYNC_NOW', true],
-    ['refresh-status']
-  ]);
-  assert.equal(events.some(event => event[0] === 'portable-reload'), false);
-  assert.equal(events.some(event => event[0] === 'onboarding-complete'), true);
-  assert.equal(notices.at(-1)[0], '目录已保存，加密配置已就绪并完成本地数据同步。');
-  assert.equal(notices.at(-1)[1], 'success');
 });
 
 test('portable passphrase mode helpers validate and map only the intended background fields', () => {
@@ -1207,6 +1071,7 @@ test('forgetting a portable key reprobes authoritative state and leaves unlock u
       portableConfigStatus: { state: 'ready', pending: false }
     },
     window: { confirm: () => true },
+    interfaceText: value => value,
     callBackground: async message => {
       calls.push(message.type);
       if (message.type === 'PORTABLE_CONFIG_FORGET_KEY') {
@@ -1255,7 +1120,7 @@ test('forgetting a portable key reprobes authoritative state and leaves unlock u
   assert.doesNotMatch(notices.flat().join(' '), /probe-secret/);
 });
 
-test('manual directory sync and rebuild require ready non-pending portable state at runtime', async () => {
+test('document writes ignore optional backup readiness while rebuild remains guarded', async () => {
   const script = read('options.js');
   const predicateStart = script.indexOf('function portableConfigAllowsManualDirectoryAction(');
   assert.ok(predicateStart >= 0, 'manual actions need one shared strict portable predicate');
@@ -1329,13 +1194,13 @@ test('manual directory sync and rebuild require ready non-pending portable state
     vm.runInNewContext(source, context);
     assert.equal(context.allows({ state, pending }), allowed, `${state}/${pending}`);
     context.updateButtons();
-    assert.equal(elements.syncUserDataNow.disabled, !allowed, `sync button ${state}/${pending}`);
+    assert.equal(elements.syncUserDataNow.disabled, false, `sync button ${state}/${pending}`);
     assert.equal(elements.rebuildUserDataIndex.disabled, !allowed, `rebuild button ${state}/${pending}`);
 
     await context.syncNow();
     context.openRebuild();
     await context.confirmRebuild({ preventDefault() {} });
-    assert.equal(calls.includes('USER_DATA_SYNC_NOW'), allowed, `sync handler ${state}/${pending}`);
+    assert.equal(calls.includes('USER_DATA_SYNC_NOW'), true, `sync handler ${state}/${pending}`);
     assert.equal(calls.includes('USER_DATA_REBUILD_INDEX'), allowed, `rebuild handler ${state}/${pending}`);
     assert.equal(rebuildDialog.showCount > 0, allowed, `rebuild open ${state}/${pending}`);
     if (!allowed) assert.ok(notices.length >= 3, `blocked ${state}/${pending} reports safely`);
@@ -1419,7 +1284,7 @@ test('backend portable readiness rejection refreshes stale-ready controls before
   assert.deepEqual(refreshPendingStates, [true]);
   assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
   assert.equal(context.userDataUi.portableConfigStatus.pending, true);
-  assert.equal(elements.syncUserDataNow.disabled, true);
+  assert.equal(elements.syncUserDataNow.disabled, false);
   assert.equal(elements.rebuildUserDataIndex.disabled, true);
   assert.equal(elements.unlockPortableConfig.hidden, false);
   assert.equal(elements.unlockPortableConfig.disabled, false);
@@ -1436,7 +1301,7 @@ test('backend portable readiness rejection refreshes stale-ready controls before
   assert.deepEqual(calls, ['USER_DATA_REBUILD_INDEX']);
   assert.deepEqual(refreshPendingStates, [true]);
   assert.equal(context.userDataUi.portableConfigStatus.state, 'locked');
-  assert.equal(elements.syncUserDataNow.disabled, true);
+  assert.equal(elements.syncUserDataNow.disabled, false);
   assert.equal(elements.unlockPortableConfig.hidden, false);
   assert.equal(notices.at(-1)?.[1], 'error');
   assert.match(notices.at(-1)?.[0] || '', /安全配置提示/);
@@ -1750,7 +1615,7 @@ test('reauthorization invokes cached handle permission synchronously before yiel
     },
     showUserDataStatus() {},
     callBackground: async () => ({ permission: 'granted' }),
-    preparePortableConfigForDirectory: async () => ({ ready: true }),
+    completeDirectorySelection: async () => true,
     refreshUserDataStatus: async () => {},
     portableConfigErrorText: () => '安全错误',
     Error
@@ -1772,7 +1637,7 @@ test('saved directory exits refresh authoritative status without overwriting por
   const events = [];
   const notices = [];
   const secret = 'saved-directory-secret';
-  let prepareBehavior = 'cancelled';
+  let prepareBehavior = 'complete';
   const handle = {
     requestPermission() {
       events.push('request-permission');
@@ -1789,11 +1654,9 @@ test('saved directory exits refresh authoritative status without overwriting por
     indexedDB: {},
     setUserDataActionPending(value) { context.userDataUi.pendingAction = Boolean(value); },
     showUserDataStatus(message, type) { notices.push([message, type]); },
-    async preparePortableConfigForDirectory() {
+    async completeDirectorySelection() {
       events.push('prepare');
-      if (prepareBehavior === 'cancelled') {
-        return { ready: false, cancelled: true, status: { state: 'locked' } };
-      }
+      if (prepareBehavior === 'complete') { await context.refreshUserDataStatus(); return true; }
       throw Object.assign(new Error(secret), { code: 'PRIVATE_FINALIZER_FAILURE' });
     },
     async refreshUserDataStatus() {
@@ -1825,14 +1688,14 @@ test('saved directory exits refresh authoritative status without overwriting por
   await context.choose();
   assert.deepEqual(events, ['save-handle', 'prepare', 'authoritative-refresh']);
   assert.doesNotMatch(events.join(' '), /synthetic-render:error/);
-  assert.equal(notices.at(-1)[0], '选择目录失败：无法完成加密配置操作，请稍后重试。');
+  assert.equal(notices.at(-1)[0], '未能完成文件夹设置，请检查文件夹读写权限后重试。');
   assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
 
   events.length = 0;
   notices.length = 0;
   await context.reauthorize();
   assert.deepEqual(events, ['request-permission', 'prepare', 'authoritative-refresh']);
-  assert.equal(notices.at(-1)[0], '重新授权失败：无法完成加密配置操作，请稍后重试。');
+  assert.equal(notices.at(-1)[0], '未能恢复文件夹访问权限，请重新选择目录并允许读写。');
   assert.doesNotMatch(notices.flat().join(' '), new RegExp(secret));
 });
 

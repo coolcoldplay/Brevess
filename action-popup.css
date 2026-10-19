@@ -25,7 +25,7 @@ body {
 .action-popup {
   box-sizing: border-box;
   width: 360px;
-  padding: 16px;
+  padding: 12px;
 }
 
 .action-popup__header {
@@ -42,7 +42,7 @@ body {
   box-shadow: 0 5px 14px rgba(19, 62, 86, .16);
 }
 
-.action-popup__heading { min-width: 0; }
+.action-popup__heading { min-width: 0; flex:1; }
 
 .action-popup__heading strong {
   display: block;
@@ -80,6 +80,13 @@ body {
 }
 
 .action-popup__actions { display: grid; gap: 10px; }
+
+.action-account { flex:0 1 124px; min-width:72px; max-width:124px; align-self:center; padding:5px 4px; border:0; background:transparent; color:#222; font:inherit; text-align:right; cursor:pointer; }
+.action-account__identity { display:grid; gap:2px; min-width:0; font-size:12px; line-height:1.4; }
+.action-account__identity strong { font-size:11px; overflow-wrap:anywhere; }
+.action-account__identity span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#646464; }
+.action-account:hover { background:#ededed; }
+.action-account:focus-visible { outline:2px solid #222; outline-offset:2px; }
 
 .action-popup__button {
   display: flex;
@@ -168,12 +175,12 @@ body {
 /* An intrinsic width prevents viewport-dependent native popup autosizing. */
 
 body[data-ui-surface="action"] .action-popup__header { padding-top: 10px; padding-bottom: 9px; margin-bottom: 4px; }
-.page-tools { margin: 12px 0; color: #222; }
+.page-tools { margin: 8px 0; color: #222; }
 .page-tools__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .page-tools__heading h2 { margin: 0; font-size: 14px; line-height: 1.5; }
 .page-tools__heading > span, .page-tools__hint { font-size: 11px; color: #666; line-height: 1.5; }
 .page-tools__hint { margin: 4px 0 6px; }
-.page-tools__row { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #e8e8e8; font-size: 12px; cursor: pointer; }
+.page-tools__row { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #e8e8e8; font-size: 12px; cursor: pointer; }
 .page-tools__row small { font-size: 10px; color: #666; margin-left: 4px; }
 .page-tools__row kbd { font-family: inherit; font-size: 10px; line-height: 1.4; border: 1px solid #ddd; padding: 0 4px; margin-left: 4px; }
 [data-ui-surface="action"] .page-tools__row input { appearance: none; flex: 0 0 30px; width: 30px; height: 18px; min-height: 0; margin: 0; padding: 2px; border: 1px solid #aaa; border-radius: 0; background: #eee; cursor: pointer; }

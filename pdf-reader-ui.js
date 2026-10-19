@@ -110,7 +110,7 @@
 
   function measuredPageProgress() {
     const message = String(readerStatus?.textContent || '');
-    const match = message.match(/(?:已检查\s*)?(\d+)\s*\/\s*(\d+)\s*页/u);
+    const match = message.match(/(?:已检查\s*|Checked\s*)?(\d+)\s*\/\s*(\d+)\s*(?:页|pages\b)/u);
     if (!match) return null;
     const current = Number(match[1]);
     const total = Number(match[2]);

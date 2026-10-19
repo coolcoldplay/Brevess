@@ -22,12 +22,14 @@
     layer.className = 'brevess-paragraph-note-marker-layer';
     layer.setAttribute('data-brevess-ui', 'paragraph-note-markers');
     layer.setAttribute('data-sci-plugin-ui', 'paragraph-note-markers');
+    layer.setAttribute('data-brevess-interface', '');
     Object.assign(layer.style, { position: 'fixed', left: '0px', top: '0px', width: '0px',
       height: '0px', overflow: 'visible', pointerEvents: 'none', zIndex: '2147483000' });
     const tooltip = doc.createElement('div');
     tooltip.className = 'brevess-paragraph-note-tooltip';
     tooltip.setAttribute('id', `brevess-paragraph-note-tooltip-${++nextManagerId}`);
     tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('data-i18n-ignore', '');
     Object.assign(tooltip.style, { position: 'absolute', boxSizing: 'border-box', width: 'max-content',
       maxWidth: 'min(320px, calc(100vw - 16px))', maxHeight: '240px', overflow: 'auto',
       padding: '8px 10px', border: '1px solid #c7ad62', borderRadius: '3px',
