@@ -6,10 +6,14 @@
 假说梳理和组图规划的课题工作台。
 
 - [从 GitHub 下载、安装到完整使用教程](使用教程.md)
-- [下载最新正式版](https://github.com/coolcoldplay/Brevess/releases/latest)
+- [下载当前源码](https://github.com/coolcoldplay/Brevess/archive/refs/heads/main.zip)
 - [完整工作流、缓存策略和提示词参考](docs/Brevess-完整工作流与提示词参考.md)
 - [性能、Token 和 Figure 优化说明](docs/Brevess-性能与质量优化.md)
 
+
+## 从源码安装
+
+在 GitHub 点击 Code → Download ZIP，解压后在 Edge / Chrome 扩展管理页开启开发人员模式，加载直接包含 `manifest.json` 的源码文件夹。可选的本机伴侣需按 [开源构建说明](OPEN_SOURCE.md) 自行构建；本次公开不搬入旧发布附件。
 
 ## R37 r4 更新
 
