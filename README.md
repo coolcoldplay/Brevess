@@ -10,6 +10,7 @@
 - [下载当前源码](https://github.com/coolcoldplay/Brevess/archive/refs/heads/main.zip)
 - [完整工作流、缓存策略和提示词参考](docs/Brevess-完整工作流与提示词参考.md)
 - [性能、Token 和 Figure 优化说明](docs/Brevess-性能与质量优化.md)
+- [联系邮箱与赞赏二维码](#联系与赞赏)
 
 
 ## 从源码安装
@@ -210,6 +211,16 @@ API Key、Provider 鉴权头、分析缓存、目录句柄和同步队列不会�
 - 主流出版社已使用站点适配器并保留通用语义回退；需要登录、正文尚未展开、反爬脚本、Shadow DOM、Canvas 或特殊阅读器仍可能限制提取。
 - 扫描 PDF 保持原页显示；缺少文字层时需要另行配置增强文本识别。本轮未完成真实扫描件经 MinerU 的端到端识别验收，不能据合成坐标测试宣称 OCR 准确率。
 - 真实 LLM 效果、价格、速率和数据政策取决于用户选择的模型服务商。
+
+## 联系与赞赏
+
+联系邮箱：[brevess0729@163.com](mailto:brevess0729@163.com)。问题反馈也可以提交 [GitHub Issue](https://github.com/coolcoldplay/Brevess/issues)。
+
+赞赏完全自愿，用于支持 BREVESS 的持续开发。
+
+| 微信赞赏 | 支付宝赞赏 |
+| :---: | :---: |
+| <img src="icons/about/wechat-support-original.png" alt="微信赞赏二维码" width="220"> | <img src="icons/about/alipay-support-original.png" alt="支付宝赞赏二维码" width="220"> |
 
 ## 开发与测试
 
