@@ -6,6 +6,7 @@
 假说梳理和组图规划的课题工作台。
 
 - [从 GitHub 下载、安装到完整使用教程](使用教程.md)
+- [下载 R37 r4 插件测试包](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.1-r37-r4-public)
 - [下载当前源码](https://github.com/coolcoldplay/Brevess/archive/refs/heads/main.zip)
 - [完整工作流、缓存策略和提示词参考](docs/Brevess-完整工作流与提示词参考.md)
 - [性能、Token 和 Figure 优化说明](docs/Brevess-性能与质量优化.md)
@@ -63,17 +64,18 @@
 
 ## 安装
 
-1. 打开 [最新 Release](https://github.com/coolcoldplay/Brevess/releases/latest)，在
-   **Assets** 中下载 `Brevess-v1.0.1-Microsoft-Edge.zip`。
-2. 解压 ZIP 到准备长期保留且路径不变的文件夹，并确认其中直接包含 `manifest.json`。
+1. 打开 [R37 r4 测试版 Release](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.1-r37-r4-public)，在
+   **Assets** 中下载 `Brevess-v1.0.1-R37-r4-public-test.zip`。
+2. 解压 ZIP 到准备长期保留的文件夹，进入 `browser-extension`，确认其中直接包含 `manifest.json`。
 3. 打开 `edge://extensions/` 或 `chrome://extensions/`。
 4. 开启“开发人员模式”。
-5. 点击“加载解压缩的扩展程序”，选择上述文件夹。
+5. 点击“加载解压缩的扩展程序”，选择上述 `browser-extension` 文件夹。
 6. 将 Brevess 固定到工具栏，在论文 HTML 全文页点击图标激活。
 
 浏览器商店的 ZIP 包不能直接在扩展管理页作为“解压缩扩展”加载，需要先解压。
 不配置 API 也可以使用论文导航、缩写表、离线正则高亮、手动标注和本地工作区。
 完整步骤和首次体验路线见[使用教程](使用教程.md)。
+注册、课题组邀请及共享评论需先在“设置中心 → 账号管理 → 高级设置 · 服务连接”填写负责人私下提供的服务地址。本公开包不预置实际共享服务地址，也不含本机伴侣二进制。
 
 ## 使用方式
 
