@@ -220,7 +220,7 @@ API Key、Provider 鉴权头、分析缓存、目录句柄和同步队列不会�
 
 | 微信赞赏 | 支付宝赞赏 |
 | :---: | :---: |
-| <img src="icons/about/wechat-support-original.png" alt="微信赞赏二维码" width="220"> | <img src="icons/about/alipay-support-original.png" alt="支付宝赞赏二维码" width="220"> |
+| <img src="docs/assets/support/wechat-plugin-display.png" alt="微信赞赏二维码" width="220"> | <img src="docs/assets/support/alipay-plugin-display.png" alt="支付宝赞赏二维码" width="220"> |
 
 ## 开发与测试
 
