@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$manifestPath = Join-Path $projectRoot 'manifest.json'
+$manifestPath = Join-Path $projectRoot 'extension/manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 |
   ConvertFrom-Json
 $version = [string]$manifest.version
@@ -74,7 +74,7 @@ if (-not $SkipNativeHostBuild) {
     throw 'Unable to build the optional Codex Native Messaging host.'
   }
 }
-$hostExecutable = Join-Path $projectRoot 'native-host\bin\brevess-codex-host.exe'
+$hostExecutable = Join-Path $projectRoot 'extension/native-host\bin\brevess-codex-host.exe'
 if (-not (Test-Path -LiteralPath $hostExecutable -PathType Leaf)) {
   throw "Codex Bridge executable is missing: $hostExecutable"
 }
@@ -82,7 +82,7 @@ Copy-BrevessReleaseFiles -ProjectRoot $projectRoot -Target $bridgeStage -Profile
 
 $catalogIds = @(
   Get-Content -LiteralPath (
-    Join-Path $projectRoot 'native-host\catalog-extension-ids.txt'
+    Join-Path $projectRoot 'extension/native-host\catalog-extension-ids.txt'
   ) -Encoding utf8 |
     ForEach-Object { $_.Trim() } |
     Where-Object { $_ -and -not $_.StartsWith('#') }
@@ -144,8 +144,8 @@ $artifacts = $artifactPaths | ForEach-Object {
     sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()
   }
 }
-$pdfEngineVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'native-host\pdffigures2\VERSION.json') -Raw | ConvertFrom-Json
-$runtimeVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'native-host\runtime-version.json') -Raw | ConvertFrom-Json
+$pdfEngineVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'extension/native-host\pdffigures2\VERSION.json') -Raw | ConvertFrom-Json
+$runtimeVersion = Get-Content -LiteralPath (Join-Path $projectRoot 'extension/native-host\runtime-version.json') -Raw | ConvertFrom-Json
 $releaseMetadata = [ordered]@{
   product = 'Brevess'
   version = $version

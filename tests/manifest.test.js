@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -41,16 +42,16 @@ test('background import capture ignores comments and quote-style decoys', () => 
 });
 
 test('manifest opens a deliberate action popup before native side-panel activation', () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
-  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(projectFile('manifest.json'), 'utf8'));
+  const packageJson = JSON.parse(fs.readFileSync(projectFile('package.json'), 'utf8'));
   assert.equal(manifest.name, '__MSG_extensionName__');
   assert.equal(manifest.description, '__MSG_extensionDescription__');
   assert.equal(manifest.default_locale, 'zh_CN');
   const zhMessages = JSON.parse(fs.readFileSync(
-    path.join(__dirname, '..', '_locales', 'zh_CN', 'messages.json'), 'utf8'
+    projectFile('_locales', 'zh_CN', 'messages.json'), 'utf8'
   ));
   const enMessages = JSON.parse(fs.readFileSync(
-    path.join(__dirname, '..', '_locales', 'en', 'messages.json'), 'utf8'
+    projectFile('_locales', 'en', 'messages.json'), 'utf8'
   ));
   assert.equal(zhMessages.extensionName.message, 'Brevess');
   assert.equal(enMessages.extensionName.message, 'Brevess');
@@ -100,12 +101,12 @@ test('manifest opens a deliberate action popup before native side-panel activati
 });
 
 test('manifest icon set uses square Brevess PNG assets at every declared size', () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(projectFile('manifest.json'), 'utf8'));
   for (const size of [16, 32, 48, 128]) {
     const relativePath = `icons/icon${size}.png`;
     assert.equal(manifest.icons[String(size)], relativePath);
     assert.equal(manifest.action.default_icon[String(size)], relativePath);
-    const image = fs.readFileSync(path.join(__dirname, '..', relativePath));
+    const image = fs.readFileSync(projectFile(relativePath));
     assert.deepEqual([...image.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
     assert.equal(image.readUInt32BE(16), size);
     assert.equal(image.readUInt32BE(20), size);
@@ -114,11 +115,11 @@ test('manifest icon set uses square Brevess PNG assets at every declared size', 
 
 test('Edge store release strips the local stable-ID key and verifies it cannot leak', () => {
   const buildScript = fs.readFileSync(
-    path.join(__dirname, '..', 'scripts', 'build-edge-store-release.ps1'),
+    projectFile('scripts', 'build-edge-store-release.ps1'),
     'utf8'
   );
   const verifyScript = fs.readFileSync(
-    path.join(__dirname, '..', 'scripts', 'verify-edge-store-release.ps1'),
+    projectFile('scripts', 'verify-edge-store-release.ps1'),
     'utf8'
   );
   assert.match(
@@ -136,8 +137,7 @@ test('Edge store release strips the local stable-ID key and verifies it cannot l
 });
 
 test('Edge permission disclosure explains unlimited local storage without broadening network access', () => {
-  const disclosure = fs.readFileSync(path.join(
-    __dirname, '..', 'docs', 'edge-store', 'PRIVACY_AND_PERMISSIONS.md'
+  const disclosure = fs.readFileSync(projectFile('docs', 'edge-store', 'PRIVACY_AND_PERMISSIONS.md'
   ), 'utf8');
   assert.match(disclosure, /`unlimitedStorage`/);
   assert.match(disclosure, /论文笔记.*标注|标注.*论文笔记/);
@@ -148,8 +148,8 @@ test('Edge permission disclosure explains unlimited local storage without broade
 });
 
 test('background worker keeps routed LLM operations alive until completion', () => {
-  const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
-  const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const background = fs.readFileSync(projectFile('background.js'), 'utf8');
+  const content = fs.readFileSync(projectFile('content.js'), 'utf8');
   const backgroundScripts = captureFirstImportScripts(background);
   assert.match(
     background,
@@ -309,7 +309,7 @@ test('background worker keeps routed LLM operations alive until completion', () 
 });
 
 test('background wires committed-document and tab-removal owner teardown through keepalive', async () => {
-  const background = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const background = fs.readFileSync(projectFile('background.js'), 'utf8');
   const start = background.indexOf('function commitTrustedNavigationOwner');
   const end = background.indexOf('const portableConfigStorageChangeListener', start);
   assert.ok(start >= 0 && end > start);
@@ -419,11 +419,11 @@ test('background wires committed-document and tab-removal owner teardown through
 
 test('action popup exposes three privacy-safe reading choices', () => {
   const root = path.join(__dirname, '..');
-  const html = fs.readFileSync(path.join(root, 'action-popup.html'), 'utf8');
-  const css = fs.readFileSync(path.join(root, 'action-popup.css'), 'utf8');
-  const script = fs.readFileSync(path.join(root, 'action-popup.js'), 'utf8');
+  const html = fs.readFileSync(projectFile('action-popup.html'), 'utf8');
+  const css = fs.readFileSync(projectFile('action-popup.css'), 'utf8');
+  const script = fs.readFileSync(projectFile('action-popup.js'), 'utf8');
   const verifier = fs.readFileSync(
-    path.join(root, 'scripts', 'verify-action-popup-extension.mjs'), 'utf8'
+    projectFile('scripts', 'verify-action-popup-extension.mjs'), 'utf8'
   );
 
   for (const id of ['startReading', 'openHistory', 'openSettings']) {
@@ -503,7 +503,7 @@ test('production workflow contains no classifier or secondary-type UI remnants',
   const root = path.join(__dirname, '..');
   const production = [
     'popup.html', 'popup.js', 'content.js', 'background.js', 'core/background-router.js'
-  ].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+  ].map(file => fs.readFileSync(projectFile(file), 'utf8')).join('\n');
   assert.doesNotMatch(
     production,
     /正在识别论文类型|已识别论文类型|分类置信度|secondaryStudyType|secondaryTypeName|LLM_SAVE_STUDY_TYPE_OVERRIDE|classifyStudyDocument/
@@ -513,7 +513,7 @@ test('production workflow contains no classifier or secondary-type UI remnants',
 test('Chinese user documents cover the current manual, rule, and local-data workflows', () => {
   const root = path.join(__dirname, '..');
   for (const filename of ['README.md', '使用教程.md']) {
-    const document = fs.readFileSync(path.join(root, filename), 'utf8');
+    const document = fs.readFileSync(projectFile(filename), 'utf8');
     for (const pattern of [
       /不再要求先选择论文类型|不要求先选择文献类型/,
       /分析模式.*活动类别/s,
@@ -536,10 +536,10 @@ test('Chinese user documents cover the current manual, rule, and local-data work
 
 test('provider networking runs in an offscreen dedicated worker', () => {
   const root = path.join(__dirname, '..');
-  const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
-  const offscreenHtml = path.join(root, 'offscreen.html');
-  const offscreenScript = path.join(root, 'offscreen.js');
-  const networkWorker = path.join(root, 'offscreen-network-worker.js');
+  const background = fs.readFileSync(projectFile('background.js'), 'utf8');
+  const offscreenHtml = projectFile('offscreen.html');
+  const offscreenScript = projectFile('offscreen.js');
+  const networkWorker = projectFile('offscreen-network-worker.js');
   assert.match(background, /core\/offscreen-fetch\.js/);
   assert.match(background, /createOffscreenFetch\(chrome\)/);
   assert.match(background, /fetchImpl:\s*providerFetch/);

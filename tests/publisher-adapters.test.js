@@ -5,7 +5,7 @@ const {
   PUBLISHER_ADAPTER_VERSION,
   PUBLISHER_ADAPTERS,
   selectPublisherAdapter
-} = require('../core/publisher-adapters.js');
+} = require('../extension/core/publisher-adapters.js');
 
 test('selects the confirmed publisher family by hostname', () => {
   const cases = [

@@ -6,8 +6,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-require('../core/category-store.js');
-const { createUnifiedCategoryCatalog } = require('../core/adaptive-catalog.js');
+require('../extension/core/category-store.js');
+const { createUnifiedCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
 const SENTENCE_SEGMENTER = typeof Intl?.Segmenter === 'function'
   ? new Intl.Segmenter('en', { granularity: 'sentence' })
   : null;

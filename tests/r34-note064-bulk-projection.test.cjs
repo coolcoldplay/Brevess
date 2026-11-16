@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 
 const test = require('node:test');
@@ -6,10 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
-const reviewOutline = require('../core/review-outline.js');
+const reviewOutline = require('../extension/core/review-outline.js');
 
 const root = path.join(__dirname, '..');
-const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+const content = fs.readFileSync(projectFile('content.js'), 'utf8');
 
 function harness() {
     const structure = { revision: 7, paragraphs: [

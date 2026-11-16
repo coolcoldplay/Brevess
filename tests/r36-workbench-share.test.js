@@ -2,13 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const M = require('../workbench/model.js');
-const S = require('../core/research-workbench-model.js');
-const { createSession } = require('../workbench/session.js');
-const { createResearchWorkbenchStore, createMemoryResearchWorkbenchBackend } = require('../core/research-workbench-store.js');
-const SHARE = require('../workbench/share.js');
-const IO = require('../core/research-workbench-import-export.js');
-const SYNC = require('../core/research-workbench-sync.js');
+const M = require('../extension/workbench/model.js');
+const S = require('../extension/core/research-workbench-model.js');
+const { createSession } = require('../extension/workbench/session.js');
+const { createResearchWorkbenchStore, createMemoryResearchWorkbenchBackend } = require('../extension/core/research-workbench-store.js');
+const SHARE = require('../extension/workbench/share.js');
+const IO = require('../extension/core/research-workbench-import-export.js');
+const SYNC = require('../extension/core/research-workbench-sync.js');
 
 function setup() {
   const store = createResearchWorkbenchStore({ backend: createMemoryResearchWorkbenchBackend() });

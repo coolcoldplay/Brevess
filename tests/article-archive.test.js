@@ -1,18 +1,19 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const crypto = require('node:crypto');
 
-require('../core/cache-planner.js');
-require('../core/article-workspace.js');
-const ArticleChatWebSources = require('../core/article-chat-web-sources.js');
+require('../extension/core/cache-planner.js');
+require('../extension/core/article-workspace.js');
+const ArticleChatWebSources = require('../extension/core/article-chat-web-sources.js');
 const {
   createFigureWorkspaceDraft,
   applyFigureWorkspaceMutation,
   publicFigureWorkspaceDraft,
   initializeFigureWorkspaceDraftState
-} = require('../core/figure-workspace.js');
+} = require('../extension/core/figure-workspace.js');
 const {
   ARTICLE_ARCHIVE_KIND,
   articleArchiveRelativePath,
@@ -20,7 +21,7 @@ const {
   validateArticleArchive,
   markArticleArchiveAsExternalImport,
   convertLegacyArticleArchiveToWorkspace
-} = require('../core/article-archive.js');
+} = require('../extension/core/article-archive.js');
 
 function reviewedFigureDraft() {
   let draft = createFigureWorkspaceDraft([{
@@ -776,11 +777,11 @@ test('converts a legacy monolithic archive into workspace assets without changin
 
 test('content and side panel expose archive snapshot, restore, probe, and portable file controls', () => {
   const root = join(__dirname, '..');
-  const content = readFileSync(join(root, 'content.js'), 'utf8');
-  const popup = readFileSync(join(root, 'popup.js'), 'utf8');
-  const html = readFileSync(join(root, 'popup.html'), 'utf8');
-  const messenger = readFileSync(join(root, 'core', 'tab-messenger.js'), 'utf8');
-  const background = readFileSync(join(root, 'background.js'), 'utf8');
+  const content = readFileSync(projectFile('content.js'), 'utf8');
+  const popup = readFileSync(projectFile('popup.js'), 'utf8');
+  const html = readFileSync(projectFile('popup.html'), 'utf8');
+  const messenger = readFileSync(projectFile('core', 'tab-messenger.js'), 'utf8');
+  const background = readFileSync(projectFile('background.js'), 'utf8');
 
   assert.match(content, /function buildCurrentArticleArchive/);
   assert.match(content, /function applyArticleArchiveSnapshot/);
@@ -826,8 +827,8 @@ test('content and side panel expose archive snapshot, restore, probe, and portab
 
 test('workspace restore preserves changed-content safety and current-page clear controls', () => {
   const root = join(__dirname, '..');
-  const content = readFileSync(join(root, 'content.js'), 'utf8');
-  const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+  const content = readFileSync(projectFile('content.js'), 'utf8');
+  const popup = readFileSync(projectFile('popup.js'), 'utf8');
   assert.match(content, /match === 'content-changed'/);
   assert.match(content, /restoredWithoutRanges/);
   assert.match(popup, /scanCurrentArticleWorkspace/);
@@ -837,8 +838,8 @@ test('workspace restore preserves changed-content safety and current-page clear 
 
 test('active persistence uses bounded workspace assets while retaining legacy archive import', () => {
   const root = join(__dirname, '..');
-  const content = readFileSync(join(root, 'content.js'), 'utf8');
-  const router = readFileSync(join(root, 'core', 'background-router.js'), 'utf8');
+  const content = readFileSync(projectFile('content.js'), 'utf8');
+  const router = readFileSync(projectFile('core', 'background-router.js'), 'utf8');
   for (const relativePath of [
     'article/structure.json', 'article/paragraphs.json', 'annotations/highlights.json',
     'analysis/full-analysis.json', 'chat/index.json', 'figures/inventory.json', 'ui/state.json'

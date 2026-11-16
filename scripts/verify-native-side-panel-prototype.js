@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const path = require('path');
 
 const prototypeUrl = 'http://127.0.0.1:4173/prototypes/native-side-panel-preview/';
-const outputDir = path.resolve(__dirname, '..', 'prototypes', 'native-side-panel-preview');
+const outputDir = path.resolve(__dirname, '..', 'extension', 'prototypes', 'native-side-panel-preview');
 
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
 
-require('../core/user-data-database.js');
+require('../extension/core/user-data-database.js');
 const {
   PORTABLE_CONFIG_PATH,
   PORTABLE_CONFIG_KDF_ITERATIONS,
@@ -10,12 +10,12 @@ const {
   encryptPortableConfig,
   decryptPortableConfig,
   toBase64
-} = require('../core/portable-config.js');
+} = require('../extension/core/portable-config.js');
 const {
   createWorkspaceManifest,
   createWorkspaceIndex,
   validateWorkspaceIndex
-} = require('../core/article-workspace.js');
+} = require('../extension/core/article-workspace.js');
 const {
   USER_DATA_DATABASE_NAME,
   USER_DATA_DATABASE_VERSION,
@@ -26,8 +26,8 @@ const {
   createIndexedDbDirectoryHandleStore,
   createIndexedDbSyncQueue,
   createDirectorySync
-} = require('../core/directory-sync.js');
-const { createIndexedDbDocumentStore } = require('../core/document-store.js');
+} = require('../extension/core/directory-sync.js');
+const { createIndexedDbDocumentStore } = require('../extension/core/document-store.js');
 
 function createFakeHandleStore(initialPermission = 'granted') {
   let permission = initialPermission;

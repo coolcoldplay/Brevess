@@ -5,9 +5,9 @@ const { chromium } = require('playwright');
 const {
   CONTENT_SCRIPT_FILES,
   CONTENT_STYLE_FILES
-} = require('../core/tab-messenger.js');
+} = require('../extension/core/tab-messenger.js');
 
-const root = path.resolve(__dirname, '..');
+const root = path.resolve(__dirname, '..', 'extension');
 const targetUrl = process.env.SCI_DIAGNOSTIC_URL ||
   'https://www.cell.com/cell-biomaterials/fulltext/S3050-5623(26)00117-0';
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-cell-diagnostic-edge-'));

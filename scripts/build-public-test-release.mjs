@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +10,12 @@ const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--name' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(args[1])) {
   throw new Error('Usage: node scripts/build-public-test-release.mjs --name RELEASE_NAME');
 }
-const release = path.join(root, 'dist', args[1]);
-const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
+const release = projectFile('dist', args[1]);
+const manifest = JSON.parse(fs.readFileSync(projectFile('manifest.json')));
 if (!manifest.key) throw new Error('Public unpacked builds require the existing public extension key');
 delete manifest.update_url;
 manifest.minimum_chrome_version = '116';
-const files = new Map(chromeFiles(root).map(f => [f.path, fs.readFileSync(path.join(root, f.source))]));
+const files = new Map(chromeFiles(root).map(f => [f.path, fs.readFileSync(projectFile(f.source))]));
 files.set('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
 // Reuse the strict browser/dependency/credential audit. Only the public identity
 // key differs from the store manifest; it is not a private signing key.

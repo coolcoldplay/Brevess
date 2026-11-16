@@ -1,11 +1,12 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { requestText } = require('../providers/provider-utils.js');
+const { requestText } = require('../extension/providers/provider-utils.js');
 
-const modulePath = path.join(__dirname, '..', 'core', 'offscreen-fetch.js');
+const modulePath = projectFile('core', 'offscreen-fetch.js');
 
 function loadApi() {
   assert.equal(fs.existsSync(modulePath), true, 'offscreen fetch module must exist');
@@ -14,7 +15,7 @@ function loadApi() {
 
 function loadNetworkWorker(fetchImpl) {
   const source = fs.readFileSync(
-    path.join(__dirname, '..', 'offscreen-network-worker.js'), 'utf8'
+    projectFile('offscreen-network-worker.js'), 'utf8'
   );
   const messages = [];
   const self = { postMessage(value) { messages.push(value); } };
@@ -386,9 +387,9 @@ test('offscreen stream rechecks cancellation after connecting and never starts a
 
 test('offscreen worker stream branch reads response chunks and bounds each event', () => {
   const worker = fs.readFileSync(
-    path.join(__dirname, '..', 'offscreen-network-worker.js'), 'utf8'
+    projectFile('offscreen-network-worker.js'), 'utf8'
   );
-  const bridge = fs.readFileSync(path.join(__dirname, '..', 'offscreen.js'), 'utf8');
+  const bridge = fs.readFileSync(projectFile('offscreen.js'), 'utf8');
   assert.match(worker, /message\.type === 'stream'/);
   assert.match(worker, /response\.body\?\.getReader/);
   assert.match(worker, /MAX_STREAM_EVENT_BYTES/);

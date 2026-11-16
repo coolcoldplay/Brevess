@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -18,8 +19,8 @@ const {
   validateUnifiedCategory,
   hasUnsafeRegexStructure,
   compileCategoryPromptPreview
-} = require('../core/category-store.js');
-const { createUnifiedCategoryCatalog } = require('../core/adaptive-catalog.js');
+} = require('../extension/core/category-store.js');
+const { createUnifiedCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
 
 test('provides all thirteen stable built-in category ids', () => {
   const ids = Object.keys(createBuiltInCategories());
@@ -545,7 +546,7 @@ test('keeps every built-in regex configuration in the shared category store', ()
 
 test('reports a clear dependency error when category-store is not loaded', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '..', 'core', 'adaptive-catalog.js'), 'utf8'
+    projectFile('core', 'adaptive-catalog.js'), 'utf8'
   );
   const sandbox = { module: { exports: {} } };
   vm.runInNewContext(source, sandbox);

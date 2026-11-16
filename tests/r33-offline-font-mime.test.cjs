@@ -3,8 +3,8 @@
 // decoded font; actual exported Nature font bytes are covered in the audit.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {functionSource}=require('./helpers/r28-full07-source.js');
-const api=require('../core/faithful-page-snapshot.js');
-const background=fs.readFileSync(path.join(__dirname,'../background.js'),'utf8');
+const api=require('../extension/core/faithful-page-snapshot.js');
+const background=fs.readFileSync(path.join(__dirname,'../extension/background.js'),'utf8');
 const fixtureSource=fs.readFileSync(path.join(__dirname,'r21-export-faithful-snapshot.test.js'),'utf8');
 const fixture=new Function(functionSource(fixtureSource,'fixture')+'\nreturn fixture;')();
 const code=['exportAbortError','exportResourceDeadline','waitForBackgroundExportSignal','parseRemoteFigureUrl','fetchExportSnapshotResource'].map(n=>functionSource(background,n)).join('\n');

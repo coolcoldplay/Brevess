@@ -2,11 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
-require('../core/confidence-policy.js');
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../core/reading-tools.js');
-const { LLM_TASK_IDS } = require('../core/llm-task-catalog.js');
+require('../extension/core/confidence-policy.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/core/reading-tools.js');
+const { LLM_TASK_IDS } = require('../extension/core/llm-task-catalog.js');
 const {
   PROFILE_ID_PATTERN,
   DEFAULT_FIGURE_PANEL_HEADER_FIELDS,
@@ -26,7 +26,7 @@ const {
   isConfiguredProfile,
   isLlmReady,
   getEffectiveMode
-} = require('../core/settings-store.js');
+} = require('../extension/core/settings-store.js');
 
 function createMemoryStorage() {
   const values = {};
@@ -70,7 +70,7 @@ test('CommonJS settings-store loads its task catalog without global preload orde
     "const settings = store.createDefaultSettings();",
     "process.stdout.write(JSON.stringify({ version: settings.version, taskIds: Object.keys(settings.taskPolicies) }));"
   ].join(' ')], {
-    cwd: path.resolve(__dirname, '..'),
+    cwd: path.resolve(__dirname, '../extension'),
     encoding: 'utf8'
   });
   assert.deepEqual(JSON.parse(output), { version: 6, taskIds: LLM_TASK_IDS });

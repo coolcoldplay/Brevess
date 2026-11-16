@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
 
 const root = process.env.SCI_EXTENSION_ROOT
   ? path.resolve(process.env.SCI_EXTENSION_ROOT)
-  : path.resolve(__dirname, '..');
+  : path.resolve(__dirname, '..', 'extension');
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-restart-edge-'));
 const extensionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-restart-extension-'));
 let activeContext = null;

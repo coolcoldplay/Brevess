@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/settings-store.js');
-require('../core/cache-planner.js');
-require('../providers/provider-registry.js');
+require('../extension/core/settings-store.js');
+require('../extension/core/cache-planner.js');
+require('../extension/providers/provider-registry.js');
 
 function profile(id, providerId, config, extra = {}) {
   return {
@@ -49,7 +49,7 @@ function settingsFixture() {
 }
 
 test('per-feature model overrides change the real route and cache identity without changing the connection', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   const previous = resolveTaskProfile(settings, 'paragraph_summary');
   settings.taskPolicies.paragraph_summary = policy({ model: 'deepseek-v4-pro', modelProfileId: 'profile_global',
@@ -69,7 +69,7 @@ test('per-feature model overrides change the real route and cache identity witho
 });
 
 test('web search capability follows implemented task, provider, model and official endpoint boundaries', () => {
-  const { supportsTaskWebSearch, taskModelForProfile } = require('../core/llm-task-catalog.js');
+  const { supportsTaskWebSearch, taskModelForProfile } = require('../extension/core/llm-task-catalog.js');
   assert.equal(taskModelForProfile(undefined, undefined, undefined), '');
   assert.equal(taskModelForProfile(null, null, ''), '');
   assert.equal(supportsTaskWebSearch('openai', { model: 'gpt-5-mini' }, 'article_chat'), true);
@@ -84,7 +84,7 @@ test('web search capability follows implemented task, provider, model and offici
 });
 
 test('routes an exact Figure task policy and returns normalized effective reasoning', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const routed = resolveTaskProfile(settingsFixture(), 'figure_walkthrough');
 
   assert.equal(routed.taskId, 'figure_walkthrough');
@@ -101,7 +101,7 @@ test('routes an exact Figure task policy and returns normalized effective reason
 });
 
 test('reads each exact task policy instead of a legacy route category', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.taskPolicies.figure_panel_interpretation = policy({
     mode: 'profile', profileId: 'profile_vision', reasoningEffort: 'low'
@@ -117,7 +117,7 @@ test('reads each exact task policy instead of a legacy route category', () => {
 });
 
 test('falls back to global when a requested text profile is missing', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.taskPolicies.document_highlight = policy({
     mode: 'profile', profileId: 'profile_deleted'
@@ -132,7 +132,7 @@ test('falls back to global when a requested text profile is missing', () => {
 });
 
 test('falls back to global when a requested text profile is unavailable', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.taskPolicies.document_highlight = policy({
     mode: 'profile', profileId: 'profile_vision'
@@ -146,7 +146,7 @@ test('falls back to global when a requested text profile is unavailable', () => 
 });
 
 test('treats a malformed but present requested profile as unavailable', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.taskPolicies.document_highlight = policy({
     mode: 'profile', profileId: 'profile_vision'
@@ -160,7 +160,7 @@ test('treats a malformed but present requested profile as unavailable', () => {
 });
 
 test('routes every Figure task to caption text for a text model without a fallback toggle', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.profiles.profile_global.config.model = 'deepseek-v4-pro';
   for (const taskId of ['figure_walkthrough', 'figure_panel_interpretation', 'figure_panel_followup']) {
@@ -172,7 +172,7 @@ test('routes every Figure task to caption text for a text model without a fallba
 });
 
 test('routes a non-vision Figure profile through explicit caption-text fallback', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.profiles.profile_global.config.model = 'deepseek-v4-pro';
   settings.taskPolicies.figure_walkthrough = policy({ allowTextFallback: true });
@@ -187,7 +187,7 @@ test('routes a non-vision Figure profile through explicit caption-text fallback'
 });
 
 test('routes DeepSeek vision and Codex Local Figure profiles through image mode', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   for (const candidate of [
     {
       profileId: 'profile_deepseek_vision', providerId: 'deepseek',
@@ -218,7 +218,7 @@ test('routes DeepSeek vision and Codex Local Figure profiles through image mode'
 });
 
 test('throws NO_USABLE_PROFILE when the global fallback is unavailable', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.profiles.profile_global.config.apiKey = '';
   settings.profiles.profile_vision.config.apiKey = '';
@@ -231,7 +231,7 @@ test('throws NO_USABLE_PROFILE when the global fallback is unavailable', () => {
 });
 
 test('preserves the catalog error for unknown task IDs', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   assert.throws(
     () => resolveTaskProfile(settingsFixture(), 'unknown-task'),
     error => error.code === 'UNKNOWN_LLM_TASK' && error.message === 'UNKNOWN_LLM_TASK'
@@ -239,7 +239,7 @@ test('preserves the catalog error for unknown task IDs', () => {
 });
 
 test('normalizes endpoints without userinfo, query, fragment, or trailing slash', () => {
-  const { normalizeEndpoint } = require('../core/task-profile-router.js');
+  const { normalizeEndpoint } = require('../extension/core/task-profile-router.js');
   assert.equal(normalizeEndpoint(''), 'official');
   assert.equal(
     normalizeEndpoint('HTTPS://User:Pass@EXAMPLE.COM:8443/v1///?key=secret#credential'),
@@ -253,7 +253,7 @@ test('normalizes endpoints without userinfo, query, fragment, or trailing slash'
 });
 
 test('profile signatures isolate endpoint, model, and catalog capability without including keys', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const base = settingsFixture();
   base.profiles.profile_global = profile('profile_global', 'openai-compatible', {
     apiKey: 'signature-secret', model: 'model-a', baseUrl: 'https://example.com/v1',
@@ -285,7 +285,7 @@ test('profile signatures isolate endpoint, model, and catalog capability without
 });
 
 test('profile signatures isolate safe request-affecting provider flags', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const compatible = settingsFixture();
   compatible.profiles.profile_global = profile('profile_global', 'openai-compatible', {
     apiKey: 'compatible-secret', model: 'same-model', baseUrl: 'https://example.com/v1',
@@ -304,7 +304,7 @@ test('profile signatures isolate safe request-affecting provider flags', () => {
 });
 
 test('profile signatures isolate the requested output language', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const chinese = settingsFixture();
   chinese.language = 'zh-CN';
   const english = structuredClone(chinese);
@@ -323,14 +323,14 @@ test('profile signatures isolate effective per-task reasoning', () => {
 
   assert.notEqual(resolveSignature(settings), resolveSignature(changed));
   assert.deepEqual(
-    require('../core/task-profile-router.js')
+    require('../extension/core/task-profile-router.js')
       .resolveTaskProfile(changed, 'document_highlight').effectiveReasoning,
     { enabled: true, effort: 'high' }
   );
 });
 
 test('profile signatures isolate normalized effective token policy and cap', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const variants = [
     { mode: 'manual', manualMax: 4096, autoCap: null },
     { mode: 'manual', manualMax: 8192, autoCap: null },
@@ -364,12 +364,12 @@ test('unsupported reasoning settings do not fragment request behavior signatures
 });
 
 function resolveSignature(settings) {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   return resolveTaskProfile(settings, 'document_highlight').profileSignature;
 }
 
 test('routing returns isolated JSON-like copies and never mutates settings', () => {
-  const { resolveTaskProfile } = require('../core/task-profile-router.js');
+  const { resolveTaskProfile } = require('../extension/core/task-profile-router.js');
   const settings = settingsFixture();
   settings.profiles.profile_global.config.customHeaders = {
     'X-Route-Secret': 'nested-secret'

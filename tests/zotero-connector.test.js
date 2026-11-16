@@ -6,7 +6,7 @@ const {
   normalizeBaseUrl,
   validateEnhancedSnapshot,
   saveEnhancedSnapshotToZotero
-} = require('../core/zotero-connector.js');
+} = require('../extension/core/zotero-connector.js');
 
 function jsonResponse(value, status = 200, headers = {}) {
   return new Response(JSON.stringify(value), {

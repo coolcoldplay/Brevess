@@ -5,7 +5,7 @@ const {
   normalizeRetrievalText,
   tokenizeRetrievalText,
   tokenizeRetrievalQuery
-} = require('../core/article-chat-tokenizer.js');
+} = require('../extension/core/article-chat-tokenizer.js');
 
 test('retrieval tokenizer emits adjacent CJK bigrams without losing complete scientific terms', () => {
   const tokens = tokenizeRetrievalQuery('慢性热应激中的 ATAC-seq、CD8+T 和 N6-mA 信号');

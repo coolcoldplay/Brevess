@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const root = path.resolve(import.meta.dirname, '..');
+const root = path.resolve(import.meta.dirname, '..', 'extension');
 const extensionPath = path.resolve(process.argv[2] || process.env.EXTENSION_PATH || root);
 const outputDir = path.resolve(process.env.OUTPUT_DIR || path.join(root, 'output', 'playwright'));
 const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brevess-action-popup-'));

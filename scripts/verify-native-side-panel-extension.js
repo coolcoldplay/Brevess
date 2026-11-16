@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
 
 const root = process.env.SCI_EXTENSION_ROOT
   ? path.resolve(process.env.SCI_EXTENSION_ROOT)
-  : path.resolve(__dirname, '..');
+  : path.resolve(__dirname, '..', 'extension');
 const outputDir = process.env.SCI_QA_OUTPUT_DIR
   ? path.resolve(process.env.SCI_QA_OUTPUT_DIR)
   : path.join(root, 'output', 'playwright');

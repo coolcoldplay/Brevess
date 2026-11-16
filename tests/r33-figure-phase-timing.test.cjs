@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
-const source = fs.readFileSync(path.resolve(__dirname, '../content.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../extension/content.js'), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const phases = ['fetch', 'cache', 'decode', 'encode', 'prepare', 'guard', 'provider', 'save', 'readback'];
 

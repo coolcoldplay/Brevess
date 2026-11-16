@@ -2,7 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
-const source = fs.readFileSync(path.resolve(__dirname, '../content.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../extension/content.js'), 'utf8');
 // Complete opaque single-item AVIF, generated locally with the existing
 // @napi-rs/canvas 0.1.100. Embedded so tests do not depend on ignored output files.
 const original = Buffer.from('AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUEAAADybWV0YQAAAAAAAAAoaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAGxpYmF2aWYAAAAADnBpdG0AAAAAAAEAAAAeaWxvYwAAAABEAAABAAEAAAABAAABGgAAAGIAAAAoaWluZgAAAAAAAQAAABppbmZlAgAAAAABAABhdjAxQ29sb3IAAAAAamlwcnAAAABLaXBjbwAAABRpc3BlAAAAAAAAAUAAAADwAAAAEHBpeGkAAAAAAwgICAAAAAxhdjFDgSAAAAAAABNjb2xybmNseAACAAIAAoAAAAAXaXBtYQAAAAAAAAABAAEEAQKDBAAAAGptZGF0EgAKBjgh5/3sEjJWE0ADzxBhQNf/L/fQRXkEOrzkh/8+1gTTb5BHP8BJOo+VBbhEy3LZKxyakaiwoGD4vgsU9Yu8KjncIU/4YvP1YzLmP1STNXbpcYWhJCWk53wbun1ADMA=', 'base64');

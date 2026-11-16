@@ -1,8 +1,9 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-structure.js');
-require('../core/article-extractor.js');
+require('../extension/core/article-structure.js');
+require('../extension/core/article-extractor.js');
 
 const {
   FIGURE_SELECTOR,
@@ -14,11 +15,11 @@ const {
   figureInventoryNeedsRefresh,
   extractArticleFigures,
   extractArticleFiguresFromRecords
-} = require('../core/figure-extractor.js');
+} = require('../extension/core/figure-extractor.js');
 
 test('Figure extraction keeps large MinerU Panel image groups intact', () => {
   const source = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, '..', 'core', 'figure-extractor.js'),
+    projectFile('core', 'figure-extractor.js'),
     'utf8'
   );
   assert.match(source, /return images\.slice\(0, 40\)/);

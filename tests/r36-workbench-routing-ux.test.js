@@ -2,8 +2,8 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const M = require('../workbench/model.js');
-const R = require('../workbench/routing.js');
+const M = require('../extension/workbench/model.js');
+const R = require('../extension/workbench/routing.js');
 
 function node(id, x, y, w = 190, h = 82) {
   return { id, label: id, x, y, w, h };

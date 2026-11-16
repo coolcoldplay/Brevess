@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const sourceRoot = process.env.SHARING_QA_SOURCE ? path.resolve(process.env.SHARING_QA_SOURCE) : path.resolve(__dirname, '../..');
+const sourceRoot = process.env.SHARING_QA_SOURCE ? path.resolve(process.env.SHARING_QA_SOURCE) : path.resolve(__dirname, '../../extension');
 const content = fs.readFileSync(path.join(sourceRoot, 'content.js'), 'utf8');
 const manual = require(path.join(sourceRoot, 'core/manual-annotations.js'));
 function fn(name) { const match = new RegExp('(?:async )?function '+name+'\\(').exec(content); assert.ok(match,name); const tail=content.slice(match.index),next=/\n(?:async )?function /u.exec(tail.slice(1));return tail.slice(0,next?next.index+1:undefined); }

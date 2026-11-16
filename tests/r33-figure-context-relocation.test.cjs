@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { harness, plain, content, functionSource } = require('./helpers/r29-figure-binding-harness.js');
-const figureApi = require('../core/figure-extractor.js');
-const archiveApi = require('../core/article-archive.js');
+const figureApi = require('../extension/core/figure-extractor.js');
+const archiveApi = require('../extension/core/article-archive.js');
 
 // Actual extractor, guards and workspace draft/CAS code. Image and persistence
 // transport boundaries are deterministic; this does not stand for live Edge QA.
@@ -177,7 +177,7 @@ test('R33 stale generic snapshot cannot replace the inputHash or evidence attach
 });
 
 test('R33 actual batch extraction and state construction retain bound IDs and a resumable checkpoint', async () => {
-  const h = harness(); Object.assign(h.c.SciLLM, require('../core/figure-result-binding.js'));
+  const h = harness(); Object.assign(h.c.SciLLM, require('../extension/core/figure-result-binding.js'));
   await h.start(); await h.checkpoint();
   const oldHash = h.state.figureInputHash, original = plain(h.state.figure.contextParagraphs);
   h.addUnrelatedParagraph(); h.setClock(126000); h.c.restoredFigureWorkspaceSnapshot = null;

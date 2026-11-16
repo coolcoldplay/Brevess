@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   createArticleChatQueue
-} = require('../core/article-chat-queue.js');
+} = require('../extension/core/article-chat-queue.js');
 
 test('queued questions bind an immutable model profile at enqueue time', () => {
   const queue = createArticleChatQueue();

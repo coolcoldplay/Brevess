@@ -1,9 +1,10 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { getProviderBrand } = require('../core/provider-brand-icons.js');
-const { getProviderDefinitions, getCompatibleProviderPresets } = require('../providers/provider-registry.js');
+const { getProviderBrand } = require('../extension/core/provider-brand-icons.js');
+const { getProviderDefinitions, getCompatibleProviderPresets } = require('../extension/providers/provider-registry.js');
 
 test('every built-in provider and named compatible preset has a bundled official icon', () => {
   const profiles = Object.keys(getProviderDefinitions()).filter(id => id !== 'openai-compatible').map(providerId => ({ providerId }));
@@ -12,7 +13,7 @@ test('every built-in provider and named compatible preset has a bundled official
     const brand = getProviderBrand(profile);
     assert.ok(brand, JSON.stringify(profile));
     assert.match(brand.src, /^icons\/providers\/[a-z]+\.(png|ico)$/);
-    assert.ok(fs.statSync(path.join(__dirname, '..', brand.src)).size > 0);
+    assert.ok(fs.statSync(projectFile(brand.src)).size > 0);
   }
 });
 

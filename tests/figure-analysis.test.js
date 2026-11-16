@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../providers/provider-utils.js');
-require('../core/figure-panel-planner.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/figure-panel-planner.js');
 const {
   FIGURE_ANALYSIS_VERSION,
   FIGURE_ANALYSIS_PROMPT_VERSION,
@@ -35,8 +35,8 @@ const {
   normalizeMethodEvidence,
   localizeFigureMethodLabel,
   isUsableFigureAnalysisResult
-} = require('../core/figure-analysis.js');
-const { buildFigureCacheKey } = require('../core/cache-planner.js');
+} = require('../extension/core/figure-analysis.js');
+const { buildFigureCacheKey } = require('../extension/core/cache-planner.js');
 
 const figureInput = {
   figureId: 'figure-2',

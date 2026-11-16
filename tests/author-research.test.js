@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const R = require('../core/article-chat-research.js');
-require('../providers/provider-utils.js');
-require('../core/article-chat-web-sources.js');
-const {createDeepSeekAdapter} = require('../providers/deepseek.js');
+const R = require('../extension/core/article-chat-research.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/article-chat-web-sources.js');
+const {createDeepSeekAdapter} = require('../extension/providers/deepseek.js');
 const input = {question:'请查询通讯作者背景与前期研究，用表格说明启发关系',document:{title:'Intestinal macrophages modulate synucleinopathy along the gut–brain axis',url:'https://www.nature.com/articles/paper',authorMetadata:{publicationDate:'2026/03/11',authors:[
  {name:'Soyon Hong',corresponding:true,affiliations:['UCL']}, {name:'Tim Bartels',corresponding:true,affiliations:['UCL']}, {name:'Other Researcher',corresponding:null,affiliations:['Institute']} ]}}};
 test('author background prioritizes verified people, short topical queries and publication cutoff',()=>{

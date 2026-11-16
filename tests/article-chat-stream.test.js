@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-citations.js');
+require('../extension/core/article-chat-citations.js');
 const {
   createMarkdownBlockStreamCoalescer,
   createArticleChatNdjsonParser
-} = require('../core/article-chat-stream.js');
+} = require('../extension/core/article-chat-stream.js');
 
 const citationSnapshot = {
   revision: 4,

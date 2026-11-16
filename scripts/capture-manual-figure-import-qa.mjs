@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const extensionRoot = path.resolve(
-  process.env.SCI_EXTENSION_ROOT || path.resolve(import.meta.dirname, '..')
+  process.env.SCI_EXTENSION_ROOT || path.resolve(import.meta.dirname, '..', 'extension')
 );
 const outputDir = path.resolve(
   process.env.SCI_QA_OUTPUT_DIR ||

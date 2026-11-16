@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { sanitizeBuiltInRegexRules } = require('../core/regex-policy.js');
+const { sanitizeBuiltInRegexRules } = require('../extension/core/regex-policy.js');
 
 test('removes ambiguous standalone causal cues from previously saved built-in rules', () => {
   const stored = {

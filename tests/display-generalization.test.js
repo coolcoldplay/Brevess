@@ -2,10 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const S = require('../web-filters-general/schema.js');
-const M = require('../web-filters-general/reading-modules.js');
-const G = require('../web-filters-general/generalization.js');
-globalThis.WFGModel = require('../web-filters-general/model.js');
+const S = require('../extension/web-filters-general/schema.js');
+const M = require('../extension/web-filters-general/reading-modules.js');
+const G = require('../extension/web-filters-general/generalization.js');
+globalThis.WFGModel = require('../extension/web-filters-general/model.js');
 
 const copy = value => structuredClone(value);
 const response = () => ({ name: '论文段落样式', selectors: ['.paper-body > p'], hosts: ['papers.example'],
@@ -182,7 +182,7 @@ test('save endpoint rejects manually broadening a single-page rule before any mo
     webNavigation: { getAllFrames: async () => [{ frameId: 0, documentId: 'doc-1' }] },
     tabs: { get: async () => tab, query: async () => [tab], onRemoved: { addListener() {} }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } } };
   const context = { WFGSchema: S, WFGReadingModules: M, WFGGeneralization: G, crypto, URL, console };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../web-filters-general/ux-background.js'), 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../extension/web-filters-general/ux-background.js'), 'utf8'), context);
   const broker = { overview: async () => ({ frames: [{ frameId: 0, ok: true, data: { session: 'session-1', version: 0 } }] }), rpc: async () => ({}) };
   const controller = context.WFGUX.install({ browser, broker, multi: {} });
   const sender = { id: 'extension', url: 'chrome-extension://extension/popup.html' };

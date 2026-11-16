@@ -3,10 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source');
-const { createFigureGesture } = require('../core/sidebar-interactions.js');
-const registry = require('../providers/provider-registry.js');
-const content = fs.readFileSync(require.resolve('../content.js'), 'utf8');
-const popup = fs.readFileSync(require.resolve('../popup.js'), 'utf8');
+const { createFigureGesture } = require('../extension/core/sidebar-interactions.js');
+const registry = require('../extension/providers/provider-registry.js');
+const content = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8');
+const popup = fs.readFileSync(require.resolve('../extension/popup.js'), 'utf8');
 
 test('provider menu keeps Grok out of the domestic group and preserves configured values', () => {
   class Element {
@@ -24,7 +24,7 @@ test('provider menu keeps Grok out of the domestic group and preserves configure
     compatiblePresets: registry.getCompatibleProviderPresets,
     COMPATIBLE_PROVIDER_VALUE_PREFIX: 'compatible:', interfaceText: value => value
   };
-  vm.runInNewContext(functionSource(fs.readFileSync(require.resolve('../options.js'), 'utf8'), 'renderProviderOptions'), ctx);
+  vm.runInNewContext(functionSource(fs.readFileSync(require.resolve('../extension/options.js'), 'utf8'), 'renderProviderOptions'), ctx);
   ctx.renderProviderOptions();
   const groupOf = value => select.children.find(group => group.children.some(option => option.value === value)).label;
   assert.equal(groupOf('compatible:grok'), '常用服务商');

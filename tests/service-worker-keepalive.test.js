@@ -1,9 +1,10 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const modulePath = path.join(__dirname, '..', 'core', 'service-worker-keepalive.js');
+const modulePath = projectFile('core', 'service-worker-keepalive.js');
 
 test('keeps a service worker alive only until the long operation settles', async () => {
   assert.equal(fs.existsSync(modulePath), true, 'service worker keepalive module must exist');

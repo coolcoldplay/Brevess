@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../providers/provider-utils.js');
-require('../providers/provider-registry.js');
-require('../core/article-chat-web-sources.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/core/article-chat-web-sources.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
 const api = globalThis.SciLLM;
 const PNG = 'data:image/png;base64,AA==';
 const JPEG = 'data:image/jpeg;base64,AQ==';

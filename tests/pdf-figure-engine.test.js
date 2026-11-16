@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const pdf = require('../core/pdf-workspace.js');
-const engine = require('../core/pdf-figure-engine.js');
+const pdf = require('../extension/core/pdf-workspace.js');
+const engine = require('../extension/core/pdf-figure-engine.js');
 
 test('legacy whole-Figure manifests are marked for native-only cache upgrade', () => {
   assert.equal(engine.PDF_FIGURE_SCHEMA_VERSION, 3);

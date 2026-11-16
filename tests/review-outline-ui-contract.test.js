@@ -1,9 +1,10 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+const read = file => fs.readFileSync(projectFile(file), 'utf8');
 
 test('navigation separates paragraph jumps from compact summaries and scopes analysis by section', async () => {
   const content = read('content.js');

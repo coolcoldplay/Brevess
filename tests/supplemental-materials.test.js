@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../core/pdf-workspace.js');
-require('../core/figure-extractor.js');
+require('../extension/core/pdf-workspace.js');
+require('../extension/core/figure-extractor.js');
 const {
   SUPPLEMENTAL_FIGURE_SOURCE_MODES,
   SUPPLEMENTAL_TRANSIENT_IMAGE_MAX_BYTES,
@@ -24,7 +24,7 @@ const {
   canonicalSupplementalFigureLabel,
   normalizeManualFigureKind,
   canonicalManualFigureLabel
-} = require('../core/supplemental-materials.js');
+} = require('../extension/core/supplemental-materials.js');
 
 const fingerprint = character => `sha256:${character.repeat(64)}`;
 const importedAt = '2026-08-03T00:00:00.000Z';

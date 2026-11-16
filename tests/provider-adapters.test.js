@@ -14,7 +14,7 @@ const {
   normalizeImageInputs,
   splitDataUrl,
   normalizeOutputTokenLimit
-} = require('../providers/provider-utils.js');
+} = require('../extension/providers/provider-utils.js');
 
 test('recovers bounded JSON from reasoning wrappers, trailing commas, and raw line breaks', () => {
   assert.deepEqual(parseJsonText('<think>reason {not json}</think>\n```json\n{"ok":true,}\n```'), {
@@ -25,11 +25,11 @@ test('recovers bounded JSON from reasoning wrappers, trailing commas, and raw li
   });
   assert.deepEqual(parseJsonText(JSON.stringify('{"nested":true}')), { nested: true });
 });
-require('../core/article-chat-web-sources.js');
-require('../providers/openai.js');
-require('../providers/anthropic.js');
-require('../providers/gemini.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
+require('../extension/core/article-chat-web-sources.js');
+require('../extension/providers/openai.js');
+require('../extension/providers/anthropic.js');
+require('../extension/providers/gemini.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
 test('DeepSeek marks invalid completed JSON as a known response outcome', async () => {
   for (const body of ['not JSON', JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"groups": broken}' } }] }),
     JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '' } }] })]) {
@@ -39,8 +39,8 @@ test('DeepSeek marks invalid completed JSON as a known response outcome', async 
       error => error.code === 'INVALID_RESPONSE' && error.diagnosticStage === 'provider-completion');
   }
 });
-require('../providers/codex-local.js');
-require('../providers/openai-compatible.js');
+require('../extension/providers/codex-local.js');
+require('../extension/providers/openai-compatible.js');
 const {
   createProviderAdapter,
   getProviderDefinitions,
@@ -50,17 +50,17 @@ const {
   normalizeReasoningForProvider,
   getProviderMaxOutputTokens,
   validateProviderConfig
-} = require('../providers/provider-registry.js');
-require('../core/settings-store.js');
-require('../core/cache-planner.js');
+} = require('../extension/providers/provider-registry.js');
+require('../extension/core/settings-store.js');
+require('../extension/core/cache-planner.js');
 const {
   resolveTaskProfile,
   requestBehaviorSignature
-} = require('../core/task-profile-router.js');
+} = require('../extension/core/task-profile-router.js');
 const {
   compileProviderCapabilityProbes,
   executeProviderProbe
-} = require('../core/provider-probes.js');
+} = require('../extension/core/provider-probes.js');
 
 test('keeps large model-specific output limits instead of silently replacing them with 4096', () => {
   assert.equal(normalizeOutputTokenLimit(384000), 384000);

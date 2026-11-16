@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$engineRoot = Join-Path $projectRoot 'native-host\pdffigures2'
+$engineRoot = Join-Path $projectRoot 'extension/native-host\pdffigures2'
 $targetJar = Join-Path $engineRoot 'pdffigures2.jar'
 $expectedJarHash = '61b97c6a456b8c993b6c716d0a5f83177dae4521242160f65a51f2ad72459a48'
 $imageIoAssets = @(

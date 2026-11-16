@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -5,8 +6,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
-const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
-const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+const popup = fs.readFileSync(projectFile('popup.js'), 'utf8');
+const content = fs.readFileSync(projectFile('content.js'), 'utf8');
 
 function sourceOf(script, name) {
     const match = new RegExp(`(?:async )?function ${name}\\(`).exec(script);

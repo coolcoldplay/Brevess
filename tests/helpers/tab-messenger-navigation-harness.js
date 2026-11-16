@@ -1,3 +1,4 @@
+const { projectFile } = require('../../scripts/project-paths.cjs');
 const MISSING_RECEIVER =
   'Could not establish connection. Receiving end does not exist.';
 const fs = require('node:fs');
@@ -195,7 +196,7 @@ function createBackgroundNavigationHarness({
   });
   const SciLLM = new Proxy({
     createOnboardingController: () => ({ get: async () => ({}) }),
-    createSemanticFindLauncher: require('../../core/semantic-find-launcher.js').createSemanticFindLauncher,
+    createSemanticFindLauncher: require('../../extension/core/semantic-find-launcher.js').createSemanticFindLauncher,
     createSemanticFindService: () => ({
       handles: () => false,
       commitTrustedDocument: async () => ({}),
@@ -305,7 +306,7 @@ function createBackgroundNavigationHarness({
   };
   context.globalThis = context;
   vm.createContext(context);
-  const backgroundPath = path.join(__dirname, '..', '..', 'background.js');
+  const backgroundPath = projectFile('background.js');
   vm.runInContext(fs.readFileSync(backgroundPath, 'utf8'), context, {
     filename: backgroundPath
   });

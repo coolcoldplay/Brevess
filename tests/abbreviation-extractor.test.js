@@ -16,7 +16,7 @@ const {
   composeArticleAbbreviations,
   compileAbbreviationTranslationPrompt,
   validateAbbreviationTranslationResult
-} = require('../core/abbreviation-extractor.js');
+} = require('../extension/core/abbreviation-extractor.js');
 
 test('extracts explicit article abbreviation definitions locally and sorts them alphabetically', () => {
   const entries = extractArticleAbbreviations([

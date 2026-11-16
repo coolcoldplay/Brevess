@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-tokenizer.js');
-const { buildArticleChatIndex } = require('../core/article-chat-index.js');
+require('../extension/core/article-chat-tokenizer.js');
+const { buildArticleChatIndex } = require('../extension/core/article-chat-index.js');
 
 function paragraph(index, text, overrides = {}) {
   return {

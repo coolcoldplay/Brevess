@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const {functionSource} = require('./helpers/r28-full07-source.js');
-const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
-const versions = require('../core/evidence-first-mechanism.js').EVIDENCE_FIRST_VERSIONS;
+const source = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8');
+const versions = require('../extension/core/evidence-first-mechanism.js').EVIDENCE_FIRST_VERSIONS;
 const path = 'mechanism/cleanup-intents.json';
 const workspaceId = 'workspace:' + 'a'.repeat(64);
 

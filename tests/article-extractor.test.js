@@ -1,10 +1,11 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { selectPublisherAdapter } = require('../core/publisher-adapters.js');
-require('../core/article-structure.js');
+const { selectPublisherAdapter } = require('../extension/core/publisher-adapters.js');
+require('../extension/core/article-structure.js');
 const {
   isExcludedSectionHeading,
   buildParagraphRecords,
@@ -25,8 +26,8 @@ const {
   outlineRecordsAreReliable,
   prepareReviewOutlineParagraphs,
   summarizeArticleRecords
-} = require('../core/article-extractor.js');
-const { extractArticleFigures } = require('../core/figure-extractor.js');
+} = require('../extension/core/article-extractor.js');
+const { extractArticleFigures } = require('../extension/core/figure-extractor.js');
 
 test('rejects a title-complete outline that captures only a small fraction of the article body', () => {
   const headings = ['Abstract', 'Introduction', 'Results', 'Discussion', 'Methods'];
@@ -2167,7 +2168,7 @@ test('builds structure and Figure inventory from one shared typed-record pass', 
 test('resolves the Figure extractor after article extractor loads into an empty UMD namespace', () => {
   const context = vm.createContext({});
   const load = filename => vm.runInContext(fs.readFileSync(
-    path.join(__dirname, '..', 'core', filename), 'utf8'
+    projectFile('core', filename), 'utf8'
   ), context, { filename });
   load('article-extractor.js');
   load('article-structure.js');

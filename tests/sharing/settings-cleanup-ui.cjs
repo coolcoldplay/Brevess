@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('fs'), path = require('path'), assert = require('assert/strict');
 const { chromium } = require('playwright');
-const feature = path.resolve(__dirname, '../..');
+const feature = path.resolve(__dirname, '../../extension');
 const source = process.env.SHARING_QA_SOURCE || feature;
 const runRoot=path.join(feature,'output','r37-browser-qa');fs.mkdirSync(runRoot,{recursive:true});const run=fs.mkdtempSync(path.join(runRoot,'ui-'));
 const checks = [], errors = [];

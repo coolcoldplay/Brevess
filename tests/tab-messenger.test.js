@@ -5,9 +5,9 @@ const {
   createTabMessengerNavigationHarness
 } = require('./helpers/tab-messenger-navigation-harness.js');
 
-const PREINDEX_CONTENT_REVISION = require('../core/tab-messenger.js').CONTENT_SCRIPT_REVISION;
+const PREINDEX_CONTENT_REVISION = require('../extension/core/tab-messenger.js').CONTENT_SCRIPT_REVISION;
 test('the actual content receiver announces the revision required by the background handshake', () => {
-  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../content.js'), 'utf8');
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../extension/content.js'), 'utf8');
   const assignment = source.match(/document\.documentElement\.dataset\.sciLlmContentRevision\s*=[\s\S]*?;/u);
   assert.ok(assignment, 'content receiver must announce its revision');
   const document = { documentElement: { dataset: {} } };
@@ -19,7 +19,7 @@ const PREINDEX_PREDECESSOR_REVISION =
 
 let messenger = {};
 try {
-  messenger = require('../core/tab-messenger.js');
+  messenger = require('../extension/core/tab-messenger.js');
 } catch {
   // The first red run intentionally exercises the missing recovery module.
 }
@@ -61,7 +61,7 @@ test('queued recovery with another binding reuses the receiver established by th
 });
 
 test('background and sidebar contexts share one document injection despite different bindings', async()=>{
-  const modulePath=require.resolve('../core/tab-messenger.js');
+  const modulePath=require.resolve('../extension/core/tab-messenger.js');
   const cached=require.cache[modulePath];
   delete require.cache[modulePath];
   const sidebarMessenger=require(modulePath);

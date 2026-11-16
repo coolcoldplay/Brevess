@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { chromium } = require('playwright');
-const sourceRoot = path.resolve(__dirname, '../..');
+const sourceRoot = path.resolve(__dirname, '../../extension');
 const content = fs.readFileSync(path.join(sourceRoot, 'content.js'), 'utf8');
 const popup = fs.readFileSync(path.join(sourceRoot, 'popup.js'), 'utf8');
 function fn(source, name) {

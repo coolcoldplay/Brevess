@@ -12,7 +12,7 @@ const {
   validatePortableEnvelope,
   toBase64,
   fromBase64
-} = require('../core/portable-config.js');
+} = require('../extension/core/portable-config.js');
 
 const passphrase = 'correct horse battery staple';
 const payload = {
@@ -204,7 +204,7 @@ test('base64 helpers use browser atob and btoa when Buffer is unavailable', () =
   const originalBuffer = globalThis.Buffer;
   try {
     globalThis.Buffer = undefined;
-    const portable = require('../core/portable-config.js');
+    const portable = require('../extension/core/portable-config.js');
     assert.deepEqual([...portable.fromBase64(portable.toBase64(new Uint8Array([0, 1, 255])))], [0, 1, 255]);
   } finally {
     globalThis.Buffer = originalBuffer;

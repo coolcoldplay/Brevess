@@ -8,7 +8,7 @@ const {
   countCanonicalTextMatches,
   findCanonicalQuoteSourceSpan,
   verifyArticleChatEvidence
-} = require('../core/article-chat-citations.js');
+} = require('../extension/core/article-chat-citations.js');
 
 function createSnapshot(overrides = {}) {
   return {

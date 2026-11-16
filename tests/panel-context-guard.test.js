@@ -5,7 +5,7 @@ const {
   capturePanelContext,
   isCurrentPanelContext,
   guardPanelMutation
-} = require('../core/panel-context-guard.js');
+} = require('../extension/core/panel-context-guard.js');
 
 function context(tabId, key, sequence) {
   return { tabId, key, tabContextSequence: sequence, activated: true };

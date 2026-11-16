@@ -9,7 +9,7 @@ const {
   buildZoteroChatNoteHtml,
   serializeMechanismGraphExport,
   parseMechanismGraphExport
-} = require('../core/export-bundle.js');
+} = require('../extension/core/export-bundle.js');
 
 test('graph serialization accepts only the export DTO and contains zero provenance fields', () => {
   const dto = {
@@ -206,7 +206,7 @@ test('Zotero exports Figure interpretation and full-text Q&A as separate child n
 });
 
 test('Figure exports include safe recovery provenance and unresolved state only', () => {
-  const { buildFigureMarkdown } = require('../core/export-bundle.js');
+  const { buildFigureMarkdown } = require('../extension/core/export-bundle.js');
   const markdown = buildFigureMarkdown({
     figureId: 'figure-1', figureLabel: 'Figure 1', panelHints: ['A', 'B'],
     inputMode: 'caption_context', unresolvedPanels: ['B'],

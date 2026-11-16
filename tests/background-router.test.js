@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 test('Figure cancelled before provider admission acknowledges a later release across worker restart', async () => {
   const storageArea=createMemoryStorage(),sessionStorageArea=createMemoryStorage();
@@ -23,79 +24,79 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { webcrypto, createHash } = require('node:crypto');
 
-require('../core/category-store.js');
-require('../core/i18n.js');
-require('../core/adaptive-catalog.js');
-require('../core/study-profile.js');
-require('../core/confidence-policy.js');
-require('../core/settings-store.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/provider-probes.js');
-require('../core/chunker.js');
-require('../core/result-validator.js');
-require('../core/semantic-find.js');
-require('../core/evidence-ledger.js');
-require('../core/figure-analysis.js');
-require('../core/figure-panel-planner.js');
-require('../core/figure-panel-recovery.js');
-require('../core/supplemental-materials.js');
-require('../core/article-chat-tokenizer.js');
-require('../core/article-chat-index.js');
-require('../core/article-chat-retrieval.js');
-require('../core/article-chat-memory.js');
-require('../core/article-chat-citations.js');
-require('../core/article-chat-stream.js');
-require('../core/article-chat-web-sources.js');
-require('../core/article-chat.js');
-require('../core/research-evidence.js');
-require('../core/research-logic-pipeline.js');
-require('../core/reading-tools.js');
-require('../core/selection-ai.js');
-require('../core/panel-ledger.js');
-require('../core/cross-figure-logic.js');
-require('../core/review-outline.js');
-require('../core/abbreviation-extractor.js');
-require('../core/cache-planner.js');
-require('../core/privacy-sanitizer.js');
-require('../core/article-workspace.js');
-require('../core/article-workspace-save.js');
-require('../core/pdf-workspace.js');
-const { workspaceContentFingerprint } = require('../core/article-workspace-store.js');
+require('../extension/core/category-store.js');
+require('../extension/core/i18n.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/core/study-profile.js');
+require('../extension/core/confidence-policy.js');
+require('../extension/core/settings-store.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/provider-probes.js');
+require('../extension/core/chunker.js');
+require('../extension/core/result-validator.js');
+require('../extension/core/semantic-find.js');
+require('../extension/core/evidence-ledger.js');
+require('../extension/core/figure-analysis.js');
+require('../extension/core/figure-panel-planner.js');
+require('../extension/core/figure-panel-recovery.js');
+require('../extension/core/supplemental-materials.js');
+require('../extension/core/article-chat-tokenizer.js');
+require('../extension/core/article-chat-index.js');
+require('../extension/core/article-chat-retrieval.js');
+require('../extension/core/article-chat-memory.js');
+require('../extension/core/article-chat-citations.js');
+require('../extension/core/article-chat-stream.js');
+require('../extension/core/article-chat-web-sources.js');
+require('../extension/core/article-chat.js');
+require('../extension/core/research-evidence.js');
+require('../extension/core/research-logic-pipeline.js');
+require('../extension/core/reading-tools.js');
+require('../extension/core/selection-ai.js');
+require('../extension/core/panel-ledger.js');
+require('../extension/core/cross-figure-logic.js');
+require('../extension/core/review-outline.js');
+require('../extension/core/abbreviation-extractor.js');
+require('../extension/core/cache-planner.js');
+require('../extension/core/privacy-sanitizer.js');
+require('../extension/core/article-workspace.js');
+require('../extension/core/article-workspace-save.js');
+require('../extension/core/pdf-workspace.js');
+const { workspaceContentFingerprint } = require('../extension/core/article-workspace-store.js');
 const {
   createFigureWorkspaceDraft,
   initializeFigureWorkspaceDraftState
-} = require('../core/figure-workspace.js');
+} = require('../extension/core/figure-workspace.js');
 const {
   articleArchiveRelativePath,
   createArticleArchive
-} = require('../core/article-archive.js');
+} = require('../extension/core/article-archive.js');
 const {
   createMemorySyncQueue,
   createDirectorySync
-} = require('../core/directory-sync.js');
-require('../core/migration-bundle.js');
-require('../core/analysis-pipeline.js');
-require('../core/analysis-cache.js');
-require('../core/review-outline-pipeline.js');
-require('../core/corpus-store.js');
-require('../core/pdf-annotations.js');
-require('../core/manual-annotations.js');
-const { createMemoryDocumentStore } = require('../core/document-store.js');
-require('../providers/openai.js');
-require('../providers/anthropic.js');
-require('../providers/gemini.js');
-require('../providers/deepseek.js');
-require('../providers/codex-local.js');
-require('../providers/openai-compatible.js');
-require('../providers/provider-registry.js');
-require('../core/provider-model-discovery.js');
-require('../core/task-profile-router.js');
-require('../core/token-budget.js');
-require('../core/article-chat-context-planner.js');
-require('../core/operation-control.js');
-require('../core/mechanism-operation-coordinator.js');
-require('../core/evidence-first-mechanism.js');
+} = require('../extension/core/directory-sync.js');
+require('../extension/core/migration-bundle.js');
+require('../extension/core/analysis-pipeline.js');
+require('../extension/core/analysis-cache.js');
+require('../extension/core/review-outline-pipeline.js');
+require('../extension/core/corpus-store.js');
+require('../extension/core/pdf-annotations.js');
+require('../extension/core/manual-annotations.js');
+const { createMemoryDocumentStore } = require('../extension/core/document-store.js');
+require('../extension/providers/openai.js');
+require('../extension/providers/anthropic.js');
+require('../extension/providers/gemini.js');
+require('../extension/providers/deepseek.js');
+require('../extension/providers/codex-local.js');
+require('../extension/providers/openai-compatible.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/core/provider-model-discovery.js');
+require('../extension/core/task-profile-router.js');
+require('../extension/core/token-budget.js');
+require('../extension/core/article-chat-context-planner.js');
+require('../extension/core/operation-control.js');
+require('../extension/core/mechanism-operation-coordinator.js');
+require('../extension/core/evidence-first-mechanism.js');
 const {
   createBackgroundRouter,
   createPortableConfigStorageChangeListener,
@@ -107,7 +108,7 @@ const {
   deriveFigureProviderAttemptBudget,
   createFigureProviderAttemptLedger,
   createMechanismBrowserSessionIdentityProvider
-} = require('../core/background-router.js');
+} = require('../extension/core/background-router.js');
 const { validBlueprint } = require('./helpers/adaptive-fixtures.js');
 
 // Offline UI choice fixture. This supplies the real modern owner/receipt and
@@ -159,7 +160,7 @@ const EXPECTED_LLM_TASK_DISPATCH = Object.freeze([
 ]);
 
 function contentFunctionSource(name) {
-  const script = readFileSync(join(__dirname, '..', 'content.js'), 'utf8');
+  const script = readFileSync(projectFile('content.js'), 'utf8');
   let start = script.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} must be defined in content.js`);
   if (script.slice(Math.max(0, start - 6), start) === 'async ') start -= 6;
@@ -658,7 +659,7 @@ test('split Figure routes carry exact Panel admission pixels into a DeepSeek vis
 
 test('background task adapters resolve policy, token rules, telemetry, and cache identity', () => {
   const source = readFileSync(
-    join(__dirname, '..', 'core', 'background-router.js'), 'utf8'
+    projectFile('core', 'background-router.js'), 'utf8'
   );
   for (const taskId of globalThis.SciLLM.LLM_TASK_IDS) {
     assert.match(source, new RegExp(`['"]${taskId}['"]`), taskId);
@@ -1039,7 +1040,7 @@ async function selectStudyType(router, document, studyType = 'observational') {
 }
 
 test('registers only the one-type study selection message in the service worker', () => {
-  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  const source = readFileSync(projectFile('background.js'), 'utf8');
   assert.match(source, /'LLM_SET_STUDY_TYPE'/);
   assert.doesNotMatch(source, /'LLM_SAVE_STUDY_TYPE_OVERRIDE'/);
   ['CATEGORY_GET', 'CATEGORY_SAVE_OVERRIDE', 'CATEGORY_APPEND_FIXED_PHRASE',
@@ -4169,12 +4170,12 @@ test('native PDF single-Panel interpretation and follow-up validate before recei
 });
 
 test('native PDF follow-up keeps a ranked fifth paragraph through prompt validation and cache', async () => {
-  require('../core/sentence-boundary.js');
-  require('../core/pdf-figure-context.js');
-  const { buildPdfSemanticIndex } = require('../core/pdf-semantic-index.js');
-  const { createPdfSemanticCompatibilityAdapter } = require('../core/pdf-semantic-compat.js');
+  require('../extension/core/sentence-boundary.js');
+  require('../extension/core/pdf-figure-context.js');
+  const { buildPdfSemanticIndex } = require('../extension/core/pdf-semantic-index.js');
+  const { createPdfSemanticCompatibilityAdapter } = require('../extension/core/pdf-semantic-compat.js');
   const { createPdfFigureContextProductionAdapter } =
-    require('../core/pdf-figure-context-production.js');
+    require('../extension/core/pdf-figure-context-production.js');
   const documentHash = createHash('sha256')
     .update('ranked-fifth-pdf-panel-source').digest('hex');
   const binding = { documentHash, documentGeneration: 4, semanticRevision: 8 };
@@ -15407,7 +15408,7 @@ function closedTabSupplementalDraft({ mode = 'caption', fingerprint = '6' } = {}
 }
 
 test('closed-tab manual drafts use the shared positional save and image contract', () => {
-  const source = readFileSync(join(__dirname, '..', 'core', 'background-router.js'), 'utf8');
+  const source = readFileSync(projectFile('core', 'background-router.js'), 'utf8');
   const start = source.indexOf('async function saveClosedTabSupplementalDraft');
   const end = source.indexOf('function publicStoredArticleChatTurn', start);
   const route = source.slice(start, end);
@@ -16917,14 +16918,14 @@ test('scan imports a legacy archive into a workspace without deleting the legacy
     })
   });
   // This acceptance now exercises the real restore-only atomic API.
-  require('../core/user-data-database.js');
+  require('../extension/core/user-data-database.js');
   const fakeSource = readFileSync(join(__dirname, 'article-workspace-store.test.js'), 'utf8');
   const fakeStart = fakeSource.indexOf('function createFakeIndexedDb(');
   const fakeEnd = fakeSource.indexOf('\nfunction workspace(', fakeStart);
   const makeFake = Function(fakeSource.slice(fakeStart, fakeEnd) + '\nreturn createFakeIndexedDb;')();
-  const workspaceStore = require('../core/article-workspace-store.js')
+  const workspaceStore = require('../extension/core/article-workspace-store.js')
     .createIndexedDbArticleWorkspaceStore(makeFake().indexedDb);
-  const converted = await require('../core/article-archive.js').convertLegacyArticleArchiveToWorkspace(archive);
+  const converted = await require('../extension/core/article-archive.js').convertLegacyArticleArchiveToWorkspace(archive);
   const liveIdentity = { ...converted.workspace, documentId: archive.documentId,
     contentHash: liveContentHash, revision: liveContentHash };
   const router = createBackgroundRouter({
@@ -21205,7 +21206,7 @@ test('paragraph-only review rejects body paragraphs outside its explicit scope',
 });
 
 test('wires durable directory sync and all four user-data routes without requesting permission', () => {
-  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  const source = readFileSync(projectFile('background.js'), 'utf8');
   assert.match(source, /core\/directory-sync\.js/);
   assert.match(source, /createIndexedDbDirectoryHandleStore\(indexedDB\)/);
   assert.match(source, /createIndexedDbSyncQueue\(indexedDB\)/);
@@ -21724,7 +21725,7 @@ test('portable status getter failures are converted to fixed safe errors', async
 });
 
 test('background wires portable manager before its router and schedules only local portable keys', () => {
-  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  const source = readFileSync(projectFile('background.js'), 'utf8');
   for (const type of [
     'PORTABLE_CONFIG_PROBE', 'PORTABLE_CONFIG_CREATE', 'PORTABLE_CONFIG_UNLOCK',
     'PORTABLE_CONFIG_ROTATE_PASSPHRASE', 'PORTABLE_CONFIG_FORGET_KEY',
@@ -22306,7 +22307,7 @@ test('literature-note mutation trusts extension-owned pages only, never content 
     assert.equal(rejected.success, false, JSON.stringify(context));
     assert.equal(rejected.error.code, 'LITERATURE_NOTE_SENDER_INVALID');
   }
-  const source = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  const source = readFileSync(projectFile('background.js'), 'utf8');
   assert.match(source, /senderUrl:\s*String\(sender\?\.url\s*\|\|\s*''\)/,
     'the browser-authenticated sender URL, not sender.tab.url, must define page ownership');
 });

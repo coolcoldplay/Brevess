@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {chromium}=require('playwright');
-const helper=process.env.R33_CAPTION_HELPER||path.resolve(__dirname,'../core/faithful-page-snapshot.js');
+const helper=process.env.R33_CAPTION_HELPER||path.resolve(__dirname,'../extension/core/faithful-page-snapshot.js');
 const sha=value=>crypto.createHash('sha256').update(value).digest('hex');
 const helperSha=sha(fs.readFileSync(helper));
 test.before(()=>console.log('Caption disclosure boundary helper SHA256: '+helperSha));

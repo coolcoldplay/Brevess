@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 #!/usr/bin/env node
 
 import fs from 'node:fs';
@@ -5,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const dataDir = path.join(root, 'benchmarks', 'checkpoint2');
+const dataDir = projectFile('benchmarks', 'checkpoint2');
 const human = JSON.parse(fs.readFileSync(path.join(dataDir, 'human-review-queue.json'), 'utf8'));
 const figures = JSON.parse(fs.readFileSync(path.join(dataDir, 'figure-review-queue.json'), 'utf8'));
 if (human.items.some(item => item.split === 'locked_test') ||
@@ -13,8 +14,8 @@ if (human.items.some(item => item.split === 'locked_test') ||
   throw new Error('Review tools must not expose locked_test items');
 }
 
-const humanPath = path.join(root, 'Checkpoint2_Human_Review_Queue.html');
-const figurePath = path.join(root, 'Checkpoint2_Figure_Review_Queue.html');
+const humanPath = projectFile('Checkpoint2_Human_Review_Queue.html');
+const figurePath = projectFile('Checkpoint2_Figure_Review_Queue.html');
 fs.writeFileSync(humanPath, humanHtml(human), 'utf8');
 fs.writeFileSync(figurePath, figureHtml(figures), 'utf8');
 for (const name of [
@@ -23,9 +24,9 @@ for (const name of [
   'Checkpoint2_Conflict_Analysis.csv'
 ]) {
   const source = path.join(dataDir, name);
-  if (fs.existsSync(source)) fs.copyFileSync(source, path.join(root, name));
+  if (fs.existsSync(source)) fs.copyFileSync(source, projectFile(name));
 }
-const testResults = path.join(root, 'Checkpoint2_Test_Results.txt');
+const testResults = projectFile('Checkpoint2_Test_Results.txt');
 if (fs.existsSync(testResults)) {
   fs.copyFileSync(testResults, path.join(dataDir, 'Checkpoint2_Test_Results.txt'));
 }

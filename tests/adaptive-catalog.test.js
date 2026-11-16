@@ -1,13 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
+require('../extension/core/category-store.js');
 const {
   STUDY_TYPES,
   READING_VIEWS,
   createAdaptiveCategoryCatalog,
   composeReadingView
-} = require('../core/adaptive-catalog.js');
+} = require('../extension/core/adaptive-catalog.js');
 
 test('defines nine study types and four reading views', () => {
   assert.deepEqual(Object.keys(STUDY_TYPES), [

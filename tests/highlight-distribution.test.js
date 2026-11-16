@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   HIGHLIGHT_DISTRIBUTION_VERSION,
   buildHighlightDistribution
-} = require('../core/highlight-distribution.js');
+} = require('../extension/core/highlight-distribution.js');
 
 const structure = {
   nodes: [{

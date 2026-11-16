@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -17,13 +18,13 @@ test('Chrome ZIP preserves file bytes and Unicode paths deterministically and re
 });
 test('Chrome staging keeps source manifest untouched and includes every runtime dependency', () => {
   const root = path.join(__dirname, '..');
-  const source = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
+  const source = JSON.parse(fs.readFileSync(projectFile('manifest.json')));
   const staged = api.storeManifest(source);
   assert.ok(source.key); assert.equal(staged.key, undefined);
   assert.equal(staged.version, source.version);
   assert.deepEqual(staged.permissions, source.permissions);
   assert.ok(staged.host_permissions.includes('https://*/*'));
-  const files = new Map(api.chromeFiles(root).map(f => [f.path, fs.readFileSync(path.join(root, f.path))]));
+  const files = new Map(api.chromeFiles(root).map(f => [f.path, fs.readFileSync(projectFile(f.path))]));
   files.set('manifest.json', Buffer.from(JSON.stringify(staged)));
   assert.equal(files.has('mcp/server.js'), false);
   assert.equal(files.has('mcp/extension/workbench-mcp-bridge.js'), true);

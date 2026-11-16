@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
-const {createBridge,endpoint}=require('../../core/sharing-background.js');
+const {createBridge,endpoint}=require('../../extension/core/sharing-background.js');
 function setup(){const state={};const calls=[];const storage={async get(k){return {[k]:structuredClone(state[k])};},async set(v){Object.assign(state,structuredClone(v));}};const api={runtime:{id:'test-id',getURL:p=>'chrome-extension://test-id/'+p.replace(/^\//,'')},storage:{session:storage,local:storage}};const bridge=createBridge({chromeApi:api,fetchImpl:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>url.endsWith('/login')?{token:'secret-token',user:{id:'alice'},expiresAt:9999}:{resources:[]}};}});return {state,calls,bridge};}
 const extension={id:'test-id',url:'chrome-extension://test-id/sharing/index.html'};
 const content={id:'test-id',url:'https://publisher.example/article',frameId:0};

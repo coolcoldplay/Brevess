@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
-const source=process.env.SHARING_QA_SOURCE?path.resolve(process.env.SHARING_QA_SOURCE):path.resolve(__dirname,'../..');
+const source=process.env.SHARING_QA_SOURCE?path.resolve(process.env.SHARING_QA_SOURCE):path.resolve(__dirname,'../../extension');
 const {normalizePageToolsSettings,createPageToolsService,PAGE_TOOLS_STORAGE_KEY}=require(path.join(source,'core/page-tools.js'));
 test('fresh, absent and invalid selection preferences default to enabled',()=>{for(const value of [undefined,null,{}, {semantic:false},{selection:null},{selection:'false'}])assert.equal(normalizePageToolsSettings(value).selection,true);});
 test('explicit false and unrelated saved preferences survive normalization roundtrip',()=>{const settings={semantic:false,selection:false,pageTranslation:false};assert.deepEqual(normalizePageToolsSettings(JSON.parse(JSON.stringify(settings))),settings);});

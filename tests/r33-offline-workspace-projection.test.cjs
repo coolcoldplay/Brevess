@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const api=require('../core/offline-article-workspace.js');
+const api=require('../extension/core/offline-article-workspace.js');
 const W='workspace:'+'a'.repeat(64),base='chrome-extension://'+'a'.repeat(32)+'/',url=base+'offline-reader.html?workspaceId='+encodeURIComponent(W)+'&generation=2';
 function setup(){
  const workspace={workspaceId:W,workspaceGeneration:2,canonicalUrl:'https://journal.test/paper',title:'Saved paper',contentHash:'body-hash',storageRevision:4};
@@ -98,7 +98,7 @@ test('empty optional modules remain readable and historical running flags never 
 });
 
 function actualLegacyArchive(){
- return require('../core/article-archive.js').createArticleArchive({
+ return require('../extension/core/article-archive.js').createArticleArchive({
   identity:{documentId:'sha256:'+'b'.repeat(64),documentHash:'legacy-source',canonicalUrl:'https://journal.test/legacy'},
   documentRecord:{documentId:'sha256:'+'b'.repeat(64),documentHash:'legacy-source',annotations:[]},
   workspace:{llm:{paragraphs:[{paragraphId:'old-p1',text:'Exact archived source.'}]},

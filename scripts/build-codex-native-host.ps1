@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$hostRoot = Join-Path $projectRoot 'native-host'
+$hostRoot = Join-Path $projectRoot 'extension/native-host'
 $binRoot = Join-Path $hostRoot 'bin'
 $blobPath = Join-Path $binRoot 'brevess-codex-host.blob'
 $executablePath = Join-Path $binRoot 'brevess-codex-host.exe'
@@ -21,7 +21,7 @@ if (-not $SkipPdfEngine) {
   if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the bundled Java runtime.' }
 }
 
-Push-Location $projectRoot
+Push-Location (Join-Path $projectRoot 'extension')
 try {
   node --experimental-sea-config native-host/sea-config.json
   if ($LASTEXITCODE -ne 0) { throw 'Unable to create the Node SEA blob.' }

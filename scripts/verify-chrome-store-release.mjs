@@ -24,11 +24,12 @@ if (metadata.sourceArtifact) {
   if (bytes.length !== artifact.bytes || sha256(bytes) !== artifact.sha256) throw new Error('Source archive hash mismatch');
   const source = readZip(bytes);
   if (source.size !== artifact.files) throw new Error('Source archive file count mismatch');
+  const prefix = artifact.extensionDirectory === 'extension' ? 'extension/' : '';
   for (const [name, contents] of files) {
     if (name === 'manifest.json') {
-      if (JSON.stringify(storeManifest(JSON.parse(source.get(name)))) !== JSON.stringify(audit.manifest))
+      if (JSON.stringify(storeManifest(JSON.parse(source.get(prefix + name)))) !== JSON.stringify(audit.manifest))
         throw new Error('Source manifest does not produce store manifest');
-    } else if (!source.get(name)?.equals(contents)) throw new Error(`Source differs from package: ${name}`);
+    } else if (!source.get(prefix + name)?.equals(contents)) throw new Error(`Source differs from package: ${name}`);
   }
 }
 if (audit.manifest.version !== metadata.version) throw new Error('Version mismatch');

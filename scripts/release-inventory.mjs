@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { sourceRelative } from './project-paths.cjs';
 
 const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const RELEASE_INVENTORY = Object.freeze(JSON.parse(fs.readFileSync(
@@ -38,7 +39,7 @@ export function releaseInventory(rootDir = DEFAULT_ROOT, profile = 'full', spec 
     ...(native ? spec.nativeHostDirectories : [])
   ];
   const verify = name => {
-    const rel = safeRelative(name);
+    const rel = safeRelative(sourceRelative(safeRelative(name), spec.sourceLayout || {}));
     let file = root;
     for (const segment of rel.split('/')) {
       file = path.join(file, segment);
@@ -60,7 +61,7 @@ export function releaseInventory(rootDir = DEFAULT_ROOT, profile = 'full', spec 
     const absolute = verify(source), stat = fs.statSync(absolute);
     if (!stat.isFile()) throw new Error(`RELEASE_FILE_REQUIRED:${source}`);
     const destination = profile === 'companion' ? source.replace(/^native-host\//, '') : source;
-    return {source, path:destination, bytes:stat.size};
+    return {source:sourceRelative(source, spec.sourceLayout || {}), path:destination, bytes:stat.size};
   });
 }
 

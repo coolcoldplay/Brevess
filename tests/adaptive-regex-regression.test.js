@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 
 const {
   validateUnifiedCategory
-} = require('../core/category-store.js');
+} = require('../extension/core/category-store.js');
 const {
   createAdaptiveCategoryCatalog,
   createUnifiedCategoryCatalog
-} = require('../core/adaptive-catalog.js');
+} = require('../extension/core/adaptive-catalog.js');
 
 const catalog = createUnifiedCategoryCatalog();
 const adaptiveCategoryIds = Object.keys(createAdaptiveCategoryCatalog())

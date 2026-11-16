@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {createRuntimeWorkbenchBridge,installRuntimeWorkbenchOwnerReceiver}=require('../core/runtime-workbench-bridge.js');
+const {createRuntimeWorkbenchBridge,installRuntimeWorkbenchOwnerReceiver}=require('../extension/core/runtime-workbench-bridge.js');
 function setup({embedded=false,otherFirst=false,changeContext=false,fragment='',contextFragment=fragment}={}){
  const id='test-extension', origin='chrome-extension://'+id, url=origin+'/workbench/index.html'+fragment;
  const sender={id,url,origin,documentId:'child',documentLifecycle:'active'};
@@ -28,7 +28,7 @@ test('designated options iframe authorizes and unrelated document proofs are ign
  const f=setup({embedded:true,otherFirst:true});await f.bridge.authorize(f.sender);assert.equal(f.background.size,0);
 });
 test('actual library entry URL authorizes in both full-page and embedded workbenches',async()=>{
- const html=require('node:fs').readFileSync(require('node:path').join(__dirname,'../options.html'),'utf8');
+ const html=require('node:fs').readFileSync(require('node:path').join(__dirname,'../extension/options.html'),'utf8');
  const path=html.match(/data-workbench-src="([^"]+)"/)[1];
  assert.equal(path,'workbench/index.html#library');
  for(const embedded of [false,true]){

@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../providers/provider-utils.js');
-const web = require('../core/article-chat-web-sources.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
+require('../extension/providers/provider-utils.js');
+const web = require('../extension/core/article-chat-web-sources.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
 
 const searchEndpoint = 'https://api.deepseek.com/v1/tools/search';
 const chatEndpoint = 'https://api.deepseek.com/chat/completions';

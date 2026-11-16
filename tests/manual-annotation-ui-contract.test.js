@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -5,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 
-const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+const read = file => fs.readFileSync(projectFile(file), 'utf8');
 
 test('manual and rule highlights share hover details and the category-note editor', () => {
   const script = read('content.js');
@@ -40,7 +41,7 @@ function plain(value) {
 }
 
 test('manifest loads manual annotation anchors before the content script', () => {
-  const { CONTENT_SCRIPT_FILES: scripts } = require('../core/tab-messenger.js');
+  const { CONTENT_SCRIPT_FILES: scripts } = require('../extension/core/tab-messenger.js');
   const manualIndex = scripts.indexOf('core/manual-annotations.js');
   const contentIndex = scripts.indexOf('content.js');
   assert.ok(manualIndex >= 0, 'manual annotation helpers should be registered');
@@ -48,7 +49,7 @@ test('manifest loads manual annotation anchors before the content script', () =>
 });
 
 test('dynamic content injection loads the PDF mutation guard exactly once before manual annotations', () => {
-  const { CONTENT_SCRIPT_FILES: scripts } = require('../core/tab-messenger.js');
+  const { CONTENT_SCRIPT_FILES: scripts } = require('../extension/core/tab-messenger.js');
   const pdfHelper = 'core/pdf-annotations.js';
   const pdfIndexes = scripts.flatMap((file, index) => file === pdfHelper ? [index] : []);
   const manualIndex = scripts.indexOf('core/manual-annotations.js');
@@ -544,7 +545,7 @@ test('an old verified event cannot supersede an in-flight new-epoch proof', asyn
   const start = popup.indexOf('function applyManualAnnotationStateEvent');
   const end = popup.indexOf('async function clearAutomaticHighlightsFromCurrentTab', start);
   const source = popup.slice(start, end);
-  const manualCore = require('../core/manual-annotations.js');
+  const manualCore = require('../extension/core/manual-annotations.js');
   let releaseFirst;
   const firstPending = new Promise(resolve => { releaseFirst = resolve; });
   const oldProof = {
@@ -620,7 +621,7 @@ test('an exact event after live proof retains its newer counts through final tab
   const start = popup.indexOf('function applyManualAnnotationStateEvent');
   const end = popup.indexOf('async function clearAutomaticHighlightsFromCurrentTab', start);
   const source = popup.slice(start, end);
-  const manualCore = require('../core/manual-annotations.js');
+  const manualCore = require('../extension/core/manual-annotations.js');
   let releaseFinalTab;
   const finalTabPending = new Promise(resolve => { releaseFinalTab = resolve; });
   const proof = {

@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const api=require('../core/offline-article-workspace.js'),publicApi=require('../core/background-router.js');
-const source=fs.readFileSync(require.resolve('../background.js'),'utf8'),id='a'.repeat(32),W='workspace:'+'a'.repeat(64),base=`chrome-extension://${id}/`,reader=base+'offline-reader.html?workspaceId='+encodeURIComponent(W)+'&generation=2';
+const api=require('../extension/core/offline-article-workspace.js'),publicApi=require('../extension/core/background-router.js');
+const source=fs.readFileSync(require.resolve('../extension/background.js'),'utf8'),id='a'.repeat(32),W='workspace:'+'a'.repeat(64),base=`chrome-extension://${id}/`,reader=base+'offline-reader.html?workspaceId='+encodeURIComponent(W)+'&generation=2';
 function fn(name){const start=source.indexOf('function '+name+'('),asyncStart=source.lastIndexOf('async ',start);const end=source.indexOf('\n}',start);assert.ok(start>=0&&end>start);return source.slice(asyncStart===start-6?asyncStart:start,end+2);}
 function fixture({changedTab=false,readGeneration=2,currentTabUrl=null,tabUnavailable=false}={}){
  let tabReads=0,assetReads=0,mutations=0,routerCalls=0;

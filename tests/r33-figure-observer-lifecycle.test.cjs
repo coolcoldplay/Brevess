@@ -4,9 +4,9 @@
 // the independent native trace establishes the real observer/prepare chain.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const {functionSource}=require('./helpers/r28-full07-source.js');
-const source=fs.readFileSync(require.resolve('../content.js'),'utf8');
-const operationApi=require('../core/operation-control.js');
-const leaseApi=require('../core/figure-source-lease.js');
+const source=fs.readFileSync(require.resolve('../extension/content.js'),'utf8');
+const operationApi=require('../extension/core/operation-control.js');
+const leaseApi=require('../extension/core/figure-source-lease.js');
 const url='https://qa.test/owned-paper',W='workspace:'+'a'.repeat(64);
 const clone=value=>JSON.parse(JSON.stringify(value));
 function readFixture({active=true,cancelled=false,navigationChanged=false,changed=true}={}){
@@ -16,7 +16,7 @@ function readFixture({active=true,cancelled=false,navigationChanged=false,change
   sourceReadLease:{operationId:'figure-owned-op',epoch:4,structureSequence:0,contentDocumentIdentity:'world-a',navigationIdentity:url,workspaceLifecycle:1,documentId:oldManual.documentId,documentHash:oldSnapshot.documentHash,sourceOwnerIdentity:JSON.stringify([url,'']),workspaceId:W,workspaceGeneration:1,workspaceContentHash:oldSnapshot.localWorkspace.contentHash,snapshot:clone(oldSnapshot),manualDocument:oldManual,
    canonicalSnapshot:{documentHash:oldSnapshot.documentHash,revision:1,url,paragraphs:clone(oldSnapshot.paragraphs),typedRecords:clone(oldSnapshot.paragraphs),structure:{paragraphs:clone(oldSnapshot.paragraphs),nodes:clone(oldSnapshot.nodes)}}}};
  const calls={prepareFresh:0,extract:0,inventory:0,populate:0,invalidations:0};
- const h={URL,Number,Object,Boolean,String,Promise,Error,Map,Set,JSON,SciLLM:{...require('../core/article-workspace.js'),...leaseApi},articleWorkspaceMetadata:()=>({canonicalUrl:url,doi:''}),document:{},figureSourceLeaseAuthorities:new WeakMap(),articleSourceRefreshDeferred:null,
+ const h={URL,Number,Object,Boolean,String,Promise,Error,Map,Set,JSON,SciLLM:{...require('../extension/core/article-workspace.js'),...leaseApi},articleWorkspaceMetadata:()=>({canonicalUrl:url,doi:''}),document:{},figureSourceLeaseAuthorities:new WeakMap(),articleSourceRefreshDeferred:null,
   currentManualDocument:oldManual,currentManualBlocks:[{element:{isConnected:true}}],manualPreparedHref:url,manualPreparedContentSequence:0,manualDocumentEpochState:{lifecycleGeneration:1},manualPreparePromise:null,
   articleStructureChangeSequence:changed?1:0,articleWorkspaceLifecycleGeneration:1,articleStructureWaiting:false,articleExtractionCache:{old:true},figureWorkspaceInventoryEpoch:1,figureWorkspaceInventorySeedPromise:Promise.resolve(),
   figureOperationState:{active:active?operation:null,last:operation},contentDocumentIdentity:'world-a',currentArticleWorkspace:oldSnapshot.localWorkspace,

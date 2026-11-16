@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -7,7 +8,7 @@ const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
 function read(file) {
-  return fs.readFileSync(path.join(root, file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 function sliceFunctions(script, startName, endName) {
@@ -319,7 +320,7 @@ test('routed background work repairs browser-authoritative document changes befo
     let providerCalls = 0;
     const context = {
       Promise,
-      BrevessRadar: require('../core/literature-radar-ai.js'),
+      BrevessRadar: require('../extension/core/literature-radar-ai.js'),
       chrome: {
         runtime: { id: 'runtime-id', getURL: value => `chrome-extension://runtime-id/${value}` },
         webNavigation: {

@@ -1,10 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/chunker.js');
-require('../core/review-outline.js');
-const { analyzeReviewOutline } = require('../core/review-outline-pipeline.js');
-const { buildReviewOutlineCacheKey } = require('../core/cache-planner.js');
+require('../extension/core/chunker.js');
+require('../extension/core/review-outline.js');
+const { analyzeReviewOutline } = require('../extension/core/review-outline-pipeline.js');
+const { buildReviewOutlineCacheKey } = require('../extension/core/cache-planner.js');
 
 function outlineParagraphs(count) {
   return Array.from({ length: count }, (_, index) => ({

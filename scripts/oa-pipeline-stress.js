@@ -1,13 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/chunker.js');
-require('../core/result-validator.js');
-require('../core/analysis-pipeline.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/chunker.js');
+require('../extension/core/result-validator.js');
+require('../extension/core/analysis-pipeline.js');
 const { OA_PAPER_BENCHMARK } = require('../tests/helpers/oa-paper-benchmark.js');
 
 const shared = globalThis.SciLLM;

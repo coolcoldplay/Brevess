@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
@@ -12,39 +13,39 @@ const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/figure-panel-planner.js');
-require('../core/figure-analysis.js');
-require('../core/article-chat-tokenizer.js');
-require('../core/article-chat-index.js');
-require('../core/article-chat-retrieval.js');
-require('../core/article-chat-memory.js');
-require('../core/article-chat-citations.js');
-require('../core/token-budget.js');
-require('../providers/provider-registry.js');
-require('../core/article-chat-context-planner.js');
-require('../core/article-chat-stream.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/figure-panel-planner.js');
+require('../extension/core/figure-analysis.js');
+require('../extension/core/article-chat-tokenizer.js');
+require('../extension/core/article-chat-index.js');
+require('../extension/core/article-chat-retrieval.js');
+require('../extension/core/article-chat-memory.js');
+require('../extension/core/article-chat-citations.js');
+require('../extension/core/token-budget.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/core/article-chat-context-planner.js');
+require('../extension/core/article-chat-stream.js');
 
-const categoriesApi = require('../core/category-store.js');
-const adaptive = require('../core/adaptive-catalog.js');
-const prompts = require('../core/prompt-compiler.js');
-const study = require('../core/study-profile.js');
-const ledger = require('../core/evidence-ledger.js');
-const figure = require('../core/figure-analysis.js');
-const crossFigure = require('../core/cross-figure-logic.js');
-const review = require('../core/review-outline.js');
-const articleChat = require('../core/article-chat.js');
-const abbreviation = require('../core/abbreviation-extractor.js');
-const exportBundle = require('../core/export-bundle.js');
-const analysisCache = require('../core/analysis-cache.js');
-const tokenBudget = require('../core/token-budget.js');
-const tokenUsage = require('../core/token-usage-store.js');
-const settings = require('../core/settings-store.js');
+const categoriesApi = require('../extension/core/category-store.js');
+const adaptive = require('../extension/core/adaptive-catalog.js');
+const prompts = require('../extension/core/prompt-compiler.js');
+const study = require('../extension/core/study-profile.js');
+const ledger = require('../extension/core/evidence-ledger.js');
+const figure = require('../extension/core/figure-analysis.js');
+const crossFigure = require('../extension/core/cross-figure-logic.js');
+const review = require('../extension/core/review-outline.js');
+const articleChat = require('../extension/core/article-chat.js');
+const abbreviation = require('../extension/core/abbreviation-extractor.js');
+const exportBundle = require('../extension/core/export-bundle.js');
+const analysisCache = require('../extension/core/analysis-cache.js');
+const tokenBudget = require('../extension/core/token-budget.js');
+const tokenUsage = require('../extension/core/token-usage-store.js');
+const settings = require('../extension/core/settings-store.js');
 
-const outDir = path.join(root, 'benchmarks', 'baseline');
+const outDir = projectFile('benchmarks', 'baseline');
 fs.mkdirSync(outDir, { recursive: true });
 const forceNewBaseline = process.argv.includes('--force-new-baseline');
 const verifyOnly = process.argv.includes('--verify');
@@ -78,7 +79,7 @@ function writeJson(name, value) {
 }
 
 function fileHash(file) {
-  return sha(fs.readFileSync(path.join(root, file)));
+  return sha(fs.readFileSync(projectFile(file)));
 }
 
 function verifyExistingBaseline() {
@@ -389,7 +390,7 @@ const categoryManifest = {
   typePromptGuidance: adaptive.TYPE_PROMPT_GUIDANCE
 };
 
-const regexReportPath = path.join(root, 'output', 'zotero-mineru-regex', 'benchmark-latest.json');
+const regexReportPath = projectFile('output', 'zotero-mineru-regex', 'benchmark-latest.json');
 let regexSummary = { available: false };
 if (fs.existsSync(regexReportPath)) {
   const report = JSON.parse(fs.readFileSync(regexReportPath, 'utf8'));

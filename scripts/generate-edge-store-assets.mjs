@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,9 +6,9 @@ import { chromium } from 'playwright';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, '..');
-const output = path.join(root, 'docs', 'edge-store', 'assets');
+const output = projectFile('docs', 'edge-store', 'assets');
 fs.mkdirSync(output, { recursive: true });
-const logo = fs.readFileSync(path.join(root, 'icons', 'Brevess-logo.png')).toString('base64');
+const logo = fs.readFileSync(projectFile('icons', 'Brevess-logo.png')).toString('base64');
 const logoUrl = `data:image/png;base64,${logo}`;
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true });

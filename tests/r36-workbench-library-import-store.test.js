@@ -3,8 +3,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { fixture } = require('./r28-workbench-idb-fixture.js');
-const { createLibraryImportStore, DATABASE_NAME, DATABASE_VERSION, STORE_NAME } = require('../workbench/library-import-store.js');
-const transfer = require('../workbench/global-library-transfer.js');
+const { createLibraryImportStore, DATABASE_NAME, DATABASE_VERSION, STORE_NAME } = require('../extension/workbench/library-import-store.js');
+const transfer = require('../extension/workbench/global-library-transfer.js');
 
 test('persistent imported-library directory survives reopen and remains isolated from local/radar stores', async () => {
   const indexed = fixture();

@@ -12,7 +12,7 @@ const {
   extractFigureImageCandidatesFromHtml,
   collectFigureImageSources,
   selectFigureImageSource
-} = require('../core/figure-viewer.js');
+} = require('../extension/core/figure-viewer.js');
 
 function fakeImage(attributes = {}, currentSrc = '', anchorHref = '') {
   return {

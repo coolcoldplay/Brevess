@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -5,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 function functionSource(script, name) {
@@ -274,7 +275,7 @@ test('popup carries the prepared document identity into analysis actions without
   );
   // Preserve the historical test name. Navigation now uses the independently
   // verified workspace identity that owns its scope, not the preparation alias.
-  const guard = require('../core/panel-context-guard.js');
+  const guard = require('../extension/core/panel-context-guard.js');
   for (const mutation of ['none', 'documentId', 'documentHash', 'live-proof']) {
     const snapshot = { documentId: 'canonical-A', documentHash: 'hash-A', url: 'https://paper.test/a', revision: 4,
       nodes: [{ analysisSelected: true, analysisSectionIds: ['section-A'] }] };
@@ -424,7 +425,7 @@ function loadSupplementalFigureImportTools(overrides = {}) {
   const factory = new Function(
     `${script.slice(start, end)}\nreturn createSupplementalFigureImportTools;`
   )();
-  const shared = require('../core/supplemental-materials.js');
+  const shared = require('../extension/core/supplemental-materials.js');
   return factory({
     shared,
     cryptoApi: {

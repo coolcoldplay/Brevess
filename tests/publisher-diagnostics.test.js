@@ -2,10 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 Object.assign(globalThis.SciLLM || (globalThis.SciLLM = {}),
-  require('../core/publisher-adapters.js'));
-Object.assign(globalThis.SciLLM, require('../core/article-structure.js'));
-Object.assign(globalThis.SciLLM, require('../core/article-extractor.js'));
-const diagnosticsApi = require('../core/publisher-diagnostics.js');
+  require('../extension/core/publisher-adapters.js'));
+Object.assign(globalThis.SciLLM, require('../extension/core/article-structure.js'));
+Object.assign(globalThis.SciLLM, require('../extension/core/article-extractor.js'));
+const diagnosticsApi = require('../extension/core/publisher-diagnostics.js');
 
 function createDiagnosticDocument({
   html = '<html><body><main id="main-content" class="article-page"><h2 id="introduction">Introduction</h2><div class="Body">FULL ARTICLE PARAGRAPH</div></main></body></html>'

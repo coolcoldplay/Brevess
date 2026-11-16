@@ -7,7 +7,7 @@ const {
   normalizeArticleChatWebGroundingResponse,
   createArticleChatWebGroundingReceipt,
   normalizeArticleChatWebGroundingReceipt
-} = require('../core/article-chat-web-sources.js');
+} = require('../extension/core/article-chat-web-sources.js');
 
 test('retains only a complete final web answer as explicitly unverified when source metadata is absent or invalid', () => {
   const fixture = groundedFixture();
@@ -525,9 +525,9 @@ test('the web runner rejects an invalid final even when an adapter supplies grou
   for (const moduleName of ['article-chat-tokenizer', 'article-chat-index',
     'article-chat-retrieval', 'article-chat-memory', 'article-chat-citations',
     'token-budget', 'article-chat-context-planner', 'article-chat-stream']) {
-    require(`../core/${moduleName}.js`);
+    require(`../extension/core/${moduleName}.js`);
   }
-  const { normalizeArticleChatInput, runArticleChat } = require('../core/article-chat.js');
+  const { normalizeArticleChatInput, runArticleChat } = require('../extension/core/article-chat.js');
   const fixture = groundedFixture();
   const grounding = normalizeArticleChatWebGroundingResponse(fixture.response, {
     providerId: 'openai', model: 'gpt-5-mini'
@@ -561,9 +561,9 @@ test('QA-063 retries one grounding-missing search with an exact-URL reminder and
   for (const moduleName of ['article-chat-tokenizer', 'article-chat-index',
     'article-chat-retrieval', 'article-chat-memory', 'article-chat-citations',
     'token-budget', 'article-chat-context-planner', 'article-chat-stream']) {
-    require(`../core/${moduleName}.js`);
+    require(`../extension/core/${moduleName}.js`);
   }
-  const { normalizeArticleChatInput, runArticleChat } = require('../core/article-chat.js');
+  const { normalizeArticleChatInput, runArticleChat } = require('../extension/core/article-chat.js');
   const fixture = groundedFixture();
   const grounding = normalizeArticleChatWebGroundingResponse(fixture.response, {
     providerId: 'openai', model: 'gpt-5-mini'
@@ -612,9 +612,9 @@ test('QA-063 stops after one retry when grounding is still missing and never emi
   for (const moduleName of ['article-chat-tokenizer', 'article-chat-index',
     'article-chat-retrieval', 'article-chat-memory', 'article-chat-citations',
     'token-budget', 'article-chat-context-planner', 'article-chat-stream']) {
-    require(`../core/${moduleName}.js`);
+    require(`../extension/core/${moduleName}.js`);
   }
-  const { normalizeArticleChatInput, runArticleChat } = require('../core/article-chat.js');
+  const { normalizeArticleChatInput, runArticleChat } = require('../extension/core/article-chat.js');
   const fixture = groundedFixture();
   const input = normalizeArticleChatInput({
     question: 'What changed?', turnId: 'turn-retry-fail', operationId: 'operation-retry-fail',
@@ -649,9 +649,9 @@ test('manual web search includes the current corresponding author and paper titl
   for (const moduleName of ['article-chat-tokenizer', 'article-chat-index',
     'article-chat-retrieval', 'article-chat-memory', 'article-chat-citations',
     'token-budget', 'article-chat-context-planner', 'article-chat-stream']) {
-    require(`../core/${moduleName}.js`);
+    require(`../extension/core/${moduleName}.js`);
   }
-  const { normalizeArticleChatInput, runArticleChat } = require('../core/article-chat.js');
+  const { normalizeArticleChatInput, runArticleChat } = require('../extension/core/article-chat.js');
   const input = normalizeArticleChatInput({
     question: '联网查询通讯作者与该论文相关的研究工作',
     turnId: 'turn-author-query', operationId: 'operation-author-query',

@@ -1,12 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-tokenizer.js');
+require('../extension/core/article-chat-tokenizer.js');
 const {
   buildArticleChatMemory,
   retrieveArticleChatMemory,
   deleteArticleChatTurnAndRebuild
-} = require('../core/article-chat-memory.js');
+} = require('../extension/core/article-chat-memory.js');
 
 function turn(index, text = '') {
   return {

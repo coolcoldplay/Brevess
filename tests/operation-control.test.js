@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   createOperationRegistry,
   normalizeOperationId
-} = require('../core/operation-control.js');
+} = require('../extension/core/operation-control.js');
 
 test('operation registry pauses at cooperative checkpoints and resumes', async () => {
   const registry = createOperationRegistry();

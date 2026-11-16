@@ -1,13 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-tokenizer.js');
-const { buildArticleChatIndex } = require('../core/article-chat-index.js');
+require('../extension/core/article-chat-tokenizer.js');
+const { buildArticleChatIndex } = require('../extension/core/article-chat-index.js');
 const {
   retrieveArticleChatContext,
   reciprocalRankFusion,
   maximalMarginalRelevance
-} = require('../core/article-chat-retrieval.js');
+} = require('../extension/core/article-chat-retrieval.js');
 
 function record(id, sectionTitle, sectionKind, text, recordType = 'body') {
   return {

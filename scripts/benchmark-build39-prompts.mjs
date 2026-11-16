@@ -1,12 +1,12 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/figure-panel-planner.js');
-require('../core/figure-analysis.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/figure-panel-planner.js');
+require('../extension/core/figure-analysis.js');
 
 const shared = globalThis.SciLLM;
 const catalog = shared.createAdaptiveCategoryCatalog();

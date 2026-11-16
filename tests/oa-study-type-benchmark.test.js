@@ -1,14 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
+require('../extension/core/category-store.js');
 const {
   STUDY_TYPES,
   READING_VIEWS,
   TYPE_PROMPT_GUIDANCE,
   VIEW_PROMPT_GUIDANCE,
   composeReadingView
-} = require('../core/adaptive-catalog.js');
+} = require('../extension/core/adaptive-catalog.js');
 const { OA_PAPER_BENCHMARK } = require('./helpers/oa-paper-benchmark.js');
 
 test('open-access benchmark covers all nine study types', () => {

@@ -1,13 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBuiltInCategories } = require('../core/category-store.js');
-const { createAdaptiveCategoryCatalog } = require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/chunker.js');
-require('../core/result-validator.js');
-require('../core/operation-control.js');
-const { analyzeDocument } = require('../core/analysis-pipeline.js');
+const { createBuiltInCategories } = require('../extension/core/category-store.js');
+const { createAdaptiveCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/chunker.js');
+require('../extension/core/result-validator.js');
+require('../extension/core/operation-control.js');
+const { analyzeDocument } = require('../extension/core/analysis-pipeline.js');
 
 test('full-text pipeline waits at a pause checkpoint before sending the next request', async () => {
   const categories = createBuiltInCategories();

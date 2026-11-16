@@ -1,32 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-tokenizer.js');
-const { buildArticleChatIndex } = require('../core/article-chat-index.js');
-const { retrieveArticleChatContext } = require('../core/article-chat-retrieval.js');
+require('../extension/core/article-chat-tokenizer.js');
+const { buildArticleChatIndex } = require('../extension/core/article-chat-index.js');
+const { retrieveArticleChatContext } = require('../extension/core/article-chat-retrieval.js');
 const {
   buildArticleChatMemory,
   retrieveArticleChatMemory
-} = require('../core/article-chat-memory.js');
-const { verifyArticleChatEvidence } = require('../core/article-chat-citations.js');
-require('../core/token-budget.js');
-require('../providers/provider-registry.js');
-require('../providers/provider-utils.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
-require('../core/article-chat-context-planner.js');
-require('../core/article-chat-stream.js');
+} = require('../extension/core/article-chat-memory.js');
+const { verifyArticleChatEvidence } = require('../extension/core/article-chat-citations.js');
+require('../extension/core/token-budget.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/providers/provider-utils.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
+require('../extension/core/article-chat-context-planner.js');
+require('../extension/core/article-chat-stream.js');
 const {
   normalizeArticleChatWebGroundingResponse,
   createArticleChatWebGroundingReceipt,
   normalizeArticleChatWebGroundingReceipt
-} = require('../core/article-chat-web-sources.js');
+} = require('../extension/core/article-chat-web-sources.js');
 const {
   normalizeArticleChatInput,
   articleChatOutputUnits,
   prepareArticleChatRequest,
   compileArticleChatPrompt,
   runArticleChat
-} = require('../core/article-chat.js');
+} = require('../extension/core/article-chat.js');
 
 function articleMessage(overrides = {}) {
   return {

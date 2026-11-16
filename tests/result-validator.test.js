@@ -5,9 +5,9 @@ const {
   mergeAnnotations,
   validateAnnotationSemantics,
   validateAnnotationStructureSemantics
-} = require('../core/result-validator.js');
-require('../core/category-store.js');
-const { createAdaptiveCategoryCatalog } = require('../core/adaptive-catalog.js');
+} = require('../extension/core/result-validator.js');
+require('../extension/core/category-store.js');
+const { createAdaptiveCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
 
 test('necessity manipulation accepts inhibiting while still requiring an observed reduced outcome', () => {
   for (const quote of [

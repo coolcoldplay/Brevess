@@ -1,13 +1,14 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
-const pdf = require('../core/pdf-workspace.js');
+const pdf = require('../extension/core/pdf-workspace.js');
 
 function read(file) {
-  return fs.readFileSync(path.join(root, file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 test('PDF reader exposes safe annotated-copy UI and keeps overwrite capability handle-only', () => {
@@ -822,7 +823,7 @@ test('supplemental Figure semantic captions include explicit Panel ranges', () =
   assert.match(captions[0].caption, /\(A\) Experimental sequence/);
   assert.match(captions[0].caption, /\(B-D\) Drawings/);
   assert.doesNotMatch(captions[0].caption, /next body paragraph/);
-  const figure = require('../core/figure-extractor.js');
+  const figure = require('../extension/core/figure-extractor.js');
   assert.deepEqual(figure.extractPanelHints(captions[0].caption), ['A', 'B', 'C', 'D']);
 });
 

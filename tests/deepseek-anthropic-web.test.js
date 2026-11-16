@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../providers/provider-utils.js');
-const web = require('../core/article-chat-web-sources.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
+require('../extension/providers/provider-utils.js');
+const web = require('../extension/core/article-chat-web-sources.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
 // Public one-call response captured 2026-09-26. No credentials or article data.
 const captured = require('./fixtures/qa017-deepseek-anthropic-search-response.json');
 const identity = { providerId: 'deepseek', model: 'deepseek-flash' };
@@ -155,8 +155,8 @@ test('ordinary JSON and vision input still use Chat Completions and no search to
 test('production article-chat accepts a Search API receipt and rejects an unbound answer before publishing blocks', async () => {
   for (const moduleName of ['article-chat-tokenizer', 'article-chat-index',
     'article-chat-retrieval', 'article-chat-memory', 'article-chat-citations',
-    'token-budget', 'article-chat-context-planner', 'article-chat-stream']) require(`../core/${moduleName}.js`);
-  const { normalizeArticleChatInput, runArticleChat } = require('../core/article-chat.js');
+    'token-budget', 'article-chat-context-planner', 'article-chat-stream']) require(`../extension/core/${moduleName}.js`);
+  const { normalizeArticleChatInput, runArticleChat } = require('../extension/core/article-chat.js');
   const searchResults = { results: [
     { title: 'Official press release', url: officialUrl,
       summary: 'The official announcement.', content: 'Official announcement content.' }

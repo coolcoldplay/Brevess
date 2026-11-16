@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,16 +12,16 @@ const { functionSource } = require('./helpers/r28-full07-source.js');
 // Real captured Cell DOM + original hash-checked JPEGs. All extra boundary fixtures
 // below are explicitly synthetic; no live publisher/profile/extension/model access.
 const repo = path.resolve(__dirname, '..');
-const owned = path.join(repo, 'output/r33-figure-flow/faithful-source/captions');
+const owned = projectFile('output/r33-figure-flow/faithful-source/captions');
 fs.mkdirSync(owned, { recursive: true });
-const helperBytes = fs.readFileSync(path.join(repo, 'core/faithful-page-snapshot.js'));
+const helperBytes = fs.readFileSync(projectFile('core/faithful-page-snapshot.js'));
 const helperSha = sha(helperBytes);
 const runDir = fs.mkdtempSync(path.join(owned, `run-${helperSha.slice(0, 8)}-`));
 const save = (name, value) => fs.writeFileSync(path.join(runDir, name), JSON.stringify(value, null, 2) + '\n');
 const captured = material();
-const contentBytes = fs.readFileSync(path.join(repo, 'content.js'));
+const contentBytes = fs.readFileSync(projectFile('content.js'));
 const content = contentBytes.toString('utf8').replace(/\r\n/g, '\n');
-const adapters = fs.readFileSync(path.join(repo, 'core/publisher-adapters.js'), 'utf8');
+const adapters = fs.readFileSync(projectFile('core/publisher-adapters.js'), 'utf8');
 const roots = ['snapshotArticleRootScore', 'resolveZoteroSnapshotArticleRoot'].map(n => functionSource(content, n)).join('\n');
 const figureIds = ['fig1', 'figs1', 'fig2', 'figs2', 'fig3', 'figs3', 'fig4', 'figs4', 'fig5', 'figs5', 'fig6', 'figs6', 'figs7', 'fig7'];
 const assets = [...captured.assets].map(([url, asset]) => ({ url, sha256: asset.sha256 }));
@@ -164,7 +165,7 @@ test.before(async () => {
 
 test.after(async () => {
   for (const browser of browsers) await browser.close().catch(() => {});
-  assert.equal(sha(fs.readFileSync(path.join(repo, 'core/faithful-page-snapshot.js'))), helperSha, 'Helper changed during browser run');
+  assert.equal(sha(fs.readFileSync(projectFile('core/faithful-page-snapshot.js'))), helperSha, 'Helper changed during browser run');
 });
 
 test('captured disclosure controls and caption ancestors are real Cell figure structure', () => {

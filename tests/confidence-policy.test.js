@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalizeConfidenceThreshold,
   filterAnnotationGroupsByConfidence
-} = require('../core/confidence-policy.js');
+} = require('../extension/core/confidence-policy.js');
 
 test('normalizes confidence threshold to 0.50-0.95 with default 0.80', () => {
   assert.equal(normalizeConfidenceThreshold(undefined), 0.8);

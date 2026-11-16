@@ -1,9 +1,10 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { PdfTranslationPageServer } = require('../native-host/host.js');
+const { PdfTranslationPageServer } = require('../extension/native-host/host.js');
 
 test('translation-compatible PDF page is served only on loopback with semantic HTML', async t => {
   const server = new PdfTranslationPageServer();
@@ -30,9 +31,9 @@ test('translation-compatible PDF page is served only on loopback with semantic H
 
 test('PDF reader hands parsed content to the same tab for natural Immersive Translate use', () => {
   const root = path.join(__dirname, '..');
-  const html = fs.readFileSync(path.join(root, 'pdf-reader.html'), 'utf8');
-  const reader = fs.readFileSync(path.join(root, 'pdf-reader.js'), 'utf8');
-  const client = fs.readFileSync(path.join(root, 'core/pdf-figure-native-client.js'), 'utf8');
+  const html = fs.readFileSync(projectFile('pdf-reader.html'), 'utf8');
+  const reader = fs.readFileSync(projectFile('pdf-reader.js'), 'utf8');
+  const client = fs.readFileSync(projectFile('core/pdf-figure-native-client.js'), 'utf8');
   assert.doesNotMatch(html, /id="pdfReaderTranslate"/);
   assert.doesNotMatch(html, /id="pdfReaderOutline"/);
   assert.match(reader, /handoffToInlineTranslationPage/);

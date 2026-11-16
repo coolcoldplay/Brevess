@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalizeFigureImageCacheKey,
   selectFigureImageCacheEvictions
-} = require('../core/figure-image-cache.js');
+} = require('../extension/core/figure-image-cache.js');
 
 test('normalizes persistent Figure cache keys without credentials or fragments', () => {
   assert.equal(

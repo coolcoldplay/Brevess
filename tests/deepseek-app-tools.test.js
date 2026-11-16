@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../providers/provider-utils.js');
-require('../core/article-chat-web-sources.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/article-chat-web-sources.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
 const url = 'https://www.nature.com/articles/s41586-025-09984-y';
 const call = { index: 0, id: 'tool-1', type: 'deepseek_web_search', kind: 'deep_search',
   status: 'completed', action: { type: 'search', queries: ['macrophage prior work'] },
@@ -70,7 +70,7 @@ test('cancelled deep research performs no request', async () => {
   assert.equal(events.at(-1).error.code, 'CANCELLED');
 });
 test('deep mode survives input and filter routing without enabling network in display editing', () => {
-  const route = require('../web-filters-general/ux-context.js').route;
+  const route = require('../extension/web-filters-general/ux-context.js').route;
   assert.equal(route({ webSearch: { mode: 'deep' } }).webSearch.enabled, true);
   assert.equal(route({ adjusting: true, webSearch: { mode: 'deep' } }).webSearch.enabled, false);
 });

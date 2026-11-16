@@ -1,13 +1,14 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { webcrypto, createHash } = require('node:crypto');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 const { jpegDataUrl } = require('./helpers/r28-c-tile-image-fixtures.js');
-const viewer = require('../core/figure-viewer.js');
+const viewer = require('../extension/core/figure-viewer.js');
 const root = path.resolve(__dirname, '..');
-const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
-const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+const content = fs.readFileSync(projectFile('content.js'), 'utf8');
+const background = fs.readFileSync(projectFile('background.js'), 'utf8');
 const sourceUrl = 'https://media.example.test/article/figure-1.jpg';
 const hqUrl = 'https://media.example.test/original/figure-1.jpg';
 const pageUrl = 'https://publisher.example.test/articles/cache-regression';
@@ -17,7 +18,7 @@ const errorWithCode = code => Object.assign(new Error(code), { code });
 const base = vm.createContext({ content, background, sourceUrl, pageUrl, jpeg, digest, errorWithCode,
   functionSource, vm, assert, webcrypto, URL, Uint8Array, Blob, Response, AbortController, TextEncoder, TextDecoder,
   atob, Buffer, setTimeout, clearTimeout, Date });
-vm.runInContext(functionSource(fs.readFileSync(path.join(root, 'tests/r33-figure-image-cache.test.cjs'), 'utf8'), 'harness'), base);
+vm.runInContext(functionSource(fs.readFileSync(projectFile('tests/r33-figure-image-cache.test.cjs'), 'utf8'), 'harness'), base);
 
 async function fixture(options = {}) {
   let documentHash = 'document-hash-1', pageIdentity = 'page-identity-1';

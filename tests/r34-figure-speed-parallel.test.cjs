@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 
 const test = require('node:test');
@@ -7,7 +8,7 @@ const path = require('node:path');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 
 const root = path.join(__dirname, '..');
-const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+const content = fs.readFileSync(projectFile('content.js'), 'utf8');
 const batchSource = () => {
   const start = content.indexOf('async function analyzeFiguresWithLLM(options = {})');
   const end = content.indexOf('\nfunction setReviewOutlineDepth', start);

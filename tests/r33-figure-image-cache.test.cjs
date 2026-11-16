@@ -9,7 +9,7 @@ const { webcrypto, createHash } = require('node:crypto');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 const { jpegDataUrl, pngImage } = require('./helpers/r28-c-tile-image-fixtures.js');
 
-const root = process.env.SCI_FIGURE_TEST_SOURCE_ROOT || path.resolve(__dirname, '..');
+const root = process.env.SCI_FIGURE_TEST_SOURCE_ROOT || path.resolve(__dirname, '../extension');
 const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
 const sourceUrl = 'https://media.example.test/article/figure-1.jpg';

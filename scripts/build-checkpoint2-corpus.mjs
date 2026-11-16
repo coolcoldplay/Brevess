@@ -11,13 +11,13 @@ const require = createRequire(import.meta.url);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
 process.chdir(repoRoot);
-require('../core/category-store.js');
-const { createUnifiedCategoryCatalog } = require('../core/adaptive-catalog.js');
+require('../extension/core/category-store.js');
+const { createUnifiedCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
 const {
   VIEW_VISIBILITY_OVERRIDES,
   STUDY_VIEW_RECOMMENDATIONS,
   categoryVisibleAtDensity
-} = require('../core/highlight-presentation.js');
+} = require('../extension/core/highlight-presentation.js');
 
 const FORMAT_VERSION = 1;
 const SPLIT_SEED = 'brevess-checkpoint2-cluster-split-20260808';

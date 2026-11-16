@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -5,15 +6,13 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(scriptRoot);
-const hostPath = join(projectRoot, 'native-host', 'host.js');
+const hostPath = projectFile('native-host', 'host.js');
 const useExecutable = process.argv.includes('--exe');
 const allowAuthRequired = process.argv.includes('--allow-auth-required');
 const visionImageFlag = process.argv.indexOf('--vision-image');
 const visionImagePath = visionImageFlag >= 0
   ? resolve(process.argv[visionImageFlag + 1] || '') : '';
-const executablePath = join(
-  projectRoot, 'native-host', 'bin', 'brevess-codex-host.exe'
-);
+const executablePath = projectFile('native-host', 'bin', 'brevess-codex-host.exe');
 const child = spawn(
   useExecutable ? executablePath : process.execPath,
   useExecutable

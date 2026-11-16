@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -8,7 +9,7 @@ const {
   tokenizePrivacyKey,
   isCredentialKey,
   isExportSensitiveKey
-} = require('../core/privacy-sanitizer.js');
+} = require('../extension/core/privacy-sanitizer.js');
 
 test('recognizes credential-bearing keys without treating scientific words as credentials', () => {
   for (const key of [
@@ -66,7 +67,7 @@ test('privacy consumers fail closed when the shared sanitizer is unavailable', (
     join('core', 'article-archive.js'),
     join('core', 'directory-sync.js')
   ]) {
-    const source = readFileSync(join(root, relativePath), 'utf8');
+    const source = readFileSync(projectFile(relativePath), 'utf8');
     assert.throws(
       () => runInNewContext(source, { globalThis: {} }, { filename: relativePath }),
       error => error?.code === 'PRIVACY_SANITIZER_UNAVAILABLE',
@@ -89,7 +90,7 @@ test('browser entry points load the shared privacy policy before every consumer'
   ];
 
   for (const [entryPoint, consumer] of cases) {
-    const source = readFileSync(join(root, entryPoint), 'utf8');
+    const source = readFileSync(projectFile(entryPoint), 'utf8');
     assert.ok(source.indexOf('core/privacy-sanitizer.js') >= 0, entryPoint);
     assert.ok(source.indexOf('core/privacy-sanitizer.js') < source.indexOf(consumer),
       `${entryPoint} should load privacy-sanitizer before ${consumer}`);

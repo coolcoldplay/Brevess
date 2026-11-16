@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBuiltInCategories } = require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-const { compileAnalysisPrompt } = require('../core/prompt-compiler.js');
+const { createBuiltInCategories } = require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+const { compileAnalysisPrompt } = require('../extension/core/prompt-compiler.js');
 
 test('injects only selected active categories', () => {
   const categories = createBuiltInCategories();

@@ -7,7 +7,7 @@ const {
   normalizeKeyboardShortcutKey,
   normalizeKeyboardShortcuts,
   findKeyboardShortcutConflicts
-} = require('../core/keyboard-shortcuts.js');
+} = require('../extension/core/keyboard-shortcuts.js');
 
 test('default shortcuts are unique and match every requested action', () => {
   assert.deepEqual(DEFAULT_KEYBOARD_SHORTCUTS, {

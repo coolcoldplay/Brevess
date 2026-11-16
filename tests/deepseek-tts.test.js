@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const T = require('../core/tts-service.js');
-const { createTtsRouter } = require('../core/tts-router.js');
+const T = require('../extension/core/tts-service.js');
+const { createTtsRouter } = require('../extension/core/tts-router.js');
 const settings = () => ({ mode: 'deepseek', speed: 1.25, deepseek: { apiKey: 'fixture', voiceEn: 'tide' },
   local: { endpoint: T.TTS_LOCAL_ENDPOINT, model: 'kokoro', transport: 'standard', voiceEn: 'af_heart' } });
 test('DeepSeek uses its own protocol, converts PCM and delegates speed to playback', async () => {
@@ -65,7 +65,7 @@ test('truncated PCM fails instead of playing an incomplete successful response',
 
 test('settings mode-change handler keeps DeepSeek selected and leaves Kokoro configuration intact',()=>{
  const fs=require('node:fs'),vm=require('node:vm');
- const source=fs.readFileSync(require.resolve('../options.js'),'utf8');
+ const source=fs.readFileSync(require.resolve('../extension/options.js'),'utf8');
  const match=source.match(/document\.getElementById\('ttsMode'\)\.addEventListener\('change', \(\) => \{([\s\S]*?)\n  \}\);/);
  assert.ok(match);let rendered;const draft=settings();draft.mode='local';
  const context={ttsDraft:draft,document:{getElementById:id=>id==='ttsMode'?{value:'deepseek'}:{checked:true}},captureTtsConnection(){},renderTtsConnection(){rendered=draft.mode;},dirty(){}};

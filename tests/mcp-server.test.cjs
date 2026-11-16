@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -6,11 +7,11 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 
-const { BridgeHub } = require('../mcp/lib/bridge-hub.js');
-const { createRegistry } = require('../mcp/lib/registry.js');
-const { McpProtocol, ResultCache } = require('../mcp/lib/protocol.js');
-const { WriteScopeManager } = require('../mcp/lib/scopes.js');
-const { start, extensionIdFromKey } = require('../mcp/server.js');
+const { BridgeHub } = require('../extension/mcp/lib/bridge-hub.js');
+const { createRegistry } = require('../extension/mcp/lib/registry.js');
+const { McpProtocol, ResultCache } = require('../extension/mcp/lib/protocol.js');
+const { WriteScopeManager } = require('../extension/mcp/lib/scopes.js');
+const { start, extensionIdFromKey } = require('../extension/mcp/server.js');
 
 const TOKEN = 'test-token-0123456789-abcdefghijklmnopqrstuvwxyz';
 const META = {
@@ -758,7 +759,7 @@ test('localhost HTTP MCP and bridge exchange a real tools/call roundtrip', async
 test('stdio MCP handshake returns initialize and tools/list in one process', async t => {
   const dir = tempDir();
   const child = spawn(process.execPath, [
-    path.join(__dirname, '..', 'mcp', 'server.js'),
+    projectFile('mcp', 'server.js'),
     '--stdio-only',
     '--port', '0',
     '--token', TOKEN,

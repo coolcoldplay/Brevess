@@ -1,17 +1,18 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { createBuiltInCategories } = require('../core/category-store.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/chunker.js');
-require('../core/result-validator.js');
-require('../core/highlight-stream.js');
-require('../core/cache-planner.js');
-require('../core/analysis-pipeline.js');
+const { createBuiltInCategories } = require('../extension/core/category-store.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/chunker.js');
+require('../extension/core/result-validator.js');
+require('../extension/core/highlight-stream.js');
+require('../extension/core/cache-planner.js');
+require('../extension/core/analysis-pipeline.js');
 const {
   createMemoryAnalysisCache,
   createIndexedDbAnalysisCache,
@@ -21,10 +22,10 @@ const {
   DEFAULT_ANALYSIS_CACHE_MAX_ENTRIES,
   DEFAULT_ANALYSIS_CACHE_MAX_AGE_MS,
   MAX_PROTECTED_MECHANISM_RECORDS
-} = require('../core/analysis-cache.js');
+} = require('../extension/core/analysis-cache.js');
 
 function loadAnalysisCacheWithProtectedByteLimit(limit) {
-  const sourcePath = path.join(__dirname, '..', 'core', 'analysis-cache.js');
+  const sourcePath = projectFile('core', 'analysis-cache.js');
   const original = fs.readFileSync(sourcePath, 'utf8');
   const marker = 'const MAX_PROTECTED_MECHANISM_TOTAL_BYTES = 256 * 1024 * 1024;';
   assert.equal(original.includes(marker), true, 'production capacity marker');
@@ -970,10 +971,10 @@ test('IndexedDB pruning never evicts durable mechanism authority records', async
 
 test('an IndexedDB mechanism receipt survives 1200 ordinary LRU writes and reconstruction', async () => {
   Object.assign(globalThis.SciLLM || (globalThis.SciLLM = {}),
-    require('../core/operation-control.js'),
-    require('../core/evidence-first-mechanism.js'));
-  delete require.cache[require.resolve('../core/mechanism-operation-coordinator.js')];
-  const coordinatorApi = require('../core/mechanism-operation-coordinator.js');
+    require('../extension/core/operation-control.js'),
+    require('../extension/core/evidence-first-mechanism.js'));
+  delete require.cache[require.resolve('../extension/core/mechanism-operation-coordinator.js')];
+  const coordinatorApi = require('../extension/core/mechanism-operation-coordinator.js');
   const fake = createTransactionalIndexedDb();
   const cache = createIndexedDbAnalysisCache(fake.indexedDbRef, { maxEntries: 1_200 });
   const input = {
@@ -1126,7 +1127,7 @@ test('keeps a multi-paper local cache window for zero-token return visits', () =
 
 test('refreshes last-access time so capacity pruning is true LRU rather than FIFO', () => {
   const source = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, '..', 'core', 'analysis-cache.js'), 'utf8'
+    projectFile('core', 'analysis-cache.js'), 'utf8'
   );
   assert.match(source, /lastAccessedAt:\s*accessedAt/);
   assert.match(source, /Number\(b\.lastAccessedAt\s*\|\|\s*b\.createdAt\)/);

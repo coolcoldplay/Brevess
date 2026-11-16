@@ -1,12 +1,13 @@
+import { projectFile } from './project-paths.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const { chromium } = await import(process.env.BREVESS_PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root,'docs/chrome-store/assets');
+const output = projectFile('docs/chrome-store/assets');
 fs.mkdirSync(output,{recursive:true});
-fs.copyFileSync(path.join(root,'icons/icon128.png'),path.join(output,'icon-128.png'));
-const logo = 'data:image/svg+xml;base64,'+fs.readFileSync(path.join(root,'icons/Brevess-logo.svg')).toString('base64');
+fs.copyFileSync(projectFile('icons/icon128.png'),path.join(output,'icon-128.png'));
+const logo = 'data:image/svg+xml;base64,'+fs.readFileSync(projectFile('icons/Brevess-logo.svg')).toString('base64');
 const browser = await chromium.launch({channel:'chromium',headless:true});
 try {
   const page = await browser.newPage();

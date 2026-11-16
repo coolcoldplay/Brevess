@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -8,7 +9,7 @@ const primaryPath = 'Brevess/settings/portable-config.enc.json';
 const previousPath = 'Brevess/backups/settings/portable-config.enc.previous.json';
 
 function read(relativePath) {
-  return readFileSync(join(repositoryRoot, relativePath), 'utf8');
+  return readFileSync(projectFile(relativePath), 'utf8');
 }
 
 test('all public privacy documents disclose the primary and single rolling encrypted backup', () => {

@@ -1,10 +1,11 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 test('settings navigation asks for local storage before model connection', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'options.html'), 'utf8');
+  const html = fs.readFileSync(projectFile('options.html'), 'utf8');
   const start = html.indexOf('<div class="settings-nav-group">');
   const end = html.indexOf('<div class="settings-nav-group">', start + 1);
   const firstGroup = html.slice(start, end);
@@ -18,7 +19,7 @@ test('settings navigation asks for local storage before model connection', () =>
 const vm = require('node:vm');
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 test('registers an LLM settings page with private credential controls', () => {

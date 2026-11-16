@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source');
-const source = fs.readFileSync(require.resolve('../popup.js'), 'utf8');
+const source = fs.readFileSync(require.resolve('../extension/popup.js'), 'utf8');
 
 test('Extended Data and supplemental figures retain distinct labels and source titles', () => {
   const h = load(['compactFigureDisplayNumber', 'figureSummaryPresentation', 'figureSourceCaption'], {
-    SciLLM: require('../core/figure-extractor.js')
+    SciLLM: require('../extension/core/figure-extractor.js')
   });
   assert.equal(h.compactFigureDisplayNumber({ figureLabel: 'Extended Data Fig. 1', isSupplemental: true }), 'ED1');
   assert.equal(h.compactFigureDisplayNumber({ figureLabel: 'Supplementary Figure S1', isSupplemental: true }), 'S1');
@@ -105,7 +105,7 @@ test('batch request keeps the selected IDs captured before an async input-mode d
 });
 
 const titleHarness = () => load(['figureSourceCaption', 'figureSummaryPresentation'], {
-  SciLLM: require('../core/figure-extractor.js')
+  SciLLM: require('../extension/core/figure-extractor.js')
 });
 
 test('initial figure names use the source title without the panel legend or a pending Chinese summary', () => {

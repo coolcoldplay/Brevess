@@ -1,10 +1,11 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 function functionBody(script, name, nextName) {
@@ -15,7 +16,7 @@ function functionBody(script, name, nextName) {
 
 test('mechanism network core loads before popup and content entrypoints', () => {
   const html = read('popup.html');
-  const { CONTENT_SCRIPT_FILES } = require('../core/tab-messenger');
+  const { CONTENT_SCRIPT_FILES } = require('../extension/core/tab-messenger');
   const exportIndex = html.indexOf('<script src="core/export-bundle.js"></script>');
   const networkIndex = html.indexOf('<script src="core/mechanism-network.js"></script>');
   const popupIndex = html.indexOf('<script src="popup.js"></script>');
@@ -45,7 +46,7 @@ test('Figure input hashes use compact image identity and invalidate replaced sup
   const buildFigureInputHash = new Function(
     'FIGURE_IMAGE_LIMIT', 'SciLLM',
     `${source}\nreturn buildFigureInputHash;`
-  )(4, require('../core/figure-analysis.js'));
+  )(4, require('../extension/core/figure-analysis.js'));
   const figure = {
     figureId: 'supp-manual-s1-s1',
     caption: 'Figure S1. Replication.',

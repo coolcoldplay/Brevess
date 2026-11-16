@@ -7,13 +7,13 @@ const path = require('node:path');
 
 const {
   createPdfFigureNativeClient
-} = require('../core/pdf-figure-native-client.js');
+} = require('../extension/core/pdf-figure-native-client.js');
 const {
   CodexBridgeHost,
   PdfFigureTaskStore,
   matchPdffigures2Images,
   degeneratePdffigures2Figure
-} = require('../native-host/host.js');
+} = require('../extension/native-host/host.js');
 
 function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');

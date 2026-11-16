@@ -6,7 +6,7 @@ const {
 
 let activation = {};
 try {
-  activation = require('../core/tab-activation.js');
+  activation = require('../extension/core/tab-activation.js');
 } catch {
   // The first red run intentionally exercises the missing activation module.
 }

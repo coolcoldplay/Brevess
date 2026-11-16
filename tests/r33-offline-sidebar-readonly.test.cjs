@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=fs.readFileSync(require.resolve('../popup.js'),'utf8');
+const source=fs.readFileSync(require.resolve('../extension/popup.js'),'utf8');
 const url='chrome-extension://'+'a'.repeat(32)+'/offline-reader.html?workspaceId=workspace%3A'+'a'.repeat(64)+'&generation=2';
 function fn(name){const start=source.indexOf('async function '+name+'(');const next=source.slice(start+1).search(/\r?\n(?:(?:async )?function |document\.addEventListener)/);assert.ok(start>=0&&next>=0);return source.slice(start,start+1+next);}
 function plainFn(name){const start=source.indexOf('function '+name+'(');const next=source.slice(start+1).search(/\r?\n(?:(?:async )?function |document\.addEventListener)/);assert.ok(start>=0&&next>=0);return source.slice(start,start+1+next);}

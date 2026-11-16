@@ -1,8 +1,9 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { CONTENT_SCRIPT_REVISION } = require('../core/tab-messenger.js');
+const { CONTENT_SCRIPT_REVISION } = require('../extension/core/tab-messenger.js');
 const {
   executeContentRevisionAssignment
 } = require('./helpers/content-revision-runtime.js');
@@ -10,7 +11,7 @@ const {
 const root = path.join(__dirname, '..');
 
 function read(filename) {
-  return fs.readFileSync(path.join(root, filename), 'utf8');
+  return fs.readFileSync(projectFile(filename), 'utf8');
 }
 
 test('repository contains the complete AGPL release documentation', () => {
@@ -18,7 +19,7 @@ test('repository contains the complete AGPL release documentation', () => {
     'LICENSE', 'OPEN_SOURCE.md', 'THIRD_PARTY_NOTICES.md',
     'CONTRIBUTING.md', 'SECURITY.md'
   ]) {
-    assert.equal(fs.existsSync(path.join(root, filename)), true, filename);
+    assert.equal(fs.existsSync(projectFile(filename)), true, filename);
   }
   assert.match(read('LICENSE'), /GNU AFFERO GENERAL PUBLIC LICENSE/);
   assert.match(read('LICENSE'), /Version 3, 19 November 2007/);
@@ -82,8 +83,8 @@ test('1.0.1 release metadata and scale benchmark stay consistent', () => {
     /v1\.0\.1-build1-store-release/
   );
   assert.match(read('README.md'), /1\.0\.1-build1-store-release/);
-  assert.equal(fs.existsSync(path.join(root, 'scripts', 'benchmark-article-chat.mjs')), true);
+  assert.equal(fs.existsSync(projectFile('scripts', 'benchmark-article-chat.mjs')), true);
   assert.equal(fs.existsSync(
-    path.join(root, 'scripts', 'benchmark-zotero-mineru-regex.mjs')
+    projectFile('scripts', 'benchmark-zotero-mineru-regex.mjs')
   ), true);
 });

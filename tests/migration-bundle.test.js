@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -7,8 +8,8 @@ const {
   MIGRATION_BUNDLE_KIND,
   createMigrationBundle,
   validateMigrationBundle
-} = require('../core/migration-bundle.js');
-const { toPublicSettings } = require('../core/settings-store.js');
+} = require('../extension/core/migration-bundle.js');
+const { toPublicSettings } = require('../extension/core/settings-store.js');
 
 function migrationInput() {
   return {
@@ -164,10 +165,10 @@ test('migration validation rejects unsupported, malformed, and oversized files',
 
 test('service worker and settings page expose full migration import and export controls', () => {
   const root = join(__dirname, '..');
-  const background = readFileSync(join(root, 'background.js'), 'utf8');
-  const router = readFileSync(join(root, 'core', 'background-router.js'), 'utf8');
-  const html = readFileSync(join(root, 'options.html'), 'utf8');
-  const script = readFileSync(join(root, 'options.js'), 'utf8');
+  const background = readFileSync(projectFile('background.js'), 'utf8');
+  const router = readFileSync(projectFile('core', 'background-router.js'), 'utf8');
+  const html = readFileSync(projectFile('options.html'), 'utf8');
+  const script = readFileSync(projectFile('options.js'), 'utf8');
 
   assert.match(background, /core\/migration-bundle\.js/);
   assert.match(background, /'MIGRATION_EXPORT'/);

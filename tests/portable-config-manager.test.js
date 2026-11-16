@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
@@ -6,16 +7,16 @@ const path = require('node:path');
 
 globalThis.crypto = webcrypto;
 
-const codec = require('../core/portable-config.js');
-const abbreviationApi = require('../core/abbreviation-extractor.js');
-require('../core/confidence-policy.js');
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-const settingsApi = require('../core/settings-store.js');
+const codec = require('../extension/core/portable-config.js');
+const abbreviationApi = require('../extension/core/abbreviation-extractor.js');
+require('../extension/core/confidence-policy.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+const settingsApi = require('../extension/core/settings-store.js');
 const {
   createPortableConfigManager,
   PORTABLE_CONFIG_KEY_CACHE
-} = require('../core/portable-config-manager.js');
+} = require('../extension/core/portable-config-manager.js');
 
 const PASSPHRASE = 'correct horse battery staple';
 const OTHER_PASSPHRASE = 'another suitably long passphrase';
@@ -1251,7 +1252,7 @@ test('background dependency graph can instantiate the manager with the real expo
 
 test('manager portable writes use only direct directory CAS, never queue or global flush', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '..', 'core', 'portable-config-manager.js'),
+    projectFile('core', 'portable-config-manager.js'),
     'utf8'
   );
   assert.match(source, /directorySync\.compareAndSwapJson/u);
@@ -1259,7 +1260,7 @@ test('manager portable writes use only direct directory CAS, never queue or glob
 });
 
 test('background loads and creates the manager between codec and directory/router wiring', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const source = fs.readFileSync(projectFile('background.js'), 'utf8');
   const importBlock = source.slice(source.indexOf('importScripts('), source.indexOf(');') + 2);
   const imports = [...importBlock.matchAll(/'([^']+)'/gu)].map(match => match[1]);
   const abbreviationIndex = imports.indexOf('core/abbreviation-extractor.js');

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 const extensionRootFlag = process.argv.indexOf('--extension-root');
 const projectRoot = extensionRootFlag >= 0
-  ? resolve(process.argv[extensionRootFlag + 1] || '') : dirname(scriptRoot);
+  ? resolve(process.argv[extensionRootFlag + 1] || '') : join(dirname(scriptRoot), 'extension');
 const useExecutable = process.argv.includes('--exe');
 const pdfFlag = process.argv.indexOf('--pdf');
 const pdfPath = pdfFlag >= 0 ? resolve(process.argv[pdfFlag + 1] || '') : '';

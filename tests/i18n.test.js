@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,9 +9,9 @@ const {
   translateInterfaceText,
   outputLanguageContract,
   localizeGeneratedFallback
-} = require('../core/i18n.js');
+} = require('../extension/core/i18n.js');
 // These surfaces load the shared account dictionary after the base catalog.
-require('../core/i18n-sharing.js');
+require('../extension/core/i18n-sharing.js');
 
 test('directory write failures and optional setup are translated without losing details', () => {
   assert.equal(translateInterfaceText('文件写入未完成（IO_ERROR），内容仍保存在浏览器中，请重试保存', 'en'),
@@ -391,7 +392,7 @@ test('covers the static text on every extension-owned reading and settings surfa
   ];
   const misses = [];
   for (const file of files) {
-    const html = fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
+    const html = fs.readFileSync(projectFile(file), 'utf8')
       .replace(/<!--[\s\S]*?-->/g, '');
     const texts = [...html.matchAll(/>([^<>]+)</g)]
       .map(match => match[1].replace(/&[^;]+;/g, ' ').replace(/\s+/g, ' ').trim())
@@ -469,7 +470,7 @@ test('covers static placeholders, titles, and accessible labels in English mode'
   ];
   const misses = [];
   for (const file of files) {
-    const html = fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
+    const html = fs.readFileSync(projectFile(file), 'utf8')
       .replace(/<!--[\s\S]*?-->/g, '');
     const values = [...html.matchAll(/(?:placeholder|title|aria-label)="([^"]+)"/g)]
       .map(match => match[1].replace(/&[^;]+;/g, ' ').replace(/\s+/g, ' ').trim())

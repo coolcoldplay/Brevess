@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -5,14 +6,14 @@ const { join } = require('node:path');
 const vm = require('node:vm');
 
 const root = join(__dirname, '..');
-const html = readFileSync(join(root, 'options.html'), 'utf8');
-const script = readFileSync(join(root, 'options.js'), 'utf8');
+const html = readFileSync(projectFile('options.html'), 'utf8');
+const script = readFileSync(projectFile('options.js'), 'utf8');
 const draftTrackingSource = `const settingsDraftRevisions = new Map(); let settingsDraftRevision = 0;\n` +
   script.slice(script.indexOf('function markProfileEditorDirty('), script.indexOf('function canLeaveProfileEditor('));
-const { getProviderReasoningCapabilities } = require('../providers/provider-registry.js');
-const i18n = require('../core/i18n.js');
-require('../core/i18n-options.js');
-const taskCatalog = require('../core/llm-task-catalog.js');
+const { getProviderReasoningCapabilities } = require('../extension/providers/provider-registry.js');
+const i18n = require('../extension/core/i18n.js');
+require('../extension/core/i18n-options.js');
+const taskCatalog = require('../extension/core/llm-task-catalog.js');
 
 test('DeepSeek V4 presets expose low, high, and max reasoning strengths', () => {
   for (const model of [

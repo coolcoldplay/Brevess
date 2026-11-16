@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const T = require('../core/chat-table-viewer.js');
+const T = require('../extension/core/chat-table-viewer.js');
 const text = textContent => ({nodeType:3,textContent});
 const cell = (value,header=false) => ({tagName:header?'TH':'TD',style:{textAlign:'left'},textContent:value,childNodes:[text(value)]});
 const table = () => ({rows:[{cells:[cell('Paper',true),cell('Relation',true)]},{cells:[cell('α-synuclein'),cell('Prior study')]}]});

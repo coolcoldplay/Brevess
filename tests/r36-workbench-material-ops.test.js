@@ -2,13 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const M = require('../workbench/model.js');
-const S = require('../core/research-workbench-model.js');
-const { createAgentTools } = require('../workbench/agent-tools.js');
-const { createGlobalLibraryReader, mergeGlobalLibrary } = require('../workbench/global-library.js');
-const registry = require('../workbench/operation-registry.js');
-const { createResearchWorkbenchStore, createMemoryResearchWorkbenchBackend } = require('../core/research-workbench-store.js');
-const IO = require('../core/research-workbench-import-export.js');
+const M = require('../extension/workbench/model.js');
+const S = require('../extension/core/research-workbench-model.js');
+const { createAgentTools } = require('../extension/workbench/agent-tools.js');
+const { createGlobalLibraryReader, mergeGlobalLibrary } = require('../extension/workbench/global-library.js');
+const registry = require('../extension/workbench/operation-registry.js');
+const { createResearchWorkbenchStore, createMemoryResearchWorkbenchBackend } = require('../extension/core/research-workbench-store.js');
+const IO = require('../extension/core/research-workbench-import-export.js');
 
 function store() {
   return createResearchWorkbenchStore({ backend: createMemoryResearchWorkbenchBackend() });

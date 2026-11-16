@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source');
-const source = fs.readFileSync(require.resolve('../workbench/app.js'), 'utf8').replace(/^  (?=(?:async )?function )/gm, '');
+const source = fs.readFileSync(require.resolve('../extension/workbench/app.js'), 'utf8').replace(/^  (?=(?:async )?function )/gm, '');
 
 function harness(extra = {}) {
   const calls = [], controls = new Map();

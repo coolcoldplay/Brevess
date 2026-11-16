@@ -5,7 +5,7 @@ const {
   createMemoryCorpusStore,
   exportCorpus,
   distillOfflineRules
-} = require('../core/corpus-store.js');
+} = require('../extension/core/corpus-store.js');
 
 test('keeps only a bounded, credential-free feedback record', () => {
   const sample = normalizeFeedbackSample({

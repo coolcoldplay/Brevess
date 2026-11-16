@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$runtimeRoot = Join-Path $projectRoot 'native-host\runtime'
+$runtimeRoot = Join-Path $projectRoot 'extension/native-host\runtime'
 $archive = Join-Path $projectRoot 'tmp\OpenJDK8U-jre_x64_windows_hotspot_8u492b09.zip'
 $staging = Join-Path $projectRoot 'tmp\temurin-jre-package'
 $uri = 'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u492-b09/OpenJDK8U-jre_x64_windows_hotspot_8u492b09.zip'
@@ -36,7 +36,7 @@ $source = Get-ChildItem -LiteralPath $staging -Directory | Select-Object -First 
 if (-not $source) { throw 'Temurin archive did not contain a runtime directory.' }
 if (Test-Path -LiteralPath $runtimeRoot) {
   $resolvedRuntime = [System.IO.Path]::GetFullPath($runtimeRoot)
-  $resolvedHost = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'native-host'))
+  $resolvedHost = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'extension/native-host'))
   if (-not $resolvedRuntime.StartsWith($resolvedHost.TrimEnd('\') + '\')) {
     throw 'Temurin runtime target escaped the native-host directory.'
   }

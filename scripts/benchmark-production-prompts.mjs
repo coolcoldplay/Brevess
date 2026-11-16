@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
@@ -7,8 +8,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const baselineDir = path.join(root, 'benchmarks', 'baseline');
-const config = readJson(path.join(root, 'benchmarks', 'prompt-eval-config.json'));
+const baselineDir = projectFile('benchmarks', 'baseline');
+const config = readJson(projectFile('benchmarks', 'prompt-eval-config.json'));
 const promptManifest = readJson(path.join(baselineDir, 'prompt-manifest.json'));
 const schemaManifest = readJson(path.join(baselineDir, 'schema-manifest.json'));
 const categoryManifest = readJson(path.join(baselineDir, 'category-manifest.json'));
@@ -64,7 +65,7 @@ const sourceParityFailures = [];
 const approvedSourceChanges = [];
 const approvedSourceHashes = config.gates.approvedDeterministicSourceChanges || {};
 for (const [source, expectedHash] of Object.entries(lock.productionSourceFiles || {})) {
-  const file = path.join(root, source);
+  const file = projectFile(source);
   const actualHash = fs.existsSync(file) ? sha(fs.readFileSync(file)) : '';
   if (actualHash === expectedHash) continue;
   if (actualHash && actualHash === String(approvedSourceHashes[source] || '').toLowerCase()) {

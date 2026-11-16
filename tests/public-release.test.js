@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,13 +9,13 @@ const { execFileSync } = require('node:child_process');
 test('public preview preserves the existing extension identity and ships only audited browser files', async () => {
   const { readZip, sha256 } = await import('../scripts/chrome-store-package.mjs');
   const root = path.join(__dirname, '..'), name = 'public-build-test-' + randomUUID();
-  const destination = path.join(root, 'dist', name);
+  const destination = projectFile('dist', name);
   try {
     execFileSync(process.execPath, ['scripts/build-public-test-release.mjs', '--name', name], { cwd: root });
     const metadata = JSON.parse(fs.readFileSync(path.join(destination, 'release-manifest.json')));
     const bytes = fs.readFileSync(path.join(destination, metadata.artifact.file));
     const files = readZip(bytes), shipped = JSON.parse(files.get('manifest.json'));
-    const source = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
+    const source = JSON.parse(fs.readFileSync(projectFile('manifest.json')));
     assert.equal(shipped.key, source.key, 'manual updates must retain the public extension identity');
     assert.equal(shipped.version, source.version);
     assert.equal(shipped.update_url, undefined);

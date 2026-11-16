@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,14 +8,14 @@ const { chromium } = await import(process.env.BREVESS_PLAYWRIGHT_MODULE || 'play
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 if (!process.argv[2]) throw new Error('Usage: node scripts/capture-chrome-store-screenshots.mjs dist/RELEASE_NAME');
 const release = path.resolve(process.argv[2]);
-const output = path.join(root, 'docs/chrome-store/assets');
-const diagnostics = path.join(root, 'tmp/chrome-store/browser');
+const output = projectFile('docs/chrome-store/assets');
+const diagnostics = projectFile('tmp/chrome-store/browser');
 fs.mkdirSync(output, { recursive: true }); fs.mkdirSync(diagnostics, { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'brevess-chrome-store-'));
 const report = { package: JSON.parse(fs.readFileSync(path.join(release, 'release-manifest.json'))).artifact,
   browserPath: 'Playwright Chromium; Browser plugin unavailable; Ego Extensions.loadUnpacked unavailable',
   viewport: { width: 1280, height: 800 }, checks: [], errors: [], warnings: [], externalRequests: [], screenshots: [] };
-const fixture = fs.readFileSync(path.join(root, 'docs/reviewer-demo.html'));
+const fixture = fs.readFileSync(projectFile('docs/reviewer-demo.html'));
 const server = http.createServer((req, res) => { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(fixture); });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const demoUrl = `http://127.0.0.1:${server.address().port}/reviewer-demo.html`;

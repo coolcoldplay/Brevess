@@ -3,7 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
-const root = path.resolve(__dirname, '..');
+const root = path.resolve(__dirname, '..', 'extension');
 const outputPath = path.join(root, 'output', 'qa', 'oa-publisher-regression-latest.json');
 const extensionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-oa-extension-'));
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sci-oa-edge-'));

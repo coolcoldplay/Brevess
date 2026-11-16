@@ -6,7 +6,7 @@ const {
   computeOutputTokenBudget,
   computeInputTokenBudget,
   createTokenManagedAdapter
-} = require('../core/token-budget.js');
+} = require('../extension/core/token-budget.js');
 
 const FIGURE_WALKTHROUGH_TASK_RULE = {
   input: {

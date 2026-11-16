@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
@@ -7,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const out = path.join(root, 'benchmarks', 'checkpoint2');
+const out = projectFile('benchmarks', 'checkpoint2');
 const corpusRoot = path.resolve(process.env.ZOTERO_MINERU_ROOT || path.join(
   os.homedir(), 'Zotero', 'llm-for-zotero-mineru'
 ));

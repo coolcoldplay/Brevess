@@ -1,12 +1,13 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const ArticleChatWebSources = require('../core/article-chat-web-sources.js');
+const ArticleChatWebSources = require('../extension/core/article-chat-web-sources.js');
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 test('side panel exposes a fifth full-text chat workspace with per-turn model selection', () => {

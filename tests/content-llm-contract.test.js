@@ -1,21 +1,22 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const FigureWorkspace = require('../core/figure-workspace.js');
-const FigureAnalysis = require('../core/figure-analysis.js');
-const FigureResultBinding = require('../core/figure-result-binding.js');
-const FigureViewer = require('../core/figure-viewer.js');
-const EvidenceFirstMechanism = require('../core/evidence-first-mechanism.js');
-const ArticleChatWebSources = require('../core/article-chat-web-sources.js');
-const ArticleChat = require('../core/article-chat.js');
-const ArticleChatAttachments = require('../core/article-chat-attachments.js');
-require('../core/operation-control.js');
-require('../core/analysis-cache.js');
-require('../core/mechanism-operation-coordinator.js');
-const { createBackgroundRouter } = require('../core/background-router.js');
-const { CONTENT_SCRIPT_REVISION } = require('../core/tab-messenger.js');
+const FigureWorkspace = require('../extension/core/figure-workspace.js');
+const FigureAnalysis = require('../extension/core/figure-analysis.js');
+const FigureResultBinding = require('../extension/core/figure-result-binding.js');
+const FigureViewer = require('../extension/core/figure-viewer.js');
+const EvidenceFirstMechanism = require('../extension/core/evidence-first-mechanism.js');
+const ArticleChatWebSources = require('../extension/core/article-chat-web-sources.js');
+const ArticleChat = require('../extension/core/article-chat.js');
+const ArticleChatAttachments = require('../extension/core/article-chat-attachments.js');
+require('../extension/core/operation-control.js');
+require('../extension/core/analysis-cache.js');
+require('../extension/core/mechanism-operation-coordinator.js');
+const { createBackgroundRouter } = require('../extension/core/background-router.js');
+const { CONTENT_SCRIPT_REVISION } = require('../extension/core/tab-messenger.js');
 const {
   executeContentRevisionAssignment
 } = require('./helpers/content-revision-runtime.js');
@@ -182,7 +183,7 @@ for (const status of ['needs_review', 'complete']) {
 }
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 function task8MechanismResult() {
@@ -1694,7 +1695,7 @@ test('cross-Figure meta seeding retries one CAS conflict on the original Paper A
 });
 
 test('cross-Figure workspace prefers the whole-study structured question graph', async () => {
-  const { orderFigureWorkspaceItems } = require('../core/figure-workspace.js');
+  const { orderFigureWorkspaceItems } = require('../extension/core/figure-workspace.js');
   const workspace = {
     workspaceId: `workspace:${'d'.repeat(64)}`, workspaceGeneration: 1,
     canonicalUrl: 'https://journal.example/ordered-paper', contentHash: 'e'.repeat(64)
@@ -1844,7 +1845,7 @@ test('dynamic article structure refresh observes prose containers used outside p
   assert.match(observer, /div\[class\*="paragraph" i\]/);
   assert.match(observer, /div\[class\*="para" i\]/);
   assert.match(observer, /sourceAdapter\?\.paragraphSelectors/);
-  const ArticleExtractor = require('../core/article-extractor.js');
+  const ArticleExtractor = require('../extension/core/article-extractor.js');
   const isMutation = executableContentFunction('isArticleStructureMutation', {
     isBilingualDisplayOnlyMutation: () => false,
     articleStructureInternalRewriteRoots: new Set(), articleStructureBoundaryRoots: new Map(),
@@ -12634,7 +12635,7 @@ test('full-text progress never exposes NaN or undefined chunk counts', () => {
 });
 
 test('LLM progress forwards only a bounded public heartbeat to the active extension panel', () => {
-  const script = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const script = fs.readFileSync(projectFile('content.js'), 'utf8');
   assert.match(script, /function publishPublicLlmOperationProgress/);
   assert.match(script, /type:\s*'LLM_OPERATION_PROGRESS'/);
   assert.match(script, /elapsedSeconds:/);

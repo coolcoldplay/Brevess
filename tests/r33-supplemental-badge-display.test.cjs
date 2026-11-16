@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=fs.readFileSync(require.resolve('../popup.js'),'utf8');
+const source=fs.readFileSync(require.resolve('../extension/popup.js'),'utf8');
 function fn(name){const start=source.indexOf('function '+name+'('),end=source.slice(start+1).search(/\r?\n(?:async )?function /);assert.ok(start>=0&&end>=0);return source.slice(start,start+1+end);}
 function node(tagName,className='',textContent=''){
  return{tagName,className,textContent,children:[],attrs:{},dataset:{},hidden:false,classList:{toggle(){},remove(){}},

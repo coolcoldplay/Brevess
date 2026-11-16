@@ -1,15 +1,16 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
-const selection = require('../core/literature-note-field-selection.js');
+const selection = require('../extension/core/literature-note-field-selection.js');
 
 const root = path.join(__dirname, '..');
-const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
-const html = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
-const css = fs.readFileSync(path.join(root, 'popup.css'), 'utf8');
+const popup = fs.readFileSync(projectFile('popup.js'), 'utf8');
+const html = fs.readFileSync(projectFile('popup.html'), 'utf8');
+const css = fs.readFileSync(projectFile('popup.css'), 'utf8');
 
 class FakeTarget extends EventTarget {
   constructor() {

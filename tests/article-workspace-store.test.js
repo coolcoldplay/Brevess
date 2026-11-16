@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -20,26 +21,26 @@ const {
   USER_DATA_STORE_NAMES,
   openUserDataDatabase,
   resetUserDataDatabaseConnection
-} = require('../core/user-data-database.js');
-require('../core/article-workspace.js');
-const { createIndexedDbDocumentStore } = require('../core/document-store.js');
-require('../core/analysis-cache.js');
-require('../core/corpus-store.js');
-require('../core/operation-control.js');
+} = require('../extension/core/user-data-database.js');
+require('../extension/core/article-workspace.js');
+const { createIndexedDbDocumentStore } = require('../extension/core/document-store.js');
+require('../extension/core/analysis-cache.js');
+require('../extension/core/corpus-store.js');
+require('../extension/core/operation-control.js');
 const {
   createSupplementalFigureImportDraft
-} = require('../core/supplemental-materials.js');
+} = require('../extension/core/supplemental-materials.js');
 const {
   createFigureWorkspaceDraft,
   applyFigureWorkspaceMutation,
   normalizeFigureWorkspaceDraft,
   publicFigureWorkspaceDraft
-} = require('../core/figure-workspace.js');
-const { createBackgroundRouter } = require('../core/background-router.js');
-const { createIndexedDbDirectoryHandleStore } = require('../core/directory-sync.js');
+} = require('../extension/core/figure-workspace.js');
+const { createBackgroundRouter } = require('../extension/core/background-router.js');
+const { createIndexedDbDirectoryHandleStore } = require('../extension/core/directory-sync.js');
 const {
   createIndexedDbArticleWorkspaceStore
-} = require('../core/article-workspace-store.js');
+} = require('../extension/core/article-workspace-store.js');
 
 function createMemoryStorage() {
   const values = {};
@@ -856,7 +857,7 @@ test('Figure retry staging maintenance removes only a bounded batch of expired h
     .map(asset => asset.relativePath).sort(), [freshPath, mainPath].sort());
   assert.equal(oldPaths.some(path =>
     fake.stores.get('workspaceAssets').has(`${owner.workspaceId}\u0000${path}`)), false);
-  const backgroundSource = readFileSync(join(__dirname, '..', 'background.js'), 'utf8');
+  const backgroundSource = readFileSync(projectFile('background.js'), 'utf8');
   assert.match(backgroundSource, /sweepExpiredFigureRetryStagingBatches/u);
   assert.match(backgroundSource, /pass < 4[\s\S]*remainingExpired !== true/u);
 });

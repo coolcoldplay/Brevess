@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/cache-planner.js');
+require('../extension/core/cache-planner.js');
 const {
   FIGURE_PANEL_IMAGE_EDGES,
   FIGURE_PANEL_PROMPT_VERSION,
@@ -14,7 +14,7 @@ const {
   retrievePanelHistory,
   buildFigurePanelCacheKey,
   isFigurePanelCapacityError
-} = require('../core/figure-panel-planner.js');
+} = require('../extension/core/figure-panel-planner.js');
 
 const paragraphs = [
   { paragraphId: 'm1', sectionTitle: 'Methods', text: 'RNA sequencing was performed on treated and control samples.' },

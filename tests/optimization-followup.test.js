@@ -1,10 +1,11 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
-const read = relativePath => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = relativePath => fs.readFileSync(projectFile(relativePath), 'utf8');
 
 test('batch Figure reading is bounded-parallel, ordered on commit, and skips completed depth', () => {
   const source = read('content.js');

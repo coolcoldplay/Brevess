@@ -1,31 +1,31 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../core/study-profile.js');
-require('../core/confidence-policy.js');
-require('../core/settings-store.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/chunker.js');
-require('../core/result-validator.js');
-require('../core/evidence-ledger.js');
-require('../core/cache-planner.js');
-require('../core/analysis-pipeline.js');
-require('../core/analysis-cache.js');
-require('../core/corpus-store.js');
-require('../core/manual-annotations.js');
-const { createMemoryDocumentStore } = require('../core/document-store.js');
-require('../providers/openai.js');
-require('../providers/anthropic.js');
-require('../providers/gemini.js');
-require('../providers/deepseek.js');
-require('../providers/openai-compatible.js');
-require('../providers/provider-registry.js');
-require('../core/task-profile-router.js');
-require('../core/token-budget.js');
-const { createBackgroundRouter } = require('../core/background-router.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/core/study-profile.js');
+require('../extension/core/confidence-policy.js');
+require('../extension/core/settings-store.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/chunker.js');
+require('../extension/core/result-validator.js');
+require('../extension/core/evidence-ledger.js');
+require('../extension/core/cache-planner.js');
+require('../extension/core/analysis-pipeline.js');
+require('../extension/core/analysis-cache.js');
+require('../extension/core/corpus-store.js');
+require('../extension/core/manual-annotations.js');
+const { createMemoryDocumentStore } = require('../extension/core/document-store.js');
+require('../extension/providers/openai.js');
+require('../extension/providers/anthropic.js');
+require('../extension/providers/gemini.js');
+require('../extension/providers/deepseek.js');
+require('../extension/providers/openai-compatible.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/core/task-profile-router.js');
+require('../extension/core/token-budget.js');
+const { createBackgroundRouter } = require('../extension/core/background-router.js');
 const {
   fixtureDocument,
   validBlueprint,

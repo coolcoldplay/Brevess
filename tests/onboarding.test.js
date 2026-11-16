@@ -10,7 +10,7 @@ const {
   setOnboardingStep,
   restartOnboarding,
   createOnboardingController
-} = require('../core/onboarding.js');
+} = require('../extension/core/onboarding.js');
 
 function memoryStorage(initial = {}) {
   const values = structuredClone(initial);

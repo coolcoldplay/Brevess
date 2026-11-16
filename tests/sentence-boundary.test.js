@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { findScientificSentenceBounds } = require('../core/sentence-boundary.js');
+const { findScientificSentenceBounds } = require('../extension/core/sentence-boundary.js');
 
 test('keeps a scientific sentence intact across CD8+T and figure abbreviations', () => {
   const text = 'Neoadjuvant therapy increased infiltration of CD8+T cells (Fig. 2a,b). ' +

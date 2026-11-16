@@ -8,7 +8,7 @@ const {
   flattenStructureNodes,
   resolveArticleStructureParagraph,
   toReviewParagraphRecords
-} = require('../core/article-structure.js');
+} = require('../extension/core/article-structure.js');
 
 function input(headings, paragraphs = []) {
   return {

@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
@@ -8,21 +9,21 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const baselineDir = path.join(root, 'benchmarks', 'baseline');
-const out = path.join(root, 'benchmarks', 'checkpoint2');
+const baselineDir = projectFile('benchmarks', 'baseline');
+const out = projectFile('benchmarks', 'checkpoint2');
 fs.mkdirSync(out, { recursive: true });
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
-require('../core/prompt-compiler.js');
-require('../core/figure-panel-planner.js');
-require('../core/figure-analysis.js');
-require('../core/provider-probes.js');
-const categories = require('../core/category-store.js');
-const promptCompiler = require('../core/prompt-compiler.js');
-const figure = require('../core/figure-analysis.js');
-const probesApi = require('../core/provider-probes.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/prompt-compiler.js');
+require('../extension/core/figure-panel-planner.js');
+require('../extension/core/figure-analysis.js');
+require('../extension/core/provider-probes.js');
+const categories = require('../extension/core/category-store.js');
+const promptCompiler = require('../extension/core/prompt-compiler.js');
+const figure = require('../extension/core/figure-analysis.js');
+const probesApi = require('../extension/core/provider-probes.js');
 
 const baseline = readJson(path.join(baselineDir, 'prompt-manifest.json'));
 const schemas = readJson(path.join(baselineDir, 'schema-manifest.json'));

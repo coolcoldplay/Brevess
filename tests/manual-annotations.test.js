@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../core/tab-activation.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/core/tab-activation.js');
 const {
   MAX_NOTE_LENGTH,
   WARNING_ANNOTATIONS_PER_DOCUMENT,
@@ -16,7 +16,7 @@ const {
   sameManualAnnotationRefreshIdentity,
   manualAnnotationRefreshCommitMode,
   manualAnnotationEventCommitMode
-} = require('../core/manual-annotations.js');
+} = require('../extension/core/manual-annotations.js');
 
 function annotation(overrides = {}) {
   return {

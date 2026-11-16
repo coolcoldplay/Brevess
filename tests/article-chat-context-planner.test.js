@@ -1,19 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/article-chat-tokenizer.js');
-require('../core/article-chat-index.js');
-require('../core/article-chat-retrieval.js');
-require('../core/token-budget.js');
-require('../providers/provider-registry.js');
-require('../core/article-chat-memory.js');
-const { buildArticleChatIndex } = require('../core/article-chat-index.js');
-const { buildArticleChatMemory } = require('../core/article-chat-memory.js');
-const { planArticleChatContext } = require('../core/article-chat-context-planner.js');
+require('../extension/core/article-chat-tokenizer.js');
+require('../extension/core/article-chat-index.js');
+require('../extension/core/article-chat-retrieval.js');
+require('../extension/core/token-budget.js');
+require('../extension/providers/provider-registry.js');
+require('../extension/core/article-chat-memory.js');
+const { buildArticleChatIndex } = require('../extension/core/article-chat-index.js');
+const { buildArticleChatMemory } = require('../extension/core/article-chat-memory.js');
+const { planArticleChatContext } = require('../extension/core/article-chat-context-planner.js');
 const {
   getProviderContextWindowTokens,
   getProviderMaxOutputTokens
-} = require('../providers/provider-registry.js');
+} = require('../extension/providers/provider-registry.js');
 
 function makeIndex(count, chars = 600) {
   const records = Array.from({ length: count }, (_, index) => ({

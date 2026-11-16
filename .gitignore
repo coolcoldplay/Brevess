@@ -9,10 +9,10 @@ outputs/
 qa-artifacts/
 发布/
 *.zip
-native-host/bin/*.blob
-native-host/bin/*.exe
-native-host/pdffigures2/pdffigures2.jar
-native-host/runtime/
+extension/native-host/bin/*.blob
+extension/native-host/bin/*.exe
+extension/native-host/pdffigures2/pdffigures2.jar
+extension/native-host/runtime/
 *.crx
 *.sha256.txt
 

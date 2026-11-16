@@ -1,10 +1,11 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'options.js'), 'utf8');
+const source = fs.readFileSync(projectFile('options.js'), 'utf8');
 const draftCapture = source.slice(source.indexOf('function updateTaskModelDraft('), source.indexOf('function handleTaskPolicyTableChange('));
 
 function editor(policy) {

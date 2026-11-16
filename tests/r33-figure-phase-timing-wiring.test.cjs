@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 const { harness: bindingHarness } = require('./helpers/r29-figure-binding-harness.js');
-const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
+const source = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8');
 const load = (name, context) => vm.runInContext(functionSource(source, name), context);
 const timings = context => Array.from(context.readContentRuntimeDiagnostics()).filter(row => row.timing);
 const wire = () => { const h = bindingHarness(); load('observeFigureRuntimePhase', h.c); return h; };

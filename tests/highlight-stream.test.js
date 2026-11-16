@@ -1,21 +1,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createBuiltInCategories } = require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../providers/provider-utils.js');
+const { createBuiltInCategories } = require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/providers/provider-utils.js');
 const {
   compileAnalysisPrompt,
   compileAnalysisStreamPrompt
-} = require('../core/prompt-compiler.js');
-require('../core/chunker.js');
+} = require('../extension/core/prompt-compiler.js');
+require('../extension/core/chunker.js');
 const {
   materializeHighlightStreamRecord,
   validateChunkResult
-} = require('../core/result-validator.js');
-const { createHighlightNdjsonParser } = require('../core/highlight-stream.js');
-require('../core/operation-control.js');
-const { analyzeDocument } = require('../core/analysis-pipeline.js');
+} = require('../extension/core/result-validator.js');
+const { createHighlightNdjsonParser } = require('../extension/core/highlight-stream.js');
+require('../extension/core/operation-control.js');
+const { analyzeDocument } = require('../extension/core/analysis-pipeline.js');
 
 function promptInput(categories) {
   return {

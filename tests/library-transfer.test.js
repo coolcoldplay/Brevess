@@ -1,14 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const common = require('../core/library-transfer.js');
-const radarModel = require('../core/literature-radar-model.js');
+const common = require('../extension/core/library-transfer.js');
+const radarModel = require('../extension/core/literature-radar-model.js');
 const {
   createMemoryRadarBackend,
   createRadarStore
-} = require('../core/literature-radar-store.js');
-const radarTransfer = require('../core/literature-radar-transfer.js');
-const globalTransfer = require('../workbench/global-library-transfer.js');
+} = require('../extension/core/literature-radar-store.js');
+const radarTransfer = require('../extension/core/literature-radar-transfer.js');
+const globalTransfer = require('../extension/workbench/global-library-transfer.js');
 
 function radarState() {
   return {

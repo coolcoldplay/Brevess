@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const {
   createMemoryTokenUsageStorageArea,
   createTokenUsageStore
-} = require('../core/token-usage-store.js');
-const { LLM_TASK_IDS } = require('../core/llm-task-catalog.js');
+} = require('../extension/core/token-usage-store.js');
+const { LLM_TASK_IDS } = require('../extension/core/llm-task-catalog.js');
 
 test('aggregates token usage by article, feature, provider, and model', async () => {
   const store = createTokenUsageStore(createMemoryTokenUsageStorageArea());

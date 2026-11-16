@@ -1,10 +1,10 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const S=require('../web-filters-general/schema.js'),M=require('../web-filters-general/reading-modules.js'),G=require('../web-filters-general/generalization.js');
+const S=require('../extension/web-filters-general/schema.js'),M=require('../extension/web-filters-general/reading-modules.js'),G=require('../extension/web-filters-general/generalization.js');
 function harness(){
  const tabs=new Map([1,2,3].map(id=>[id,{id,windowId:id===3?8:7,title:'Paper '+id,url:'https://papers.example/articles/'+id}]));let active=1,documentVersion=1;const events={},rpcCalls=[];
  const event=name=>({addListener:f=>events[name]=f});
  const browser={runtime:{id:'extension',getContexts:async()=>[{documentUrl:'chrome-extension://extension/popup.html',windowId:7}],onMessage:event('message'),sendMessage:async()=>{}},storage:{local:{get:async()=>({}),set:async()=>{}},session:{get:async()=>({}),set:async()=>{}}},webNavigation:{getAllFrames:async({tabId})=>[{frameId:0,documentId:'doc-'+tabId+'-'+documentVersion}]},tabs:{get:async id=>{if(!tabs.has(id))throw Error('Closed');return tabs.get(id);},query:async()=>[tabs.get(active)],update:async id=>{active=id;await events.activated({tabId:id,windowId:7});},onRemoved:event('removed'),onActivated:event('activated'),onUpdated:event('updated')}};
- const context={WFGSchema:S,WFGReadingModules:M,WFGGeneralization:G,crypto,URL,console};vm.runInNewContext(fs.readFileSync(require.resolve('../web-filters-general/ux-background.js'),'utf8'),context);
+ const context={WFGSchema:S,WFGReadingModules:M,WFGGeneralization:G,crypto,URL,console};vm.runInNewContext(fs.readFileSync(require.resolve('../extension/web-filters-general/ux-background.js'),'utf8'),context);
  const broker={allUndo:async id=>{rpcCalls.push({id,command:'UNDO_ALL'});},overview:async id=>({frames:[{frameId:0,ok:true,data:{session:'s-'+id,version:0}}]}),rpc:async(id,frame,command,data)=>{rpcCalls.push({id,command,data});return {};}};
  const c=context.WFGUX.install({browser,broker,multi:{cancel(){}}}),sender={id:'extension',url:'chrome-extension://extension/popup.html'};
  const call=(command,data={})=>c.handle({command,...data},sender);
@@ -27,7 +27,7 @@ test('switch during model work is refused; manual tab change cancels pending wor
  const h=harness();await h.call('STATE');const st=h.c.states.get(1);st.adjusting=true;st.busy=true;st.targets=[{id:'p'}];st.turns=[{status:'pending'}];await assert.rejects(h.call('SWITCH_TAB',{tabId:2}),/QUESTION_RUNNING/);await h.events.activated({tabId:2,windowId:7});assert.equal(st.busy,false);assert.equal(st.turns[0].status,'cancelled');assert.equal(st.targets.length,1);
 });
 test('display editing uses local page evidence while preserving the QA network preference',()=>{
- const C=require('../web-filters-general/ux-context.js');
+ const C=require('../extension/web-filters-general/ux-context.js');
  for(const mode of ['on','auto']) {
   const webSearch={mode};const display=C.route({adjusting:true,webSearch,question:'隐藏所选悬浮栏'});
   assert.equal(display.kind,'display');assert.equal(display.webSearch.mode,'off');assert.equal(webSearch.mode,mode);

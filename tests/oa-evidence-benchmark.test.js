@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   validateAnnotationSemantics,
   validateAnnotationStructureSemantics
-} = require('../core/result-validator.js');
+} = require('../extension/core/result-validator.js');
 
 // Adversarial evidence structures abstracted from the open-access paper set in
 // docs/testing/oa-paper-benchmark.md. The benchmark deliberately tests semantic

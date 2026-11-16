@@ -12,7 +12,7 @@ const {
   updateFinalConclusion,
   upsertResearchLogicMapIndex,
   buildResearchLogicMapSvg
-} = require('../core/research-logic-map');
+} = require('../extension/core/research-logic-map');
 
 function v3Fixture(overrides = {}) {
   const base = {

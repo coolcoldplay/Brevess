@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -7,13 +8,13 @@ const vm = require('node:vm');
 const {
   MAX_NON_STREAM_RESPONSE_BYTES,
   getProviderTransportLease
-} = require('../providers/provider-utils.js');
+} = require('../extension/providers/provider-utils.js');
 
 const {
   modelListRequest,
   parseModelList,
   discoverProviderModels
-} = require('../core/provider-model-discovery.js');
+} = require('../extension/core/provider-model-discovery.js');
 
 function responseHeaders(values = {}) {
   const entries = new Map(Object.entries(values).map(([key, value]) => [
@@ -79,7 +80,7 @@ function createProviderScriptContext(shared = null) {
 
 function executeProviderScript(context, relativePath) {
   vm.runInContext(
-    readFileSync(join(__dirname, '..', relativePath), 'utf8'),
+    readFileSync(projectFile(relativePath), 'utf8'),
     context,
     { filename: relativePath }
   );

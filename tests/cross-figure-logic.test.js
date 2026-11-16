@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../providers/provider-utils.js');
-require('../core/panel-ledger.js');
-require('../core/evidence-first-mechanism.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/core/panel-ledger.js');
+require('../extension/core/evidence-first-mechanism.js');
 const {
   CROSS_FIGURE_LOGIC_VERSION,
   compileCrossFigureLogicPrompt,
@@ -25,7 +25,7 @@ const {
   compileCrossFigureOverviewPrompt,
   projectCrossFigurePanelEvidenceSources,
   compileEvidenceFirstPanelBatchPrompt
-} = require('../core/cross-figure-logic.js');
+} = require('../extension/core/cross-figure-logic.js');
 
 const input = {
   articleTitle: 'A mechanistic study',

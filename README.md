@@ -1,9 +1,9 @@
-<p align="center"><img src="icons/Brevess-logo.svg" alt="BREVESS logo" width="72"></p>
+<p align="center"><img src="extension/icons/Brevess-logo.svg" alt="BREVESS logo" width="72"></p>
 <h1 align="center">BREVESS</h1>
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 实测演示</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-20261117"><strong>1.0.2 r27 预览版</strong></a> · <a href="使用教程.md">使用教程</a></p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 实测演示</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-20261117"><strong>1.0.2 r27 预览版</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -85,7 +85,11 @@
 
 ## 源码与构建
 
-Node.js 20+：
+插件源码集中在 [`extension/`](extension/)，构建脚本在 `scripts/`，回归测试在 `tests/`，官网和文档在 `docs/`。
+
+从 GitHub 克隆或下载源码后，Chrome「加载已解压的扩展程序」选择 **`extension/` 文件夹**。Release ZIP 的安装方式不变，仍选择解压后直接包含 `manifest.json` 的文件夹。
+
+Node.js 20+，以下命令均在仓库根目录运行：
 
 ```sh
 npm ci
@@ -100,7 +104,7 @@ npm run build:chrome-store -- --name Brevess-Chrome-v1.0.2
 npm run verify:chrome-store -- dist/Brevess-Chrome-v1.0.2
 ```
 
-`npm test` 运行完整现有回归；已知范围见[发布检查说明](docs/chrome-store/RELEASE_READINESS.md)。构建与许可见 [OPEN_SOURCE.md](OPEN_SOURCE.md)。
+`npm test` 运行完整现有回归；已知范围见[发布检查说明](docs/chrome-store/RELEASE_READINESS.md)。构建与许可见 [OPEN_SOURCE.md](extension/OPEN_SOURCE.md)。
 
 ## 联系与赞赏
 
@@ -110,4 +114,4 @@ npm run verify:chrome-store -- dist/Brevess-Chrome-v1.0.2
 | :---: | :---: |
 | <img src="docs/assets/support/wechat-plugin-display.png" alt="微信赞赏二维码" width="150"> | <img src="docs/assets/support/alipay-plugin-display.png" alt="支付宝赞赏二维码" width="150"> |
 
-[完整教程](使用教程.md) · [版本记录](https://github.com/coolcoldplay/Brevess/releases) · [隐私政策](docs/privacy-policy.md) · [AGPL-3.0-or-later](LICENSE)
+[完整教程](docs/使用教程.md) · [版本记录](https://github.com/coolcoldplay/Brevess/releases) · [隐私政策](docs/privacy-policy.md) · [AGPL-3.0-or-later](LICENSE)

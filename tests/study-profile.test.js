@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
 const {
   selectStudyProfileInput,
   compileStudyProfilePrompt,
@@ -13,7 +13,7 @@ const {
   createManualStudyProfile,
   deriveManualPaperBlueprint,
   classifyStudyDocument
-} = require('../core/study-profile.js');
+} = require('../extension/core/study-profile.js');
 const {
   fixtureParagraphs,
   fixtureDocument,

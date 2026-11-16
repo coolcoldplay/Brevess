@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -5,13 +6,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {
   normalizeLiteratureNoteDocumentState: normalizeCoreLiteratureNoteDocumentState
-} = require('../core/reading-tools.js');
-const ManualAnnotations = require('../core/manual-annotations.js');
-const EvidenceFirstMechanism = require('../core/evidence-first-mechanism.js');
-const FigureWorkspace = require('../core/figure-workspace.js');
+} = require('../extension/core/reading-tools.js');
+const ManualAnnotations = require('../extension/core/manual-annotations.js');
+const EvidenceFirstMechanism = require('../extension/core/evidence-first-mechanism.js');
+const FigureWorkspace = require('../extension/core/figure-workspace.js');
 
 function read(file) {
-  return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  return fs.readFileSync(projectFile(file), 'utf8');
 }
 
 function loadPopupUiHelpers() {
@@ -1639,7 +1640,7 @@ test('navigation first render opens exact root Results and preserves explicit ma
 });
 
 test('side panel auto-restores a readable local workspace before showing a legacy prompt', () => {
-  const script = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+  const script = fs.readFileSync(projectFile('popup.js'), 'utf8');
   assert.match(
     script,
     /async function tryAutoRestoreCurrentArticleWorkspace\([\s\S]*?requestPermission:\s*false/
@@ -1653,7 +1654,7 @@ test('side panel auto-restores a readable local workspace before showing a legac
       initialize.indexOf('probeCurrentArticleArchive'),
     'directory auto-restore must run before the optional legacy archive prompt'
   );
-  const content = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const content = fs.readFileSync(projectFile('content.js'), 'utf8');
   const snapshotStart = content.indexOf(
     "} else if (request.action === 'getArticleWorkspaceSnapshot')"
   );
@@ -1812,7 +1813,7 @@ test('navigation exposes a local high-precision abbreviation table', () => {
   assert.match(script, /ABBREVIATION_MEMORY_MERGE/);
   assert.match(script, /createGlobalAbbreviationMemoryExport/);
   assert.match(script, /getElementById\('configureAbbreviationLookup'\)\.addEventListener\('click', \(\) => void showAbbreviationLookupSettings\(\)\)/);
-  assert.equal(typeof require('../core/abbreviation-extractor.js').parseGlobalAbbreviationMemoryImport, 'function',
+  assert.equal(typeof require('../extension/core/abbreviation-extractor.js').parseGlobalAbbreviationMemoryImport, 'function',
     'legacy dictionary import remains available at the compatibility boundary');
   assert.match(script, /未调用 LLM/);
   assert.match(script, /function jumpToArticleAbbreviationSource/);

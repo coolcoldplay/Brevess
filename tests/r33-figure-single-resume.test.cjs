@@ -8,8 +8,8 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 const H = require('../output/r32-20261014/zero-model/resume/fixture.cjs');
-const popup = fs.readFileSync(require.resolve('../popup.js'), 'utf8').replace(/\r\n/g, '\n');
-const content = fs.readFileSync(require.resolve('../content.js'), 'utf8').replace(/\r\n/g, '\n');
+const popup = fs.readFileSync(require.resolve('../extension/popup.js'), 'utf8').replace(/\r\n/g, '\n');
+const content = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8').replace(/\r\n/g, '\n');
 const plain = value => JSON.parse(JSON.stringify(value));
 const uiOwner = { contextId: 'synthetic-side-panel', contextType: 'SIDE_PANEL' };
 const uiSender = { trustedExtensionSender: true, senderExtensionId: 'extension-id',
@@ -111,7 +111,7 @@ async function harness(options = {}) {
   let stopped = false, current = true, activeOperation;
   const c = vm.createContext({ console, structuredClone, Map, Set, Date, setTimeout, clearTimeout,
     figureTerminalSourceReceipts: new Map(),
-    SciLLM: { ...globalThis.SciLLM, ...require('../core/figure-result-binding.js') },
+    SciLLM: { ...globalThis.SciLLM, ...require('../extension/core/figure-result-binding.js') },
     articleWorkspaceLifecycleGeneration: 82, contentDocumentIdentity: f.binding.documentIdentity,
     contentNavigationIdentity: () => f.binding.navigationIdentity,
     getCanonicalArticleSnapshot: () => ({ documentHash: f.binding.documentHash }),
@@ -557,7 +557,7 @@ for (const type of ['dblclick', 'keydown']) for (const isTrusted of [true, false
     const view = { ...target(), setTimeout: () => 1, clearTimeout() {} };
     const doc = { ...target(), defaultView: view };
     const button = { ...target(), ownerDocument: doc, style: { setProperty() {} }, dataset: {} };
-    require('../core/sidebar-interactions.js').bindFigureGesture(button, { onAnalyze, isCurrent: () => true });
+    require('../extension/core/sidebar-interactions.js').bindFigureGesture(button, { onAnalyze, isCurrent: () => true });
     button.listeners.get(type)({ isTrusted, key: 'Enter', shiftKey: true, stopPropagation() {}, preventDefault() {} });
     await Promise.resolve();
     assert.equal(calls.length, 1);

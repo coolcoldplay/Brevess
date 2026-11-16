@@ -8,7 +8,7 @@ const {
   buildReviewOutlineCacheKey,
   buildReviewOutlineProgressKey,
   planCategoryAnalysis
-} = require('../core/cache-planner.js');
+} = require('../extension/core/cache-planner.js');
 
 const context = {
   documentHash: 'doc123',

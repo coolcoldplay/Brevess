@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,11 +9,11 @@ test('R27 production settings UI: isolated model workflow, About clipboard, resp
   { skip: process.env.BREVESS_R27_BROWSER !== '1', timeout: 60000 }, async () => {
     const { chromium } = require('playwright');
     const root = path.resolve(__dirname, '..');
-    const output = path.join(root, 'output/r27-ai-settings-repair');
-    const registry = require('../providers/provider-registry.js');
-    require('../core/llm-task-catalog.js'); require('../core/token-budget.js');
-    const settingsApi = require('../core/settings-store.js');
-    const categories = Object.values(require('../core/category-store.js').createBuiltInCategories());
+    const output = projectFile('output/r27-ai-settings-repair');
+    const registry = require('../extension/providers/provider-registry.js');
+    require('../extension/core/llm-task-catalog.js'); require('../extension/core/token-budget.js');
+    const settingsApi = require('../extension/core/settings-store.js');
+    const categories = Object.values(require('../extension/core/category-store.js').createBuiltInCategories());
     let settings = settingsApi.createDefaultSettings();
     settings.consentGranted = true;
     const state = () => ({ settings: settingsApi.toPublicSettings(settings), providers: registry.getProviderDefinitions(),
@@ -21,7 +22,7 @@ test('R27 production settings UI: isolated model workflow, About clipboard, resp
       llmReady: Object.values(settings.profiles).some(profile => Boolean(profile.config.apiKey)),
       effectiveMode: 'regex', analysisModeDefaults: settingsApi.createDefaultAnalysisModes() });
     const calls = [], pageErrors = [], unexpectedNetwork = [], viewportEvidence = [];
-    const html = fs.readFileSync(path.join(root, 'options.html'), 'utf8');
+    const html = fs.readFileSync(projectFile('options.html'), 'utf8');
     const files = new Map([['/options.html', 'options.html']]);
     for (const match of html.matchAll(/\b(?:src|href)="([\w./-]+\.(?:js|css|png|svg))"/g)) files.set('/' + match[1], match[1]);
     files.set('/vendor/phosphor/Phosphor.woff2', 'vendor/phosphor/Phosphor.woff2');
@@ -54,11 +55,11 @@ test('R27 production settings UI: isolated model workflow, About clipboard, resp
       }
       if (pathname === '/__fixture/shim.js') {
         res.writeHead(200, { 'content-type': 'text/javascript' });
-        res.end(fs.readFileSync(path.join(root, 'output/r25-ui-fixture/shim.js'), 'utf8') +
+        res.end(fs.readFileSync(projectFile('output/r25-ui-fixture/shim.js'), 'utf8') +
           '\nchrome.permissions = {request: async () => true, contains: async () => true};'); return;
       }
       if (!files.has(pathname)) { res.writeHead(404); res.end(); return; }
-      const name = files.get(pathname); let bytes = fs.readFileSync(path.join(root, name));
+      const name = files.get(pathname); let bytes = fs.readFileSync(projectFile(name));
       if (name === 'options.html') bytes = Buffer.from(bytes.toString('utf8').replace('<head>', '<head><script src="/__fixture/shim.js"></script>'));
       res.writeHead(200, { 'content-type': mime[path.extname(name)] || 'application/octet-stream' }); res.end(bytes);
     });

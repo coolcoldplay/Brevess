@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
-const root = path.join(__dirname, '..');
+const root = path.join(__dirname, '..', 'extension');
 
 function buildCellFixture() {
   const sections = Array.from({ length: 72 }, (_, sectionIndex) => {

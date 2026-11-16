@@ -1,10 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
-require('../core/adaptive-catalog.js');
-require('../core/manual-annotations.js');
-require('../core/user-data-database.js');
+require('../extension/core/category-store.js');
+require('../extension/core/adaptive-catalog.js');
+require('../extension/core/manual-annotations.js');
+require('../extension/core/user-data-database.js');
 const {
   DOCUMENT_DATABASE_NAME,
   DOCUMENT_DATABASE_VERSION,
@@ -12,7 +12,7 @@ const {
   META_STORE_NAME,
   createMemoryDocumentStore,
   createIndexedDbDocumentStore
-} = require('../core/document-store.js');
+} = require('../extension/core/document-store.js');
 
 const DOCUMENT_ONE = `sha256:${'1'.repeat(64)}`;
 const DOCUMENT_TWO = `sha256:${'2'.repeat(64)}`;

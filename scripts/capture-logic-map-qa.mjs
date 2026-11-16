@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(process.env.SCI_EXTENSION_ROOT || path.resolve(scriptDirectory, '..'));
+const root = path.resolve(process.env.SCI_EXTENSION_ROOT || path.resolve(scriptDirectory, '..', 'extension'));
 const output = path.resolve(process.env.SCI_QA_OUTPUT_DIR ||
-  path.join(path.resolve(scriptDirectory, '..'), 'output', 'playwright', 'logic-map-current'));
+  path.join(path.resolve(scriptDirectory, '..', 'extension'), 'output', 'playwright', 'logic-map-current'));
 const userMapInput = String(process.env.SCI_LOGIC_MAP_FIXTURE || '').trim();
 const userMap = userMapInput ? path.resolve(userMapInput) : '';
 fs.mkdirSync(output, { recursive: true });

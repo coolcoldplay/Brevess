@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { chunkParagraphs } = require('../core/chunker.js');
+const { chunkParagraphs } = require('../extension/core/chunker.js');
 
 test('covers every paragraph without candidate filtering', () => {
   const paragraphs = [

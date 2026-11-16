@@ -2,8 +2,8 @@ param([switch]$Force)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $projectRoot 'native-host\pdf-fallback\BrevessPdfFallback.java'
-$engineRoot = Join-Path $projectRoot 'native-host\pdffigures2'
+$source = Join-Path $projectRoot 'extension/native-host\pdf-fallback\BrevessPdfFallback.java'
+$engineRoot = Join-Path $projectRoot 'extension/native-host\pdffigures2'
 $dependencyJar = Join-Path $engineRoot 'pdffigures2.jar'
 $targetJar = Join-Path $engineRoot 'brevess-pdf-fallback.jar'
 $classes = Join-Path $projectRoot 'tmp\pdf-fallback-classes'

@@ -2,6 +2,8 @@
 
 ## 安装扩展
 
+GitHub 源码位于 `extension/`：如果下载的是仓库源码，加载该子目录；如果下载的是 Release 浏览器 ZIP，按下面步骤直接加载解压目录。现有已安装扩展不需要因为源码整理而重新安装。
+
 1. 解压发布包。
 2. 在 Edge 打开 `edge://extensions/`，或在 Chrome 打开 `chrome://extensions/`。
 3. 开启右上角“开发人员模式”。

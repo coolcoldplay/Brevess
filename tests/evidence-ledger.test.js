@@ -7,7 +7,7 @@ const {
   reviewEvidenceLedger,
   MISSING_INFORMATION_PREFIX,
   EVIDENCE_LEDGER_VERSION
-} = require('../core/evidence-ledger.js');
+} = require('../extension/core/evidence-ledger.js');
 const {
   validBlueprint,
   acceptedAnnotations,

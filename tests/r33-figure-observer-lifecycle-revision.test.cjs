@@ -1,11 +1,11 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
-const messenger=require('../core/tab-messenger.js'),{executeContentRevisionAssignment}=require('./helpers/content-revision-runtime.js'),{createTabMessengerNavigationHarness}=require('./helpers/tab-messenger-navigation-harness.js');
+const messenger=require('../extension/core/tab-messenger.js'),{executeContentRevisionAssignment}=require('./helpers/content-revision-runtime.js'),{createTabMessengerNavigationHarness}=require('./helpers/tab-messenger-navigation-harness.js');
 const old='1.0.1-reliability-r32-paragraph-notes-v16';
 const previous='1.0.1-reliability-r33-figure-source-v17';
 const current='1.0.1-reliability-r34-figure-retry-v18';
 test('R33 source lease revision replaces the F19 receiver and loads the helper before content',()=>{
- assert.equal(messenger.CONTENT_SCRIPT_REVISION,current);assert.equal(executeContentRevisionAssignment(fs.readFileSync(require.resolve('../content.js'),'utf8')),messenger.CONTENT_SCRIPT_REVISION);
+ assert.equal(messenger.CONTENT_SCRIPT_REVISION,current);assert.equal(executeContentRevisionAssignment(fs.readFileSync(require.resolve('../extension/content.js'),'utf8')),messenger.CONTENT_SCRIPT_REVISION);
  const files=messenger.CONTENT_SCRIPT_FILES;assert.ok(files.indexOf('core/figure-source-lease.js')>=0&&files.indexOf('core/figure-source-lease.js')<files.indexOf('content.js'));
 });
 for(const revision of [old,previous])for(const receiver of [true,false])test(`an old ${revision} page upgrades through the existing one-reload protocol (receiver=${receiver})`,async()=>{

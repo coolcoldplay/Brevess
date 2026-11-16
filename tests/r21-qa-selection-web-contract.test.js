@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('../providers/provider-utils.js');
-require('../providers/provider-registry.js');
-const web = require('../core/article-chat-web-sources.js');
-const { createDeepSeekAdapter } = require('../providers/deepseek.js');
-const { createOpenAIAdapter } = require('../providers/openai.js');
-const { compileSelectionAiPrompt, runSelectionAi } = require('../core/selection-ai.js');
+require('../extension/providers/provider-utils.js');
+require('../extension/providers/provider-registry.js');
+const web = require('../extension/core/article-chat-web-sources.js');
+const { createDeepSeekAdapter } = require('../extension/providers/deepseek.js');
+const { createOpenAIAdapter } = require('../extension/providers/openai.js');
+const { compileSelectionAiPrompt, runSelectionAi } = require('../extension/core/selection-ai.js');
 
 const SOURCE = 'https://www.nobelprize.org/prizes/physics/2025/press-release/?lang=en#content';
 const markdown = `Explain the supplied selection cautiously. The external claim is supported by [the official source](${SOURCE}).`;

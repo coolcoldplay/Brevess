@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 
 const test = require('node:test');
@@ -7,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 
-const popup = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+const popup = fs.readFileSync(projectFile('popup.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function clock() {
@@ -150,7 +151,7 @@ test('R34 both renderers append the marker before the edit card and remove legac
 });
 
 test('R34 paragraph marker uses the compact Figure/Panel badge language instead of a standalone amber bar', () => {
-  const css = fs.readFileSync(path.join(__dirname, '..', 'popup.css'), 'utf8');
+  const css = fs.readFileSync(projectFile('popup.css'), 'utf8');
   const block = css.match(/^\.workspace-paragraph-marker\s*\{([^}]*)\}/m)?.[1] || '';
   assert.match(block, /background:\s*#dfedf8/i);
   assert.match(block, /color:\s*#183a57/i);
@@ -162,6 +163,6 @@ test('R34 paragraph marker uses the compact Figure/Panel badge language instead 
   assert.match(css, /^\.workspace-paragraph-text\s*\{\s*display:\s*inline/m);
   const source = functionSource(popup, 'renderArticleNavigationTree');
   assert.match(source, /`段\$\{index \+ 1\}`/);
-  const swiss = fs.readFileSync(path.join(__dirname, '..', 'ui-swiss.css'), 'utf8');
+  const swiss = fs.readFileSync(projectFile('ui-swiss.css'), 'utf8');
   assert.match(swiss, /#articleNavigationTree :is\(\.workspace-paragraph-row, \.workspace-pdf-paragraph-row\)\s*\{\s*display:\s*block/);
 });

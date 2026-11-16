@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const registry = require('../workbench/operation-registry.js');
+const registry = require('../extension/workbench/operation-registry.js');
 
 function runtimeFixture() {
   let row = null;
@@ -97,7 +97,7 @@ function loadHost(fixture) {
   context.__workbenchTools = fixture.tools;
   vm.createContext(context);
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, '../workbench/mcp-host.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '../extension/workbench/mcp-host.js'), 'utf8'),
     context,
     { filename: 'workbench/mcp-host.js' }
   );

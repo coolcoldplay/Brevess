@@ -12,7 +12,7 @@ const {
   createWorkspaceIndex,
   validateWorkspaceIndex,
   matchWorkspaceManifests
-} = require('../core/article-workspace.js');
+} = require('../extension/core/article-workspace.js');
 
 test('workspace identity uses normalized canonical URL, aliases, and content hash revision', async () => {
   const workspace = await createArticleWorkspaceIdentity({

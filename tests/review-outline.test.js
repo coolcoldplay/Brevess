@@ -12,7 +12,7 @@ const {
   validateReviewSynthesis,
   buildReviewOutlineTree,
   collectReviewParagraphSummaries
-} = require('../core/review-outline.js');
+} = require('../extension/core/review-outline.js');
 
 test('selects a generic or primary-research strategy when review metadata is absent', () => {
   assert.equal(selectArticleOutlineStrategy(null), 'generic_article');

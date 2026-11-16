@@ -4,9 +4,9 @@ const { existsSync, mkdtempSync, readFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
-require('../providers/provider-utils.js');
-const { createCodexNativeClient } = require('../core/codex-native-client.js');
-const { createCodexLocalAdapter } = require('../providers/codex-local.js');
+require('../extension/providers/provider-utils.js');
+const { createCodexNativeClient } = require('../extension/core/codex-native-client.js');
+const { createCodexLocalAdapter } = require('../extension/providers/codex-local.js');
 const {
   CodexBridgeHost,
   TurnImageStore,
@@ -17,7 +17,7 @@ const {
   codexSpawnSpec,
   classifyTurnError,
   codexHomeDirectory
-} = require('../native-host/host.js');
+} = require('../extension/native-host/host.js');
 
 function createFakeRuntime() {
   const messageListeners = [];

@@ -9,7 +9,7 @@ async function snapshot(css) {
     const context = await browser.newContext();
     await context.route('**/*', route => route.request().url() === 'https://r33-resource.qa.test/paper'
       ? route.fulfill({ contentType: 'text/html', body: `<!doctype html><style>${css}</style><div><nav class="removed-navigation-0">Not article</nav><article id="paper"><p data-component=":hover">All article source text remains available.</p><img src="${PNG}" alt="Available local figure"></article></div>` }) : route.abort());
-    await context.addInitScript({ path: path.resolve(__dirname, '../core/faithful-page-snapshot.js') });
+    await context.addInitScript({ path: path.resolve(__dirname, '../extension/core/faithful-page-snapshot.js') });
     const page = await context.newPage(); await page.goto('https://r33-resource.qa.test/paper');
     return await page.evaluate(async () => {
       const before = document.documentElement.outerHTML, calls = [];

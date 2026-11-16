@@ -1,3 +1,4 @@
+const { projectFile } = require('../scripts/project-paths.cjs');
 'use strict';
 
 const test = require('node:test');
@@ -5,12 +6,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const readingTools = require('../core/reading-tools.js');
-const reviewOutline = require('../core/review-outline.js');
+const readingTools = require('../extension/core/reading-tools.js');
+const reviewOutline = require('../extension/core/review-outline.js');
 const { functionSource } = require('./helpers/r28-full07-source.js');
 
 const root = path.join(__dirname, '..');
-const read = relativePath => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = relativePath => fs.readFileSync(projectFile(relativePath), 'utf8');
 
 test('NOTE-067 keeps transferable ideas as the final default basic-research field', () => {
   const template = readingTools.DEFAULT_LITERATURE_NOTE_TEMPLATES

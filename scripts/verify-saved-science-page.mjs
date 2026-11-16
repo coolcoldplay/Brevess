@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const root = process.env.SCI_EXTENSION_ROOT
   ? path.resolve(process.env.SCI_EXTENSION_ROOT)
-  : path.resolve(import.meta.dirname, '..');
+  : path.resolve(import.meta.dirname, '..', 'extension');
 const candidateDirectory = process.env.SCI_SAVED_HTML
   ? path.dirname(path.resolve(process.env.SCI_SAVED_HTML))
   : path.resolve(root, '..', 'test_example');

@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-require('../core/category-store.js');
-const { createUnifiedCategoryCatalog } = require('../core/adaptive-catalog.js');
+require('../extension/core/category-store.js');
+const { createUnifiedCategoryCatalog } = require('../extension/core/adaptive-catalog.js');
 
 const catalog = createUnifiedCategoryCatalog();
 

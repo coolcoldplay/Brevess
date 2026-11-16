@@ -1,3 +1,4 @@
+import { projectFile } from './project-paths.cjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,10 +7,10 @@ import { chromium } from 'playwright';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, '..');
-const output = path.join(root, 'docs', 'edge-store', 'assets');
+const output = projectFile('docs', 'edge-store', 'assets');
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brevess-store-profile-'));
 const extensionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brevess-store-extension-'));
-const reviewerHtml = fs.readFileSync(path.join(root, 'docs', 'reviewer-demo.html'), 'utf8');
+const reviewerHtml = fs.readFileSync(projectFile('docs', 'reviewer-demo.html'), 'utf8');
 fs.mkdirSync(output, { recursive: true });
 
 function removeGeneratedTempDirectory(directory, expectedPrefix) {
@@ -22,7 +23,7 @@ function removeGeneratedTempDirectory(directory, expectedPrefix) {
 }
 
 for (const directory of ['core', 'providers', 'vendor', 'icons', '_locales']) {
-  fs.cpSync(path.join(root, directory), path.join(extensionDir, directory), {
+  fs.cpSync(projectFile(directory), path.join(extensionDir, directory), {
     recursive: true
   });
 }
@@ -33,7 +34,7 @@ for (const filename of [
   'options.html', 'options.js', 'options.css',
   'offscreen.html', 'offscreen.js', 'offscreen-network-worker.js'
 ]) {
-  fs.copyFileSync(path.join(root, filename), path.join(extensionDir, filename));
+  fs.copyFileSync(projectFile(filename), path.join(extensionDir, filename));
 }
 
 const context = await chromium.launchPersistentContext(userDataDir, {

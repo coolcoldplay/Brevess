@@ -6,11 +6,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 const { functionSource } = require('./helpers/r28-full07-source.js');
-const recoveryApi = require('../core/figure-panel-recovery.js');
+const recoveryApi = require('../extension/core/figure-panel-recovery.js');
 
-const content = fs.readFileSync(require.resolve('../content.js'), 'utf8')
+const content = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8')
   .replace(/\r\n/g, '\n');
-const router = fs.readFileSync(require.resolve('../core/background-router.js'), 'utf8')
+const router = fs.readFileSync(require.resolve('../extension/core/background-router.js'), 'utf8')
   .replace(/\r\n/g, '\n');
 const hash = value => crypto.createHash('sha256')
   .update(JSON.stringify(value)).digest('hex');
