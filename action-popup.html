@@ -16,27 +16,21 @@
         <strong id="popupTitle">Brevess</strong>
         <p id="pageTitle">正在读取当前页面…</p>
       </div>
-      <button id="actionAccountOpen" class="action-account" type="button" aria-label="账号管理" title="账号管理">
-        <span class="action-account__identity" role="status" aria-live="polite"><strong id="actionAccountState">正在核验登录状态…</strong><span id="actionAccountName" data-i18n-ignore hidden></span></span>
-      </button>
+
     </header>
 
     <div class="action-popup__actions">
       <button id="startReading" class="action-popup__button action-popup__button--primary" type="button">
         <i class="ph ph-compass action-popup__button-icon" aria-hidden="true"></i>
-        <span class="action-popup__button-copy"><strong>开始研读</strong><small>在侧栏打开当前文献</small></span>
+        <span class="action-popup__button-copy"><strong>侧栏打开工作台</strong><small>在侧栏打开当前文献</small></span>
       </button>
     </div>
     <section class="page-tools" aria-labelledby="pageToolsTitle">
       <div class="page-tools__heading"><h2 id="pageToolsTitle">网页工具</h2><span>无需打开侧栏</span></div>
       <p class="page-tools__hint">开关会记住并应用于之后打开的网页</p>
-      <label class="page-tools__row" for="toolSemantic"><span>页面语义检索 <kbd id="semanticShortcut">J</kbd></span><input id="toolSemantic" type="checkbox" role="switch" disabled></label>
-      <label class="page-tools__row" for="toolSelection"><span>划句弹窗 · 翻译与高亮</span><input id="toolSelection" type="checkbox" role="switch" disabled></label>
-      <label class="page-tools__row" for="toolTranslation"><span>整页翻译 <small>含 Alt 段落翻译</small></span><input id="toolTranslation" type="checkbox" role="switch" disabled></label>
-      <div class="page-tools__actions">
-        <button id="openPageSearch" type="button" disabled>打开检索</button>
-        <button id="translatePage" type="button" disabled>翻译当前页</button>
-      </div>
+      <div class="page-tools__row"><label for="toolSelection">划句弹窗 · 翻译与高亮</label><input id="toolSelection" type="checkbox" role="switch" disabled></div>
+      <div class="page-tools__row"><label for="toolSemantic">页面语义检索 <kbd id="semanticShortcut">J</kbd></label><button id="openPageSearch" class="page-tools__icon" type="button" aria-label="打开页面语义检索" title="打开页面语义检索" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></button><input id="toolSemantic" type="checkbox" role="switch" disabled></div>
+      <div class="page-tools__row"><label for="toolTranslation">整页翻译 <small>含 Alt 段落翻译</small></label><button id="translatePage" class="page-tools__icon" type="button" aria-label="翻译当前页" title="翻译当前页" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h12M9 2v3M5 5c1 6 5 9 10 11M13 5c-1 6-5 9-10 11M14 21l4-11 4 11M15.5 17h5"/></svg></button><input id="toolTranslation" type="checkbox" role="switch" disabled></div>
       <p id="pageToolsStatus" class="page-tools__hint" role="status" aria-live="polite">正在读取工具设置…</p>
     </section>
     <div class="action-popup__actions action-popup__actions--secondary">
@@ -59,16 +53,16 @@
     </div>
     <p id="pageStatus" class="action-popup__status" role="status" aria-live="polite" hidden></p>
   </main>
-  <script src="core/i18n.js"></script>
+  <script src="core/ui-action-icons.js"></script><script src="core/i18n.js"></script>
     <script src="core/i18n-extension.js"></script>
 <script src="core/i18n-reader.js"></script>
 <script src="core/i18n-reader-extra.js"></script>
 <script src="core/i18n-system.js"></script>
 <script src="core/i18n-tools.js"></script>
 <script src="core/i18n-reader-patterns.js"></script>
-  <script src="core/i18n-sharing.js"></script>
-  <script src="sharing/client.js"></script>
-  <script src="sharing/account-status.js"></script>
+
+
+
   <script src="action-popup.js"></script>
 </body>
 </html>

@@ -216,6 +216,7 @@ async function handleStreamRequest(message) {
   try {
     const response = await fetch(message.url, {
       ...(message.options || {}),
+      redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store',
       signal: controller.signal
     });
     await streamResponseBody(message, response, controller);
@@ -251,6 +252,7 @@ self.onmessage = async event => {
   try {
     response = await fetch(message.url, {
       ...(message.options || {}),
+      redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store',
       signal: controller.signal
     });
   } catch (error) {

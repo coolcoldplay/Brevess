@@ -107,8 +107,7 @@
 
     if (providerId === 'gemini') {
       const url = new URL(OFFICIAL_MODEL_ENDPOINTS.gemini);
-      url.searchParams.set('key', apiKey);
-      return { providerId, url: url.href, headers: { Accept: 'application/json' } };
+      return { providerId, url: url.href, headers: { Accept: 'application/json', 'x-goog-api-key': apiKey } };
     }
 
     if (providerId === 'anthropic') {

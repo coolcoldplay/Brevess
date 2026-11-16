@@ -2,7 +2,10 @@
   'use strict';
   const TYPES = new Set(['RESEARCH_WORKBENCH_SYNC','RESEARCH_WORKBENCH_DIRECTORY_STATUS','RESEARCH_WORKBENCH_LOCATE_SOURCE','RESEARCH_WORKBENCH_DATA_DIRECTORY_ENSURE','RESEARCH_WORKBENCH_DATA_DIRECTORY_OPEN']);
   const OWNER_CHALLENGE = 'RESEARCH_WORKBENCH_OWNER_CHALLENGE';
+  const OWNER_PROOF = 'RESEARCH_WORKBENCH_OWNER_PROOF';
   const fault = code => Object.assign(new Error(code),{code});
+  // Options, the action popup and the library link all use this entry route.
+  const validWorkbenchFragment = hash => !hash || hash === '#library';
   function validMcpBridgeQuery(url) {
     const allowed = new Set(['mcpServer', 'mcpToken', 'mcpBridge']);
     const entries = [...url.searchParams.entries()];
@@ -28,9 +31,10 @@
     if (left === right) return true;
     try {
       const a = new URL(left), b = new URL(right);
-      if (a.protocol !== b.protocol || a.host !== b.host || a.pathname !== b.pathname || a.hash !== b.hash) return false;
+      if (a.protocol !== b.protocol || a.host !== b.host || a.pathname !== b.pathname) return false;
       if (a.pathname !== '/workbench/index.html') return false;
-      return validMcpBridgeQuery(a) && validMcpBridgeQuery(b);
+      return validWorkbenchFragment(a.hash) && validWorkbenchFragment(b.hash) &&
+        (!a.search || validMcpBridgeQuery(a)) && (!b.search || validMcpBridgeQuery(b));
     } catch (_) {
       return false;
     }
@@ -42,7 +46,7 @@
     try {
       const href=new URL(view.location?.href||''), expected=new URL(runtime.getURL('workbench/index.html'));
       ownWorkbench=href.protocol===expected.protocol&&href.host===expected.host&&href.pathname===expected.pathname&&
-        (!href.search||validMcpBridgeQuery(href))&&!href.hash;
+        (!href.search||validMcpBridgeQuery(href))&&validWorkbenchFragment(href.hash);
     } catch (_) {}
     if(!ownWorkbench)return;
     runtime.onMessage.addListener((message,sender,respond)=>{
@@ -53,7 +57,11 @@
         parentHref=view.parent.location.href;
         designatedFrame=isDirectChild&&view.parent.document.getElementById('researchWorkbenchFrame')?.contentWindow===view;
       } catch (_) {}
-      respond({nonce:message.nonce,href:view.location.href,isTop,isDirectChild,parentHref,designatedFrame});
+      // A new runtime message carries Chrome's document identity. A broadcast
+      // response alone cannot identify which of several workbench tabs replied.
+      Promise.resolve(runtime.sendMessage({type:OWNER_PROOF,nonce:message.nonce,
+        href:view.location.href,isTop,isDirectChild,parentHref,designatedFrame})).catch(()=>{});
+      respond({accepted:true});
       return false;
     });
   }
@@ -64,7 +72,7 @@
         const url=new URL(value), expected=new URL(chromeApi.runtime.getURL(path));
         const mcpQuery=path==='workbench/index.html'&&validMcpBridgeQuery(url);
         return url.protocol===expected.protocol && url.host===expected.host && url.pathname===expected.pathname && (!url.search||mcpQuery) &&
-          (!url.hash || (path==='options.html' && url.hash==='#page=workbench'));
+          (path==='workbench/index.html'?validWorkbenchFragment(url.hash):(!url.hash || (path==='options.html' && url.hash==='#page=workbench')));
       } catch { return false; }
     };
     async function authorize(sender) {
@@ -101,14 +109,31 @@
       if(frame&&topFrame&&tab.url!==undefined)return;
       // Chromium normally excludes chrome-extension URLs from webNavigation.
       // Require exact live contexts AND an exact-document DOM owner challenge.
-      if(!child||typeof chromeApi.tabs.sendMessage!=='function')invalid();
+      if(!child||typeof chromeApi.runtime.sendMessage!=='function'||!chromeApi.runtime.onMessage?.addListener)invalid();
       const contexts=await chromeApi.runtime.getContexts({tabIds:[child.tabId]});
       const owners=contexts.filter(item=>item.frameId===0&&item.tabId===child.tabId);
       if(owners.length!==1||!validContext(owners[0])||!exactPage(owners[0].documentUrl,ownerPage))invalid();
       const owner={...owners[0]};
       if(topFrame&&topFrame.documentId!==owner.documentId||sender.frameId===0&&owner.documentId!==child.documentId)invalid();
       const nonce=globalThis.crypto.randomUUID();let receipt;
-      try {receipt=await chromeApi.tabs.sendMessage(child.tabId,{type:OWNER_CHALLENGE,nonce},{frameId:child.frameId,documentId:child.documentId});}
+      // tabs.sendMessage only reaches content scripts, not extension pages.
+      // Broadcast the challenge, then accept a separate, browser-authenticated
+      // proof only from the exact live document we are authorizing.
+      try {receipt=await new Promise((resolve,reject)=>{
+        const event=chromeApi.runtime.onMessage;
+        let settled=false;
+        const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);event.removeListener(listener);error?reject(error):resolve(value);};
+        const listener=(message,proofSender,respond)=>{
+          if(message?.type!==OWNER_PROOF||message.nonce!==nonce||proofSender?.id!==chromeApi.runtime.id||
+            proofSender.documentId!==child.documentId||!sameDocumentPage(proofSender.url,child.documentUrl)||
+            proofSender.origin!==undefined&&proofSender.origin!==ownOrigin||
+            proofSender.documentLifecycle!==undefined&&proofSender.documentLifecycle!=='active')return false;
+          respond({accepted:true});finish(null,message);return false;
+        };
+        const timer=setTimeout(()=>finish(fault('WORKBENCH_SENDER_INVALID')),3000);
+        event.addListener(listener);
+        Promise.resolve().then(()=>chromeApi.runtime.sendMessage({type:OWNER_CHALLENGE,nonce})).catch(error=>finish(error));
+      });}
       catch (_) {invalid();}
       if(receipt?.nonce!==nonce||!sameDocumentPage(receipt.href,child.documentUrl)||receipt.isTop!==(child.frameId===0)||
         child.frameId!==0&&(receipt.isDirectChild!==true||receipt.designatedFrame!==true||receipt.parentHref!==owner.documentUrl))invalid();

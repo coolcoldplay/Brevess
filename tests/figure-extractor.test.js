@@ -52,6 +52,12 @@ test('falls back to the original Figure title when no translation is present', (
   );
 });
 
+test('publisher heading boundaries preserve scientific abbreviations, parentheses and multiple sentences', () => {
+  const title = 'E. coli challenge (A) at 1.5 h. Response after recovery.';
+  assert.equal(extractFigureTitle('Fig. 1: ' + title, 'Figure 1', { heading: true }).title, title);
+  assert.equal(extractFigureTitle('Extended Data Fig. 2: ' + title, 'Extended Data Figure 2', { heading: true }).title, title);
+});
+
 function image(src, width = 900, height = 600) {
   return {
     currentSrc: src,
@@ -113,6 +119,23 @@ function documentWith(candidates) {
     }
   };
 }
+
+test('split publisher captions carry the exact heading independently of the full evidence caption', () => {
+  const heading = { textContent: 'Fig. 1: E. coli at 1.5 h. Recovery (A).' };
+  const caption = heading.textContent + ' a, Dosing. b, Quantification, n = 4 animals.';
+  const candidate = figure({ caption });
+  const previous = globalThis.SciLLM.collectArticleCaptionSources;
+  globalThis.SciLLM.collectArticleCaptionSources = () => [{
+    element: candidate, titleElement: heading, text: caption,
+    parts: [heading, { textContent: 'a, Dosing. b, Quantification, n = 4 animals.' }]
+  }];
+  try {
+    const [result] = extractArticleFiguresFromRecords(documentWith([candidate]), []);
+    assert.equal(result.figureTitle, 'E. coli at 1.5 h. Recovery (A).');
+    assert.equal(result.caption, caption);
+    assert.equal(result.figureId, 'figure-1');
+  } finally { globalThis.SciLLM.collectArticleCaptionSources = previous; }
+});
 
 test('builds Figure context from supplied body records without resolving images', () => {
   const candidate = figure({

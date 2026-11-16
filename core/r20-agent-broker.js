@@ -1,0 +1,7 @@
+(function(){
+ const base=chrome.runtime.getURL('');const context=async tabId=>{const rows=await chrome.runtime.getContexts({contextTypes:['TAB']});const own=rows.filter(c=>c.tabId===tabId&&c.frameId===0&&c.documentUrl?.split(/[?#]/)[0]===base+'workbench/index.html');return own.length===1?own[0]:null;};const bridge=BrevessR20AgentBridge.createBroker({base,
+  verifyHost:async sender=>{if(sender?.id!==chrome.runtime.id||sender.frameId!==0||sender.url?.split(/[?#]/)[0]!==base+'workbench/index.html'||!Number.isInteger(sender.tab?.id)||!sender.documentId||sender.documentLifecycle&&sender.documentLifecycle!=='active')return false;const own=await context(sender.tab.id);return own?.documentId===sender.documentId&&own.windowId===sender.tab.windowId;},
+  verifySidebar:async sender=>{if(sender?.id!==chrome.runtime.id||sender.tab||sender.url!==base+'workbench/agent-sidebar.html'||!sender.documentId||!chrome.runtime.getContexts)return null;const contexts=await chrome.runtime.getContexts({contextTypes:['SIDE_PANEL'],documentIds:[sender.documentId],documentUrls:[base+'workbench/agent-sidebar.html']});const owners=contexts.filter(c=>c.contextType==='SIDE_PANEL'&&c.documentId===sender.documentId&&c.windowId>=0);return owners.length===1?{windowId:owners[0].windowId}:null;},
+  activeTab:async windowId=>(await chrome.tabs.query({active:true,windowId}))[0],frame:tabId=>context(tabId)
+ });chrome.runtime.onConnect.addListener(port=>void bridge.attach(port).catch(()=>{try{port.disconnect()}catch{}}));
+})();

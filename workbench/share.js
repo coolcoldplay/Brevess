@@ -190,7 +190,10 @@
     const assets = [];
     for (const id of assetIds) {
       const row = (project.assets || []).find(item => item.id === id);
-      if (row) assets.push(row);
+      if (row) {
+        assets.push(row);
+        warning(warnings, 'SHARE_ASSET_BYTES_EXCLUDED', '自有图片仅包含引用，不含原图；传递原图请使用完整导出', id);
+      }
       else warning(warnings, 'SHARE_ASSET_UNRESOLVED', '自有图片引用未在本课题解析', id);
     }
 
@@ -207,10 +210,10 @@
         type: row.type,
         title: row.title,
         mimeType: row.mimeType,
-        sha256: row.sha256,
+        sha256: row.sha256 || row.sourceSha256,
         byteLength: row.byteLength,
         note: row.note,
-        availability: row.availability || 'unavailable'
+        availability: 'unavailable'
       })))
     };
     const share = {
@@ -280,7 +283,13 @@
     const assets = (share.payload.assets || []).map(row => {
       const id = M.uid('asset');
       idMap.assets.set(row.id, id);
-      return { ...M.clone(row), id, originalId: row.id, availability: row.availability || 'unavailable' };
+      // sha256 declares local binary in storage, backup and directory sync.
+      // Shares contain references only; retain the source fingerprint separately.
+      const asset = { ...M.clone(row), id, originalId: row.id, availability: 'unavailable' };
+      if (row.sha256 || row.sourceSha256) asset.sourceSha256 = row.sha256 || row.sourceSha256;
+      delete asset.sha256;
+      warning(warnings, 'SHARE_ASSET_BYTES_EXCLUDED', '分享文件不含自有图片原件，已保留图片引用；需要原图请导入完整课题备份', row.id);
+      return asset;
     });
     const assetsByOriginal = new Map(assets.map(row => [row.originalId, row]));
     const resources = (share.payload.resources || []).map(row => {

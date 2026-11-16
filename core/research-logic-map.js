@@ -14,6 +14,16 @@
     return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
   }
 
+  // Scientific prose must not compatibility-fold subscripts, exponents or
+  // mathematical alphabets. Keep the old text() contract for stable identifiers.
+  function researchText(value, maximum = 12000) {
+    const source = String(value || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+    // Reject an oversize compatibility-sensitive field as a whole, never retain
+    // a partial formula. Ordinary prose retains the previous length contract.
+    if (source.length > maximum && source.normalize('NFKC') !== source) return '';
+    return source.slice(0, maximum);
+  }
+
   function list(value, maximum = 60) {
     return (Array.isArray(value) ? value : [])
       .map(item => text(item, 200))
@@ -92,11 +102,11 @@
   function normalizeTextItems(value, prefix, maximum = 60) {
     const source = Array.isArray(value)
       ? value
-      : (text(value) ? [{ text: value }] : []);
+      : (researchText(value) ? [{ text: value }] : []);
     const used = new Set();
     return source.slice(0, maximum).map((item, index) => ({
       itemId: allocateCollectionId(item?.itemId, prefix, index, used),
-      text: text(item?.text ?? item, 2400),
+      text: researchText(item?.text ?? item, 2400),
       ...editedState(item, ['text'])
     })).filter(item => item.text);
   }
@@ -104,13 +114,13 @@
   function normalizeScientificQuestions(value) {
     const source = Array.isArray(value)
       ? value
-      : (text(value) ? [{ text: value }] : []);
+      : (researchText(value) ? [{ text: value }] : []);
     const used = new Set();
     const candidates = source.slice(0, 60).map((item, index) => {
       const relation = text(item?.relationType, 40).toLowerCase();
       return {
         questionId: allocateCollectionId(item?.questionId, 'question', index, used),
-        text: text(item?.text ?? item?.value ?? item, 2400),
+        text: researchText(item?.text ?? item?.value ?? item, 2400),
         relationType: SCIENTIFIC_QUESTION_RELATIONS.has(relation) ? relation : 'root',
         rawParentQuestionIds: item?.parentQuestionIds,
         supportingFigureIds: [...new Set((Array.isArray(item?.supportingFigureIds)
@@ -139,13 +149,13 @@
   function normalizeFinalConclusions(value, validQuestionIds = new Set()) {
     const source = Array.isArray(value)
       ? value
-      : (text(value) ? [{ text: value }] : []);
+      : (researchText(value) ? [{ text: value }] : []);
     const used = new Set();
     return source.slice(0, 60).map((item, index) => ({
       conclusionId: allocateCollectionId(
         item?.conclusionId, 'conclusion', index, used
       ),
-      text: text(item?.text ?? item, 3000),
+      text: researchText(item?.text ?? item, 3000),
       questionIds: [...new Set((Array.isArray(item?.questionIds)
         ? item.questionIds : []).map(questionId => safeId(questionId, '')))]
         .filter(questionId => validQuestionIds.has(questionId)),
@@ -173,8 +183,9 @@
   }
 
   function firstSentence(value, maximum = 260) {
-    const source = text(value, Math.max(maximum * 4, 1200));
+    const source = researchText(value, Math.max(maximum * 4, 1200));
     if (!source) return '';
+    if (source.normalize('NFKC') !== source) return researchText(source, maximum);
     const sentence = source.match(/^.*?[。！？.!?](?:\s|$)/u)?.[0]?.trim() || source;
     return sentence.length > maximum
       ? `${sentence.slice(0, Math.max(1, maximum - 1)).trimEnd()}…`
@@ -322,18 +333,18 @@
       panel?.directObservation
     ];
     for (const candidate of candidates) {
-      const normalized = text(candidate, 1600);
+      const normalized = researchText(candidate, 1600);
       if (normalized && !isLowInformationPanelText(normalized)) return normalized;
     }
     return '';
   }
 
   function informativeEvidenceGroup(group) {
-    const conclusion = text(group?.groupConclusion, 1600);
+    const conclusion = researchText(group?.groupConclusion, 1600);
     const points = Array.isArray(group?.evidencePoints) ? group.evidencePoints : [];
     return Boolean(
       (conclusion && !isLowInformationPanelText(conclusion)) ||
-      points.some(point => text(point?.observation, 1600) &&
+      points.some(point => researchText(point?.observation, 1600) &&
         !isLowInformationPanelText(point.observation))
     );
   }
@@ -353,7 +364,7 @@
             locator: { kind: 'panels', values: [panelId] },
             observation,
             argumentRole: text(panel?.role || group?.role, 120),
-            limitation: text(panel?.limitation, 1200),
+            limitation: researchText(panel?.limitation, 1200),
             sourceRefs: [{ kind: 'panel', figureId: text(figureId, 120), panelId }]
           };
         }).filter(Boolean);
@@ -361,9 +372,9 @@
           ? explicitPoints
           : [{
               locator: { kind: 'panels', values: panelIds },
-              observation: text(group?.groupConclusion, 1600),
+              observation: researchText(group?.groupConclusion, 1600),
               argumentRole: text(group?.role, 120),
-              limitation: text(group?.limitation, 1200),
+              limitation: researchText(group?.limitation, 1200),
               sourceRefs: panelIds.map(panelId => ({
                 kind: 'panel', figureId: text(figureId, 120), panelId
               })),
@@ -371,13 +382,13 @@
             }];
         return {
           groupId: `${safeId(figureId, 'figure')}-evidence-${index + 1}`,
-          title: text(group?.groupGoal || `证据组 ${index + 1}`, 320),
-          method: text(panelRecords.map(panel => panel?.methodCategory)
+          title: researchText(group?.groupGoal || `证据组 ${index + 1}`, 320),
+          method: researchText(panelRecords.map(panel => panel?.methodCategory)
             .filter(Boolean).join('、'), 320),
-          groupConclusion: text(group?.groupConclusion ||
+          groupConclusion: researchText(group?.groupConclusion ||
             panelRecords.map(panel => panel?.localInference || panel?.directObservation)
               .filter(Boolean).join('；'), 1600),
-          limitation: text(group?.limitation, 1200),
+          limitation: researchText(group?.limitation, 1200),
           evidencePoints
         };
       }).filter(informativeEvidenceGroup);
@@ -396,15 +407,15 @@
                 locator: { kind: 'panels', values: [panelId] },
                 observation: panelFunctionalEvidence(panel),
                 argumentRole: text(panel?.role || step?.evidenceLevel, 120),
-                limitation: text(panel?.limitation, 1200),
+                limitation: researchText(panel?.limitation, 1200),
                 sourceRefs: [{ kind: 'panel', figureId: text(figureId, 120), panelId }]
               };
             })
           : [{
               locator: { kind: 'panels', values: panelIds },
-              observation: text(step?.established, 1600),
+              observation: researchText(step?.established, 1600),
               argumentRole: text(step?.evidenceLevel, 120),
-              limitation: text(step?.limitation, 1200),
+              limitation: researchText(step?.limitation, 1200),
               sourceRefs: panelIds.map(panelId => ({
                 kind: 'panel', figureId: text(figureId, 120), panelId
               })),
@@ -412,11 +423,11 @@
             }];
         return {
           groupId: `${safeId(figureId, 'figure')}-evidence-${index + 1}`,
-          title: text(`证据步骤 ${index + 1}`, 320),
-          method: text(panelRecords.map(panel => panel?.methodCategory)
+          title: researchText(`证据步骤 ${index + 1}`, 320),
+          method: researchText(panelRecords.map(panel => panel?.methodCategory)
             .filter(Boolean).join('、'), 320),
-          groupConclusion: text(step?.established, 1600),
-          limitation: text(step?.limitation, 1200),
+          groupConclusion: researchText(step?.established, 1600),
+          limitation: researchText(step?.limitation, 1200),
           evidencePoints
         };
       }).filter(informativeEvidenceGroup);
@@ -426,15 +437,15 @@
         const panelId = text(panel?.panelId || panel?.panel || `Panel ${index + 1}`, 80);
         return {
           groupId: `${safeId(figureId, 'figure')}-evidence-${index + 1}`,
-          title: text(panel?.purpose || panelId, 320),
-          method: text(panel?.methodCategory, 320),
+          title: researchText(panel?.purpose || panelId, 320),
+          method: researchText(panel?.methodCategory, 320),
           groupConclusion: panelFunctionalEvidence(panel),
-          limitation: text(panel?.limitation, 1200),
+          limitation: researchText(panel?.limitation, 1200),
           evidencePoints: [{
             locator: { kind: 'panels', values: panelId ? [panelId] : [] },
             observation: panelFunctionalEvidence(panel),
             argumentRole: text(panel?.role, 120),
-            limitation: text(panel?.limitation, 1200),
+            limitation: researchText(panel?.limitation, 1200),
             sourceRefs: panelId ? [{
               kind: 'panel', figureId: text(figureId, 120), panelId
             }] : []
@@ -460,13 +471,13 @@
       const entries = grouped.get(mainFigureId) || [];
       entries.push({
         figureId: text(item?.figureId || item?.supplementalFigureId, 120),
-        figureLabel: text(item?.figureLabel || item?.supplementalFigureLabel, 160),
+        figureLabel: researchText(item?.figureLabel || item?.supplementalFigureLabel, 160),
         relationship: text(item?.relationship || item?.supportType || item?.role ||
           item?.supportRole, 320),
         supportRole: text(item?.supportRole || item?.support_role, 80),
         attachmentBasis: text(item?.attachmentBasis || item?.attachment_basis, 80),
-        conclusion: text(item?.established || item?.contribution || item?.conclusion, 1200),
-        limitation: text(item?.limitation || item?.limitation_zh, 1200)
+        conclusion: researchText(item?.established || item?.contribution || item?.conclusion, 1200),
+        limitation: researchText(item?.limitation || item?.limitation_zh, 1200)
       });
       grouped.set(mainFigureId, entries);
     });
@@ -488,7 +499,7 @@
     return evidenceGroupsFromResult(result, figure.figureId).map((group, index) => ({
       ...group,
       groupId: `${safeId(figure.figureId, 'supplement')}-supplement-${index + 1}`,
-      title: text(`${figure.figureLabel || '补充图'} · ${group.title}`, 320),
+      title: researchText(`${figure.figureLabel || '补充图'} · ${group.title}`, 320),
       evidencePoints: group.evidencePoints.map(point => ({
         ...point,
         locator: point.locator?.kind === 'panels'
@@ -505,12 +516,12 @@
       // Parsed supplemental results may carry an entire Figure legend here.
       // Preserve that source text in the Figure workspace, while the map uses
       // the concise contribution produced by cross-Figure synthesis.
-      groupConclusion: text(attachment.conclusion || group.groupConclusion, 1600),
+      groupConclusion: researchText(attachment.conclusion || group.groupConclusion, 1600),
       isSupplemental: true,
-      sourceFigureLabel: text(figure.figureLabel || figure.figureId, 160),
+      sourceFigureLabel: researchText(figure.figureLabel || figure.figureId, 160),
       supportRole: text(attachment.supportRole || attachment.relationship, 80),
       attachmentBasis: text(attachment.attachmentBasis, 80),
-      limitation: text(attachment.limitation, 1200)
+      limitation: researchText(attachment.limitation, 1200)
     }));
   }
 
@@ -568,9 +579,9 @@
     return {
       pointId,
       locator: normalizeEvidenceLocator(locator),
-      observation: text(value?.observation || value?.conclusion, 1600),
+      observation: researchText(value?.observation || value?.conclusion, 1600),
       argumentRole: text(value?.argumentRole || value?.category, 120),
-      limitation: text(value?.limitation, 1200),
+      limitation: researchText(value?.limitation, 1200),
       sourceRefs: normalizeSourceRefs(value?.sourceRefs),
       needsManualSplit: value?.needsManualSplit === true,
       ...editedState(value, [
@@ -588,12 +599,12 @@
       .map(value => text(value, 40).replace(/^panel\s*/i, '').trim())
       .filter(Boolean);
     const legacyObservations = (Array.isArray(group?.observations)
-      ? group.observations : []).map(value => text(value, 1600)).filter(Boolean);
+      ? group.observations : []).map(value => researchText(value, 1600)).filter(Boolean);
     const legacyRoles = (Array.isArray(group?.argumentRoles)
       ? group.argumentRoles : []).map(value => text(value, 120)).filter(Boolean);
     const legacyPoint = {
       locator: { kind: 'panels', values: legacyPanels },
-      observation: text(group?.conclusion, 1600) || legacyObservations.join('；'),
+      observation: researchText(group?.conclusion, 1600) || legacyObservations.join('；'),
       argumentRole: text(group?.category, 120) || legacyRoles.join('；'),
       limitation: group?.limitation,
       sourceRefs: group?.sourceRefs,
@@ -612,10 +623,10 @@
         point.locator.kind !== 'panels' || point.locator.values.length);
     return {
       groupId,
-      title: text(group?.title || `证据组 ${index + 1}`, 320),
-      method: text(group?.method, 320),
-      groupConclusion: text(group?.groupConclusion || group?.conclusion, 1600),
-      limitation: text(group?.limitation, 1200),
+      title: researchText(group?.title || `证据组 ${index + 1}`, 320),
+      method: researchText(group?.method, 320),
+      groupConclusion: researchText(group?.groupConclusion || group?.conclusion, 1600),
+      limitation: researchText(group?.limitation, 1200),
       evidencePoints,
       ...editedState(group, [
         'title', 'method', 'groupConclusion', 'limitation', 'evidencePoints'
@@ -707,8 +718,8 @@
       const material = {
         supplementalId,
         type: ['figure', 'video', 'table'].includes(item?.type) ? item.type : 'figure',
-        label: text(item?.label || item?.figureLabel, 240),
-        summary: text(item?.summary, 320),
+        label: researchText(item?.label || item?.figureLabel, 240),
+        summary: researchText(item?.summary, 320),
         proofItems: normalizeTextItems(
           Array.isArray(item?.proofItems) ? item.proofItems : item?.conclusion,
           `${supplementalId}-proof`
@@ -750,7 +761,7 @@
         stepId,
         order: index + 1,
         figureId: text(step?.figureId, 120),
-        figureLabel: text(step?.figureLabel || `Figure ${index + 1}`, 160),
+        figureLabel: researchText(step?.figureLabel || `Figure ${index + 1}`, 160),
         questionItems: normalizeTextItems(
           questionSource, `${stepId}-question`
         ),
@@ -762,7 +773,7 @@
           .map((group, groupIndex) => normalizeEvidenceGroupV3(
             group, stepId, groupIndex, allocateGroupId
           )),
-        notes: text(step?.notes, 4000),
+        notes: researchText(step?.notes, 4000),
         ...editedState(step, [
           'figureId', 'figureLabel', 'questionItems', 'proofItems', 'role',
           'evidenceLevel', 'evidenceGroups', 'notes'
@@ -782,8 +793,8 @@
       .map(link => ({
         fromStepId: safeId(link?.fromStepId, ''),
         toStepId: safeId(link?.toStepId, ''),
-        label: text(link?.label || '因此下一图需要回答', 320),
-        boundary: text(link?.boundary, 1200)
+        label: researchText(link?.label || '因此下一图需要回答', 320),
+        boundary: researchText(link?.boundary, 1200)
       }))
       .filter(link => stepIds.has(link.fromStepId) && stepIds.has(link.toStepId));
     const metaInput = input?.meta && typeof input.meta === 'object' ? input.meta : {};
@@ -796,7 +807,7 @@
       Array.isArray(metaInput.scientificQuestions)
         ? metaInput.scientificQuestions : metaInput.scientificQuestion
     );
-    const centralScientificQuestion = text(
+    const centralScientificQuestion = researchText(
       metaInput.centralScientificQuestion ||
         scientificQuestions.find(item => item.relationType === 'root')?.text ||
         scientificQuestions[0]?.text,
@@ -840,19 +851,19 @@
       generatedAt: text(input?.generatedAt || timestamp, 80),
       userEditedAt: text(input?.userEditedAt, 80),
       meta: {
-        title: text(metaInput.title || '论文论证阶梯', 240),
-        articleTitle: text(metaInput.articleTitle, 500),
+        title: researchText(metaInput.title || '论文论证阶梯', 240),
+        articleTitle: researchText(metaInput.articleTitle, 500),
         canonicalUrl: text(metaInput.canonicalUrl, 2000),
         documentHash: normalizeDocumentHash(metaInput.documentHash),
         backgroundItems,
         centralScientificQuestion,
         scientificQuestions,
         finalConclusions,
-        overallThesis: text(metaInput.overallThesis, 3000),
+        overallThesis: researchText(metaInput.overallThesis, 3000),
         mechanismEdges,
-        mechanismChain: text(metaInput.mechanismChain, 1200) ||
+        mechanismChain: researchText(metaInput.mechanismChain, 1200) ||
           mechanismChainFromEdges || deriveMechanismChainFromSteps(steps),
-        claimBoundary: text(metaInput.claimBoundary, 3000),
+        claimBoundary: researchText(metaInput.claimBoundary, 3000),
         supplementalCoverage: metaInput.supplementalCoverage &&
           typeof metaInput.supplementalCoverage === 'object'
           ? {
@@ -932,14 +943,14 @@
       const previousFigureId = index > 0
         ? text(figures[index - 1]?.figureId, 120) : '';
       const precedingHandoff = previousFigureId
-        ? text(linksBySource.get(previousFigureId)?.transition, 1800) : '';
-      const question = text(precedingHandoff || result?.figureQuestion || node?.question ||
+        ? researchText(linksBySource.get(previousFigureId)?.transition, 1800) : '';
+      const question = researchText(precedingHandoff || result?.figureQuestion || node?.question ||
         '这张图要回答什么问题？', 1800);
-      const proof = text(node?.established || result?.coreConclusion, 2400);
+      const proof = researchText(node?.established || result?.coreConclusion, 2400);
       return {
         stepId: `figure-step-${index + 1}-${safeId(figure.figureId, 'figure')}`,
         figureId: text(figure.figureId, 120),
-        figureLabel: text(figure.figureLabel || `Figure ${index + 1}`, 160),
+        figureLabel: researchText(figure.figureLabel || `Figure ${index + 1}`, 160),
         questionItems: question ? [{
           itemId: `figure-step-${index + 1}-question-1`, text: question
         }] : [],
@@ -961,16 +972,16 @@
         fromStepId: step.stepId,
         toStepId: next.stepId,
         label: '因此下一图需要回答',
-        boundary: text(crossLink?.evidenceBoundary, 1200)
+        boundary: researchText(crossLink?.evidenceBoundary, 1200)
       };
     });
-    const overallThesis = text(
+    const overallThesis = researchText(
       crossFigureLogic?.overallThesis ||
         steps.flatMap(step => step.proofItems).map(item => item.text)
           .filter(Boolean).join(' → '),
       3000
     );
-    const centralScientificQuestion = text(
+    const centralScientificQuestion = researchText(
       crossFigureLogic?.centralScientificQuestion || input.centralScientificQuestion ||
         input.scientificQuestion || steps[0]?.questionItems?.[0]?.text,
       3000
@@ -996,11 +1007,11 @@
         const result = mapFigureResult(figure);
         const evidenceGroups = figure && result
           ? supplementalEvidenceGroups(figure, result, item) : [];
-        const proof = text(item.conclusion || result?.coreConclusion, 2400);
+        const proof = researchText(item.conclusion || result?.coreConclusion, 2400);
         return {
           supplementalId: safeId(item.figureId, 'supplemental'),
           type: 'figure',
-          label: text(item.figureLabel || item.figureId, 240),
+          label: researchText(item.figureLabel || item.figureId, 240),
           summary: supplementalContributionSummary(figure, result, item),
           proofItems: proof ? [{
             itemId: `${safeId(item.figureId, 'supplemental')}-proof-1`,
@@ -1183,7 +1194,7 @@
     const current = next.meta.scientificQuestions[index];
     const changed = [];
     if (Object.hasOwn(patch, 'text')) {
-      current.text = text(patch.text, 2400);
+      current.text = researchText(patch.text, 2400);
       changed.push('text');
     }
     if (Object.hasOwn(patch, 'relationType')) {
@@ -1225,7 +1236,7 @@
     const current = next.meta.finalConclusions[index];
     const changed = [];
     if (Object.hasOwn(patch, 'text')) {
-      current.text = text(patch.text, 3000);
+      current.text = researchText(patch.text, 3000);
       changed.push('text');
     }
     if (Object.hasOwn(patch, 'questionIds')) {
@@ -1247,7 +1258,7 @@
     const maps = (Array.isArray(input?.maps) ? input.maps : []).slice(0, 200)
       .map(item => ({
         mapId: safeId(item?.mapId, ''),
-        title: text(item?.title || '论文论证阶梯', 240),
+        title: researchText(item?.title || '论文论证阶梯', 240),
         origin: item?.origin === 'manual' ? 'manual' : 'figure-analysis',
         relativePath: text(item?.relativePath, 320),
         updatedAt: text(item?.updatedAt, 80),
@@ -1304,7 +1315,7 @@
   }
 
   function wrapSvgText(value, maximumWidth = 420, fontSize = 22, maximumLines = 0) {
-    const source = text(value, 12000);
+    const source = researchText(value, 12000);
     if (!source) return ['—'];
     const lines = [];
     let current = '';
@@ -1749,7 +1760,7 @@
 
     function addBulletSection(title, items, fill = '#ffffff') {
       const normalizedItems = (Array.isArray(items) ? items : [])
-        .map(item => text(item?.text ?? item, 3000)).filter(Boolean);
+        .map(item => researchText(item?.text ?? item, 3000)).filter(Boolean);
       const layouts = (normalizedItems.length ? normalizedItems : ['—'])
         .map(item => wrapSvgText(item, contentWidth - 120, 21));
       const height = 62 + layouts.reduce(

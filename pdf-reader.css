@@ -1441,11 +1441,14 @@ body.brevess-pdf-reader .pdf-reader-toolbar-actions { width: auto; margin-left: 
 }
 
 @media (max-width: 620px) {
-  body.brevess-pdf-reader .pdf-reader-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  /* Keep page/search and actions on separate complete rows. Reserving a fixed
+     action column squeezed search to a few characters beside stacked arrows. */
+  body.brevess-pdf-reader .pdf-reader-toolbar { grid-template-columns: minmax(0, 1fr); }
   .pdf-reader-toolbar .pdf-reader-brand { display: none; }
   .pdf-reader-toolbar .pdf-reader-navigation { flex-wrap: wrap; }
-  .pdf-reader-toolbar .pdf-reader-page-controls,
-  .pdf-reader-toolbar .pdf-reader-search-controls { flex: 1 1 100%; }
+  .pdf-reader-toolbar .pdf-reader-page-controls { flex: 0 0 auto; }
+  .pdf-reader-toolbar .pdf-reader-search-controls { flex: 1 1 190px; min-width: 160px; }
+  body.brevess-pdf-reader .pdf-reader-toolbar-actions { justify-content: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1461,25 +1464,31 @@ body.brevess-pdf-reader .pdf-reader-toolbar-actions { width: auto; margin-left: 
     transition: none !important;
   }
 }
-/* Small nonmodal Figure/image-page table: scrolling the PDF never dismisses it. */
+/* Guided page review shares the native viewer grid instead of covering it. */
 .pdf-figure-page-review {
-  position: fixed; z-index: 80; top: 88px; right: 16px;
-  width: min(420px, calc(100vw - 24px)); max-height: calc(100dvh - 104px);
-  display: flex; flex-direction: column; border: 1px solid #b8b8b8;
-  background: #fff; color: #202020; box-shadow: 0 5px 22px #0002;
+  position: relative; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; border-left: 1px solid #b8b8b8;
+  background: #fff; color: #202020; overflow: hidden;
   font: 13px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
 }
+body.brevess-pdf-reader[data-pdf-view="original"] .pdf-original-viewer.pdf-figure-review-open {
+  width: calc(100% - 12px); grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(0, 1fr);
+}
+.pdf-figure-review-open > .pdf-native-viewer { grid-column: 1; grid-row: 1; }
+.pdf-figure-review-open > .pdf-figure-page-review { grid-column: 2; grid-row: 1; }
+.pdf-figure-page-review-heading, .pdf-figure-page-review-footer { flex: none; }
+.pdf-figure-page-review-body { padding: 0 12px 12px; }
+.pdf-figure-page-review-select { width: 100%; min-height: 36px; font: inherit; color: inherit; background: #fff; border: 1px solid #b8b8b8; }
+.pdf-figure-page-review-navigation { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 0; }
+.pdf-figure-page-review-navigation .pdf-reader-button { width: auto; padding: 0 8px; }
+.pdf-figure-page-review-manual { display: block; margin-top: 12px; font-size: 12px; }
+.pdf-figure-page-review-manual input { margin-top: 5px; }
 .pdf-figure-page-review[hidden] { display: none; }
 .pdf-figure-page-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #d5d5d5; }
 .pdf-figure-page-review-heading strong { font-size: 14px; }
 .pdf-figure-page-review-hint { margin: 0; padding: 9px 12px; color: #646464; font-size: 12px; }
 .pdf-figure-page-review-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
-.pdf-figure-page-review-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-.pdf-figure-page-review-table th, .pdf-figure-page-review-table td { padding: 9px 12px; border-top: 1px solid #e2e2e2; vertical-align: top; text-align: left; }
-.pdf-figure-page-review-table th:first-child { width: 32%; }
-.pdf-figure-page-review-table thead { color: #646464; font-size: 11px; background: #f4f4f4; }
-.pdf-figure-page-review-table tbody th { font-size: 12px; overflow-wrap: anywhere; }
-.pdf-figure-page-review-table small { display: block; margin-top: 4px; color: #757575; font-weight: 400; font-size: 10px; }
 .pdf-figure-page-review-input { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 4px 7px; border: 1px solid #b8b8b8; background: #fff; color: #202020; font: inherit; }
 .pdf-figure-page-review-links { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .pdf-figure-page-review-link { border: 0; padding: 2px 5px; background: #f4f4f4; color: #202020; font: inherit; font-size: 11px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -1488,4 +1497,32 @@ body.brevess-pdf-reader .pdf-reader-toolbar-actions { width: auto; margin-left: 
 .pdf-figure-page-review-input[aria-invalid="true"] { border-color: #a23838; outline-color: #a23838; }
 .pdf-figure-page-review-feedback { margin: 5px 0 0; color: #646464; font-size: 11px; overflow-wrap: anywhere; }
 .pdf-figure-page-review-empty { margin: 0; padding: 12px; }
-@media (max-width: 640px) { .pdf-figure-page-review { top: 116px; right: 12px; max-height: calc(100dvh - 128px); } }
+.pdf-preflight-list { display: grid; gap: 6px; margin: 12px 0; }
+.pdf-preflight-list button { white-space: normal; height: auto; text-align: left; padding: 8px; }
+.pdf-preflight-list [data-status="review"] { border-left: 3px solid #b24b22; }
+.pdf-preflight-list [data-status="ready"] { border-left: 3px solid #268060; }
+.pdf-preflight-editor { display: grid; gap: 9px; font-size: 13px; }
+.pdf-preflight-editor p { margin: 3px 0; overflow-wrap: anywhere; }
+.pdf-preflight-editor pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font: inherit; }
+.pdf-preflight-editor textarea { box-sizing: border-box; width: 100%; margin-top: 6px; resize: vertical; min-height: 140px; font: inherit; padding: 7px; }
+.pdf-preflight-editor .pdf-reader-button { white-space: normal; height: auto; min-height: 32px; }
+@media (max-width: 700px) {
+  body.brevess-pdf-reader[data-pdf-view="original"] .pdf-original-viewer.pdf-figure-review-open {
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 1fr) minmax(0, auto);
+  }
+  .pdf-figure-review-open > .pdf-figure-page-review { grid-column: 1; grid-row: 2; max-height: min(54dvh, 460px); border-left: 0; border-top: 1px solid #b8b8b8; }
+}
+
+.pdf-figure-sequential-review { position:fixed;bottom:12px;left:16px;right:16px;z-index:100;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#fff;border:1px solid #ccd4dc;border-radius:12px;box-shadow:0 6px 24px #0002; }
+.pdf-figure-sequential-review[hidden],#pdfPageAnnotationControls[hidden] { display:none; }
+.pdf-figure-sequential-review output { flex:1 1 100%;font-weight:600; }
+.pdf-figure-sequential-review span { flex:1;font-size:12px; }
+.pdf-figure-review-marker { position:absolute;left:12px;top:12px;z-index:30;display:flex;gap:6px;pointer-events:none; }
+.pdf-figure-review-marker span { background:#111;color:white;padding:5px 9px;border-radius:5px;font:600 14px system-ui; }
+.is-checking-figure-pages .pdf-native-page { cursor:crosshair; }
+#pdfPageAnnotationControls { position:fixed;bottom:12px;left:12px;right:12px;z-index:95;background:white;border:1px solid #ccd4dc;border-radius:12px;padding:8px;box-shadow:0 6px 24px #0002; }
+#pdfPageAnnotationControls .sci-figure-annotation-controls { display:flex;flex-wrap:wrap;gap:6px;align-items:center; }
+#pdfPageAnnotationControls button { width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center; }
+#pdfPageAnnotationControls input[type=number] { width:64px; }
+#pdfPageAnnotationControls input[type=color] { width:34px;padding:1px; }
+#pdfPageAnnotationControls output { font-size:12px; }

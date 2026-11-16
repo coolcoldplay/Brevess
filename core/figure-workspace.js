@@ -3,6 +3,132 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const r16FigureMap = (function r16FigureMapTools() {
+  const SCHEMA = 'brevess.chat-figure-map.v1';
+  const clean = (v, n = 400) => String(v && typeof v === 'object' ? v.value || '' : v || '')
+    .normalize('NFC').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n);
+  const fail = code => { const e = new Error(code); e.code = code; throw e; };
+  const digest = value => { let h = 2166136261; for (const c of JSON.stringify(value)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0).toString(16).padStart(8, '0'); };
+  function evidence(draft, documentHash, allowedFigures = null) {
+    const hash = draft?.binding?.documentHash;
+    if (typeof hash !== 'string' || !hash || (documentHash !== undefined && documentHash !== hash)) return null;
+    const groups = [];
+    const figures = Array.isArray(draft?.figures) ? draft.figures : Object.values(draft?.figures || {});
+    for (const figure of figures) {
+      const figureId = clean(figure.figureId, 80);
+      if (!figureId || (allowedFigures && !allowedFigures.includes(figureId))) continue;
+      const rows = [];
+      for (const panel of Object.values(figure.panels || {})) {
+        const panelId = clean(panel.panelId, 30);
+        const observation = clean(panel.directObservation, 320);
+        const inference = clean(panel.localInference, 240) || clean(panel.contribution, 240);
+        if (!panelId || (!observation && !inference)) continue;
+        rows.push({ key: figureId + '::' + panelId, figureId, panelId, observation, inference,
+          method: clean((panel.experimentalMethods || []).map(x => clean(x, 100)).join('; '), 180),
+          limits: clean(figure.overview?.claimBoundary, 180) });
+      }
+      if (rows.length) groups.push(rows);
+    }
+    const selected = [];
+    // Round-robin keeps later interpreted figures represented within the budget.
+    for (let index = 0; groups.some(rows => index < rows.length) && selected.length < 32; index += 1) {
+      for (const rows of groups) {
+        const row = rows[index];
+        if (!row || selected.length >= 32) continue;
+        if (JSON.stringify([...selected, row]).length > 14000) continue;
+        selected.push(row);
+      }
+    }
+    return { documentHash: hash, sourceDigest: digest([hash, selected]), rows: selected };
+  }
+  function normalize(value, documentHash) {
+    if (!value || value.documentHash !== documentHash || !Array.isArray(value.rows) || value.rows.length > 32) return null;
+    const rows = value.rows.map(row => ({ key: clean(row?.key, 120), figureId: clean(row?.figureId, 80),
+      panelId: clean(row?.panelId, 30), observation: clean(row?.observation, 320), inference: clean(row?.inference, 240),
+      method: clean(row?.method, 180), limits: clean(row?.limits, 180) }));
+    if (!rows.length || rows.some(x => !x.figureId || !x.panelId || x.key !== x.figureId + '::' + x.panelId || (!x.observation && !x.inference)) ||
+        new Set(rows.map(x => x.key)).size !== rows.length || JSON.stringify(rows).length > 14000 || value.sourceDigest !== digest([documentHash, rows])) return null;
+    return { documentHash, sourceDigest: value.sourceDigest, rows };
+  }
+  function parse(text, context) {
+    if (!context?.rows?.length) fail('CHAT_MAP_EVIDENCE_MISSING');
+    if (typeof text !== 'string' || text.length > 30000) fail('CHAT_MAP_FORMAT_INVALID');
+    let data; try { data = JSON.parse(text); } catch { fail('CHAT_MAP_FORMAT_INVALID'); }
+    const object = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+      Object.keys(value).every(key => keys.includes(key));
+    if (!object(data, ['schema', 'documentHash', 'sourceDigest', 'nodes', 'edges']) || data.schema !== SCHEMA) fail('CHAT_MAP_FORMAT_INVALID');
+    if (data.documentHash !== context.documentHash || data.sourceDigest !== context.sourceDigest) fail('CHAT_MAP_SOURCE_CHANGED');
+    if (!Array.isArray(data.nodes) || data.nodes.length < 2 || data.nodes.length > 24 || !Array.isArray(data.edges) || !data.edges.length || data.edges.length > 36) fail('CHAT_MAP_FORMAT_INVALID');
+    const ids = new Set(), edgeIds = new Set(), sources = new Map(context.rows.map(row => [row.key, row]));
+    const validId = value => typeof value === 'string' && /^[a-zA-Z][\w-]{0,39}$/.test(value);
+    const validText = (value, max, empty = false) => typeof value === 'string' && value.length <= max && (empty || Boolean(value.trim())) && !/[\u0000-\u001f\u007f]/.test(value);
+    for (const node of data.nodes) {
+      if (!object(node, ['id', 'label']) || !validId(node.id) || ids.has(node.id) || !validText(node.label, 160)) fail('CHAT_MAP_FORMAT_INVALID');
+      ids.add(node.id);
+    }
+    for (const edge of data.edges) {
+      if (!object(edge, ['id', 'from', 'to', 'label', 'polarity', 'evidenceKeys']) || !validId(edge.id) || edgeIds.has(edge.id) ||
+          !ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to || !validText(edge.label, 200, true) ||
+          !['positive', 'negative', 'neutral'].includes(edge.polarity) || !Array.isArray(edge.evidenceKeys) || !edge.evidenceKeys.length || edge.evidenceKeys.length > 8 ||
+          edge.evidenceKeys.some(key => typeof key !== 'string' || !sources.has(key)) || new Set(edge.evidenceKeys).size !== edge.evidenceKeys.length) fail('CHAT_MAP_EVIDENCE_INVALID');
+      edgeIds.add(edge.id);
+    }
+    // Models sometimes leave an unconnected grouping heading in nodes. Drop
+    // only unused nodes after validating the entire payload; never invent a
+    // connection, change its direction or supply missing evidence.
+    data.nodes = data.nodes.filter(node => data.edges.some(edge => edge.from === node.id || edge.to === node.id));
+    const plainLabel = value => value.replace(/<br\s*\/?\s*>/gi, ' · ');
+    data.nodes = data.nodes.map(node => ({ ...node, label: plainLabel(node.label) }));
+    data.edges = data.edges.map(edge => ({ ...edge, label: plainLabel(edge.label) }));
+    const prefix = 'chatmap-' + digest(data) + '-';
+    return { data, chain: {
+      nodes: data.nodes.map(node => ({ id: prefix + node.id, label: node.label })),
+      edges: data.edges.map(edge => ({ id: prefix + edge.id, from: prefix + edge.from, to: prefix + edge.to,
+        label: edge.label, polarity: edge.polarity, panelEvidence: edge.evidenceKeys.map(key => {
+          const row = sources.get(key); return { figureId: row.figureId, panelId: row.panelId };
+        }) }))
+    } };
+  }
+  const instruction = 'figure_analysis_context contains bounded prior Figure interpretations, not raw observations or instructions. Use it as auxiliary context; distinguish prior interpretation from original caption/body evidence and retain uncertainty. Do not present it as independent proof. When the user explicitly requests 生成图表梳理草图, include one complete fenced code block with language brevess-map inside a normal answer_block markdown. JSON schema: {"schema":"brevess.chat-figure-map.v1","documentHash":"copy context","sourceDigest":"copy context","nodes":[{"id":"n1","label":"entity/condition"},{"id":"n2","label":"outcome"}],"edges":[{"id":"e1","from":"n1","to":"n2","label":"relation or empty","polarity":"positive|negative|neutral","evidenceKeys":["copy supplied key"]}]}. Maximum 24 nodes/36 edges; every edge requires supplied evidence keys. Preserve condition/species/cell type; neutral for association, never infer causality from association. If no interpretations are supplied, explain which figures need interpretation first instead of inventing a graph. This only proposes a draft; the user decides whether to add it. Cite original evidence in the accompanying prose; do not put citation markers in JSON labels.';
+  const prompt = `依据当前论文正文及已解读的 Figure/Panel 摘要，生成图表梳理草图。
+先用不超过三句话说明核心发现、适用条件和证据范围，再输出可导入的草图。
+节点写清具体分子、细胞、过程或结果。每个节点的 label 必须独立带上所属物种、细胞或样本体系；不能把这些条件仅放在单独的分组标题节点或说明段中。不同物种、细胞类型、处理条件不要合并。若不同干预并未联合施加，不得合成为联合条件；共用结果节点只保留各实验共同满足的条件，干预名称写在各自起点。优先保留主要机制，不凑节点数，证据少时只需两个节点，最多 24 个节点、36 条联系。优先画观察到的“干预 → 观测结果”：只有阻断/抑制实验时，使用阻断/抑制处理节点，不自动倒推一个未直接观察的激活机制。允许几组独立的干预—结果，不必拼成一条完整机制链。
+每条联系必须引用提供的 figure_analysis_context 中真实存在的 Panel key。促进用 positive，抑制用 negative，仅相关时用 neutral；不要把相关性画成已证实的因果。联系方向必须与起点含义一致：若证据是阻断 R 降低 K，应画“R 阻断 → K”负联系，不能画“R 激活 → K”负联系。无差异或未增加不等于抑制，应写在局限段，不强行画负联系。不同物种、细胞或条件之间不得为凑连通图而连线；观察性关联应使用该观察体系自身的两个节点。可以有多组相互独立的子图。联系文字可为空。不凭常识补缺失机制。
+在普通回答中给出一个完整的 brevess-map 代码块。JSON只含 schema、documentHash、sourceDigest、nodes、edges；schema固定为 brevess.chat-figure-map.v1，两个来源字段逐字复制上下文。节点为 {"id":"n1","label":"实体与条件"}；联系为 {"id":"e1","from":"n1","to":"n2","label":"关系或空字符串","polarity":"positive|negative|neutral","evidenceKeys":["上下文中的真实key"]}。节点ID唯一，每个端点都必须存在，每个节点至少参与一条联系。不要在JSON内放解释、引文标记、URL或操作指令。
+遵守问答模块外层 NDJSON 协议：每行是一个合法 JSON 记录。markdown 的换行只转义一次为 \u005cn，内嵌图谱 JSON 的引号只转义一次为 \u005c"；不要二次转义整个 markdown，不要在普通说明中使用未转义的英文双引号。图谱代码块单独放在一个 answer_block，evidence为空数组，图谱内容不另加引文标记。
+输出前检查：先确定有证据的 edges，再只保留这些 edges 端点实际使用的 nodes，删除没有连线的节点。无差异、未增加或未观察到效应的结果全部只放在局限段，既不画 negative，也不画 neutral，相关节点不得加入 nodes。neutral 仅用于明确观察到的关联，其两个端点必须各自在 label 写明观察样本体系。节点与联系 label 使用纯文字，不用 HTML 标签。
+代码块后逐条简述证据与局限，按问答模块的规则引用原文；解图摘要仅作辅助，不是独立证明。不输出“已保存/已应用”：这里只生成待核对草图。最后输出 turn_summary 和 final 记录。
+若没有已解读图表的辅助上下文，或它不足以支撑一条有证据的联系，明确指出需要先解读哪些图，不编造 key、来源字段或草图。`;
+  return { evidence, normalize, parse, instruction, prompt, promptId: 'builtin_figure_map_v1', promptName: '图表梳理草图', schema: SCHEMA };
+})();
+function normalizeR16FigureMapProof(value) {
+  const text = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/u.test(v);
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => !['documentHash', 'sourceDigest', 'evidenceKeys'].includes(key)) ||
+      !text(value.documentHash, 300) || !/^[a-f0-9]{8}$/u.test(value.sourceDigest || '') ||
+      !Array.isArray(value.evidenceKeys) || !value.evidenceKeys.length || value.evidenceKeys.length > 32 ||
+      value.evidenceKeys.some(key => !text(key, 120) || !/^.{1,80}::.{1,30}$/u.test(key)) ||
+      new Set(value.evidenceKeys).size !== value.evidenceKeys.length) return null;
+  return { documentHash: value.documentHash, sourceDigest: value.sourceDigest, evidenceKeys: [...value.evidenceKeys] };
+}
+function r16FigureMapProof(context) {
+  return normalizeR16FigureMapProof(context && { documentHash: context.documentHash,
+    sourceDigest: context.sourceDigest, evidenceKeys: context.rows?.map(row => row.key) });
+}
+function r16FigureMapContextForProof(context, supplied) {
+  const proof = normalizeR16FigureMapProof(supplied);
+  if (!context?.rows?.length || !proof) throw Object.assign(new Error('CHAT_MAP_EVIDENCE_MISSING'), { code: 'CHAT_MAP_EVIDENCE_MISSING' });
+  if (proof.documentHash !== context.documentHash || proof.sourceDigest !== context.sourceDigest) {
+    throw Object.assign(new Error('CHAT_MAP_SOURCE_CHANGED'), { code: 'CHAT_MAP_SOURCE_CHANGED' });
+  }
+  const allowed = new Set(proof.evidenceKeys);
+  if (proof.evidenceKeys.some(key => !context.rows.some(row => row.key === key))) {
+    throw Object.assign(new Error('CHAT_MAP_EVIDENCE_INVALID'), { code: 'CHAT_MAP_EVIDENCE_INVALID' });
+  }
+  // Retain the full digest for source-change protection while restricting
+  // graph references to the rows actually sent in this completed turn.
+  return { ...context, rows: context.rows.filter(row => allowed.has(row.key)) };
+}
   const evidenceFirstContracts = shared.EVIDENCE_FIRST_VERSIONS &&
     typeof shared.normalizeEvidenceFirstVersions === 'function'
     ? shared
@@ -66,7 +192,7 @@
   ];
   const BINDING_KEYS = [
     'documentId', 'documentHash', 'canonicalUrl', 'workspaceId',
-    'workspaceGeneration'
+    'workspaceGeneration', 'sourceIdentity'
   ];
   const EDITABLE_KEYS = ['value', 'humanReviewed', 'editedAt'];
   const OVERVIEW_KEYS = [
@@ -131,7 +257,8 @@
     'groupGoal', 'groupConclusion', 'upstreamContext', 'established', 'handoff', 'evidenceLevel',
     'transitionToNext', 'fromGroup', 'toGroup', 'nextGoal', 'relationType'
   ]);
-  const MANUAL_EVIDENCE_FIELDS = new Set(['title', 'method', 'observation', 'conclusion']);
+  // Legacy fields remain valid for lossless imports and historical callers. New edits use the common evidence fields.
+  const MANUAL_EVIDENCE_FIELDS = new Set(['title', 'method', 'observation', 'conclusion', 'upstreamContext', 'groupConclusion', 'evidenceLevel']);
   const MECHANISM_POLARITIES = new Set(['neutral', 'positive', 'negative']);
   const GENERATED_SOURCE_FIELDS = new Set([
     'role', 'evidenceType', 'purpose', 'design', 'comparison',
@@ -155,6 +282,7 @@
   ]);
   const EDGE_SCALAR_FIELDS = new Set(['from', 'to', 'label', 'polarity']);
   const MUTATION_KEYS = [
+    'jsonText', 'figureMapEvidence', 'chatTurnId',
     'type', 'expectedRevision', 'figureId', 'panelId', 'field', 'value', 'block', 'blockId',
     'placements', 'node', 'nodeId', 'edge', 'edgeId', 'evidence', 'index', 'target', 'modelValue',
     'expectedFigureId', 'expectedPanelId',
@@ -174,6 +302,8 @@
 
   function figurePanelDisplayId(figureLabel, isSupplemental, panelId) {
     const label = String(figureLabel || '');
+    const scoped = /^fig(?:ure)?\.?\s*([1-9]\d{0,2})\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+([1-9]\d{0,2})\b/i.exec(label);
+    if (scoped) return formatCompactFigurePanelId(`${scoped[1]}-S${scoped[2]}`, panelId);
     const supplement =
       /(?:supplement(?:ary|al)\s+(?:figure|fig\.?)?\s*|(?:figure|fig\.?)\s*S|\bS)(\d{1,3})\b/i
         .exec(label) ||
@@ -250,6 +380,8 @@
     const canonical = mechanismCanonicalPanelReference(value);
     if (canonical) return canonical;
     const text = boundedText(value, 80).toUpperCase();
+    const scoped = /^(?:FIGURE\s+)?([1-9]\d{0,2})\s*[-\u2010-\u2015\u2212]\s*(?:FIGURE\s+SUPPLEMENT\s+|S)([1-9]\d{0,2})\s*(?:PANEL\s+|·)?([A-Z][A-Z0-9_-]*)$/u.exec(text);
+    if (scoped) return formatCompactFigurePanelId(`${scoped[1]}-S${scoped[2]}`, scoped[3]);
     const wordForm = /^(SUPPLEMENT(?:ARY|AL)?\s+)?(?:FIGURE|FIG\.?)\s*(S\s*)?0*(\d{1,3})\s+(?:PANEL\s+)?([A-Z][A-Z0-9_-]*)$/u.exec(text);
     if (wordForm) {
       const prefix = wordForm[1] || wordForm[2] ? 'S' : '';
@@ -425,7 +557,7 @@
 
   function strictAuditEditable(value, nodeLabel = false) {
     const editable = strictOwnDataRecord(value, EDITABLE_KEYS);
-    if (!editable || !(nodeLabel ? isCanonicalMechanismWorkspaceNodeLabel(editable.value) : strictAuditText(editable.value, MAX_TEXT_LENGTH)) ||
+    if (!editable || !(nodeLabel ? isCanonicalMechanismWorkspaceNodeLabel(editable.value) : isCanonicalMechanismWorkspaceText(editable.value)) ||
         typeof editable.humanReviewed !== 'boolean' ||
         !strictAuditTimestamp(editable.editedAt) ||
         !strictAuditCloneable(value, EDITABLE_KEYS)) return null;
@@ -817,12 +949,12 @@
         'from', 'to', 'from_zh', 'to_zh', 'label', 'relation',
         'polarity', 'supportPanels', 'support_panel_refs'
       ]);
-      const fromLabel = boundedText(source.from || source.from_zh, 240);
-      const toLabel = boundedText(source.to || source.to_zh, 240);
+      const fromLabel = boundedResearchText(source.from || source.from_zh, 240);
+      const toLabel = boundedResearchText(source.to || source.to_zh, 240);
       if (!fromLabel || !toLabel) continue;
       const edgeIndex = edges.length;
       const polarity = normalizeMechanismPolarity(source.polarity);
-      const edgeLabel = boundedText(source.label || source.relation, 400);
+      const edgeLabel = boundedResearchText(source.label || source.relation, 400);
       const signature = `${fromLabel}\u0000${toLabel}\u0000${polarity}\u0000${edgeLabel}`;
       if (edgeSignatures.has(signature)) continue;
       edgeSignatures.add(signature);
@@ -1146,13 +1278,31 @@
     return bounded;
   }
 
+  function boundedResearchText(value, maximum = MAX_TEXT_LENGTH) {
+    if (!['string', 'number', 'boolean', 'bigint'].includes(typeof value)) return '';
+    const raw = String(value);
+    const limit = activeNormalizationTextBudget
+      ? Math.min(maximum, activeNormalizationTextBudget.remaining) : maximum;
+    const text = raw.slice(0, maximum + 1).normalize('NFC')
+      .replace(/[\u0000-\u001f\u007f]/gu, ' ').replace(/\s+/gu, ' ').trim();
+    const shadow = text.normalize('NFKC');
+    if (shadow === text) return boundedText(value, maximum);
+    // Research prose may contain mathematical alphabets, subscripts and units.
+    // Check the compatibility-normalized shadow with the existing security
+    // filters, but never persist it as scientific content or truncate a formula.
+    if (!limit || raw.length > limit || text.length > limit ||
+        stripUriTokens(stripCredentialTokens(shadow)) !== shadow) return '';
+    if (activeNormalizationTextBudget) activeNormalizationTextBudget.remaining -= text.length;
+    return text;
+  }
+
   function isCanonicalMechanismWorkspaceText(value, maximum = MAX_TEXT_LENGTH) {
     if (typeof value !== 'string' || !Number.isSafeInteger(maximum) ||
         maximum < 0 || maximum > MAX_TEXT_LENGTH || value.length > maximum * 2 ||
         Array.from(value).length > maximum) return false;
     const previousBudget = activeNormalizationTextBudget;
     activeNormalizationTextBudget = null;
-    try { return boundedText(value, maximum) === value; }
+    try { return boundedResearchText(value, maximum) === value; }
     catch (_) { return false; }
     finally { activeNormalizationTextBudget = previousBudget; }
   }
@@ -1217,24 +1367,38 @@
     return strictDescriptorId(value, 32, /^[A-Z0-9][A-Z0-9_.+-]*$/u, true);
   }
 
-  function normalizedEditable(value, legacyIsHumanReviewed = true, protectLegacyMetadata = false) {
+  function normalizedEditable(value, legacyIsHumanReviewed = true, protectLegacyMetadata = false, normalizeText = boundedText) {
     if (value === undefined) return editableValue();
     if (isPlainObject(value)) {
       const source = ownRecord(value, EDITABLE_KEYS);
       const hasReviewMetadata = typeof source.humanReviewed === 'boolean' &&
         strictAuditTimestamp(source.editedAt);
       return editableValue(
-        boundedText(source.value), source.humanReviewed === true ||
+        normalizeText(source.value), source.humanReviewed === true ||
           (!hasReviewMetadata && legacyIsHumanReviewed && protectLegacyMetadata), boundedTimestamp(source.editedAt)
       );
     }
-    return editableValue(boundedText(value), legacyIsHumanReviewed, 0);
+    return editableValue(normalizeText(value), legacyIsHumanReviewed, 0);
   }
 
-  function normalizedEditableList(value, maximum = MAX_COLLECTION_ITEMS, legacyIsHumanReviewed = true, protectLegacyMetadata = false) {
+  function normalizedEditableList(value, maximum = MAX_COLLECTION_ITEMS, legacyIsHumanReviewed = true, protectLegacyMetadata = false, normalizeText = boundedText) {
     if (value === undefined || value === null) return [];
     const source = Array.isArray(value) ? cappedArrayValues(value, maximum) : [value];
-    return source.map(item => normalizedEditable(item, legacyIsHumanReviewed, protectLegacyMetadata));
+    return source.map(item => normalizedEditable(item, legacyIsHumanReviewed, protectLegacyMetadata, normalizeText));
+  }
+
+  // Readable Figure/mechanism prose shares the research text policy;
+  // identifiers retain their existing compatibility normalization.
+  function normalizedResearchEditable(value, legacyIsHumanReviewed = true, protectLegacyMetadata = false) {
+    return normalizedEditable(value, legacyIsHumanReviewed, protectLegacyMetadata, boundedResearchText);
+  }
+
+  function normalizedResearchEditableList(value, maximum = MAX_COLLECTION_ITEMS, legacyIsHumanReviewed = true, protectLegacyMetadata = false) {
+    return normalizedEditableList(value, maximum, legacyIsHumanReviewed, protectLegacyMetadata, boundedResearchText);
+  }
+
+  function evidenceTextNormalizer(field) {
+    return field === 'relationType' || field === 'evidenceLevel' ? boundedText : boundedResearchText;
   }
 
   function normalizeScientificQuestionList(
@@ -1260,7 +1424,7 @@
       usedIds.add(questionId);
       const rawText = Object.hasOwn(record, 'text') ? record.text
         : Object.hasOwn(record, 'value') ? record.value : item;
-      const questionText = boundedText(rawText);
+      const questionText = boundedResearchText(rawText);
       const relationToken = typeof record.relationType === 'string'
         ? record.relationType.normalize('NFKC').trim().toLowerCase() : '';
       return {
@@ -1319,7 +1483,7 @@
   function normalizedModelEditable(value) {
     const candidate = isPlainObject(value)
       ? ownRecord(value, EDITABLE_KEYS).value : value;
-    return editableValue(boundedText(candidate), false, 0);
+    return editableValue(boundedResearchText(candidate), false, 0);
   }
 
   function normalizedModelEditableList(value, maximum = MAX_COLLECTION_ITEMS) {
@@ -1376,7 +1540,7 @@
   // Old drafts stay byte-stable and model input cannot introduce these records.
   function optionalDisplayName(source, allow = true) {
     return allow && source.displayName !== undefined
-      ? { displayName: normalizedEditable(source.displayName, true, true) } : {};
+      ? { displayName: normalizedResearchEditable(source.displayName, true, true) } : {};
   }
 
   function mergeDisplayNames(existing, incoming) {
@@ -1386,14 +1550,16 @@
   }
 
   function normalizeOverview(value, legacyIsHumanReviewed = true) {
-    const source = ownRecord(value, [...OVERVIEW_KEYS, 'displayName']);
+    const source = ownRecord(value, [...OVERVIEW_KEYS, 'displayName', 'note']);
     return {
       ...optionalDisplayName(source, legacyIsHumanReviewed !== false),
-      figureQuestion: normalizedEditable(source.figureQuestion, legacyIsHumanReviewed, true),
-      coreConclusion: normalizedEditable(source.coreConclusion, legacyIsHumanReviewed, true),
-      claimBoundary: normalizedEditable(source.claimBoundary, legacyIsHumanReviewed, true),
-      authorAssembly: normalizedEditable(source.authorAssembly, legacyIsHumanReviewed, true),
-      remainingQuestion: normalizedEditable(source.remainingQuestion, legacyIsHumanReviewed, true)
+      ...(legacyIsHumanReviewed !== false && source.note !== undefined
+        ? { note: normalizedResearchEditable(source.note, true, true) } : {}),
+      figureQuestion: normalizedResearchEditable(source.figureQuestion, legacyIsHumanReviewed, true),
+      coreConclusion: normalizedResearchEditable(source.coreConclusion, legacyIsHumanReviewed, true),
+      claimBoundary: normalizedResearchEditable(source.claimBoundary, legacyIsHumanReviewed, true),
+      authorAssembly: normalizedResearchEditable(source.authorAssembly, legacyIsHumanReviewed, true),
+      remainingQuestion: normalizedResearchEditable(source.remainingQuestion, legacyIsHumanReviewed, true)
     };
   }
 
@@ -1424,23 +1590,23 @@
       ...optionalDisplayName(source, legacyIsHumanReviewed !== false),
       ...(legacyIsHumanReviewed !== false && source.provenance === 'manual' ? { provenance: 'manual' } : {}),
       compactId: figurePanelDisplayId(figureLabel, isSupplemental, panelId),
-      purpose: normalizedEditable(source.purpose, legacyIsHumanReviewed, true),
-      evidenceType: normalizedEditable(source.evidenceType, legacyIsHumanReviewed, true),
-      directObservation: normalizedEditable(source.directObservation, legacyIsHumanReviewed, true),
+      purpose: normalizedResearchEditable(source.purpose, legacyIsHumanReviewed, true),
+      evidenceType: normalizedResearchEditable(source.evidenceType, legacyIsHumanReviewed, true),
+      directObservation: normalizedResearchEditable(source.directObservation, legacyIsHumanReviewed, true),
       ...(source.observationSource !== undefined ? {
         observationSource: normalizePanelObservationSource(source.observationSource)
       } : {}),
-      experimentalMethods: normalizedEditableList(
+      experimentalMethods: normalizedResearchEditableList(
         source.experimentalMethods === undefined ? source.methods : source.experimentalMethods,
         16, legacyIsHumanReviewed, true
       ),
-      statisticalMethods: normalizedEditableList(source.statisticalMethods, 16, legacyIsHumanReviewed, true),
-      comparison: normalizedEditable(source.comparison, legacyIsHumanReviewed, true),
-      note: normalizedEditable(source.note, legacyIsHumanReviewed, true),
-      phenotypeName: normalizedEditable(source.phenotypeName, legacyIsHumanReviewed, true),
-      design: normalizedEditable(source.design, legacyIsHumanReviewed, true),
-      localInference: normalizedEditable(source.localInference, legacyIsHumanReviewed, true),
-      contribution: normalizedEditable(source.contribution, legacyIsHumanReviewed, true)
+      statisticalMethods: normalizedResearchEditableList(source.statisticalMethods, 16, legacyIsHumanReviewed, true),
+      comparison: normalizedResearchEditable(source.comparison, legacyIsHumanReviewed, true),
+      note: normalizedResearchEditable(source.note, legacyIsHumanReviewed, true),
+      phenotypeName: normalizedResearchEditable(source.phenotypeName, legacyIsHumanReviewed, true),
+      design: normalizedResearchEditable(source.design, legacyIsHumanReviewed, true),
+      localInference: normalizedResearchEditable(source.localInference, legacyIsHumanReviewed, true),
+      contribution: normalizedResearchEditable(source.contribution, legacyIsHumanReviewed, true)
     };
   }
 
@@ -1573,7 +1739,7 @@
     const source = Array.isArray(value)
       ? cappedArrayValues(value, MAX_COLLECTION_ITEMS)
       : (value === undefined ? [] : [value]);
-    const values = source.map(item => normalizedEditable(item));
+    const values = source.map(item => normalizedEditable(item, true, false, boundedResearchText));
     return values.length ? values : [editableValue()];
   }
 
@@ -1631,7 +1797,9 @@
     const isSupplemental = existing.isSupplemental;
     const tombstones = normalizeEvidenceBlockTombstones([...(existing.evidenceBlockTombstones || []), ...(incoming.evidenceBlockTombstones || [])]);
     const archive = mergeManualEvidenceArchives(existing.manualEvidenceArchive, incoming.manualEvidenceArchive, figureLabel, isSupplemental);
-    const overview = { ...mergeDisplayNames(existing.overview, incoming.overview) };
+    const overview = { ...mergeDisplayNames(existing.overview, incoming.overview),
+      ...(existing.overview.note || incoming.overview.note ? { note: mergeEditableValues(
+        existing.overview.note || editableValue(), incoming.overview.note || editableValue()) } : {}) };
     for (const key of Object.keys(emptyOverview())) {
       overview[key] = mergeEditableValues(existing.overview[key], incoming.overview[key]);
     }
@@ -1674,14 +1842,14 @@
       const paragraphId = safeId(source.paragraphId, 240);
       const sourceIdentity = boundedText(source.sourceIdentity, 360);
       const sourceKey = boundedText(source.sourceKey, 360);
-      const quote = boundedText(source.quote, 360);
+      const quote = boundedResearchText(source.quote, 360);
       if (!paragraphId && !sourceIdentity && !sourceKey && !quote) return null;
       return {
         paragraphId, sourceIdentity, sourceKey,
         textHash: boundedText(source.textHash, 160),
         quote,
         sectionPath: cappedArrayValues(source.sectionPath, 12)
-          .map(item => boundedText(item, 180)).filter(Boolean),
+          .map(item => boundedResearchText(item, 180)).filter(Boolean),
         documentHash: boundedText(source.documentHash, 160),
         citationRefs: cappedArrayValues(source.citationRefs, 16)
           .map(item => boundedText(item, 80)).filter(Boolean)
@@ -1703,7 +1871,7 @@
       ]);
       const evidenceId = safeId(source.evidenceId, 80);
       const type = boundedText(source.type, 80).toLowerCase();
-      const statement = boundedText(source.statement, 1200);
+      const statement = boundedResearchText(source.statement, 1200);
       if (!evidenceId || !allowedTypes.has(type) || !statement || seen.has(evidenceId)) continue;
       seen.add(evidenceId);
       result.push({
@@ -1725,23 +1893,23 @@
       'generatedFrom', 'hypothesis', 'test', 'result', 'warrantedConclusion',
       'remainingGap', 'causalLevel'
     ]);
-    const text = boundedText(source.text, 1200);
+    const text = boundedResearchText(source.text, 1200);
     if (!text) return null;
     return {
       questionId: safeId(source.questionId, 80) || fallbackId,
       text,
-      authorWording: boundedText(source.authorWording, 1200),
+      authorWording: boundedResearchText(source.authorWording, 1200),
       evidenceIds: cappedArrayValues(source.evidenceIds, 16)
         .map(item => safeId(item, 80)).filter(Boolean),
       origin: boundedText(source.origin, 80),
       confidence: boundedText(source.confidence, 40),
       generatedFrom: cappedArrayValues(source.generatedFrom, 8)
         .map(item => safeId(item, 80)).filter(Boolean),
-      hypothesis: boundedText(source.hypothesis, 1200),
-      test: boundedText(source.test, 1200),
-      result: boundedText(source.result, 1200),
-      warrantedConclusion: boundedText(source.warrantedConclusion, 1200),
-      remainingGap: boundedText(source.remainingGap, 1200),
+      hypothesis: boundedResearchText(source.hypothesis, 1200),
+      test: boundedResearchText(source.test, 1200),
+      result: boundedResearchText(source.result, 1200),
+      warrantedConclusion: boundedResearchText(source.warrantedConclusion, 1200),
+      remainingGap: boundedResearchText(source.remainingGap, 1200),
       causalLevel: boundedText(source.causalLevel, 80)
     };
   }
@@ -1773,7 +1941,7 @@
         type,
         evidenceIds: cappedArrayValues(item.evidenceIds, 16)
           .map(id => safeId(id, 80)).filter(Boolean),
-        statement: boundedText(item.statement, 1200),
+        statement: boundedResearchText(item.statement, 1200),
         relation: boundedText(item.relation, 120),
         origin: boundedText(item.origin, 80)
       };
@@ -1796,7 +1964,7 @@
         acceptedProgressionIds: cappedArrayValues(auditSource.acceptedProgressionIds, 8)
           .map(id => safeId(id, 80)).filter(Boolean),
         issues: cappedArrayValues(auditSource.issues, 32)
-          .map(item => boundedText(item, 500)).filter(Boolean),
+          .map(item => boundedResearchText(item, 500)).filter(Boolean),
         audited: auditSource.audited === true,
         evidenceCoverage: Math.max(0, Number(auditSource.evidenceCoverage) || 0)
       },
@@ -1809,7 +1977,7 @@
     const source = ownRecord(value, [
       'pointId', 'text', 'value', 'evidenceIds', 'origin', 'confidence', 'scope'
     ]);
-    const text = boundedText(source.text || source.value, 1200);
+    const text = boundedResearchText(source.text || source.value, 1200);
     if (!text) return null;
     return {
       pointId: safeId(source.pointId, 80) || fallbackId,
@@ -1818,7 +1986,7 @@
         .map(item => safeId(item, 80)).filter(Boolean),
       origin: boundedText(source.origin, 80),
       confidence: boundedText(source.confidence, 40),
-      scope: boundedText(source.scope, 240)
+      scope: boundedResearchText(source.scope, 240)
     };
   }
 
@@ -1880,13 +2048,13 @@
     const joined = [];
     const seen = new Set();
     for (const value of values) {
-      const text = boundedText(value);
+      const text = boundedResearchText(value);
       if (text && !seen.has(text)) {
         seen.add(text);
         joined.push(text);
       }
     }
-    return boundedText(joined.join('\n'));
+    return boundedResearchText(joined.join('\n'));
   }
 
   function normalizedArgumentStep(value, index) {
@@ -1894,8 +2062,8 @@
     return {
       id: `argument-${index + 1}`,
       panelIds: normalizedEvidencePanelIds(source.panels),
-      established: boundedText(source.established),
-      handoff: boundedText(source.handoff),
+      established: boundedResearchText(source.established),
+      handoff: boundedResearchText(source.handoff),
       evidenceLevel: boundedText(source.evidenceLevel, 80)
     };
   }
@@ -1904,10 +2072,10 @@
     const source = ownRecord(value, RESULT_LOGIC_BRIDGE_KEYS);
     return {
       id: `bridge-${index + 1}`,
-      fromGroup: boundedText(source.fromGroup, 240),
-      toGroup: boundedText(source.toGroup, 240),
+      fromGroup: boundedResearchText(source.fromGroup, 240),
+      toGroup: boundedResearchText(source.toGroup, 240),
       relationType: boundedText(source.relationType, 80),
-      bridge: boundedText(source.bridge)
+      bridge: boundedResearchText(source.bridge)
     };
   }
 
@@ -2003,9 +2171,9 @@
             id: `evidence-group-${index + 1}`,
             sourceType: 'group',
             panelIds: normalizedEvidencePanelIds(group.panels),
-            groupGoal: boundedText(group.groupGoal),
-            groupConclusion: boundedText(group.groupConclusion),
-            upstreamContext: boundedText(group.upstreamContext),
+            groupGoal: boundedResearchText(group.groupGoal),
+            groupConclusion: boundedResearchText(group.groupConclusion),
+            upstreamContext: boundedResearchText(group.upstreamContext),
             established: '',
             handoff: '',
             evidenceLevel: '',
@@ -2128,12 +2296,12 @@
         toBlockId: safeId(source.toBlockId, 80)
       };
       for (const field of EVIDENCE_SCALAR_FIELDS) {
-        block[field] = normalizedEditable(source[field], legacyIsHumanReviewed);
+        block[field] = normalizedEditable(source[field], legacyIsHumanReviewed, false, evidenceTextNormalizer(field));
       }
       if (legacyIsHumanReviewed !== false && source.provenance === 'manual') {
         block.provenance = 'manual';
         block.sourceType = 'manual';
-        for (const field of MANUAL_EVIDENCE_FIELDS) block[field] = normalizedEditable(source[field], true);
+        for (const field of MANUAL_EVIDENCE_FIELDS) block[field] = normalizedResearchEditable(source[field], true);
         if (['group', 'argument', 'bridge', 'manual'].includes(source.originalSourceType)) {
           block.originalSourceType = source.originalSourceType;
           block.originalPanelIds = [...new Set(cappedArrayValues(source.originalPanelIds, MAX_PANEL_IDS_PER_BLOCK).map(safePanelId).filter(Boolean))];
@@ -2143,7 +2311,7 @@
               kind: history.kind === 'transition' ? 'transition' : 'evidence',
               sourceType: block.originalSourceType, panelIds: block.originalPanelIds.slice()
             };
-            for (const field of EVIDENCE_SCALAR_FIELDS) block.originalSource[field] = normalizedEditable(history[field], false);
+            for (const field of EVIDENCE_SCALAR_FIELDS) block.originalSource[field] = normalizedEditable(history[field], false, false, evidenceTextNormalizer(field));
           }
         }
       }
@@ -2695,7 +2863,7 @@
     for (const [key, alias] of cappedMapEntries(value, 512)) {
       const identity = resolvePanelKey(figures, key);
       if (!identity) continue;
-      result[identity.panelKey] = normalizedEditable(alias, legacyReviewed);
+      result[identity.panelKey] = normalizedResearchEditable(alias, legacyReviewed);
     }
     return result;
   }
@@ -2785,23 +2953,26 @@
     ));
   }
 
-  function normalizedMechanismNodeLabel(value) {
-    const raw = isPlainObject(value) ? ownRecord(value, EDITABLE_KEYS).value : value;
+  function boundedMechanismNodeText(raw) {
     const limit = activeNormalizationTextBudget ? Math.min(MAX_TEXT_LENGTH, activeNormalizationTextBudget.remaining) : MAX_TEXT_LENGTH;
-    const normalized = normalizedEditable(value);
+    const normalized = boundedResearchText(raw);
     if (typeof raw !== 'string' || !/[\r\n]/u.test(raw)) return normalized;
-    const multiline = raw.slice(0, limit).normalize('NFKC').replace(/\r\n?/gu, '\n')
+    const multiline = raw.slice(0, limit).normalize('NFC').replace(/\r\n?/gu, '\n')
       .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/gu, ' ')
       .replace(/[^\S\n]+/gu, ' ').replace(/ *\n */gu, '\n').trim().slice(0, limit);
     // Preserve layout only when the existing sanitizer kept the same text.
     // Credential/URI removal and the shared normalization budget stay intact.
-    if (multiline.replace(/\s+/gu, ' ').trim() !== normalized.value) return normalized;
-    const extra = Math.max(0, multiline.length - normalized.value.length);
+    if (multiline.replace(/\s+/gu, ' ').trim() !== normalized) return normalized;
+    const extra = Math.max(0, multiline.length - normalized.length);
     if (activeNormalizationTextBudget) {
       if (extra > activeNormalizationTextBudget.remaining) return normalized;
       activeNormalizationTextBudget.remaining -= extra;
     }
-    return { ...normalized, value: multiline };
+    return multiline;
+  }
+
+  function normalizedMechanismNodeLabel(value) {
+    return normalizedEditable(value, true, false, boundedMechanismNodeText);
   }
 
   function isCanonicalMechanismWorkspaceNodeLabel(value, maximum = MAX_TEXT_LENGTH) {
@@ -2835,7 +3006,7 @@
         id,
         from: safeId(edge.from, 80),
         to: safeId(edge.to, 80),
-        label: normalizedEditable(edge.label),
+        label: normalizedResearchEditable(edge.label),
         polarity: normalizeMechanismPolarity(edge.polarity),
         panelEvidence,
         humanReviewed: edge.humanReviewed === true,
@@ -2880,7 +3051,16 @@
       workspaceId: bindingString(source.workspaceId, MAX_ID_LENGTH),
       workspaceGeneration: Number(source.workspaceGeneration)
     };
-    if (!binding.documentId || !binding.documentHash || !binding.canonicalUrl ||
+    const localSource = source.sourceIdentity;
+    if (localSource !== undefined && localSource !== null && localSource !== '') {
+      if (typeof localSource !== 'string' ||
+          !/^library-html:sha256:[a-f0-9]{64}$/u.test(localSource) ||
+          localSource !== `library-html:sha256:${binding.documentHash}` ||
+          binding.documentId !== `sha256:${binding.documentHash}`) return null;
+      binding.sourceIdentity = localSource;
+    }
+    if (!binding.documentId || !binding.documentHash ||
+        !(binding.canonicalUrl || binding.sourceIdentity) ||
         !binding.workspaceId || !Number.isSafeInteger(binding.workspaceGeneration) ||
         binding.workspaceGeneration < 1) return null;
     return binding;
@@ -2918,6 +3098,14 @@
     const normalized = boundedText(value, maximum);
     if (!normalized || normalized !== value.trim()) return '';
     return pattern && !pattern.test(normalized) ? '' : normalized;
+  }
+
+  // Labels and biological context are prose; IDs, enums and signed handles
+  // continue through strictGeneratedText without compatibility changes.
+  function strictGeneratedResearchText(value, maximum) {
+    if (typeof value !== 'string' || !value || value.length > maximum) return '';
+    const normalized = boundedResearchText(value, maximum);
+    return normalized && normalized === value.trim() ? normalized : '';
   }
 
   function normalizeGeneratedPanelKey(value) {
@@ -2966,7 +3154,7 @@
     for (const field of GENERATED_CONTEXT_FIELDS) {
       const item = source[field];
       if (typeof item !== 'string' || item.length > 240) return null;
-      const normalized = boundedText(item, 240);
+      const normalized = boundedResearchText(item, 240);
       if (normalized !== item.trim()) return null;
       context[field] = normalized;
     }
@@ -3012,7 +3200,7 @@
       const node = ownRecord(raw, ['nodeId', 'label', 'nodeType']);
       const nodeId = strictGeneratedText(node.nodeId, 80);
       const candidateDialect = generatedNodeDialect(nodeId);
-      const label = strictGeneratedText(node.label, 240);
+      const label = strictGeneratedResearchText(node.label, 240);
       if (!candidateDialect || (nodeDialect &&
           candidateDialect.version !== nodeDialect.version) ||
           (expectedNodeDialect && candidateDialect.version !== expectedNodeDialect)) {
@@ -3855,7 +4043,7 @@
       const node = ownRecord(raw, ['id', 'label']);
       const id = strictGeneratedText(node.id, 80,
         /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u);
-      const label = strictGeneratedText(node.label, 240);
+      const label = strictGeneratedResearchText(node.label, 240);
       if (!id || !label || nodes.has(id) || previewNodes.get(id)?.label !== label) {
         return false;
       }
@@ -4632,9 +4820,9 @@
   }
 
   function mergeFigureWorkspaceValue(manualValue, modelValue) {
-    const manual = normalizedEditable(manualValue, false);
+    const manual = normalizedResearchEditable(manualValue, false);
     if (manual.humanReviewed || manual.value) return manual.value;
-    return boundedText(isPlainObject(modelValue)
+    return boundedResearchText(isPlainObject(modelValue)
       ? ownRecord(modelValue, EDITABLE_KEYS).value : modelValue);
   }
 
@@ -4673,12 +4861,12 @@
           const record = ownRecord(item, ['key', 'humanReviewed']);
           return [record.key, record.humanReviewed === true];
         }));
-      const scalar = key => normalizedEditable(source[key], false, true).value;
-      const list = key => normalizedEditableList(source[key], 16, false, true)
+      const scalar = key => normalizedResearchEditable(source[key], false, true).value;
+      const list = key => normalizedResearchEditableList(source[key], 16, false, true)
         .map(item => item.value).filter(Boolean);
       const reviewed = key => fieldReviews.get(key) === true || (Array.isArray(source[key])
-        ? normalizedEditableList(source[key], 16, false, true).some(item => item.humanReviewed)
-        : normalizedEditable(source[key], false, true).humanReviewed);
+        ? normalizedResearchEditableList(source[key], 16, false, true).some(item => item.humanReviewed)
+        : normalizedResearchEditable(source[key], false, true).humanReviewed);
       const field = (key, label, listValue = false) => ({
         key, label, kind: listValue ? 'list' : 'text',
         value: listValue ? list(key) : scalar(key), humanReviewed: reviewed(key)
@@ -4698,7 +4886,7 @@
       phenotype.emptyLabel = '未明确';
       const methods = field('experimentalMethods', '实验方法', true);
       if (source.experimentalMethods === undefined) {
-        const methodKey = text => String(text).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+        const methodKey = text => String(text).normalize('NFC').trim().replace(/\s+/gu, ' ').toLowerCase();
         const statisticalKeys = new Set(statistics.value.map(methodKey));
         methods.value = list('methods').filter(text => !statisticalKeys.has(methodKey(text)));
       }
@@ -4712,8 +4900,8 @@
   }
 
   function mergeFigureWorkspaceList(manualValue, modelValue) {
-    const manual = normalizedEditableList(manualValue, 16, false);
-    const model = normalizedEditableList(modelValue, 16, false);
+    const manual = normalizedResearchEditableList(manualValue, 16, false);
+    const model = normalizedResearchEditableList(modelValue, 16, false);
     const manualValues = manual.map(item => item.value).filter(Boolean);
     if (manual.some(item => item.humanReviewed) || manualValues.length) {
       return manualValues.slice();
@@ -4993,7 +5181,7 @@
         Object.assign(panel, optionalDisplayName(manualPanel));
         if (manualPanel.provenance === 'manual') panel.provenance = 'manual';
         const fields = FIGURE_WORKSPACE_VIEW_PANEL_FIELDS.map(([key, label, list]) => {
-          const manualList = list ? normalizedEditableList(manualPanel[key], 16, false) : null;
+          const manualList = list ? normalizedResearchEditableList(manualPanel[key], 16, false) : null;
           const preserveEdited = list ? manualList.some(item => item.editedAt > 0)
             : manualPanel[key]?.editedAt > 0;
           const value = preserveEdited
@@ -5007,13 +5195,13 @@
             kind: list ? 'list' : 'text',
             value: Array.isArray(value) ? value.slice() : value,
             humanReviewed: list
-              ? normalizedEditableList(manualPanel[key], 16, false)
+              ? normalizedResearchEditableList(manualPanel[key], 16, false)
                 .some(item => item.humanReviewed)
               : manualPanel[key]?.humanReviewed === true
           };
         });
         panel.fields = fields;
-        const manualObservation = normalizedEditable(manualPanel.directObservation, false, true);
+        const manualObservation = normalizedResearchEditable(manualPanel.directObservation, false, true);
         const observationOwner = (manualObservation.humanReviewed || manualObservation.editedAt > 0 ||
           manualObservation.value) && panel.directObservation === manualObservation.value
           ? manualPanel : modelPanel;
@@ -5042,6 +5230,7 @@
         figureLabel,
         figureAnchorId: figureId ? figureWorkspaceAnchorId('figure', figureId) : '',
         ...optionalDisplayName(manualOverview),
+        ...(manualOverview.note ? { note: { ...manualOverview.note } } : {}),
         isSupplemental,
         overview,
         panels: activePanels,
@@ -5099,21 +5288,21 @@
     return mechanismPanelKey(figure.figureId, panel.panelId);
   }
 
-  function reviewedValue(value, now) {
-    return editableValue(boundedText(value), true, boundedTimestamp(now));
+  function reviewedValue(value, now, normalizeText = boundedText) {
+    return editableValue(normalizeText(value), true, boundedTimestamp(now));
   }
 
-  function reviewedList(value, now, maximum = 16) {
+  function reviewedList(value, now, maximum = 16, normalizeText = boundedText) {
     if (!Array.isArray(value)) throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
     const items = cappedArrayValues(value, maximum)
-      .map(item => reviewedValue(isPlainObject(item) ? ownRecord(item, EDITABLE_KEYS).value : item, now));
-    return items.length ? items : [reviewedValue('', now)];
+      .map(item => reviewedValue(isPlainObject(item) ? ownRecord(item, EDITABLE_KEYS).value : item, now, normalizeText));
+    return items.length ? items : [reviewedValue('', now, normalizeText)];
   }
 
-  function unlockedList(value, maximum = 16) {
+  function unlockedList(value, maximum = 16, normalizeText = boundedText) {
     if (!Array.isArray(value)) throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
     return cappedArrayValues(value, maximum).map(item => editableValue(
-      boundedText(isPlainObject(item) ? ownRecord(item, EDITABLE_KEYS).value : item), false, 0
+      normalizeText(isPlainObject(item) ? ownRecord(item, EDITABLE_KEYS).value : item), false, 0
     ));
   }
 
@@ -5181,7 +5370,7 @@
       toBlockId: safeId(source.toBlockId, 80)
     };
     for (const field of EVIDENCE_SCALAR_FIELDS) {
-      block[field] = reviewedValue(source[field], now);
+      block[field] = reviewedValue(source[field], now, evidenceTextNormalizer(field));
     }
     blocks.push(block);
   }
@@ -5211,16 +5400,17 @@
   }
 
   function manualEvidenceBlockValues(block, figure) {
-    const scalar = value => normalizedEditable(value, false).value;
+    const scalar = value => normalizedResearchEditable(value, false).value;
     if (block.provenance === 'manual') return Object.fromEntries(
       [...MANUAL_EVIDENCE_FIELDS].map(field => [field, scalar(block[field])])
     );
     const panels = block.panelIds.map(panelId => figure?.panels?.[panelId]).filter(Boolean);
     return {
       title: scalar(block.groupGoal) || scalar(block.groupConclusion) || scalar(block.established),
-      method: scalar(block.method) || boundedText(panels.map(panel => normalizedEditableList(panel.experimentalMethods, 16, false).map(item => item.value).filter(Boolean).join('；')).filter(Boolean).join('；')),
-      observation: scalar(block.observation) || boundedText(panels.map(panel => scalar(panel.directObservation)).filter(Boolean).join('；')),
-      conclusion: scalar(block.groupConclusion) || scalar(block.established) || scalar(block.groupGoal)
+      method: scalar(block.method) || boundedResearchText(panels.map(panel => normalizedResearchEditableList(panel.experimentalMethods, 16, false).map(item => item.value).filter(Boolean).join('；')).filter(Boolean).join('；')),
+      observation: scalar(block.observation) || boundedResearchText(panels.map(panel => scalar(panel.directObservation)).filter(Boolean).join('；')),
+      conclusion: scalar(block.groupConclusion) || scalar(block.established) || scalar(block.groupGoal),
+      upstreamContext: scalar(block.upstreamContext), groupConclusion: scalar(block.groupConclusion), evidenceLevel: scalar(block.evidenceLevel)
     };
   }
 
@@ -5232,7 +5422,7 @@
     block.originalSource = { kind: block.kind, sourceType: block.sourceType, panelIds: block.panelIds.slice() };
     for (const field of EVIDENCE_SCALAR_FIELDS) block.originalSource[field] = { ...block[field] };
     block.provenance = 'manual'; block.sourceType = 'manual';
-    for (const field of MANUAL_EVIDENCE_FIELDS) block[field] = reviewedValue(values[field], now);
+    for (const field of MANUAL_EVIDENCE_FIELDS) if (!EVIDENCE_SCALAR_FIELDS.has(field)) block[field] = reviewedValue(values[field], now, boundedResearchText);
   }
 
   function requireGroupableEvidenceBlock(draft, blockId, figureId) {
@@ -5284,17 +5474,23 @@
       if (figure.evidenceBlocks.length >= MAX_COLLECTION_ITEMS) throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
       block = { id, kind: 'evidence', sourceType: 'manual', provenance: 'manual', panelIds: [], fromBlockId: '', toBlockId: '' };
       for (const field of EVIDENCE_SCALAR_FIELDS) block[field] = editableValue();
-      for (const field of MANUAL_EVIDENCE_FIELDS) block[field] = reviewedValue('', now);
+      for (const field of MANUAL_EVIDENCE_FIELDS) if (!EVIDENCE_SCALAR_FIELDS.has(field)) block[field] = reviewedValue('', now, boundedResearchText);
     }
     const takeover = isUpdate && block.provenance !== 'manual';
     const previousValues = manualEvidenceBlockValues(block, figure), previousPanelIds = block.panelIds.slice();
     const previousSource = takeover && canvasContracts?.mechanismCanvasSources(draft.figures).find(source => source.figureId === figure.figureId && source.blockId === block.id);
     const panelIds = source.panelIds || block.panelIds;
+    // Preserve pre-existing duplicate memberships, but reject every new duplicate
+    // even when a caller bypasses the picker or types an extra Panel identifier.
+    const conflict = panelIds.find(panelId => (!isUpdate || !block.panelIds.includes(panelId)) &&
+      figure.evidenceBlocks.some(other => other.id !== block.id && other.kind !== 'transition' && other.sourceType !== 'bridge' && other.panelIds.includes(panelId)));
+    if (conflict) throw workspaceError('FIGURE_WORKSPACE_PANEL_ALREADY_ASSIGNED');
     ensureManualEvidencePanels(figure, panelIds, mutation.createMissingPanels);
     if (isUpdate) recordReplacedEvidenceBlock(figure, block);
     if (takeover) promoteManualEvidenceBlock(block, figure, now);
     block.panelIds = panelIds.slice();
-    for (const field of MANUAL_EVIDENCE_FIELDS) if (Object.hasOwn(source, field)) block[field] = reviewedValue(source[field], now);
+    for (const field of MANUAL_EVIDENCE_FIELDS) if (Object.hasOwn(source, field)) block[field] = reviewedValue(source[field], now, boundedResearchText);
+    if (Object.hasOwn(source, 'conclusion') && !Object.hasOwn(source, 'groupConclusion') && source.conclusion !== block.groupConclusion?.value) block.groupConclusion = reviewedValue(source.conclusion, now, boundedResearchText);
     if (!isUpdate) figure.evidenceBlocks.push(block);
     if (takeover) preserveUnchangedTakeoverJudgments(draft, figure, block, previousSource, previousValues, previousPanelIds);
   }
@@ -5338,6 +5534,8 @@
       panels: Object.fromEntries(source.panelIds.filter(panelId => Object.hasOwn(figure.panels, panelId))
         .map(panelId => [panelId, cloneNormalizedWorkspaceValue(figure.panels[panelId])]))
     }));
+    // Remove merged members on this private atomic draft before the common ownership guard.
+    figure.evidenceBlocks = figure.evidenceBlocks.filter(item => !ids.includes(item.id));
     mutateManualEvidenceBlock(draft, { type: 'update_manual_evidence_block', figureId: figure.figureId,
       blockId: block.id, block: { panelIds, ...description } }, now);
     for (const source of sources) recordReplacedEvidenceBlock(figure, source);
@@ -5470,7 +5668,7 @@
     if (draft.mechanismChain.nodes.some(node => node.id === id)) {
       throw workspaceError('FIGURE_WORKSPACE_DUPLICATE_ID');
     }
-    draft.mechanismChain.nodes.push({ id, label: reviewedValue(source.label, now) });
+    draft.mechanismChain.nodes.push({ id, label: reviewedValue(source.label, now, boundedMechanismNodeText) });
     clearMechanismNodeTombstone(draft.mechanismChain, id);
     draft.mechanismChain.initialized = true;
   }
@@ -5521,8 +5719,8 @@
 
   function mechanismEdgeLabelValue(edge) {
     return isPlainObject(edge?.label)
-      ? boundedText(ownRecord(edge.label, EDITABLE_KEYS).value)
-      : boundedText(edge?.label);
+      ? boundedResearchText(ownRecord(edge.label, EDITABLE_KEYS).value)
+      : boundedResearchText(edge?.label);
   }
 
   function exactMechanismEdgeDuplicate(edges, candidate, ignoredId = '') {
@@ -5568,7 +5766,7 @@
       id,
       from,
       to,
-      label: reviewedValue(source.label, now),
+      label: reviewedValue(source.label, now, boundedResearchText),
       polarity,
       panelEvidence: evidenceInputs.map(item => reviewedPanelEvidenceReference(
         draft, item, now
@@ -5872,7 +6070,7 @@
       const id = requireSafeId(node.id, 'FIGURE_WORKSPACE_VALUE_INVALID');
       if (nodeIds.has(id)) throw workspaceError('FIGURE_WORKSPACE_DUPLICATE_ID');
       nodeIds.add(id);
-      nodes.push({ id, label: editableValue(boundedText(node.label), false, 0) });
+      nodes.push({ id, label: editableValue(boundedMechanismNodeText(node.label), false, 0) });
     }
     const edges = [];
     const edgeIds = new Set();
@@ -5895,7 +6093,7 @@
         id,
         from,
         to,
-        label: editableValue(boundedText(edge.label), false, 0),
+        label: editableValue(boundedResearchText(edge.label), false, 0),
         polarity,
         panelEvidence: cappedArrayValues(
           edge.panelEvidence, MAX_PANEL_IDS_PER_BLOCK
@@ -6441,9 +6639,9 @@
     }
     if (mutation.type === `add_${prefix}`) {
       if (items.length >= MAX_COLLECTION_ITEMS) throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
-      items.push(reviewedValue(mutation.value, now));
+      items.push(editableValue(boundedResearchText(mutation.value), true, boundedTimestamp(now)));
     } else if (mutation.type === `update_${prefix}`) {
-      items[requireCollectionIndex(mutation.index, items.length)] = reviewedValue(mutation.value, now);
+      items[requireCollectionIndex(mutation.index, items.length)] = editableValue(boundedResearchText(mutation.value), true, boundedTimestamp(now));
     } else {
       items.splice(requireCollectionIndex(mutation.index, items.length), 1);
     }
@@ -6458,8 +6656,8 @@
       ? source.relationType.normalize('NFKC').trim().toLowerCase() : '';
     return {
       questionId: safeId(source.questionId, 100) || current?.questionId || fallbackId,
-      text: boundedText(rawText),
-      value: boundedText(rawText),
+      text: boundedResearchText(rawText),
+      value: boundedResearchText(rawText),
       relationType: SCIENTIFIC_QUESTION_RELATIONS.has(relationToken)
         ? relationToken : (current?.relationType || 'root'),
       parentQuestionIds: Array.isArray(source.parentQuestionIds)
@@ -6475,24 +6673,24 @@
 
   function seedGeneratedMetaCollection(items, rawValues, options = {}) {
     if (!Array.isArray(rawValues)) return items;
-    const hasReaderContent = items.some(item => boundedText(item?.value));
+    const hasReaderContent = items.some(item => boundedResearchText(item?.value));
     const hasReviewedEmpty = items.some(item =>
-      item?.humanReviewed === true && !boundedText(item?.value)
+      item?.humanReviewed === true && !boundedResearchText(item?.value)
     );
     if (hasReaderContent || (hasReviewedEmpty && options.overwriteReviewedEmpty !== true)) {
       return items;
     }
     const values = cappedArrayValues(rawValues, MAX_COLLECTION_ITEMS)
-      .map(value => boundedText(value)).filter(Boolean);
+      .map(value => boundedResearchText(value)).filter(Boolean);
     return values.length
       ? values.map(value => editableValue(value, false, 0)) : items;
   }
 
   function seedGeneratedScientificQuestions(items, rawValues, options = {}) {
     if (!Array.isArray(rawValues)) return items;
-    const hasReaderContent = items.some(item => boundedText(item?.value));
+    const hasReaderContent = items.some(item => boundedResearchText(item?.value));
     const hasReviewedEmpty = items.some(item =>
-      item?.humanReviewed === true && !boundedText(item?.value)
+      item?.humanReviewed === true && !boundedResearchText(item?.value)
     );
     if (hasReaderContent || (hasReviewedEmpty && options.overwriteReviewedEmpty !== true)) {
       return items;
@@ -6553,13 +6751,13 @@
     if (target === 'figure_field') {
       const field = requireAllowedField(mutation.field, new Set(OVERVIEW_KEYS));
       requireFigure(draft, mutation.figureId).overview[field] = editableValue(
-        boundedText(mutation.modelValue), false, 0
+        boundedResearchText(mutation.modelValue), false, 0
       );
     } else if (target === 'panel_field') {
       const field = requireAllowedField(mutation.field, PANEL_SCALAR_FIELDS);
       const panel = requirePanel(draft, mutation.figureId, mutation.panelId);
       const previousValue = panel[field].value;
-      panel[field] = editableValue(boundedText(mutation.modelValue), false, 0);
+      panel[field] = editableValue(boundedResearchText(mutation.modelValue), false, 0);
       if (field === 'directObservation' && previousValue !== panel[field].value &&
           panel.observationSource !== undefined) {
         // This scalar restore carries no source binding for the replacement text.
@@ -6572,7 +6770,7 @@
       const field = requireAllowedField(mutation.field, PANEL_LIST_FIELDS);
       const panel = requirePanel(draft, mutation.figureId, mutation.panelId);
       const previousValues = editableListTextValues(panel[field]);
-      panel[field] = unlockedList(mutation.modelValue || [], 16);
+      panel[field] = unlockedList(mutation.modelValue || [], 16, boundedResearchText);
       if (!sameTextValues(previousValues, editableListTextValues(panel[field])) &&
           generatedAuditReferencesPanelField(
             draft.mechanismGeneration, mutation.figureId, mutation.panelId, field
@@ -6667,15 +6865,15 @@
         break;
       }
       case 'set_figure_field': {
-        const field = requireAllowedField(mutation.field, new Set([...OVERVIEW_KEYS, 'displayName']));
-        requireFigure(draft, mutation.figureId).overview[field] = reviewedValue(mutation.value, now);
+        const field = requireAllowedField(mutation.field, new Set([...OVERVIEW_KEYS, 'displayName', 'note']));
+        requireFigure(draft, mutation.figureId).overview[field] = reviewedValue(mutation.value, now, boundedResearchText);
         break;
       }
       case 'set_panel_field': {
         const field = requireAllowedField(mutation.field, new Set([...PANEL_SCALAR_FIELDS, 'displayName']));
         const panel = requirePanel(draft, mutation.figureId, mutation.panelId);
         const previousValue = panel[field]?.value;
-        panel[field] = reviewedValue(mutation.value, now);
+        panel[field] = reviewedValue(mutation.value, now, boundedResearchText);
         if (previousValue !== panel[field].value && generatedAuditReferencesPanelField(
           draft.mechanismGeneration, mutation.figureId, mutation.panelId, field
         )) delete draft.mechanismGeneration;
@@ -6685,7 +6883,7 @@
         const field = requireAllowedField(mutation.field, PANEL_LIST_FIELDS);
         const panel = requirePanel(draft, mutation.figureId, mutation.panelId);
         const previousValues = editableListTextValues(panel[field]);
-        panel[field] = reviewedList(mutation.value, now);
+        panel[field] = reviewedList(mutation.value, now, 16, boundedResearchText);
         if (!sameTextValues(previousValues, editableListTextValues(panel[field])) &&
             generatedAuditReferencesPanelField(
               draft.mechanismGeneration, mutation.figureId, mutation.panelId, field
@@ -6750,13 +6948,13 @@
             ...EVIDENCE_SCALAR_FIELDS, 'displayName',
             ...(block.provenance === 'manual' ? MANUAL_EVIDENCE_FIELDS : [])
           ]));
-          block[field] = reviewedValue(mutation.value, now);
+          block[field] = reviewedValue(mutation.value, now, evidenceTextNormalizer(field));
         }
         break;
       }
       case 'set_transition_text':
         requireEvidenceBlock(draft, mutation.blockId, mutation.figureId).transitionToNext =
-          reviewedValue(mutation.value, now);
+          reviewedValue(mutation.value, now, boundedResearchText);
         break;
       case 'remove_evidence_block': {
         const blocks = evidenceBlockCollection(draft, mutation.figureId);
@@ -6850,6 +7048,24 @@
       case 'add_mechanism_branch':
         addMechanismBranch(draft, mutation.node, mutation.edge, now);
         break;
+      case 'append_chat_mechanism': {
+        const context = r16FigureMap.evidence(draft, draft.binding.documentHash);
+        const parsed = r16FigureMap.parse(mutation.jsonText,
+          r16FigureMapContextForProof(context, mutation.figureMapEvidence));
+        const existing = draft.mechanismChain;
+        if (parsed.chain.nodes.some(node => existing.nodes.some(old => old.id === node.id)) ||
+            parsed.chain.edges.some(edge => existing.edges.some(old => old.id === edge.id))) {
+          throw workspaceError('CHAT_MAP_ALREADY_ADDED');
+        }
+        if (existing.nodes.length + parsed.chain.nodes.length > MAX_COLLECTION_ITEMS ||
+            existing.edges.length + parsed.chain.edges.length > MAX_COLLECTION_ITEMS) throw workspaceError('CHAT_MAP_CAPACITY');
+        const temporary = { ...draft, mechanismChain: { initialized: false, nodes: [], edges: [], panelAliases: existing.panelAliases } };
+        seedMechanismChain(temporary, parsed.chain);
+        draft.mechanismChain = { ...existing, initialized: true,
+          nodes: [...existing.nodes, ...temporary.mechanismChain.nodes], edges: [...existing.edges, ...temporary.mechanismChain.edges] };
+        delete draft.mechanismGeneration;
+        break;
+      }
       case 'seed_mechanism_chain':
         seedMechanismChain(draft, mutation.chain);
         break;
@@ -6871,7 +7087,7 @@
           throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
         }
         requireMechanismItem(draft.mechanismChain.nodes, mutation.nodeId).label =
-          reviewedValue(mutation.value, now);
+          reviewedValue(mutation.value, now, boundedMechanismNodeText);
         clearMechanismNodeTombstone(draft.mechanismChain, mutation.nodeId);
         draft.mechanismChain.initialized = true;
         break;
@@ -6893,7 +7109,7 @@
           throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
         }
         const key = requireExistingPanelKey(draft, mutation.figureId, mutation.panelId);
-        const alias = reviewedValue(mutation.value, now);
+        const alias = reviewedValue(mutation.value, now, boundedResearchText);
         if (alias.value) draft.mechanismChain.panelAliases[key] = alias;
         else delete draft.mechanismChain.panelAliases[key];
         draft.mechanismChain.initialized = true;
@@ -6934,7 +7150,7 @@
           if (typeof mutation.value !== 'string') {
             throw workspaceError('FIGURE_WORKSPACE_VALUE_INVALID');
           }
-          edge[field] = reviewedValue(mutation.value, now);
+          edge[field] = reviewedValue(mutation.value, now, boundedResearchText);
         } else if (field === 'polarity') {
           edge.polarity = requireMechanismPolarity(mutation.value, false);
         } else {
@@ -7140,13 +7356,13 @@
 
   function setLegacyReviewedScalar(target, field, value, editedAt, tracker) {
     if (!Object.hasOwn(target, field) || target[field].humanReviewed) return false;
-    return tracker.tryReplace(target, field, reviewedValue(value, editedAt));
+    return tracker.tryReplace(target, field, reviewedValue(value, editedAt, boundedResearchText));
   }
 
   function setLegacyReviewedList(target, field, value, editedAt, tracker) {
     if (!Object.hasOwn(target, field) || target[field].some(item => item.humanReviewed)) return false;
     return tracker.tryReplace(
-      target, field, reviewedList(Array.isArray(value) ? value : [], editedAt)
+      target, field, reviewedList(Array.isArray(value) ? value : [], editedAt, 16, boundedResearchText)
     );
   }
 
@@ -7280,6 +7496,7 @@
       if (binding && candidate?.binding &&
           !sameFigureWorkspaceBinding(binding, candidate.binding)) {
         const sameWebOwner = options.allowDocumentRevisionUpdate === true &&
+          !binding.sourceIdentity && !candidate.binding.sourceIdentity &&
           /^https?:\/\//u.test(binding.canonicalUrl) &&
           ['canonicalUrl', 'workspaceId', 'workspaceGeneration'].every(key =>
             candidate.binding[key] === binding[key]);
@@ -7563,6 +7780,7 @@
   }
 
   return {
+    r16FigureMap, normalizeR16FigureMapProof, r16FigureMapProof, r16FigureMapContextForProof,
     FIGURE_WORKSPACE_DRAFT_VERSION,
     FIGURE_WORKSPACE_MAX_SERIALIZED_CHARS,
     editableValue,

@@ -1,6 +1,7 @@
 (function attach(root, factory) {
   const projection = typeof module === 'object' && module.exports
-    ? { ...require('./pdf-text-projection.js'), ...require('./pdf-figure-panel-inventory.js') }
+    ? { ...require('./pdf-text-projection.js'), ...require('./pdf-figure-panel-inventory.js'),
+      ...require('./pdf-semantic-index.js') }
     : root.SciLLM || {};
   const api = factory(Object.assign({}, root.SciLLM || {}, projection));
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -19,13 +20,12 @@
   }
 
   function normalizedCaption(value) {
-    // Match canonical item control filtering and semantic line-end
-    // dehyphenation. Preserve raw lines separately; never fold inline hyphens.
-    return String(value || '').normalize('NFKC')
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
-      .replace(/(\p{L}\p{M}*)-(?:\r\n|\r|\n)(?=\p{Ll})/gu, '$1')
-      .replace(/\s+/g, ' ').trim()
-      .slice(0, MAX_CAPTION_CHARS);
+    // Share the semantic index's wrap policy: BAPTA-/injected and Adrb2-/
+    // deficient keep compound hyphens, while co-/localization joins.
+    // Separate caption rules would make exact source binding reject valid text.
+    const text = String(value || '').normalize('NFKC')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '');
+    return shared.normalizePdfTextWithOffsets(text).normalizedText.slice(0, MAX_CAPTION_CHARS);
   }
 
   function positivePageNumber(value) {
@@ -486,8 +486,12 @@
         }
         continue;
       }
-      if (parseCaptionHeader(line) || isCaptionBoundary(line) &&
-          !isScientificSuperscript(page.lines[scanIndex], lastCaptionLine)) {
+      const relatedFigureReference = /\brelated to\s*$/iu.test(pieces.at(-1) || '') &&
+        /^fig(?:ure)?\.?\s+(?:S\s*)?\d+[.]?$/iu.test(line) &&
+        (page.lines[scanIndex].y == null || compatibleCaptionLine(
+          page.lines[scanIndex], lastCaptionLine, page.lines[lineIndex]));
+      if (!relatedFigureReference && (parseCaptionHeader(line) || isCaptionBoundary(line) &&
+          !isScientificSuperscript(page.lines[scanIndex], lastCaptionLine))) {
         trace(parseCaptionHeader(line) ? 'next-caption' : 'section-boundary', page, scanIndex);
         endedByBoundary = true;
         break;
@@ -831,6 +835,63 @@
       .slice(0, limit);
   }
 
+  // These layout hints only prefill the review UI. They never establish full
+  // visual coverage or replace a confirmed artwork selection.
+  function measureNativePdfArtwork(operatorList, view, ops) {
+    const unknown = { imageCoverage: null };
+    if (!Array.isArray(view) || view.length !== 4 || !view.every(Number.isFinite) ||
+        view[2] <= view[0] || view[3] <= view[1] ||
+        !Array.isArray(operatorList?.fnArray) || operatorList.fnArray.length > 250000) return unknown;
+    const multiply = (a, b) => [
+      a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+      a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+      a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]
+    ];
+    const valid = m => Array.isArray(m) && m.length === 6 && m.every(Number.isFinite);
+    let matrix = [1,0,0,1,0,0], area = 0;
+    const stack = [];
+    for (let i = 0; i < operatorList.fnArray.length; i++) {
+      const op = operatorList.fnArray[i], args = operatorList.argsArray?.[i] || [];
+      if (op === ops.save || op === ops.paintFormXObjectBegin) {
+        if (stack.length >= 1000) return unknown;
+        stack.push([...matrix]);
+        if (op === ops.paintFormXObjectBegin && valid(args[0])) matrix = multiply(matrix, args[0]);
+      } else if (op === ops.restore || op === ops.paintFormXObjectEnd) {
+        matrix = stack.pop() || [1,0,0,1,0,0];
+      } else if (op === ops.transform && valid(args)) matrix = multiply(matrix, args);
+      else if (op === ops.paintImageXObject || op === ops.paintInlineImageXObject) {
+        const xs = [matrix[4], matrix[0]+matrix[4], matrix[2]+matrix[4], matrix[0]+matrix[2]+matrix[4]];
+        const ys = [matrix[5], matrix[1]+matrix[5], matrix[3]+matrix[5], matrix[1]+matrix[3]+matrix[5]];
+        const width = Math.max(0, Math.min(view[2], Math.max(...xs)) - Math.max(view[0], Math.min(...xs)));
+        const height = Math.max(0, Math.min(view[3], Math.max(...ys)) - Math.max(view[1], Math.min(...ys)));
+        if (Number.isFinite(width * height)) area += width * height;
+      }
+    }
+    return { imageCoverage: Math.min(1, area / ((view[2]-view[0])*(view[3]-view[1]))) };
+  }
+
+  function recommendNativePdfFigurePages({ figure, figures = [], pages = [], visualHints = {} }) {
+    if (figure?.artworkPageEvidence === 'user-selection' && Array.isArray(figure.artworkPageNumbers))
+      return [...figure.artworkPageNumbers];
+    const anchor = positivePageNumber(figure?.pageNumber);
+    if (!anchor) return [];
+    const pageMap = new Map(pages.map(page => [positivePageNumber(page.pageNumber), page]));
+    const captionPages = [...new Set([anchor, ...(figure.captionPageNumbers || [])])]
+      .filter(page => positivePageNumber(page) && pageMap.has(page));
+    const hasArtwork = page => Number(visualHints[page]?.imageCoverage) >= 0.15;
+    const otherCaptionPages = new Set(figures.filter(item => item.figureId !== figure.figureId)
+      .flatMap(item => [item.pageNumber, ...(item.captionPageNumbers || [])]));
+    const result = captionPages.filter(hasArtwork);
+    for (let pageNumber = anchor - 1; pageNumber >= Math.max(1, anchor - 3); pageNumber--) {
+      const page = pageMap.get(pageNumber);
+      if (!page || otherCaptionPages.has(pageNumber) || !hasArtwork(pageNumber)) break;
+      const textLength = nativePdfPageLines(page).reduce((sum, line) => sum + line.text.length, 0);
+      if (textLength > 400) break;
+      result.push(pageNumber);
+    }
+    return result.length ? [...new Set(result)].sort((a,b) => a-b).slice(0,4) : [anchor];
+  }
+
   function manifestImage(images, figure, index) {
     if (typeof images === 'function') return images(figure, index);
     if (images instanceof Map) return images.get(figure.figureId) ?? images.get(index);
@@ -1012,11 +1073,14 @@
   }
 
   return {
+    nativePdfCaptionPanelHints: value => captionPanelHints(value).panelHints,
     createEffectivePdfFigureInventory,
     linesFromPdfTextContent,
     nativePdfPageLines,
     parseNativePdfFigureCaptionHeader: parseCaptionHeader,
     extractNativePdfFigures,
+    measureNativePdfArtwork,
+    recommendNativePdfFigurePages,
     normalizePdfManifestInventory
   };
 });

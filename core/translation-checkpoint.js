@@ -30,6 +30,28 @@
     }
     return path.length ? `dom:${path.join('/')}` : null;
   }
+  function normalizeScientificContext(sourceText, value) {
+    if (value == null || value === '') return [];
+    if (!Array.isArray(value) || value.length > 2000 || JSON.stringify(value).length > 200000) throw error('TRANSLATION_INVALID_REQUEST');
+    let end = 0;
+    return value.flatMap(item => {
+      if (!item || Object.keys(item).some(key => !['sourceStart','sourceEnd','text','displayText'].includes(key)) ||
+          !Number.isSafeInteger(item.sourceStart) || item.sourceStart < end || !Number.isSafeInteger(item.sourceEnd) ||
+          item.sourceEnd <= item.sourceStart || item.sourceEnd > sourceText.length ||
+          typeof item.text !== 'string' || item.text !== sourceText.slice(item.sourceStart, item.sourceEnd) ||
+          typeof item.displayText !== 'string') throw error('TRANSLATION_INVALID_REQUEST');
+      end = item.sourceEnd;
+      const displayText = item.displayText.trim();
+      return !displayText || displayText === item.text ? [] : [{sourceStart:item.sourceStart, sourceEnd:item.sourceEnd, text:item.text, displayText}];
+    });
+  }
+  function sliceScientificContext(sourceText, value, start, end) {
+    return normalizeScientificContext(sourceText, value).flatMap(item => {
+      if (item.sourceEnd <= start || item.sourceStart >= end) return [];
+      if (item.sourceStart < start || item.sourceEnd > end) throw error('TRANSLATION_INVALID_REQUEST');
+      return [{...item, sourceStart:item.sourceStart-start, sourceEnd:item.sourceEnd-start}];
+    });
+  }
   function normalizeEntry(value) {
     if (!value || typeof value.sourceKey !== 'string' || !value.sourceKey ||
         typeof value.sourceText !== 'string' || !value.sourceText || value.sourceText.length > 200000 ||
@@ -37,11 +59,16 @@
         value.sourceStart !== 0 || !Number.isInteger(value.sourceEnd) || value.sourceEnd <= 0 || value.sourceEnd > value.sourceText.length ||
         typeof value.engineSignature !== 'string' || !value.engineSignature ||
         value.sourceLanguage !== 'en' || value.targetLanguage !== 'zh' || value.confirmed !== true) return null;
+    let scientificContext;
+    try { scientificContext = normalizeScientificContext(value.sourceText, value.scientificContext);
+      sliceScientificContext(value.sourceText, scientificContext, 0, value.sourceEnd); }
+    catch { return null; }
     const partial = value.sourceEnd < value.sourceText.length;
     // Manual edits remain valid confirmed output but never become native-model prefixes.
     return { sourceKey: value.sourceKey, sourceText: value.sourceText, translatedText: value.translatedText,
       sourceStart: 0, sourceEnd: value.sourceEnd, partial, sourceLanguage: 'en', targetLanguage: 'zh',
-      engineSignature: value.engineSignature, confirmed: true, manuallyEdited: value.manuallyEdited === true };
+      engineSignature: value.engineSignature, confirmed: true, manuallyEdited: value.manuallyEdited === true,
+      ...(scientificContext.length ? { scientificContext } : {}) };
   }
   function error(code) { return Object.assign(new Error(code), { code }); }
   async function sha256(value, cryptoApi = globalThis.crypto) {
@@ -78,7 +105,8 @@
         throw error('TRANSLATION_CHECKPOINT_IDENTITY_MISMATCH');
       }
       if (expectedRevision !== undefined && expectedRevision !== (Number(saved?.revision) || 0)) throw error('TRANSLATION_CHECKPOINT_REVISION_STALE');
-      const identity = entry => JSON.stringify([entry.sourceKey, entry.sourceText]);
+      const identity = entry => JSON.stringify([entry.sourceKey, entry.sourceText,
+        ...(entry.scientificContext ? [entry.scientificContext] : [])]);
       const entries = new Map((saved?.translations || []).map(normalizeEntry).filter(Boolean).map(entry => [identity(entry), entry]));
       for (const value of incoming || []) {
         const entry = normalizeEntry(value);
@@ -97,5 +125,5 @@
     }); }
     return { read, write };
   }
-  return { VERSION, LOCAL_SIGNATURE, stableBinding, sourceKey, normalizeEntry, createStore };
+  return { VERSION, LOCAL_SIGNATURE, stableBinding, sourceKey, normalizeEntry, createStore, normalizeScientificContext, sliceScientificContext };
 });

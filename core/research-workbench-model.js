@@ -32,6 +32,22 @@
     return value;
   }
   const wbNewId = prefix => `${prefix}-${globalThis.crypto.randomUUID()}`;
+  function wbValidatePanelSchedule(value) {
+    if (value == null) return {};
+    const fail = () => { throw wbError('WORKBENCH_PANEL_SCHEDULE_INVALID'); };
+    if (typeof value !== 'object' || Array.isArray(value)) fail();
+    for (const key of ['start', 'end']) {
+      const date = value[key];
+      if (date == null || date === '') continue;
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+          !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date) fail();
+    }
+    if (value.start && value.end && value.end < value.start) fail();
+    if (value.owner != null && (typeof value.owner !== 'string' || value.owner.length > 200)) fail();
+    if (value.progress != null && value.progress !== '' &&
+        (typeof value.progress !== 'number' || !Number.isFinite(value.progress) || value.progress < 0 || value.progress > 100)) fail();
+    return wbClone(value);
+  }
   function wbValidateProject(project) {
     wbJson(project); wbId(project.id);
     const unique = list => { const ids = new Set(); for (const row of list) { wbId(row.id); if (ids.has(row.id)) throw wbError('WORKBENCH_DUPLICATE_ID'); ids.add(row.id); } };
@@ -58,7 +74,9 @@
       unique(plan.figures);
       for (const id of plan.hypothesisIds) if (!project.hypotheses.some(h => h.id === id)) throw wbError('WORKBENCH_DANGLING_HYPOTHESIS');
       for (const figure of plan.figures) {
+        if (Object.hasOwn(figure,'supplementary') && typeof figure.supplementary !== 'boolean') throw wbError('WORKBENCH_INVALID_FIGURE');
         if (!Array.isArray(figure.panels)) throw wbError('WORKBENCH_INVALID_FIGURE'); unique(figure.panels);
+        for (const panel of figure.panels) if (Object.hasOwn(panel,'schedule')) wbValidatePanelSchedule(panel.schedule);
         const blocks = figure.evidenceBlocks ?? [];
         if (!Array.isArray(blocks)) throw wbError('WORKBENCH_EVIDENCE_BLOCK_INVALID', {field:'evidenceBlocks', figureId:figure.id});
         unique(blocks);
@@ -67,6 +85,8 @@
           if (typeof block.title !== 'string' || !block.title.trim() || block.title.length > 500) throw wbError('WORKBENCH_EVIDENCE_BLOCK_INVALID', {field:'title', blockId:block.id});
           if (!Array.isArray(block.panelIds) || !block.panelIds.length || new Set(block.panelIds).size !== block.panelIds.length || block.panelIds.some(id => !figure.panels.some(panel => panel.id === id))) throw wbError('WORKBENCH_EVIDENCE_BLOCK_INVALID', {field:'panelIds', blockId:block.id});
           if (block.summary !== undefined && (typeof block.summary !== 'string' || block.summary.length > 4000)) throw wbError('WORKBENCH_EVIDENCE_BLOCK_INVALID', {field:'summary', blockId:block.id});
+          for(const field of ['method','observation','conclusion']) if(block[field] !== undefined &&
+            (typeof block[field] !== 'string' || block[field].length > 4000)) throw wbError('WORKBENCH_EVIDENCE_BLOCK_INVALID',{field,blockId:block.id});
         }
       }
       validateTables(plan,'plans.'+planIndex);
@@ -126,5 +146,5 @@
   }
   return { WORKBENCH_DATABASE_NAME, WORKBENCH_DATABASE_VERSION, WORKBENCH_OPERATION_CONTRACT_VERSION,
     MATERIAL_TYPES, MATERIAL_SOURCES, MATERIAL_STANCES, EDGE_KINDS, EVIDENCE_BLOCK_STATUSES,
-    wbError, wbClone, wbJson, wbId, wbNewId, wbValidateProject, wbScientificProjection, wbLayoutProjection, wbBytes, wbSha256 };
+    wbError, wbClone, wbJson, wbId, wbNewId, wbValidatePanelSchedule, wbValidateProject, wbScientificProjection, wbLayoutProjection, wbBytes, wbSha256 };
 });

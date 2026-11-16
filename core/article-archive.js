@@ -111,13 +111,22 @@
     return figureWorkspace.stripExplicitAuthorizationCredentials(value);
   }
 
-  function sanitizePortableValue(value, depth = 0) {
+  function sanitizePortableValue(value, depth = 0, preserveResearchText = false) {
     if (depth > 40) fail('ARTICLE_ARCHIVE_TOO_DEEP');
     if (value === null || typeof value === 'boolean') return value;
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     if (typeof value === 'string') {
       if (/^data:/iu.test(value.trim())) return OMIT;
-      return stripPortableAuthorization(value);
+      const sanitized = stripPortableAuthorization(value);
+      if (preserveResearchText) {
+        const shadow = value.normalize('NFKC').replace(/\s*;\s*/gu, '; ')
+          .replace(/^(?:;\s*)+|(?:;\s*)+$/gu, '').trim();
+        // Only explicitly selected, already normalized research/Figure subtrees opt in.
+        // Restore spelling only when the portable credential filter removed
+        // no content. All other archive fields keep their existing policy.
+        if (sanitized === shadow) return value;
+      }
+      return sanitized;
     }
     if (Array.isArray(value)) {
       let length = 0;
@@ -136,7 +145,7 @@
         try { descriptor = Object.getOwnPropertyDescriptor(value, String(index)); }
         catch (_) { return OMIT; }
         if (!descriptor || !Object.hasOwn(descriptor, 'value')) continue;
-        const item = sanitizePortableValue(descriptor.value, depth + 1);
+        const item = sanitizePortableValue(descriptor.value, depth + 1, preserveResearchText);
         if (item !== OMIT) sanitized.push(item);
       }
       return sanitized;
@@ -151,7 +160,7 @@
       try { descriptor = Object.getOwnPropertyDescriptor(value, key); }
       catch (_) { continue; }
       if (!descriptor || !Object.hasOwn(descriptor, 'value')) continue;
-      const item = sanitizePortableValue(descriptor.value, depth + 1);
+      const item = sanitizePortableValue(descriptor.value, depth + 1, preserveResearchText);
       if (item !== OMIT) sanitized[key] = item;
     }
     return sanitized;
@@ -178,11 +187,13 @@
       return null;
     }
     if (prototype !== Object.prototype ||
-        keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length ||
+        (keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length &&
+          keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length + 1) ||
+        FIGURE_WORKSPACE_BINDING_KEYS.some(key => !keys.includes(key)) ||
         keys.some(key => typeof key !== 'string' ||
-          !FIGURE_WORKSPACE_BINDING_KEYS.includes(key))) return null;
+          (!FIGURE_WORKSPACE_BINDING_KEYS.includes(key) && key !== 'sourceIdentity'))) return null;
     const snapshot = {};
-    for (const key of FIGURE_WORKSPACE_BINDING_KEYS) {
+    for (const key of keys) {
       let descriptor;
       try { descriptor = Object.getOwnPropertyDescriptor(value, key); }
       catch (_) { return null; }
@@ -341,10 +352,12 @@
       return false;
     }
     if (prototype !== Object.prototype ||
-        keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length ||
+        (keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length &&
+          keys.length !== FIGURE_WORKSPACE_BINDING_KEYS.length + 1) ||
+        FIGURE_WORKSPACE_BINDING_KEYS.some(key => !keys.includes(key)) ||
         keys.some(key => typeof key !== 'string' ||
-          !FIGURE_WORKSPACE_BINDING_KEYS.includes(key))) return false;
-    for (const key of FIGURE_WORKSPACE_BINDING_KEYS) {
+          (!FIGURE_WORKSPACE_BINDING_KEYS.includes(key) && key !== 'sourceIdentity'))) return false;
+    for (const key of keys) {
       let descriptor;
       let normalizedDescriptor;
       try {
@@ -357,12 +370,13 @@
           !normalizedDescriptor || !Object.hasOwn(normalizedDescriptor, 'value') ||
           descriptor.value !== normalizedDescriptor.value) return false;
     }
-    return true;
+    return Reflect.ownKeys(normalized).length === keys.length;
   }
 
   function bindingMatchesArchiveIdentity(binding, identity) {
     return binding.documentId === identity.documentId &&
       binding.documentHash === identity.documentHash &&
+      (binding.sourceIdentity || '') === (identity.sourceIdentity || '') &&
       normalizeUrl(binding.canonicalUrl) === identity.canonicalUrl;
   }
 
@@ -509,7 +523,7 @@
 
   function portableWebSearchIntent(rawWebSearch) {
     const mode = ownData(rawWebSearch, 'mode');
-    const intent = ['off', 'on', 'auto'].includes(mode) ? { mode } : {};
+    const intent = ['off', 'on', 'deep', 'auto'].includes(mode) ? { mode } : {};
     if (mode !== 'auto' || typeof articleChat.normalizeArticleChatSearchPlan !== 'function') return intent;
     const decision = ownData(rawWebSearch, 'decision');
     if (!isPlainObject(decision)) return intent;
@@ -595,9 +609,22 @@
     }
   }
 
+  function normalizeR16FigureMapProof(value) {
+  const text = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/u.test(v);
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => !['documentHash', 'sourceDigest', 'evidenceKeys'].includes(key)) ||
+      !text(value.documentHash, 300) || !/^[a-f0-9]{8}$/u.test(value.sourceDigest || '') ||
+      !Array.isArray(value.evidenceKeys) || !value.evidenceKeys.length || value.evidenceKeys.length > 32 ||
+      value.evidenceKeys.some(key => !text(key, 120) || !/^.{1,80}::.{1,30}$/u.test(key)) ||
+      new Set(value.evidenceKeys).size !== value.evidenceKeys.length) return null;
+  return { documentHash: value.documentHash, sourceDigest: value.sourceDigest, evidenceKeys: [...value.evidenceKeys] };
+}
   function portableChatInputContext(value) {
     if (!isPlainObject(value)) return value === null ? null : undefined;
     const context = {};
+    const safeFigureProof = sanitizePortableValue(ownData(value, 'figureMapEvidence'));
+    const figureProof = safeFigureProof === OMIT ? null : normalizeR16FigureMapProof(safeFigureProof);
+    if (figureProof) context.figureMapEvidence = figureProof;
     const metadataFields = ['attachmentId', 'name', 'kind', 'mediaType', 'byteLength',
       'contentHash', 'sourceType', 'pageCount', 'imageNumber', 'origin', 'imageId',
       'figureId', 'label', 'documentHash', 'captionSourceKey'];
@@ -755,6 +782,19 @@
       eachPair(ownData(rawEvidence, 'paragraphs'), ownData(evidence, 'paragraphs'), (raw, clean) => {
         restoreString(raw, clean, 'text');
         restoreString(raw, clean, 'sectionTitle');
+        restoreString(raw, clean, 'displayText');
+      });
+    });
+    // Body translation recovery also binds UTF-16 source coordinates. Preserve
+    // mathematical Unicode only after the same credential stripping check.
+    const rawTranslations = ownData(ownData(rawWorkspace, 'bodyTranslations'), 'translations');
+    const translations = ownData(ownData(workspace, 'bodyTranslations'), 'translations');
+    eachPair(rawTranslations, translations, (source, target) => {
+      restoreString(source, target, 'sourceText');
+      restoreString(source, target, 'translatedText');
+      eachPair(ownData(source, 'scientificContext'), ownData(target, 'scientificContext'), (raw, clean) => {
+        restoreString(raw, clean, 'text');
+        restoreString(raw, clean, 'displayText');
       });
     });
     const rawLlm = ownData(rawWorkspace, 'llm'), llm = ownData(workspace, 'llm');
@@ -802,6 +842,10 @@
     if (!isPlainObject(workspace)) return {};
     if (draftDescriptor) {
       workspace.figureWorkspaceDraft = sanitizePortableValue(normalizedDraft);
+      workspace.figureWorkspaceDraft.meta = sanitizePortableValue(normalizedDraft.meta, 0, true);
+      workspace.figureWorkspaceDraft.figures = sanitizePortableValue(normalizedDraft.figures, 0, true);
+      workspace.figureWorkspaceDraft.evidenceBlocks = sanitizePortableValue(normalizedDraft.evidenceBlocks, 0, true);
+      workspace.figureWorkspaceDraft.mechanismChain = sanitizePortableValue(normalizedDraft.mechanismChain, 0, true);
     }
     restoreCanonicalPortableArticleChatReceipts(value, workspace);
     restorePortableHighlightLocators(value, workspace);
@@ -853,6 +897,13 @@
         normalizeDocumentId(documentRecord.documentId) !== documentId) {
       fail('ARCHIVE_IDENTITY_MISMATCH');
     }
+    if (documentRecord.sourceIdentity !== undefined && documentRecord.sourceIdentity !== null && documentRecord.sourceIdentity !== '') {
+      const hash = documentRecord.documentHash;
+      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/u.test(hash) ||
+          documentId !== `sha256:${hash}` || input.documentHash !== hash ||
+          documentRecord.sourceIdentity !== `library-html:sha256:${hash}` ||
+          normalizeUrl(input.canonicalUrl) !== normalizeUrl(documentRecord.canonicalUrl)) fail('ARCHIVE_SOURCE_IDENTITY_MISMATCH');
+    }
     const revision = Number(input.revision);
     if (!Number.isSafeInteger(revision) || revision < 1) fail('INVALID_ARCHIVE_REVISION');
     const savedAt = String(input.savedAt || '');
@@ -902,7 +953,8 @@
       publisher: identity.publisher || '',
       documentRecord,
       workspace: portableWorkspaceFromLiveFigureDraft(input.workspace || {}, {
-        documentId, documentHash, canonicalUrl
+        documentId, documentHash, canonicalUrl,
+        ...(documentRecord.sourceIdentity ? { sourceIdentity: documentRecord.sourceIdentity } : {})
       })
     });
   }

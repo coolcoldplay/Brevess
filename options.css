@@ -969,3 +969,54 @@ body[data-ui-surface="settings"] .settings-frame {
 @media (prefers-reduced-motion: reduce) {
   [data-ui-surface="settings"] .settings-nav-group > button[data-settings-nav] { transition: none; }
 }
+
+/* r16: status belongs to its feature; controls adapt to available content width. */
+.task-policy-table-wrap { container-type:inline-size; overflow-x:clip; }
+.task-policy-table { min-width:0; }
+.task-policy-table thead th:nth-child(1), .task-policy-table tbody th { width:22%; }
+.task-policy-table thead th:nth-child(2) { width:34%; }
+.task-policy-table thead th:nth-child(3), .task-policy-table thead th:nth-child(4), .task-policy-table thead th:nth-child(5), .task-policy-table thead th:nth-child(6) { width:11%; }
+.task-policy-table input[data-task-policy-model], .task-policy-table select { box-sizing:border-box; max-width:100%; }
+.task-policy-table .task-token-rule-button { min-width:0; max-width:100%; box-sizing:border-box; padding-inline:6px; }
+.task-policy-table tbody th strong { display:inline; }
+.task-policy-table .task-policy-status { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; min-width:24px; min-height:24px; margin:0 0 0 5px; padding:0; border:0; border-radius:50%; background:transparent; vertical-align:middle; font-size:14px; font-weight:400; cursor:help; }
+.task-policy-table .task-policy-status::before { display:none; }
+.task-policy-table .task-policy-status:focus-visible { outline:2px solid currentColor; outline-offset:1px; }
+@container (max-width:760px) {
+  .task-policy-table { display:block; table-layout:auto; }
+  .task-policy-table thead { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .task-policy-table tbody { display:block; }
+  .task-policy-table tbody tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 12px; padding:14px 12px; border-bottom:1px solid var(--line-soft,#ddd); }
+  .task-policy-table tbody tr:last-child { border-bottom:0; }
+  .task-policy-table tbody th, .task-policy-table tbody td { width:auto; min-width:0; padding:0; border:0; }
+  .task-policy-table tbody th, .task-policy-table tbody td:nth-child(2) { grid-column:1 / -1; }
+  .task-policy-table tbody td::before { content:attr(data-label); display:block; margin-bottom:5px; color:var(--muted,#646464); font-size:11px; }
+  .task-policy-table .task-policy-toggle { white-space:normal; }
+}
+
+.task-policy-status-description { display:block; margin-top:5px; max-width:100%; color:var(--muted,#646464); font-size:11px; font-weight:400; line-height:1.5; white-space:normal; overflow-wrap:anywhere; }
+.task-policy-status-description[hidden] { display:none; }
+
+/* r18: configured overview uses a single actionable status surface. */
+.overview-current-list>[hidden],.setup-check-row[hidden],#onboardingGuide[hidden]{display:none!important}.overview-status-card[role=button]{cursor:pointer}.overview-status-card[role=button]:focus-visible{outline:2px solid currentColor;outline-offset:3px}
+
+/* AI data disclosure: always visible within its settings page. */
+.ai-privacy-warning{border:1px solid #a44a24;border-left:5px solid #a44a24;border-radius:8px;background:#fff5eb;color:#5d260e;padding:16px 18px;margin:0 0 20px;min-width:0;overflow-wrap:anywhere}
+.ai-privacy-warning h2,.ai-privacy-warning h3{font-size:16px;line-height:1.5;margin:0 0 6px;color:inherit}
+.ai-privacy-warning p{font-size:14px;line-height:1.65;margin:0;color:inherit}
+.ai-privacy-acknowledgement{display:flex;align-items:flex-start;gap:10px;margin-top:12px;font-size:14px;line-height:1.65;font-weight:600;cursor:pointer}
+.ai-privacy-acknowledgement input{flex:0 0 auto;width:18px;height:18px;margin:3px 0 0;accent-color:#9b3d18}
+.ai-privacy-warning .ai-privacy-ack-status{margin-top:8px;font-size:12px}
+.ai-privacy-ack-status[data-state=error]{font-weight:700;color:#9c1c16}
+@media(max-width:600px){.ai-privacy-warning{padding:13px 12px}.ai-privacy-acknowledgement{gap:8px}}
+
+.r20-risk-gated{min-width:0;margin-inline:0}.r20-risk-gated:disabled{opacity:.62}.r20-risk-gated:disabled input,.r20-risk-gated:disabled select{cursor:not-allowed}
+
+/* r23 template editor: one consistent field column with quiet card boundaries. */
+[data-ui-surface="settings"] #apiProfilesSettings{border:0;min-width:0;padding:16px 0;margin-inline:0}
+[data-ui-surface="settings"] #literatureNoteTemplateList .literature-note-field-row{background:#fff;border:1px solid #e3e6e4;border-radius:8px;padding:16px;gap:12px}
+#literatureNoteTemplateList .literature-note-field-main{grid-template-columns:minmax(0,1fr);gap:12px}
+#literatureNoteTemplateList .literature-note-field-main input,#literatureNoteTemplateList .literature-note-field-main textarea{width:100%;box-sizing:border-box;border:1px solid #d6ddd8;background:#fafcfb;padding:10px 12px;line-height:1.6;border-radius:5px}
+#literatureNoteTemplateList .literature-note-field-main textarea{min-height:86px;resize:vertical}
+#literatureNoteTemplateList .literature-note-field-delete{margin-top:23px}
+#literatureNoteTemplateList .literature-note-field-advanced{border-top:1px solid #eef0ee;padding-top:10px}

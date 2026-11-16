@@ -49,7 +49,8 @@
       run(rt.loadGlobalLibrary);
     } else if (event.target.id === 'library-view-sort') {
       rt.ui.librarySort = event.target.value;
-      rt.renderLibraryView();
+      rt.ui.libraryPage = 1;
+      run(rt.loadGlobalLibrary);
     }
   });
 })();

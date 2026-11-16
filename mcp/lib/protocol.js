@@ -257,11 +257,14 @@ class McpProtocol {
       });
     }
     const mutating = this.registry.writeRequired(tool, args);
+    // Document receipts live behind live document/scope checks. Caching here
+    // would also cache a pending deletion approval and prevent its safe retry.
+    const cacheable = mutating && tool.kind !== 'document';
     const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : '';
     const argsHash = jsonHash(args);
     const cacheKey = `${context.sessionId || 'stdio'}:${name}:${idempotencyKey}`;
     this._pruneIdempotency();
-    if (mutating && idempotencyKey) {
+    if (cacheable && idempotencyKey) {
       const cached = this.idempotency.get(cacheKey);
       if (cached && cached.argsHash !== argsHash) {
         throw new BrevessMcpError(
@@ -330,7 +333,7 @@ class McpProtocol {
         };
       }
     })();
-    if (mutating && idempotencyKey) {
+    if (cacheable && idempotencyKey) {
       this.idempotency.set(cacheKey, {
         argsHash,
         promise,

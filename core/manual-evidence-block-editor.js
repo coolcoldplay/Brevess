@@ -15,19 +15,17 @@
     line.append(name, doc.createTextNode(': '), authored(value));
     return line;
   }
-  const fields = [['title', '标题'], ['method', '方法与对照'], ['observation', '观察结果'], ['conclusion', '结论']];
+  const fields = [['title', '标题'], ['upstreamContext', '承上'], ['groupConclusion', '模块小结'], ['evidenceLevel', '证据类型']];
   function value(raw) {
     if (Array.isArray(raw)) return raw.slice(0, 64).map(item => typeof item === 'string' ? item : String(item?.value || '')).filter(Boolean).join('；');
     return typeof raw === 'string' ? raw : String(raw?.value || '');
   }
   function manualEvidenceEditorValues(block, panels = []) {
     if (!block) return Object.fromEntries(fields.map(([field]) => [field, '']));
-    if (block.provenance === 'manual') return Object.fromEntries(fields.map(([field]) => [field, value(block[field])]));
-    const members = panels.filter(panel => block.panelIds?.includes(panel.panelId || panel.panel));
-    return { title: value(block.title) || value(block.groupGoal) || value(block.groupConclusion) || value(block.established),
-      method: value(block.method) || members.map(panel => value(panel.experimentalMethods)).filter(Boolean).join('；'),
-      observation: value(block.observation) || members.map(panel => value(panel.directObservation)).filter(Boolean).join('；'),
-      conclusion: value(block.conclusion) || value(block.groupConclusion) || value(block.established) || value(block.groupGoal) };
+    const state = block.fieldStates?.groupConclusion || (typeof block.groupConclusion === 'object' ? block.groupConclusion : null);
+    const summary = state?.humanReviewed === true ? value(state) : value(block.groupConclusion) || value(block.conclusion) || value(block.established);
+    return { title: value(block.title) || value(block.groupGoal), upstreamContext: value(block.upstreamContext),
+      groupConclusion: summary, evidenceLevel: value(block.evidenceLevel) };
   }
   function createManualEvidenceArchiveDetails(doc, entries, options = {}) {
     if (!Array.isArray(entries) || !entries.length) return null;
@@ -129,10 +127,14 @@
       const choices = element('fieldset', ''); choices.append(element('legend', '选择 Panel（可多选）'));
       const known = [...new Set([...panels.map(panel => String(panel.panelId || panel.panel || '').toUpperCase()), ...(block?.panelIds || [])])].filter(Boolean);
       const selected = new Set(block?.panelIds || []);
+      const occupied = new Set(blocks.filter(other => other.id !== block?.id && other.kind !== 'transition' && other.sourceType !== 'bridge').flatMap(other => other.panelIds || []));
       for (const panelId of known) {
         const label = element('label', '', 'manual-evidence-choice');
         const checkbox = doc.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = panelId; checkbox.checked = selected.has(panelId);
-        label.append(checkbox, element('span', panelId)); choices.append(label);
+        checkbox.dataset.occupied = String(occupied.has(panelId) && !selected.has(panelId));
+        checkbox.disabled = checkbox.dataset.occupied === 'true';
+        if (checkbox.disabled) { label.classList.add('is-occupied'); label.title = '已被其他证据块选用'; }
+        label.append(checkbox, element('span', checkbox.disabled ? `${panelId} · 已选用` : panelId)); choices.append(label);
       }
       if (!known.length) choices.append(element('p', '尚无 Panel 目录，请对照原图填写下方编号。', 'manual-evidence-note'));
       const extraLabel = element('label', '补充原图中的 Panel 编号', 'manual-evidence-field');
@@ -159,6 +161,10 @@
         status.textContent = '正在保存…';
         try {
           if (!options.isCurrent(context)) throw new Error('文献或草稿已有变化。本次输入仍保留，请复制后重新打开编辑器。');
+          if (['add_manual_evidence_block', 'update_manual_evidence_block'].includes(mutation.type)) {
+            const conflict = (mutation.block.panelIds || []).find(id => occupied.has(id) && !selected.has(id));
+            if (conflict) throw new Error(`Panel ${conflict} 已被其他证据块选用，请先从原块释放。`);
+          }
           const result = await options.persist(mutation, context);
           if (current !== state) return;
           if (!options.isCurrent(context) && !options.isAcknowledged?.(result, context)) throw new Error('文献或草稿已有变化，本次保存结果未应用到当前界面。');
@@ -168,7 +174,7 @@
         } catch (error) {
           if (current === state) status.textContent = /[\u3400-\u9fff]/u.test(error.message) ? error.message : '证据块未保存。请核对 Panel 编号后重试；输入已保留。';
         } finally {
-          state.busy = false; if (current === state) controls().forEach(control => { control.disabled = false; });
+          state.busy = false; if (current === state) controls().forEach(control => { control.disabled = control.dataset.occupied === 'true'; });
         }
       }
       form.addEventListener('submit', event => {

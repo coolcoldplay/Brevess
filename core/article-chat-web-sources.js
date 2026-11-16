@@ -801,6 +801,9 @@
       if (end < 0) throw invalidResponse();
       readable += ' '; index = end + delimiter.length;
     }
+    // Markdown tables commonly use a bare line-break tag inside a cell.
+    // Permit only this inert tag; attributes and all other HTML remain invalid.
+    readable = readable.replace(/<br\s*\/?>/giu, ' ');
     if (/<\/?[a-z]|<https?:|\[[^\]\n]+\]:\s*\S|\]\s*\[/iu.test(readable)) throw invalidResponse();
     const urls = [];
     const link = /(!?\[[^\]\n]+\])\(/gu;
@@ -845,10 +848,11 @@
     if (results.length > 50) throw invalidResponse();
     const sources = [];
     const seen = new Set();
+    let invalidHits = false;
     for (const item of results) {
-      if (!isPlainRecord(item)) throw invalidResponse();
+      if (!isPlainRecord(item)) { invalidHits = true; continue; }
       const url = normalizeWebSourceUrl(ownData(item, 'url'));
-      if (!url) throw invalidResponse();
+      if (!url) { invalidHits = true; continue; }
       if (seen.has(url)) continue;
       seen.add(url);
       const hostname = new URL(url).hostname.toLocaleLowerCase('en-US');
@@ -868,7 +872,7 @@
       });
       if (sources.length >= MAX_SOURCES) break;
     }
-    if (!sources.length) throw groundingMissing();
+    if (!sources.length) { if (invalidHits) throw invalidResponse(); throw groundingMissing(); }
     return sources;
   }
 
@@ -934,7 +938,7 @@
     if (!isPlainRecord(message) || ownData(message, 'role') !== 'assistant') {
       throw invalidResponse();
     }
-    const content = ownData(message, 'content');
+    let content = ownData(message, 'content');
     if (typeof content !== 'string' || !content.trim() ||
         content.includes('\0') || content.length > MAX_ANSWER_MARKDOWN_CHARS) {
       throw invalidResponse();
@@ -948,6 +952,13 @@
     });
     if (sourcesByUrl.size !== rawSources.length) throw invalidResponse();
 
+    // Expand grouped handles only outside code, before binding each individual
+    // handle. Unknown handles still fail; no URL is guessed or rewritten here.
+    const grouped = [...maskMarkdownCode(content).matchAll(/\[S\d{1,2}(?:\s*[,，;；]\s*S\d{1,2})+\]/gu)];
+    for (const group of grouped.reverse()) {
+      const handles = group[0].match(/S\d{1,2}/gu).map(id => `[${id}]`).join(' ');
+      content = content.slice(0, group.index) + handles + content.slice(group.index + group[0].length);
+    }
     const visible = maskMarkdownCode(content);
     const cited = new Map();
     let transformed = '';

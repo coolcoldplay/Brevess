@@ -185,6 +185,20 @@ body[data-ui-surface] :is(button, a, input, select, textarea, summary):focus-vis
 [data-ui-surface="sidebar"] .side-panel-notification-center { flex: 0 1 150px; min-width: 80px; }
 [data-ui-surface="sidebar"] .side-panel-document-status:not(.is-error) { background: #f4f4f4; color: var(--swiss-muted); }
 [data-ui-surface="sidebar"] .side-panel-icon-button { color: var(--swiss-ink); }
+/* Top tools are quiet icons; focus and hover remain visible without boxes. */
+[data-ui-surface="sidebar"] #sidePanelHeader :is(.side-panel-icon-button, #focusToggle, #sidePanelNotificationSummary),
+[data-ui-surface="sidebar"] #sidePanelDocumentStatus .side-panel-tool-button {
+  border: 0; border-radius: 6px; box-shadow: none; background: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; min-width: 32px; height: 32px; padding: 5px;
+}
+[data-ui-surface="sidebar"] #sidePanelHeader .side-panel-notification-center { flex: 0 0 32px; min-width: 32px; }
+[data-ui-surface="sidebar"] #sidePanelNotificationSummary :is(time, span),
+[data-ui-surface="sidebar"] #sidePanelHeader #focusToggle #focusCompactTime { display: none; }
+[data-ui-surface="sidebar"] #sidePanelHeader :is(button, summary):hover,
+[data-ui-surface="sidebar"] #sidePanelDocumentStatus .side-panel-tool-button:hover { background: #eeeeee; }
+[data-ui-surface="sidebar"] #sidePanelHeader :is(button, summary):focus-visible,
+[data-ui-surface="sidebar"] #sidePanelDocumentStatus .side-panel-tool-button:focus-visible { outline: 2px solid var(--swiss-ink); outline-offset: 2px; }
 [data-ui-surface="sidebar"] :is(.side-panel-tool-button, .side-panel-notification-center > summary) { color: var(--swiss-ink); border-color: var(--swiss-line); background: #fff; border-radius: 0; box-shadow: none; }
 [data-ui-surface="sidebar"] .workspace-view { padding: 20px; }
 [data-ui-surface="sidebar"] .workspace-view[data-workspace-view="analysis"] { padding: 0; }
@@ -912,3 +926,32 @@ body[data-ui-surface="pdf"] :is(.pdf-reader-local-fallback input[type="file"], .
   [data-ui-surface="sidebar"] .workspace-nav-task-progress { animation: none !important; transition: none; }
   [data-ui-surface="sidebar"] :is(.workspace-nav-button, .nav-icon-shape, .nav-icon-activation, .nav-icon-motion, .nav-chat-dot, .workspace-figure-summary-heading, .workspace-figure-summary-heading::after) { animation: none !important; transition: none !important; }
 }
+
+/* Compact reading chrome: 40px title + 38px tools; native browser header is unchanged. */
+body[data-ui-surface="sidebar"] #sidePanelHeader { display:flex; box-sizing:border-box; min-height:40px; height:40px; padding:4px 10px; gap:4px; }
+body[data-ui-surface="sidebar"] #sidePanelDocumentStatus { box-sizing:border-box; min-height:38px; height:38px; padding:3px 10px; gap:5px; }
+body[data-ui-surface="sidebar"] #sidePanelHeader :is(.side-panel-icon-button,#focusToggle,#sidePanelNotificationSummary),
+body[data-ui-surface="sidebar"] #sidePanelDocumentStatus .side-panel-tool-button { box-sizing:border-box; width:30px; min-width:30px; height:30px; min-height:30px; padding:5px; border:0; border-radius:5px; background:transparent; }
+body[data-ui-surface="sidebar"] #sidePanelHeader .side-panel-notification-center { flex-basis:30px; min-width:30px; }
+body[data-ui-surface="sidebar"] :is(#sidePanelHeader,#sidePanelDocumentStatus) svg[data-toolbar-icon] { display:block; flex:none; width:20px; height:20px; }
+body[data-ui-surface="sidebar"] #sidePanelDocumentStatus .side-panel-global-tools { gap:2px; }
+body[data-ui-surface="sidebar"] :is(#sidePanelHeader,#sidePanelDocumentStatus) :is(button,summary):hover { background:#eceeea; }
+body[data-ui-surface="sidebar"] .workspace-bottom-nav { flex-basis:42px; min-height:42px; padding:0; border-top:1px solid #d9dbd6; }
+body[data-ui-surface="sidebar"] .workspace-nav-button { min-height:40px; padding:5px 3px; }
+
+/* Note actions share the existing tool row; the note owns the entire content area. */
+body[data-ui-surface="sidebar"] #sidePanelDocumentStatus:has(#notesModuleTools:not([hidden])) { flex-wrap:nowrap; }
+body[data-ui-surface="sidebar"] #notesModuleTools { min-width:0; }
+body[data-ui-surface="sidebar"] #notesModuleTools .side-panel-tool-button { flex:0 0 30px; }
+body[data-ui-surface="sidebar"] #notesModuleTools .literature-note-template-field select { width:clamp(84px,22vw,128px); height:30px; min-height:30px; }
+body[data-ui-surface="sidebar"] #literatureNoteDrawer { gap:0; padding-top:12px; }
+body[data-ui-surface="sidebar"] #toggleLiteratureNoteMarkdown[aria-pressed="false"] { background:#e4e8e2; }
+@media (max-width:479px) {
+  body[data-ui-surface="sidebar"] #sidePanelDocumentStatus:has(#notesModuleTools:not([hidden])) > #sidePanelDocumentStatusText { display:none; }
+  body[data-ui-surface="sidebar"] #sidePanelDocumentStatus:has(#notesModuleTools:not([hidden])) .side-panel-global-tools { flex:1; flex-wrap:nowrap; min-width:0; margin-left:0; }
+  body[data-ui-surface="sidebar"] #notesModuleTools:not([hidden]) { flex:1; }
+  body[data-ui-surface="sidebar"] #notesModuleTools .literature-note-template-field { flex:1; }
+  body[data-ui-surface="sidebar"] #notesModuleTools .literature-note-template-field select { width:100%; }
+}
+
+body[data-ui-surface="sidebar"] .workspace-figure-summary-state { white-space:nowrap; }

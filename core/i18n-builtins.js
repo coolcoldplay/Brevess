@@ -205,11 +205,14 @@
     explain: ['Explain', 'Explain the selected passage clearly without distorting it: first state what the authors directly mean, then explain key concepts, logical relationships and the limits of the conclusion. Do not invent mechanisms absent from the original text.']
   };
   const TEMPLATE_EN = {
+    general_web: 'General web page',
     basic_research: 'Basic research article', clinical_study: 'Clinical study', systematic_review: 'Systematic review / meta-analysis',
     narrative_review: 'Narrative review', case_report: 'Case report / case series', methods_resource: 'Methods / protocol / resource',
     guideline_consensus: 'Guideline / consensus'
   };
   const FIELD_EN = {
+    web_title: 'Title', web_source: 'Source', web_key_points: 'Key points',
+    web_excerpts: 'Excerpts', web_reflections: 'Reflections', web_actions: 'Actions',
     research_background: 'Research background', scientific_questions: 'Scientific question and logical subquestions',
     experimental_design: 'Experimental design', important_methods: 'Key experimental methods', main_findings: 'Main findings',
     innovations: 'Research contributions', limitations: 'Limitations', open_questions: 'Questions to test', transferable_ideas: 'Ideas I can apply',
@@ -405,6 +408,7 @@
   }
 
   function registerBuiltinInterfaceTranslations() {
+    currentShared().registerInterfaceTranslations?.({ '添加通用网页模板': 'Add general web template' });
     const api = currentShared();
     if (typeof api.registerInterfaceTranslations !== 'function') return;
     const base = defaultCatalog(), translated = englishCatalog(base), entries = {

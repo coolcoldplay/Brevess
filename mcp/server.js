@@ -72,8 +72,12 @@ function loadOrCreateToken({ explicitToken, tokenFile }) {
     if (error.code !== 'ENOENT') throw error;
   }
   const token = crypto.randomBytes(32).toString('base64url');
+  const temporary = `${tokenFile}.${crypto.randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    fs.writeFileSync(temporary, `${token}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    // Publishing a fully written file atomically prevents concurrent clients
+    // observing an empty token; link never overwrites an existing credential.
+    fs.linkSync(temporary, tokenFile);
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const existing = fs.readFileSync(tokenFile, 'utf8').trim();
@@ -81,6 +85,8 @@ function loadOrCreateToken({ explicitToken, tokenFile }) {
       throw new BrevessMcpError('MCP_TOKEN_INVALID', 'The existing MCP bridge token file is invalid.');
     }
     return { token: existing, source: tokenFile };
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   return { token, source: tokenFile };
 }
@@ -102,6 +108,30 @@ function extensionIdFromManifest(manifestPath) {
   } catch {
     return '';
   }
+}
+
+function extensionIdsFromManifest(manifestPath) {
+  const ids = new Set();
+  const localId = extensionIdFromManifest(manifestPath);
+  if (localId) ids.add(localId);
+  const catalog = path.join(path.dirname(manifestPath), 'native-host', 'catalog-extension-ids.txt');
+  try {
+    const stat = fs.lstatSync(catalog);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384 || fs.lstatSync(path.dirname(catalog)).isSymbolicLink()) {
+      throw new BrevessMcpError('AGENT_INSTALLATION_MISMATCH', 'The packaged extension identity catalog is invalid.');
+    }
+    for (const line of fs.readFileSync(catalog, 'utf8').split(/\r?\n/u)) {
+      const id = line.trim();
+      if (!id || id.startsWith('#')) continue;
+      if (!/^[a-p]{32}$/u.test(id)) throw new BrevessMcpError('AGENT_INSTALLATION_MISMATCH', 'The packaged extension identity catalog is invalid.');
+      ids.add(id);
+    }
+  } catch (error) {
+    // Existing development payloads predate the catalog. Preserve only their
+    // manifest-derived identity; never infer trust from the incoming request.
+    if (error.code !== 'ENOENT') throw error;
+  }
+  return [...ids];
 }
 
 function parseArgs(argv = []) {
@@ -127,6 +157,7 @@ function parseArgs(argv = []) {
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--http-only') options.transport = 'http';
     else if (arg === '--stdio-only') options.transport = 'stdio';
+    else if (arg === '--managed-service') options.managedService = true;
     else if (arg === '--allow-write') options.allowWrite = true;
     else if (arg === '--no-write') options.allowWrite = false;
     else if (arg === '--host') options.host = next();
@@ -166,7 +197,7 @@ function helpText() {
     'Usage: node mcp/server.js [options]',
     '',
     'Options:',
-    '  --stdio-only             Serve MCP over stdio only (HTTP bridge still starts).',
+    '  --stdio-only             Proxy stdio to the shared local HTTP bridge.',
     '  --http-only              Serve MCP over localhost HTTP only.',
     '  --allow-write            Enable mutating tools. Default is read-only.',
     '  --port <number>          Localhost bridge/MCP port. Default 9537.',
@@ -185,16 +216,15 @@ function helpText() {
   ].join('\n');
 }
 
-function corsOrigin(request, extensionId) {
+function corsOrigin(request, extensionIds) {
   const origin = request.headers.origin;
   if (!origin) return null;
-  if (origin === `chrome-extension://${extensionId}`) return origin;
-  if (/^chrome-extension:\/\/[a-p]{32}$/u.test(origin) && !extensionId) return origin;
+  if (extensionIds.some(id => origin === `chrome-extension://${id}`)) return origin;
   return false;
 }
 
-function applyCors(request, response, extensionId) {
-  const origin = corsOrigin(request, extensionId);
+function applyCors(request, response, extensionIds) {
+  const origin = corsOrigin(request, extensionIds);
   if (origin === false) {
     response.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify({ error: 'origin_forbidden' }));
@@ -269,7 +299,7 @@ function connectPage({ url, extensionId, scopes, bridge, tokenSource, language =
   const ui = (zh, en) => english ? en : zh;
   const languageLink = value => { const target = new URL(url); target.searchParams.set('lang', value); return target.href; };
   const workbench = extensionId
-    ? `chrome-extension://${extensionId}/workbench/index.html?mcpServer=${encodeURIComponent(url)}&mcpToken=${encodeURIComponent(new URL(url).searchParams.get('token') || '')}`
+    ? `chrome-extension://${extensionId}/workbench/index.html?mcpServer=${encodeURIComponent(new URL(url).origin)}&mcpToken=${encodeURIComponent(new URL(url).searchParams.get('token') || '')}`
     : '';
   const escaped = value => String(value).replace(/[&<>"']/gu, char => ({
     '&': '&amp;',
@@ -286,11 +316,13 @@ function connectPage({ url, extensionId, scopes, bridge, tokenSource, language =
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${ui('BREVESS MCP 连接', 'BREVESS MCP connection')}</title>
 <style>
-body{font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:880px;margin:40px auto;padding:0 24px;color:#17202a;background:#f7f9fb}
-main{background:#fff;border:1px solid #dbe3ea;border-radius:14px;padding:28px 30px;box-shadow:0 12px 40px rgba(35,52,70,.08)}
-code,pre{background:#f1f4f7;border-radius:6px}code{padding:2px 5px}pre{padding:14px;overflow:auto;font-size:13px}
-a.button{display:inline-block;background:#174d66;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;margin:8px 0}
-.muted{color:#62717f}.warn{background:#fff7e5;border-left:4px solid #d89a20;padding:10px 14px}
+body{font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:880px;margin:32px auto;padding:0 20px;color:#202020;background:#fff}
+main{background:#fff;border:1px solid #d5d5d5;padding:24px}
+code,pre{background:#f3f3f3}code{padding:2px 5px}pre{padding:14px;overflow:auto;font-size:13px}
+a.button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;min-height:32px;background:#fff;color:#202020;border:1px solid #d5d5d5;padding:6px 10px;line-height:18px;text-decoration:none;margin:8px 0}
+a.button:hover{background:#ededed;border-color:#202020}a.button:focus-visible{outline:2px solid #202020;outline-offset:3px}
+.muted{color:#666}.warn{background:#fff7e5;border-left:4px solid #d89a20;padding:10px 14px}
+@media(max-width:480px){body{margin:16px auto;padding:0 12px}main{padding:16px}a.button{max-width:100%;text-align:center}}
 </style>
 </head>
 <body><main>
@@ -308,6 +340,20 @@ mcpToken=${escaped(new URL(url).searchParams.get('token') || '')}</pre>
 </main></body></html>`;
 }
 
+function namespaceProxyMessage(message, clientId, restore = false) {
+  if (Array.isArray(message)) return message.map(value => namespaceProxyMessage(value, clientId, restore));
+  if (!message || typeof message !== 'object' || !clientId) return message;
+  const result = { ...message }, prefix = `${clientId}:`;
+  if (Object.hasOwn(result, 'id')) {
+    if (!restore) result.id = prefix + JSON.stringify(result.id);
+    else if (typeof result.id === 'string' && result.id.startsWith(prefix)) result.id = JSON.parse(result.id.slice(prefix.length));
+  }
+  if (!restore && result.method === 'notifications/cancelled' && Object.hasOwn(result.params || {}, 'requestId')) {
+    result.params = { ...result.params, requestId: prefix + JSON.stringify(result.params.requestId) };
+  }
+  return result;
+}
+
 function createHttpServer(options) {
   const {
     hub,
@@ -317,13 +363,14 @@ function createHttpServer(options) {
     allowWrite,
     connectPagePath
   } = options;
+  const extensionIds = options.extensionIds || [extensionId].filter(Boolean);
   const sessions = new Map();
 
   const server = http.createServer(async (request, response) => {
     if (process.env.BREVESS_MCP_DEBUG === '1') {
-      process.stderr.write(`[mcp-http] ${request.method} ${request.url || '/'} accept=${String(request.headers.accept || '')} content_length=${String(request.headers['content-length'] || '')}\n`);
+      process.stderr.write(`[mcp-http] ${request.method} ${(request.url || '/').split('?')[0]}\n`);
     }
-    if (!applyCors(request, response, extensionId)) return;
+    if (!applyCors(request, response, extensionIds)) return;
     if (request.method === 'OPTIONS') {
       response.writeHead(204);
       response.end();
@@ -332,6 +379,15 @@ function createHttpServer(options) {
     const base = `http://${request.headers.host || `${options.host}:${options.port}`}`;
     const requestUrl = new URL(request.url || '/', base);
     try {
+      if (request.method === 'GET' && requestUrl.pathname === '/bootstrap/status') {
+        const nonce = requestUrl.searchParams.get('nonce') || '';
+        if (!/^[a-f0-9]{48}$/u.test(nonce) || !options.bootstrapStatus) {
+          sendJson(response, 400, { error: 'invalid_bootstrap_request' }); return;
+        }
+        const { proofFor } = require('./bootstrap.js');
+        sendJson(response, 200, { ...options.bootstrapStatus, proof: proofFor(token, nonce, options.bootstrapStatus) });
+        return;
+      }
       if (request.method === 'GET' && requestUrl.pathname === '/') {
         sendJson(response, 200, {
           name: SERVER_NAME,
@@ -420,8 +476,11 @@ function createHttpServer(options) {
             `${message?.method || 'invalid'}#${String(message?.id ?? 'notification')}`).join(',')}\n`);
         }
         const sessionId = requestUrl.searchParams.get('sessionId') || '';
-        const context = { sessionId: sessionId || 'http', transport: 'http' };
-        const result = await protocol.handle(body, context);
+        const rawClientId = request.headers['x-brevess-client-id'];
+        const clientId = typeof rawClientId === 'string' && /^proxy-[a-f0-9-]{36}$/u.test(rawClientId) ? rawClientId : '';
+        const context = { sessionId: clientId || sessionId || 'http', transport: 'http' };
+        const handled = await protocol.handle(namespaceProxyMessage(body, clientId), context);
+        const result = namespaceProxyMessage(handled, clientId, true);
         if (sessionId) {
           const session = sessions.get(sessionId);
           if (!session) {
@@ -566,7 +625,10 @@ async function start(options = {}) {
   });
   const audit = createAuditWriter(parsed.auditFile);
   const manifestPath = path.join(__dirname, '..', 'manifest.json');
-  const extensionId = extensionIdFromManifest(manifestPath);
+  const extensionIds = extensionIdsFromManifest(manifestPath);
+  const extensionId = extensionIds[0] || '';
+  const { statusFields, runtimeRevision, writeDescriptor } = require('./bootstrap.js');
+  const bootstrapStatus = statusFields({ revision: runtimeRevision(), extensionId, extensionIds, allowWrite: parsed.allowWrite });
   let port = parsed.port;
   let baseUrl = `http://${parsed.host}:${port || DEFAULT_PORT}`;
   const hub = new BridgeHub({
@@ -592,10 +654,12 @@ async function start(options = {}) {
     protocol,
     token: tokenState.token,
     extensionId,
+    extensionIds,
     allowWrite: parsed.allowWrite,
     connectPagePath: tokenState.source,
     host: parsed.host,
-    port
+    port,
+    bootstrapStatus
   });
   await new Promise((resolve, reject) => {
     httpServer.once('error', reject);
@@ -616,7 +680,7 @@ async function start(options = {}) {
     `[${SERVER_NAME}] scopes ${parsed.allowWrite ? 'read,write' : 'read'}`,
     `[${SERVER_NAME}] bridge protocol ${BRIDGE_PROTOCOL_VERSION}`,
     `[${SERVER_NAME}] token file ${tokenState.source}`,
-    `[${SERVER_NAME}] connect ${connectUrl}`,
+    `[${SERVER_NAME}] connect ${tokenlessConnectUrl} (pair through the local companion)`,
     parsed.transport === 'http' ? '' : `[${SERVER_NAME}] stdio ready`,
     ''
   ].filter(Boolean).join('\n'));
@@ -624,12 +688,32 @@ async function start(options = {}) {
     allowWrite: parsed.allowWrite
   });
   let closing = false;
+  let idleTimer = null;
+  const descriptorPath = path.join(parsed.stateDir, 'service.json');
+  if (parsed.managedService) {
+    writeDescriptor(descriptorPath, { pid: process.pid, port, ...bootstrapStatus });
+    let lastActivity = Date.now(), activeRequests = 0;
+    httpServer.on('request', (_request, response) => {
+      lastActivity = Date.now(); activeRequests += 1;
+      let completed = false;
+      const done = () => { if (!completed) { completed = true; activeRequests -= 1; lastActivity = Date.now(); } };
+      response.once('finish', done); response.once('close', done);
+    });
+    idleTimer = setInterval(() => {
+      if (!activeRequests && Date.now() - lastActivity > 30000) close(0).catch(() => {});
+    }, 5000);
+    idleTimer.unref();
+  }
   async function close(exitCode = 0) {
     if (closing) return;
     closing = true;
+    clearInterval(idleTimer);
     stdio?.close();
     hub.close();
     await new Promise(resolve => httpServer.close(() => resolve()));
+    if (parsed.managedService) {
+      try { if (JSON.parse(fs.readFileSync(descriptorPath, 'utf8')).pid === process.pid) fs.unlinkSync(descriptorPath); } catch {}
+    }
     if (exitCode !== null) process.exitCode = exitCode;
   }
   return {
@@ -652,6 +736,13 @@ async function main() {
     process.stdout.write(helpText());
     return;
   }
+  if (options.transport === 'stdio') {
+    const { startProxy } = require('./client-proxy.js');
+    const proxy = await startProxy(options);
+    process.once('SIGINT', () => proxy.close());
+    process.once('SIGTERM', () => proxy.close());
+    return;
+  }
   const instance = await start({ ...options, argv: null });
   const shutdown = () => {
     instance.close(0).catch(error => {
@@ -664,20 +755,22 @@ async function main() {
   if (options.transport === 'http') process.stderr.write(`[${SERVER_NAME}] http-only mode\n`);
 }
 
+module.exports = {
+  parseArgs,
+  loadOrCreateToken,
+  extensionIdFromKey,
+  extensionIdFromManifest,
+  extensionIdsFromManifest,
+  createHttpServer,
+  createStdioTransport,
+  namespaceProxyMessage,
+  start,
+  helpText
+};
+
 if (require.main === module) {
   main().catch(error => {
     process.stderr.write(`[${SERVER_NAME}] ${serializeError(error).code}: ${error.message}\n`);
     process.exitCode = 1;
   });
 }
-
-module.exports = {
-  parseArgs,
-  loadOrCreateToken,
-  extensionIdFromKey,
-  extensionIdFromManifest,
-  createHttpServer,
-  createStdioTransport,
-  start,
-  helpText
-};

@@ -1,9 +1,11 @@
 # Dependencies
 node_modules/
+.venv-kokoro/
 
 # Generated builds and archives
 dist/
 output/
+outputs/
 qa-artifacts/
 发布/
 *.zip

@@ -377,6 +377,10 @@ Key 已保存	Key saved
 API Key 无效或无权限	API key is invalid or lacks permission
 请求过于频繁，请稍后重试	Too many requests. Try again later
 API 额度不足	Insufficient API quota
+本机 Codex 桥版本过旧，不支持当前结构化输出协议。请更新 BREVESS Windows 配套组件，再重新测试；仅更新扩展不够。	The local Codex bridge is too old for structured output. Update the BREVESS Windows companion and test again; updating only the extension is not enough.
+本机 Codex 返回的结构化结果不符合桥协议，请更新配套组件后重试	The local Codex structured result violates the bridge protocol. Update the companion and retry.
+本次 JSON Schema 包含本机 Codex 尚不支持的结构	This JSON Schema contains structures unsupported by local Codex.
+本次 JSON Schema 超出本机 Codex 的结构预算	This JSON Schema exceeds the local Codex structure budget.
 服务商拒绝了模型列表请求	The provider rejected the model-list request
 连接测试等待超时，请稍后重试	Connection test timed out. Try again later
 请求已取消	Request cancelled

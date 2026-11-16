@@ -4,6 +4,8 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const CONTENT_SCRIPT_FILES = [
+    'core/credential-boundary.js',
+    'core/ui-action-icons.js',
     'core/i18n.js',
     'core/i18n-extension.js',
     'core/i18n-reader.js',
@@ -43,6 +45,10 @@
     'core/figure-extractor.js',
     'core/figure-source-lease.js',
     'core/figure-viewer.js',
+    'core/figure-magnifier.js',
+    'core/web-media.js',
+    'core/figure-annotations.js',
+    'core/figure-annotation-ui.js',
     'core/figure-image-tiles.js',
     'core/figure-analysis.js',
     'core/figure-result-binding.js',
@@ -54,6 +60,8 @@
     'core/cross-figure-logic.js',
     'core/pdf-annotations.js',
     'core/manual-annotations.js',
+    'core/cross-format-anchors.js',
+    'core/cross-format-view.js',
     'core/pdf-native-document.js',
     'core/reading-tools.js',
     'core/cache-planner.js',
@@ -63,6 +71,7 @@
     'core/article-workspace-save.js',
     'core/article-archive.js',
     'core/export-bundle.js',
+    'core/ppt-agent-materials.js',
     'core/i18n-export.js',
     'core/mechanism-canvas-model.js',
     'core/research-workbench-canvas-interaction.js',
@@ -78,6 +87,7 @@
     'core/translation-checkpoint.js',
     'core/selection-tts.js',
     'core/local-translator.js',
+    'core/input-tools.js',
     'core/bilingual-translation-controller.js',
     'bilingual-translation-content.js',
     'core/llm-task-catalog.js',
@@ -90,16 +100,19 @@
 
 
 
-    'sharing/client.js',
-    'sharing/dialog.js',
+
+
     'content.js',
     'semantic-find-content.js',
     'page-load-indicator-content.js'
   ];
-  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css', 'sharing/sharing.css'];
+  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.1-visibility-sharing-r37-v26';
+    '1.0.2-store-first-r1';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.1-visibility-sharing-r38-v29',
+    '1.0.1-visibility-sharing-r38-v28',
+    '1.0.1-visibility-sharing-r37-v26',
     '1.0.1-visibility-sharing-r37-v25',
     '1.0.1-visibility-sharing-r37-v24',
     '1.0.1-visibility-sharing-r37-v23',
@@ -221,7 +234,8 @@
       const actual = new URL(String(value || ''));
       const owned = new URL(chromeApi.runtime.getURL('pdf-reader.html'));
       return actual.protocol === 'chrome-extension:' && actual.protocol === owned.protocol &&
-        actual.host === owned.host && actual.pathname === owned.pathname;
+        actual.host === owned.host && (actual.pathname === owned.pathname ||
+          Boolean(globalThis.SciLLM?.parseLibraryHtmlReaderUrl?.(actual.href, chromeApi.runtime.getURL(''))));
     } catch (_) { return false; }
   }
 
@@ -257,7 +271,7 @@
       const owned = new URL(chromeApi.runtime.getURL('pdf-reader.html'));
       ownPdfReader = expected.protocol === 'chrome-extension:' &&
         expected.protocol === owned.protocol && expected.host === owned.host &&
-        expected.pathname === owned.pathname;
+        (expected.pathname === owned.pathname || Boolean(globalThis.SciLLM?.parseLibraryHtmlReaderUrl?.(expected.href, chromeApi.runtime.getURL(''))));
     } catch (_) {}
     if (!observedUrl && ownPdfReader) {
       // A click inside our reader does not grant activeTab. Chromium can omit
@@ -517,7 +531,7 @@
     const results = await chromeApi.scripting.executeScript({
       target,
       func: (isReady, claimKey, readyKey, bindingKeyName, expectedRevision,
-        expectedBinding, expectedUrl, ownerKey, expectedOwner) => {
+        expectedBinding, expectedUrl, ownerKey, expectedOwner, documentPinned) => {
         const root = document.documentElement;
         if (!root) return 'waiting';
         let liveUrl = String(globalThis.location?.href || '');
@@ -528,8 +542,12 @@
         } catch (_) {
           liveUrl = liveUrl.replace(/#.*/, '');
         }
-        if (expectedUrl && liveUrl !== expectedUrl) return 'stale';
+        // Ready commits remain URL-bound. Failed owners may release after a
+        // same-document route change only with the browser document receipt.
+        if (expectedUrl && liveUrl !== expectedUrl && (isReady || !documentPinned)) return 'stale';
         if (root.dataset[ownerKey] !== expectedOwner) return 'waiting';
+        if (!isReady && (root.dataset[claimKey] !== expectedRevision ||
+            root.dataset[bindingKeyName] !== expectedBinding)) return 'waiting';
         if (isReady) {
           root.dataset[readyKey] = expectedRevision;
           root.dataset[bindingKeyName] = expectedBinding;
@@ -551,7 +569,9 @@
         bindingKey(binding),
         binding?.expectedUrl || '',
         CONTENT_INJECTION_OWNER,
-        owner
+        owner,
+        Array.isArray(target.documentIds) && target.documentIds.length === 1 &&
+          typeof target.documentIds[0] === 'string' && target.documentIds[0].length > 0
       ]
     });
     const state = results?.[0]?.result || 'waiting';
@@ -595,7 +615,16 @@
         }
       }
       const state = await inspectContentInjection(chromeApi, target, true, binding, owner, options.deferArticlePreindex);
-      await assertMessageCurrent(chromeApi, tabId, guardedOptions);
+      try {
+        await assertMessageCurrent(chromeApi, tabId, guardedOptions);
+      } catch (error) {
+        // This caller can be cancelled while the browser grants its claim.
+        // A waiter never owns that claim and must not release it.
+        if (state === 'claimed') {
+          await setContentInjectionState(chromeApi, target, false, binding, owner).catch(() => {});
+        }
+        throw error;
+      }
       if (state === 'stale') throw staleNavigationError();
       if (state === 'ready') return;
       if (state === 'waiting') {

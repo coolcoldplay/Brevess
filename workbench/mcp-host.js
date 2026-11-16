@@ -19,6 +19,7 @@
     'create_panel',
     'layout',
     'set_panel_status',
+    'set_panel_schedule',
     'attach_material',
     'update_material_stance',
     'create_evidence_block',
@@ -44,6 +45,24 @@
     const value = runtime();
     if (!value?.session || !value?.project) throw fail('WORKBENCH_HOST_NOT_READY', '课题工作台尚未就绪');
     return value;
+  }
+  function assertLocalContext(rt) {
+    if (rt.ui.sharedProject) throw fail('WORKBENCH_SHARED_READ_ONLY', '当前显示共享课题；请返回我的课题后使用本地 Agent 工具。');
+  }
+  function captureLocalContext(rt, { bindProject = true } = {}) {
+    assertLocalContext(rt);
+    const epoch = rt.ui.agentApprovalEpoch || 0, projectId = rt.project()?.id || null;
+    return () => {
+      assertLocalContext(rt);
+      if (runtime() !== rt || (rt.ui.agentApprovalEpoch || 0) !== epoch || bindProject && (rt.project()?.id || null) !== projectId) {
+        throw fail('WORKBENCH_CONTEXT_CHANGED', '工作台上下文或授权已变化；请重新读取当前目标。');
+      }
+    };
+  }
+  function sharedContext(rt) {
+    const p = rt.ui.sharedProject;
+    return { projectId: null, revision: null, module: 'shared-project', readonly: true,
+      sharedProject: { key: p.key, name: p.name, ownerId: p.ownerId, groupId: p.groupId } };
   }
   function currentRevision(rt) { return rt.session.state.row?.revision ?? null; }
   function toolDefinition(name) {
@@ -83,6 +102,7 @@
       scope.operations.length === 1 && scope.operations[0] === 'create_project';
   }
   function ensureWriteScope(rt, definition, args) {
+    assertLocalContext(rt);
     if (definition?.access !== 'write') return null;
     if (definition.name === 'create_project') {
       if (args.expectedProjectId !== null || args.expectedRevision !== 0) {
@@ -116,6 +136,7 @@
     status() {
       const rt = runtime();
       if (!rt?.session) return { ready: false, projectId: null, revision: null, scope: null, writeScope: null, connectedClients: [], recentCalls: [], pendingApprovals: [] };
+      if (rt.ui.sharedProject) return { ready: true, ...sharedContext(rt), scope: null, writeScope: null, bootstrapScope: null, connectedClients: [], recentCalls: [], pendingApprovals: [] };
       return {
         ready: true,
         projectId: rt.project()?.id || null,
@@ -130,6 +151,7 @@
     },
     getContext() {
       const rt = requireRuntime();
+      if (rt.ui.sharedProject) return sharedContext(rt);
       const p = rt.project();
       return {
         projectId: p?.id || null,
@@ -158,6 +180,7 @@
     },
     async execute(name, args = {}, options = {}) {
       if (name === 'brevess.request_write_scope') return host.requestWriteScope(args);
+      assertLocalContext(requireRuntime());
       if (name === 'open_local_pdf') return host.openLocalPdf(args);
       if (name === 'export_library_transfer') {
         const data = await host.exportLibraryTransfer(args);
@@ -174,20 +197,27 @@
         const active = name === 'create_project' ? rt.ui.bootstrapScope : rt.ui.writeScope;
         if (active?.token !== options.scopeToken) throw fail('WORKBENCH_WRITE_SCOPE_TOKEN_MISMATCH', '外部写作用域 token 与 Workbench 当前授权不一致');
       }
-      if (name === 'query_global_library') {
-        if (!rt.globalLibraryReader) throw fail('WORKBENCH_GLOBAL_LIBRARY_UNAVAILABLE', '全局文献总库读取器未就绪');
-        const result = await rt.globalLibraryReader.query(args);
-        rt.ui.libraryEntries = result.items || [];
-        rt.render?.();
-        return { data: result, revision: currentRevision(rt), changedPaths: [], approval: null, auditId: auditId() };
+      if (['query_global_library', 'read_library_catalog', 'command_library_catalog'].includes(name)) {
+        if (!root.BrevessLibraryCatalogMcp?.execute) throw fail('LIBRARY_CATALOG_MCP_UNAVAILABLE');
+        const result = await root.BrevessLibraryCatalogMcp.execute(name, args, {
+          catalogActions: rt.catalogActions, globalLibraryReader: rt.globalLibraryReader,
+          modal: rt.modal, ui: rt.ui, signal: options.signal,
+          deadlineAt: options.libraryCatalogDeadlineAt
+        });
+        if (result.changedPaths?.length && rt.ui.library && !rt.ui.sharedProject) {
+          try { await rt.loadGlobalLibrary?.(); } catch (_) { rt.toast?.('资料已保存；请刷新文献总库。'); }
+        }
+        return result;
       }
       const approval = ensureWriteScope(rt, definition, args);
       if (approval) return { data: null, revision: currentRevision(rt), changedPaths: [], approval, auditId: null };
       const toolset = tools();
       if (!toolset?.execute) throw fail('WORKBENCH_TOOLS_NOT_READY', 'Workbench operation registry 尚未就绪');
+      const checkContext = captureLocalContext(rt, { bindProject: definition.access !== 'write' });
       const result = modelOperations.has(name)
         ? await toolset.execute('model_operation', { ...args, operation: name })
         : await toolset.execute(name, args);
+      checkContext();
       const data = result?.data ?? result;
       if (name === 'create_project') {
         consumeBootstrapScope(rt);
@@ -208,6 +238,9 @@
     },
     requestWriteScope(request = {}) {
       const rt = requireRuntime();
+      if (request.action === 'revoke') return host.revokeWriteScope();
+      assertLocalContext(rt);
+      const approvalEpoch = rt.ui.agentApprovalEpoch || 0;
       const bootstrap = request.bootstrap === true;
       const projectId = request.projectId === null ? null : String(request.projectId || '');
       const operations = Array.isArray(request.operations) ? [...new Set(request.operations.map(operationName))] : [];
@@ -244,6 +277,7 @@
           const finish = value => { dialog.close(); resolve(value); };
           dialog.querySelector('[data-scope-deny]').onclick = () => finish({ success: false, error: { code: 'WRITE_SCOPE_DENIED', message: '用户拒绝 write scope' } });
           dialog.querySelector('[data-scope-allow]').onclick = () => {
+            if (rt.ui.sharedProject || (rt.ui.agentApprovalEpoch || 0) !== approvalEpoch || (bootstrap ? !!rt.project()?.id : projectId && rt.project()?.id !== projectId)) return finish({success:false,error:{code:'WRITE_SCOPE_DISMISSED',message:'授权已撤回或课题已切换'}});
             const scope = { token: `scope-${root.crypto?.randomUUID?.() || Date.now()}`, projectId, bootstrap, operations, ttlMs, taskId: request.taskId || null, expiresAt: Date.now() + ttlMs, grantedAt: now(), used: false };
             if (bootstrap) rt.ui.bootstrapScope = scope;
             else rt.ui.writeScope = scope;
@@ -253,8 +287,16 @@
         });
       });
     },
+    revokeWriteScope() {
+      const rt = requireRuntime();
+      rt.ui.writeScope = null;
+      rt.ui.bootstrapScope = null;
+      rt.ui.agentApprovalEpoch = (rt.ui.agentApprovalEpoch || 0) + 1;
+      return { success: true, data: { revoked: true } };
+    },
     async readResource(uri) {
       const rt = requireRuntime();
+      assertLocalContext(rt);
       const raw = String(uri || '');
       if (!raw.startsWith('brevess://')) throw fail('WORKBENCH_RESOURCE_URI_INVALID', '仅支持 brevess:// resource URI');
       const parts = raw.slice('brevess://'.length).split('/').filter(Boolean);
@@ -290,17 +332,20 @@
       return { cancelled: false, operationId: operationId || null, reason: 'NO_ACTIVE_OPERATION' };
     },
     async openLocalPdf(args = {}) {
+      const checkContext = captureLocalContext(requireRuntime());
       const hook = root.BrevessWorkbenchMCPBridge?.openLocalPdf || root.BrevessWorkbenchHostHooks?.openLocalPdf;
       if (typeof hook !== 'function') throw fail('PENDING_HOST_HOOK', '本地 PDF 打开需要 MCP/native host 提供 openLocalPdf(path) hook；Workbench 不读取或伪造 PDF 解析结果');
-      return hook(args);
+      const result = await hook(args); checkContext(); return result;
     },
     async exportLibraryTransfer(args = {}) {
       const rt = requireRuntime();
+      const checkContext = captureLocalContext(rt);
       if (typeof rt.libraryTransfer?.export !== 'function') throw fail('LIBRARY_TRANSFER_HOST_UNAVAILABLE', 'Workbench 文献转移服务尚未就绪');
-      return rt.libraryTransfer.export(args);
+      const result = await rt.libraryTransfer.export(args); checkContext(); return result;
     },
     async importLibraryTransfer(args = {}) {
       const rt = requireRuntime();
+      const checkContext = captureLocalContext(rt);
       if (!args.bundle || typeof args.bundle !== 'object') throw fail('LIBRARY_TRANSFER_BUNDLE_REQUIRED', '缺少文献转移 bundle');
       if (typeof rt.libraryTransfer?.import !== 'function') throw fail('LIBRARY_TRANSFER_HOST_UNAVAILABLE', 'Workbench 文献转移服务尚未就绪');
       const definition = root.BrevessLibraryTransfer?.validateEnvelope?.(args.bundle);
@@ -318,11 +363,14 @@
           dialog.addEventListener('close', () => finish(false), { once: true });
         });
       });
+      checkContext();
       if (!approved) throw fail('LIBRARY_TRANSFER_DENIED', '用户未确认文献分享导入');
-      return rt.libraryTransfer.import(args.bundle, { idempotencyKey: args.idempotencyKey || `host-transfer-${root.crypto?.randomUUID?.() || Date.now()}` });
+      const result = await rt.libraryTransfer.import(args.bundle, { idempotencyKey: args.idempotencyKey || `host-transfer-${root.crypto?.randomUUID?.() || Date.now()}` });
+      checkContext(); return result;
     },
     async legacyExecute(name, args = {}, options = {}) {
       const rt = requireRuntime();
+      assertLocalContext(rt);
       const toolset = tools();
       const definition = legacyDefinition(name, args);
       if (!toolset?.execute || !definition) throw fail('WORKBENCH_OPERATION_UNKNOWN', `未知 Agent tool: ${name}`);
@@ -333,7 +381,9 @@
         const active = rt.ui.writeScope;
         if (active?.token !== options.scopeToken) throw fail('WORKBENCH_WRITE_SCOPE_TOKEN_MISMATCH', '外部写作用域 token 与 Workbench 当前授权不一致');
       }
+      const checkContext = captureLocalContext(rt, { bindProject: definition.access !== 'write' });
       const result = await toolset.execute(name, args);
+      checkContext();
       const entry = { id: auditId(), name, at: now(), args, success: true, revision: currentRevision(rt), legacy: true };
       (rt.ui.audit ||= []).push(entry);
       return { data: result, revision: currentRevision(rt), changedPaths: [], approval: null, auditId: entry.id };
@@ -360,6 +410,7 @@
       }
     },
     requestWriteScope: request => host.requestWriteScope(request),
+    revokeWriteScope: () => host.revokeWriteScope(),
     requestBootstrapScope: request => host.requestWriteScope({ ...(request || {}), projectId: null, bootstrap: true, operations: ['create_project'] }),
     legacyExecute: async (name, args, options = {}) => {
       try {

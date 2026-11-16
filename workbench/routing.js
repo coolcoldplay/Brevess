@@ -81,7 +81,7 @@
       [s,{x:s.x,y:all.y-pad},{x:t.x,y:all.y-pad},t],
       [s,{x:s.x,y:all.y+all.h+pad},{x:t.x,y:all.y+all.h+pad},t]
     ];
-    if(edge.waypoints?.length){const manual=[s,...edge.waypoints,t];if(!valid(manual))return {blocked:true,reason:'手动路线穿过节点或不是正交线，请调整',points:[],path:'',a,b};candidates.splice(0,candidates.length,manual);}
+    if(edge.waypoints?.length){const manual=[a,...edge.waypoints,b];if(!orthogonal(manual)||segments(manual).some(([p,q])=>actual.some(r=>hits(p,q,r))))return {blocked:true,reason:'手动路线穿过节点或不是正交线，请调整',points:[],path:'',a,b};const result={points:simplify(manual),path:rounded(simplify(manual)),a,b,blocked:false};placeLabels(nodes,[edge],{[edge.id]:result});return result;}
     let available=candidates.map(simplify).filter(valid);if(!available.length){const path=graphPath(s,t,obstacles);if(path&&orthogonal(path))available=[path];}
     if(!available.length)return {blocked:true,reason:'路线拥挤，请移动节点或调整端口',points:[],path:'',a,b};
     const priorSegments=previous.flatMap(r=>segments(r.points));
@@ -105,6 +105,19 @@
     placeLabels(nodes,[edge],{[edge.id]:result});
     return result;
   }
-  function routeAll(nodes,edges){const map={},previous=[],lanes=new Map(),groups=new Map(),effective=new Map();const sorted=[...edges].sort((a,b)=>a.id.localeCompare(b.id));for(const e of sorted){const a=nodes.find(n=>n.id===e.source),b=nodes.find(n=>n.id===e.target);if(!a||!b)continue;const defaults=autoPorts(a,b),copy={...e};effective.set(e.id,copy);for(const end of ['source','target'])if(!SIDES.includes(e[end+'Port']?.side)){const key=e[end]+'/'+defaults[end].side;const group=groups.get(key)||[];group.push({edge:copy,end,side:defaults[end].side});groups.set(key,group);}}for(const group of groups.values())group.forEach((item,index)=>item.edge[item.end+'Port']={side:item.side,offset:group.length===1?.5:(index+1)/(group.length+1)});for(const e of sorted){const key=[e.source,e.target].sort().join('/'),lane=lanes.get(key)||0;lanes.set(key,lane+1);const r=route(effective.get(e.id)||e,nodes,previous,lane);map[e.id]=r;if(!r.blocked)previous.push(r);}placeLabels(nodes,sorted,map);return map;}
+  function routeAll(nodes,edges){const map={},previous=[],lanes=new Map(),groups=new Map(),effective=new Map();const sorted=[...edges].sort((a,b)=>a.id.localeCompare(b.id));for(const e of sorted){const a=nodes.find(n=>n.id===e.source),b=nodes.find(n=>n.id===e.target);if(!a||!b)continue;const defaults=autoPorts(a,b),copy={...e};effective.set(e.id,copy);for(const end of ['source','target'])if(!SIDES.includes(e[end+'Port']?.side)){const key=e[end]+'/'+defaults[end].side;const group=groups.get(key)||[];group.push({edge:copy,end,side:defaults[end].side});groups.set(key,group);}}for(const group of groups.values())group.forEach((item,index)=>item.edge[item.end+'Port']={side:item.side,offset:group.length===1?.5:(index+1)/(group.length+1)});for(const e of sorted){const key=[e.source,e.target].sort().join('/'),lane=lanes.get(key)||0;lanes.set(key,lane+1);let r=route(effective.get(e.id)||e,nodes,previous,lane);
+      const length=p=>segments(p).reduce((n,[a,b])=>n+Math.abs(a.x-b.x)+Math.abs(a.y-b.y),0);
+      const cost=p=>length(p)+turnCount(p)*44+previous.flatMap(q=>segments(q.points)).reduce((n,[c,d])=>n+segments(p).reduce((k,[a,b])=>k+Number(crossing(a,b,c,d))*120+parallelOverlap(a,b,c,d)*2.4,0),0);
+      const a=nodes.find(n=>n.id===e.source),b=nodes.find(n=>n.id===e.target),direct=a&&b?Math.abs(a.x-b.x)+Math.abs(a.y-b.y):0;
+      // Keep ordinary routes cheap and stable. Search alternate free port sides
+      // only when the default pair is blocked or makes a large detour.
+      if(a&&b&&!e.waypoints?.length&&(r.blocked||length(r.points)>direct*1.7+100)){
+        let best=r.blocked?Infinity:cost(r.points);
+        for(const source of SIDES.includes(e.sourcePort?.side)?[e.sourcePort]:SIDES.map(side=>({side,offset:.5})))for(const target of SIDES.includes(e.targetPort?.side)?[e.targetPort]:SIDES.map(side=>({side,offset:.5}))){
+          const candidate=route({...e,sourcePort:source,targetPort:target},nodes,previous,lane);if(candidate.blocked)continue;
+          const score=cost(candidate.points);if(score<best){best=score;r=candidate;}
+        }
+      }
+      map[e.id]=r;if(!r.blocked)previous.push(r);}placeLabels(nodes,sorted,map);return map;}
   return {SIDES,autoPorts,port,portForPoint:M.portForPoint,segmentHits:hits,segments,orthogonal,turnCount,rounded,measureWorkbenchText,labelInfo,route,routeAll};
 });

@@ -43,6 +43,7 @@ const pageRecords = new Map();
 const ocrTextPages = new Map();
 const nativePageTextContentLoads = new Map();
 const nativePageTextContentCache = globalThis.SciLLM.createPdfNativePageTextCache();
+let nativeCrossFormatTextReader = null;
 const visiblePages = new Set();
 const renderFailureDocumentGenerations = new WeakMap();
 const lifecycle = globalThis.SciLLM.createPdfNativeLifecycle();
@@ -1095,6 +1096,9 @@ function createPagePlaceholder(pageNumber, page, binding = {}) {
   const section = document.createElement('section');
   section.className = 'pdf-native-page pdf-native-page-placeholder';
   section.dataset.pdfPageNumber = String(pageNumber);
+  const annotationViewport = page.getViewport({ scale: 1 });
+  section.dataset.pdfAnnotationWidth = String(Math.round(annotationViewport.width));
+  section.dataset.pdfAnnotationHeight = String(Math.round(annotationViewport.height));
   section.setAttribute('data-pdf-page-number', String(pageNumber));
   section.setAttribute('aria-label', `PDF page ${pageNumber}`);
   const record = {
@@ -1124,8 +1128,12 @@ async function effectivePageTextContent(page, pageNumber) {
   const extracted = await page.getTextContent({ includeMarkedContent: true, disableNormalization: true });
   const native = globalThis.SciLLM.orderPdfTextContentForReading(extracted, page);
   const ocr = ocrTextPages.get(pageNumber);
-  return ocr ? globalThis.SciLLM.mineruPageToPdfTextContent(ocr,
-    { view: page.view, rotation: page.rotate }) : native;
+  if (ocr) {
+    const content = globalThis.SciLLM.mineruPageToPdfTextContent(ocr,
+      { view: page.view, rotation: page.rotate });
+    return globalThis.SciLLM.retainPdfOriginalTextContent(content, content);
+  }
+  return globalThis.SciLLM.retainPdfOriginalTextContent(native, extracted);
 }
 
 async function loadCurrentPageTextContent(page, pageNumber, binding = {}) {
@@ -1154,6 +1162,7 @@ async function loadCurrentPageTextContent(page, pageNumber, binding = {}) {
       nativePageTextContentCache.retain(key, cacheBinding, textContent);
     }
     if (nativeDocumentMatches(sourceDocument, documentHash, documentGeneration) &&
+        ocrTextPages.get(normalizedPage) === cacheBinding.ocr &&
         currentRecord?.page === page && currentRecord.documentHash === documentHash &&
         currentRecord.documentGeneration === documentGeneration &&
         (currentRecord.mounted || wantedPages.has(normalizedPage))) {
@@ -1237,10 +1246,16 @@ async function installOcrTextLayer(binding) {
     }
     const textContent = globalThis.SciLLM.mineruPageToPdfTextContent(ocr,
       { view: page.view, rotation: page.rotate });
+    globalThis.SciLLM.retainPdfOriginalTextContent(textContent, textContent);
     prepared.push({ ocr, page, textContent });
   }
   // Validate every page before mutating any OCR map or canonical text record.
   if (!nativeDocumentMatches(sourceDocument, hash, generation)) throw new Error('PDF_OCR_SOURCE_MISMATCH');
+  if (prepared.length) {
+    nativeCrossFormatTextReader?.reader.invalidate();
+    nativePageTextContentLoads.clear();
+    nativePageTextContentCache.clear();
+  }
   for (const { ocr, page, textContent } of prepared) {
     ocrTextPages.set(ocr.pageNumber, ocr);
     const record = pageRecords.get(ocr.pageNumber) || createPagePlaceholder(ocr.pageNumber, page);
@@ -2078,6 +2093,24 @@ async function readPageTextContent(pageNumber) {
   });
 }
 
+async function readPageArtworkHints(pageNumber) {
+  const sourceDocument = pdfDocument;
+  const documentHash = loadedDocumentHash, documentGeneration = nativeDocumentGeneration;
+  if (!sourceDocument || !active || disposed || lifecycle.isTerminal() ||
+      !nativeDocumentMatches(sourceDocument, documentHash, documentGeneration))
+    throw new Error('PDF_DOCUMENT_NOT_READY');
+  if (!Number.isSafeInteger(pageNumber) || pageNumber < 1 || pageNumber > sourceDocument.numPages)
+    throw new Error('PDF_TEXT_PAGE_OUT_OF_RANGE');
+  const page = await sourceDocument.getPage(pageNumber);
+  if (!nativeDocumentMatches(sourceDocument, documentHash, documentGeneration))
+    throw new Error('PDF_TEXT_DOCUMENT_CHANGED');
+  const operators = await page.getOperatorList();
+  if (!nativeDocumentMatches(sourceDocument, documentHash, documentGeneration))
+    throw new Error('PDF_TEXT_DOCUMENT_CHANGED');
+  return Object.freeze({ documentHash, documentGeneration, pageNumber,
+    ...globalThis.SciLLM.measureNativePdfArtwork(operators, page.view, OPS) });
+}
+
 async function renderPageImage(pageNumber, options = {}) {
   const sourceDocument = pdfDocument;
   if (!sourceDocument || !active || disposed || lifecycle.isTerminal()) {
@@ -2298,6 +2331,8 @@ async function releaseNativeResources({ destroyDocument = true } = {}) {
   visiblePages.clear();
   nativePageTextContentLoads.clear();
   nativePageTextContentCache.clear();
+  nativeCrossFormatTextReader?.reader.invalidate();
+  nativeCrossFormatTextReader = null;
   canvasBudget.clear();
   textBudget.clear();
   incrementalDocument?.clear?.();
@@ -2788,6 +2823,27 @@ function createPdfSemanticHighlightResolver(nativeDocument) {
 
 function createNativePdfDocumentPublication(fields = {}) {
   const nativeDocument = { ...fields };
+  const owner = { sourceDocument: pdfDocument, documentHash: loadedDocumentHash,
+    documentGeneration: nativeDocumentGeneration };
+  nativeDocument.readCrossFormatBlocks = async () => {
+    const isCurrent = () => nativeDocumentMatches(owner.sourceDocument, owner.documentHash, owner.documentGeneration);
+    if (!isCurrent()) throw Error('PDF_TEXT_DOCUMENT_CHANGED');
+    if (!nativeCrossFormatTextReader || nativeCrossFormatTextReader.sourceDocument !== owner.sourceDocument ||
+        nativeCrossFormatTextReader.documentHash !== owner.documentHash ||
+        nativeCrossFormatTextReader.documentGeneration !== owner.documentGeneration) {
+      nativeCrossFormatTextReader = { ...owner, reader: globalThis.SciLLM.createPdfCrossFormatBlockReader({
+        pageCount: owner.sourceDocument.numPages, isCurrent,
+        readPage: async pageNumber => {
+          if (!isCurrent()) throw Error('PDF_TEXT_DOCUMENT_CHANGED');
+          const result = await readPageTextContent(pageNumber);
+          if (!isCurrent() || result.documentHash !== owner.documentHash ||
+              result.documentGeneration !== owner.documentGeneration) throw Error('PDF_TEXT_DOCUMENT_CHANGED');
+          return result.textContent;
+        }
+      }) };
+    }
+    return nativeCrossFormatTextReader.reader.read();
+  };
   nativeDocument.resolveSemanticHighlight =
     createPdfSemanticHighlightResolver(nativeDocument);
   nativeDocument.focusOutlineTarget = (anchor, stillCurrent) =>
@@ -3040,8 +3096,9 @@ async function initializeNativePdf() {
       activate, deactivate, dispose, replaceDocument,
       setScale, zoomBy, fitWidth, updatePageWindow,
       ensurePageIndexed: ensureNativePdfPageIndexed,
-      getPageProjection, readPageTextContent, renderPageImage, installOcrTextLayer,
-      getState: () => notifyState(), focusPage, focusSemanticTarget: focusPdfSemanticTarget,
+      getPageProjection, readPageTextContent, readPageArtworkHints, renderPageImage, installOcrTextLayer,
+      getState: () => notifyState(), getCurrentPageNumber: () => currentPageRecord()?.pageNumber || 0,
+      focusPage, focusSemanticTarget: focusPdfSemanticTarget,
       cancelOwnedSemanticFocus,
       resolveSemanticHighlight: createPdfSemanticHighlightResolver(
         globalThis.__brevessNativePdfDocument

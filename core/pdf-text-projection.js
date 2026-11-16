@@ -805,6 +805,22 @@
   // An absent binding keeps standalone/legacy projections compatible. An
   // explicitly invalid binding must fail closed instead of guessing separators.
   const pdfTextLayerSourceItems = new WeakMap();
+  const pdfOriginalTextItems = new WeakMap();
+  const pdfTextLayerOriginalItems = new WeakMap();
+
+  function retainPdfOriginalTextContent(ordered, original) {
+    if (!ordered || typeof ordered !== 'object') return ordered;
+    pdfOriginalTextItems.set(ordered, null);
+    const originals = original?.items, rendered = ordered.items;
+    if (!Array.isArray(originals) || !Array.isArray(rendered) || originals.length !== rendered.length ||
+        new Set(originals).size !== originals.length || new Set(rendered).size !== rendered.length) return ordered;
+    const identities = new Set(originals);
+    if (rendered.some(item => !identities.has(item))) return ordered;
+    pdfOriginalTextItems.set(ordered, originals.map((item, index) => ({
+      item, index, text: item?.str, hasEOL: Boolean(item?.hasEOL)
+    })));
+    return ordered;
+  }
 
   function pdfSourceTextNodes(span) {
     const nodes = [];
@@ -812,6 +828,67 @@
     let node;
     while ((node = walker.nextNode())) nodes.push({ node, text: node.textContent });
     return nodes;
+  }
+
+  function readPdfOriginalCrossFormatBlocks(textContent, { pageNumber } = {}) {
+    const originals = pdfOriginalTextItems.get(textContent);
+    const current = textContent?.items;
+    const identities = new Set(Array.isArray(current) ? current : []);
+    if (!Number.isSafeInteger(pageNumber) || pageNumber < 1 || !originals ||
+        !Array.isArray(current) || current.length !== originals.length ||
+        identities.size !== current.length ||
+        originals.some(entry => !identities.has(entry.item) || entry.item?.str !== entry.text ||
+          Boolean(entry.item?.hasEOL) !== entry.hasEOL)) throw Error('PDF_SOURCE_MAPPING_UNAVAILABLE');
+    const blocks = []; let separatorBefore = '';
+    for (const item of originals) {
+      if (typeof item.text !== 'string') continue;
+      if (item.text.length) {
+        const blockId = `pdf-source-${pageNumber}-item-${item.index}`;
+        blocks.push({ blockId, blockFingerprint: blockId, text: item.text, separatorBefore,
+          pageNumber, sourceItemIndex: item.index });
+        separatorBefore = item.hasEOL ? '\n' : '';
+      } else if (item.hasEOL) separatorBefore = '\n';
+    }
+    return blocks;
+  }
+
+  // A single bounded document snapshot is shared across publication refreshes.
+  // Invalidation also rejects an already pending read before it can be cached.
+  function createPdfCrossFormatBlockReader({ pageCount, readPage, isCurrent }) {
+    let revision = 0, cached = null, pending = null;
+    const assertCurrent = token => {
+      if (token !== revision || !isCurrent()) throw Error('PDF_TEXT_DOCUMENT_CHANGED');
+    };
+    return {
+      invalidate() { revision++; cached = null; pending = null; },
+      async read() {
+        const token = revision; assertCurrent(token);
+        if (cached) return cached;
+        if (pending) return pending;
+        if (!Number.isSafeInteger(pageCount) || pageCount < 1 || pageCount > 10000) throw Error('INVALID_TARGET_BLOCKS');
+        const load = (async () => {
+          const blocks = []; let length = 0;
+          for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+            assertCurrent(token);
+            const textContent = await readPage(pageNumber);
+            assertCurrent(token);
+            let first = true;
+            for (const block of readPdfOriginalCrossFormatBlocks(textContent, { pageNumber })) {
+              if (blocks.length && first) block.separatorBefore = '\n\n';
+              first = false;
+              length += block.text.length + block.separatorBefore.length;
+              if (block.text.length > 500000 || length > 2000000) throw Error('TARGET_TEXT_TOO_LARGE');
+              if (blocks.length >= 10000) throw Error('INVALID_TARGET_BLOCKS');
+              blocks.push(Object.freeze(block));
+            }
+          }
+          assertCurrent(token);
+          cached = Object.freeze(blocks); return cached;
+        })();
+        pending = load;
+        try { return await load; } finally { if (pending === load) pending = null; }
+      }
+    };
   }
 
   function pdfSourceBindingIsCurrent(textLayer, items) {
@@ -834,6 +911,7 @@
   function bindPdfTextLayerSourceItems(textLayer, source = {}) {
     if (!textLayer || typeof textLayer !== 'object') return false;
     pdfTextLayerSourceItems.set(textLayer, null);
+    pdfTextLayerOriginalItems.set(textLayer, null);
     try {
       const { textContent, textDivs, textContentItemsStr } = source;
       if (!Array.isArray(textContent?.items) || !Array.isArray(textDivs) ||
@@ -851,12 +929,65 @@
             span.textContent !== item.str || span.querySelector('span')) return false;
         const nodes = pdfSourceTextNodes(span);
         if (nodes.map(entry => entry.text).join('') !== item.str) return false;
-        items.push({ span, text: item.str, hasEOL: Boolean(item.hasEOL), nodes });
+        items.push({ span, text: item.str, hasEOL: Boolean(item.hasEOL), nodes, sourceItem: item });
       }
       if (!pdfSourceBindingIsCurrent(textLayer, items)) return false;
       pdfTextLayerSourceItems.set(textLayer, items);
+      const originals = pdfOriginalTextItems.get(textContent);
+      if (originals) {
+        const bindings = new Map(items.map(item => [item.sourceItem, item]));
+        if (originals.every(entry => entry.item?.str === entry.text && Boolean(entry.item?.hasEOL) === entry.hasEOL) &&
+            originals.filter(entry => typeof entry.text === 'string').every(entry => bindings.has(entry.item))) {
+          pdfTextLayerOriginalItems.set(textLayer, originals.filter(entry => typeof entry.text === 'string')
+            .map(entry => ({ ...bindings.get(entry.item), sourceItemIndex: entry.index })));
+        }
+      }
       return true;
     } catch (_) { return false; }
+  }
+
+  function readPdfCrossFormatBlocks(textLayer, { pageNumber } = {}) {
+    if (!Number.isSafeInteger(pageNumber) || pageNumber < 1) return [];
+    const rendered = pdfTextLayerSourceItems.get(textLayer), originals = pdfTextLayerOriginalItems.get(textLayer);
+    try {
+      if (!rendered || !originals || !pdfSourceBindingIsCurrent(textLayer, rendered) ||
+          originals.some(item => item.sourceItem.str !== item.text || Boolean(item.sourceItem.hasEOL) !== item.hasEOL)) return [];
+      let separatorBefore = '';
+      const blocks = [];
+      for (const item of originals) {
+        if (item.text.length) {
+          const blockId = `pdf-source-${pageNumber}-item-${item.sourceItemIndex}`;
+          blocks.push({ blockId, blockFingerprint: blockId, text: item.text, separatorBefore,
+            element: item.span, pageNumber, sourceItemIndex: item.sourceItemIndex });
+          separatorBefore = item.hasEOL ? '\n' : '';
+        } else if (item.hasEOL) separatorBefore = '\n';
+      }
+      return blocks;
+    } catch (_) { return []; }
+  }
+
+  function pdfCrossFormatFragmentRange(textLayer, { pageNumber, fragment } = {}) {
+    try {
+      const block = readPdfCrossFormatBlocks(textLayer, { pageNumber }).find(row => row.blockId === fragment?.blockId);
+      const start = fragment?.startOffset, end = fragment?.endOffset;
+      if (!block || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start ||
+          end > block.text.length || block.text.slice(start, end) !== fragment.quote) return null;
+      const nodes = pdfSourceTextNodes(block.element);
+      const point = (offset, beginning) => {
+        let total = 0;
+        for (const entry of nodes) {
+          const next = total + entry.text.length;
+          if (entry.text.length && (beginning ? offset < next : offset <= next)) return { node: entry.node, offset: offset - total };
+          total = next;
+        }
+        return null;
+      };
+      const from = point(start, true), to = point(end, false);
+      if (!from || !to) return null;
+      const range = textLayer.ownerDocument.createRange();
+      range.setStart(from.node, from.offset); range.setEnd(to.node, to.offset);
+      return range;
+    } catch (_) { return null; }
   }
 
   function createBoundRawOffsetProjection(textLayer) {
@@ -1237,6 +1368,11 @@
     classifyPdfPageFurnitureSegments,
     createPdfTextProjection,
     bindPdfTextLayerSourceItems,
+    retainPdfOriginalTextContent,
+    readPdfOriginalCrossFormatBlocks,
+    createPdfCrossFormatBlockReader,
+    readPdfCrossFormatBlocks,
+    pdfCrossFormatFragmentRange,
     pdfProjectionSelectionOffsets,
     pinPdfSelectionTextEndpoints,
     markPdfTextLayerFurniture,

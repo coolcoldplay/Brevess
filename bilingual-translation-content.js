@@ -24,10 +24,13 @@
         '.article-section__content,.c-article-body,.abstract-content,.highwire-markup,' +
         '.widget-ArticleFulltext,.hlFld-Fulltext,#artText,.JournalFullText,.art-text,' +
         '#pnlArticleContent,.bodySection,.article-full-text,.o-article-body';
-    const CANDIDATE = 'p,h1,h2,h3,h4,h5,h6,figcaption,.fig-caption,.figure-caption,' +
+    const SEMANTIC_CANDIDATE = 'p,h1,h2,h3,h4,h5,h6,figcaption,.fig-caption,.figure-caption,' +
         '.c-article-section__figure-caption,.figcaption,.caption,.article-title,.c-article-title,.title-text,' +
         '[role="paragraph"],[role="heading"],.para,.paragraph,.section-paragraph,.html-p,' +
         '.section-title,.section__title,.article-section-title,.c-article-section__title';
+    // Reading extraction has already identified these DIVs as paragraphs. Publisher
+    // IDs cover the same source before extraction or focus-layout markers arrive.
+    const CANDIDATE = SEMANTIC_CANDIDATE + ',div[data-sci-llm-paragraph-id],div[id^="p"],div[id^="fspara"]';
     function readSourceText(element) {
         if (globalThis.BrevessTranslationSource?.readSourceText) {
             return globalThis.BrevessTranslationSource.readSourceText(element, {
@@ -46,13 +49,29 @@
         }
         return parts.join('').replace(/\s+/gu, ' ').trim();
     }
+    function readSourceProjection(element) {
+        return globalThis.BrevessTranslationSource?.extractSource?.(element, {
+            allowHiddenRoot: element?.matches?.('.full-view-snippet') === true
+        }) || {text:readSourceText(element)};
+    }
+    function sameScientificContext(a, b) { return JSON.stringify(a || []) === JSON.stringify(b || []); }
+    function sourceMatches(record) {
+        const source = readSourceProjection(record.element);
+        return source.text === record.text && sameScientificContext(source.scientificContext, record.scientificContext);
+    }
     function localTranslationErrorMessage(error) {
         const code = typeof error === 'string' ? error : error?.code || error?.name || '';
         const messages = {
             API_UNAVAILABLE: '当前页面环境没有可用的官方 Translator 接口。请检查浏览器支持与策略；未调用云端服务。',
-            LANGUAGE_UNAVAILABLE: '浏览器的英译中（en → zh）语言组合当前不可用。请检查模型、设备条件或浏览器策略；未调用云端服务。',
-            USER_ACTIVATION_REQUIRED: '请在原网页点击确认按钮后启动本地翻译。',
-            NotAllowedError: '请在原网页点击确认按钮后启动本地翻译。',
+            LANGUAGE_UNAVAILABLE: '浏览器暂未提供本地英译中资源，请检查模型与浏览器状态。',
+            NATIVE_UNAVAILABLE: '本机翻译模型或服务暂不可用，浏览器未提供具体原因。自动重试后仍失败时，请保存工作并完全退出、重启浏览器；若持续失败，检查并安装浏览器更新后再试。',
+            MODEL_NOT_READY: '浏览器仍在检查设备或准备本地模型，自动重试后仍未就绪；可继续重试。',
+            CAPABILITY_TIMEOUT: '浏览器能力检查超时，可继续重试；原文保持不变。',
+            INITIALIZATION_TIMEOUT: '本地模型准备长时间无进展或超过时限，可继续重试。',
+            TRANSLATION_POLICY_BLOCKED: '当前网页的权限策略阻止浏览器本地翻译。',
+            TRANSLATION_CONTEXT_UNAVAILABLE: '当前页面不是安全上下文，浏览器未提供本地翻译权限。',
+            USER_ACTIVATION_REQUIRED: '浏览器需要原网页上的操作；操作后会自动继续本地翻译。',
+            NotAllowedError: '浏览器需要原网页上的操作或权限；操作后会自动继续本地翻译。',
             INITIALIZATION_FAILED: '本地英译中模型下载或初始化失败。请检查网络、可用磁盘空间及浏览器状态，关闭后重试；未调用云端服务。',
             TRANSLATION_FAILED: '当前段落的本地翻译失败，其他有效译文仍保留；可关闭后重试，未调用云端服务。',
             TRANSLATION_TIMEOUT: '本地翻译等待超时，已保留原文和已完成的部分译文；可关闭后重试。',
@@ -71,6 +90,54 @@
             address.hash = '';
             return address.href;
         } catch { return String(value || '').replace(/#.*/, ''); }
+    }
+    // The storage record is shared with chat, highlighting and display settings.
+    // Compare only dependencies of the full-text route; do not retire a live
+    // translator merely because another task saved its preferences. This is an
+    // in-memory comparison only: credentials are never logged or persisted here.
+    function translationSettingsIdentity(settings) {
+        const plain = value => value && typeof value === 'object' && !Array.isArray(value);
+        const stable = (value, depth = 0) => {
+            if (depth > 32) throw new TypeError('Translation settings are too deeply nested.');
+            if (!value || typeof value !== 'object') return value;
+            if (Array.isArray(value)) return value.map(item => stable(item, depth + 1));
+            return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key], depth + 1)]));
+        };
+        const encode = value => JSON.stringify(stable(value));
+        // Older/unknown formats need the existing conservative invalidation.
+        if (!plain(settings) || settings.version !== 6 || !plain(settings.taskPolicies)) return encode(settings);
+        const policy = settings.taskPolicies.full_text_translation;
+        if (!plain(policy)) return encode(settings);
+        const mode = policy.mode;
+        if (!['local', 'global', 'profile'].includes(mode)) return encode(settings);
+        // Both current native and remote tasks are fixed en -> zh. UI language
+        // is not their output language. Bind explicit task language fields too.
+        if (mode === 'local') return encode({ mode, sourceLanguage: policy.sourceLanguage, targetLanguage: policy.targetLanguage });
+        const profileId = String(mode === 'profile' ? policy.profileId || '' : settings.globalProfileId || '');
+        const profile = Object.hasOwn(settings.profiles || {}, profileId) ? settings.profiles[profileId] : null;
+        if (!plain(profile) || !plain(profile.config)) return encode({ mode, profileId, policy, profile, consentGranted: settings.consentGranted === true });
+        const config = { ...profile.config };
+        // The router validates the original profile before task overrides. Only
+        // fields omitted below need these checks; all other config changes are
+        // retained verbatim. Keep this independent of provider-registry loading
+        // because the content world does not always include that helper.
+        const defaultModel = String(config.model || '').trim();
+        const defaultEffort = String(config.reasoningEffort || 'auto');
+        const profileUsable = Boolean(defaultModel) &&
+            (profile.providerId !== 'deepseek-harness' || defaultModel !== 'auto') &&
+            (profile.providerId !== 'codex-local' || ['auto', 'low', 'medium', 'high', 'xhigh'].includes(defaultEffort)) &&
+            (profile.providerId !== 'deepseek-harness' || ['auto', 'off', 'low', 'high', 'max'].includes(defaultEffort));
+        if (!profileUsable) return encode(settings);
+        // Mirror taskModelForProfile and resolveTaskProfile: these profile
+        // defaults are replaced by the task's explicit model/reasoning policy.
+        const taskModel = policy.modelProfileId === profileId &&
+            (!policy.modelProviderId || policy.modelProviderId === profile.providerId) &&
+            (policy.modelPresetId === undefined || policy.modelPresetId === String(config.presetId || ''))
+            ? String(policy.model || '').trim() : '';
+        if (taskModel) config.model = taskModel;
+        delete config.thinking; delete config.reasoningEnabled; delete config.reasoningEffort;
+        return encode({ mode, profileId, providerId: profile.providerId, config, policy,
+            tokenPolicy: profile.tokenPolicy || {}, consentGranted: settings.consentGranted === true });
     }
     function createPageTranslator({ document, window: view = document.defaultView,
         provider: suppliedProvider, createController = view.BrevessBilingualTranslation?.createController } = {}) {
@@ -92,7 +159,7 @@
         const paragraphTasks = new Map();
         let pageTask = null, taskSequence = 0;
         let scope = null, resuming = false;
-        let hiddenSources = new WeakSet(), hoveredSource = null, altSource = null;
+        let hiddenSources = new WeakSet(), hoveredSource = null, altSource = null, hoverPoint = null;
         const checkpointApi = view.BrevessTranslationCheckpoint || globalThis.BrevessTranslationCheckpoint ||
             (typeof require === 'function' ? require('./core/translation-checkpoint.js') : null);
         const translationBridge = view.__brevessTranslationTasks || (!suppliedProvider && view.chrome?.runtime?.id
@@ -118,8 +185,8 @@
             const keys = Object.keys(expected);
             return keys.length > 0 && keys.every(key => Object.hasOwn(binding, key) && expected[key] === binding[key]);
         }
-        function checkpointIdentity(key, text, signature = engineSignature()) { return JSON.stringify([key, text, signature]); }
-        function exportIdentity(key, text) { return JSON.stringify([key, text]); }
+        function checkpointIdentity(key, text, signature = engineSignature(), context) { return JSON.stringify([key, text, signature, ...(context?.length ? [context] : [])]); }
+        function exportIdentity(key, text, context) { return JSON.stringify([key, text, ...(context?.length ? [context] : [])]); }
         function revisionIdentity(binding, signature) { return JSON.stringify([checkpointApi?.stableBinding(binding) || binding, signature]); }
         function observeRevision(binding, signature, revision) {
             const key = revisionIdentity(binding, signature);
@@ -134,7 +201,7 @@
                 record.checkpoint = { ...saved, translatedText: displayed, manuallyEdited: true };
                 record.persisted = false;
                 if (record.reused) { record.reused = false; reusedCount--; }
-                checkpoints.set(checkpointIdentity(record.checkpoint.sourceKey, record.text, record.checkpoint.engineSignature), { ...record.checkpoint });
+                checkpoints.set(checkpointIdentity(record.checkpoint.sourceKey, record.text, record.checkpoint.engineSignature, record.scientificContext), { ...record.checkpoint });
                 cachedResults.set(record.element, { url, text: record.text, ...record.checkpoint, persisted: false });
             }
             return record.checkpoint;
@@ -147,19 +214,19 @@
                 if (record.persistencePending && record.persistenceEpoch === epoch && record.persistenceEntry === existing) return record.persistence;
                 return persistRecord(record, existing);
             }
-            const entry = checkpointApi.normalizeEntry({ sourceKey: record.sourceKey, sourceText: record.text,
+            const entry = checkpointApi.normalizeEntry({ sourceKey: record.sourceKey, sourceText: record.text, scientificContext: record.scientificContext,
                 translatedText, sourceStart: 0, sourceEnd, confirmed: true,
                 sourceLanguage: 'en', targetLanguage: 'zh', engineSignature: engineSignature() });
             if (!entry) return Promise.resolve();
             // Final output repeats the last validated progress snapshot. Reuse
             // its exact ACK instead of writing the same whole-page checkpoint
             // twice; failed or retired writes still need a fresh persistence.
-            if (existing && Object.keys(entry).every(key => existing[key] === entry[key])) {
+            if (existing && JSON.stringify(existing) === JSON.stringify(entry)) {
                 if (record.persisted === true) return Promise.resolve();
                 if (record.persistencePending && record.persistenceEpoch === epoch && record.persistenceEntry === existing) return record.persistence;
             }
             record.checkpoint = entry;
-            checkpoints.set(checkpointIdentity(entry.sourceKey, entry.sourceText), entry);
+            checkpoints.set(checkpointIdentity(entry.sourceKey, entry.sourceText, undefined, entry.scientificContext), entry);
             return persistRecord(record, entry);
         }
         function persistRecord(record, entry) {
@@ -173,11 +240,12 @@
             const operation = persistEntries([entry]).then(() => {
                 if (token !== epoch || destroyed) return;
                 // Keep the last acknowledged revision even if the displayed draft changed while saving.
-                acknowledgedResults.set(exportIdentity(entry.sourceKey, entry.sourceText), { ...entry });
+                acknowledgedResults.set(exportIdentity(entry.sourceKey, entry.sourceText, entry.scientificContext), { ...entry });
                 if (record.checkpoint !== entry) return;
                 record.persisted = true;
                 if (entry.manuallyEdited && !record.reused) { record.reused = true; reusedCount++; }
                 cachedResults.set(record.element, { url, text: record.text, ...record.checkpoint, persisted: true });
+                view.dispatchEvent?.(new view.CustomEvent('brevess-translation-saved'));
             }, error => {
                 if (token === epoch && record.checkpoint === entry) record.persistenceError = true;
                 throw error;
@@ -224,11 +292,64 @@
             for (const value of saved.translations || []) {
                 const entry = checkpointApi.normalizeEntry(value);
                 if (entry?.engineSignature === signature) {
-                    checkpoints.set(checkpointIdentity(entry.sourceKey, entry.sourceText), entry);
-                    acknowledgedResults.set(exportIdentity(entry.sourceKey, entry.sourceText), { ...entry });
+                    checkpoints.set(checkpointIdentity(entry.sourceKey, entry.sourceText, undefined, entry.scientificContext), entry);
+                    acknowledgedResults.set(exportIdentity(entry.sourceKey, entry.sourceText, entry.scientificContext), { ...entry });
                 }
             }
             update({ checkpointPersistence: 'saved', checkpointError: '' });
+        }
+        let displayRestoreGeneration = 0;
+        async function restoreSavedTranslations({ snapshot, expectedIdentity } = {}) {
+            if (destroyed || state.active) return { restored: 0, skipped: true };
+            checkNavigation();
+            const generation = ++displayRestoreGeneration, token = epoch, binding = captureBinding();
+            if (expectedIdentity && !matchesIdentity(expectedIdentity, binding)) throw Object.assign(Error('Translation history target changed.'), { code: 'TRANSLATION_CONTEXT_STALE' });
+            const valid = () => !destroyed && !state.active && token === epoch && generation === displayRestoreGeneration && matchesIdentity(binding);
+            let saved = snapshot;
+            if (!saved) {
+                if (!translationBridge?.readCheckpoint || !provider) return { restored: 0 };
+                // Resolves the saved engine route only; never creates a model/session.
+                await provider.availability();
+                if (!valid()) return { restored: 0, stale: true };
+                saved = await translationBridge.readCheckpoint(binding, engineSignature());
+            }
+            if (!valid()) return { restored: 0, stale: true };
+            if (!saved || saved.version !== 1 || !checkpointApi ||
+                JSON.stringify(checkpointApi.stableBinding(saved.documentBinding)) !== JSON.stringify(checkpointApi.stableBinding(binding))) {
+                throw Object.assign(Error('Translation history belongs to another document.'), { code: 'TRANSLATION_CHECKPOINT_IDENTITY_MISMATCH' });
+            }
+            if (!Array.isArray(saved.translations) || saved.translations.length > 2000 || JSON.stringify(saved.translations).length > 2000000) {
+                throw Object.assign(Error('Translation history exceeds its bound.'), { code: 'TRANSLATION_CHECKPOINT_LIMIT' });
+            }
+            bindControllerDocument();
+            const entries = new Map(saved.translations.map(checkpointApi.normalizeEntry).filter(Boolean)
+                .map(entry => [exportIdentity(entry.sourceKey, entry.sourceText, entry.scientificContext), entry]));
+            if (!snapshot) observeRevision(binding, engineSignature(), saved.revision);
+            let restored = 0;
+            for (const element of document.querySelectorAll(CANDIDATE)) {
+                const anchor = sourceAnchor(element);
+                if (!anchor || !element.isConnected) continue;
+                const {text, scientificContext} = readSourceProjection(element), sourceKey = checkpointApi.sourceKey(element);
+                const entry = entries.get(exportIdentity(sourceKey, text, scientificContext));
+                if (!entry) continue;
+                const existing = elements.get(element);
+                // An explicit history display never overwrites an unsaved/manual edit.
+                if (existing && (confirmedEntry(existing)?.manuallyEdited || existing.persisted === false)) continue;
+                if (existing) forget(existing);
+                const record = { id: 'bilingual-' + (++serial), element, anchor, text, scientificContext, sourceKey, epoch,
+                    priority: priority(anchor), foreground: false, translation: null,
+                    checkpoint: { ...entry }, persisted: true, reused: !entry.partial || entry.manuallyEdited };
+                if (record.reused) reusedCount++;
+                records.set(record.id, record); elements.set(element, record); anchors.set(anchor, record);
+                knownSources.set(sourceKey, { element, text, scientificContext });
+                checkpoints.set(checkpointIdentity(sourceKey, text, entry.engineSignature, scientificContext), { ...entry });
+                acknowledgedResults.set(exportIdentity(sourceKey, text, scientificContext), { ...entry });
+                cachedResults.set(element, { url, text, ...entry, persisted: true });
+                paintTranslation(record, entry.translatedText, { partial: entry.partial });
+                restored++;
+            }
+            update({ restoredTranslations: restored, checkpointPersistence: 'saved', checkpointError: '' });
+            return { restored };
         }
         // Weak keys tie cached results to the actual source node, not just matching text.
         // A closed reader can reuse completed results without retaining detached DOM.
@@ -386,7 +507,7 @@
             }
             const messages = {
                 checking: '正在检查翻译引擎配置与可用性…',
-                'awaiting-user': '开启本地翻译；首次使用或资源缺失时浏览器可能下载。论文文本仅在本机处理。',
+                'awaiting-user': '等待网页操作，浏览器允许后自动加载本地翻译资源。',
                 initializing: '正在初始化浏览器本地翻译模型…',
                 downloading: '浏览器正在准备本地翻译资源：' + Math.round((Number(state.progress) || 0) * 100) + '%（需要时下载）',
                 unavailable: state.error || '当前浏览器的本地英译中接口不可用，未启用云端翻译。',
@@ -396,11 +517,13 @@
                     : '翻译已暂停，已完成和部分译文均保留。'
             };
             notice.querySelector('.sci-translation-notice-text').textContent = messages[state.phase] || '';
+            const diagnostic = provider?.getState?.().diagnostic;
+            notice.querySelector('.sci-translation-notice-text').title = diagnostic ? [diagnostic.stage, diagnostic.name, diagnostic.message].filter(Boolean).join(' · ') : '';
             const progress = notice.querySelector('progress');
             progress.hidden = state.phase !== 'downloading';
             progress.value = Math.max(0, Math.min(1, Number(state.progress) || 0));
             const button = notice.querySelector('.sci-translation-initialize');
-            button.hidden = state.phase !== 'awaiting-user';
+            button.hidden = state.phase !== 'awaiting-user' || provider?.getState?.().mode === 'local';
             button.textContent = '开启本地翻译';
             const pauseButton = notice.querySelector('.sci-translation-pause');
             pauseButton.hidden = !state.active;
@@ -425,6 +548,7 @@
             const patch = {};
             if (value.availability) patch.availability = value.availability;
             if (Object.hasOwn(value, 'error')) patch.errorCode = value.error || '';
+            if (Object.hasOwn(value, 'diagnostic')) patch.nativeDiagnostic = value.diagnostic ? { ...value.diagnostic } : null;
             if (Number.isFinite(value.progress)) patch.progress = Math.max(0, Math.min(1, value.progress));
             if (['checking', 'initializing', 'downloading'].includes(value.phase) &&
                 state.phase !== 'awaiting-user') patch.phase = value.phase;
@@ -455,7 +579,8 @@
                 event.isPrimary === false ||
                 event.ctrlKey || event.altKey || event.metaKey || event.shiftKey ||
                 view.navigator?.userActivation?.isActive !== true ||
-                modelState?.availability !== 'available') return;
+                (modelState?.availability !== 'available' && !(provider?.getState?.().mode === 'local' &&
+                    ['downloadable', 'downloading'].includes(modelState?.availability)))) return;
             const target = event.target?.nodeType === 3 ? event.target.parentElement : event.target;
             if (!target?.closest || target.closest('a,button,input,textarea,select,[role="button"]') ||
                 editable(target) || isUi(target)) return;
@@ -545,7 +670,7 @@
                     const record = records.get(entry.id);
                     if (!record || !current(record.epoch) || record.text !== entry.text ||
                         !record.element.isConnected || !record.anchor.isConnected ||
-                        readSourceText(record.element) !== entry.text) {
+                        !sourceMatches(record)) {
                         if (record && current(record.epoch) && record.text === entry.text) finishParagraphTask(record.element, 'cancelled');
                         throw Object.assign(Error('Translation source changed before saving.'), { code: 'TRANSLATION_CONTEXT_STALE' });
                     }
@@ -553,7 +678,7 @@
                     const saved = remember(record, translatedText, entry.text.length);
                     paintTranslation(record, record.checkpoint?.translatedText || translatedText, { partial: record.checkpoint?.partial === true });
                     await saved;
-                    if (!current(record.epoch) || !record.element.isConnected || !record.anchor.isConnected || readSourceText(record.element) !== entry.text) {
+                    if (!current(record.epoch) || !record.element.isConnected || !record.anchor.isConnected || !sourceMatches(record)) {
                         throw Object.assign(Error('Translation source changed after saving.'), { code: 'TRANSLATION_CONTEXT_STALE' });
                     }
                     finishParagraphTask(record.element, 'success');
@@ -561,7 +686,7 @@
                 onProgress(entry, value) {
                     const record = records.get(entry?.id);
                     if (!record || !current(record.epoch) || record.text !== entry.text || entry.version !== record.entryVersion ||
-                        !record.element.isConnected || !record.anchor.isConnected || readSourceText(record.element) !== entry.text ||
+                        !record.element.isConnected || !record.anchor.isConnected || !sourceMatches(record) ||
                         typeof value?.translatedText !== 'string' || !value.translatedText.trim() ||
                         value.sourceStart !== 0 || !(value.sourceEnd > 0 && value.sourceEnd <= entry.text.length)) return;
                     remember(record, value.translatedText, value.sourceEnd);
@@ -571,7 +696,7 @@
                     const record = records.get(entry?.id);
                     if (!record || !current(record.epoch) || record.text !== entry.text ||
                         !record.element.isConnected || !record.anchor.isConnected ||
-                        readSourceText(record.element) !== entry.text) {
+                        !sourceMatches(record)) {
                         if (record && current(record.epoch) && record.text === entry.text) finishParagraphTask(record.element, 'cancelled');
                         return;
                     }
@@ -614,7 +739,7 @@
                 record.translation.setAttribute('dir', 'auto');
                 record.translation.setAttribute('translate', 'no');
                 record.translation.addEventListener('input', () => {
-                    if (!current(record.epoch) || readSourceText(record.element) !== record.text) return;
+                    if (destroyed || record.epoch !== epoch || !checkNavigation() || !sourceMatches(record)) return;
                     const entry = confirmedEntry(record);
                     if (entry?.manuallyEdited) persistRecord(record, entry);
                 });
@@ -664,21 +789,40 @@
             (record.translation?.isConnected ? record.translation : record.anchor).after(record.failure);
         }
         const isPubmed = document.location.hostname === 'pubmed.ncbi.nlm.nih.gov';
+        function isSourceCandidate(element) {
+            if (element.matches(SEMANTIC_CANDIDATE)) return true;
+            if (element.tagName !== 'DIV') return false;
+            if (element.getAttribute('data-sci-llm-paragraph-id')?.trim()) return true;
+            return /(^|\.)sciencedirect\.com$/i.test(document.location.hostname) &&
+                /^(?:p|fspara)\d+$/.test(element.id) && Boolean(element.closest(READING));
+        }
+        function closestSourceCandidate(target, extra = '') {
+            const selector = CANDIDATE + (extra ? ',' + extra : '');
+            let source = target?.closest(selector);
+            // Prefix selectors are only discovery hints. An unrelated inner ID
+            // must not hide a real source from hover, mutation or viewport scans.
+            while (source && !isSourceCandidate(source) && !(extra && source.matches(extra))) {
+                source = source.parentElement?.closest(selector);
+            }
+            return source || null;
+        }
         function sourceAnchor(element, explicitlySelected = selectedSources.has(element)) {
             if (!element?.isConnected || element.closest(OMIT_SOURCE)) return null;
             if (isPubmed && element.closest('article.full-docsum .docsum-snippet')) {
                 const container = element.closest('.docsum-snippet');
+                const expanded = container.querySelector('[data-wfg-complete="true"] [data-wfg-abstract-body]:not([hidden])');
+                if (expanded && readSourceText(expanded)) return element === expanded ? expanded : null;
                 const full = container.querySelector('.full-view-snippet');
                 const source = full && readSourceText(full) ? full : container.querySelector('.short-view-snippet');
                 return source === element ? container : null;
             }
-            if (!element.matches(CANDIDATE) || (!wholePageScope && !explicitlySelected && !element.closest(READING) &&
+            if (!isSourceCandidate(element) || (!wholePageScope && !explicitlySelected && !element.closest(READING) &&
                 !element.matches('h1,.article-title,.c-article-title,.title-text'))) return null;
             if (element.closest('header') && !element.closest(READING)) return null;
             if (element.closest('[hidden],[aria-hidden="true"]')) return null;
             // A caption wrapper containing paragraph candidates must not duplicate them.
             for (const candidate of element.querySelectorAll(CANDIDATE)) {
-                if (!candidate.closest(FOREIGN_TRANSLATION)) return null;
+                if (isSourceCandidate(candidate) && !candidate.closest(FOREIGN_TRANSLATION)) return null;
             }
             return element;
         }
@@ -706,7 +850,7 @@
                 update({ rangeFrozen: true, logicalOperationId: pageTask?.taskId || '', total: scope.size });
             }
             controller?.setEntries([...records.values()].filter(record => !record.reused && (scope.has(record.id) || record.foreground)).map(record => ({
-                id: record.id, sourceKey: record.sourceKey, text: record.text, priority: record.priority, foreground: record.foreground,
+                id: record.id, sourceKey: record.sourceKey, text: record.text, scientificContext: record.scientificContext, priority: record.priority, foreground: record.foreground,
                 automaticRecovery: state.enabled === true,
                 confirmedTranslation: record.checkpoint && (!record.checkpoint.partial || record.checkpoint.manuallyEdited) && record.persisted === false ? record.checkpoint.translatedText : undefined,
                 resumeFrom: record.checkpoint && !record.checkpoint.manuallyEdited ? { ...record.checkpoint } : undefined
@@ -733,19 +877,19 @@
                 if (existing) { forget(existing); queuePublish(); }
                 return;
             }
-            const text = readSourceText(element);
+            const {text, scientificContext} = readSourceProjection(element);
             if (text.length < 3 || !/[A-Za-z]{2}/u.test(text)) {
                 if (existing) { forget(existing); queuePublish(); } return;
             }
-            if (existing && existing.text === text && existing.anchor === anchor) return;
+            if (existing && existing.text === text && sameScientificContext(existing.scientificContext, scientificContext) && existing.anchor === anchor) return;
             if (existing) forget(existing);
-            const record = { id: 'bilingual-' + (++serial), element, anchor, text, sourceKey: checkpointApi?.sourceKey(element),
+            const record = { id: 'bilingual-' + (++serial), element, anchor, text, scientificContext, sourceKey: checkpointApi?.sourceKey(element),
                 priority: priority(anchor), foreground: selectedSources.has(element), epoch, translation: null };
-            if (record.sourceKey) knownSources.set(record.sourceKey, { element, text });
+            if (record.sourceKey) knownSources.set(record.sourceKey, { element, text, scientificContext });
             const nodeCache = cachedResults.get(element);
-            const cached = nodeCache?.url === url && nodeCache.text === text && (nodeCache.manuallyEdited || nodeCache.engineSignature === engineSignature())
-                ? nodeCache : checkpoints.get(checkpointIdentity(record.sourceKey, text));
-            if ((cached?.manuallyEdited || cached?.engineSignature === engineSignature()) && cached?.sourceText === text) {
+            const cached = nodeCache?.url === url && nodeCache.text === text && sameScientificContext(nodeCache.scientificContext, scientificContext) && (nodeCache.manuallyEdited || nodeCache.engineSignature === engineSignature())
+                ? nodeCache : checkpoints.get(checkpointIdentity(record.sourceKey, text, undefined, scientificContext));
+            if ((cached?.manuallyEdited || cached?.engineSignature === engineSignature()) && cached?.sourceText === text && sameScientificContext(cached.scientificContext, scientificContext)) {
                 record.checkpoint = { ...cached };
                 record.persisted = cached.persisted !== false;
                 if ((!cached.partial || cached.manuallyEdited) && record.persisted) { record.reused = true; reusedCount++; }
@@ -825,7 +969,7 @@
                     [...added, ...removed].every(isUi)) continue;
                 const parent = change.target.nodeType === 1 ? change.target : change.target.parentElement;
                 // Only changed source candidates and newly added subtrees, not their whole article.
-                const candidate = parent?.closest(CANDIDATE + ',.full-view-snippet,.short-view-snippet');
+                const candidate = closestSourceCandidate(parent, '.full-view-snippet,.short-view-snippet');
                 if (candidate) queueScan(candidate);
                 if (change.type === 'attributes') queueScan(parent);
                 for (const node of added) if (node.nodeType === 1 && !isUi(node)) queueScan(node);
@@ -836,7 +980,9 @@
             if (mutationObserver) return;
             mutationObserver = new view.MutationObserver(sourceMutations);
             mutationObserver.observe(document.body, { subtree: true, childList: true, characterData: true,
-                attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'class', 'style'] });
+                attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'class', 'style', 'id', 'data-sci-llm-paragraph-id',
+                    'mathvariant', 'linethickness', 'notation', 'accent', 'accentunder', 'stretchy', 'fence',
+                    'separator', 'columnspan', 'rowspan', 'open', 'close', 'separators'] });
             if (view.IntersectionObserver) {
                 intersectionObserver = new view.IntersectionObserver(entries => {
                     if (!state.active) return;
@@ -862,7 +1008,7 @@
                 for (const x of [view.innerWidth * .25, view.innerWidth * .5, view.innerWidth * .75]) {
                     for (const element of document.elementsFromPoint(x, y)) {
                         if (isUi(element)) continue;
-                        const candidate = element.closest(CANDIDATE + ',.docsum-snippet');
+                        const candidate = closestSourceCandidate(element, '.docsum-snippet');
                         if (candidate) queueScan(candidate);
                     }
                 }
@@ -960,7 +1106,7 @@
             }
             const change = changes?.sciLlmSettingsV2;
             if (destroyed || areaName !== 'local' || !change) return;
-            try { if (JSON.stringify(change.oldValue) === JSON.stringify(change.newValue)) return; } catch { /* Invalidate unreadable changes conservatively. */ }
+            try { if (translationSettingsIdentity(change.oldValue) === translationSettingsIdentity(change.newValue)) return; } catch { /* Invalidate unreadable changes conservatively. */ }
             lastEngineSignature = engineSignature();
             noticeDismissed = false;
             for (const record of records.values()) confirmedEntry(record);
@@ -1005,7 +1151,7 @@
                         const confirmed = confirmedEntry(record);
                         record.reused = Boolean(confirmed && (!confirmed.partial || confirmed.manuallyEdited) && record.persisted !== false);
                         if (!record.reused && !confirmed?.manuallyEdited) {
-                            const saved = checkpoints.get(checkpointIdentity(record.sourceKey, record.text));
+                            const saved = checkpoints.get(checkpointIdentity(record.sourceKey, record.text, undefined, record.scientificContext));
                             if (saved) { record.checkpoint = { ...saved }; record.persisted = true; record.reused = !saved.partial || saved.manuallyEdited; }
                         }
                         if (record.reused) reusedCount++;
@@ -1031,8 +1177,8 @@
                 throw Object.assign(new Error('Translation export source changed.'), { code: 'TRANSLATION_EXPORT_IDENTITY_STALE' });
             }
             const translations = [], draftTranslations = [], capturedKeys = new Set();
-            const captureEntry = (sourceKey, text, candidate, persistence) => {
-                const saved = checkpointApi?.normalizeEntry(acknowledgedResults.get(exportIdentity(sourceKey, text)));
+            const captureEntry = (sourceKey, text, context, candidate, persistence) => {
+                const saved = checkpointApi?.normalizeEntry(acknowledgedResults.get(exportIdentity(sourceKey, text, context)));
                 const draft = checkpointApi?.normalizeEntry(candidate);
                 if (saved) {
                     const { confirmed: internalConfirmed, ...exported } = saved;
@@ -1045,19 +1191,24 @@
                 capturedKeys.add(sourceKey);
             };
             for (const record of records.values()) {
-                if (!record.element.isConnected || !record.anchor.isConnected || readSourceText(record.element) !== record.text) continue;
-                captureEntry(record.sourceKey, record.text, confirmedEntry(record), record);
+                if (!record.element.isConnected || !record.anchor.isConnected || !sourceMatches(record)) continue;
+                captureEntry(record.sourceKey, record.text, record.scientificContext, confirmedEntry(record), record);
             }
             for (const [sourceKey, source] of knownSources) {
                 if (capturedKeys.has(sourceKey) || !source.element.isConnected ||
-                    checkpointApi?.sourceKey(source.element) !== sourceKey || readSourceText(source.element) !== source.text) continue;
+                    checkpointApi?.sourceKey(source.element) !== sourceKey || !sourceMatches(source)) continue;
                 const cached = cachedResults.get(source.element);
-                const candidate = cached?.url === url && cached.text === source.text ? cached : checkpoints.get(checkpointIdentity(sourceKey, source.text));
-                captureEntry(sourceKey, source.text, candidate, candidate);
+                const candidate = cached?.url === url && cached.text === source.text && sameScientificContext(cached.scientificContext, source.scientificContext) ? cached : checkpoints.get(checkpointIdentity(sourceKey, source.text, undefined, source.scientificContext));
+                captureEntry(sourceKey, source.text, source.scientificContext, candidate, candidate);
             }
             if (!matchesIdentity(binding)) throw Object.assign(new Error('Translation export source changed.'), { code: 'TRANSLATION_EXPORT_IDENTITY_STALE' });
             return { version: 1, documentBinding: { ...binding }, translations, draftTranslations,
                 status: state.pending || state.failed || state.unknown || state.unfinished || state.stopUnknown || draftTranslations.length || translations.some(value => value.partial) ? 'partial' : translations.length ? 'complete' : 'pending' };
+        }
+        function captureSavedTranslations() {
+            const snapshot = captureExportSnapshot(captureBinding());
+            return { version: 1, documentBinding: checkpointApi.stableBinding(snapshot.documentBinding),
+                translations: snapshot.translations.map(entry => ({ ...entry, confirmed: true })) };
         }
         function stop({ preserveTranslations = false } = {}) {
             const retainedProgress = preserveTranslations && scope ? scopeProgress() : null;
@@ -1136,6 +1287,26 @@
             selectedSources.clear(); hiddenSources = new WeakSet();
             return activate('page');
         }
+        function prepareLocalDemand() {
+            // A saved local route is the user's choice. Create the native session
+            // during this gesture, before route revalidation/checkpoint I/O awaits.
+            // This never sends text and does not replace the route identity checks.
+            if (provider?.getState?.().mode !== 'local') return;
+            try { return Promise.resolve(provider.initialize()).then(() => ({ ready: true }), error => ({ error })); }
+            catch (error) { return Promise.resolve({ error }); }
+        }
+        function resumeLocalDemand(event) {
+            if (destroyed || !state.active || state.paused || !(state.phase === 'awaiting-user' ||
+                (state.phase === 'error' && ['MODEL_NOT_READY', 'NATIVE_UNAVAILABLE', 'CAPABILITY_TIMEOUT', 'USER_ACTIVATION_REQUIRED'].includes(state.errorCode))) ||
+                event?.isTrusted !== true || event.defaultPrevented ||
+                view.navigator?.userActivation?.isActive !== true || provider?.getState?.().mode !== 'local') return;
+            if (event.type === 'pointerdown' && (event.button !== 0 || event.isPrimary === false)) return;
+            if (event.type === 'keydown' && (event.repeat || event.isComposing || event.key === 'Escape')) return;
+            // Resume a previously requested translation with the browser's real
+            // activation. No synthetic events or additional consent dialog.
+            if (controller?.getState?.().initializationError) void resume({ retryFailed: true });
+            else void initializeFromPage();
+        }
         async function activate(mode) {
             noticeDismissed = false;
             scope = null; resuming = false;
@@ -1158,9 +1329,11 @@
             // Show feedback at the chosen paragraph before any asynchronous
             // availability/model work. It is a plugin-only node, never source text.
             if (mode === 'paragraph') for (const source of selectedSources) admit(source);
+            let localPreparation = prepareLocalDemand();
             try {
                 const availability = await provider.availability();
                 if (!current(token)) return getState();
+                if (!localPreparation && availability !== 'unavailable') localPreparation = prepareLocalDemand();
                 lastEngineSignature = engineSignature();
                 bindControllerDocument();
                 try { await restoreCheckpoints(token); }
@@ -1168,7 +1341,7 @@
                 if (!current(token)) return getState();
                 reusedCount = 0;
                 for (const record of [...records.values()]) {
-                    if (!record.element.isConnected || readSourceText(record.element) !== record.text) { forget(record); continue; }
+                    if (!record.element.isConnected || !sourceMatches(record)) { forget(record); continue; }
                     record.epoch = epoch;
                     const saved = confirmedEntry(record);
                     record.reused = Boolean(saved && (!saved.partial || saved.manuallyEdited) && record.persisted !== false);
@@ -1176,15 +1349,28 @@
                     if (saved && saved.engineSignature !== engineSignature() && !saved.manuallyEdited && saved.partial) record.checkpoint = null;
                 }
                 update({ availability });
-                if (availability === 'unavailable') {
+                if (localPreparation) {
+                    const prepared = await localPreparation;
+                    if (!current(token)) return getState();
+                    if (prepared.error) {
+                        // This demand already exhausted its one preparation round.
+                        // Slow checkpoint I/O must not silently start another.
+                        clearAllPending();
+                        const needsGesture = prepared.error.code === 'USER_ACTIVATION_REQUIRED';
+                        update({ phase: needsGesture ? 'awaiting-user' : 'error', error: needsGesture ? '' : errorText(prepared.error), errorCode: prepared.error.code || '' });
+                        if (!needsGesture) finishPendingTasks('failed');
+                        return getState();
+                    }
+                }
+                if (availability === 'unavailable' && !(provider?.getState?.().mode === 'local' &&
+                    ['MODEL_NOT_READY', 'NATIVE_UNAVAILABLE', 'CAPABILITY_TIMEOUT', 'USER_ACTIVATION_REQUIRED'].includes(provider.getState().error))) {
                     clearAllPending();
                     const errorCode = provider.getState?.().error || state.errorCode || 'LANGUAGE_UNAVAILABLE';
                     update({ enabled: false, active: false, mode: 'off', phase: 'unavailable', errorCode, error: errorText(errorCode) });
                     finishPendingTasks('failed');
                 }
-                else if (availability === 'downloadable' || availability === 'downloading') {
-                    clearAllPending(); update({ phase: 'awaiting-user' });
-                }
+                // The user's translation action also authorizes initialization.
+                // Only a real browser activation error needs an on-page retry.
                 else void startController(token);
             } catch (error) {
                 if (current(token)) { clearAllPending(); update({ phase: 'error', error: errorText(error), errorCode: error?.code || '' }); finishPendingTasks('failed'); }
@@ -1219,7 +1405,7 @@
             else if (mutationObserver) queueScan(source);
         }
         function editable(target) {
-            return Boolean(target?.isContentEditable || target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="combobox"]'));
+            return Boolean(target?.isContentEditable || target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="combobox"],#brevess-mechanism-drawing-host'));
         }
         function hoveredCandidate(target) {
             if (!target?.closest || editable(target) || target.closest(INTERACTIVE) || target.closest(FOREIGN_TRANSLATION)) return null;
@@ -1229,24 +1415,27 @@
             if (isPubmed) {
                 const snippet = target.closest('article.full-docsum .docsum-snippet');
                 if (snippet) {
+                    const expanded = snippet.querySelector('[data-wfg-complete="true"] [data-wfg-abstract-body]:not([hidden])');
+                    if (expanded && readSourceText(expanded)) return sourceAnchor(expanded) ? expanded : null;
                     const full = snippet.querySelector('.full-view-snippet');
                     const source = full && readSourceText(full) ? full : snippet.querySelector('.short-view-snippet');
                     return source && sourceAnchor(source) ? source : null;
                 }
             }
-            const source = target.closest(CANDIDATE);
+            const source = closestSourceCandidate(target);
             return source && sourceAnchor(source, true) ? source : null;
         }
-        function onPointer(event) { hoveredSource = hoveredCandidate(event.target); }
+        function onPointer(event) { hoverPoint = {x:event.clientX,y:event.clientY}; hoveredSource = hoveredCandidate(event.target); }
         function refreshHoveredSource() {
             // The adapter may be injected while the pointer is already stationary.
             // Resolve the live hover chain instead of requiring a new pointerover.
             const hovered = document.querySelectorAll?.(':hover');
-            if (hovered) hoveredSource = hoveredCandidate(hovered[hovered.length - 1]);
+            if (hovered?.length) hoveredSource = hoveredCandidate(hovered[hovered.length - 1]);
+            else hoveredSource = hoverPoint ? hoveredCandidate(document.elementFromPoint(hoverPoint.x,hoverPoint.y)) : null;
         }
         function resetShortcut() { altSource = null; }
         function leaveDocument(event) {
-            if (event.type === 'blur' || !event.relatedTarget) { hoveredSource = null; resetShortcut(); releaseSelectionPreparation(); }
+            if (event.type === 'blur' || !event.relatedTarget) { hoveredSource = null; hoverPoint = null; resetShortcut(); releaseSelectionPreparation(); }
         }
         function editingEvent(event) {
             const interactive = target => editable(target) || Boolean(target?.closest?.(INTERACTIVE));
@@ -1260,6 +1449,14 @@
             altSource = !event.defaultPrevented && !event.isComposing && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
                 !event.getModifierState?.('AltGraph') && !editingEvent(event) ? hoveredSource : null;
         }
+        function requestTranslationPersistence() {
+            const admit = view.__brevessAdmitTranslationPersistence;
+            if (typeof admit !== 'function') return;
+            const requestedUrl = document.location.href;
+            void Promise.resolve(admit(requestedUrl)).catch(error => {
+                view.console?.warn?.('Brevess: translation library checkpoint not saved', error?.code || error?.message);
+            });
+        }
         function onKeyUp(event) {
             if (!standaloneTranslationAllowed()) { resetShortcut(); return; }
             if (event.key !== 'Alt') { resetShortcut(); return; }
@@ -1268,6 +1465,7 @@
             if (!source || source !== hoveredSource || !source.isConnected || event.defaultPrevented || event.isComposing ||
                 event.ctrlKey || event.metaKey || event.shiftKey || event.getModifierState?.('AltGraph') || editingEvent(event)) return;
             event.preventDefault();
+            if (event.isTrusted === true) requestTranslationPersistence();
             toggleParagraph(source);
         }
         function onMessage(message, sender, respond) {
@@ -1296,6 +1494,9 @@
                     return;
                 }
                 checkNavigation();
+                if (sender?.id === view.chrome?.runtime?.id &&
+                    ((message.action === 'BREVESS_TRANSLATION_SET_ENABLED' && message.enabled === true) ||
+                        message.action === 'BREVESS_TRANSLATION_RESUME')) requestTranslationPersistence();
                 const operation = message.action === 'BREVESS_TRANSLATION_PAUSE' ? pause()
                     : message.action === 'BREVESS_TRANSLATION_CONFIRM_STOP' ? confirmStopped()
                     : message.action === 'BREVESS_TRANSLATION_RESUME' ? resume({ retryFailed: message.retryFailed === true })
@@ -1318,7 +1519,7 @@
             function sourceFor(sourceKey, sourceText) {
                 const source = knownSources.get(sourceKey);
                 if (!source || !source.element.isConnected || !sourceAnchor(source.element) ||
-                    checkpointApi?.sourceKey(source.element) !== sourceKey || readSourceText(source.element) !== source.text ||
+                    checkpointApi?.sourceKey(source.element) !== sourceKey || !sourceMatches(source) ||
                     (sourceText !== undefined && sourceText !== source.text)) throw stale();
                 return source;
             }
@@ -1328,12 +1529,17 @@
                 if (request.expectedEngineSignature !== engineSignature() || !Number.isInteger(request.sourceStart) || !Number.isInteger(request.sourceEnd) ||
                     request.sourceStart < 0 || request.sourceEnd <= request.sourceStart || request.sourceEnd > source.text.length ||
                     source.text.slice(request.sourceStart, request.sourceEnd) !== request.sourceText) throw stale();
+                let context;
+                try { context = checkpointApi.sliceScientificContext(source.text, source.scientificContext, request.sourceStart, request.sourceEnd); }
+                catch { throw stale(); }
+                if (!sameScientificContext(request.scientificContext, context)) throw stale();
             } else if (request.type === 'TRANSLATION_CHECKPOINT_WRITE') {
                 if (request.engineSignature !== engineSignature() || !Array.isArray(request.translations) || request.translations.length > 2000) throw stale();
                 for (const value of request.translations) {
                     const entry = checkpointApi?.normalizeEntry(value);
                     if (!entry || entry.engineSignature !== request.engineSignature) throw stale();
-                    sourceFor(entry.sourceKey, entry.sourceText);
+                    const source = sourceFor(entry.sourceKey, entry.sourceText);
+                    if (!sameScientificContext(entry.scientificContext, source.scientificContext)) throw stale();
                 }
             } else if (request.type === 'LLM_CONTROL_OPERATION') {
                 if (request.command !== 'cancel' || typeof request.operationId !== 'string' || !/^translation-[A-Za-z0-9_-]{1,180}$/u.test(request.operationId)) throw stale();
@@ -1346,13 +1552,21 @@
         view.addEventListener('popstate', onNavigation);
         view.addEventListener('hashchange', onNavigation);
         view.addEventListener('pagehide', onPageHide);
+        document.addEventListener?.('pointerdown', resumeLocalDemand, true);
+        document.addEventListener?.('keydown', resumeLocalDemand, true);
         document.addEventListener?.('pointerover', onPointer, true);
         document.addEventListener?.('pointerout', leaveDocument, true);
         document.addEventListener?.('keydown', onKeyDown, true);
         document.addEventListener?.('keyup', onKeyUp, true);
         view.addEventListener('blur', leaveDocument);
         // SPA pushState has no DOM event; a cheap URL check also cancels quiet navigations.
-        const navigationTimer = view.setInterval(() => { if (state.active || selectionTasks.size || selectionPreparation) checkNavigation(); }, 500);
+        const navigationTimer = view.setInterval(() => { if (state.active || records.size || selectionTasks.size || selectionPreparation) checkNavigation(); }, 500);
+        // A reopened document may display saved output without enabling translation.
+        if (!suppliedProvider && translationBridge) view.setTimeout(() => {
+            void restoreSavedTranslations().catch(error => {
+                if (!destroyed && !state.active) update({ checkpointPersistence: 'failed', checkpointError: error?.code || 'TRANSLATION_CHECKPOINT_READ_FAILED' });
+            });
+        }, 0);
         function destroy() {
             stop(); cachedResults = new WeakMap(); destroyed = true; controller?.destroy(); provider?.destroy();
             view.clearInterval(navigationTimer);
@@ -1361,17 +1575,19 @@
             view.removeEventListener('popstate', onNavigation);
             view.removeEventListener('hashchange', onNavigation);
             view.removeEventListener('pagehide', onPageHide);
+            document.removeEventListener?.('pointerdown', resumeLocalDemand, true);
+            document.removeEventListener?.('keydown', resumeLocalDemand, true);
             document.removeEventListener?.('pointerover', onPointer, true);
             document.removeEventListener?.('pointerout', leaveDocument, true);
             document.removeEventListener?.('keydown', onKeyDown, true);
             document.removeEventListener?.('keyup', onKeyUp, true);
             view.removeEventListener('blur', leaveDocument);
         }
-        return { setEnabled, getState, pause, resume, confirmStopped, hideTranslations, dismissNotice, captureExportSnapshot,
+        return { setEnabled, getState, pause, resume, confirmStopped, hideTranslations, dismissNotice, captureExportSnapshot, captureSavedTranslations, restoreSavedTranslations,
             validateTranslationContext,
             captureDocumentBinding: captureBinding, sourceKeyForElement: checkpointApi?.sourceKey,
             captureTranslationSourceMap: () => new Map([...knownSources].filter(([sourceKey, source]) => source.element.isConnected &&
-                checkpointApi?.sourceKey(source.element) === sourceKey && readSourceText(source.element) === source.text)
+                checkpointApi?.sourceKey(source.element) === sourceKey && sourceMatches(source))
                 .map(([sourceKey, source]) => [source.element, sourceKey])),
             translateSelection, prepareSelection, releaseSelectionPreparation, destroy };
     }

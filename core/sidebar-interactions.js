@@ -22,7 +22,7 @@
   Object.assign(panel.style,{position:'fixed',right:'auto',bottom:'auto',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',maxHeight:rect.maxHeight+'px',overflowY:'auto'});
   panel.dataset.placement=rect.placement;return rect;
  }
- function createFigureGesture({onLocate,onAnalyze,onInspect,onFeedback,isCurrent=()=>true,setTimer=setTimeout,clearTimer=clearTimeout,singleDelay=500,longDelay=1000}){
+ function createFigureGesture({onLocate,onAnalyze,onInspect,onFeedback,isCurrent=()=>true,setTimer=setTimeout,clearTimer=clearTimeout,singleDelay=500,longDelay=500,immediateLocate=false}){
   let press=null,longTimer=null,singleTimer=null,suppress=false,disposed=false;
   const clear=()=>{clearTimer(longTimer);clearTimer(singleTimer);longTimer=singleTimer=null;};
   const feedback=state=>{if(!disposed)onFeedback?.(state);};
@@ -38,7 +38,7 @@
    pointerUp(event){if(!press||event.pointerId!==press.id)return;clearTimer(longTimer);longTimer=null;press=null;if(!suppress)feedback('idle');},
    click(event){if(disposed||suppress||!isCurrent())return;clearTimer(singleTimer);singleTimer=null;
     if(event.detail>1)return;
-    if(event.detail===0)fire(onLocate,'locate');
+    if(event.detail===0||immediateLocate)fire(onLocate,'locate');
     else {feedback('pending');singleTimer=setTimer(()=>{singleTimer=null;fire(onLocate,'locate');},singleDelay);}
    },
    doubleClick(event){clearTimer(singleTimer);singleTimer=null;if(!suppress)fire(onAnalyze,'analyze',event);},
@@ -57,7 +57,7 @@
    options.onFeedback?.(state);
    if(['locate','analyze','inspect'].includes(state))feedbackTimer=setTimer(()=>{feedbackTimer=null;button.dataset.figureGesture='idle';},600);
   };
-  button.style.setProperty('--figure-hold-duration',`${options.longDelay??1000}ms`);
+  button.style.setProperty('--figure-hold-duration',`${options.longDelay??500}ms`);
   const g=createFigureGesture({...options,setTimer,clearTimer,onFeedback:setFeedback}),listeners=[];
   const listen=(target,type,handler,config)=>{target.addEventListener(type,handler,config);listeners.push(()=>target.removeEventListener(type,handler,config));};
   const isolated=fn=>event=>{event.stopPropagation();fn(event);};

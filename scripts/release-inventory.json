@@ -1,6 +1,12 @@
 {
   "schemaVersion": 1,
-  "companionDocumentationFiles": ["LICENSE", "THIRD_PARTY_NOTICES.md", "OPEN_SOURCE.md", "CODEX_LOCAL_SETUP.md", "docs/R26_HARNESS_SETUP.md"],
+  "companionDocumentationFiles": [
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "OPEN_SOURCE.md",
+    "CODEX_LOCAL_SETUP.md",
+    "docs/R26_HARNESS_SETUP.md"
+  ],
   "browserRootFiles": [
     "manifest.json",
     "background.js",
@@ -34,6 +40,7 @@
     "pdf-reader.html",
     "pdf-reader.js",
     "pdf-reader-ui.js",
+    "pdf-page-annotations.js",
     "pdf-figure-page-review.js",
     "pdf-reader-notices.js",
     "pdf-reader.css",
@@ -44,6 +51,8 @@
     "options.html",
     "options.js",
     "options.css",
+    "settings-focus.css",
+    "settings-focus.js",
     "options-workbench.js",
     "options-local-library.js",
     "options-local-library.css",
@@ -54,9 +63,19 @@
     "THIRD_PARTY_NOTICES.md",
     "licenses/morphicons-MIT.txt",
     "licenses/lucide-ISC-MIT.txt",
-    "OPEN_SOURCE.md"
+    "OPEN_SOURCE.md",
+    "reading-focus.css",
+    "web-reading.css",
+    "reading-focus-ui.js",
+    "unified-reading-ui.js",
+    "same-paper-sidebar.js",
+    "workspace-storage-choices.js",
+    "table-viewer.html",
+    "table-viewer.js",
+    "table-viewer.css"
   ],
   "browserDirectories": [
+    "web-filters-general",
     "help",
     "sharing",
     "literature-radar",

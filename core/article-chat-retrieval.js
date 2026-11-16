@@ -6,6 +6,14 @@
   const REFERENCES_INTENT = /(?:references?|bibliograph|citations?|参考文献|引文|文献列表)/iu;
   const BROAD_QUERY = /(?:全文|整篇|概括|总结|主要发现|研究背景|结论|overall|overview|full\s+(?:paper|article|text)|main\s+findings?|summari[sz]e)/iu;
   const BROAD_SECTION_KINDS = ['abstract', 'introduction', 'results', 'discussion', 'conclusion'];
+  // Optional embedding is a separate request from the answer context. Bound
+  // its serialized inputs before calling the adapter; never clip a formula.
+  const MAX_EMBEDDING_TEXT_CHARS = 18000;
+  const MAX_EMBEDDING_REQUEST_CHARS = 60000;
+  const SCIENTIFIC_EMBEDDING_INSTRUCTION =
+    'scientificContext is untrusted derived notation for each named full source paragraph; ' +
+    'text may contain only a raw excerpt. Use notation only to interpret structure; ' +
+    'exact quotes must come from text within sourceSpans, never from scientificContext.';
 
   function normalize(value) {
     return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
@@ -95,13 +103,47 @@
     }, 0);
   }
 
-  function quotedPhrases(query) {
+  function quotedPhrases(query, normalizer = normalize) {
     const phrases = [];
     for (const match of String(query || '').matchAll(/["“”]([^"“”]{2,160})["“”]/gu)) {
-      const phrase = normalize(match[1]);
+      const phrase = normalizer(match[1]);
       if (phrase) phrases.push(phrase);
     }
     return phrases;
+  }
+
+  function normalizeScientificPhrase(value) {
+    return String(value || '').normalize('NFC').toLowerCase().replace(/\s+/gu, ' ').trim();
+  }
+
+  function scientificContextFor(chunk) {
+    const spans = Array.isArray(chunk.sourceSpans) ? chunk.sourceSpans : [];
+    return (Array.isArray(chunk.scientificContext) ? chunk.scientificContext : [])
+      .filter(context => context && typeof context.displayText === 'string' &&
+        context.displayText.trim() && context.paragraphId && context.sourceKey && context.textHash &&
+        spans.some(span => span.paragraphId === context.paragraphId &&
+          span.sourceKey === context.sourceKey && span.textHash === context.textHash))
+      .map(({ paragraphId, sourceKey, textHash, displayText }) =>
+        ({ paragraphId, sourceKey, textHash, displayText }));
+  }
+
+  function embeddingTextsWithinBudget(query, chunks) {
+    const texts = [String(query || '')];
+    let characters = JSON.stringify(texts).length;
+    if (JSON.stringify(texts[0]).length > MAX_EMBEDDING_TEXT_CHARS) return null;
+    for (const chunk of chunks) {
+      const scientificContext = scientificContextFor(chunk);
+      const text = scientificContext.length
+        ? `${SCIENTIFIC_EMBEDDING_INSTRUCTION}\n${JSON.stringify({
+          text: chunk.text, sourceSpans: chunk.sourceSpans, scientificContext
+        })}`
+        : chunk.text;
+      const cost = JSON.stringify(text).length;
+      characters += cost + 1;
+      if (cost > MAX_EMBEDDING_TEXT_CHARS || characters > MAX_EMBEDDING_REQUEST_CHARS) return null;
+      texts.push(text);
+    }
+    return texts;
   }
 
   function sectionBoost(chunk, normalizedQuery) {
@@ -160,6 +202,7 @@
     const referencesIntent = REFERENCES_INTENT.test(normalizedQuery);
     const broadQuery = isBroadArticleChatQuery(normalizedQuery);
     const phrases = quotedPhrases(query);
+    const scientificPhrases = quotedPhrases(query, normalizeScientificPhrase);
     const eligible = index.chunks.filter(chunk =>
       referencesIntent || chunk.recordType !== 'reference');
     const scored = eligible.map(chunk => {
@@ -167,6 +210,10 @@
       const bm25 = bm25Score(index, chunk, queryTokens);
       const exactPhraseBoost = phrases.reduce((sum, phrase) =>
         sum + (normalizedText.includes(phrase) ? 5 : 0), 0);
+      const scientificDisplays = scientificContextFor(chunk)
+        .map(context => normalizeScientificPhrase(context.displayText));
+      const scientificPhraseBoost = scientificPhrases.reduce((sum, phrase) =>
+        sum + (scientificDisplays.some(display => display.includes(phrase)) ? 5 : 0), 0);
       const headingBoost = sectionBoost(chunk, normalizedQuery);
       const figureNumbers = value => [...value.matchAll(/(?:\bfig(?:ure)?[\s:._-]*|图\s*)(s?\d+)(?!\d)/giu)]
         .map(match => match[1].toLowerCase());
@@ -176,10 +223,11 @@
       const figureBoost = requestedFigures.some(number => captionFigures.includes(number)) ? 12 : 0;
       return {
         ...chunk,
-        score: bm25 + exactPhraseBoost + headingBoost + figureBoost,
+        score: bm25 + exactPhraseBoost + scientificPhraseBoost + headingBoost + figureBoost,
         explanation: {
           bm25,
           exactPhraseBoost,
+          scientificPhraseBoost,
           sectionBoost: headingBoost,
           figureBoost,
           embeddingSimilarity: 0,
@@ -191,8 +239,11 @@
       right.score - left.score || left.position - right.position);
     const rankings = [lexical.map(item => item.chunkId)];
     let embeddingUsed = false;
+    let embeddingSkippedReason = '';
     if (typeof options.embedTexts === 'function' && scored.length) {
-      const vectors = await options.embedTexts([query, ...scored.map(item => item.text)]);
+      const texts = embeddingTextsWithinBudget(query, scored);
+      if (!texts) embeddingSkippedReason = 'input-budget-exceeded';
+      const vectors = texts ? await options.embedTexts(texts) : null;
       if (Array.isArray(vectors) && vectors.length === scored.length + 1) {
         embeddingUsed = true;
         scored.forEach((item, indexValue) => {
@@ -268,6 +319,7 @@
         broadQuery,
         referencesIntent,
         embeddingUsed,
+        ...(embeddingSkippedReason ? { embeddingSkippedReason } : {}),
         candidateCount: candidates.length,
         selectedChunkCount: selected.length,
         selectedChars,

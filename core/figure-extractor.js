@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_PANEL_DIRECTORY_VERSION = '10-unicode-panel-boundaries';
+  const FIGURE_PANEL_DIRECTORY_VERSION = '13-caption-block-boundaries';
   const FIGURE_SELECTOR = [
     'figure',
     '[role="figure"]',
@@ -101,11 +101,73 @@
   const EXCLUDED_LABEL = /\b(?:supporting information|graphical abstract|scheme|table)\b|\u8865\u5145(?:\u56fe|\u6750\u6599)|\u56fe\u6587\u6458\u8981/i;
   const SOURCE_UI_SELECTOR = '[data-sci-plugin-ui],[data-sci-translation]';
 
+  const captionDisclosureAttempts = new WeakSet();
+  const captionDisclosurePending = new WeakMap();
+
+  // Some publishers (e.g. eLife ToggleableCaption) replace the full paragraph
+  // with a preview. Hidden DOM needs no action: sourceText already reads it.
+  // Reveal only a native disclosure inside a caption, before source admission.
+  function prepareArticleFigureCaptions(documentLike, { timeoutMs = 350 } = {}) {
+    if (!documentLike?.querySelectorAll) return Promise.resolve({ expanded: 0 });
+    if (captionDisclosurePending.has(documentLike)) return captionDisclosurePending.get(documentLike);
+    const tasks = [];
+    const controls = Array.from(documentLike.querySelectorAll('button,[role="button"],a[aria-controls],a[href^="#"]'));
+    for (const control of controls) {
+      const caption = control.closest?.(CAPTION_SELECTOR + ',[data-figure-caption]');
+      if (!caption || control.isConnected === false || control.disabled ||
+          control.getAttribute?.('type') === 'submit' ||
+          control.closest?.('nav,aside,footer,form,[data-sci-plugin-ui],[data-sci-translation]') ||
+          control.getAttribute?.('aria-expanded') === 'true' || captionDisclosureAttempts.has(control)) continue;
+      const label = String(control.textContent || '').replace(/[«»‹›…]/g, '').replace(/\s+/g, ' ').trim();
+      if (!/^(?:(?:see|read|show|view)\s+more|(?:show|view|expand)\s+(?:(?:the|full|complete)\s+)?(?:caption|legend)|(?:展开|显示)(?:完整|全部)?(?:图注|图例)|(?:展开|显示|查看)更多)$/i.test(label)) continue;
+      const targetId = String(control.getAttribute?.('aria-controls') || '').trim();
+      const href = control.getAttribute?.('href');
+      if (href && href !== '#' && (!href.startsWith('#') || targetId && href !== '#' + targetId)) continue;
+      const id = targetId || (href?.startsWith('#') ? href.slice(1) : '');
+      if (id) {
+        const target = documentLike.getElementById?.(id);
+        if (!target || !caption.contains?.(target)) continue;
+        // A hidden body can already provide its scientific source text. A
+        // visible preview with aria-controls still needs to be expanded.
+        const hidden = target.hidden || target.getAttribute?.('aria-hidden') === 'true' ||
+          documentLike.defaultView?.getComputedStyle?.(target)?.display === 'none';
+        if (hidden && sourceText(target).trim()) continue;
+      }
+      if (typeof control.click !== 'function') continue;
+      captionDisclosureAttempts.add(control);
+      tasks.push(new Promise(resolve => {
+        const before = sourceText(caption);
+        let observer, timer, finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true; observer?.disconnect(); clearTimeout(timer);
+          resolve(sourceText(caption) !== before);
+        };
+        const changed = () => { if (sourceText(caption) !== before) finish(); };
+        const Observer = documentLike.defaultView?.MutationObserver;
+        if (Observer) {
+          observer = new Observer(changed);
+          observer.observe(caption, { childList: true, subtree: true, characterData: true });
+        }
+        try { control.click(); } catch (_) { finish(); return; }
+        changed();
+        if (!finished) {
+          if (!Observer) finish();
+          else timer = setTimeout(finish, Math.max(0, Math.min(350, timeoutMs)));
+        }
+      }));
+    }
+    const pending = Promise.all(tasks).then(results => ({ expanded: results.filter(Boolean).length }))
+      .finally(() => captionDisclosurePending.delete(documentLike));
+    captionDisclosurePending.set(documentLike, pending);
+    return pending;
+  }
+
   function isSourceUi(element) {
     return Boolean(element?.matches?.(SOURCE_UI_SELECTOR) || element?.closest?.(SOURCE_UI_SELECTOR));
   }
 
-  // Keep textContent's source notation and spacing, but never include display UI.
+  // Keep inline source notation and real block boundaries; exclude display UI.
   // This module can load without article-extractor, so filtering is self-contained.
   function sourceText(element) {
     if (!element || isSourceUi(element)) return '';
@@ -113,9 +175,20 @@
       if (node.nodeType === 3) return String(node.nodeValue || '');
       if (node.nodeType && node.nodeType !== 1) return '';
       if (node.matches?.(SOURCE_UI_SELECTOR)) return '';
+      if (node.matches?.('button,[role="button"]') && node.closest?.(CAPTION_SELECTOR)) return '';
       const children = Array.from(node.childNodes || []);
       if (!children.length) return String(node.textContent || '');
-      return children.map(visit).reduce((text, part) => {
+      return children.map(child => {
+        const part = visit(child);
+        // Adjacent publisher blocks do not imply inline adjacency. Cell/Elsevier
+        // places an unpunctuated title in <p> and its first (A) clause in <div>.
+        // Preserve that boundary before parsing; never split inline sup/sub/math
+        // notation or infer a Panel label that is absent from the source.
+        const inCaption = node.matches?.(CAPTION_SELECTOR) || node.closest?.(CAPTION_SELECTOR);
+        const block = inCaption && /^(?:P|DIV|LI|DT|DD|FIGCAPTION|H[1-6])$/i.test(child.tagName || '');
+        if (inCaption && /^BR$/i.test(child.tagName || '')) return '\n';
+        return part && block ? '\n' + part + '\n' : part;
+      }).reduce((text, part) => {
         // A Figure label and a separate compact reference can be adjacent DOM
         // nodes (Figure 2 | 2N). Preserve that boundary without changing normal
         // scientific inline notation, numbers, or source quotation spacing.
@@ -178,6 +251,16 @@
     if (!match) return null;
     const labelPrefix = text.slice(0, match.index).trim();
     if (EXCLUDED_LABEL.test(labelPrefix)) return null;
+    // eLife numbers supplements within a parent Figure, not as global S1/S2.
+    // Only extend the first label; a later citation cannot rename this Figure.
+    const scoped = /^fig(?:ure)?\.?\s*([1-9]\d{0,2})\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+([1-9]\d{0,2})(?!\d)/i.exec(text.slice(match.index));
+    if (scoped) {
+      const figureNumber = Number(scoped[1]), supplementNumber = Number(scoped[2]);
+      return { figureNumber, supplementNumber, figureCode: `${figureNumber}-S${supplementNumber}`,
+        figureSeries: 'supplemental', isSupplemental: true,
+        figureId: `figure-${figureNumber}-s${supplementNumber}`,
+        figureLabel: `Figure ${figureNumber}\u2014figure supplement ${supplementNumber}` };
+    }
     const isSupplemental = Boolean(match[1]) || /\bsupplement(?:ary|al)?\b|\u8865\u5145/i.test(labelPrefix);
     const figureNumber = Number(match[2]);
     if (!Number.isInteger(figureNumber) || figureNumber < 1 || figureNumber > 999) return null;
@@ -202,6 +285,8 @@
       return {
         figureNumber,
         figureSeries,
+        ...(Number.isInteger(value.supplementNumber) && value.supplementNumber > 0
+          ? { supplementNumber: value.supplementNumber } : {}),
         isSupplemental: figureSeries !== 'main'
       };
     }
@@ -212,15 +297,32 @@
   }
 
   function isCaptionVariableParenthesis(text, index) {
+    const before = text.slice(0, index);
+    const anatomical = /\b(axons?|paranodes?|dendrites?|mitochondri(?:a|on)|nucle(?:us|i)|cytoplasm|myelin)\s*$/i.exec(before);
+    const symbol = /^\(\s*([A-Z])\s*[;)]/.exec(text.slice(index));
+    if (anatomical && symbol && symbol[1] === anatomical[1][0].toUpperCase()) return true;
     const marker = /^\([^)]{1,80}\)/.exec(text.slice(index));
     if (!marker) return false;
-    const before = text.slice(0, index);
     // A new legend heading may use either case. Inline quantity definitions,
     // such as "mean distance (d) per disease", do not introduce a Panel.
     if (/(?:^|[.!?;:|\n])\s*$/.test(before)) return false;
     const after = text.slice(index + marker[0].length);
-    return /\b(?:distance|sample\s+size|number\s+of\s+(?:mice|animals|cells|samples|replicates)|degrees\s+of\s+freedom|[pr][ -]?value|(?:correlation\s+)?coefficient|statistic)\s*$/i.test(before) ||
+    // Anatomical labels define structures visible inside a micrograph, not
+    // lettered Panels. Keep actual heading "(P) ..." and references intact.
+    return /\b(?:distance|roughness|sample\s+size|number\s+of\s+(?:mice|animals|cells|samples|replicates)|degrees\s+of\s+freedom|[pr][ -]?value|(?:correlation\s+)?coefficient|statistic)\s*$/i.test(before) ||
       /^\s*(?:is|denotes|represents)\s+(?:the\s+)?(?:number|sample\s+size|probability|coefficient|statistic|distance)\b/i.test(after);
+  }
+
+  function captionParenthesisDepths(text) {
+    const depths = new Uint16Array(text.length + 1);
+    let depth = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      depths[index] = depth;
+      if (text[index] === '(' || text[index] === '（') depth += 1;
+      else if (text[index] === ')' || text[index] === '）') depth = Math.max(0, depth - 1);
+    }
+    depths[text.length] = depth;
+    return depths;
   }
 
   function isLocalPanelParenthesis(text, index, hasCaptionIdentity = false) {
@@ -228,23 +330,25 @@
     // headings. Nor is the parenthesis following an explicit Figure citation.
     if (/[\p{L}\p{N}]/u.test(text[index - 1] || '')) return false;
     if (isCaptionVariableParenthesis(text, index)) return false;
+    if (hasCaptionIdentity && /^(?:(?:extended\s+data|supplement(?:ary|al)?)\s+)?fig(?:ure)?\.?\s*(?:S\s*)?\d{1,3}(?:\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+\d{1,3})?[.:|]?\s*$/i.test(text.slice(0,index))) return true;
     // Only a source paragraph's explicit uppercase marker in an identified
     // caption can supersede the Figure-citation guard. Inline references and
     // lower-case suffixes still use the conservative path below.
     if (hasCaptionIdentity && /\n *$/.test(text.slice(0, index)) &&
         /^\([A-Z](?=[\s,;&)\-\u2010-\u2015\u2212])/.test(text.slice(index))) return true;
-    return !/\b(?:extended\s+data\s+)?fig(?:ure)?s?\.?\s*(?:S\s*)?\d{1,3}[A-Za-z]?\s*$/i
+    return !/\b(?:extended\s+data\s+)?fig(?:ure)?s?\.?\s*(?:S\s*)?\d{1,3}(?:\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+\d{1,3})?[A-Za-z]?\s*$/i
       .test(text.slice(Math.max(0, index - 100), index));
   }
 
   function sameFigureIdentity(left, right) {
     return Boolean(left && right && left.figureNumber === right.figureNumber &&
-      left.figureSeries === right.figureSeries);
+      left.figureSeries === right.figureSeries &&
+      (left.supplementNumber || 0) === (right.supplementNumber || 0));
   }
 
   function namedPanelReferenceIsLocal(text, match, target) {
     if (!target) return true;
-    const figurePattern = '\\b(?:(?:extended\\s+data|supplement(?:ary|al)?)\\s+)?fig(?:ure)?s?\\.?\\s*(?:S\\s*)?\\d{1,3}(?![\\dA-Za-z])';
+    const figurePattern = '\\b(?:(?:extended\\s+data|supplement(?:ary|al)?)\\s+)?fig(?:ure)?s?\\.?\\s*(?:S\\s*)?\\d{1,3}(?:\\s*[-\u2010-\u2015\u2212]\\s*figure\\s+supplement\\s+\\d{1,3})?(?![\\dA-Za-z])';
     const prefix = text.slice(0, match.index);
     const references = [...prefix.matchAll(new RegExp(figurePattern, 'gi'))];
     const preceding = references.at(-1);
@@ -260,6 +364,7 @@
   function extractPanelHints(caption, figureReference = null, knownLocalPanels = []) {
     const panels = new Set();
     const text = normalizePanelCaption(caption);
+    const depths = captionParenthesisDepths(text);
     const target = (figureReference == null ? null : normalizeFigureReference(figureReference)) || parseLeadingFigureLabel(text);
     const addRange = (firstLabel, lastLabel = firstLabel) => {
       const start = firstLabel.charCodeAt(0);
@@ -268,6 +373,7 @@
       for (let code = start; code <= end; code += 1) panels.add(String.fromCharCode(code));
     };
     for (const match of text.matchAll(/\(([^)]{1,80})\)/g)) {
+      if (depths[match.index]) continue;
       if (!isLocalPanelParenthesis(text, match.index, Boolean(target && target.figureNumber >= 1 && target.figureNumber <= 999))) continue;
       const rawContent = match[1].trim();
       if (/^[ivx]+$/.test(rawContent)) continue;
@@ -279,6 +385,16 @@
       for (const label of content.matchAll(/\b([A-Z])\b/g)) {
         addRange(label[1]);
       }
+    }
+    // Inline references can qualify a condition or an explanation with a
+    // semicolon: "(control; A–C)" and "(Q; filled circles ...)". They add
+    // directory identities, but do not become caption section boundaries.
+    const qualifiedGroup = '[A-Z](?:\\s*[-\\u2010-\\u2015\\u2212]\\s*[A-Z])?(?:\\s*[,;&]\\s*[A-Z](?:\\s*[-\\u2010-\\u2015\\u2212]\\s*[A-Z])?)*';
+    const qualified = new RegExp(`\\(\\s*(?:[^;()]{2,40};\\s*)?(${qualifiedGroup})\\s*(?=;|\\))`, 'gi');
+    for (const match of text.matchAll(qualified)) {
+      if (!match[0].includes(';') && text[match.index + match[0].length] !== ';') continue;
+      if (depths[match.index] || !isLocalPanelParenthesis(text,match.index,Boolean(target))) continue;
+      expandCaptionPanelGroup(match[1]).forEach(label => addRange(label));
     }
     for (const match of text.matchAll(/(?<![\p{L}\p{N}\p{M}_])(?:panels?|subpanels?)\s+([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*[,;&]\s*|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)(?![\p{L}\p{N}\p{M}_])/giu)) {
       if (!namedPanelReferenceIsLocal(text, match, target)) continue;
@@ -298,10 +414,13 @@
     // as `n.c., necrotic core` and `T, T cells`, which otherwise look like
     // single-letter Panel markers after a period or semicolon.
     for (const match of text.matchAll(
-      /(?:^|[.|]\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?!\.\s*[A-Z]\.)(?!,\s*\1\b)(?=[:,.])/gi
+      /(?:^|[.|][)）\]]*\s*)\(?([A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?(?:(?:\s*(?:,|;|&)\s*(?:(?:and|or)\s+)?|\s+(?:and|or|to)\s+)[A-Z](?:\s*[-\u2010-\u2015\u2212]\s*[A-Z])?)*)\)?\s*(?!\.\s*[A-Z]\.)(?!,\s*\1\b)(?=[:,.])/gi
     )) {
+      if (depths[match.index + match[0].indexOf(match[1])]) continue;
       const group = match[1].toUpperCase();
       // Author initials such as "Gerdt, J. P." are not legend headings.
+      // Lowercase expansions in a run of glossary entries are not headings.
+      if (/^[A-Z]$/.test(group) && /^,\s*[a-z][^.;]*;\s*[A-Z][A-Z0-9-]{0,7},\s*[a-z][^.;]*;\s*[A-Z][A-Z0-9-]{0,7},/u.test(text.slice(match.index + match[0].length))) continue;
       if (/^[A-Z]$/.test(group) && /\b[A-Z]\.\s*$/.test(text.slice(0, match.index + match[0].indexOf(match[1]))) &&
           text[match.index + match[0].length] === '.') continue;
       if (/^\.[A-Z]$/i.test(match[0]) && text[match.index + match[0].length] === '.') {
@@ -388,12 +507,12 @@
     return matches.length ? Math.min(...matches) : source.length;
   }
 
-  function extractFigureTitle(value, figureLabel = '') {
+  function extractFigureTitle(value, figureLabel = '', { heading = false } = {}) {
     const caption = normalizeText(value);
     const parsed = parseFigureLabel(figureLabel) || parseLeadingFigureLabel(caption);
     if (!caption || !parsed) return { title: '', translatedTitle: '' };
     const figureCode = `${parsed.isSupplemental ? 'S\\s*' : ''}${parsed.figureNumber}`;
-    const chineseMarker = parsed.figureSeries === 'extended-data' ? null : new RegExp(
+    const chineseMarker = parsed.figureSeries === 'extended-data' || parsed.supplementNumber ? null : new RegExp(
       `(?:^|\\s)图\\s*${figureCode}(?!\\s*[A-Z])\\s*`,
       'i'
     );
@@ -407,7 +526,9 @@
       if (!/[\u3400-\u9fff]/u.test(translatedTitle)) translatedTitle = '';
     }
 
-    const labelPattern = parsed.figureSeries === 'extended-data'
+    const labelPattern = parsed.supplementNumber
+      ? new RegExp(`(?:^|\\s)fig(?:ure)?\\.?\\s*${parsed.figureNumber}\\s*[-\u2010-\u2015\u2212]\\s*figure\\s+supplement\\s+${parsed.supplementNumber}(?![A-Z0-9])\\s*`, 'i')
+      : parsed.figureSeries === 'extended-data'
       ? new RegExp(
         `(?:^|\\s)extended\\s+data\\s+fig(?:ure)?\\.?\\s*${parsed.figureNumber}` +
         '(?![A-Z0-9])\\s*',
@@ -423,6 +544,12 @@
     let title = '';
     if (labelMatch) {
       const remainder = caption.slice(labelMatch.index + labelMatch[0].length);
+      // A publisher heading already supplies the title boundary. Keep its
+      // punctuation, abbreviations and parenthesized scientific names intact.
+      if (heading) return {
+        title: remainder.replace(/^(?:[:：.\-–—]\s*)+/, '').trim().slice(0, 1200),
+        translatedTitle: ''
+      };
       const chineseIndex = chineseMarker?.exec(remainder)?.index ?? -1;
       const boundary = figureTitleBoundary(remainder);
       title = cleanFigureTitle(remainder.slice(
@@ -623,6 +750,7 @@
   function splitFigureCaptionByPanelGroups(value) {
     const caption = normalizePanelCaption(value);
     if (!caption) return [];
+    const depths = captionParenthesisDepths(caption);
     const hasCaptionIdentity = Boolean(parseLeadingFigureLabel(caption));
     const markers = [];
     const addMarker = (index, length, group) => {
@@ -640,15 +768,17 @@
       '[A-Z](?:\\s*[-\\u2010-\\u2015\\u2212]\\s*[A-Z])?)*';
     const parenthesized = new RegExp(`\\((${groupPattern})\\)\\s*`, 'gi');
     for (const match of caption.matchAll(parenthesized)) {
+      if (depths[match.index]) continue;
       if (!isLocalPanelParenthesis(caption, match.index, hasCaptionIdentity) || /^[ivx]+$/.test(match[1])) continue;
       addMarker(match.index, match[0].length, match[1]);
     }
     const inline = new RegExp(
-      `(^|[.;]\\s*)(${groupPattern})(\\s*[,;:]\\s*)`,
+      `(^|[.;][)）\\]]*\\s*)(${groupPattern})(\\s*[,;:]\\s*)`,
       'gi'
     );
     for (const match of caption.matchAll(inline)) {
       const prefixLength = match[1]?.length || 0;
+      if (depths[(match.index || 0) + prefixLength]) continue;
       if (/^[A-Z]$/.test(match[2]) && /\b[A-Z]\.\s*$/.test(caption.slice(0, (match.index || 0) + prefixLength))) continue;
       addMarker(
         (match.index || 0) + prefixLength,
@@ -735,6 +865,9 @@
         sourceText(figure?.element)
       );
       if (liveCaption && liveCaption !== normalizeText(figure?.caption)) return true;
+      const liveDisplay = String(nativeCaption?.displayText || '').replace(/\s+/gu, ' ').trim();
+      const expectedDisplay = liveDisplay && liveDisplay !== liveCaption ? liveDisplay : '';
+      if (expectedDisplay !== String(figure?.captionScientificContext?.displayText || '')) return true;
       return Boolean(nativeCaption?.panelScope && nativeCaption.element === figure?.element &&
         JSON.stringify(figure.panelHints || []) !==
           JSON.stringify(extractElementPanelHints(figure.element, liveCaption, figure)));
@@ -792,7 +925,7 @@
 
   function isUsefulFigureImage(image) {
     const source = imageSource(image);
-    if (!source || /^data:image\/svg/i.test(source)) return false;
+    if (!source || /^data:image\/svg/i.test(source) && shared.isLibraryHtmlVectorImage?.(image) !== true) return false;
     if (/\b(?:icon|logo|avatar|spinner|placeholder|tracking)\b/i.test(source)) return false;
     const width = imageDimension(image, 'width');
     const height = imageDimension(image, 'height');
@@ -855,9 +988,16 @@
   }
 
   function paragraphReferencesFigure(value, figureReference) {
-    const text = String(value || '');
+    let text = String(value || '');
     const target = normalizeFigureReference(figureReference);
     if (!target) return false;
+    let scopedMatch = false;
+    text = text.replace(/\bfig(?:ure)?\.?\s*[1-9]\d{0,2}\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+[1-9]\d{0,2}(?!\d)/gi, label => {
+      if (sameFigureIdentity(parseFigureLabel(label), target)) scopedMatch = true;
+      return ' ';
+    });
+    if (scopedMatch) return true;
+    if (target.supplementNumber) return false;
     if (target.figureSeries === 'extended-data') {
       const extendedPattern = /\bextended\s+data\s+fig(?:ure)?s?\.?\s*/gi;
       let extendedMatch;
@@ -909,7 +1049,10 @@
       .map(item => ({
         paragraphId: String(item?.paragraphId || '').slice(0, 120),
         sectionTitle: normalizeText(item?.sectionTitle).slice(0, 240),
-        text: normalizeText(item?.text)
+        text: normalizeText(item?.text),
+        ...(typeof item?.displayText === 'string' && item.displayText.trim() &&
+          item.displayText.replace(/\s+/gu, ' ').trim() !== normalizeText(item?.text)
+          ? { displayText: item.displayText.replace(/\s+/gu, ' ').trim() } : {})
       }));
   }
 
@@ -917,11 +1060,13 @@
     if (!Array.isArray(boundParagraphs) || !Array.isArray(liveParagraphs) ||
         boundParagraphs.length !== liveParagraphs.length || boundParagraphs.length > 256) return null;
     const valid = row => row && typeof row === 'object' &&
-      Object.keys(row).every(key => ['paragraphId', 'sectionTitle', 'text'].includes(key)) &&
+      Object.keys(row).every(key => ['paragraphId', 'sectionTitle', 'text', 'displayText'].includes(key)) &&
       typeof row.paragraphId === 'string' && row.paragraphId.length > 0 && row.paragraphId.length <= 120 &&
-      typeof row.sectionTitle === 'string' && typeof row.text === 'string' && row.text.length > 0;
+      typeof row.sectionTitle === 'string' && typeof row.text === 'string' && row.text.length > 0 &&
+      (row.displayText == null || typeof row.displayText === 'string');
     if (![...boundParagraphs, ...liveParagraphs].every(valid)) return null;
-    const identity = row => JSON.stringify([row.sectionTitle, row.text]);
+    const identity = row => JSON.stringify([row.sectionTitle, row.text,
+      row.displayText && row.displayText !== row.text ? row.displayText : '']);
     for (const rows of [boundParagraphs, liveParagraphs]) {
       if (new Set(rows.map(row => row.paragraphId)).size !== rows.length ||
           new Set(rows.map(identity)).size !== rows.length) return null;
@@ -1028,6 +1173,7 @@
         : /(^|\.)journals\.plos\.org$/i.test(hostname)
         ? element.closest?.('#artText .figure')
         : /(^|\.)jci\.org$/i.test(hostname) ? element.closest?.('.figure')
+        : /(^|\.)elifesciences\.org$/i.test(hostname) ? element.closest?.('.asset-viewer-inline')
         : splitSpringerOwner;
       if (splitOwner && !nativeOwners.has(splitOwner)) continue;
       const standaloneIdentity = standaloneCaption && parseLeadingFigureLabel(
@@ -1054,16 +1200,29 @@
       }
       const captionElement = captionSource.element || element;
       const caption = captionSource.caption;
+      const scientificSource = nativeOwners.get(element) ||
+        (shared.articleCaptionSource || globalThis.SciLLM?.articleCaptionSource)?.(captionElement);
+      const displayText = String(scientificSource?.displayText || '').replace(/\s+/gu, ' ').trim();
+      const captionScientificContext = normalizeText(scientificSource?.text) === caption &&
+        displayText && displayText !== caption ? { text: caption, displayText } : null;
       const labelText = normalizeText(
         sourceText(captionElement?.querySelector?.(LABEL_SELECTOR))
       );
       const parsed = expectedIdentity || parseLeadingFigureLabel(labelText) || parseLeadingFigureLabel(caption) ||
         parseLeadingFigureLabel(sourceText(element));
       if (!parsed) continue;
+      const titleElement = scientificSource?.titleElement;
+      const isolatedHeading = titleElement && scientificSource.parts?.length > 1 &&
+        scientificSource.parts[0] === titleElement &&
+        parseLeadingFigureLabel(sourceText(titleElement))?.figureId === parsed.figureId;
+      const figureTitle = isolatedHeading
+        ? extractFigureTitle(sourceText(titleElement), parsed.figureLabel, { heading: true }).title : '';
       const imageElements = collectImages(element, parsed, caption);
       const item = {
         ...parsed,
         caption,
+        ...(figureTitle ? { figureTitle } : {}),
+        ...(captionScientificContext ? { captionScientificContext } : {}),
         captionElement: captionElement || element,
         imageElements,
         panelHints: extractElementPanelHints(element, caption, parsed),
@@ -1128,6 +1287,7 @@
     FIGURE_PANEL_DIRECTORY_VERSION,
     FIGURE_SELECTOR,
     CAPTION_SELECTOR,
+    prepareArticleFigureCaptions,
     STANDALONE_CAPTION_SELECTOR,
     parseFigureLabel,
     extractFigureTitle,

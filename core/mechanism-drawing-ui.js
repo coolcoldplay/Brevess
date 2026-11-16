@@ -19,6 +19,23 @@
   const sourceKey = (figureId, blockId) => `${figureId}::${blockId}`;
   const nodeLabel = node => text(node && (typeof node.label === 'object' ? node.label.value : node.label));
   const uid = prefix => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+  function mechanismDrawingYieldForPaint(win) {
+    return new Promise(resolve => {
+      let frame = 0, timer = 0;
+      const finish = () => {
+        if (frame) win.cancelAnimationFrame(frame);
+        win.clearTimeout(timer);
+        resolve();
+      };
+      // Native frame callbacks can be throttled even on a visible paper.
+      // Give the preview a chance to paint without blocking its save on a frame.
+      timer = win.setTimeout(finish, 48);
+      frame = win.requestAnimationFrame(() => {
+        frame = 0; win.clearTimeout(timer);
+        timer = win.setTimeout(finish, 0);
+      });
+    });
+  }
   // Prefer the nearest free space in the visible world rectangle. A full view
   // falls back to the nearest free edge; the caller reveals only the new node.
   function mechanismDrawingFindNodePosition(positions, bounds) {
@@ -36,6 +53,7 @@
   }
   function mechanismDrawingErrorMessage(error) {
     const code = text(error && (error.code || error.message) || error);
+    if (/WORKSPACE_GENERATION_CONFLICT|WORKSPACE_DELETION_CONFLICT/.test(code)) return '这篇文献的工作区已在其他页面清空或重新建立。当前旧图未被覆盖，请先保留需要的内容，再重新打开文献。';
     if (/CONTEXT_CHANGED|CONTEXT_STALE|BINDING_MISMATCH/.test(code)) return '文献或解图内容已变化。请关闭绘图面板，再从当前文献重新打开。';
     if (/REVISION_CHANGED|REVISION_CONFLICT/.test(code)) return '图表已有较新的修改。请重新打开面板后再试，原数据已保留。';
     if (/SOURCE_MISSING|TARGET_NOT_FOUND/.test(code)) return '找不到原节点、联系或证据块。请重新选择当前文献中的项目。';
@@ -72,6 +90,26 @@
     const candidates = exact.length ? exact : historical;
     if (candidates.length !== 1) return null;
     return { source: candidates[0], kind: 'archive', contentMatched: exact.length === 1 };
+  }
+
+  function mechanismDrawingEvidenceLabel(snapshot, binding) {
+    let match = resolveMechanismDrawingEvidenceSource(snapshot, binding);
+    if (match && !match.contentMatched) {
+      match = resolveMechanismDrawingEvidenceSource({ evidenceArchive: snapshot?.evidenceArchive }, { ...binding, unresolved: true });
+    }
+    // Only a verified version may supply its scientific title to this binding.
+    if (match?.contentMatched && Object.hasOwn(match.source, 'displayTitle')) return text(match.source.displayTitle).trim() || t('名称已清空');
+    return match?.contentMatched && text(match.source.title).trim() || text(binding?.panelLabel) || t('未命名证据');
+  }
+
+  function mechanismDrawingEvidenceReference(binding) {
+    const current=text(binding?.panelLabel).trim();
+    if(/^(?:S?\d+[A-Z](?:-S?\d+[A-Z])?)(?:、S?\d+[A-Z](?:-S?\d+[A-Z])?)*$/i.test(current))return current;
+    const prefix=text(binding?.figureId).match(/^figure-(S?\d+)$/i)?.[1]?.toUpperCase();
+    const panels=[...new Set(list(binding?.panelIds).map(v=>text(v).toUpperCase()))].sort();
+    if(!prefix||!panels.length||!panels.every(v=>/^[A-Z]$/.test(v)))return t('证据');
+    const ranges=[];for(let i=0;i<panels.length;i++){const first=panels[i];let last=first;while(panels[i+1]?.charCodeAt(0)===last.charCodeAt(0)+1)last=panels[++i];ranges.push(prefix+first+(first!==last?'-'+prefix+last:''));}
+    return ranges.join('、');
   }
 
   function parseMechanismEvidenceDrop(raw, snapshot) {
@@ -144,19 +182,55 @@
     return options.connectMode && (mode === 'move' || mode === 'marquee' || mode === 'pan' && !options.pan && !options.middle && !options.presentation) ? 'connect-click' : mode;
   }
 
-  function mechanismDrawingLabelSize(edge) {
-    const width = 194, available = 184;
+  function mechanismDrawingLabelSize(edge, snapshot) {
     const measuredWidth = (value, wide, narrow) => Array.from(text(value)).reduce((sum, character) => sum + (character.charCodeAt(0) > 255 ? wide : narrow), 0);
+    const evidenceWidth = list(edge.evidence).reduce((sum,binding)=>sum+Math.max(36,measuredWidth(mechanismDrawingEvidenceReference(binding),13,7.5)+18)+4,0);
+    const width = Math.min(194, Math.max(48, measuredWidth(edge.label,11,6)+18, evidenceWidth+6)), available = width-10;
     const titleHeight = Math.min(2, Math.max(1, Math.ceil(measuredWidth(edge.label, 11, 6) / available))) * 16;
     let occupied = 0, rowHeight = 0, evidenceHeight = 0;
     list(edge.evidence).forEach(binding => {
-      const rawWidth = measuredWidth(binding.panelLabel, 13, 7.5) + 18;
+      const label = mechanismDrawingEvidenceReference(binding);
+      const rawWidth = measuredWidth(label, 13, 7.5) + 18;
       const chipWidth = Math.min(available, Math.max(36, rawWidth));
       const chipHeight = Math.max(1, Math.ceil((rawWidth - 18) / (available - 18))) * 19 + 6;
       if (occupied && occupied + 4 + chipWidth > available) { evidenceHeight += rowHeight + 4; occupied = 0; rowHeight = 0; }
       occupied += (occupied ? 4 : 0) + chipWidth; rowHeight = Math.max(rowHeight, chipHeight);
     });
     return { width, height: 10 + titleHeight + evidenceHeight + rowHeight };
+  }
+
+  // Gesture-only geometry: keep terminals attached without running global
+  // obstacle search. The acknowledged snapshot restores exact obstacle routing.
+  function previewMechanismDrawingRoute(route, fromDelta, toDelta) {
+    const shift = (point, delta) => ({ ...point, x: point.x + delta.x, y: point.y + delta.y });
+    if (!fromDelta.x && !fromDelta.y && !toDelta.x && !toDelta.y || route.blocked || !route.points?.length) return route;
+    let points, label = route.label, labelBox = route.labelBox, labelAnchor = route.labelAnchor;
+    if (fromDelta.x === toDelta.x && fromDelta.y === toDelta.y) {
+      points = route.points.map(point => shift(point, fromDelta));
+      if (label) label = shift(label, fromDelta);
+      if (labelBox) labelBox = shift(labelBox, fromDelta);
+      if (labelAnchor) labelAnchor = shift(labelAnchor, fromDelta);
+    } else {
+      const start = shift(route.points[0], fromDelta), end = shift(route.points[route.points.length - 1], toDelta);
+      const offsets = { left: { x: -18, y: 0 }, right: { x: 18, y: 0 }, top: { x: 0, y: -18 }, bottom: { x: 0, y: 18 } };
+      const a = shift(start, offsets[route.sourceSide] || offsets.right), b = shift(end, offsets[route.targetSide] || offsets.left);
+      const horizontalStart = !['top', 'bottom'].includes(route.sourceSide), horizontalEnd = !['top', 'bottom'].includes(route.targetSide);
+      const bends = horizontalStart === horizontalEnd
+        ? horizontalStart ? [{ x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }]
+          : [{ x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }]
+        : [horizontalStart ? { x: b.x, y: a.y } : { x: a.x, y: b.y }];
+      points = [start, a, ...bends, b, end];
+      // Keep the tag on the main preview path while only one endpoint moves.
+      // The longest interior segment avoids crowding the endpoint ports.
+      const segments = points.slice(1).map((end, i) => ({ start: points[i], end, length: Math.abs(end.x - points[i].x) + Math.abs(end.y - points[i].y) }));
+      const segment = segments.slice(1, -1).sort((a, b) => b.length - a.length)[0] || segments[0];
+      labelAnchor = { x: (segment.start.x + segment.end.x) / 2, y: (segment.start.y + segment.end.y) / 2 };
+      if (label) {
+        const delta = { x: labelAnchor.x - label.x, y: labelAnchor.y - label.y };
+        label = shift(label, delta); if (labelBox) labelBox = shift(labelBox, delta);
+      }
+    }
+    return { ...route, points, label, labelBox, labelAnchor, path: points.map((point, index) => `${index ? 'L' : 'M'}${point.x} ${point.y}`).join(' ') };
   }
 
   function mechanismDrawingNodeAtPoint(nodes, positions, point) {
@@ -179,34 +253,67 @@
     const doc = mount.ownerDocument;
     const win = doc.defaultView || host;
     const shell = doc.createElement('section');
-    shell.className = 'md-shell';
+    shell.className = 'md-shell md-expanded';
     shell.setAttribute('data-brevess-interface', '');
     shell.hidden = true;
     shell.setAttribute('aria-label', '手动绘制图表梳理');
-    shell.innerHTML = `<header class="md-header"><div><strong>图表梳理</strong><span class="md-subtitle">手动绘制</span></div><div class="md-header-actions"><button type="button" data-action="expand" aria-pressed="false">展开</button><button type="button" data-action="close" aria-label="关闭图表梳理">关闭</button></div></header>
-      <div class="md-toolbar" role="toolbar" aria-label="绘图工具"><button type="button" data-action="add-node">＋ 节点</button><button type="button" data-action="select" aria-pressed="true">选择</button><button type="button" data-action="connect" aria-pressed="false">连线</button><button type="button" data-action="pan" aria-pressed="false">平移</button><span class="md-divider"></span><button type="button" data-action="undo" title="撤销 Ctrl+Z">撤销</button><button type="button" data-action="redo" title="重做 Ctrl+Shift+Z">重做</button><span class="md-divider"></span><button type="button" data-action="zoom-out" aria-label="缩小">−</button><output class="md-zoom">100%</output><button type="button" data-action="zoom-in" aria-label="放大">＋</button><button type="button" data-action="fit">适应画布</button><span class="md-toolbar-spacer"></span><button type="button" data-action="story">论证步骤</button><button type="button" data-action="main" aria-pressed="true">当前进度</button><button type="button" data-action="all" aria-pressed="false">全部联系</button><button type="button" data-action="matrix" aria-pressed="true">证据矩阵</button></div>
-      <div class="md-story" hidden></div><div class="md-workspace"><div class="md-canvas" tabindex="0" role="application" aria-label="机制图画布：拖动节点；从端口拉线；空白拖动平移；Shift 框选；滚轮缩放"><div class="md-world"><svg class="md-svg" aria-hidden="true"><defs><marker id="md-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="context-stroke" stroke-width="1.7"/></marker><marker id="md-stop" markerWidth="8" markerHeight="14" refX="3" refY="7" orient="auto" markerUnits="userSpaceOnUse"><path d="M3 1 L3 13" fill="none" stroke="context-stroke" stroke-width="2.5"/></marker></defs><g class="md-routes"></g><path class="md-connection-preview"/></svg><div class="md-node-layer"></div><div class="md-label-layer"></div><div class="md-selection-box" hidden></div></div><div class="md-empty" hidden>添加节点，拉线连接，再从右侧解图拖入证据块。</div><div class="md-canvas-hint">拖动节点 · 从端口拉线 · 空白拖动平移；Shift 框选</div><div class="md-drop-hint" hidden></div></div><aside class="md-inspector" aria-label="选择项编辑" hidden></aside></div>
+    shell.innerHTML = `<header class="md-header"><div><strong>图表梳理</strong></div><div class="md-header-actions">${typeof opts.onAgent === 'function' ? '<button type="button" data-action="agent">Agent 辅助</button>' : ''}<button type="button" data-action="close" aria-label="关闭图表梳理">关闭</button></div></header>
+      <div class="md-toolbar" role="toolbar" aria-label="绘图工具"><button type="button" data-action="add-node">＋ 节点</button><button type="button" data-action="select" aria-pressed="true">选择</button><button type="button" data-action="connect" aria-pressed="false">连线</button><button type="button" data-action="pan" aria-pressed="false">平移</button><span class="md-divider"></span><button type="button" data-action="undo" title="撤销 Ctrl+Z">撤销</button><button type="button" data-action="redo" title="重做 Ctrl+Shift+Z">重做</button><span class="md-divider"></span><button type="button" data-action="zoom-out" aria-label="缩小">−</button><output class="md-zoom">100%</output><button type="button" data-action="zoom-in" aria-label="放大">＋</button><button type="button" data-action="fit">适应画布</button><span class="md-toolbar-spacer"></span><button type="button" data-action="story">论证步骤</button><button type="button" data-action="main" aria-pressed="true">当前进度</button><button type="button" data-action="all" aria-pressed="false">全部联系</button><button type="button" data-action="snap-assist" aria-pressed="false" title="移动与缩放时显示对齐预览并吸附">辅助对齐</button><button type="button" data-action="matrix" aria-pressed="true">证据矩阵</button></div>
+      <div class="md-story" hidden></div><div class="md-workspace"><div class="md-canvas" tabindex="0" role="application" aria-label="机制图画布：拖动节点；从端口拉线；空白拖动平移；Shift 框选；滚轮缩放"><div class="md-world"><svg class="md-svg" aria-hidden="true"><defs><marker id="md-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="context-stroke" stroke-width="1.7"/></marker><marker id="md-stop" markerWidth="8" markerHeight="14" refX="3" refY="7" orient="auto" markerUnits="userSpaceOnUse"><path d="M3 1 L3 13" fill="none" stroke="context-stroke" stroke-width="2.5"/></marker></defs><g class="md-routes"></g><path class="md-connection-preview"/></svg><div class="md-node-layer"></div><div class="md-label-layer"></div><svg class="md-edit-overlay"><g class="md-edit-handles"></g><g class="md-snap-guides"></g><circle class="md-port-target" r="7" hidden/></svg><div class="md-selection-box" hidden></div></div><div class="md-empty" hidden>添加节点，拉线连接，再从右侧解图拖入证据块。</div><details class="md-canvas-help"><summary>操作帮助</summary><p class="md-canvas-hint">拖动节点 · 从端口拉线 · 空白拖动平移；Shift 框选</p></details><div class="md-drop-hint" hidden></div></div><aside class="md-inspector" aria-label="选择项编辑" hidden></aside></div>
       <div class="md-matrix-resizer" role="separator" tabindex="0" aria-label="调整证据矩阵高度" aria-orientation="horizontal" aria-valuemin="96" aria-valuemax="500" aria-valuenow="210"></div><section class="md-matrix"><div class="md-matrix-heading"><strong>证据矩阵</strong><span>列为起点 · 行为终点</span><span class="md-legend" title="可多选；红蓝双色表示同时为充分与必要。相关或未分类为中性颜色。"><i class="md-key-sufficient"></i>充分 <i class="md-key-necessary"></i>必要 <i class="md-key-related"></i>相关</span></div><div class="md-matrix-scroll" tabindex="0" aria-label="节点乘节点证据矩阵"></div></section>
       <footer class="md-footer"><span class="md-status" role="status" aria-live="polite">图表中的证据名称可点击定位，右键可更改。</span><span class="md-count"></span></footer><div class="md-tooltip" role="tooltip" hidden></div><div class="md-menu" role="menu" aria-label="证据块操作" hidden></div>`;
     mount.appendChild(shell);
     const $ = selector => shell.querySelector(selector);
     const canvas = $('.md-canvas'), world = $('.md-world'), inspector = $('.md-inspector');
+    const toolStrip = doc.createElement('div');
+    toolStrip.className = 'md-canvas-tools'; toolStrip.setAttribute('role', 'toolbar'); toolStrip.setAttribute('aria-label', t('画布工具'));
+    const toolIcons = {
+      'select': '<path d="m5 3 14 9-7 1-3 7Z"/>',
+      'pan': '<path d="M12 3v18M3 12h18m-12-6 3-3 3 3m-6 12 3 3 3-3M6 9l-3 3 3 3m12-6 3 3-3 3"/>',
+      'add-node': '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 12h8m-4-4v8"/>',
+      'connect': '<path d="M5 19 19 5m-7 0h7v7"/>'
+    };
+    for (const [action, icon] of Object.entries(toolIcons)) {
+      const button = $(`[data-action="${action}"]`), label = button.textContent.replace('＋ ', '添加');
+      button.title = t(label); button.setAttribute('aria-label', t(label));
+      button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+      toolStrip.appendChild(button);
+    }
+    canvas.appendChild(toolStrip);
+    const zoomStrip = doc.createElement('div'); zoomStrip.className = 'md-canvas-zoom';
+    for (const selector of ['[data-action="zoom-out"]', '.md-zoom', '[data-action="zoom-in"]', '[data-action="fit"]']) zoomStrip.appendChild($(selector));
+    canvas.appendChild(zoomStrip);
+    const firstDivider = $('.md-toolbar .md-divider'); if (firstDivider) firstDivider.remove();
+    const headingTools = doc.createElement('div'); headingTools.className = 'md-heading-tools';
+    headingTools.setAttribute('role','toolbar'); headingTools.setAttribute('aria-label',t('图表视图'));
+    for (const action of ['story','main','all','snap-assist','matrix']) headingTools.append($(`[data-action="${action}"]`));
+    $('.md-header-actions').before(headingTools);
+    for (const action of ['undo','redo']) { const button=$(`[data-action="${action}"]`);const label=button.textContent;button.setAttribute('aria-label',label);button.title=label;button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5 3 10l5 5M3 10h10a7 7 0 0 1 7 7"/></svg>';if(action==='redo')button.firstElementChild.style.transform='scaleX(-1)';toolStrip.append(button); }
+    $('.md-toolbar').remove();
+    canvas.setAttribute('aria-label', t('机制图画布：双击空白创建节点；拖动节点；从端口拉线；空白拖动平移；Shift 框选；滚轮缩放'));
+    $('.md-canvas-hint').textContent = t('双击空白创建 · 拖动节点 · 从端口拉线 · 空白拖动平移 · Shift 框选');
     const matrixScroll = $('.md-matrix-scroll'), tooltip = $('.md-tooltip'), menu = $('.md-menu');
     const listeners = [];
     function listen(target, type, fn, config) { target.addEventListener(type, fn, config); listeners.push(() => target.removeEventListener(type, fn, config)); }
+    // Keep drawing gestures inside the overlay. Publisher document handlers can
+    // otherwise rescan the article on every bubbled mouse event through the shadow host.
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup', 'mouseover', 'mouseout', 'click', 'dblclick', 'contextmenu', 'wheel', 'dragstart', 'dragend', 'dragenter', 'dragover', 'dragleave', 'drop']) {
+      listen(shell, type, event => event.stopPropagation());
+    }
     let snapshot = { nodes: [], edges: [], sources: [], drawing: {} };
     let viewport = { x: 36, y: 30, zoom: 1 };
     let view = { mode: 'main', activeStageId: '' };
     let scene = { nodes: [], edges: [], stages: [] };
     let selectedNodes = new Set(), selectedEdgeId = '', selectedBindingId = '';
     let routes = [], positions = {}, activePointer = null, connectingFrom = '', connectMode = false, panMode = false, spaceDown = false;
-    let destroyed = false, shown = false, pending = 0, queue = Promise.resolve(), status = '', errorStatus = false;
-    let matrixVisible = true, matrixHeight = 210, expanded = false, dropEdgeId = '', pendingViewTimer = null, menuBindingId = '';
+    let destroyed = false, shown = false, hasRendered = false, pending = 0, queue = Promise.resolve(), status = '', errorStatus = false;
+    let matrixVisible = null, matrixHeight = 210, dropEdgeId = '', pendingViewTimer = null, menuBindingId = '';
     let editorNodeId = '', editorValue = '', sceneSignature = '', previousContext = '', previousSession = '', storyMarkupKey = '', viewVersion = 0, pendingViewVersion = 0;
     let editorVersion = 0, editorPending = null;
     let storyDraft = null, storyEditorIndex = 0;
     let initialFitDone = false, initialFitScheduled = false, fitObserver = null;
     let layoutCacheKey = '', layoutCache = {};
+    let routeCacheKey = '', routeCache = [], matrixMarkupKey = '';
     const apiHost = () => host.SciLLM || {};
     // Only generated controls are translated. Scientific labels remain exact,
     // including labels such as “保存” that also occur in the UI dictionary.
@@ -239,6 +346,12 @@
         if (destroyed || context !== previousContext || session !== previousSession) return null;
         if (typeof opts.onCommand !== 'function') throw new Error('编辑通道尚未就绪。');
         const submitted = typeof command === 'function' ? command() : command;
+        if ((submitted.type === 'add_node' || submitted.type === 'add_edge') && doc.visibilityState !== 'hidden') {
+          // Give the pending element a paint opportunity before the content
+          // receiver begins synchronous draft validation on this same page.
+          await mechanismDrawingYieldForPaint(win);
+          if (destroyed || context !== previousContext || session !== previousSession) return null;
+        }
         const acknowledged = await opts.onCommand({ ...submitted, contextKey: context });
         if (destroyed || context !== previousContext || session !== previousSession) return null;
         if (!acknowledged || !Array.isArray(acknowledged.nodes) || !Array.isArray(acknowledged.edges)) throw new Error('尚未收到保存确认；图表保留原状态，请重试。');
@@ -268,7 +381,7 @@
       transform(); deferView();
     }
     function fit() {
-      const boxes = scene.nodes.map(node => ({ x: positions[node.id].x, y: positions[node.id].y, width: NODE_WIDTH, height: NODE_HEIGHT }));
+      const boxes = scene.nodes.map(node => ({ ...positions[node.id] }));
       routes.forEach(route => { if (route.labelBox) boxes.push(route.labelBox); list(route.points).forEach(point => boxes.push({ ...point, width: 1, height: 1 })); });
       if (!boxes.length) { viewport = { x: 36, y: 30, zoom: 1 }; transform(); deferView(); return; }
       const left = Math.min(...boxes.map(box => box.x)), top = Math.min(...boxes.map(box => box.y));
@@ -280,10 +393,11 @@
       transform(); deferView();
     }
 
-    function chip(binding) {
+    function chip(binding, compact = false) {
       const types = list(binding.types).map(type => t(TYPE_NAMES[type])).filter(Boolean).join(' / ') || t('未分类');
       const review = binding.unresolved ? t('原证据暂不可用') : binding.needsReview ? t('待复核') : '';
-      return `<button type="button" data-i18n-ignore class="md-evidence ${mechanismDrawingEvidenceClass(binding.types)}${binding.unresolved ? ' md-unresolved' : ''}" data-binding="${esc(binding.id)}" data-focus-key="binding:${esc(binding.id)}" aria-label="${esc(binding.panelLabel || t('未命名证据'))}, ${esc(types)}${review ? ', ' + esc(review) : ''}. ${esc(t('点击定位；右键或 Shift+F10 更改'))}">${esc(binding.panelLabel || t('未命名证据'))}</button>`;
+      const label = mechanismDrawingEvidenceLabel(snapshot, binding), reference = binding.panelLabel && label !== binding.panelLabel ? binding.panelLabel : '';
+      return `<button type="button" data-i18n-ignore class="md-evidence ${mechanismDrawingEvidenceClass(binding.types)}${binding.unresolved ? ' md-unresolved' : ''}" title="${esc(label)}${reference ? ' · ' + esc(reference) : ''}" data-binding="${esc(binding.id)}" data-focus-key="binding:${esc(binding.id)}" aria-label="${esc(label)}${reference ? ', ' + esc(reference) : ''}, ${esc(types)}${review ? ', ' + esc(review) : ''}. ${esc(t('点击定位；右键或 Shift+F10 更改'))}">${compact === true ? `<span class="md-evidence-panel">${esc(mechanismDrawingEvidenceReference(binding))}</span>` : `<span class="md-evidence-name">${esc(label)}</span>${reference ? `<small class="md-evidence-ref">${esc(reference)}</small>` : ''}`}</button>`;
     }
     function focusedState() {
       const active = shell.getRootNode().activeElement || doc.activeElement;
@@ -301,17 +415,18 @@
       if (saved.start != null && typeof target.setSelectionRange === 'function' && target.type !== 'range') { try { target.setSelectionRange(saved.start, saved.end); } catch (_) {} }
     }
     function updateToolbar() {
+      const matrixShown = matrixVisible ?? list(snapshot.edges).some(edge=>list(edge.evidence).length>0);
       $('[data-action="undo"]').disabled = !snapshot.canUndo || pending > 0;
       $('[data-action="redo"]').disabled = !snapshot.canRedo || pending > 0;
-      ['select', 'connect', 'pan', 'main', 'all', 'matrix', 'expand'].forEach(action => {
-        const value = action === 'select' ? !connectMode && !panMode : action === 'connect' ? connectMode : action === 'pan' ? panMode : action === 'main' ? view.mode === 'main' : action === 'all' ? view.mode === 'all' : action === 'matrix' ? matrixVisible : expanded;
+      ['select', 'connect', 'pan', 'main', 'all', 'matrix'].forEach(action => {
+        const value = action === 'select' ? !connectMode && !panMode : action === 'connect' ? connectMode : action === 'pan' ? panMode : action === 'main' ? view.mode === 'main' : action === 'all' ? view.mode === 'all' : matrixShown;
         $(`[data-action="${action}"]`).setAttribute('aria-pressed', String(value));
       });
-      shell.classList.toggle('md-expanded', expanded);
       shell.classList.toggle('md-pan-mode', panMode || spaceDown);
       shell.classList.toggle('md-connect-mode', connectMode || !!connectingFrom);
-      $('.md-canvas-hint').textContent = panMode || spaceDown ? '平移画布 · 点击“选择”可拖动节点' : connectMode ? '依次点击两个节点连线 · 点击“选择”可拖动节点' : '拖动节点 · 双击编辑 · 从端口拉线 · 空白拖动平移；Shift 框选';
-      $('.md-matrix').hidden = !matrixVisible; $('.md-matrix-resizer').hidden = !matrixVisible;
+      $('.md-canvas-hint').textContent = panMode || spaceDown ? '平移画布 · 点击“选择”可拖动节点' : connectMode ? '依次点击两个节点连线 · 点击“选择”可拖动节点' : '双击空白创建 · 拖动节点 · 从端口拉线 · 空白拖动平移 · Shift 框选';
+      $('.md-matrix').hidden = !matrixShown; $('.md-matrix-resizer').hidden = !matrixShown;
+      if(panMode||spaceDown||connectMode)$('.md-canvas-help').open=true;
       $('.md-matrix-resizer').setAttribute('aria-valuenow', String(Math.round(matrixHeight)));
       shell.style.setProperty('--md-matrix-height', `${matrixHeight}px`);
       $('.md-count').textContent = `${list(snapshot.nodes).length} 节点 · ${list(snapshot.edges).length} 联系 · ${list(snapshot.edges).reduce((sum, edge) => sum + list(edge.evidence).length, 0)} 证据`;
@@ -349,25 +464,79 @@
         layoutCacheKey = layoutKey;
       }
       const incoming = Object.assign({}, layoutCache);
-      list(snapshot.nodes).forEach((node, index) => { const saved = persisted[node.id] || incoming[node.id] || {}; incoming[node.id] = { ...saved, x: finite(saved.x, finite(node.x, (index % 4) * 230)), y: finite(saved.y, finite(node.y, Math.floor(index / 4) * 170)), width: NODE_WIDTH, height: NODE_HEIGHT }; });
+      list(snapshot.nodes).forEach((node, index) => { const saved = persisted[node.id] || incoming[node.id] || {}; incoming[node.id] = { ...saved, x: finite(saved.x, finite(node.x, (index % 4) * 230)), y: finite(saved.y, finite(node.y, Math.floor(index / 4) * 170)), width: clamp(finite(saved.width, NODE_WIDTH), 80, 1600), height: clamp(finite(saved.height, NODE_HEIGHT), 48, 1200) }; });
       positions = incoming;
       if (activePointer && activePointer.kind === 'nodes') Object.assign(positions, activePointer.preview);
       const router = apiHost().routeMechanismDrawingEdges;
-      const edges = scene.edges.map(edge => { const size = mechanismDrawingLabelSize(edge); return { ...edge, labelWidth: size.width, labelHeight: size.height }; });
-      routes = typeof router === 'function' ? router({ nodes: scene.nodes, edges, positions }) : [];
-      if (!Array.isArray(routes)) routes = [];
+      const edges = scene.edges.map(edge => { const size = mechanismDrawingLabelSize(edge, snapshot); return { ...edge, labelWidth: size.width, labelHeight: size.height }; });
+      const routeKey = JSON.stringify([previousContext, previousSession, scene.nodes.map(node => [node.id, positions[node.id]]), edges.map(edge => [edge.id, edge.from, edge.to, edge.labelWidth, edge.labelHeight, edge.sourcePort, edge.targetPort, edge.waypoints, edge.labelPosition])]);
+      if (routeKey !== routeCacheKey) {
+        const computed = typeof router === 'function' ? router({ nodes: scene.nodes, edges, positions }) : [];
+        routeCache = Array.isArray(computed) ? computed : []; routeCacheKey = routeKey;
+      }
+      routes = routeCache;
+    }
+    let routeEditingId = '', snapAssist = false;
+    function edgeRouteConfig(edge, route) {
+      const port = (id, side, p) => { const b = positions[id]; return {side,offset:clamp((side === 'left' || side === 'right' ? (p.y-b.y)/b.height : (p.x-b.x)/b.width),0,1)}; };
+      return { sourcePort: port(edge.from,route.sourceSide,route.points[0]), targetPort: port(edge.to,route.targetSide,route.points.at(-1)), ...(edge.labelPosition ? {labelPosition:{...edge.labelPosition}} : {}) };
+    }
+    function renderRouteHandles() {
+      const edge = edgeById(selectedEdgeId), route = routes.find(r=>r.edgeId===selectedEdgeId), layer = $('.md-edit-handles');
+      if (!edge || !route || route.blocked) { layer.innerHTML=''; return; }
+      const radius = 7/viewport.zoom;
+      const handle = (p,attrs,kind='') => '<circle class="md-route-handle '+kind+'" '+attrs+' cx="'+p.x+'" cy="'+p.y+'" r="'+radius+'"/>';
+      let html = handle(route.points[0],'data-reconnect="source"')+handle(route.points.at(-1),'data-reconnect="target"');
+      if (routeEditingId===edge.id) {
+        html += route.points.slice(1,-1).map((p,i)=>handle(p,'data-route-bend="'+(i+1)+'"')).join('');
+        html += route.points.slice(1).map((p,i)=>handle({x:(p.x+route.points[i].x)/2,y:(p.y+route.points[i].y)/2},'data-route-segment="'+i+'"','md-segment-handle')).join('');
+        html += handle(route.label,'data-route-label="'+esc(edge.id)+'" aria-label="沿连线移动文字与证据"','md-label-handle');
+      }
+      layer.innerHTML=html;
+    }
+    function routeHit(point) { return interaction.canvasRouteTarget(routes.map(r=>({...r,id:r.edgeId})),point,viewport.zoom,{radius:16,ambiguity:2}).id; }
+    function portTarget(point, exclude=[]) { return interaction.canvasPortTarget(scene.nodes.map(n=>({id:n.id,...positions[n.id]})),point,viewport.zoom,{exclude}); }
+    function showPortTarget(hit) {
+      const marker=$('.md-port-target');marker.hidden=!hit;marker.style.display=hit?'':'none';
+      if(hit){marker.setAttribute('cx',hit.point.x);marker.setAttribute('cy',hit.point.y);marker.setAttribute('r',8/viewport.zoom);}
+    }
+    function renderSnapGuides(result) {
+      const layer=$('.md-snap-guides'); if (!result?.guides.length) {layer.innerHTML='';return;}
+      const p=result.preview;
+      layer.innerHTML='<rect x="'+p.x+'" y="'+p.y+'" width="'+p.width+'" height="'+p.height+'"/>'+result.guides.map(g=>'<path d="'+interaction.canvasSnapGuidePath(g,p)+'"/>').join('');
+    }
+    // Selection must not replace the pressed line/title: the second native click
+    // needs the same DOM target to become a dblclick.
+    function syncMarkup(parent, markup, svg = false) {
+      const next = svg ? doc.createElementNS('http://www.w3.org/2000/svg','svg') : doc.createElement('div');
+      next.innerHTML = markup;
+      function sync(current, desired) {
+        const children = Array.from(desired.childNodes);
+        children.forEach((child,index) => {
+          let old = current.childNodes[index];
+          const identity = node => node.nodeType === 1 ? node.tagName+':'+(node.getAttribute('data-edge')||node.getAttribute('data-binding')||'') : node.nodeType;
+          if (!old) { current.appendChild(child.cloneNode(true)); return; }
+          if (identity(old) !== identity(child)) { current.replaceChild(child.cloneNode(true),old);return; }
+          if (child.nodeType !== 1) { if(old.nodeValue!==child.nodeValue)old.nodeValue=child.nodeValue;return; }
+          for (const attr of Array.from(old.attributes)) if(!child.hasAttribute(attr.name))old.removeAttribute(attr.name);
+          for (const attr of Array.from(child.attributes)) if(old.getAttribute(attr.name)!==attr.value)old.setAttribute(attr.name,attr.value);
+          sync(old,child);
+        });
+        while(current.childNodes.length>children.length)current.lastChild.remove();
+      }
+      sync(parent,next);
     }
     function renderGraph() {
       layoutGraph();
       const routeMap = new Map(routes.map(route => [route.edgeId, route]));
-      $('.md-routes').innerHTML = scene.edges.map(edge => {
+      syncMarkup($('.md-routes'), scene.edges.map(edge => {
         const route = routeMap.get(edge.id);
         if (!route || route.blocked || !route.path) return '';
         const active = edge.id === selectedEdgeId || edge.id === dropEdgeId;
         const terminal = edge.polarity === 'negative' ? 'md-stop' : edge.polarity === 'positive' ? 'md-arrow' : '';
-        const leader = route.labelAnchor && route.label ? `<path class="md-label-leader" d="M${route.labelAnchor.x} ${route.labelAnchor.y} L${route.label.x} ${route.label.y}"/>` : '';
-        return `${leader}<path class="md-edge-hit" data-edge="${esc(edge.id)}" d="${esc(route.path)}"/><path class="md-edge${active ? ' md-active' : ''}${edge.polarity === 'neutral' ? ' md-neutral' : ''}${edge.id === dropEdgeId ? ' md-drop-target' : ''}" data-edge="${esc(edge.id)}" d="${esc(route.path)}"${terminal ? ` marker-end="url(#${terminal})"` : ''}/>`;
-      }).join('');
+        return `<path class="md-edge-hit" data-edge="${esc(edge.id)}" d="${esc(route.path)}"/><path class="md-edge${active ? ' md-active' : ''}${edge.polarity === 'neutral' ? ' md-neutral' : ''}${edge.id === dropEdgeId ? ' md-drop-target' : ''}" data-edge="${esc(edge.id)}" d="${esc(route.path)}"${terminal ? ` marker-end="url(#${terminal})"` : ''}/>`;
+      }).join(''), true);
+      renderRouteHandles();
       // Keep each node's DOM identity through pointerdown/up so the browser can
       // finish clicks and native double clicks even when selection is redrawn.
       const nodeLayer = $('.md-node-layer');
@@ -382,36 +551,66 @@
           element = doc.createElement('div');
           element.setAttribute('data-node', node.id); element.setAttribute('data-focus-key', `node:${node.id}`);
           element.setAttribute('role', 'button'); element.setAttribute('tabindex', '0');
-          element.innerHTML = `<span class="md-node-label"></span>${['top', 'right', 'bottom', 'left'].map(side => `<button type="button" class="md-port md-port-${side}" data-port="${esc(node.id)}" tabindex="-1"></button>`).join('')}`;
+          element.innerHTML = `<span class="md-node-label"></span>${['top', 'right', 'bottom', 'left'].map(side => `<button type="button" class="md-port md-port-${side}" data-port="${esc(node.id)}" tabindex="-1"></button>`).join('')}<button type="button" class="md-node-resize" data-node-resize="${esc(node.id)}" title="拖动调整宽高；方向键微调" aria-label="调整节点宽高"></button>`;
           nodeLayer.appendChild(element);
         }
         element.className = `md-node${selectedNodes.has(node.id) ? ' md-selected' : ''}${target ? ' md-drop-target' : ''}${connectingFrom === node.id ? ' md-connecting' : ''}`;
-        element.setAttribute('style', `left:${point.x}px;top:${point.y}px`);
+        element.setAttribute('style', `left:${point.x}px;top:${point.y}px;width:${point.width}px;height:${point.height}px`);
         element.setAttribute('aria-label', `节点 ${nodeLabel(node)}，双击编辑文字`);
         element.querySelector('.md-node-label').textContent = nodeLabel(node);
         element.querySelectorAll('[data-port]').forEach(port => port.setAttribute('aria-label', `从 ${nodeLabel(node)} 拉线`));
       });
-      $('.md-label-layer').innerHTML = scene.edges.map(edge => {
+      syncMarkup($('.md-label-layer'), scene.edges.map(edge => {
         const route = routeMap.get(edge.id);
         const from = positions[edge.from], to = positions[edge.to];
         if (!from || !to) return '';
-        const label = route && route.label || { x: (from.x + to.x + NODE_WIDTH) / 2, y: (from.y + to.y + NODE_HEIGHT) / 2, width: 194 };
-        return `<div class="md-edge-label${edge.id === selectedEdgeId ? ' md-selected' : ''}${edge.id === dropEdgeId ? ' md-drop-target' : ''}${route && route.blocked ? ' md-route-blocked' : ''}" data-edge="${esc(edge.id)}" style="left:${label.x}px;top:${label.y}px;width:${finite(label.width, 194)}px"><button type="button" class="md-edge-title" title="${esc(edge.label || '联系')}" data-edge-select="${esc(edge.id)}" data-focus-key="edge:${esc(edge.id)}" aria-label="编辑联系 ${esc(edgeName(edge))}">${esc(edge.label || '联系')}</button><div class="md-edge-evidence">${list(edge.evidence).map(chip).join('')}</div>${route && route.blocked ? '<span class="md-route-note">移动重叠节点以显示连线</span>' : ''}</div>`;
-      }).join('');
+        const label = route && route.label || { x: (from.x + from.width / 2 + to.x + to.width / 2) / 2, y: (from.y + from.height / 2 + to.y + to.height / 2) / 2, width: 194 };
+        return `<div class="md-edge-label${edge.label === '' && !list(edge.evidence).length ? ' md-unlabelled' : ''}${edge.id === selectedEdgeId ? ' md-selected' : ''}${edge.id === dropEdgeId ? ' md-drop-target' : ''}${route && route.blocked ? ' md-route-blocked' : ''}" data-edge="${esc(edge.id)}" style="left:${label.x}px;top:${label.y}px;width:${finite(label.width, 194)}px"><button type="button" class="md-edge-title" title="${esc(edge.label || '联系')}" data-edge-select="${esc(edge.id)}" data-focus-key="edge:${esc(edge.id)}" aria-label="编辑联系 ${esc(edgeName(edge))}">${esc(edge.label ?? '联系')}</button><div class="md-edge-evidence">${list(edge.evidence).map(binding => chip(binding, true)).join('')}</div>${route && route.blocked ? '<span class="md-route-note">移动重叠节点以显示连线</span>' : ''}</div>`;
+      }).join(''));
       $('.md-empty').hidden = !!scene.nodes.length;
       renderNodeEditor();
       protectAuthoredLabels();
       transform();
+      // A save ACK can arrive during a second gesture; bind the preview to the
+      // newly rendered DOM and geometry without resetting that gesture's origin.
+      if (activePointer?.kind === 'nodes') activePointer.paint = null;
+    }
+    function renderNodePreview() {
+      const active = activePointer;
+      if (!active || active.kind !== 'nodes') return;
+      if (!active.paint) active.paint = {
+        routes, positions: { ...positions }, edges: new Map(scene.edges.map(edge => [edge.id, edge])),
+        nodes: Array.from(shell.querySelectorAll('.md-node[data-node]')),
+        paths: Array.from(shell.querySelectorAll('.md-edge[data-edge], .md-edge-hit[data-edge]')),
+        labels: Array.from(shell.querySelectorAll('.md-edge-label[data-edge]'))
+      };
+      const paint = active.paint;
+      Object.assign(positions, active.preview);
+      const delta = (id, side, endpoint) => {
+        const next = active.preview[id], before = paint.positions[id]; if (!next || !before) return { x: 0, y: 0 };
+        const dw = finite(next.width, NODE_WIDTH) - finite(before.width, NODE_WIDTH), dh = finite(next.height, NODE_HEIGHT) - finite(before.height, NODE_HEIGHT);
+        const offsetX = endpoint ? (endpoint.x - before.x) / finite(before.width, NODE_WIDTH) : .5;
+        const offsetY = endpoint ? (endpoint.y - before.y) / finite(before.height, NODE_HEIGHT) : .5;
+        return { x: next.x - before.x + (side === 'right' ? dw : side === 'left' ? 0 : dw * offsetX), y: next.y - before.y + (side === 'bottom' ? dh : side === 'top' ? 0 : dh * offsetY) };
+      };
+      routes = paint.routes.map(route => { const edge = paint.edges.get(route.edgeId); return edge ? previewMechanismDrawingRoute(route, delta(edge.from, route.sourceSide, route.points[0]), delta(edge.to, route.targetSide, route.points.at(-1))) : route; });
+      const changed = new Map(routes.filter(route => { const edge = paint.edges.get(route.edgeId); return edge && (Object.hasOwn(active.preview, edge.from) || Object.hasOwn(active.preview, edge.to)); }).map(route => [route.edgeId, route]));
+      paint.nodes.forEach(element => { const point = active.preview[element.dataset.node]; if (point) { element.style.left = `${point.x}px`; element.style.top = `${point.y}px`; element.style.width = `${finite(point.width, NODE_WIDTH)}px`; element.style.height = `${finite(point.height, NODE_HEIGHT)}px`; } });
+      paint.paths.forEach(element => { const route = changed.get(element.dataset.edge); if (route) element.setAttribute('d', route.path); });
+      paint.labels.forEach(element => { const route = changed.get(element.dataset.edge); if (route?.label) { element.style.left = `${route.label.x}px`; element.style.top = `${route.label.y}px`; } });
     }
     function renderMatrix() {
       const nodes = list(snapshot.nodes), selected = edgeById(selectedEdgeId);
+      const markupKey = JSON.stringify([nodes.map(node => [node.id, nodeLabel(node)]), list(snapshot.edges).map(edge => [edge.id, edge.from, edge.to, list(edge.evidence).map(binding=>chip(binding,true))]), selectedEdgeId]);
+      if (markupKey === matrixMarkupKey) return;
+      matrixMarkupKey = markupKey;
       const pairs = new Map();
       list(snapshot.edges).forEach(edge => { const key = `${edge.from}\u0000${edge.to}`; if (!pairs.has(key)) pairs.set(key, []); pairs.get(key).push(edge); });
       if (!nodes.length) { matrixScroll.innerHTML = '<p class="md-matrix-empty">添加节点后，此处自动显示节点 × 节点矩阵。</p>'; return; }
       matrixScroll.innerHTML = `<table><thead><tr><th class="md-corner">终点 ↓ / 起点 →</th>${nodes.map(node => `<th scope="col" class="${selected && selected.from === node.id ? 'md-matrix-axis' : ''}">${esc(nodeLabel(node))}</th>`).join('')}</tr></thead><tbody>${nodes.map(to => `<tr><th scope="row" class="${selected && selected.to === to.id ? 'md-matrix-axis' : ''}">${esc(nodeLabel(to))}</th>${nodes.map(from => {
         const edges = pairs.get(`${from.id}\u0000${to.id}`) || [];
         const active = selected && selected.from === from.id && selected.to === to.id;
-        return `<td class="${active ? 'md-matrix-selected' : ''}${from.id === to.id ? ' md-matrix-diagonal' : ''}" data-matrix-from="${esc(from.id)}" data-matrix-to="${esc(to.id)}" tabindex="${from.id === to.id ? -1 : 0}" aria-label="${esc(nodeLabel(from))} 到 ${esc(nodeLabel(to))}，${edges.length ? `${edges.length} 条联系` : '暂无联系'}">${edges.flatMap(edge => list(edge.evidence)).map(chip).join('')}${edges.length && !edges.some(edge => list(edge.evidence).length) ? '<span class="md-cell-empty">待添加证据</span>' : ''}</td>`;
+        return `<td class="${active ? 'md-matrix-selected' : ''}${from.id === to.id ? ' md-matrix-diagonal' : ''}" data-matrix-from="${esc(from.id)}" data-matrix-to="${esc(to.id)}" tabindex="${from.id === to.id ? -1 : 0}" aria-label="${esc(nodeLabel(from))} 到 ${esc(nodeLabel(to))}，${edges.length ? `${edges.length} 条联系` : '暂无联系'}">${edges.flatMap(edge => list(edge.evidence)).map(binding=>chip(binding,true)).join('')}${edges.length && !edges.some(edge => list(edge.evidence).length) ? '<span class="md-cell-empty">待添加证据</span>' : ''}</td>`;
       }).join('')}</tr>`).join('')}</tbody></table>`;
     }
     function renderInspector() {
@@ -420,12 +619,12 @@
       inspector.hidden = !edge && !selectedNodes.size;
       if (inspector.hidden) { inspector.innerHTML = ''; return; }
       if (!edge) {
-        inspector.innerHTML = `<div class="md-inspector-heading"><strong>${node ? '节点' : `已选 ${selectedNodes.size} 个节点`}</strong><button type="button" data-action="deselect" aria-label="关闭编辑面板">×</button></div>${node ? `<label>节点文字<textarea data-field="node-label" data-node-id="${esc(node.id)}" data-focus-key="node-label:${esc(node.id)}" rows="3">${esc(nodeLabel(node))}</textarea></label><p class="md-help">拖动节点调整位置。按住 Shift 点击可多选。</p>` : '<p class="md-help">拖动其中一个节点可移动整组选区。</p>'}<button type="button" class="md-danger" data-action="delete-nodes">删除${selectedNodes.size > 1 ? '所选节点' : '节点'}</button>`;
+        inspector.innerHTML = `<div class="md-inspector-heading"><strong>${node ? '节点' : `已选 ${selectedNodes.size} 个节点`}</strong><button type="button" data-action="deselect" aria-label="关闭编辑面板">×</button></div>${node ? `<label>节点文字<textarea data-field="node-label" data-node-id="${esc(node.id)}" data-focus-key="node-label:${esc(node.id)}" rows="3">${esc(nodeLabel(node))}</textarea></label><div class="md-endpoints">${['width','height'].map(key => `<label>${key === 'width' ? '宽度' : '高度'}<input type="number" min="${key === 'width' ? 80 : 48}" max="${key === 'width' ? 1600 : 1200}" data-field="node-${key}" data-node-id="${esc(node.id)}" value="${Math.round(positions[node.id][key])}"></label>`).join('')}</div><button type="button" data-action="fit-node-text">适应文字高度</button><p class="md-help">拖动右下角调整宽高；标题自动换行。按住 Shift 点击可多选。</p>` : '<p class="md-help">拖动其中一个节点可移动整组选区。</p>'}<button type="button" class="md-danger" data-action="delete-nodes">删除${selectedNodes.size > 1 ? '所选节点' : '节点'}</button>`;
         return;
       }
       const binding = list(edge.evidence).find(item => item.id === selectedBindingId);
       const selectOptions = current => list(snapshot.nodes).map(item => `<option value="${esc(item.id)}"${item.id === current ? ' selected' : ''}>${esc(nodeLabel(item))}</option>`).join('');
-      inspector.innerHTML = `<div class="md-inspector-heading"><strong>联系</strong><button type="button" data-action="deselect" aria-label="关闭编辑面板">×</button></div><label>联系文字<textarea data-field="edge-label" data-focus-key="edge-label:${esc(edge.id)}" rows="2">${esc(edge.label || '')}</textarea></label><div class="md-endpoints"><label>起点<select data-field="edge-from" data-focus-key="edge-from">${selectOptions(edge.from)}</select></label><label>终点<select data-field="edge-to" data-focus-key="edge-to">${selectOptions(edge.to)}</select></label></div><div class="md-inspector-row"><select data-field="edge-polarity" data-focus-key="edge-polarity" aria-label="联系方向含义"><option value="positive"${edge.polarity === 'positive' ? ' selected' : ''}>促进 →</option><option value="negative"${edge.polarity === 'negative' ? ' selected' : ''}>抑制 ⊣</option><option value="neutral"${edge.polarity === 'neutral' ? ' selected' : ''}>关联 ···</option></select><button type="button" data-action="reverse">反向</button></div><div class="md-section-label">已绑定证据</div><div class="md-inspector-chips">${list(edge.evidence).map(chip).join('') || '<span class="md-help">拖入证据块，或从下方选择。</span>'}</div><p class="md-help">证据名称：点击定位；右键更改类型、替换或移除。</p>${binding ? `<section class="md-binding-editor"><strong>${esc(binding.panelLabel || '证据')}</strong><fieldset><legend>证据类型（可多选）</legend>${Object.entries(TYPE_NAMES).map(([value, label]) => `<label class="md-type-option"><input type="checkbox" data-binding-type="${value}" data-binding-id="${esc(binding.id)}" data-focus-key="type:${esc(binding.id)}:${value}"${list(binding.types).includes(value) ? ' checked' : ''}><span class="${mechanismDrawingEvidenceClass([value])}">${label}</span></label>`).join('')}</fieldset><div class="md-inspector-row"><button type="button" data-action="replace-binding">替换证据</button><button type="button" class="md-danger" data-action="remove-binding">移除</button></div></section>` : ''}<label class="md-source-picker-label">从解图添加证据<select class="md-source-picker" data-focus-key="source-picker"><option value="">选择 Figure 证据块</option>${list(snapshot.sources).map(source => `<option value="${esc(sourceKey(source.figureId, source.blockId))}">${esc(source.panelLabel || source.title || source.blockId)}${source.title ? ` · ${esc(source.title).slice(0, 160)}` : ''}</option>`).join('')}</select></label><button type="button" data-action="bind-source"${list(snapshot.sources).length ? '' : ' disabled'}>添加到此联系</button><div class="md-inspector-bottom"><button type="button" class="md-danger" data-action="delete-edge">删除联系</button></div>`;
+      inspector.innerHTML = `<div class="md-inspector-heading"><strong>联系</strong><button type="button" data-action="deselect" aria-label="关闭编辑面板">×</button></div><label>联系文字<textarea data-field="edge-label" data-focus-key="edge-label:${esc(edge.id)}" rows="2">${esc(edge.label || '')}</textarea></label><div class="md-endpoints"><label>起点<select data-field="edge-from" data-focus-key="edge-from">${selectOptions(edge.from)}</select></label><label>终点<select data-field="edge-to" data-focus-key="edge-to">${selectOptions(edge.to)}</select></label></div><div class="md-inspector-row"><select data-field="edge-polarity" data-focus-key="edge-polarity" aria-label="联系方向含义"><option value="positive"${edge.polarity === 'positive' ? ' selected' : ''}>促进 →</option><option value="negative"${edge.polarity === 'negative' ? ' selected' : ''}>抑制 ⊣</option><option value="neutral"${edge.polarity === 'neutral' ? ' selected' : ''}>关联 ···</option></select><button type="button" data-action="reverse">反向</button></div><div class="md-inspector-row"><button type="button" data-action="edit-route">编辑拐点</button><button type="button" data-action="auto-route">恢复自动走线</button></div><p class="md-help">拖动连线两端的圆点到节点边缘；双击连线调整拐点；拖动标签中心圆点沿线移动文字与证据。</p><div class="md-section-label">已绑定证据</div><div class="md-inspector-chips">${list(edge.evidence).map(item => '<div class="md-binding-row">' + chip(item) + '<button type="button" data-remove-binding="' + esc(item.id) + '" aria-label="移除此证据绑定" title="仅移除绑定，保留原证据">×</button></div>').join('') || '<span class="md-help">拖入证据块，或从下方选择。</span>'}</div><p class="md-help">证据名称：点击定位；右键更改类型、替换或移除。</p>${binding ? `<section class="md-binding-editor"><strong>${esc(binding.panelLabel || '证据')}</strong><fieldset><legend>证据类型（可多选）</legend>${Object.entries(TYPE_NAMES).map(([value, label]) => `<label class="md-type-option"><input type="checkbox" data-binding-type="${value}" data-binding-id="${esc(binding.id)}" data-focus-key="type:${esc(binding.id)}:${value}"${list(binding.types).includes(value) ? ' checked' : ''}><span class="${mechanismDrawingEvidenceClass([value])}">${label}</span></label>`).join('')}</fieldset><div class="md-inspector-row"><button type="button" data-action="replace-binding">替换证据</button><button type="button" class="md-danger" data-action="remove-binding">移除</button></div></section>` : ''}<label class="md-source-picker-label">从解图添加证据<select class="md-source-picker" data-focus-key="source-picker"><option value="">选择 Figure 证据块</option>${list(snapshot.sources).map(source => `<option value="${esc(sourceKey(source.figureId, source.blockId))}">${esc(source.panelLabel || source.title || source.blockId)}${source.title ? ` · ${esc(source.title).slice(0, 160)}` : ''}</option>`).join('')}</select></label><button type="button" data-action="bind-source"${list(snapshot.sources).length ? '' : ' disabled'}>添加到此联系</button><div class="md-inspector-bottom"><button type="button" class="md-danger" data-action="delete-edge">删除联系</button></div>`;
     }
     function addRelationContextFields() {
       const edge = edgeById(selectedEdgeId); if (!edge || storyDraft || inspector.hidden) return;
@@ -436,11 +635,16 @@
     }
     function render() {
       if (destroyed || !shown) return;
-      const focus = focusedState(), matrixOffset = { x: matrixScroll.scrollLeft, y: matrixScroll.scrollTop }, inspectorOffset = inspector.scrollTop;
+      const focus = focusedState(), matrixOffset = hasRendered ? { x: matrixScroll.scrollLeft, y: matrixScroll.scrollTop } : { x: 0, y: 0 }, inspectorOffset = hasRendered ? inspector.scrollTop : 0;
+      hasRendered = true;
       scene = selectMechanismDrawingScene(snapshot, view);
       renderStory(); renderGraph(); renderMatrix(); renderInspector(); addRelationContextFields(); updateToolbar();
       protectAuthoredLabels();
-      matrixScroll.scrollLeft = matrixOffset.x; matrixScroll.scrollTop = matrixOffset.y; inspector.scrollTop = inspectorOffset;
+      // Fresh content already starts at zero. Writing zero here forces a full
+      // table/canvas layout before the browser can paint the opening interface.
+      if (matrixOffset.x) matrixScroll.scrollLeft = matrixOffset.x;
+      if (matrixOffset.y) matrixScroll.scrollTop = matrixOffset.y;
+      if (inspectorOffset) inspector.scrollTop = inspectorOffset;
       restoreFocus(focus);
     }
     function update(next) {
@@ -448,7 +652,7 @@
       const newContext = contextOf(next), newSession = text(next.sessionId);
       const changedDocument = (previousContext && newContext !== previousContext) || (previousSession && newSession !== previousSession);
       if (!changedDocument && contextOf(snapshot) === newContext && Number.isFinite(snapshot.revision) && Number.isFinite(next.revision) && next.revision < snapshot.revision) return;
-      if (changedDocument) { selectedNodes.clear(); selectedEdgeId = ''; selectedBindingId = ''; clearNodeEditor(); connectingFrom = ''; activePointer = null; sceneSignature = ''; storyDraft = null; initialFitDone = false; initialFitScheduled = false; if (fitObserver) fitObserver.disconnect(); pendingViewVersion = 0; if (pendingViewTimer) win.clearTimeout(pendingViewTimer); pendingViewTimer = null; }
+      if (changedDocument) { matrixVisible = null; selectedNodes.clear(); selectedEdgeId = ''; selectedBindingId = ''; clearNodeEditor(); connectingFrom = ''; activePointer = null; sceneSignature = ''; storyDraft = null; initialFitDone = false; initialFitScheduled = false; if (fitObserver) fitObserver.disconnect(); pendingViewVersion = 0; if (pendingViewTimer) win.clearTimeout(pendingViewTimer); pendingViewTimer = null; }
       previousContext = newContext; previousSession = newSession; snapshot = next;
       const drawing = next.drawing || {};
       if (!activePointer && !pendingViewTimer && !pendingViewVersion) {
@@ -482,7 +686,7 @@
       const archived = match && match.kind === 'archive';
       const unavailable = binding.unresolved || (!binding.legacy && (!match || archived));
       const archiveNote = archived ? `<p class="md-help">合并前的来源记录（只读）${match.contentMatched ? '' : '；这是合并前最后保存的历史来源，当前绑定仍需复核。'}</p>` : '';
-      tooltip.innerHTML = `<strong data-i18n-ignore>${esc(binding.panelLabel || source.panelLabel || t('证据'))}</strong>${archiveNote}${source.title ? `<p data-i18n-ignore>${esc(source.title)}</p>` : ''}${[['方法', source.method], ['观察', source.observation], ['结论', source.conclusion]].filter(([, value]) => value).map(([label, value]) => `<p><b>${label}</b> <span data-i18n-ignore>${esc(value)}</span></p>`).join('')}<p>此联系的证据类型：${esc(list(binding.types).map(type => t(TYPE_NAMES[type])).filter(Boolean).join(' / ') || t('未分类'))}</p>${unavailable ? '<p>原证据块暂不可用；请复核、替换或移除绑定。</p>' : '<p class="md-help">点击在解图中定位 · 右键更改</p>'}`;
+      tooltip.innerHTML = `<strong data-i18n-ignore>${esc(binding.panelLabel || source.panelLabel || t('证据'))}</strong>${archiveNote}<p data-i18n-ignore>${esc(mechanismDrawingEvidenceLabel(snapshot, binding))}</p>${[['方法', source.method], ['观察', source.observation], ['结论', source.conclusion]].filter(([, value]) => value).map(([label, value]) => `<p><b>${label}</b> <span data-i18n-ignore>${esc(value)}</span></p>`).join('')}<p>此联系的证据类型：${esc(list(binding.types).map(type => t(TYPE_NAMES[type])).filter(Boolean).join(' / ') || t('未分类'))}</p>${unavailable ? '<p>原证据块暂不可用；请复核、替换或移除绑定。</p>' : '<p class="md-help">点击在解图中定位 · 右键更改</p>'}`;
       tooltip.hidden = false;
       const owner = edgeById(binding.edgeId);
       if (owner) { const relationship = doc.createElement('p'); relationship.setAttribute('data-i18n-ignore', ''); relationship.textContent = `${edgeName(owner)} · ${owner.label || t('联系')}${owner.context && owner.context.summary ? ` · ${owner.context.summary}` : ''}`; tooltip.insertBefore(relationship, tooltip.children[1] || null); }
@@ -517,28 +721,45 @@
       const existing = list(snapshot.edges).find(edge => edge.from === from && edge.to === to);
       if (existing && !allowParallel) { selectEdge(existing.id); notify('已选中现有联系；不同条件下的关系可用“另建联系”。'); return; }
       const id = uid('edge');
-      dispatch({ type: 'add_edge', edge: { id, from, to, label: t('联系'), polarity: 'neutral' } }, () => { selectEdge(id); const input = $('[data-field="edge-label"]'); if (input) { input.focus(); input.select(); } });
+      // Keep the new connection visible while its authoritative save is pending.
+      // This temporary element is never part of the snapshot or history.
+      const preview = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const a = positions[from], b = positions[to];
+      if (a && b) {
+        const x1 = a.x + a.width / 2, y1 = a.y + a.height / 2, x2 = b.x + b.width / 2, y2 = b.y + b.height / 2;
+        preview.setAttribute('class', 'md-edge md-neutral'); preview.setAttribute('data-pending-kind', 'edge');
+        preview.setAttribute('d', `M${x1} ${y1} L${(x1 + x2) / 2} ${y1} L${(x1 + x2) / 2} ${y2} L${x2} ${y2}`);
+        preview.style.opacity = '.5'; preview.style.pointerEvents = 'none'; $('.md-svg').appendChild(preview);
+      }
+      notify('正在保存新联系…');
+      dispatch({ type: 'add_edge', edge: { id, from, to, label: t('联系'), polarity: 'neutral' } }, () => { selectEdge(id); const input = $('[data-field="edge-label"]'); if (input) { input.focus(); input.select(); } }).finally(() => preview.remove());
     }
-    async function addNode() {
+    async function addNode(point) {
       const context = previousContext, session = previousSession;
       if (!await commitNodeEditor() || destroyed || !shown || context !== previousContext || session !== previousSession) return;
       const id = uid('node');
+      let preview;
       dispatch(() => {
         // Resolve after preceding additions are acknowledged, including rapid clicks.
         layoutGraph();
         const rect = canvas.getBoundingClientRect(), origin = worldPoint(rect.left + 12, rect.top + 12);
-        const position = mechanismDrawingFindNodePosition(positions, { ...origin, width: Math.max(0, rect.width - 24) / viewport.zoom, height: Math.max(0, rect.height - 24) / viewport.zoom });
+        const position = point ? { x: point.x - NODE_WIDTH / 2, y: point.y - NODE_HEIGHT / 2 }
+          : mechanismDrawingFindNodePosition(positions, { ...origin, width: Math.max(0, rect.width - 24) / viewport.zoom, height: Math.max(0, rect.height - 24) / viewport.zoom });
+        preview = doc.createElement('div'); preview.className = 'md-node'; preview.setAttribute('data-pending-kind', 'node');
+        preview.setAttribute('aria-label', t('新节点，保存中')); preview.textContent = t('新节点');
+        Object.assign(preview.style, { left: `${position.x}px`, top: `${position.y}px`, opacity: '.5', pointerEvents: 'none', borderStyle: 'dashed' });
+        $('.md-node-layer').appendChild(preview); notify('正在保存新节点…');
         return { type: 'add_node', node: { id, label: t('新节点') }, position };
       }, () => {
         clearNodeEditor(); selectedNodes = new Set([id]); selectedEdgeId = ''; selectedBindingId = ''; storyDraft = null;
         panMode = false; connectMode = false; spaceDown = false; connectingFrom = ''; render();
         revealNode(id); startNodeEdit(id);
-      });
+      }).finally(() => preview?.remove());
     }
     function revealNode(id) {
       const point = positions[id]; if (!point) return;
       const rect = canvas.getBoundingClientRect(), before = { ...viewport }, padding = 12;
-      for (const [axis, size, extent] of [['x', NODE_WIDTH, rect.width], ['y', NODE_HEIGHT, rect.height]]) {
+      for (const [axis, size, extent] of [['x', point.width, rect.width], ['y', point.height, rect.height]]) {
         const start = point[axis] * viewport.zoom + viewport[axis], length = size * viewport.zoom;
         if (length + padding * 2 > extent) viewport[axis] = (extent - length) / 2 - point[axis] * viewport.zoom;
         else if (start < padding) viewport[axis] += padding - start;
@@ -580,7 +801,7 @@
         editor.setAttribute('aria-label', '编辑节点文字，Enter 保存，Shift+Enter 换行，Escape 取消'); editor.setAttribute('data-focus-key', `inline:${editorNodeId}`);
         world.appendChild(editor);
       }
-      editor.style.left = `${position.x}px`; editor.style.top = `${position.y}px`;
+      editor.style.left = `${position.x}px`; editor.style.top = `${position.y}px`; editor.style.width = `${position.width}px`;
       sizeNodeEditor(editor);
     }
     function commitNodeEditor() {
@@ -668,9 +889,13 @@
         dispatch({ type: 'set_story', story: submitted }, () => { const newerEdits = storyDraft && JSON.stringify(storyDraft) !== submittedKey; if (!newerEdits) storyDraft = null; view = { mode: 'main', activeStageId }; render(); saveView(); notify(newerEdits ? '已保存上次提交的步骤；编辑面板中的新修改仍待保存。' : '已保存论证步骤。拖动进度条逐步查看，节点位置保持不变。'); });
       }
     }
+    function resizeNode(id, width, height) {
+      const position = positions[id]; if (!position || !Number.isFinite(width) || !Number.isFinite(height)) return;
+      return dispatch({ type: 'move_nodes', positions: [{ nodeId: id, x: position.x, y: position.y, width: clamp(width, 80, 1600), height: clamp(height, 48, 1200), pinned: true }] });
+    }
     function onAction(action) {
+      if (action === 'agent') { safeCallback(opts.onAgent); return; }
       if (action === 'close') { const context = previousContext, session = previousSession; commitNodeEditor().then(saved => { if (saved && !destroyed && context === previousContext && session === previousSession) { if (typeof opts.onClose === 'function') opts.onClose(); close(); } }); }
-      else if (action === 'expand') { expanded = !expanded; updateToolbar(); }
       else if (action === 'add-node') addNode();
       else if (action === 'select') { panMode = false; connectMode = false; spaceDown = false; connectingFrom = ''; updateToolbar(); }
       else if (action === 'connect') { connectMode = !connectMode; panMode = false; connectingFrom = ''; updateToolbar(); notify(connectMode ? '依次点击起点和终点，或从节点端口拉线。' : '连线工具已关闭。'); }
@@ -678,7 +903,15 @@
       else if (action === 'undo' || action === 'redo') dispatch({ type: action });
       else if (action === 'zoom-in' || action === 'zoom-out') zoomAt(viewport.zoom * (action === 'zoom-in' ? 1.15 : 1 / 1.15));
       else if (action === 'fit') fit();
-      else if (action === 'matrix') { matrixVisible = !matrixVisible; updateToolbar(); }
+      else if (action === 'fit-node-text') {
+        const id = Array.from(selectedNodes)[0], p = positions[id];
+        const element = Array.from($('.md-node-layer').querySelectorAll('[data-node]')).find(el => el.dataset.node === id);
+        if (p && element) resizeNode(id, p.width, Math.max(NODE_HEIGHT, element.querySelector('.md-node-label').scrollHeight + 22));
+      }
+      else if (action === 'snap-assist') { snapAssist = !snapAssist; $('[data-action="snap-assist"]').setAttribute('aria-pressed',String(snapAssist)); renderSnapGuides(null); }
+      else if (action === 'edit-route') { routeEditingId=selectedEdgeId;renderRouteHandles();notify('拖动圆点调整拐点；拖动小方点平移线段。'); }
+      else if (action === 'auto-route') { routeEditingId=''; dispatch({type:'set_edge_route',edgeId:selectedEdgeId,route:null}); }
+      else if (action === 'matrix') { matrixVisible = !(matrixVisible ?? list(snapshot.edges).some(edge=>list(edge.evidence).length>0)); updateToolbar(); }
       else if (action === 'story') { openStoryEditor(); }
       else if (action === 'main' || action === 'all') { view.mode = action; render(); saveView(); }
       else if (action === 'deselect') { selectedNodes.clear(); selectedEdgeId = ''; selectedBindingId = ''; storyDraft = null; render(); }
@@ -698,6 +931,7 @@
       const menuAction = target.closest('[data-menu-action]');
       if (menuAction) { const id = menuBindingId, action = menuAction.dataset.menuAction; closeMenu(); if (action === 'locate') locateBinding(id); else if (action === 'remove') dispatch(mechanismDrawingBindingCommand(bindingById(id), 'remove')); else { selectedBindingId = id; renderInspector(); notify('在“从解图添加证据”中选择新证据，再点击“替换证据”。'); const picker = $('.md-source-picker'); if (picker) picker.focus(); } return; }
       if (!target.closest('.md-menu')) closeMenu();
+      const remove = target.closest('[data-remove-binding]'); if (remove) { dispatch(mechanismDrawingBindingCommand(bindingById(remove.dataset.removeBinding), 'remove')); return; }
       const binding = target.closest('[data-binding]'); if (binding) { locateBinding(binding.dataset.binding); return; }
       const action = target.closest('[data-action]'); if (action) { onAction(action.dataset.action); return; }
       const tick = target.closest('[data-stage-index]'); if (tick) { setStage(Number(tick.dataset.stageIndex), true, true); return; }
@@ -707,8 +941,16 @@
       if (node && connectMode) { if (connectingFrom) { const from = connectingFrom; connectingFrom = ''; addEdge(from, node.dataset.node); } else { connectingFrom = node.dataset.node; renderGraph(); notify(`已选择起点 ${nodeLabel(nodeById(connectingFrom))}，请选择终点。`); } }
     });
     listen(shell, 'dblclick', event => {
-      const node = event.target.closest('[data-node]'); if (node && !event.target.closest('[data-port]')) { startNodeEdit(node.dataset.node); return; }
-      const cell = event.target.closest('[data-matrix-from]'); if (cell && !event.target.closest('[data-binding]')) addEdge(cell.dataset.matrixFrom, cell.dataset.matrixTo);
+      if(event.target.closest('.md-canvas-help'))return;
+      const explicitEdge=event.target.closest('[data-edge],[data-edge-select]');
+      const routeId = !event.target.closest('[data-node],button:not(.md-edge-title),input,textarea,[data-binding]') && canvas.contains(event.target) && (explicitEdge?.dataset.edge||explicitEdge?.dataset.edgeSelect||routeHit(worldPoint(event.clientX,event.clientY)));
+      if (routeId) { event.preventDefault(); selectEdge(routeId);routeEditingId=routeId;renderRouteHandles();notify('拖动圆点调整拐点；拖动小方点平移线段。');return; }
+      const node = event.target.closest('[data-node]'); if (node && !event.target.closest('[data-port],[data-node-resize]')) { startNodeEdit(node.dataset.node); return; }
+      const cell = event.target.closest('[data-matrix-from]'); if (cell && !event.target.closest('[data-binding]')) { addEdge(cell.dataset.matrixFrom, cell.dataset.matrixTo); return; }
+      if (event.button === 0 && canvas.contains(event.target) && !node &&
+          !event.target.closest('[data-edge], [data-edge-select], [data-binding], button, input, textarea, select, [contenteditable]')) {
+        event.preventDefault(); addNode(worldPoint(event.clientX, event.clientY));
+      }
     });
     listen(shell, 'change', event => {
       const target = event.target;
@@ -721,6 +963,7 @@
       const field = target.dataset.field;
       if (field === 'edge-choice') { selectEdge(target.value); return; }
       if (field === 'edge-context') { const edge = edgeById(selectedEdgeId); if (edge) dispatch({ type: 'update_edge', edgeId: edge.id, context: { ...edge.context, summary: target.value.trim() } }); return; }
+      if (field === 'node-width' || field === 'node-height') { const p = positions[target.dataset.nodeId]; if (p && target.value.trim()) resizeNode(target.dataset.nodeId, field === 'node-width' ? Number(target.value) : p.width, field === 'node-height' ? Number(target.value) : p.height); return; }
       if (field === 'node-label') { if (target.value.trim()) dispatch({ type: 'update_node', nodeId: target.dataset.nodeId, label: target.value.trim() }); else notify('节点文字不能为空。', true); }
       else if (field && selectedEdgeId) {
         const edge = edgeById(selectedEdgeId); if (!edge) return;
@@ -745,17 +988,29 @@
     }
     function previewConnection(point) {
       const from = positions[connectingFrom]; if (!from) return;
-      $('.md-connection-preview').setAttribute('d', `M${from.x + NODE_WIDTH / 2} ${from.y + NODE_HEIGHT / 2} L${point.x} ${point.y}`);
+      $('.md-connection-preview').setAttribute('d', `M${from.x + from.width / 2} ${from.y + from.height / 2} L${point.x} ${point.y}`);
     }
     listen(canvas, 'pointerdown', event => {
-      if (event.button !== 0 && event.button !== 1 || event.target.closest('.md-node-editor,[data-binding]')) return;
+      if (event.button !== 0 && event.button !== 1 || event.target.closest('.md-node-editor,[data-binding],.md-canvas-tools,.md-canvas-zoom,.md-canvas-help')) return;
       tooltip.hidden = true; closeMenu();
-      const target = event.target.closest('[data-node]'), port = event.target.closest('[data-port]');
-      const mode = mechanismDrawingGestureMode({ pan: panMode || spaceDown, middle: event.button === 1, port: !!port, object: !!target, edge: !!event.target.closest('.md-edge-label,[data-edge]'), shift: !!event.shiftKey, connectMode });
+      const handle=event.target.closest('[data-reconnect],[data-route-bend],[data-route-segment],[data-route-label]');
+      if (handle && selectedEdgeId) {
+        const edge=edgeById(selectedEdgeId),route=routes.find(r=>r.edgeId===selectedEdgeId);if(!edge||!route||route.blocked)return;
+        event.preventDefault();const end=handle.dataset.reconnect;
+        activePointer={kind:handle.hasAttribute('data-route-label')?'label':end?'reconnect':'route',id:event.pointerId,edgeId:edge.id,end,route,config:edgeRouteConfig(edge,route),point:worldPoint(event.clientX,event.clientY),editKind:handle.hasAttribute('data-route-bend')?'bend':'segment',index:Number(handle.dataset.routeBend??handle.dataset.routeSegment),moved:false};
+        canvas.setPointerCapture(event.pointerId);return;
+      }
+      const target = event.target.closest('[data-node]'), port = event.target.closest('[data-port]'), resize = event.target.closest('[data-node-resize]');
+      const mode = resize ? 'resize' : mechanismDrawingGestureMode({ pan: panMode || spaceDown, middle: event.button === 1, port: !!port, object: !!target, edge: !!event.target.closest('.md-edge-label,[data-edge]'), shift: !!event.shiftKey, connectMode });
       if (mode === 'connect') { event.preventDefault(); connectingFrom = port.dataset.port; activePointer = { kind: 'connect', id: event.pointerId }; canvas.setPointerCapture(event.pointerId); previewConnection(worldPoint(event.clientX, event.clientY)); return; }
       if (mode === 'edge' || mode === 'connect-click') return;
       const point = worldPoint(event.clientX, event.clientY);
-      if (mode === 'pan') activePointer = { kind: 'pan', id: event.pointerId, x: event.clientX, y: event.clientY, viewport: { ...viewport } };
+      if (mode === 'pan') activePointer = { kind: 'pan', id: event.pointerId, x: event.clientX, y: event.clientY, viewport: { ...viewport }, moved:false, deselectOnClick:event.button===0&&!panMode&&!spaceDown&&!target&&!event.target.closest('[data-edge],.md-edge-label') };
+      else if (mode === 'resize') {
+        const id = resize.dataset.nodeResize; selectedNodes = new Set([id]); selectedEdgeId = ''; selectedBindingId = '';
+        const originals = { [id]: { ...positions[id] } };
+        activePointer = { kind: 'nodes', resizingId: id, id: event.pointerId, start: point, originals, preview: { ...originals }, moved: false }; render();
+      }
       else if (mode === 'move') {
         const id = target.dataset.node;
         if (event.shiftKey || event.ctrlKey || event.metaKey || !selectedNodes.has(id)) selectedNodes = new Set(interaction.canvasToggleSelection(Array.from(selectedNodes), id, !!(event.shiftKey || event.ctrlKey || event.metaKey)));
@@ -773,15 +1028,37 @@
     listen(canvas, 'pointermove', event => {
       if (!activePointer || activePointer.id !== event.pointerId) return;
       const point = worldPoint(event.clientX, event.clientY), active = activePointer;
-      if (active.kind === 'pan') { viewport = interaction.canvasPan(active.viewport, { x: active.x, y: active.y }, { x: event.clientX, y: event.clientY }); transform(); }
+      if (active.kind === 'pan') { active.moved ||= Math.hypot(event.clientX-active.x,event.clientY-active.y)>6; viewport = interaction.canvasPan(active.viewport, { x: active.x, y: active.y }, { x: event.clientX, y: event.clientY }); transform(); }
+      else if (active.kind === 'label') {
+        active.moved ||= Math.hypot(point.x-active.point.x,point.y-active.point.y)*viewport.zoom>3;
+        active.labelPosition=interaction.canvasProjectRoutePoint(active.route.points,point);
+        const label=Array.from(shell.querySelectorAll('.md-edge-label')).find(e=>e.dataset.edge===active.edgeId);
+        if(label&&active.labelPosition){label.style.left=active.labelPosition.x+'px';label.style.top=active.labelPosition.y+'px';}
+        const handle=$('[data-route-label]');if(handle&&active.labelPosition){handle.setAttribute('cx',active.labelPosition.x);handle.setAttribute('cy',active.labelPosition.y);}
+      }
+      else if (active.kind === 'route') {
+        active.moved=true;active.points=interaction.canvasEditRoute(active.route.points,active.editKind,active.index,point);
+        $('.md-connection-preview').setAttribute('d',active.points.map((p,i)=>(i?'L':'M')+' '+p.x+' '+p.y).join(' '));
+      } else if (active.kind === 'reconnect') {
+        const edge=edgeById(active.edgeId),other=active.end==='source'?edge.to:edge.from;
+        active.hit=portTarget(point,[other]);active.moved=true;showPortTarget(active.hit);
+        const p=active.hit?.point||point,a=active.end==='source'?active.route.points.at(-1):active.route.points[0];
+        $('.md-connection-preview').setAttribute('d','M '+a.x+' '+a.y+' L '+p.x+' '+a.y+' L '+p.x+' '+p.y);
+      }
       else if (active.kind === 'nodes') {
         const dx = point.x - active.start.x, dy = point.y - active.start.y; active.moved = active.moved || Math.abs(dx) + Math.abs(dy) > 3;
-        Object.entries(active.originals).forEach(([id, original]) => { active.preview[id] = { ...original, x: original.x + dx, y: original.y + dy }; }); renderGraph();
+        let adjustX=0,adjustY=0;const firstId=active.resizingId||Object.keys(active.originals)[0],first=active.originals[firstId];
+        const raw=active.resizingId?{...first,width:clamp(first.width+dx,80,1600),height:clamp(first.height+dy,48,1200)}:{...first,x:first.x+dx,y:first.y+dy};
+        const snap=interaction.canvasSnapBox(raw,Object.entries(positions).filter(([id])=>!Object.hasOwn(active.originals,id)).map(([,p])=>p),{enabled:snapAssist,resize:!!active.resizingId,zoom:viewport.zoom});
+        if(!active.resizingId){adjustX=snap.box.x-raw.x;adjustY=snap.box.y-raw.y;}renderSnapGuides(snap);
+        Object.entries(active.originals).forEach(([id, original]) => { active.preview[id] = active.resizingId === id
+          ? { ...original, width: clamp(snap.box.width,80,1600), height: clamp(snap.box.height,48,1200) }
+          : { ...original, x: original.x + dx + adjustX, y: original.y + dy + adjustY }; }); renderNodePreview();
       } else if (active.kind === 'connect') previewConnection(point);
       else if (active.kind === 'select') {
         const box = { x: Math.min(active.start.x, point.x), y: Math.min(active.start.y, point.y), width: Math.abs(point.x - active.start.x), height: Math.abs(point.y - active.start.y) };
         const element = $('.md-selection-box'); element.hidden = false; Object.entries(box).forEach(([key, value]) => { element.style[key === 'x' ? 'left' : key === 'y' ? 'top' : key] = `${value}px`; });
-        selectedNodes = new Set(active.additive); scene.nodes.forEach(node => { const position = positions[node.id]; if (position.x + NODE_WIDTH >= box.x && position.x <= box.x + box.width && position.y + NODE_HEIGHT >= box.y && position.y <= box.y + box.height) selectedNodes.add(node.id); });
+        selectedNodes = new Set(active.additive); scene.nodes.forEach(node => { const position = positions[node.id]; if (position.x + position.width >= box.x && position.x <= box.x + box.width && position.y + position.height >= box.y && position.y <= box.y + box.height) selectedNodes.add(node.id); });
         shell.querySelectorAll('.md-node').forEach(element => element.classList.toggle('md-selected', selectedNodes.has(element.dataset.node)));
       }
     });
@@ -791,18 +1068,57 @@
       if (active.captureTarget && active.captureTarget.hasPointerCapture(event.pointerId)) active.captureTarget.releasePointerCapture(event.pointerId);
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       $('.md-selection-box').hidden = true; $('.md-connection-preview').setAttribute('d', '');
+      renderSnapGuides(null);showPortTarget(null);
+      if(active.kind==='label'){
+        if(!cancelled&&active.moved&&active.labelPosition)dispatch({type:'set_edge_route',edgeId:active.edgeId,route:{...active.config,waypoints:active.route.points.slice(1,-1),labelPosition:active.labelPosition}});
+        else render();return;
+      }
+      if ((active.kind==='route'||active.kind==='reconnect') && active.moved && !cancelled) {
+        const edge=edgeById(active.edgeId); if(!edge)return;
+        let command;
+        if(active.kind==='route' && active.points){
+          const route={...active.config,waypoints:active.points.slice(1,-1)};
+          const check=apiHost().routeMechanismDrawingEdges({nodes:scene.nodes,positions,edges:[{...edge,...route}]})[0];
+          if(check?.blocked){notify('路线穿过节点，请将拐点移到空白处。',true);render();return;}
+          command={type:'set_edge_route',edgeId:edge.id,route};
+        } else if(active.hit){
+          const field=active.end==='source'?'from':'to',portField=active.end+'Port',route={...active.config,[portField]:active.hit.port};
+          const setRoute={type:'set_edge_route',edgeId:edge.id,route};
+          command=edge[field]===active.hit.id?setRoute:{type:'batch',commands:[{type:'update_edge',edgeId:edge.id,[field]:active.hit.id},setRoute]};
+        }
+        if(command)dispatch(command);else render();return;
+      }
       if (active.kind === 'nodes' && active.moved && !cancelled) {
         const persisted = snapshot.drawing && snapshot.drawing.positions || {};
-        const frozen = Object.entries(positions).filter(([id]) => Object.hasOwn(active.preview, id) || !persisted[id]).map(([nodeId, point]) => ({ nodeId, x: point.x, y: point.y, ...(Object.hasOwn(active.preview, nodeId) ? { pinned: true } : {}) }));
-        dispatch({ type: 'move_nodes', positions: frozen });
+        const frozen = Object.entries(positions).filter(([id]) => Object.hasOwn(active.preview, id) || !persisted[id]).map(([nodeId, point]) => ({ nodeId, x: point.x, y: point.y, ...(active.resizingId === nodeId ? { width: point.width, height: point.height } : {}), ...(Object.hasOwn(active.preview, nodeId) ? { pinned: true } : {}) }));
+        const context = previousContext, session = previousSession;
+        // The last pointermove already painted these positions. Keep that preview
+        // until dispatch's ACK update; repainting here would route the old snapshot
+        // and rebuild the matrix/inspector before doing the same work for the ACK.
+        dispatch({ type: 'move_nodes', positions: frozen }).then(acknowledged => {
+          if (!acknowledged && !destroyed && context === previousContext && session === previousSession) render();
+        });
+        updateToolbar();
+        return;
       }
       else if (active.kind === 'connect') { const from = connectingFrom, to = hitNode(event.clientX, event.clientY); connectingFrom = ''; if (!cancelled && to) addEdge(from, to.id); }
-      else if (active.kind === 'pan' && !cancelled) saveView();
+      else if (active.kind === 'pan') {
+        if (!cancelled && (viewport.x !== active.viewport.x || viewport.y !== active.viewport.y)) saveView();
+        if(!cancelled&&!active.moved&&active.deselectOnClick){
+          selectedNodes.clear();selectedEdgeId='';selectedBindingId='';routeEditingId='';storyDraft=null;
+          shell.querySelectorAll('.md-selected').forEach(e=>e.classList.remove('md-selected'));
+          shell.querySelectorAll('.md-edge').forEach(e=>e.classList.toggle('md-active',e.dataset.edge===dropEdgeId));
+          renderRouteHandles();renderMatrix();renderInspector();
+        }
+        // A click/double click on blank canvas is not a persisted pan and does
+        // not need a graph redraw before the browser delivers the dblclick.
+        return;
+      }
       render();
     }
     listen(canvas, 'pointerup', event => endPointer(event, false));
     listen(canvas, 'pointercancel', event => endPointer(event, true));
-    listen(canvas, 'wheel', event => { if (event.target.closest('.md-node-editor,.md-node-label')) return; event.preventDefault(); zoomAt(viewport.zoom * Math.exp(-event.deltaY * .0015), event.clientX, event.clientY); }, { passive: false });
+    listen(canvas, 'wheel', event => { if (event.target.closest('.md-node-editor,.md-node-label,.md-canvas-help')) return; event.preventDefault(); zoomAt(viewport.zoom * Math.exp(-event.deltaY * .0015), event.clientX, event.clientY); }, { passive: false });
 
     function dropTarget(event) {
       const element = event.target.closest && event.target.closest('.md-edge-label[data-edge]');
@@ -841,7 +1157,12 @@
     listen(resizer, 'pointerup', event => { if (!resizing) return; resizing = null; resizer.releasePointerCapture(event.pointerId); saveView(); });
     listen(resizer, 'keydown', event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); matrixHeight = clamp(matrixHeight + (event.key === 'ArrowUp' ? 24 : -24), 96, 500); updateToolbar(); saveView(); } });
     listen(shell, 'keydown', event => {
-      const target = event.target, editing = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable;
+      // Keep canvas/editor keystrokes inside this interface, without blocking native text editing.
+      event.stopPropagation();
+      if (event.isComposing || event.keyCode === 229) return;
+      const target = event.target;
+      if (target.dataset.nodeResize && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) { event.preventDefault(); const p = positions[target.dataset.nodeResize]; resizeNode(target.dataset.nodeResize, p.width + (event.key === 'ArrowRight' ? 8 : event.key === 'ArrowLeft' ? -8 : 0), p.height + (event.key === 'ArrowDown' ? 8 : event.key === 'ArrowUp' ? -8 : 0)); return; }
+      const editing = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable || !!target.closest('.md-canvas-help');
       if (target.classList.contains('md-node-editor')) { if (event.isComposing) return; if (event.key === 'Escape') { event.preventDefault(); if (!editorPending) { clearNodeEditor(); render(); canvas.focus({ preventScroll: true }); } } else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); commitNodeEditor(); } return; }
       if (!menu.hidden && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = Array.from(menu.querySelectorAll('button')), index = items.indexOf(target); items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); return; }
       const binding = target.closest('[data-binding]');
@@ -856,7 +1177,8 @@
       else if (event.key === 'Enter' && target.dataset.matrixFrom) { event.preventDefault(); const edge = list(snapshot.edges).find(item => item.from === target.dataset.matrixFrom && item.to === target.dataset.matrixTo); if (edge) selectEdge(edge.id); else addEdge(target.dataset.matrixFrom, target.dataset.matrixTo); }
       else if (event.key === 'Enter' && target.dataset.edgeSelect) selectEdge(target.dataset.edgeSelect);
     });
-    listen(shell, 'keyup', event => { if (event.key === ' ') { spaceDown = false; updateToolbar(); } });
+    listen(shell, 'keypress', event => event.stopPropagation());
+    listen(shell, 'keyup', event => { event.stopPropagation(); if (event.isComposing || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName) || event.target.isContentEditable) return; if (event.key === ' ') { spaceDown = false; updateToolbar(); } });
     listen(win, 'blur', () => { spaceDown = false; if (!destroyed) updateToolbar(); });
 
     function scheduleInitialFit() {
@@ -874,7 +1196,9 @@
         if (fitObserver) { fitObserver.disconnect(); fitObserver = null; }
         initialFitDone = true; initialFitScheduled = false; renderGraph(); fit();
       };
-      const afterLayout = () => win.requestAnimationFrame(() => win.requestAnimationFrame(run));
+      // Styles are loaded before reading geometry. Waiting for two unbounded
+      // frames can leave a newly opened graph unfitted in an occluded window.
+      const afterLayout = () => mechanismDrawingYieldForPaint(win).then(run);
       const stylesheet = shell.getRootNode().querySelector('link[rel="stylesheet"]');
       if (stylesheet && !stylesheet.sheet) stylesheet.addEventListener('load', afterLayout, { once: true }); else afterLayout();
     }
@@ -885,5 +1209,5 @@
     return { open, update, close, destroy, getState };
   }
 
-  return { MECHANISM_DRAWING_EVIDENCE_MIME: EVIDENCE_MIME, createMechanismDrawingUi, mechanismDrawingEvidenceClass, resolveMechanismDrawingEvidenceSource, mechanismDrawingBindingCommand, mechanismDrawingErrorMessage, mechanismDrawingLabelSize, mechanismDrawingNodeAtPoint, mechanismDrawingFindNodePosition, parseMechanismEvidenceDrop, selectMechanismDrawingScene, mechanismDrawingWorldPoint, mechanismDrawingRouteDistance, mechanismDrawingRouteTarget, mechanismDrawingGestureMode };
+  return { MECHANISM_DRAWING_EVIDENCE_MIME: EVIDENCE_MIME, createMechanismDrawingUi, previewMechanismDrawingRoute, mechanismDrawingEvidenceClass, resolveMechanismDrawingEvidenceSource, mechanismDrawingEvidenceLabel, mechanismDrawingEvidenceReference, mechanismDrawingBindingCommand, mechanismDrawingErrorMessage, mechanismDrawingLabelSize, mechanismDrawingNodeAtPoint, mechanismDrawingFindNodePosition, parseMechanismEvidenceDrop, selectMechanismDrawingScene, mechanismDrawingWorldPoint, mechanismDrawingRouteDistance, mechanismDrawingRouteTarget, mechanismDrawingGestureMode };
 });

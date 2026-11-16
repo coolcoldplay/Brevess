@@ -6,7 +6,40 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, { localizeLogicMapDemo: api.localizeLogicMapDemo });
 })(globalThis, function (root) {
   'use strict';
-  const entries = Object.fromEntries(`本地翻译等待超时，已保留原文和已完成的部分译文；可关闭后重试。	Local translation timed out. The original and completed translations are preserved; close and retry.
+  const entries = Object.fromEntries(`回答达到模型输出上限，未采用不完整回答。请缩小范围或提高模型输出额度后重试。	The answer reached the output limit and was not accepted. Narrow the request or raise the output allowance and retry.
+回答或检索来源的格式未通过校验。请展开过程查看失败阶段后重试。	The answer or search-source format was invalid. Expand the process log to inspect the failed stage.
+检索或模型服务限流。请稍后重试，已返回的检索信息可在过程中查看。	The search or model service is rate limited. Retry later; available search details remain in the process log.
+检索或模型服务响应超时。请展开过程查看已完成的步骤，再重试。	The search or model service timed out. Inspect completed steps in the process log and retry.
+此处展示实际执行步骤和检索记录；模型未返回可展示的思考文本。	This log shows actual execution and search records. The model did not return displayable reasoning text.
+检查全部图 / 补充图注	Check all figures / Edit captions
+全部 Figure 输入检查	All Figure input checks
+自动提取图注（保留原文）	Automatic caption (original preserved)
+完整图注（可手动补充或修正）	Full caption (add or correct manually)
+请对照原页补齐完整图注。保存后作为用户补充用于解图，不冒充 PDF 原文。	Check the original page and complete the caption. It will be used as a user transcription, separate from verified PDF text.
+确认图注并重新检查	Confirm caption and recheck
+撤销人工图注	Remove manual caption
+核对图像页	Review artwork pages
+重新检查全部图	Recheck all figures
+图注与正文检查通过	Caption and body checks passed
+可解读 · 使用人工图注	Ready with user caption
+图注含无法识别的字符，请对照原页修正。	The caption contains unreadable characters. Correct them using the original page.
+图注可能未完整提取，请补齐后重新检查。	The caption may be incomplete. Complete it and recheck.
+图注与原文定位不一致，请查看原页并补充图注。	The caption could not be located exactly. Check the original page and provide a caption.
+相关正文证据不足，请等待索引就绪后重新检查。	Related body evidence is missing. Recheck when indexing is complete.
+人工图注未能恢复或含无效字符，请核查并重新保存。	The user caption could not be restored or contains invalid characters. Review and save again.
+文献已变化，请重新检查。	The document changed. Recheck it.
+检查未通过，请重新检查或核查原页。	The check failed. Retry or inspect the original page.
+图像页已确认	Artwork pages confirmed
+图像页待核查	Artwork pages need review
+检查不调用模型	No model calls during checks
+正在检查…	Checking…
+检查尚未就绪，请稍后重试。	Checks are not ready yet. Please retry shortly.
+已保存并重新检查。	Saved and rechecked.
+保存失败，已保留输入。	Save failed. Your input is preserved.
+可解读	Ready
+需核查	Review needed
+未保存	Unsaved
+本地翻译等待超时，已保留原文和已完成的部分译文；可关闭后重试。	Local translation timed out. The original and completed translations are preserved; close and retry.
 全文翻译	Full-text translation
 段落翻译	Paragraph translation
 已保存的翻译专用模型不可用，请修正配置后继续。	The saved translation model is unavailable. Correct its configuration before continuing.
@@ -109,7 +142,43 @@ PDF 高亮	PDF highlight
 资源	Resource
 嵌入资源	Embedded resource
 无法打开离线文献	The offline article could not open
+解图来源校验失败，尚未调用模型；请重新打开当前文献后重试。	The Figure source could not be verified; no model request was sent. Reopen the current article and retry.
 Figure 图像页核对	Review Figure image pages
+逐图核对图像页	Review Figure pages
+选择要核对的 Figure	Choose a Figure to review
+上一页	Previous page
+下一页	Next page
+加入当前页（跨页图）	Add current page (multi-page Figure)
+改用当前页	Use current page instead
+自动推荐，待核查确认	Automatically suggested; review and confirm
+已人工确认	Manually confirmed
+已调整，待确认	Edited; awaiting confirmation
+已预填推荐页码，请核查原图后确认；不正确时可改用当前页或手动调整。	Suggested pages are prefilled. Check the artwork and confirm, or use the current page or edit the selection.
+正在建立图注目录，完成后将自动显示推荐页码。	Building the Figure index. Suggested pages will appear automatically when ready.
+当前没有可核对的 PDF Figure。	No PDF Figures are available for review.
+已选图像页	Selected image pages
+手动页码（可选）	Page numbers (optional)
+候选页仅供参考。单页图直接确认；跨页图逐页添加后确认。	Candidates are suggestions. Confirm the current page, or add all pages of a multi-page Figure before confirming.
+确认本页并下一图	Confirm page and next Figure
+确认所选并下一图	Confirm selection and next Figure
+确认本页	Confirm page
+确认所选	Confirm selection
+图像页保存失败，已保留本次选择；请重试。	Image pages could not be saved. Your selection is preserved; retry.
+页码或图像来源校验失败，请重新打开核对窗口。	The page numbers or image source could not be verified. Reopen the review panel.
+上一图	Previous Figure
+暂时跳过	Skip for now
+当前 PDF 页尚未就绪，请稍后重试。	The current PDF page is not ready. Retry shortly.
+尚未选择；确认时使用当前页。	No pages selected; confirmation will use the current page.
+移除图像页	Remove image page
+已确认	Confirmed
+未确认	Unconfirmed
+图注页	Caption pages
+候选	Candidate
+已有人工页码不能清空，请先选择替代页码。	Previously confirmed pages cannot be cleared. Select replacement pages first.
+正在保存图像页…	Saving image pages…
+已保存，已进入下一图。	Saved. The next Figure is ready.
+已保存。可回看其他 Figure，或关闭核对。	Saved. Review another Figure or close this panel.
+正在读取 Figure 与已保存页码…	Loading Figures and saved pages…
 关闭页码核对	Close page review
 输入完整图像的物理页码，可多页；填写即人工指定。自动候选仅作参考，空白保持未指定。	Enter the physical page numbers containing the complete image; multiple pages are allowed. Entered values are manual selections. Automatic candidates are suggestions; blank fields remain unspecified.
 保存全部页码	Save all page numbers

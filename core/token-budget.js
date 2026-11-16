@@ -207,7 +207,7 @@
       Math.max(rule.floor, roundUp256(rule.base + rule.perUnit * units))
     );
     const budget = { initial, ceiling, mode: normalized.mode };
-    if (normalized.budgetKind !== 'figure' ||
+    if (!['figure', 'articleChat', 'panelChat'].includes(normalized.budgetKind) ||
         String(options.reasoningProviderId || '') !== 'deepseek' ||
         options.reasoningEnabled !== true ||
         !['high', 'max'].includes(String(options.reasoningEffort || ''))) {

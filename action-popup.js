@@ -32,7 +32,9 @@ function renderPageTools() {
   if (searchPageButton) searchPageButton.disabled = !state?.supported || !state.preferences.semantic || pageToolsBusy;
   if (translatePageButton) {
     translatePageButton.disabled = !state?.supported || !state.preferences.pageTranslation || pageToolsBusy;
-    translatePageButton.textContent = state?.translation?.enabled ? '停止整页翻译' : '翻译当前页';
+    translatePageButton.title = state?.translation?.enabled ? '停止整页翻译' : '翻译当前页';
+    translatePageButton.setAttribute('aria-label',translatePageButton.title);
+    translatePageButton.setAttribute('aria-pressed',String(state?.translation?.enabled===true));
   }
   const shortcut = document.getElementById('semanticShortcut');
   if (shortcut) { shortcut.textContent = state?.shortcut || ''; shortcut.hidden = !state?.shortcut; }
@@ -75,7 +77,11 @@ translatePageButton?.addEventListener('click', () => void pageToolAction('PAGE_T
   enabled: currentState?.pageTools?.translation?.enabled !== true
 }));
 
-function runtimeMessage(message) {
+async function runtimeMessage(message) {
+  if (message.type === 'ACTION_POPUP_GET_STATE') {
+    const owner = await chrome.windows.getCurrent();
+    message = { ...message, windowId: owner.id };
+  }
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(message, response => {
       const lastError = chrome.runtime.lastError;
@@ -111,7 +117,7 @@ async function loadState() {
   try {
     currentState = await runtimeMessage({ type: 'ACTION_POPUP_GET_STATE' });
     pageTitle.textContent = currentState.title || '当前页面';
-    updatePrimaryLabel(currentState.primaryLabel || '开始研读');
+    updatePrimaryLabel('侧栏打开工作台');
     startButton.disabled = currentState.readable !== true;
     if (currentState.pageTools?.supported) {
       pageToolsBusy = true;
@@ -174,7 +180,7 @@ settingsButton.addEventListener('click', () => {
 
 workbenchButton.addEventListener('click', () => {
   workbenchButton.disabled = true;
-  chrome.tabs.create({ url: chrome.runtime.getURL('workbench/index.html') })
+  chrome.tabs.create({ url: chrome.runtime.getURL('workbench/index.html#library') })
     .then(() => window.close())
     .catch(error => {
       workbenchButton.disabled = false;

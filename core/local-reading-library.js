@@ -252,8 +252,35 @@
       : { doi: '', doiState: 'conflict' };
   }
 
+  function isKnownVideoWebWorkspace(workspace, structure, byPath, sourceUrl) {
+    // An archived/native PDF remains a literature source even without a DOI.
+    if (byPath.has('pdf/document.json') || /\.pdf(?:$|[?#])/iu.test(sourceUrl) ||
+        /^(?:pdf-native|pdf-workspace)$/u.test(String(structure.publisherFamily || structure.adapterId || ''))) return false;
+    // These are validated source-bound facts, not a DOI mentioned in body text
+    // or a later user-entered reference field in the catalog.
+    if (articleDoi(workspace).doiState === 'known' ||
+        bibliographyFromAsset(workspace, byPath.get('article/bibliography.json')).journal) return false;
+    try {
+      const url=new URL(sourceUrl);
+      if (!['http:','https:'].includes(url.protocol) || url.username || url.password) return false;
+      const host=url.hostname.toLowerCase().replace(/\.$/u,'');
+      return ['youtube.com','bilibili.com'].some(domain=>host===domain||host.endsWith('.'+domain)) ||
+        host==='youtu.be'||host==='b23.tv';
+    } catch (_) { return false; }
+  }
+
   function articleFromWorkspace(workspace, rawAssets) {
     const byPath = contentByPath(rawAssets);
+    const web=byPath.get('reading/web-page.json')?.content;
+    if(web?.schemaVersion===1&&['article','conversation'].includes(web.contentType)){
+      const sources=[],title=String(web.snapshot?.title||workspace.title||'网页'),url=String(String(web.snapshot?.sourceUrl||'').startsWith('https://brevess.invalid/research-session/')?(web.snapshot?.researchOwner?.primarySourceUrl||(web.turns||[]).find(t=>t.derivedOwner)?.primarySourceUrl||''):(web.snapshot?.sourceUrl||workspace.canonicalUrl||''));
+      pushSource(sources,'title',title,'标题');pushSource(sources,'notes',web.notes||'','笔记');
+      for(const a of web.annotations||[])pushSource(sources,'notes',[a.quote,a.note].filter(Boolean).join('\n'),'高亮与备注');
+      for(const turn of web.turns||[])pushSource(sources,'notes',[turn.question,turn.answer].filter(Boolean).join('\n'),'网页问答');
+      const snapshot=web.pageSnapshot||(web.snapshot?.blocks?web.snapshot:null);
+      for(const b of snapshot?.blocks||[])pushSource(sources,'fulltext',b.text,'已保存网页内容');
+      return{workspaceId:workspace.workspaceId,workspaceGeneration:workspace.workspaceGeneration,title,url,sourceKind:'html',contentType:'web',webKind:web.contentType,doi:'',doiState:'unknown',authors:[],journal:'',publicationDate:'',createdAt:workspace.createdAt||'',updatedAt:workspace.updatedAt||'',savedAt:workspace.createdAt||'',hasSavedWebContent:!!snapshot,hasOfflineSnapshot:false,offlineSnapshotStatus:'missing',...tagsFromAsset(workspace,byPath.get(TAGS_PATH)),sources,coverage:{title:!!title,notes:sources.some(s=>s.scope==='notes'),fulltext:!!snapshot,abstract:false,method:false,caption:false}};
+    }
     const sources = [];
     const structure = byPath.get('article/structure.json')?.content || {};
     const pdf = byPath.get('pdf/document.json')?.content || {};
@@ -288,6 +315,7 @@
       workspaceId: text(workspace?.workspaceId, 100),
       title,
       url,
+      ...(structure.readingContentType==='web'||isKnownVideoWebWorkspace(workspace,structure,byPath,url)?{contentType:'web',webKind:'article'}:{}),
       sourceKind: byPath.has('pdf/document.json') || /\.pdf(?:$|[?#])/iu.test(url) ? 'pdf' : 'html',
       ...articleDoi(workspace),
       createdAt: text(workspace?.createdAt, 100),
@@ -517,6 +545,8 @@
       title: article.title,
       url: article.url,
       sourceKind: article.sourceKind,
+      contentType: article.contentType||'literature',
+      hasSavedWebContent: article.hasSavedWebContent===true,
       doi: article.doi,
       doiState: article.doiState,
       createdAt: article.createdAt,

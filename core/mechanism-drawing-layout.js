@@ -1,8 +1,8 @@
 (function attach(root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./research-workbench-canvas-interaction.js') : (root.SciLLM ||= {}));
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(interaction) {
   'use strict';
 
   const WIDTH = 168, HEIGHT = 68, GAP_X = 112, GAP_Y = 100, MARGIN = 56, PAD = 20;
@@ -143,12 +143,23 @@
     ];
   }
 
-  function routePenalty(points, used) {
+  function constrainedPorts(box, offset, constraint) {
+    if (!constraint) return ports(box, offset);
+    const port = ports(box, 0).find(p => p.side === constraint.side);
+    if (!port) return ports(box, offset);
+    const vertical = constraint.side === 'left' || constraint.side === 'right';
+    const value = Math.max(0, Math.min(1, constraint.offset));
+    if (vertical) port.p.y = port.out.y = box.y + box.height * value;
+    else port.p.x = port.out.x = box.x + box.width * value;
+    return [port];
+  }
+  function routePenalty(points, used, maximum = Infinity) {
     let score = (points.length - 2) * 24;
     for (let i = 1; i < points.length; i++) {
       const a = points[i - 1], b = points[i], horizontal = a.y === b.y;
       score += distance(a, b);
-      used.forEach(([c, d]) => {
+      if (score >= maximum) return Infinity;
+      for (const [c, d] of used) {
         const oldHorizontal = c.y === d.y;
         if (horizontal === oldHorizontal && Math.abs(horizontal ? a.y - c.y : a.x - c.x) < 9) {
           const lo = Math.max(Math.min(horizontal ? a.x : a.y, horizontal ? b.x : b.y), Math.min(horizontal ? c.x : c.y, horizontal ? d.x : d.y));
@@ -158,7 +169,10 @@
           const h1 = horizontal ? a : c, h2 = horizontal ? b : d, v1 = horizontal ? c : a, v2 = horizontal ? d : b;
           if (v1.x > Math.min(h1.x, h2.x) && v1.x < Math.max(h1.x, h2.x) && h1.y > Math.min(v1.y, v2.y) && h1.y < Math.max(v1.y, v2.y)) score += 120;
         }
-      });
+        // All remaining penalties are nonnegative; an earlier equally good
+        // candidate wins the stable ordering, so this route cannot improve it.
+        if (score >= maximum) return Infinity;
+      }
     }
     return score;
   }
@@ -205,16 +219,47 @@
     const evidenceCount = (Array.isArray(edge.evidence) ? edge.evidence : Array.isArray(edge.panelEvidence) ? edge.panelEvidence : []).length;
     const width = finite(edge.labelWidth) && edge.labelWidth > 0 ? edge.labelWidth : Math.min(228, Math.max(88, Array.from(edgeText(edge)).reduce((sum, c) => sum + (c.charCodeAt(0) > 255 ? 13 : 7), 20)));
     const height = finite(edge.labelHeight) && edge.labelHeight > 0 ? edge.labelHeight : 26 + (evidenceCount ? Math.min(3, Math.ceil(evidenceCount / 3)) * 22 : 0);
-    const candidates = [];
-    function propose(anchor, dx, dy) {
-      const center = point(anchor.x + dx, anchor.y + dy), box = { x: center.x - width / 2, y: center.y - height / 2, width, height };
-      if (boxes.some(node => overlaps(box, node, 12)) || occupied.some(other => overlaps(box, other, 12))) return;
-      if ((dx || dy) && boxes.some(node => segmentHits(anchor, center, grow(node, 5)))) return;
-      let crossings = 0;
-      routes.forEach(other => { if (other === route) return; for (let i = 1; i < other.points.length; i++) if (segmentHits(other.points[i - 1], other.points[i], grow(box, 3))) crossings++; });
-      candidates.push({ center, box, anchor, score: Math.abs(dx) + Math.abs(dy) + crossings * 400 });
+    if (finite(edge.labelPosition?.x) && finite(edge.labelPosition?.y)) {
+      const center = interaction.canvasProjectRoutePoint(route.points, edge.labelPosition);
+      if (center) {
+        route.label = { ...center, width, height };
+        route.labelBox = { x: center.x-width/2, y:center.y-height/2, width, height };
+        route.labelAnchor = center; route.labelDetached = false; occupied.push(route.labelBox); return;
+      }
     }
+    const candidates = [], leaderObstacles = boxes.map(node => grow(node, 5));
+    let bestScore = Infinity;
+    function propose(anchor, dx, dy) {
+      const offsetScore = Math.abs(dx) + Math.abs(dy);
+      if (offsetScore >= bestScore) return;
+      const center = point(anchor.x + dx, anchor.y + dy), box = { x: center.x - width / 2, y: center.y - height / 2, width, height };
+      if (boxes.some(node => overlaps(box, node, 4)) || occupied.some(other => overlaps(box, other, 8))) return;
+      if ((dx || dy) && leaderObstacles.some(node => segmentHits(anchor, center, node))) return;
+      let crossings = 0;
+      const crossingBox = grow(box, 3);
+      for (const other of routes) {
+        if (other === route) continue;
+        for (let i = 1; i < other.points.length; i++) if (segmentHits(other.points[i - 1], other.points[i], crossingBox)) {
+          crossings++;
+          if (offsetScore + crossings * 400 >= bestScore) return;
+        }
+      }
+      bestScore = offsetScore + crossings * 400;
+      candidates.push({ center, box, anchor, score: bestScore });
+    }
+    // Prefer the main line even when a slightly offset label would score better
+    // against another edge. Four pixels suffice between a compact tag and a node.
     for (let i = 1; i < route.points.length; i++) {
+      const a = route.points[i - 1], b = route.points[i];
+      propose(point((a.x+b.x)/2, (a.y+b.y)/2), 0, 0);
+    }
+    // A crowded route may need a different anchor to create a free label lane.
+    // Final placement below returns to a straight segment midpoint when clear.
+    if(!candidates.length)for(let i=1;i<route.points.length;i++){
+      const a=route.points[i-1],b=route.points[i];
+      [.3,.7].forEach(t=>propose(point(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t),0,0));
+    }
+    for (let i = 1; !candidates.length && i < route.points.length; i++) {
       const a = route.points[i - 1], b = route.points[i], horizontal = a.y === b.y;
       [.5, .3, .7].forEach(t => {
         const anchor = point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
@@ -237,6 +282,46 @@
       candidates.push({ center: point(box.x + width / 2, box.y + height / 2), box, anchor, score: Infinity, detached: true });
     }
     const chosen = candidates.sort((a, b) => a.score - b.score)[0];
+    // When the gap is too short for a tag, route the actual edge through a free
+    // label lane. This is one continuous edge, never a separate leader branch.
+    if (route.manual && distance(chosen.center, chosen.anchor) > .001) {
+      const segment = route.points.slice(1).map((p,i)=>[route.points[i],p]).sort((a,b)=>distance(...b)-distance(...a))[0];
+      if (segment) { const [a,b]=segment; chosen.center=point((a.x+b.x)/2,(a.y+b.y)/2);chosen.anchor=chosen.center;chosen.box={x:chosen.center.x-width/2,y:chosen.center.y-height/2,width,height};chosen.detached=false; }
+    }
+    if (!route.blocked && !route.manual && distance(chosen.center, chosen.anchor) > .001) {
+      const start = route.points[0], end = route.points[route.points.length - 1];
+      const offsets = { left: [-PAD, 0], right: [PAD, 0], top: [0, -PAD], bottom: [0, PAD] };
+      const outward = (p, side) => point(p.x + offsets[side][0], p.y + offsets[side][1]);
+      const a = outward(start, route.sourceSide), b = outward(end, route.targetSide);
+      // An earlier label can cover a later port's escape point (parallel/self
+      // edges). It must not make the endpoint unreachable.
+      const obstacles = boxes.map(box => grow(box, 4)).concat(occupied.map(box => grow(box, 4)).filter(box => !inside(a, box) && !inside(b, box)), [grow(chosen.box, 4)]);
+      const bounds = { left: Math.min(a.x, b.x, chosen.box.x, ...boxes.map(box => box.x)) - 40,
+        right: Math.max(a.x, b.x, chosen.box.x + width, ...boxes.map(box => box.x + box.width)) + 40,
+        top: Math.min(a.y, b.y, chosen.box.y, ...boxes.map(box => box.y)) - 40,
+        bottom: Math.max(a.y, b.y, chosen.box.y + height, ...boxes.map(box => box.y + box.height)) + 40 };
+      const lanes = [
+        [point(chosen.box.x - 8, chosen.center.y), point(chosen.box.x + width + 8, chosen.center.y)],
+        [point(chosen.center.x, chosen.box.y - 8), point(chosen.center.x, chosen.box.y + height + 8)]
+      ].flatMap(pair => [pair, pair.slice().reverse()]).sort((x, y) => distance(a, x[0]) + distance(b, x[1]) - distance(a, y[0]) - distance(b, y[1]));
+      for (const [enter, leave] of lanes) {
+        const first = searchPath(a, enter, obstacles, bounds), last = searchPath(leave, b, obstacles, bounds);
+        if (!first || !last || boxes.some(box => segmentHits(enter, leave, grow(box, 4)))) continue;
+        route.points = simplify([start, ...first, ...last, end]);
+        route.path = route.points.map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' ');
+        chosen.anchor = chosen.center; chosen.detached = false;
+        break;
+      }
+    }
+    // A rerouted label lane can merge with adjacent collinear segments. Use the
+    // midpoint of a clear final straight segment rather than the old bend anchor.
+    const midpoints=route.points.slice(1).map((p,i)=>point((p.x+route.points[i].x)/2,(p.y+route.points[i].y)/2));
+    const middle=midpoints.sort((a,b)=>distance(a,chosen.center)-distance(b,chosen.center)).find(center=>{
+      const box={x:center.x-width/2,y:center.y-height/2,width,height};
+      // Leave both node and label obstacle padding clear for later port escapes.
+      return !boxes.some(node=>overlaps(box,node,12))&&!occupied.some(other=>overlaps(box,other,12));
+    });
+    if(middle){chosen.center=middle;chosen.anchor=middle;chosen.box={x:middle.x-width/2,y:middle.y-height/2,width,height};chosen.detached=false;}
     route.label = { ...chosen.center, width, height };
     route.labelBox = chosen.box; route.labelAnchor = chosen.anchor; route.labelDetached = !!chosen.detached;
     occupied.push(chosen.box);
@@ -246,24 +331,39 @@
   function routeMechanismDrawingEdges(input = {}) {
     const { nodes, edges } = graphParts(input), positions = computeMechanismDrawingLayout(input);
     const boxes = nodes.map(node => ({ ...positions[node.id], id: node.id })), byId = new Map(boxes.map(box => [box.id, box]));
-    const obstacles = boxes.map(box => grow(box, PAD)), routes = [], used = [], pairs = new Map();
+    const obstacles = boxes.map(box => grow(box, PAD)), portObstacles = boxes.map(box => ({ ...grow(box, 4), id: box.id })), routes = [], used = [], pairs = new Map();
     edges.forEach(edge => { const key = JSON.stringify(endpoints(edge).slice().sort()); if (!pairs.has(key)) pairs.set(key, []); pairs.get(key).push(edge); });
     const bounds = { left: Math.min(0, ...boxes.map(box => box.x)) - 60, right: Math.max(0, ...boxes.map(box => box.x + box.width)) + 60,
       top: Math.min(0, ...boxes.map(box => box.y)) - 60, bottom: Math.max(0, ...boxes.map(box => box.y + box.height)) + 60 };
     edges.forEach(edge => {
       const [from, to] = endpoints(edge), a = byId.get(from), b = byId.get(to), group = pairs.get(JSON.stringify([from, to].sort()));
       const ordinal = group.indexOf(edge), offset = (ordinal - (group.length - 1) / 2) * Math.min(16, 36 / Math.max(1, group.length - 1));
-      const startPorts = ports(a, offset).filter(port => !boxes.some(box => box.id !== from && segmentHits(port.p, port.out, grow(box, 4))));
-      const endPorts = ports(b, offset).filter(port => !boxes.some(box => box.id !== to && segmentHits(port.p, port.out, grow(box, 4))));
+      const startPorts = constrainedPorts(a, offset, edge.sourcePort).filter(port => !portObstacles.some(box => box.id !== from && segmentHits(port.p, port.out, box)));
+      const endPorts = constrainedPorts(b, offset, edge.targetPort).filter(port => !portObstacles.some(box => box.id !== to && segmentHits(port.p, port.out, box)));
       const choices = [];
+      let bestScore = Infinity;
       function accept(middle, start, end) {
         if (!middle || middle.some(p => !finite(p.x) || !finite(p.y) || obstacles.some(box => inside(p, box)))) return;
         for (let i = 1; i < middle.length; i++) if (obstacles.some(box => segmentHits(middle[i - 1], middle[i], box))) return;
         const points = simplify([start.p, ...middle, end.p]);
         if (from === to && points.length < 4) return;
-        choices.push({ points, sourceSide: start.side, targetSide: end.side, score: routePenalty(points, used) });
+        const score = routePenalty(points, used, bestScore);
+        if (score >= bestScore) return;
+        bestScore = score;
+        choices.push({ points, sourceSide: start.side, targetSide: end.side, score });
       }
       const portPairs = [];
+      if (Array.isArray(edge.waypoints) && edge.waypoints.length) {
+        for (const start of startPorts) for (const end of endPorts) {
+          // Manual bends describe the full centre line between boundary ports.
+          // Keep authored bends fixed; validate actual node interiors, including
+          // the source/target, without forcing an extra offset stub.
+          const points = simplify([start.p, ...edge.waypoints, end.p]);
+          const valid = points.every(p => finite(p.x) && finite(p.y)) && points.slice(1).every((p,i) => !boxes.some(box => segmentHits(points[i],p,box)));
+          if (valid) choices.push({points,sourceSide:start.side,targetSide:end.side,score:routePenalty(points,used)});
+        }
+      }
+      else
       startPorts.forEach(start => endPorts.forEach(end => {
         if (from === to && (start.side !== 'right' || end.side !== 'top')) return;
         portPairs.push({ start, end, score: distance(start.out, end.out) });
@@ -276,7 +376,7 @@
           [p, point(bounds.right + ordinal * 18, p.y), point(bounds.right + ordinal * 18, q.y), q]
         ].forEach(points => accept(simplify(points), start, end));
       }));
-      if (!choices.length) {
+      if (!choices.length && !edge.waypoints?.length) {
         portPairs.sort((x, y) => x.score - y.score);
         for (const pair of portPairs) {
           accept(searchPath(pair.start.out, pair.end.out, obstacles, bounds), pair.start, pair.end);
@@ -291,7 +391,7 @@
       routes.push(route);
     });
     const occupied = [];
-    routes.forEach((route, i) => placeLabel(route, edges[i], boxes, occupied, routes));
+    routes.forEach((route, i) => { if (edges[i].waypoints?.length) route.manual = true; placeLabel(route, edges[i], boxes, occupied, routes); });
     return routes;
   }
 

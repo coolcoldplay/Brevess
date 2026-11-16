@@ -34,6 +34,21 @@
     return String(value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
   }
 
+  // A user transcription is bound to the original extraction, but is never
+  // represented as a verified quote or assigned invented PDF offsets.
+  function validatePdfFigureUserCaption(value, figure, nativeDocument) {
+    if (!value || value.version !== 'pdf-figure-user-caption-v1' ||
+        value.confirmed !== true || value.documentHash !== nativeDocument?.structure?.documentHash ||
+        value.figureId !== figure?.figureId || value.originalCaption !== figure?.caption ||
+        value.pageCount !== nativeDocument?.pageCount ||
+        JSON.stringify(value.captionPageNumbers) !== JSON.stringify(figure?.captionPageNumbers || []) ||
+        typeof value.text !== 'string' || !value.text.trim() || value.text.length > 20000 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffd]/u.test(value.text)) {
+      fail('PDF_FIGURE_USER_CAPTION_INVALID');
+    }
+    return { ...value, text: value.text.trim(), captionPageNumbers: [...value.captionPageNumbers] };
+  }
+
   function stableValue(value) {
     if (Array.isArray(value)) return value.map(stableValue);
     if (!value || typeof value !== 'object') return value;
@@ -424,6 +439,7 @@
       }
       const parts = captionSegments || [{ text: caption }];
       const matchedParts = [];
+      let matchedPartCount = 0;
       for (const part of parts) {
         const matches = [];
         const needle = normalizedText(part.text).replace(/\s/gu, '');
@@ -441,11 +457,45 @@
           }
           compactCursor = found + 1;
         }
+        // A full-width caption heading and its body can be separated by a
+        // column paragraph in reading order. Admit only a unique sequence of
+        // complete, already verified paragraphs on the declared caption page.
+        // No characters inside a paragraph may be skipped or approximated.
+        if (!matches.length && captionSegments) {
+          const paths = new Map([[0, [[]]]]);
+          for (const item of placements) {
+            if (item.record.pageNumbers.length !== 1 ||
+                item.record.pageNumbers[0] !== part.pageNumber) continue;
+            const text = item.record.normalizedText.replace(/\s/gu, '');
+            if (!text) continue;
+            const additions = [];
+            for (const [offset, candidates] of paths) {
+              if (!needle.startsWith(text, offset)) continue;
+              for (const path of candidates) additions.push({
+                offset: offset + text.length, path: [...path, item]
+              });
+            }
+            for (const candidate of additions) {
+              const existing = paths.get(candidate.offset) || [];
+              // Two distinct paths are sufficient to reject ambiguity.
+              if (existing.length < 2) paths.set(candidate.offset, [...existing, candidate.path]);
+            }
+          }
+          const complete = paths.get(needle.length) || [];
+          if (complete.length === 1) {
+            matchedParts.push(...complete[0].map(item => ({
+              start: item.start, end: item.end, touched: [item], pageNumber: part.pageNumber
+            })));
+            matchedPartCount += 1;
+            continue;
+          }
+        }
         if (matches.length !== 1) {
           if (captionSegments) fail('PDF_FIGURE_CAPTION_BINDING_UNAVAILABLE');
           break;
         }
         matchedParts.push({ ...matches[0], pageNumber: part.pageNumber || null });
+        matchedPartCount += 1;
       }
       if (matchedParts.some((part, index) => index > 0 &&
           part.start < matchedParts[index - 1].end)) {
@@ -456,7 +506,7 @@
       let sentences = [];
       let sourceParagraphIds = [];
       let captionText = caption;
-      if (matchedParts.length === parts.length) {
+      if (matchedPartCount === parts.length) {
         captionText = '';
         for (const match of matchedParts) {
         if (captionText) captionText += ' ';
@@ -640,9 +690,12 @@
         fail('PDF_FIGURE_ID_INVALID');
       }
       const figure = selected[0];
-      if (figure.captionComplete === false || (Array.isArray(figure.reviewReasons) &&
+      const userCaption = figure.userCaption == null ? null
+        : validatePdfFigureUserCaption(figure.userCaption, figure, nativeDocument);
+      const userCaptionSignature = stableJson(figure.userCaption ?? null);
+      if (!userCaption && (figure.captionComplete === false || (Array.isArray(figure.reviewReasons) &&
           figure.reviewReasons.some(reason =>
-            ['missing-caption-continuation', 'caption-truncated'].includes(reason)))) {
+            ['missing-caption-continuation', 'caption-truncated'].includes(reason))))) {
         fail('PDF_FIGURE_CAPTION_INCOMPLETE');
       }
       const pages = figurePages(figure, snapshot.pageCount);
@@ -652,7 +705,19 @@
       }
       const adapted = adaptRecords(snapshot, figure);
       const records = adapted.records;
-      const caption = captionRecord(records, figure, snapshot);
+      let caption;
+      try { caption = captionRecord(records, figure, snapshot); }
+      catch (error) {
+        if (!userCaption || error.code !== 'PDF_FIGURE_CAPTION_BINDING_UNAVAILABLE') throw error;
+        // A corrected transcription can differ from extracted glyphs. Still
+        // require one exact Figure heading on its original caption page.
+        const heading = String(figure.caption || '').match(
+          /^(?:(?:Extended Data|Supplementary|Supplemental)\s+)?Fig(?:ure)?\.?\s*(?:S\s*)?\d+\s*[.:]/iu)?.[0];
+        if (!heading) throw error;
+        caption = captionRecord(records, { ...figure, caption: heading,
+          captionSegments: [{ pageNumber: figure.captionPageNumbers?.[0], text: heading }] }, snapshot);
+        caption.omissions.push({ code: 'PDF_FIGURE_USER_CAPTION_SOURCE_ANCHOR_ONLY' });
+      }
       const bodyRecords = bodyRecordsAfterCaption(records, caption, snapshot);
       const binding = {
         documentHash: snapshot.documentHash,
@@ -687,6 +752,13 @@
       }, request.options || {});
       const context = bindSelectedEvidence(selectedContext,
         [caption.record, ...bodyRecords], snapshot);
+      if (userCaption) {
+        context.textualEvidence.userCaption = {
+          source: 'user', text: userCaption.text, figureId: figure.figureId,
+          documentHash: snapshot.documentHash, captionPageNumbers: userCaption.captionPageNumbers,
+          originalCaption: userCaption.originalCaption, confirmed: true
+        };
+      }
       if (!context.binding.valid) fail('PDF_FIGURE_DOCUMENT_BINDING_CONFLICT');
       if (request.requireCaptionAndBody !== false &&
           (!context.captionEvidence.length || !context.bodyEvidence.length)) {
@@ -699,6 +771,8 @@
         binding, target, textualEvidence: context.textualEvidence
       }));
       requireCurrentOwnership();
+      if (stableJson(figure.userCaption ?? null) !== userCaptionSignature)
+        fail('PDF_FIGURE_CONTEXT_STALE');
       return deepFreeze({ version: VERSION, binding, target,
         visualCoverage,
         records: [caption.record, ...bodyRecords],
@@ -710,5 +784,6 @@
   }
 
   return { PDF_FIGURE_CONTEXT_PRODUCTION_VERSION: VERSION,
-    createPdfFigureContextProductionAdapter, canMigrateCompletedPdfFigureResult };
+    createPdfFigureContextProductionAdapter, canMigrateCompletedPdfFigureResult,
+    validatePdfFigureUserCaption };
 });

@@ -1,6 +1,6 @@
 (function(root, factory) {
   const common = typeof module === 'object' && module.exports;
-  const api = factory(common ? Object.assign({}, require('./literature-radar-store.js'), require('./literature-radar-pubmed.js'), require('./literature-radar-service.js')) : root.BrevessRadar);
+  const api = factory(common ? Object.assign({}, require('./literature-radar-store.js'), require('./literature-radar-pubmed.js'), require('./literature-radar-sources.js'), require('./literature-radar-service.js')) : root.BrevessRadar);
   if (common) module.exports = api;
   Object.assign(root.BrevessRadar ||= {}, api);
 })(globalThis, function(m) {
@@ -12,7 +12,7 @@
     if (installed.has(chromeApi)) return installed.get(chromeApi);
     if (!service) {
       const store = m.createRadarStore();
-      service = m.createRadarService({ store, adapters: { pubmed: m.createPubMedRadarAdapter() } });
+      service = m.createRadarService({ store, adapters: m.createRadarAdapters() });
     }
     const tick = () => keepAlive(service.checkDue()).catch(onError);
     const ensure = async () => {

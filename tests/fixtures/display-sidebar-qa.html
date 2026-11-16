@@ -1,0 +1,32 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>侧栏与表格交互验收</title><link rel="stylesheet" href="/popup.css"><link rel="stylesheet" href="/ui-swiss.css"><link rel="stylesheet" href="/sidebar-module-icons.css"><link rel="stylesheet" href="/core/chat-message-ui.css"><style>body{display:block!important;margin:20px!important;width:auto!important;height:auto!important;background:#fafafa!important}#sidebar{display:flex;flex-direction:column;width:380px;height:640px;border:1px solid #ddd;float:right}#answer{overflow:auto;min-height:0;flex:1;padding:12px}#test{max-width:600px}figure img{width:500px;height:250px}dialog{width:min(1200px,90vw);max-height:85vh;border:1px solid #ddd;border-radius:12px;padding:20px}dialog::backdrop{background:#0006}#viewer{overflow:auto;max-height:65vh}#viewer table{border-collapse:collapse;width:100%}#viewer th,#viewer td{min-width:150px;padding:12px;border:1px solid #ddd;vertical-align:top}#viewer th{position:sticky;top:0;background:#e9eee8}pre{white-space:pre-wrap}button{cursor:pointer}[hidden]{display:none!important}</style></head><body data-ui-surface="sidebar"><section id="sidebar" class="side-panel-app">      <header id="sidePanelHeader" class="side-panel-header compact-paper-header">
+        <div id="sidePanelPaperTitle" class="side-panel-paper-title">Nature · 学术论文阅读</div>
+        <details id="sidePanelNotificationCenter" class="side-panel-notification-center"
+          data-sidebar-focus-escape-priority>
+          <summary id="sidePanelNotificationSummary"
+            aria-label="查看通知历史" title="查看通知历史">
+            <i class="ph ph-bell" aria-hidden="true"></i>
+            <time id="sidePanelNotificationTime" datetime="">--:--</time>
+            <span id="sidePanelNotificationLatest">暂无通知</span>
+          </summary>
+          <section class="side-panel-notification-popover" aria-label="通知历史">
+            <div class="side-panel-notification-heading">
+              <strong>通知历史</strong>
+              <div class="side-panel-notification-actions">
+                <span>仅保留最近 40 条</span>
+                <button id="exportAdapterDiagnosticBundle" class="side-panel-tool-button"
+                  type="button" aria-label="导出网页适配诊断包" title="导出网页适配诊断包">
+                  <i class="ph ph-warning" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+            <div id="pdfReaderNoticeActions" class="side-panel-pdf-notice-actions" hidden></div>
+            <ol id="sidePanelNotificationHistory" class="side-panel-notification-history"></ol>
+          </section>
+        </details>
+        
+        <button id="focusToggle" class="side-panel-icon-button" aria-label="阅读计时"></button><button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
+          aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
+          <i class="ph ph-gear" aria-hidden="true"></i>
+        </button>
+      </header>
+<div id="sidePanelDocumentStatus" class="side-panel-document-status"><span class="side-panel-live-dot"></span><button id="sidePanelDocumentStatusText" class="side-panel-layout-toggle">已激活 · Nature · 网页滤镜</button><div class="side-panel-global-tools"><button id="collapseAllOutlineLevels" class="side-panel-tool-button" aria-label="收起大纲"></button><button id="showArticleAbbreviations" class="side-panel-tool-button" aria-label="缩写"></button><button id="saveCurrentArticleWorkspace" class="side-panel-tool-button" aria-label="保存"></button><button id="refreshArticleNavigation" class="side-panel-tool-button" aria-label="刷新"></button><button id="sidePanelMoreToolsSummary" class="side-panel-tool-button" aria-label="更多"></button></div></div><div id="answer"></div><nav class="workspace-bottom-nav"><button class="workspace-nav-button bvi-button">导航</button><button class="workspace-nav-button bvi-button">摘句</button><button class="workspace-nav-button bvi-button">图解</button><button class="workspace-nav-button bvi-button">问答</button><button class="workspace-nav-button bvi-button">笔记</button></nav></section><section id="test"><h1>侧栏与表格交互验收</h1><p>真实渲染器与图片控制器；浏览器窗口接口使用隔离测试替身。</p><button id="run-checks">运行交互检查</button><figure><img id="figure" src="/tests/fixtures/display-figure.svg" alt="Figure 1"><figcaption>移动到图片上查看原有图片工具；无需启动论文工作区。</figcaption></figure><p id="summary" aria-live="polite"></p><pre id="results"></pre></section><dialog id="wide-panel"><button id="close-viewer">关闭表格</button><div id="viewer"></div></dialog><script src="/core/chat-table-viewer.js"></script><script src="/core/chat-message-ui.js"></script><script src="/core/sidebar-toolbar-icons.js"></script><script src="/core/figure-magnifier.js"></script><script src="/tests/fixtures/display-sidebar-checks.js"></script></body></html>

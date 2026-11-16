@@ -148,6 +148,10 @@
       if (destroyed) return;
       if (selection && selection.value !== textarea.value && !applying && !composing) announce('');
       if (!selection || selection.value !== textarea.value) capture();
+      // Empty AI fields must remain ordinary editable inputs even when other
+      // fields enter preview. This changes presentation only, never note data.
+      const emptyPresentation = !String(textarea.value || '').replace(/(?:<\/?(?:p|div|span)\s*>|<br\s*\/?>|&nbsp;|\u00a0)/gi, '').trim();
+      if (previewing && emptyPresentation) previewing = false;
       textarea.hidden = previewing || initialHidden;
       element.dataset.previewing = String(previewing);
       const disabled = textarea.disabled || textarea.readOnly || composing || previewing || typeof api().formatLiteratureNoteSelection !== 'function';

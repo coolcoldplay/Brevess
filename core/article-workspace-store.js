@@ -834,6 +834,30 @@
       });
     }
 
+
+    async function deleteSelectedData(value, options) {
+      const id=workspaceId(value),paths=new Set(options.paths||[]);
+      if(!paths.size&&!options.deleteUserData&&!options.sourceReplacement)fail('WORKSPACE_DELETE_SELECTION_REQUIRED');
+      for(const path of paths)shared.normalizeWorkspaceRelativePath(path);
+      return run([WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME,WORKSPACE_TURN_STORE_NAME,DOCUMENT_STORE_NAME],'readwrite',async tx=>{
+        const owners=tx.objectStore(WORKSPACE_STORE_NAME),assets=tx.objectStore(WORKSPACE_ASSET_STORE_NAME),turns=tx.objectStore(WORKSPACE_TURN_STORE_NAME),documents=tx.objectStore(DOCUMENT_STORE_NAME);
+        const owner=await request(owners.get(id));
+        if(!owner||owner.deletionPending||owner.workspaceGeneration!==options.workspaceGeneration||Number(owner.storageRevision||0)!==options.expectedStorageRevision)fail('WORKSPACE_DELETION_CONFLICT');
+        const all=await request(assets.getAll()),owned=all.filter(a=>a.workspaceId===id),allTurns=(await request(turns.getAll())).filter(t=>t.workspaceId===id);
+        if(options.deleteUserData&&JSON.stringify(allTurns.map(t=>[t.turnId,t.revision]).sort())!==JSON.stringify(options.turnRevisions))fail('WORKSPACE_DELETION_CONFLICT');
+        const doc=options.documentId?await request(documents.get(options.documentId)):null;
+        if(options.deleteUserData&&doc&&Number(doc.revision)!==options.documentRevision)fail('WORKSPACE_DELETION_CONFLICT');
+        const contributions={...(owner.assetSummaryByPath||{})};let deleted=0;
+        for(const a of owned)if(paths.has(a.relativePath)){await request(assets.delete(a.assetKey));delete contributions[a.relativePath];deleted++;}
+        if(options.replacement){const a=owned.find(a=>a.relativePath==='article/offline-snapshot.html');if(!a||a.revision!==options.replacement.expectedRevision)fail('ASSET_REVISION_CONFLICT');const content=safeValue(options.replacement.content),next={...a,content,contentHash:options.replacement.contentHash,revision:a.revision+1,updatedAt:now(),byteSize:byteSize(content)};await request(assets.put(next));contributions[a.relativePath]=workspaceAssetContribution(a.relativePath,content,next.byteSize);}
+        if(options.sourceReplacement){const a=owned.find(a=>a.relativePath==='article/structure.json');if(!a||a.revision!==options.sourceReplacement.expectedRevision)fail('ASSET_REVISION_CONFLICT');const content=safeValue(options.sourceReplacement.content),next={...a,content,contentHash:options.sourceReplacement.contentHash,revision:a.revision+1,updatedAt:now(),byteSize:byteSize(content)};await request(assets.put(next));contributions[a.relativePath]=workspaceAssetContribution(a.relativePath,content,next.byteSize);}
+        if(options.deleteUserData){for(const t of allTurns)await request(turns.delete(t.turnKey));if(doc)await request(documents.put({...doc,annotations:[],revision:Number(doc.revision||0)+1,updatedAt:now()}));}
+        const summary=summarizeWorkspaceContributions(contributions,{...owner.summary,...(options.deleteUserData?{turnCount:0,turnBytes:0}:{})});
+        await request(owners.put({...owner,storageRevision:Number(owner.storageRevision||0)+1,updatedAt:now(),assetSummaryByPath:contributions,summary,memoryNeedsRebuild:options.deleteUserData||owner.memoryNeedsRebuild}));
+        return{deletedAssets:deleted,deletedTurns:options.deleteUserData?allTurns.length:0};
+      });
+    }
+
     async function deleteAsset(value, relativePath, conflict = {}) {
       const id = workspaceId(value);
       const path = shared.normalizeWorkspaceRelativePath(relativePath);
@@ -1221,6 +1245,23 @@
       });
     }
 
+    async function readChatRestoreSnapshot(value) {
+      const id = workspaceId(value);
+      // One read transaction is the linearization point. Later cross-tab writes
+      // belong to a subsequent snapshot; same-page mutations are rejected by the client epoch.
+      return run([WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME,WORKSPACE_TURN_STORE_NAME], 'readonly', async transaction => {
+        const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
+        const [workspace,source,index,turns] = await Promise.all([
+          request(transaction.objectStore(WORKSPACE_STORE_NAME).get(id)),
+          request(assets.get(assetKey(id,'article/structure.json'))),
+          request(assets.get(assetKey(id,'chat/index.json'))),
+          readRestoreRows(transaction,WORKSPACE_TURN_STORE_NAME,id,MAX_PAGE_SIZE)
+        ]);
+        return cloneValue({workspace:workspace||null,source:source||null,index:index||null,
+          turns:turns.sort((a,b)=>a.sequence-b.sequence)});
+      });
+    }
+
     async function pageTurns(value, options = {}) {
       const id = workspaceId(value);
       const limit = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(options.limit) || 100));
@@ -1478,9 +1519,11 @@
       listAssets,
       readPublicAssetCandidates,
       deleteAsset,
+      deleteSelectedData,
       appendTurn,
       updateTurn,
       pageTurns,
+      readChatRestoreSnapshot,
       deleteTurn,
       markMemoryRebuild,
       supportsWorkspaceDeletionApprovalCas: true,

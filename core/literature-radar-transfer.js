@@ -12,22 +12,24 @@
   const clone = t.clone;
   const RADAR_TRANSFER_KIND = 'radar';
   const ARTICLE_KEYS = [
-    'id', 'title', 'journal', 'createdDay', 'publicationDate', 'authors', 'doi', 'url',
+    'relatedPublications','sourceRecords','pmid','version','publishedDoi', 'source', 'preprint', 'id', 'title', 'journal', 'createdDay', 'publicationDate', 'authors', 'doi', 'url',
     'firstSeenAt', 'isBaseline', 'read', 'abstractSections', 'abstractStatus',
     'abstractCopyright', 'abstractSource', 'abstractError', 'abstractFetchedAt',
     'abstractAttemptAt'
   ];
   const REVISION_KEYS = [
-    'number', 'query', 'baselineDays', 'createdAt', 'windowStart', 'baselineAt', 'lastSuccessAt',
-    'lastAttemptAt', 'nextRetryAt', 'lastNewCount', 'warnings', 'queryTranslation', 'error'
+    'sourceQueries','sourceStates', 'number', 'query', 'baselineDays', 'createdAt', 'windowStart', 'baselineAt', 'lastSuccessAt',
+    'lastAttemptAt', 'nextRetryAt', 'lastNewCount', 'warnings', 'queryTranslation', 'error', 'baselineHistory'
   ];
   function normalizeQuery(value) {
     return t.normalize(value).toLowerCase();
   }
   function sanitizeArticle(article = {}) {
     const result = {};
-    for (const key of ARTICLE_KEYS) if (article[key] !== undefined) result[key] = clone(article[key]);
-    result.id = t.normalizePmid(article.id);
+    for (const key of ARTICLE_KEYS) if (key!=='sourceRecords' && article[key] !== undefined) result[key] = clone(article[key]);
+    if(Array.isArray(article.sourceRecords))result.sourceRecords=article.sourceRecords.slice(0,100).map(raw=>{const {sourceRecords,...record}=raw;return sanitizeArticle(record);});
+    if(Array.isArray(article.relatedPublications))result.relatedPublications=article.relatedPublications.slice(0,100).map(r=>({source:r.source,id:String(r.id||''),relation:t.sanitizeString(r.relation,100),url:t.sanitizeString(r.url,2000)}));
+    result.id = String(article.id||'');
     result.title = t.sanitizeString(article.title, 4000);
     result.journal = t.sanitizeString(article.journal, 500);
     result.doi = t.sanitizeString(article.doi, 500);
@@ -57,7 +59,7 @@
   }
   function sanitizeRadar(radar, includeRevisions = true) {
     const result = {
-      id: radar.id,
+      ...(radar.sourceQueries?{sourceQueries:clone(radar.sourceQueries)}:{}), id: radar.id,
       name: t.sanitizeString(radar.name, 120),
       source: radar.source,
       query: t.sanitizeString(radar.query, 4000),
@@ -93,7 +95,7 @@
       }
       for (const revision of radar.revisions) {
         for (const article of revision.articles) {
-          if (typeof article.id !== 'string' || !/^\d{5,12}$/u.test(article.id) ||
+          if (!m.validRadarPaperId(article.source||radar.source,article.id) ||
               typeof article.title !== 'string') {
             throw fail('RADAR_TRANSFER_ARTICLE_INVALID', 'radar 论文身份无效。');
           }
@@ -118,23 +120,24 @@
   }
   function radarMatch(state, incoming) {
     const query = normalizeQuery(incoming.query);
-    return state.radars.find(radar => radar.source === incoming.source &&
+    return state.radars.find(radar => JSON.stringify(radar.sourceQueries||null)===JSON.stringify(incoming.sourceQueries||null)&&radar.source === incoming.source &&
       normalizeQuery(radar.query) === query && radar.baselineDays === incoming.baselineDays);
   }
   function mergeArticles(target, incoming, warnings) {
-    const byId = new Map(target.map(article => [article.id, article]));
+    const byId = new Map(target.map(article => [(article.source||'')+':'+article.id, article]));
     for (const raw of incoming) {
       const article = sanitizeArticle(raw);
-      const existing = byId.get(article.id);
+      const existing = byId.get((article.source||'')+':'+article.id);
       if (existing) {
         existing.read = existing.read === true || article.read === true;
+        if(article.sourceRecords){const records=new Map((existing.sourceRecords||[]).map(r=>[[r.source,r.id,r.version||''].join('|'),r]));for(const r of article.sourceRecords){const key=[r.source,r.id,r.version||''].join('|');if(!records.has(key))records.set(key,r);else{const current=records.get(key);for(const [field,value]of Object.entries(r))if(current[field]===undefined||current[field]===null||current[field]==='')current[field]=value;}}existing.sourceRecords=[...records.values()];}
         for (const [key, value] of Object.entries(article)) {
           if (existing[key] === undefined || existing[key] === null || existing[key] === '') existing[key] = value;
         }
         continue;
       }
       target.push(article);
-      byId.set(article.id, article);
+      byId.set((article.source||'')+':'+article.id, article);
     }
     return warnings;
   }
@@ -148,7 +151,7 @@
     for (const raw of value.payload.radars) {
       const incoming = sanitizeRadar(raw, true);
       const sameId = current.radars.find(radar => radar.id === incoming.id);
-      if (sameId && normalizeQuery(sameId.query) !== normalizeQuery(incoming.query)) {
+      if (sameId && (normalizeQuery(sameId.query) !== normalizeQuery(incoming.query)||JSON.stringify(sameId.sourceQueries||null)!==JSON.stringify(incoming.sourceQueries||null))) {
         conflicts.push({ type: 'radar-id-query-conflict', id: incoming.id });
         warnings.push(`RADAR_TRANSFER_QUERY_CONFLICT:${incoming.id}`);
         continue;
@@ -165,8 +168,8 @@
           revisions: incoming.revisions.map((revision, index) => ({
             ...revision,
             number: index + 1,
-            query: incoming.query,
-            baselineDays: incoming.baselineDays
+            query: revision.query,
+            baselineDays: revision.baselineDays
           }))
         };
         current.radars.push(target);
@@ -179,21 +182,22 @@
       }
       for (const revision of incoming.revisions) {
         let destination = target.revisions.find(row => row.number === revision.number);
-        if (destination && normalizeQuery(destination.query) !== normalizeQuery(revision.query)) {
+        if (destination && (normalizeQuery(destination.query) !== normalizeQuery(revision.query)||JSON.stringify(destination.sourceQueries||null)!==JSON.stringify(revision.sourceQueries||null))) {
           conflicts.push({ type: 'radar-revision-query-conflict', id: target.id, revision: revision.number });
           warnings.push(`RADAR_TRANSFER_REVISION_CONFLICT:${target.id}:${revision.number}`);
           continue;
         }
         if (!destination) {
-          revision.number = target.revisions.length + 1;
-          revision.query = target.query;
-          revision.baselineDays = target.baselineDays;
-          revision.articles = [];
-          target.revisions.push(revision);
+          target.revisions.push({...revision,number:target.revisions.length+1,articles:[]});
         }
         destination = destination || target.revisions[target.revisions.length - 1];
         const before = destination.articles.length;
         mergeArticles(destination.articles, revision.articles, warnings);
+        if(Array.isArray(revision.baselineHistory)){
+          const history=new Map((destination.baselineHistory||[]).map(h=>[h.startDay+'|'+h.endDay,h]));
+          for(const h of revision.baselineHistory)if(!history.has(h.startDay+'|'+h.endDay))history.set(h.startDay+'|'+h.endDay,clone(h));
+          destination.baselineHistory=[...history.values()].sort((a,b)=>a.checkedAt-b.checkedAt).slice(-100);
+        }
         const added = destination.articles.length - before;
         summary.articlesAdded += added;
         summary.articlesMerged += revision.articles.length - added;

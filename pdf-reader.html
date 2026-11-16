@@ -10,6 +10,11 @@
   <link rel="stylesheet" href="vendor/pdfjs/web/pdf_viewer.css">
   <link rel="stylesheet" href="pdf-reader.css">
   <link rel="stylesheet" href="ui-swiss.css">
+<script src="core/translation-checkpoint.js"></script>
+<script src="core/local-translator.js"></script>
+<script src="core/credential-boundary.js"></script>
+<script src="core/input-tools.js"></script>
+<script src="core/web-media.js"></script>
 </head>
 <body class="brevess-pdf-reader" data-ui-surface="pdf">
   <header class="pdf-reader-toolbar">
@@ -37,6 +42,8 @@
     </nav>
     <div class="pdf-reader-toolbar-actions" data-sci-plugin-ui>
       <button id="pdfReaderStudy" class="pdf-reader-button is-primary" type="button">研读侧栏</button>
+      <button id="pdfReaderAnnotations" class="pdf-reader-button" type="button" aria-pressed="false">图像标注</button>
+      <button id="pdfReaderReviewFigurePages" class="pdf-reader-button" type="button" aria-pressed="false" aria-controls="pdfFigurePageReview">核对图像</button>
       <div class="pdf-reader-zoom" role="group" aria-label="阅读缩放">
         <button id="pdfReaderZoomOut" class="pdf-reader-icon-button" type="button"
           aria-label="缩小">−</button>
@@ -51,8 +58,9 @@
           type="button" aria-expanded="false" aria-controls="pdfReaderMoreMenu"
           aria-haspopup="menu"><span aria-hidden="true">•••</span><span class="pdf-reader-more-label">更多</span></button>
         <div id="pdfReaderMoreMenu" class="pdf-reader-more-menu" role="menu" hidden>
-          <button id="pdfReaderReviewFigurePages" class="pdf-reader-button" type="button"
-            role="menuitem" aria-controls="pdfFigurePageReview">核对 Figure 图像页</button>
+
+          <button id="pdfReaderCheckFigures" class="pdf-reader-button" type="button"
+            role="menuitem" aria-controls="pdfFigurePreflight">检查全部图 / 补充图注</button>
           <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" role="menuitem" hidden>返回上处</button>
           <button id="pdfReaderReturnToArticle" class="pdf-reader-button" type="button"
             role="menuitem" aria-label="返回原论文正文" hidden>← 返回原论文正文</button>
@@ -150,7 +158,7 @@
     </main>
   </div>
 
-  <script src="core/i18n.js"></script>
+  <script src="core/ui-action-icons.js"></script><script src="core/i18n.js"></script>
     <script src="core/i18n-extension.js"></script>
 <script src="core/i18n-reader.js"></script>
 <script src="core/i18n-reader-extra.js"></script>
@@ -179,6 +187,9 @@
   <script src="core/supplemental-pdf-import-store.js"></script>
   <script src="core/figure-extractor.js"></script>
   <script src="core/figure-viewer.js"></script>
+  <script src="core/figure-magnifier.js"></script>
+  <script src="core/figure-annotations.js"></script>
+  <script src="core/figure-annotation-ui.js"></script>
   <script src="core/figure-image-tiles.js"></script>
   <script src="core/figure-analysis.js"></script>
   <script src="core/figure-result-binding.js"></script>
@@ -192,6 +203,8 @@
   <script src="core/pdf-annotation-export.js"></script>
   <script src="core/pdf-save-policy.js"></script>
   <script src="core/manual-annotations.js"></script>
+  <script src="core/cross-format-anchors.js"></script>
+  <script src="core/cross-format-view.js"></script>
   <script src="core/reading-tools.js"></script>
   <script src="core/cache-planner.js"></script>
   <script src="core/review-outline.js"></script>
@@ -200,6 +213,7 @@
   <script src="core/article-workspace-save.js"></script>
   <script src="core/article-archive.js"></script>
   <script src="core/export-bundle.js"></script>
+    <script src="core/ppt-agent-materials.js"></script>
   <script src="core/evidence-first-mechanism.js"></script>
   <script src="core/cross-figure-logic.js"></script>
   <script src="core/mechanism-canvas-model.js"></script>
@@ -245,6 +259,7 @@
   <script src="pdf-reader-ui.js"></script>
   <script src="core/sidebar-interactions.js"></script>
   <script src="pdf-figure-page-review.js"></script>
+  <script src="pdf-page-annotations.js"></script>
   <script src="pdf-reader-notices.js"></script>
   <script type="module" src="pdf-native-reader.mjs"></script>
 </body>

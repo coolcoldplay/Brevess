@@ -1,3 +1,4 @@
+function isBackgroundNetworkSender(sender) { return sender?.id === chrome.runtime.id && !sender.tab && (!sender.url || sender.url === chrome.runtime.getURL('background.js')); }
 const pendingResponses = new Map();
 const pendingStreams = new Map();
 const networkWorker = new Worker('offscreen-network-worker.js');
@@ -34,7 +35,7 @@ networkWorker.onerror = event => {
 };
 
 chrome.runtime.onConnect.addListener(port => {
-  if (port?.name !== 'sci-offscreen-network-stream') return;
+  if (port?.name !== 'sci-offscreen-network-stream' || !isBackgroundNetworkSender(port.sender)) return;
   const requestIds = new Set();
   port.onMessage.addListener(message => {
     if (message?.target !== 'sci-offscreen-network') return;
@@ -64,7 +65,7 @@ chrome.runtime.onConnect.addListener(port => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.target !== 'sci-offscreen-network') return false;
+  if (message?.target !== 'sci-offscreen-network' || !isBackgroundNetworkSender(sender)) return false;
   if (message.type === 'SCI_OFFSCREEN_FETCH') {
     pendingResponses.set(message.requestId, sendResponse);
     networkWorker.postMessage({

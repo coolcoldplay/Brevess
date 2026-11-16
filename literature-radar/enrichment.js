@@ -31,7 +31,9 @@
       for(const run of [...(version.aiRuns||[])].reverse()){const completed=Object.values(run.results||{}).filter(r=>r.status==='ready').length;menu.append(new Option(`${run.description.slice(0,34)} · ${run.startDay}—${run.endDay} · ${completed} 篇`,run.key));}
       menu.value=activeRun||'';
       const run=currentRun();status('score-model',run?`当前结果来自已保存任务 · 模型：${run.route?.model||run.route?.name||'语义查找配置'} · 分数表示相关性，不是概率。`:'尚未选择评分任务；分数不会自动生成。');
-      const count=version.articles.filter(p=>!['ready','missing'].includes(p.abstractStatus)).length;
+      const supports=p=>(p.sourceRecords||[{...p,source:p.source||selected.source}]).some(r=>r.source==='pubmed');
+      const count=version.articles.filter(p=>supports(p)&&!['ready','missing'].includes(p.abstractStatus)).length;
+      $('backfill-abstracts').hidden=!version.articles.some(supports);
       $('backfill-abstracts').disabled=!!(state.active?.expiresAt>Date.now())||!count;status('backfill-abstracts',count?`补齐摘要（${count}）`:'摘要已补齐');
       updateCount();
     }
@@ -41,7 +43,7 @@
       block.title='鼠标指向或聚焦本块，按下并松开 Alt 显示/隐藏中文对照';original.setAttribute('translate','no');block.append(original);
       const saved=paper.translations?.[part];
       if(saved?.sourceText===source&&!hiddenTranslations.has(key)){const zh=node('div','translation-zh'), translated=node('p','',saved.translatedText);translated.setAttribute('translate','no');zh.append(node('small','','中文对照'),translated);block.append(zh);block.classList.add('has-translation');}
-      const target={key,source,paper,part,id:selected.id,revision:revision.number};
+      const target={key,source,paper:{...paper,source:paper.source||selected.source},part,id:selected.id,revision:revision.number};
       block.addEventListener('mouseenter',()=>{hover=target;});block.addEventListener('mouseleave',()=>{if(hover?.key===key)hover=null;});
       block.addEventListener('focus',()=>{hover=target;});block.addEventListener('blur',()=>{if(hover?.key===key)hover=null;});
       return block;
@@ -50,7 +52,7 @@
       article.dataset.pmid=paper.id;const title=article.querySelector('h3'),afterTitle=title.nextSibling;
       article.insertBefore(bilingual(title,paper,'title'),afterTitle);
       const abstract=node('details','paper-abstract'),key=`${viewKey}:${paper.id}`;abstract.open=opened.has(key);
-      const labels={ready:'摘要',missing:'PubMed 未提供摘要',error:'摘要获取失败 · 可补齐重试'};
+      const labels={ready:'摘要',missing:'来源未提供摘要',error:'摘要获取失败 · 可补齐重试'};
       abstract.append(node('summary','',labels[paper.abstractStatus]||'摘要待补齐'));
       if(paper.abstractStatus==='ready'){
         const original=node('div','abstract-original');for(const s of paper.abstractSections||[]){const p=node('p');if(s.label)p.append(node('strong','',s.label+' '));p.append(document.createTextNode(s.text));original.append(p);}
@@ -60,7 +62,7 @@
       abstract.addEventListener('toggle',()=>{if(abstract.open)opened.add(key);else opened.delete(key);});article.insertBefore(abstract,article.querySelector('.paper-footer'));
       const result=scoreFor(paper),score=node('div','relevance-result');
       if(result?.status==='ready'){const color=R.radarScoreColor(result.score);score.style.backgroundColor=color.css;score.append(node('strong','',`相关性 ${result.score}/100`),node('span','',result.reason));}
-      else if(currentRun()){const messages={'missing-abstract':'未评分 · PubMed 无摘要','abstract-unavailable':'未评分 · 摘要待补齐',error:`评分失败 · ${result?.errorCode||''}`,cancelled:'已停止 · 可继续评分',pending:'评分中…'};score.textContent=messages[result?.status]||'未评分 · 不在此任务范围或内容已更新';}
+      else if(currentRun()){const messages={'missing-abstract':'未评分 · 来源无摘要','abstract-unavailable':'未评分 · 摘要待补齐',error:`评分失败 · ${result?.errorCode||''}`,cancelled:'已停止 · 可继续评分',pending:'评分中…'};score.textContent=messages[result?.status]||'未评分 · 不在此任务范围或内容已更新';}
       if(score.textContent)article.insertBefore(score,abstract);
     }
     function compare(a,b){
@@ -69,14 +71,15 @@
     }
     async function translate(target){
       if(translationJobs.has(target.key))return;
+      let provider;
+      try {
       const binding=await R.radarTranslationBinding(target.id,target.revision,target.paper,target.part);
       const wrap=request=>client.request({type:'RADAR_TRANSLATION',request});
       const bridge={getRoute:(taskId,documentBinding)=>wrap({type:'TRANSLATION_TASK_ROUTE_GET',taskId,documentBinding}),translate:wrap,
         getReceipt:request=>wrap({...request,type:'TRANSLATION_RECEIPT_GET'}),cancel:(operationId,documentBinding,taskId)=>wrap({type:'LLM_CONTROL_OPERATION',operationId,documentBinding,taskId,command:'cancel'})};
       const T=root.BrevessLocalTranslator;if(!T){notice('翻译组件尚未载入。');return;}
-      const provider=T.createTaskProvider({taskId:'full_text_translation',localProvider:T.createProvider(),bridge,captureIdentity:()=>binding,isCurrent:()=>viewKey===`${target.id}:${target.revision}`});
+      provider=T.createTaskProvider({taskId:'full_text_translation',localProvider:T.createProvider(),bridge,captureIdentity:()=>binding,isCurrent:()=>viewKey===`${target.id}:${target.revision}`});
       translationJobs.set(target.key,{provider});notice('正在检查当前原文翻译配置…');
-      try{
         const available=await provider.availability(),signature=provider.getState().engineSignature;
         const paper=(await store.get(target.id)).revisions.find(v=>v.number===target.revision)?.articles.find(p=>p.id===target.paper.id),saved=paper?.translations?.[target.part];
         if(saved?.sourceText===target.source&&saved.engineSignature===signature){
@@ -90,7 +93,7 @@
           if(!p||(target.part==='title'?p.title:R.radarAbstractText(p))!==target.source)throw R.radarError('RADAR_AI_STALE');
           p.translations||={};p.translations[target.part]={sourceText:target.source,translatedText,engineSignature:signature,at:Date.now()};});
         hiddenTranslations.delete(target.key);notice('中文对照已保存。');await refresh(true);
-      }catch(e){notice(errorText(e));}finally{provider.destroy();translationJobs.delete(target.key);}
+      }catch(e){notice(errorText(e));}finally{provider?.destroy();translationJobs.delete(target.key);}
     }
     const typing=e=>e.target?.closest?.('input,textarea,select,[contenteditable="true"]');
     document.addEventListener('keydown',e=>{if(e.key==='Alt'&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.repeat&&!typing(e)){altTarget=hover;if(altTarget)e.preventDefault();}else if(e.key!=='Alt')altTarget=null;});
@@ -98,14 +101,21 @@
     window.addEventListener('blur',()=>{altTarget=null;});
     function editorOpened(query){queryEpoch++;cancelQuery();$('query-need').value=query||'';$('query-candidate').value='';$('query-candidate-area').hidden=true;status('query-ai-status','');}
     function cancelQuery(){if(queryJob){void client.request({type:'RADAR_AI_CANCEL',operationId:queryJob}).catch(()=>{});queryJob=null;}$('generate-query').disabled=false;}
+    $('source').addEventListener('change',()=>{queryEpoch++;cancelQuery();$('query-candidate-area').hidden=true;});
     $('editor').addEventListener('close',()=>{queryEpoch++;cancelQuery();});
-    $('cancel-query-ai').addEventListener('click',()=>{queryEpoch++;cancelQuery();status('query-ai-status','已停止生成；原检索式保留。');});
+    $('cancel-query-ai').addEventListener('click',()=>{queryEpoch++;cancelQuery();status('query-ai-status','已停止生成；已完成的候选与人工编辑保留，尚未保存。');});
     $('generate-query').addEventListener('click',async()=>{
       const input=$('query-need').value.trim();if(!input){status('query-ai-status','请填写研究需求或已有检索式。');return;}
       const epoch=++queryEpoch,operationId=op();queryJob=operationId;$('generate-query').disabled=true;status('query-ai-status','正在使用全局默认模型生成候选检索式…');
       try{const route=await client.request({type:'RADAR_AI_ROUTE',kind:'query'});if(epoch!==queryEpoch)return;
-        const result=await client.request({type:'RADAR_AI_QUERY',input,operationId,expectedEngineSignature:route.engineSignature});if(epoch!==queryEpoch)return;
-        $('query-candidate').value=result.query;$('query-candidate-area').hidden=false;status('query-ai-status',`模型：${result.route?.model||result.route?.name||'全局默认'}。${result.explanation}`);status('query-validation','候选待验证。生成和应用均不会自动保存或扫描。');
+        const controller=window.R21RadarQueries,rows=controller?controller.values():[{source:$('source').value,query:$('query').value}],generation=controller?.epoch;let completed=0;const failures=[];
+        for(const row of rows){if(epoch!==queryEpoch)return;const requestId=op();queryJob=requestId;status('query-ai-status','正在为 '+R.RADAR_SOURCES[row.source].name+' 生成检索式…');
+          try{const result=await client.request({type:'RADAR_AI_QUERY',input,source:row.source,operationId:requestId,expectedEngineSignature:route.engineSignature});if(epoch!==queryEpoch)return;
+            if(controller){if(!controller.candidate(row.source,result.query,row.query,generation)){failures.push(R.RADAR_SOURCES[row.source].name+'：输入已变化，保留人工内容');continue;}}
+            else {$('query-candidate').value=result.query;$('query-candidate-area').hidden=false;}completed++;
+          }catch(error){if(epoch!==queryEpoch)return;failures.push(R.RADAR_SOURCES[row.source].name+'：'+errorText(error));}
+        }
+        status('query-ai-status','已生成 '+completed+' / '+rows.length+' 个来源检索式；可逐项编辑后保存。'+failures.join('；'));status('query-validation','尚未保存或扫描。');
       }catch(e){if(epoch===queryEpoch)status('query-ai-status',errorText(e));}finally{if(epoch===queryEpoch){queryJob=null;$('generate-query').disabled=false;}}
     });
     $('validate-query').addEventListener('click',async()=>{const query=$('query-candidate').value,epoch=queryEpoch;
@@ -113,7 +123,7 @@
         if(epoch!==queryEpoch||query!==$('query-candidate').value)return;
         status('query-validation',`${result.errors.length?'PubMed 错误：'+result.errors.join('；'):`PubMed 命中 ${result.count} 篇。`}${result.warnings.length?' 提示：'+result.warnings.join('；'):''}\n解析：${result.queryTranslation}\n可解析不代表符合研究意图，请人工检查候选。`);
       }catch(e){if(epoch===queryEpoch)status('query-validation',errorText(e));}});
-    $('apply-query').addEventListener('click',()=>{try{$('query').value=R.validateRadarQuery($('query-candidate').value);$('query').dispatchEvent(new Event('input'));status('query-ai-status','候选已应用到检索框，尚未保存或扫描。');}catch(e){status('query-validation',errorText(e));}});
+    $('apply-query').addEventListener('click',()=>{try{$('query').value=$('source').value==='pubmed'?R.validateRadarQuery($('query-candidate').value):$('query-candidate').value.trim();$('query').dispatchEvent(new Event('input'));status('query-ai-status','候选已应用到检索框，尚未保存或扫描。');}catch(e){status('query-validation',errorText(e));}});
     $('backfill-abstracts').addEventListener('click',async()=>{
       if(!selected||!revision)return;const id=selected.id,version=revision.number;$('backfill-abstracts').disabled=true;
       try{const result=await service.backfillAbstracts(id,version,{onProgress:p=>notice(`摘要补齐 ${p.completed}/${p.total}，失败 ${p.errors} 篇。`)});notice(`摘要补齐完成：处理 ${result.completed} 篇，失败 ${result.errors} 篇。未改变新增计数。`);}catch(e){notice(errorText(e));}finally{await refresh(true);}

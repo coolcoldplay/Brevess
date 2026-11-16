@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
-  const FIGURE_PANEL_PROMPT_VERSION = '9-evidence-certainty';
+  const FIGURE_PANEL_PROMPT_VERSION = '10-oa-caption-boundaries';
   const FIGURE_PANEL_IMAGE_EDGES = Object.freeze([1200, 960, 768]);
   const CAPACITY_ERROR_CODES = new Set([
     'TOKEN_LIMIT_REJECTED', 'CONTEXT_BUDGET_EXCEEDED', 'OUTPUT_TRUNCATED'
@@ -241,15 +241,23 @@
 
   function extractFigurePanelCaption(caption, requestedPanel) {
     const text = cleanSourceText(caption, 12000);
+    const depths = new Uint16Array(text.length + 1);
+    let depth = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      depths[index] = depth;
+      if (text[index] === '(' || text[index] === '（') depth += 1;
+      else if (text[index] === ')' || text[index] === '）') depth = Math.max(0, depth - 1);
+    }
     const panel = panelRef(requestedPanel);
     const letter = '[A-Z\\uFF21-\\uFF3A]';
     const group = `${letter}(?:\\s*[-\\u2010-\\u2015\\u2212]\\s*${letter})?` +
       '(?:(?:\\s*(?:,|&|;|，|；)\\s*|\\s+(?:and|or|to)\\s+)' +
       `${letter}(?:\\s*[-\\u2010-\\u2015\\u2212]\\s*${letter})?)*`;
     const inlineCandidates = [];
-    const inline = new RegExp(`(^|[.!?;。！？；]\\s+)(${group})(\\s*[,;:，；：]\\s*)`, 'gi');
+    const inline = new RegExp(`(^|[.!?;。！？；][)）\\]]*\\s+|[)）]\\s+)(${group})(\\s*[,;:，；：]\\s*|\\.\\s+)`, 'gi');
     for (const match of text.matchAll(inline)) {
       const prefixLength = match[1]?.length || 0;
+      if (depths[(match.index || 0) + prefixLength]) continue;
       inlineCandidates.push({
         index: (match.index || 0) + prefixLength,
         end: (match.index || 0) + match[0].length,
@@ -260,9 +268,12 @@
     const declarations = captionDeclarations(text, 0, text.length);
     const parenthesized = new RegExp(`[\\(（]\\s*(${group})\\s*[\\)）]\\s*`, 'gi');
     for (const match of text.matchAll(parenthesized)) {
+      if (depths[match.index]) continue;
       const after = text.slice((match.index || 0) + match[0].length);
       const before = text.slice(0, match.index).trimEnd();
       const panels = markerPanels(match[1]);
+      const namedHeading = /\b(?:in\s+)?panels?\s*$/iu.test(before);
+      const listConjunction = /,\s*(?:and|or)\s*$/iu.test(before);
       // Inline headings establish the current source section too. Otherwise,
       // references in "a,b, WT (a) versus mutant (b) mice" become boundaries
       // and joining their fragments can change the original group assignment.
@@ -270,7 +281,7 @@
         marker.index < match.index && (!latest || marker.index > latest.index) ? marker : latest, null);
       const nextSequentialSection = previous &&
         panels[0]?.charCodeAt(0) === previous.panels.at(-1)?.charCodeAt(0) + 1 &&
-        !/\b(?:in|see|from|for|of|and|or|to|with|than|test|ANOVA|SEM|SD)\s*$/iu.test(before);
+        (listConjunction || !/\b(?:in|see|from|for|of|and|or|to|with|than|test|ANOVA|SEM|SD)\s*$/iu.test(before));
       const declarationBefore = before.slice(previous?.end || 0);
       const referenceBeforeTest = /\b(?:statistics|statistical\s+(?:analysis|analyses|tests?))\s*[:：]/iu.test(declarationBefore) &&
         /^(?:unpaired|paired|one[- ]way|two[- ]way|three[- ]way|Student['’]?s?|Welch['’]?s?|ANOVA|t[- ]test)\b/iu.test(after);
@@ -286,9 +297,13 @@
       const referenceBeforeProperty = leadingScope && (leadingScope.panels || leadingScope.local);
       // A section label introduces prose. References such as "test (A),"
       // and "(B)–(D) show mean ± SD" must stay with their original clause.
-      if (!after || referenceBeforeTest || referenceBeforeNormalization || referenceBeforeProperty || /^[,.;:!?，。；：！？&\-\u2010-\u2015\u2212]/u.test(after) ||
+      const firstHeading = namedHeading || !previous &&
+        (/(?:^|[.!?;。！？；:：])$/u.test(before) || /^[A-Z\uFF21-\uFF3A]/u.test(after) ||
+          panels[0] === 'A' && /,$/u.test(before));
+      if (!after || referenceBeforeTest || referenceBeforeNormalization || referenceBeforeProperty || (!namedHeading && /^[,.;:!?，。；：！？&\-\u2010-\u2015\u2212]/u.test(after)) ||
           /^(?:and|or|to)\b/iu.test(after) ||
-          (previous && !/[.!?;。！？；:：]$/u.test(before) && !nextSequentialSection)) continue;
+          (!previous && !firstHeading) ||
+          (previous && !namedHeading && !/[.!?;。！？；:：]$/u.test(before) && !nextSequentialSection)) continue;
       markers.push({
         index: match.index,
         end: (match.index || 0) + match[0].length,
@@ -325,6 +340,17 @@
       }
     }
     const sharedLegend = joinCaptionSpans(text, sharedSpans);
+    // A caption can end with a referenced Panel outside its earlier heading
+    // range. Recover only its complete source sentence, without assigning
+    // another Panel's section or discarding the available observation.
+    if (!targetSpans.length) {
+      for (const span of declarations) {
+        const clause = text.slice(span.index,span.end);
+        const refs = new RegExp(`[\\(（]\\s*(${group})\\s*[\\)）]`, 'gi');
+        if ([...clause.matchAll(refs)].some(match => markerPanels(match[1]).includes(panel) &&
+            !/\bfig(?:ure)?s?\.?\s*(?:S\s*)?\d+[A-Za-z]?\s*$/iu.test(clause.slice(0,match.index)))) targetSpans.push(span);
+      }
+    }
     const targetText = joinCaptionSpans(text, targetSpans).slice(0, 4800);
     const combined = [sharedLegend, targetText].filter(Boolean).join(' ');
     return { panel, sharedLegend, targetText, combined,
@@ -358,7 +384,10 @@
     const topic = options.topic || 'general';
     const terms = queryTerms(`${options.question || ''} ${figureLabel} ${panel}`);
     const scored = (Array.isArray(paragraphs) ? paragraphs : []).map((item, order) => {
-      const text = cleanSourceText(item?.text, 1600);
+      const fullText = cleanSourceText(item?.text, 4001);
+      const candidateDisplay = typeof item?.displayText === 'string' ? cleanSourceText(item.displayText, 4001) : '';
+      const displayText = candidateDisplay && candidateDisplay !== fullText ? candidateDisplay : '';
+      const text = displayText ? fullText : cleanSourceText(item?.text, 1600);
       const sectionTitle = cleanText(item?.sectionTitle, 240);
       const scoringText = cleanText(item?.text, 1600);
       const haystack = `${sectionTitle} ${scoringText}`.toLowerCase();
@@ -371,11 +400,12 @@
         paragraphId: cleanText(item?.paragraphId, 120) || `panel-context-${order + 1}`,
         sectionTitle,
         text,
+        ...(displayText && displayText !== text ? { displayText } : {}),
         ...(Array.isArray(item?.evidence) ? { evidence: item.evidence } : {}),
         score,
         order
       };
-    }).filter(item => item.text && item.score > 0)
+    }).filter(item => item.text && item.score > 0 && (!item.displayText || item.text.length + item.displayText.length <= 4000))
       .sort((left, right) => right.score - left.score || left.order - right.order);
     const selected = scored.slice(0, 4);
     if (selected.length < 2) {
@@ -383,10 +413,14 @@
       (Array.isArray(paragraphs) ? paragraphs : []).forEach((item, order) => {
         if (selected.length >= 2) return;
         const paragraphId = cleanText(item?.paragraphId, 120) || `panel-context-${order + 1}`;
-        const text = cleanSourceText(item?.text, 1600);
-        if (!text || selectedIds.has(paragraphId)) return;
+        const fullText = cleanSourceText(item?.text, 4001);
+        const candidateDisplay = typeof item?.displayText === 'string' ? cleanSourceText(item.displayText, 4001) : '';
+        const displayText = candidateDisplay && candidateDisplay !== fullText ? candidateDisplay : '';
+        const text = displayText ? fullText : cleanSourceText(item?.text, 1600);
+        if (!text || selectedIds.has(paragraphId) || displayText && displayText !== text && text.length + displayText.length > 4000) return;
         selectedIds.add(paragraphId);
         selected.push({ paragraphId, sectionTitle: cleanText(item?.sectionTitle, 240), text,
+          ...(displayText && displayText !== text ? { displayText } : {}),
           ...(Array.isArray(item?.evidence) ? { evidence: item.evidence } : {}),
           score: 0, order });
       });
@@ -503,12 +537,15 @@
       figureId: cleanText(input.figureId, 80),
       panelId,
       topic,
+      ...(shared.normalizeFigureScientificCaption?.(input) ?
+        { captionScientificContext: shared.normalizeFigureScientificCaption(input) } : {}),
       sharedLegend: captionEvidence.sharedLegend,
       panelCaption: captionEvidence.targetText || captionEvidence.combined,
       bodyEvidence: contextParagraphs.map(item => ({
         paragraphId: item.paragraphId,
         sectionTitle: item.sectionTitle,
-        text: item.text
+        text: item.text,
+        ...(item.displayText ? { displayText: item.displayText } : {})
       })),
       priorInterpretation: {
         role: cleanText(existing.role, 80),

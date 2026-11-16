@@ -1231,7 +1231,8 @@ html[data-sci-reader-single-column="true"] :is(
 }
 
 #sci-figure-image-viewer > header {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 36px;
     align-items: center;
     gap: 12px;
     min-height: 40px;
@@ -1246,7 +1247,10 @@ html[data-sci-reader-single-column="true"] :is(
     grid-row: auto;
 }
 #sci-figure-image-viewer :where(*) { box-sizing: border-box; margin: 0; float: none; }
-#sci-figure-image-viewer .sci-figure-viewer-close { margin-left: auto; }
+#sci-figure-image-viewer .sci-figure-viewer-close { margin-left: 0; grid-column: 3; }
+#sci-figure-image-viewer .sci-figure-viewer-header-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+#sci-figure-image-viewer .sci-figure-viewer-header-controls[hidden] { display: none; }
+#sci-figure-image-viewer .sci-figure-viewer-header-controls button { padding: 6px 10px; white-space: nowrap; }
 #sci-figure-image-viewer .sci-figure-viewer-canvas {
     width: auto; height: auto; max-height: none; min-height: 0;
     grid-column: auto; grid-row: auto;
@@ -1259,7 +1263,13 @@ html[data-sci-reader-single-column="true"] :is(
 #sci-figure-image-viewer .sci-figure-viewer-controls {
     width: auto; height: auto; max-height: none; grid-column: auto; grid-row: auto;
 }
-#sci-figure-image-viewer > header > strong { min-width: 0; overflow-wrap: anywhere; }
+#sci-figure-image-viewer > header > strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+    #sci-figure-image-viewer > header { gap: 6px; padding: 8px; }
+    #sci-figure-image-viewer > header > strong { grid-row: 1; grid-column: 1 / 3; }
+    #sci-figure-image-viewer .sci-figure-viewer-close { grid-row: 1; }
+    #sci-figure-image-viewer .sci-figure-viewer-header-controls { grid-row: 2; grid-column: 1 / 4; flex-wrap: wrap; }
+}
 
 #sci-manual-toolbar .sci-manual-llm-action {
     border-color: #9fbfd3;
@@ -1421,7 +1431,30 @@ html[data-sci-reader-single-column="true"] :is(
 }
 .sci-figure-viewer-controls[hidden] { display: none; }
 
+#sci-figure-image-viewer .sci-figure-annotation-controls {
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+    gap: 5px; width: 100%; padding-top: 0;
+}
+#sci-figure-image-viewer .sci-figure-viewer-controls { justify-content: flex-start; gap: 6px; padding: 8px 16px; }
+#sci-figure-image-viewer .sci-figure-viewer-shortcuts { flex-basis: auto; margin-left: auto; text-align: right; }
+#sci-figure-image-viewer .sci-figure-annotation-controls button { padding: 4px 8px; min-height: 30px; border-radius: 6px; }
+#sci-figure-image-viewer .sci-figure-annotation-controls .sci-figure-annotation-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 6px; }
+#sci-figure-image-viewer .sci-figure-annotation-icon svg { display: block; width: 20px; height: 20px; pointer-events: none; }
+#sci-figure-image-viewer .sci-figure-annotation-controls button[aria-pressed="true"] { color: #145a43; background: #d7eee5; border-color: #66a58d; }
+#sci-figure-image-viewer .sci-figure-annotation-controls input { font: inherit; height: 30px; min-width: 0; border: 1px solid #b8b8b8; border-radius: 5px; padding: 3px 5px; }
+#sci-figure-image-viewer .sci-figure-annotation-controls input[type="color"] { width: 36px; padding: 2px; }
+#sci-figure-image-viewer .sci-figure-annotation-controls input[type="number"] { width: 68px; }
+#sci-figure-image-viewer .sci-figure-annotation-controls input[type="text"] { width: 210px; }
+#sci-figure-image-viewer .sci-figure-annotation-controls input[hidden] { display: none; }
+#sci-figure-image-viewer .sci-figure-annotation-controls output { color: #566773; font-size: 12px; max-width: 360px; overflow-wrap: anywhere; }
+#sci-figure-image-viewer .sci-figure-annotation-hint { color: #667580; font-size: 11px; }
+@media (max-width: 900px) {
+    #sci-figure-image-viewer .sci-figure-viewer-shortcuts { display: none; }
+    #sci-figure-image-viewer .sci-figure-annotation-hint { display: none; }
+}
+
 .sci-figure-viewer-controls button,
+.sci-figure-viewer-header-controls button,
 .sci-figure-viewer-close {
     min-width: 36px;
     min-height: 34px;
@@ -1443,8 +1476,10 @@ html[data-sci-reader-single-column="true"] :is(
     white-space: nowrap;
 }
 .sci-figure-viewer-controls button:hover,
+.sci-figure-viewer-header-controls button:hover,
 .sci-figure-viewer-close:hover { background: #ededed; }
 .sci-figure-viewer-controls button:focus-visible,
+.sci-figure-viewer-header-controls button:focus-visible,
 .sci-figure-viewer-close:focus-visible { outline: 2px solid #202020; outline-offset: 2px; }
 .sci-figure-viewer-controls .sci-figure-viewer-caption-toggle[aria-pressed="true"] {
     border-color: #202020;
@@ -2170,3 +2205,32 @@ html[data-sci-reader-single-column="true"] :is(
 .sci-shared-note-sentence { text-decoration-line: underline !important; text-decoration-style: dashed !important; text-decoration-color: #646464 !important; text-decoration-thickness: 1.5px !important; text-underline-offset: 4px; cursor: pointer; }
 .sci-shared-note-sentence:focus-visible { outline: 1px dashed #646464; outline-offset: 3px; }
 .sci-shared-note-focus { outline: 2px solid #202020; outline-offset: 4px; }
+
+/* r21 A01: context before colors; centered menu and explicit selection ring. */
+#sci-manual-toolbar.sci-selection-surface .sci-selection-top { position: relative; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-context { margin-inline-start: 0; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-context-toggle { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-context-menu { position: absolute; z-index: 5; top: 100%; left: 50%; transform: translateX(-50%); width: min(240px, 100%); max-height: 180px; overflow-y: auto; padding: 4px; box-sizing: border-box; background: white; border: 1px solid #b8c2bc; box-shadow: 0 4px 12px #0002; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-context-choice { display: block; width: 100%; padding: 7px; border: 0; background: white; text-align: center; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-context-choice[aria-pressed="true"] { background: #e7eeea; font-weight: 600; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-palette { padding: 6px; gap: 7px; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-color[aria-pressed="true"] { outline: 2px solid #292c29; outline-offset: 2px; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-speech { position: relative; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-speech[data-state="loading"] svg { opacity: 1; }
+#sci-manual-toolbar.sci-selection-surface .sci-selection-speech[data-state="loading"]::after { content: ''; position: absolute; inset: -3px; border: 2px solid transparent; border-top-color: #326b8c; border-right-color: #326b8c; border-radius: 50%; animation: sci-speech-preparing .85s linear infinite; pointer-events: none; }
+@keyframes sci-speech-preparing { 0% { transform: rotate(0); opacity: .4; } 50% { opacity: 1; } 100% { transform: rotate(360deg); opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { #sci-manual-toolbar.sci-selection-surface .sci-selection-speech[data-state="loading"]::after { animation: none; } }
+
+/* r22: keep annotation categories in data, omit appended prose badges. */
+.sci-llm-highlight[data-badges]:not([data-badges=""])::after{content:none!important;display:none!important;}
+#sci-manual-toolbar.sci-selection-surface .sci-selection-top{gap:2px;}
+#sci-manual-toolbar.sci-selection-surface .sci-selection-palette{padding-inline-start:0;}
+
+#sci-manual-toolbar.sci-selection-surface .sci-selection-palette{padding-inline-start:5px;padding-inline-end:5px}
+#sci-manual-toolbar.sci-selection-surface .sci-selection-color[aria-pressed="true"]{outline-width:1.5px;outline-offset:1.5px}
+
+/* r27: explicit drag target preserves selection, editors and other controls. */
+#sci-manual-toolbar.sci-selection-surface .sci-selection-drag {
+    flex: 0 0 24px; width: 24px; min-width: 24px; padding: 0; font-size: 22px;
+    line-height: 28px; cursor: grab; touch-action: none; user-select: none;
+}

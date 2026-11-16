@@ -713,20 +713,22 @@
     }
 
     async function prune(database) {
-      const readTransaction = database.transaction('analysisCache', 'readonly');
-      const all = await requestToPromise(readTransaction.objectStore('analysisCache').getAll());
-      await transactionDone(readTransaction);
+      // Choose and remove victims in one transaction. A separate delete
+      // transaction can erase a freshly replaced result under the same key
+      // after the snapshot was taken, forcing another paid generation.
+      const transaction = database.transaction('analysisCache', 'readwrite');
+      const store = transaction.objectStore('analysisCache');
+      const done = transactionDone(transaction);
+      done.catch(() => {});
+      const all = await requestToPromise(store.getAll());
       const cutoff = Date.now() - maxAgeMs;
       const sorted = all.filter(entry => !isProtectedAnalysisCacheKey(entry?.key)).sort((a, b) =>
         Number(b.lastAccessedAt || b.createdAt) - Number(a.lastAccessedAt || a.createdAt));
       const removeKeys = sorted
         .filter((entry, index) => entry.createdAt < cutoff || index >= maxEntries)
         .map(entry => entry.key);
-      if (!removeKeys.length) return;
-      const writeTransaction = database.transaction('analysisCache', 'readwrite');
-      const store = writeTransaction.objectStore('analysisCache');
       removeKeys.forEach(key => store.delete(key));
-      await transactionDone(writeTransaction);
+      await done;
     }
 
     function schedulePrune(database) {
@@ -1045,6 +1047,15 @@
     onParagraphComplete = async () => {}
   }) {
     const documentHash = await hashDocument(paragraphs);
+    // A notation companion changes interpretation, not the source document or
+    // its quote offsets. Isolate both finished and resumable analysis caches
+    // while retaining all existing entries and keys for legacy/plain input.
+    const scientificDisplay = paragraphs.flatMap(item =>
+      typeof item?.displayText === 'string' && item.displayText.trim() && item.displayText !== item.text
+        ? [[item.paragraphId, item.displayText]] : []);
+    if (scientificDisplay.length) contextHash = shared.stableHash({
+      contextHash, scientificDisplayVersion: 1, scientificDisplay
+    });
     const signatureByCategory = new Map(selectedCategories.map(category => [
       category.categoryId,
       shared.buildEffectiveCategorySignature(category)

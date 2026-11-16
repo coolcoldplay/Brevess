@@ -114,7 +114,53 @@
         }
       }
     }
-    return { text, segments };
+    // Keep the original projection and Text-node offsets. The companion is
+    // descriptive MathML notation, never a replacement source or anchor.
+    const scientificContext = [];
+    if (!range && root.nodeType !== 3) {
+      const groups = new Map();
+      for (const segment of segments) {
+        let scientific = null;
+        for (let node = segment.node?.parentElement; node; node = node.parentElement) {
+          if (/^(math|sup|sub)$/iu.test(node.localName || node.tagName || '')) scientific = node;
+          if (node === root) break;
+        }
+        if (!scientific) continue;
+        const group = groups.get(scientific) || { sourceStart: segment.textStart, sourceEnd: segment.textEnd };
+        group.sourceEnd = segment.textEnd; groups.set(scientific, group);
+      }
+      let remaining = 50000;
+      function describe(node, depth = 0) {
+        if (--remaining < 0 || depth > 200) throw Error('MATH_REPRESENTATION_LIMIT');
+        if (node.nodeType === 3) return node.nodeValue || '';
+        if (omitted(node)) return '';
+        const tag = String(node.localName || node.tagName || '').toLowerCase();
+        const children = [...(node.childNodes || [])];
+        const parts = children.map(child => describe(child, depth + 1));
+        const content = parts.join('');
+        const attrs = ['mathvariant','linethickness','notation','accent','accentunder','stretchy','fence','separator',
+          'columnspan','rowspan','open','close','separators'].flatMap(name => {
+            const value = node.getAttribute?.(name); return value == null ? [] : [`${name}=${value}`];
+          });
+        if (!attrs.length && ['math','mrow','semantics','mi','mn','mo','mtext','ms'].includes(tag)) return content;
+        if (tag === 'mspace' || tag === 'br') return ' ';
+        const operands = children.flatMap((child, index) => child.nodeType === 1 && !omitted(child) ? [parts[index]] : []);
+        return `${tag}${attrs.length ? '[' + attrs.join(', ') + ']' : ''}(${operands.length ? operands.join('; ') : content})`;
+      }
+      for (const [node, span] of groups) {
+        const raw = text.slice(span.sourceStart, span.sourceEnd);
+        // A collapsed leading space can originate inside MathML but belong to
+        // surrounding prose. Bind only the mathematical source itself.
+        const leading = raw.length - raw.trimStart().length, trailing = raw.length - raw.trimEnd().length;
+        span.sourceStart += leading; span.sourceEnd -= trailing;
+        const value = text.slice(span.sourceStart, span.sourceEnd);
+        let displayText;
+        try { displayText = describe(node).replace(/\s+/gu, ' ').trim(); }
+        catch { displayText = '[MathML representation unavailable]'; }
+        if (value && displayText && displayText !== value) scientificContext.push({ ...span, text: value, displayText });
+      }
+    }
+    return { text, segments, ...(scientificContext.length ? { scientificContext } : {}) };
   }
   function readSourceText(element, options) { return extractSource(element, options).text; }
   function readRangeText(range) { return extractSource(range).text; }

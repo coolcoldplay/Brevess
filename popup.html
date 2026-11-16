@@ -5,12 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brevess</title>
     <link rel="stylesheet" href="vendor/phosphor/icons.css">
+    <link rel="stylesheet" href="core/chat-message-ui.css">
     <link rel="stylesheet" href="popup.css">
-    <link rel="stylesheet" href="sharing/sharing.css">
+
     <link rel="stylesheet" href="ui-swiss.css">
     <link rel="stylesheet" href="manual-evidence-block-editor.css">
     <link rel="stylesheet" href="vendor/semantic-icons-r42/icons.css">
     <link rel="stylesheet" href="sidebar-module-icons.css">
+<link rel="stylesheet" href="reading-focus.css">
+<link rel="stylesheet" href="web-reading.css">
+<link rel="stylesheet" href="web-filters-general/ux-panel.css">
+<link rel="stylesheet" href="workbench/agent-panel.css">
+<script src="core/input-tools.js"></script>
 </head>
 <body data-ui-surface="sidebar">
     <div id="sidePanelApp" class="side-panel-app">
@@ -39,12 +45,7 @@
             <ol id="sidePanelNotificationHistory" class="side-panel-notification-history"></ol>
           </section>
         </details>
-        <button id="toggleBilingualTranslation" class="side-panel-tool-button side-panel-icon-button" type="button"
-          aria-label="开启本地英中双语阅读" title="开启本地英中双语阅读" aria-pressed="false">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 5h12M9 3v2M12 5c-1 5-4 8-8 10M5 8c1 3 3 5 6 7M13 21l4-10 4 10M14.5 17h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button id="openBrevessAccount" class="side-panel-tool-button brevess-account-entry" type="button"
-          aria-label="账号与课题组" title="账号与课题组">账号</button>
+
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
           aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
           <i class="ph ph-gear" aria-hidden="true"></i>
@@ -80,10 +81,8 @@
           </div>
           <div id="navigationOutlineControls" class="navigation-outline-controls" role="group"
             data-workspace-tools="navigation" aria-label="标题层级展开控制" hidden>
-            <button id="expandAllOutlineLevels" class="side-panel-tool-button" type="button"
-              aria-label="展开全部标题层级" title="展开全部标题层级">+</button>
             <button id="collapseAllOutlineLevels" class="side-panel-tool-button" type="button"
-              aria-label="收起全部标题层级" title="收起全部标题层级">−</button>
+              aria-label="选择大纲展开层级；双击全部收起" title="单击选择层级 · 双击收至最高层级"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m6 3 6 6 6-6M6 21l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
           <div id="highlightsModuleTools" class="module-action-tools" data-workspace-tools="highlights"
             role="group" aria-label="摘句工具" hidden>
@@ -107,6 +106,12 @@
               <span class="visually-hidden">文献类型模板</span>
               <select id="literatureNoteTemplateSelect" aria-label="文献类型模板" title="文献类型模板"></select>
             </label>
+            <button id="copyLiteratureNote" class="side-panel-tool-button" type="button" data-action-icon="none"
+              aria-label="复制笔记" title="复制笔记"></button>
+            <button id="exportLiteratureNoteMarkdown" class="side-panel-tool-button" type="button" data-action-icon="none"
+              aria-label="导出 Markdown" title="导出 Markdown"></button>
+            <button id="toggleLiteratureNoteMarkdown" class="side-panel-tool-button" type="button" data-action-icon="none"
+              aria-label="查看 Markdown 源码" title="查看 Markdown 源码" aria-pressed="true"></button>
             <button id="autofillLiteratureNote" class="side-panel-tool-button literature-note-autofill module-primary-action" type="button"
               data-module-action title="AI 读取全文填写本模板" hidden>
               <i class="ph ph-file-magnifying-glass" aria-hidden="true"></i>
@@ -168,7 +173,7 @@
                 <span class="side-panel-tool-letter" aria-hidden="true">Z</span><span>导出到 Zotero</span>
               </button>
               <button id="clearArticleWorkspace" class="side-panel-more-tool is-danger" type="button" role="menuitem">
-                <i class="ph ph-trash" aria-hidden="true"></i><span>清空本地工作区</span>
+                <i class="ph ph-trash" aria-hidden="true"></i><span>删除本地资料…</span>
               </button>
             </div>
           </details>
@@ -177,6 +182,15 @@
       </div>
       <div id="statusMessage" class="status-message side-panel-global-status" role="status"
           aria-live="polite" aria-atomic="true"></div>
+      <div id="navigationTranslationRecovery" class="navigation-translation-recovery" hidden>
+        <p>浏览器本地翻译暂不可用，可改用已配置的默认 AI 模型翻译大纲。</p>
+        <p class="navigation-translation-recovery-note">仅切换大纲翻译；标题将发送给默认模型，并计入模型用量。</p>
+        <div class="navigation-translation-recovery-actions">
+          <button id="useGlobalNavigationTranslation" class="btn btn-primary" type="button">使用默认模型翻译</button>
+          <button id="retryLocalNavigationTranslation" class="btn btn-secondary" type="button">重试本地翻译</button>
+          <button id="openNavigationTranslationSettings" class="btn btn-secondary" type="button">翻译设置</button>
+        </div>
+      </div>
       <div id="articleContentExportProgress" class="article-content-export-progress" hidden></div>
       <div id="mechanismGenerationStatus" class="mechanism-generation-status"
         role="status" aria-live="polite" aria-atomic="true" aria-busy="false" hidden>
@@ -212,13 +226,16 @@
           <button id="pauseHighlightAnalysis" class="btn btn-secondary" type="button">暂停分析</button>
           <button id="cancelHighlightAnalysis" class="btn btn-danger-outline" type="button">取消分析</button>
         </div>
-        <details id="highlightControls" class="highlight-controls">
+        <details id="highlightControls" class="highlight-controls" open>
           <summary><i class="ph ph-list-magnifying-glass" aria-hidden="true"></i><span>高亮设置与应用</span></summary>
       <div class="container">
         <!-- 识别引擎选择 -->
         <div class="section analysis-engine-section">
+          <div class="r21-highlight-mode-row">
+           <div class="r21-engine-control">
             <h3>识别引擎</h3>
-            <div class="mode-selector engine-selector">
+            <button id="toggleAnalysisEngine" type="button" class="btn btn-secondary">正则模式</button>
+            <div class="mode-selector engine-selector" hidden>
                 <label>
                     <input type="radio" name="analysisMode" value="regex" checked>
                     <span>正则模式</span>
@@ -228,17 +245,19 @@
                     <span>LLM 精确模式</span>
                 </label>
             </div>
+           </div>
             <div id="llmAdaptiveControls" class="llm-adaptive-controls">
                 <fieldset id="readingViewControl" class="reading-view-control">
                     <legend class="adaptive-label">阅读情境</legend>
                     <div id="readingViewOptions" class="reading-view-options"></div>
-                    <button id="editReadingScenarios" type="button" class="text-button">编辑情境与类别</button>
+                    <button id="editReadingScenarios" type="button" class="text-button" title="编辑情境与类别" aria-label="编辑情境与类别"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L21 7l-5-5L4 14Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button>
                 </fieldset>
                 <div id="highlightPresentationControls" class="highlight-presentation-controls" hidden>
                     <div id="highlightFamilyLegend" class="highlight-family-legend"
                         aria-label="高亮视觉家族"></div>
                 </div>
             </div>
+          </div>
             <div id="confidenceControl" class="confidence-control" hidden>
                 <div class="confidence-label-row">
                     <label for="confidenceThreshold">证据匹配阈值</label>
@@ -256,7 +275,7 @@
             </div>
             <div id="llmDiagnostics" class="llm-diagnostics" hidden></div>
         </div>
-        
+
         <!-- 高亮模式选择 -->
         <div id="spanModeSection" class="section">
             <h3>高亮模式</h3>
@@ -374,6 +393,7 @@
         </div>
         <div class="workspace-mechanism-toolbar" role="toolbar" aria-label="图表梳理工具">
           <div class="workspace-mechanism-toolbar-actions">
+            <button id="documentAgentConnection" class="btn btn-secondary" type="button">Agent 连接</button>
             <button id="addMechanismChainNode" class="btn btn-primary" type="button">新增</button>
             <button id="focusMechanismPath" class="btn btn-secondary" type="button"
               aria-pressed="false">聚焦路径</button>
@@ -413,8 +433,7 @@
 
       <section id="workspace-chat" class="workspace-view workspace-chat-view" data-workspace-view="chat" role="tabpanel" aria-labelledby="workspace-tab-chat" hidden>
         <div class="article-chat-context-bar">
-          <div id="articleChatCoverage" class="article-chat-coverage" aria-live="polite"
-            data-sidebar-focus-static-context>等待读取当前网页正文…</div>
+          <div id="articleChatCoverage" class="article-chat-coverage" hidden></div>
           <div id="articleChatModelStatus" class="article-chat-model-status" aria-live="polite">
             <span>正在检查模型连接…</span>
             <button id="openArticleChatModelSettings" type="button">模型设置</button>
@@ -423,12 +442,12 @@
         <button id="articleChatLoadEarlier" class="article-chat-load-earlier" type="button" hidden>加载更早对话</button>
         <div id="articleChatMessages" class="article-chat-messages" role="log"
           aria-live="polite" aria-relevant="additions text" aria-label="全文问答记录">
-          <div class="workspace-empty">可以询问结论、机制、方法、证据强弱、局限，或让模型跨章节比较。</div>
+
         </div>
-        <button id="articleChatReturnLatest" class="article-chat-return-latest" type="button" hidden>
-          <i class="ph ph-caret-down" aria-hidden="true"></i>回到最新
-        </button>
         <form id="articleChatForm" class="article-chat-composer">
+        <button id="articleChatReturnLatest" class="article-chat-return-latest" type="button" aria-label="回到最新" title="回到最新" hidden>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>
+        </button>
           <label class="visually-hidden" for="articleChatQuestion">向全文提问</label>
           <div id="articleChatContextScopes" class="article-chat-context-scopes"
             aria-label="本轮限定章节" hidden></div>
@@ -471,18 +490,7 @@
         </form>
       </section>
       <section id="literatureNoteDrawer" class="workspace-view literature-note-drawer" data-workspace-view="notes" role="tabpanel" aria-labelledby="openLiteratureNote" hidden>
-        <div class="literature-note-export-actions" role="group" aria-label="笔记复制与导出">
-          <button id="copyLiteratureNote" type="button">复制笔记</button>
-          <button id="exportLiteratureNoteMarkdown" type="button">导出 Markdown</button>
-          <button id="toggleLiteratureNoteMarkdown" type="button" aria-label="查看 Markdown 源码" title="查看 Markdown 源码" aria-pressed="true">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M8 5l-6 7 6 7M16 5l6 7-6 7M14 3l-4 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <small id="literatureNoteStatus" role="status" aria-live="polite">自动保存到本机</small>
-        </div>
-        <div id="literatureNoteModelHint" class="literature-note-model-hint" aria-live="polite">
-          <span>AI 填写需要已配置的模型。</span>
-          <button id="openLiteratureNoteModelSettings" type="button">模型设置</button>
-        </div>
+        <small id="literatureNoteStatus" class="visually-hidden" role="status" aria-live="polite"></small>
         <form id="literatureNoteForm" class="literature-note-form">
           <div id="literatureNoteFields" class="literature-note-fields"></div>
         </form>
@@ -783,6 +791,7 @@
     <script src="core/article-workspace.js"></script>
     <script src="core/article-workspace-save.js"></script>
     <script src="core/article-chat-attachments.js"></script>
+    <script src="core/article-chat-research.js"></script>
     <script src="core/article-chat.js"></script>
     <script src="core/article-chat-web-sources.js"></script>
     <script src="core/article-archive.js"></script>
@@ -797,10 +806,12 @@
     <script src="core/cross-figure-logic.js"></script>
     <script src="core/panel-context-guard.js"></script>
     <script src="core/tab-activation.js"></script>
+    <script src="core/page-tools.js"></script>
     <script src="core/offline-article-workspace.js"></script>
     <script src="core/figure-source-lease.js"></script>
     <script src="core/literature-url.js"></script>
     <script src="core/pdf-workspace.js"></script>
+    <script src="core/library-html-reader.js"></script>
   <script src="core/supplemental-materials.js"></script>
   <script src="core/supplemental-docx-parts.js"></script>
   <script src="core/supplemental-docx-figures.js"></script>
@@ -820,7 +831,7 @@
     <script src="core/literature-note-export.js"></script>
     <script src="core/literature-note-editor.js"></script>
     <script src="core/literature-note-field-selection.js"></script>
-    <script src="core/i18n.js"></script>
+    <script src="core/ui-action-icons.js"></script><script src="core/i18n.js"></script>
     <script src="core/i18n-extension.js"></script>
 <script src="core/i18n-reader.js"></script>
 <script src="core/i18n-reader-extra.js"></script>
@@ -833,9 +844,19 @@
     <script src="core/user-data-database.js"></script>
     <script src="core/directory-sync.js"></script>
     <script src="core/export-bundle.js"></script>
+    <script src="core/ppt-agent-materials.js"></script>
     <script src="core/mechanism-canvas-model.js"></script>
     <script src="core/mechanism-drawing-bridge.js"></script>
     <script src="core/mechanism-drawing-panel.js"></script>
+    <script src="core/document-agent-host.js"></script>
+    <script src="core/codex-native-client.js"></script>
+    <script src="core/harness-native-client.js"></script>
+    <script src="workbench/r20-agent-permissions.js"></script>
+    <script src="workbench/agent-panel.js"></script>
+    <script src="workbench/agent-runner.js"></script>
+    <script src="core/document-agent-chat.js"></script>
+    <script src="core/document-agent-bridge.js"></script>
+    <script src="core/agent-connection-ui.js"></script>
     <script src="core/manual-evidence-block-editor.js"></script>
     <script src="core/mechanism-network.js"></script>
     <script src="core/figure-workspace.js"></script>
@@ -848,9 +869,9 @@
     <script src="vendor/semantic-icons-r42/resources.js"></script>
     <script src="vendor/semantic-icons-r42/icons.js"></script>
     <script src="sidebar-module-icons.js"></script>
-    <script src="core/i18n-sharing.js"></script>
-    <script src="sharing/client.js"></script>
-    <script src="sharing/dialog.js"></script>
+
+
+
     <script src="core/llm-task-catalog.js"></script>
     <script src="core/token-budget.js"></script>
     <script src="core/tts-service.js"></script>
@@ -863,7 +884,21 @@
 
     <script src="core/i18n-builtins.js"></script>
     <script src="core/i18n-export.js"></script>
-    <script src="sharing/account-entry.js"></script>
+
+    <script src="core/chat-table-viewer.js"></script>
+    <script src="core/chat-message-ui.js"></script>
+    <script src="core/web-media.js"></script>
     <script src="popup.js"></script>
+<script src="core/reading-focus-model.js"></script>
+<script src="reading-focus-ui.js"></script>
+<script src="unified-reading-ui.js"></script>
+<script src="same-paper-sidebar.js"></script>
+<script src="workspace-storage-choices.js"></script>
+<script src="web-filters-general/ux-context.js"></script>
+<script src="providers/provider-registry.js"></script>
+<script src="web-filters-general/ux-composer.js"></script>
+<script src="web-filters-general/ux-workflow.js"></script>
+<script src="web-filters-general/ux-panel.js"></script>
+<script src="core/sidebar-toolbar-icons.js"></script>
 </body>
 </html>

@@ -238,6 +238,12 @@
           phase = 'text';
           continue;
         }
+        // Provider progress is separate from answer NDJSON and source receipts.
+        // Identity, start and terminal checks still apply to these events.
+        if (['public_summary', 'public_reasoning_delta'].includes(event?.type)) {
+          if (event.visibility !== 'public' || typeof event.text !== 'string') throw invalidSequence();
+          continue;
+        }
         if (webEnabled && phase === 'text' && !responseText && !searchProgressSeen &&
             event?.type === 'search_progress' && event.verification === 'provider_verified' &&
             event.stage === 'completed') {

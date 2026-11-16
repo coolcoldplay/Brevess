@@ -205,3 +205,15 @@ body[data-ui-surface="action"] .action-popup__header { padding-top: 10px; paddin
     transition-duration: .01ms !important;
   }
 }
+
+[data-ui-surface="action"] .page-tools__row{display:flex;align-items:center;gap:8px}
+.page-tools__row>label{flex:0 1 auto;min-width:0;line-height:1.5}
+.page-tools__row>input{margin-left:auto;flex-shrink:0}
+[data-ui-surface="action"] .page-tools__row .page-tools__icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:5px;flex:0 0 30px;border:0;background:transparent;color:inherit}
+.page-tools__icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.page-tools__icon[aria-pressed="true"]{background:#e8eee9!important}
+
+/* Icon actions occupy the same column immediately before their switches. */
+[data-ui-surface="action"] .page-tools__row{display:grid;grid-template-columns:minmax(0,1fr) 30px 30px;column-gap:8px}
+[data-ui-surface="action"] .page-tools__row>input{grid-column:3;margin:0}
+[data-ui-surface="action"] .page-tools__row>.page-tools__icon{grid-column:2}

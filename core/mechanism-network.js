@@ -1399,16 +1399,16 @@
     return result;
   }
 
-  function safeExportText(value, maximum, strictCanonical = false) {
+  function safeExportText(value, maximum, strictCanonical = false, researchText = false) {
     if (typeof value !== 'string' || value.length > maximum * 2) invalidImport();
-    const normalized = value.normalize('NFKC')
+    const normalized = value.normalize(researchText ? 'NFC' : 'NFKC')
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, '')
       .replace(/\s+/gu, ' ').trim();
     if ((strictCanonical && normalized !== value) ||
         Array.from(normalized).length > maximum ||
         (!strictCanonical && (
-          /(?:https?|file|data|blob|javascript):|(?:^|\s)\/\//iu.test(normalized) ||
-          /(?:authorization|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|password)\b/iu.test(normalized)
+          /(?:https?|file|data|blob|javascript):|(?:^|\s)\/\//iu.test(normalized.normalize('NFKC')) ||
+          /(?:authorization|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|password)\b/iu.test(normalized.normalize('NFKC'))
         ))) {
       invalidImport();
     }
@@ -1427,7 +1427,7 @@
   }
 
   function safeMechanismText(value, maximum, strictCanonical = false) {
-    const text = safeExportText(value, maximum, strictCanonical);
+    const text = safeExportText(value, maximum, strictCanonical, true);
     if (strictCanonical) {
       let accepted = false;
       try {

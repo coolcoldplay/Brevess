@@ -1,0 +1,118 @@
+{
+  "retrievedAt": "2026-11-17",
+  "usage": "Unmodified official website icons identify configured API services. Trademarks belong to their respective owners; no endorsement is implied.",
+  "icons": [
+    {
+      "brand": "deepseek",
+      "file": "deepseek.ico",
+      "website": "https://www.deepseek.com",
+      "source": "https://www.deepseek.com/favicon.ico",
+      "sha256": "30a4420e6e4dcb17fd7de560c5004346c2bc8cd971d2d5f5ee15326603e51321",
+      "bytes": 209762
+    },
+    {
+      "brand": "openai",
+      "file": "openai.png",
+      "website": "https://developers.openai.com",
+      "source": "https://developers.openai.com/favicon.png",
+      "sha256": "8d5575ee667ff715cd3e3074d5296edc68d5aadd89720d203e13131b68b22a04",
+      "bytes": 1841
+    },
+    {
+      "brand": "anthropic",
+      "file": "anthropic.png",
+      "website": "https://www.anthropic.com",
+      "source": "https://www.anthropic.com/images/icons/favicon-32x32.png",
+      "sha256": "47718065aeeb968b381b070c66c90d9c3ae95b09a0ee24e78b9e12ae5c4f11c7",
+      "bytes": 1359
+    },
+    {
+      "brand": "claude",
+      "file": "claude.png",
+      "website": "https://claude.com",
+      "source": "https://claude.com/icon.png",
+      "sha256": "733f24f4c52acb15eb0fbded1cf40eb42b4ba8e62b882acac70b6234b50919a8",
+      "bytes": 4787
+    },
+    {
+      "brand": "gemini",
+      "file": "gemini.png",
+      "website": "https://gemini.google.com",
+      "source": "https://www.gstatic.com/lamda/images/gemini_sparkle_4g_512_lt_f94943af3be039176192d.png",
+      "sha256": "5e7cfecaa53f4f65a313fe89b0f389548126544a78fad8489510c70ae641a4a1",
+      "bytes": 61823
+    },
+    {
+      "brand": "kimi",
+      "file": "kimi.ico",
+      "website": "https://www.kimi.com",
+      "source": "https://www.kimi.com/favicon-light.ico",
+      "sha256": "df91c1ecf1d4894cf05845cdce44549ed3ccca3478b97a70972d1bc82ac4f2d1",
+      "bytes": 15086
+    },
+    {
+      "brand": "zhipu",
+      "file": "zhipu.png",
+      "website": "https://bigmodel.cn",
+      "source": "https://bigmodel.cn/static/images/favicon.png",
+      "sha256": "94ff9c00af67774e5178428942a6e0a9952c7e2f3aba4c25f3b05c782841ee4c",
+      "bytes": 1441
+    },
+    {
+      "brand": "doubao",
+      "file": "doubao.png",
+      "website": "https://www.doubao.com",
+      "source": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/favicon/new-doubao/128x128.png",
+      "sha256": "bf8e41bcc864c00099a98080825ea42aba7cf481303dad3312f44a5da68c3f3b",
+      "bytes": 17843
+    },
+    {
+      "brand": "qwen",
+      "file": "qwen.png",
+      "website": "https://qwen.ai",
+      "source": "https://img.alicdn.com/imgextra/i4/O1CN01OXv3EM1FN8t9W4P79_!!6000000000474-2-tps-80-80.png",
+      "sha256": "cd9390bc4209c319121d111f3a1f535b3c7dd909b8f860d41acc9744138d58df",
+      "bytes": 1658
+    },
+    {
+      "brand": "hunyuan",
+      "file": "hunyuan.png",
+      "website": "https://hunyuan.tencent.com",
+      "source": "https://hunyuan-blog-web-prod-1258344703.cos.ap-guangzhou.myqcloud.com/favicon.png",
+      "sha256": "d42c09bc6f08bb8435f3549c88467590aa73b0ce8cf38a1513398bc8dcb7b971",
+      "bytes": 3180
+    },
+    {
+      "brand": "qianfan",
+      "file": "qianfan.ico",
+      "website": "https://qianfan.cloud.baidu.com",
+      "source": "https://bce.bdstatic.com/img/newfavicon.ico",
+      "sha256": "fe0756fc591ed4985144cd9f61784036b1ca2bc1ed3665ad08cd2f5d626d0e77",
+      "bytes": 38078
+    },
+    {
+      "brand": "minimax",
+      "file": "minimax.ico",
+      "website": "https://www.minimax.io",
+      "source": "https://www.minimax.io/favicon.ico",
+      "sha256": "43ce4c9b9e627b391a116cd5da09e4c062d9c4e3d585509c65a4a3d16f386256",
+      "bytes": 4286
+    },
+    {
+      "brand": "typesafe",
+      "file": "typesafe.png",
+      "website": "https://typesafe.ai",
+      "source": "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png",
+      "sha256": "fcb8f554778c45ff62b97ca05df643588b39c8c66913736b7fe3485cedd96180",
+      "bytes": 4311
+    },
+    {
+      "brand": "grok",
+      "file": "grok.png",
+      "website": "https://docs.x.ai/overview",
+      "source": "https://docs.x.ai/_next/static/media/icon.2jebtfdg6783w.png?dpl=12355879cfa544f7b5e4a3457d7939c14b96a94f",
+      "sha256": "e54b4baf2aaca29eb182cb51d22be3dbad5ab09c86ccee4183fefd8326e6ee28",
+      "bytes": 5026
+    }
+  ]
+}

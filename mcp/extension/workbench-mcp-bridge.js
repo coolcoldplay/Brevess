@@ -21,10 +21,12 @@
   if (!root?.chrome?.runtime?.id) return;
 
   let generation = 0;
+  let connectionAttempt = 0;
   let config = null;
   let clientId = '';
   let workAbort = null;
   let controlAbort = null;
+  let connectionState = 'unpaired';
   const running = new Map();
 
   async function openLocalPdfViaHost(args = {}) {
@@ -68,6 +70,7 @@
   });
 
   function emitStatus(state, detail = {}) {
+    connectionState = state;
     try {
       root.dispatchEvent(new CustomEvent('brevess:mcp-status', {
         detail: { state, ...detail }
@@ -106,7 +109,7 @@
       throw error('MCP_BRIDGE_SERVER_INVALID', 'MCP server must be a localhost HTTP URL.');
     }
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) ||
-        url.username || url.password || url.search || url.hash) {
+        url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw error('MCP_BRIDGE_SERVER_INVALID', 'MCP server must be http://127.0.0.1:<port> or http://localhost:<port>.');
     }
     return url.href.replace(/\/+$/u, '');
@@ -304,7 +307,14 @@
     const started = Date.now();
     try {
       let result;
-      if (job.name === 'brevess.status') {
+      if (['ppt.prepare', 'ppt.status', 'ppt.get_manifest', 'ppt.read_chunk', 'ppt.cancel', 'mechanism.read_context', 'mechanism.list_evidence', 'mechanism.apply_commands', 'mechanism.read_receipt',
+        'brevess.request_document_write_scope', 'brevess.revoke_document_write_scope'].includes(job.name)) {
+        const response = await chrome.runtime.sendMessage({ type: 'BREVESS_DOCUMENT_AGENT_CALL', name: job.name,
+          args: job.args || {}, meta: job.hostOptions || {} });
+        if (response?.success !== true) throw error(response?.error?.code || 'DOCUMENT_HOST_UNAVAILABLE',
+          response?.error?.message, response?.error?.details);
+        result = response.data;
+      } else if (job.name === 'brevess.status') {
         result = await hostApi.status();
       } else if (job.name === 'brevess.capabilities') {
         result = await hostApi.listCapabilities(job.args || {});
@@ -435,14 +445,19 @@
     }
   }
 
-  async function workLoop(myGeneration, extensionVersion) {
+  async function workLoop(myGeneration, extensionVersion, firstPoll = null) {
     const signal = workAbort.signal;
     let backoff = 1000;
     while (!signal.aborted && generation === myGeneration) {
       try {
         const job = await request('/bridge/poll', bridgeMeta(extensionVersion), { signal });
         if (signal.aborted || generation !== myGeneration) return;
+        if (!['idle', 'call', 'reconnect'].includes(job?.type) || job?.bridge?.id !== clientId || job?.bridge?.protocolVersion !== PROTOCOL_VERSION) {
+          throw error('MCP_BRIDGE_RECEIPT_INVALID', 'The extension registration receipt is invalid.');
+        }
         emitStatus('connected', { bridge: job.bridge || null });
+        firstPoll?.resolve();
+        firstPoll = null;
         backoff = 1000;
         if (job.type === 'call') {
           await executeJob(job, extensionVersion, signal);
@@ -453,12 +468,18 @@
         }
       } catch (failure) {
         if (signal.aborted || generation !== myGeneration) return;
+        firstPoll?.reject(failure);
+        firstPoll = null;
         if (failure?.status === 401) {
           emitStatus('unauthorized', { message: failure.message });
           return;
         }
         if (failure?.code === 'BRIDGE_VERSION_MISMATCH') {
           emitStatus('incompatible', { message: failure.message });
+          return;
+        }
+        if (failure?.code === 'MCP_BRIDGE_RECEIPT_INVALID') {
+          emitStatus('incompatible');
           return;
         }
         emitStatus('offline', { message: failure?.message || String(failure) });
@@ -491,22 +512,28 @@
   }
 
   async function connect(nextConfig = null) {
+    const validated = nextConfig ? normalizeConfig(nextConfig) : null;
+    const attempt = ++connectionAttempt;
+    const next = validated || await loadConfig();
+    if (attempt !== connectionAttempt) return status();
     generation += 1;
     const myGeneration = generation;
     workAbort?.abort();
     controlAbort?.abort();
     for (const controller of running.values()) controller.abort();
     running.clear();
-    config = nextConfig ? normalizeConfig(nextConfig) : await loadConfig();
+    config = next;
     if (!config) {
       emitStatus('unpaired');
       return { connected: false, state: 'unpaired' };
     }
     await chrome.storage.local.set({ [CONFIG_KEY]: config });
     await ensureClientId();
+    if (generation !== myGeneration) return status();
     emitStatus('connecting');
     try {
       const health = await request('/health', {}, { timeoutMs: 10000 });
+      if (generation !== myGeneration) return { connected: false, state: connectionState };
       const extensionVersion = chrome.runtime.getManifest?.().version || 'unknown';
       const protocol = health?.bridge?.protocolVersion;
       if (protocol !== undefined && protocol !== PROTOCOL_VERSION) {
@@ -519,12 +546,23 @@
       }
       workAbort = new AbortController();
       controlAbort = new AbortController();
-      void workLoop(myGeneration, extensionVersion);
+      // /health is public and cannot acknowledge an authenticated extension.
+      // Keep the one-click action pending until its first real poll receipt.
+      const ready = new Promise((resolve, reject) => {
+        const signal = workAbort.signal;
+        const aborted = () => reject(error('CANCELLED', 'The MCP bridge was stopped.'));
+        signal.addEventListener('abort', aborted, { once: true });
+        const finish = fn => value => { signal.removeEventListener('abort', aborted); fn(value); };
+        void workLoop(myGeneration, extensionVersion, { resolve: finish(resolve), reject: finish(reject) });
+      });
       void controlLoop(myGeneration, extensionVersion);
+      await ready;
+      if (generation !== myGeneration) return status();
       return { connected: true, scopes: health?.scopes || [] };
     } catch (failure) {
+      if (generation !== myGeneration) throw error('CANCELLED', 'The MCP bridge was stopped.');
       if (failure?.status === 401) emitStatus('unauthorized', { message: failure.message });
-      else if (failure?.code !== 'BRIDGE_VERSION_MISMATCH') {
+      else if (!['BRIDGE_VERSION_MISMATCH', 'MCP_BRIDGE_RECEIPT_INVALID'].includes(failure?.code)) {
         emitStatus('offline', { message: failure?.message || String(failure) });
       }
       throw failure;
@@ -532,6 +570,7 @@
   }
 
   async function disconnect({ forget = false } = {}) {
+    connectionAttempt += 1;
     generation += 1;
     workAbort?.abort();
     controlAbort?.abort();
@@ -545,14 +584,24 @@
   function status() {
     return {
       paired: !!config,
-      connected: !!workAbort && !workAbort.signal.aborted,
+      connected: connectionState === 'connected',
+      state: connectionState,
       server: config?.server || null,
       protocolVersion: PROTOCOL_VERSION,
       activeRequests: [...running.keys()]
     };
   }
 
-  const api = { connect, disconnect, status, configKey: CONFIG_KEY };
+  async function probe() {
+    if (!config) return status();
+    try {
+      const health = await request('/health', {}, { timeoutMs: 10000 });
+      if (health?.bridge?.protocolVersion !== PROTOCOL_VERSION) emitStatus('incompatible');
+      else if (connectionState === 'connected' && (!health.bridge.online || health.bridge.bridge?.id !== clientId)) emitStatus('offline');
+    } catch (_) { emitStatus('offline'); }
+    return status();
+  }
+  const api = { connect, disconnect, status, probe, configKey: CONFIG_KEY };
   root.BrevessMcpBridge = api;
   emitStatus('unpaired');
   ensureClientId().catch(() => {});

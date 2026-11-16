@@ -982,7 +982,54 @@ Object.assign(entries,{'起点方向':'Source direction','终点方向':'Target 
  '原文 Panel 1A · DEMO':'Source Panel 1A · DEMO','原文 Panel 1B · DEMO':'Source Panel 1B · DEMO',
  '原文 Panel 2A · DEMO':'Source Panel 2A · DEMO','原文 Panel 2B · DEMO':'Source Panel 2B · DEMO'});
 const t=value=>globalThis.SciLLM?.translateInterfaceText?.(value,'en')||entries[value]||value;
+Object.assign(entries,{"来源连接": "Source connections", "文献来源": "Literature source", "预印本": "Preprint", "预印本 · 请核对评审状态": "Preprint · Check peer-review status", "使用所选来源的原生语法，监测日期由雷达添加。": "Use the selected source’s search syntax. Radar adds the tracking dates.", "打开来源检索 ↗": "Open source search ↗", "申请 API Key ↗": "Request an API key ↗", "机构 Token（可选）": "Institution token (optional)", "API Key 仅保存在本机，不包含在雷达分享文件中。网页版的机构登录不会自动开通 API 权限。": "API keys are stored locally and excluded from radar sharing files. Institutional website access does not automatically grant API access.", "Scopus 可使用机构网络或服务商提供的机构 Token。": "Scopus can use your institutional network or a provider-issued institution token.", "保存连接": "Save connection", "移除连接": "Remove connection", "本机已配置；填写新值可替换。": "Configured locally. Enter a new value to replace it.", "尚未配置": "Not configured", "连接已保存；请立即检查雷达以验证来源授权。": "Connection saved. Run a radar check to verify source access.", "正在从所选来源检索，请稍候…": "Searching the selected source…", "正在检查来源…": "Checking source…", "通过 Europe PMC 索引检索，可能晚于预印本网站发布。": "Searches the Europe PMC index, which can lag behind the preprint website.", "预印本通过 Europe PMC 索引检索，可能晚于网站发布。": "Preprints are retrieved through Europe PMC and may appear later than on the source website.", "输入关键词；不使用 PubMed 字段标签或布尔语法。": "Enter keywords without PubMed field tags or Boolean syntax.", "需要 API Key；可用范围由服务商和机构授权决定。": "Requires an API key. Coverage depends on provider and institutional access.", "使用该来源原生检索语法。": "Use this source’s native search syntax.", "日期口径：": "Date basis: ", "来源提示：": "Source notes: ", "来源未提供摘要": "No abstract provided by the source", "未评分 · 来源无摘要": "Not scored · No source abstract", "来源记录没有摘要，未生成替代内容。": "The source record has no abstract. No substitute was generated.", "请填写名称与所选来源的检索式，并选择有效的回溯范围和频率。": "Enter a name and source-specific query, then select a valid lookback period and frequency.", "来源不可在已有雷达中更换，请新建追踪任务。": "Create a new tracker to use another source.", "请填写该来源的 API Key。": "Enter the API key for this source.", "此来源需要 API Key，请先打开“来源连接”配置。": "This source requires an API key. Configure it in Source connections.", "来源返回的数据不完整，未推进检查进度。": "The source returned incomplete data. Check progress was not advanced.", "本次超过 5,000 篇处理上限。请缩小检索式或回溯范围；未截断结果或推进进度。": "This check exceeds the 5,000-record limit. Narrow the query or lookback period. Results were not truncated and progress was not advanced.", "来源授权未通过，请检查 API Key、机构权限和网络。": "Source access was denied. Check your API key, institutional access and network.", "来源限流或额度不足，请稍后重试。": "The source rate or quota limit was reached. Retry later.", "来源网络请求失败或超时，原进度已保留。": "The source request failed or timed out. Previous progress was preserved.", "按首次提交日期检索，修订稿不会作为新增论文重复计数。": "Uses the first submission date. Revisions are not counted as new papers.", "结果受当前 API 权限和额度限制；接口未提供摘要或日期时不编造内容。": "Results depend on API access and quota. Missing abstracts or dates are not invented.", "Crossref 使用相关性关键词检索，摘要由出版方提供，可能缺失。": "Crossref uses keyword relevance search. Publisher-supplied abstracts may be missing.", "包含 Europe PMC 收录的期刊论文和预印本。": "Includes journal articles and preprints indexed by Europe PMC.", "查看素材": "View material", "素材详情": "Material details", "修改判断 / 备注": "Edit judgment / note", "打开原文": "Open source", "暂无保存的素材内容。": "No material content has been saved.", "预览素材": "Preview material"});
+Object.assign(entries,{"移除本机凭据": "Remove local credentials", "更换来源请新建雷达；原任务和历史记录保留。": "Create a new radar for another source. The existing tracker and history are preserved."});
+Object.assign(entries,{'检索式':'Search query'});
+Object.assign(entries,{
+ '本机保存 · 多来源追踪':'Saved locally · Multiple sources',
+ '按来源保存检索式，保留原始链接与预印本标记。':'Keep source-specific queries, original links and preprint labels.',
+ '新建文献追踪任务，保存对应来源的检索式。首次检索建立基线，后续新增按时间汇集在这里。':'Create a tracker with a source-specific query. The first search establishes a baseline; later discoveries appear here by date.',
+ '每个来源使用自己的检索语法；需要授权的来源请先配置连接。':'Each source uses its own search syntax. Configure connections for sources that require authorization.',
+ '检索式发送给所选来源；任务和结果保存在本机。首次结果为基线，后续首次发现的匹配记录计为新增。向前重叠 7 天；浏览器关闭时暂停。超出 5,000 篇或分页不完整时保留原进度。':'Queries are sent to the selected source; trackers and results stay on this device. The first results form the baseline, and later first-seen matches count as new. Checks overlap by seven days and pause when the browser is closed. Progress is preserved if results exceed 5,000 records or pagination is incomplete.',
+ '· 当前':'· Current','· 历史':'· Historical',
+ '来源记录日期 · 从':'Source record date · From',
+ '时间由新到旧':'Newest first','· 时间由新到旧':'· Newest first'
+});
+Object.assign(entries,{
+  "检查全部任务": "Check all tasks",
+  "停止检查": "Stop checking",
+  "检查失败的任务": "Failed tasks",
+  "未读新增": "Unread new papers",
+  "批量检查进度": "Batch progress",
+  "批量检查已停止": "Batch stopped",
+  "批量检查完成": "Batch complete",
+  "成功": "Succeeded",
+  "失败": "Failed",
+  "新增": "New",
+  "上次检索发表日期：": "Last publication-date search: ",
+  "上次成功覆盖：": "Last successful coverage: ",
+  "今天发表": "Published today",
+  "打开 Asta 网页 ↗": "Open Asta website ↗",
+  "尚未配置 Asta Key；将尝试匿名访问，访问范围和限流由来源决定。": "No Asta key configured; anonymous access will be attempted, subject to source access and rate limits.",
+  "Asta 官方文献检索：输入关键词，按发表日期追踪。不是网页 Deep search；可能含预印本，晚到索引可能漏检。API Key 可在来源连接中配置。": "Asta official literature search: enter keywords and track publication dates. Separate from website Deep search; results may include preprints and late indexing may be missed. Configure an API key under Source connections.",
+  "Asta 按发表日期进行相关性检索；与网页 Deep search 不同，不保证穷尽收录。晚到索引超过 7 天重叠范围可能漏检。": "Asta searches by relevance and publication date. This differs from website Deep search and is not exhaustive. Late indexing beyond the 7-day overlap may be missed.",
+  "部分文献缺少具体发表日期；来源按年份的 1 月 1 日筛选，列表保留年份，不补造日期。": "Some papers lack a publication date; the source filters them as January 1 of the year. Only the known year is displayed.",
+  "Asta 访问被拒绝，请检查 API Key、来源授权与网络。": "Asta access denied. Check your API key, source authorization and network.",
+  "Asta 限流或额度不足，请稍后重试。": "Asta rate limit or quota reached. Try again later.",
+  "Asta 请求超时，原进度已保留。": "Asta request timed out; previous progress is preserved.",
+  "Asta 网络连接失败，原进度已保留。": "Asta network connection failed; previous progress is preserved.",
+  "Asta 单日结果达到 50 篇上限，请缩小检索词；原进度已保留。": "Asta reached 50 results in a single day. Narrow your keywords; previous progress is preserved.",
+  "Asta 检索范围过大，请缩小检索词或回溯范围；原进度已保留。": "Asta search is too broad. Narrow your keywords or lookback window; previous progress is preserved.",
+  "Asta 返回的数据不完整，未推进检查进度。": "Asta returned incomplete data; check progress was not advanced.",
+  "Asta 检索未成功，请检查检索词与来源授权后重试。": "Asta search failed. Check the keywords and source authorization, then retry.",
+  "Asta 接口未接受请求，请检查来源授权或稍后重试。": "Asta did not accept the request. Check source authorization or retry later.",
+  "Asta 协议版本或检索能力不兼容，请稍后重试。": "Asta protocol version or search capability is incompatible. Try again later."
+});
 const patterns=[
+[/^版本 (\d+) · (当前|历史)$/u,m=>'Version '+m[1]+' · '+(m[2]==='当前'?'Current':'Historical')],
+[/^(\d+) 篇 · 时间由新到旧( · 历史检索版本)?$/u,m=>m[1]+' papers · Newest first'+(m[2]?' · Historical query version':'')],
+[/^来源检索失败（HTTP (\d+)），原进度已保留。$/u,m=>'Source search failed (HTTP '+m[1]+'). Previous progress was preserved.'],
+[/^来源提示：(.+)$/u,m=>'Source notes: '+t(m[1])],
 [/^方案 (\d+)$/u,m=>'Plan '+m[1]],
 [/^实验分组表格无效：(.+)$/u,m=>'Invalid experimental group table: '+t(m[1])],
 [/^数量必须为 0 至 (\d+) 的整数$/u,m=>'Count must be an integer between 0 and '+m[1]],
@@ -1038,6 +1085,12 @@ for(const [prefix,en]of [['正在','Working: '],['已完成：','Completed: '],[
 // Full runtime messages, not HTML source fragments. Only explicitly identified
 // builtin status arguments are translated; authored names and IDs remain raw.
 const templates=[
+ ['批量检查完成 · 成功 {0}/{1} · 失败 {2} · 新增 {3}','Batch complete · Succeeded {0}/{1} · Failed {2} · New {3}'],
+ ['批量检查已停止 · 成功 {0}/{1} · 失败 {2} · 新增 {3}','Batch stopped · Succeeded {0}/{1} · Failed {2} · New {3}'],
+ ['批量检查进度 {0}/{1} · {2}','Batch progress {0}/{1} · {2}'],
+ ['批量检查进度 {0}/{1}','Batch progress {0}/{1}'],
+ ['上次检索发表日期：{0} — {1}（含去重重叠窗口）','Last publication-date search: {0} — {1} (includes deduplication overlap)'],
+ ['Asta 检索失败（HTTP {0}），原进度已保留。','Asta search failed (HTTP {0}); previous progress is preserved.'],
  ['实验分组表格无效：{0}','Invalid experimental group table: {0}',[0]],
  ['数量必须为 0 至 {0} 的整数','Count must be an integer from 0 to {0}'],
  ['{0}需要字符串','{0} requires a string'],
@@ -1068,5 +1121,42 @@ const templates=[
 ];
 const compile=globalThis.SciLLM?.compileInterfaceTemplate||(typeof require==='function'?require('./i18n.js').compileInterfaceTemplate:null);
 if(compile)patterns.push(...templates.map(compile));
+Object.assign(entries,{
+  '逻辑':'Logic','进度':'Progress','排期与进度':'Schedule and progress','开始日期':'Start date','结束日期':'End date','负责人':'Owner','完成比例（%）':'Completion (%)',
+  '当前 Figure':'Current Figure','新建证据块':'New evidence block','保存证据块':'Save evidence block','编辑证据块':'Edit evidence block','删除证据块':'Delete evidence block',
+  '把共同回答一个问题的 Panel 组成证据块，记录方法、观察和结论。':'Group Panels that answer the same question; record methods, observations and conclusions.',
+  '① 选择 Panel':'① Choose Panels','② 填写方法、观察与结论':'② Add methods, observations and conclusions','③ 保存证据块':'③ Save evidence block',
+  '方法与对照':'Methods and controls','观察结果':'Observations','结论':'Conclusion','未填写':'Not provided','草稿':'Draft','还没有证据块':'No evidence blocks yet',
+  '点击“新建证据块”，直接勾选当前 Figure 的 Panel。未完成的实验也能先保存为草稿。':'Select “New evidence block” and choose Panels from this Figure. Unfinished experiments can be saved as drafts.',
+  '证据块只做逻辑分组，不改变画板排布。保存后，可从假说梳理的材料库「组图规划证据」拖到节点或联系。':'Evidence blocks group Panels without changing their layout. Drag saved blocks from Figure planning evidence in the hypothesis materials library onto nodes or connections.',
+  '选择 Panel':'Choose Panels','勾选共同回答一个问题的 Panel。':'Choose Panels that answer the same question.',
+  '这些 Panel 共同回答什么问题？':'What question do these Panels answer together?',
+  '包含未完成 Panel 时保存为草稿；不会自动把计划当作实验结果。':'Blocks containing unfinished Panels are saved as drafts; plans are not treated as experimental results.',
+  '此 Figure 还没有实验 Panel，请先在画板添加。':'Add experimental Panels to this Figure on the canvas first.',
+  '请填写标题，并至少选择一个 Panel':'Enter a title and choose at least one Panel',
+  '按 Figure 展开实验 Panel；点击一行，在右侧修改排期与实验状态。':'Expand each Figure to see experimental Panels. Select a row to edit its schedule and status on the right.',
+  '日期范围':'Date range','尚无已排期 Panel':'No scheduled Panels','日期待补全':'Incomplete dates','未排期':'Unscheduled','未填比例':'No percentage',
+  '此 Figure 还没有实验 Panel':'This Figure has no experimental Panels','先添加 Figure 和 Panel，再安排实验进度。':'Add Figures and Panels to schedule experiments.',
+  '双击空白新建 · 拖动对象 · 空白拖动平移 · 滚轮缩放 · Shift 框选':'Double-click empty space to add · Drag objects · Drag blank space to pan · Wheel to zoom · Shift to select',
+  '删除这个证据块？Panel 和实验内容会保留，可撤销。':'Delete this evidence block? Panels and experiments will be kept. You can undo this.',
+  '拖 Panel 到画板空白处，新建计划占位；拖到已有 Panel 上附加参考':'Drag a Panel onto blank canvas to plan an experiment, or onto an existing Panel to add a reference',
+  'Panel · 拖入画板规划实验':'Panel · Drag onto canvas to plan an experiment',
+  '松开附加为实验参考，保留当前状态':'Release to add a reference; keep the current status',
+  '松开新建计划占位 Panel，保留文献来源':'Release to create a planned Panel with its literature source',
+  '借鉴文献 Panel 规划后续实验，尚未执行。':'Inspired by this literature Panel; the planned experiment has not been performed.',
+  '计划占位 · 参考设计':'Planned · Referenced design','进行中 · 参考设计':'In progress · Referenced design','已完成 · 参考设计':'Completed · Referenced design','待复核 · 参考设计':'Needs review · Referenced design',
+});
+Object.assign(entries,{
+  '管理课题':'Manage project','管理 课题':'Manage project','管理当前课题':'Manage current project',
+  '移入回收站后可以恢复。已有文献来源与本地文件保留。':'Items can be restored from the recycle bin. Literature sources and local files are preserved.',
+  '暂无已删除的课题、假说、方案或 Figure。':'No deleted projects, hypotheses, plans or Figures.',
+  '请填写名称':'Please enter a name',
+  '当前有未完成的修改。请取消本窗口，先导出提案，再重新载入已保存版本后重试。':'There is an unfinished change. Cancel this dialog, export the proposal, then reload the saved version and retry.',
+  '当前有未完成的修改，请先导出提案并重新载入已保存版本。':'There is an unfinished change. Export the proposal, then reload the saved version.',
+  '课题已切换，请重新打开管理窗口':'The project changed. Reopen the management dialog.',
+  '课题已切换，请重新打开回收站':'The project changed. Reopen the recycle bin.',
+  '对象已移除，请重新打开':'The item was removed. Reopen the dialog.',
+  '创建失败，请重试':'Creation failed. Please retry.'
+});
 return {entries,patterns,templates};
 });

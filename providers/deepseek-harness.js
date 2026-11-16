@@ -46,7 +46,9 @@
         let text = '', usage = null, terminal = false, model = input.model, finishReason = 'error', elapsedMs;
         try {
           for await (const raw of nativeClient.streamTurn(input)) {
-            let event = raw;
+            // Native connection metadata is the provider stream's start event.
+            // Keep it out of the article-answer content parser.
+            let event = raw?.type === 'metadata' ? { ...raw, type: 'started', providerId: 'deepseek-harness' } : raw;
             if (event?.type === 'text_delta') text += String(event.text || '');
             if (event?.model) model = String(event.model);
             if (event?.usage) usage = event.usage;

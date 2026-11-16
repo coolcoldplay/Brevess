@@ -30,6 +30,20 @@
     return Object.freeze(value);
   }
 
+  // A companion is interpretation of the full source paragraph, not a new
+  // quote coordinate system. NFC preserves mathematical Unicode distinctions.
+  function normalizeArticleScientificDisplay(value, rawText) {
+    if (typeof value !== 'string') return '';
+    const display = value.normalize('NFC').replace(/\0/g, '').replace(/\s+/gu, ' ').trim();
+    if (!display || display === String(rawText || '').normalize('NFC').replace(/\s+/gu, ' ').trim()) return '';
+    if (display.length > 64000) {
+      const error = new Error('The complete scientific representation exceeds the context limit');
+      error.code = 'SCIENTIFIC_CONTEXT_TOO_LARGE';
+      throw error;
+    }
+    return display;
+  }
+
   function chooseTextBoundary(text, start, targetChars, minChars, maxChars) {
     const remaining = text.length - start;
     if (remaining <= maxChars) return text.length;
@@ -53,6 +67,7 @@
   function recordUnits(record, options) {
     const text = String(record?.text || '');
     if (!text) return [];
+    const displayText = normalizeArticleScientificDisplay(record?.displayText, text);
     const units = [];
     let sourceStart = 0;
     while (sourceStart < text.length) {
@@ -62,6 +77,7 @@
       if (sourceEnd <= sourceStart) break;
       units.push({
         text: text.slice(sourceStart, sourceEnd).trim(),
+        ...(displayText ? { displayText } : {}),
         paragraphId: normalize(record.paragraphId),
         sourceKey: normalize(record.sourceKey || record.paragraphId),
         sourceIdentity: normalize(record.sourceIdentity || record.sourceKey || record.paragraphId),
@@ -92,11 +108,13 @@
   function makeChunk(units, position) {
     const text = units.map(unit => unit.text).join('\n\n');
     const first = units[0];
+    const interpretation = [...new Set(units.map(unit => unit.displayText).filter(Boolean))].join('\n');
+    const retrievalText = `${first.sectionTitle} ${text}${interpretation ? `\n${interpretation}` : ''}`;
     const tokens = typeof shared.tokenizeRetrievalText === 'function'
-      ? shared.tokenizeRetrievalText(`${first.sectionTitle} ${text}`, {
+      ? shared.tokenizeRetrievalText(retrievalText, {
         fallbackToUnfilteredIfEmpty: true
       })
-      : normalize(`${first.sectionTitle} ${text}`).toLowerCase().split(/\s+/);
+      : normalize(retrievalText).toLowerCase().split(/\s+/);
     const termFrequencies = {};
     tokens.forEach(token => { termFrequencies[token] = (termFrequencies[token] || 0) + 1; });
     const sourceSpans = units.map(unit => ({
@@ -116,6 +134,11 @@
     });
     const paragraphIds = [...new Set(units.map(unit => unit.paragraphId).filter(Boolean))];
     const sourceKeys = [...new Set(units.map(unit => unit.sourceKey).filter(Boolean))];
+    const scientificContext = [...new Map(units.filter(unit => unit.displayText).map(unit => {
+      const context = { paragraphId: unit.paragraphId, sourceKey: unit.sourceKey,
+        textHash: unit.textHash, displayText: unit.displayText };
+      return [JSON.stringify(context), context];
+    })).values()];
     const chunkIdentity = hash([
       first.recordType, first.sectionId, first.sectionTitle,
       sourceSpans.map(span => [span.sourceIdentity, span.textHash, span.sourceStart, span.sourceEnd])
@@ -133,6 +156,7 @@
       sourceSpans,
       sourceSpanRanges,
       text,
+      ...(scientificContext.length ? { scientificContext } : {}),
       textHash: hash(text),
       tokens,
       termFrequencies,
@@ -186,10 +210,13 @@
     });
     const documentHash = normalize(snapshot.documentHash || String(snapshot.key || '').split(':')[0]);
     const revision = Math.max(1, Number(snapshot.revision) || 1);
+    const scientificIdentity = chunks.filter(chunk => chunk.scientificContext?.length)
+      .map(chunk => [chunk.chunkId, chunk.scientificContext]);
     const index = {
       version: 1,
       indexId: `article-chat-index-${hash([
-        documentHash, revision, chunks.map(chunk => chunk.chunkId)
+        documentHash, revision, chunks.map(chunk => chunk.chunkId),
+        ...(scientificIdentity.length ? [scientificIdentity] : [])
       ])}`,
       snapshotKey: normalize(snapshot.key || `${documentHash}:${revision}`),
       documentHash,
@@ -221,6 +248,7 @@
       targetChars: DEFAULT_TARGET_CHARS,
       maxChars: DEFAULT_MAX_CHARS
     }),
-    buildArticleChatIndex
+    buildArticleChatIndex,
+    normalizeArticleScientificDisplay
   };
 });

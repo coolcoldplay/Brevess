@@ -606,6 +606,7 @@
       element('pdfReaderJumpBack').hidden = state.jumpStack.length === 0;
     });
     document.addEventListener('keydown', event => {
+      if(globalThis.BrevessInputTools?.isEditingEvent(event))return;
       if (!event.ctrlKey && !event.metaKey) return;
       if (event.key.toLowerCase() === 'f') {
         event.preventDefault(); element('pdfReaderFind').focus(); element('pdfReaderFind').select();
@@ -3403,6 +3404,33 @@
       }
       const figures = SciLLM.extractNativePdfFigures({ pages, documentHash });
       if (!current()) return [];
+      const visualHints = {};
+      const candidatePages = new Set();
+      for (const figure of figures) {
+        (figure.captionPageNumbers || [figure.pageNumber]).forEach(page => candidatePages.add(page));
+        for (let page = Math.max(1, figure.pageNumber - 3); page < figure.pageNumber; page++) {
+          const content = pages.find(item => item.pageNumber === page);
+          if (content && SciLLM.nativePdfPageLines(content).reduce((sum, line) => sum + line.text.length, 0) <= 400)
+            candidatePages.add(page);
+        }
+      }
+      if (typeof state.nativeReader.readPageArtworkHints === 'function') {
+        for (const page of candidatePages) {
+          if (!current()) return [];
+          try {
+            const hint = await state.nativeReader.readPageArtworkHints(page);
+            if (!current() || hint.documentHash !== documentHash ||
+                hint.documentGeneration !== native.documentGeneration) return [];
+            visualHints[page] = hint;
+          } catch (_) { if (!current()) return []; }
+        }
+      }
+      for (const figure of figures) {
+        figure.artworkPageRecommendation = SciLLM.recommendNativePdfFigurePages({
+          figure, figures, pages, visualHints
+        });
+        figure.artworkPageCandidates = [...figure.artworkPageRecommendation];
+      }
       const sourceRevision = await sha256PdfBytes(new TextEncoder().encode(JSON.stringify({
         documentHash, extractorVersion: 'native-caption-v3',
         figures: figures.map(({ figureId, caption, captionLineEvidence }) =>

@@ -7,6 +7,8 @@
   const TTS_MAX_AUDIO_BYTES = 8 * 1024 * 1024;
   const TTS_REQUEST_TIMEOUT_MS = 45000;
   const TTS_LOCAL_ENDPOINT = 'http://127.0.0.1:8880/v1/audio/speech';
+  const TTS_DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/tools/tts';
+  const TTS_DEEPSEEK_VOICES = [{ id: 'stella', name: 'Stella · 女声' }, { id: 'tide', name: 'Tide · 男声' }];
   const voicePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.+-]{0,79}$/;
   const plain = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const string = (value, fallback = '') => typeof value === 'string' ? value.trim() : fallback;
@@ -51,10 +53,11 @@
     const raw = plain(value);
     const local = plain(raw.local);
     const online = plain(raw.online);
+    const deepseek = plain(raw.deepseek);
     const browser = plain(raw.browser);
     const speed = Number(raw.speed);
     return {
-      mode: ['local', 'online'].includes(raw.mode) ? raw.mode : 'browser',
+      mode: ['local', 'online', 'deepseek'].includes(raw.mode) ? raw.mode : 'browser',
       autoPlay: raw.autoPlay === true,
       speed: Number.isFinite(speed) && speed >= 0.25 && speed <= 4 ? speed : 1,
       browser: { voiceEn: browserVoice(browser.voiceEn), voiceZh: browserVoice(browser.voiceZh) },
@@ -66,6 +69,11 @@
       online: {
         endpoint: string(online.endpoint), model: string(online.model),
         voiceEn: string(online.voiceEn), voiceZh: string(online.voiceZh), apiKey: string(online.apiKey)
+      },
+      deepseek: {
+        endpoint: TTS_DEEPSEEK_ENDPOINT,
+        voiceEn: string(deepseek.voiceEn, 'stella'), voiceZh: string(deepseek.voiceZh, 'stella'),
+        apiKey: string(deepseek.apiKey)
       }
     };
   }
@@ -76,17 +84,41 @@
     return normalizeTtsSettings({ ...before, ...update,
       browser: { ...before.browser, ...plain(update.browser) },
       local: { ...before.local, ...plain(update.local) },
-      online: { ...before.online, ...plain(update.online) }
+      online: { ...before.online, ...plain(update.online) },
+      deepseek: { ...before.deepseek, ...plain(update.deepseek) }
     });
   }
 
   function toPublicTtsSettings(value) {
     const settings = normalizeTtsSettings(value);
     const { apiKey, ...online } = settings.online;
-    return { ...settings, online: { ...online, hasApiKey: Boolean(apiKey) } };
+    const { apiKey: deepseekKey, ...deepseek } = settings.deepseek;
+    return { ...settings, online: { ...online, hasApiKey: Boolean(apiKey) },
+      deepseek: { ...deepseek, hasApiKey: Boolean(deepseekKey) } };
+  }
+
+  // Resolve an existing official connection only in the background. Never copy
+  // its credential into the saved TTS settings or expose it to reading pages.
+  function resolveTtsSettings(settings = {}) {
+    const tts = normalizeTtsSettings(settings.tts);
+    if (tts.mode !== 'deepseek' || tts.deepseek.apiKey) return tts;
+    const profiles = Object.entries(settings.profiles || {});
+    profiles.sort(([a], [b]) => Number(b === settings.globalProfileId) - Number(a === settings.globalProfileId));
+    const profile = profiles.map(([, p]) => p).find(p => {
+      if (p?.providerId !== 'deepseek' || !string(p.config?.apiKey)) return false;
+      if (!p.config.baseUrl) return true;
+      try { const u = new URL(p.config.baseUrl); return u.origin === 'https://api.deepseek.com' &&
+        !u.username && !u.password && !u.search && !u.hash; } catch { return false; }
+    });
+    if (profile) tts.deepseek.apiKey = string(profile.config.apiKey);
+    return tts;
   }
 
   function validateTtsEndpoint(endpoint, mode) {
+    if (mode === 'deepseek') {
+      if (endpoint !== TTS_DEEPSEEK_ENDPOINT) throw ttsError('TTS_INVALID_ENDPOINT');
+      return endpoint;
+    }
     let url;
     try { url = new URL(endpoint); } catch { throw ttsError('TTS_INVALID_ENDPOINT'); }
     const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname.toLowerCase());
@@ -102,9 +134,9 @@
     const settings = normalizeTtsSettings(value);
     if (settings.mode === 'browser') throw ttsError('TTS_BROWSER_ONLY');
     const config = settings[settings.mode];
-    if (!config.endpoint || !config.model) throw ttsError('TTS_NOT_CONFIGURED');
+    if (!config.endpoint || (settings.mode === 'deepseek' ? !config.apiKey : !config.model)) throw ttsError('TTS_NOT_CONFIGURED');
     const endpoint = validateTtsEndpoint(config.endpoint, settings.mode);
-    if (config.model.length > 120 || /[\u0000-\u001f\u007f]/u.test(config.model) ||
+    if ((config.model || '').length > 120 || /[\u0000-\u001f\u007f]/u.test(config.model || '') ||
         (config.apiKey && (config.apiKey.length > 4096 || /[\u0000-\u001f\u007f]/u.test(config.apiKey)))) {
       throw ttsError('TTS_INVALID_CONFIG');
     }
@@ -209,7 +241,7 @@
           if (total > limit) throw ttsError('TTS_RESPONSE_SIZE');
           chunks.push(value);
         }
-        if (!total) throw ttsError('TTS_RESPONSE_SIZE');
+        if (!total || (length !== null && !response.headers.get('content-encoding') && total !== Number(length))) throw ttsError('TTS_RESPONSE_SIZE');
         const bytes = new Uint8Array(total);
         let offset = 0;
         for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
@@ -283,7 +315,10 @@
         const language = input?.language === 'zh' || (input?.language !== 'en' && /\p{Script=Han}/u.test(text)) ? 'zh' : 'en';
         const voice = language === 'zh' ? config.voiceZh : config.voiceEn;
         if (!voicePattern.test(voice)) throw ttsError('TTS_INVALID_VOICE');
-        const body = { model: config.model, input: text, voice, response_format: 'mp3', speed: settings.speed };
+        const deepseek = settings.mode === 'deepseek';
+        if (deepseek && !TTS_DEEPSEEK_VOICES.some(item => item.id === voice)) throw ttsError('TTS_INVALID_VOICE');
+        const body = deepseek ? { text, voice_id: voice, format: 'pcm', filter_markdown: true }
+          : { model: config.model, input: text, voice, response_format: 'mp3', speed: settings.speed };
         if (settings.mode === 'local') Object.assign(body, { stream: false, return_download_link: false, allow_voice_tags: false, ssml: false });
         let target = '';
         if (settings.mode === 'local' && config.transport !== 'standard' && /^kokoro(?:[-_].*)?$/iu.test(config.model)) {
@@ -307,7 +342,16 @@
           return { audioBase64: encodedAudio(wav), mimeType: 'audio/wav', byteLength: wav.length, voice, language };
         }
         const headers = { 'Content-Type': 'application/json', Accept: 'audio/mpeg, audio/wav' };
-        if (settings.mode === 'online' && config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+        if (['online', 'deepseek'].includes(settings.mode) && config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+        if (deepseek) {
+          headers.Accept = 'audio/pcm, application/octet-stream';
+          const { bytes } = await requestBytes(endpoint, { method: 'POST', headers, body: JSON.stringify(body) },
+            { signal, deadline, limit: TTS_MAX_AUDIO_BYTES - 44, acceptedTypes: ['audio/pcm', 'application/octet-stream', 'audio/L16'.toLowerCase()] });
+          if (bytes.length % 2) throw ttsError('TTS_RESPONSE_TYPE');
+          const wav = pcmJsonToWav(new TextEncoder().encode(JSON.stringify({ audio_format: 'audio/pcm', audio: encodedAudio(bytes) })));
+          return { audioBase64: encodedAudio(wav), mimeType: 'audio/wav', byteLength: wav.length,
+            voice, language, playbackRate: settings.speed };
+        }
         const { bytes, mimeType } = await requestBytes(endpoint, { method: 'POST', headers, body: JSON.stringify(body) },
           { signal, deadline, limit: TTS_MAX_AUDIO_BYTES, acceptedTypes: ['audio/mpeg', 'audio/wav'] });
         if (!hasAudioSignature(bytes, mimeType)) throw ttsError('TTS_RESPONSE_TYPE', { phase: 'decode-audio', audioBytes: bytes.length });
@@ -323,6 +367,7 @@
         }
       },
       async listVoices({ settings: value, signal } = {}) {
+        if (normalizeTtsSettings(value).mode === 'deepseek') return { voices: TTS_DEEPSEEK_VOICES.map(v => ({ ...v })), defaultVoice: 'stella' };
         const { settings, config, endpoint } = activeConfig(value);
         const url = endpoint.slice(0, -'speech'.length) + 'voices';
         const headers = { Accept: 'application/json' };
@@ -334,7 +379,8 @@
       }
     };
   }
-  return { TTS_MAX_TEXT_CHARACTERS, TTS_MAX_AUDIO_BYTES, TTS_REQUEST_TIMEOUT_MS, TTS_LOCAL_ENDPOINT,
+  return { TTS_MAX_TEXT_CHARACTERS, TTS_MAX_AUDIO_BYTES, TTS_REQUEST_TIMEOUT_MS, TTS_LOCAL_ENDPOINT, TTS_DEEPSEEK_ENDPOINT, TTS_DEEPSEEK_VOICES,
+    resolveTtsSettings,
     normalizeTtsSettings, mergeTtsSettings, toPublicTtsSettings, getTtsPublicSettings,
     validateTtsEndpoint, validateBrowserTtsSettings, normalizeTtsVoices, createTtsService };
 });

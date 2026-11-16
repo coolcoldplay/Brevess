@@ -520,6 +520,7 @@
         usage.outputTokens
       ),
       reasoningTokens: boundedUsageNumber(
+        usage.output_tokens_details?.thinking_tokens ??
         usage.output_tokens_details?.reasoning_tokens ??
         usage.completion_tokens_details?.reasoning_tokens ??
         usage.thoughtsTokenCount ?? usage.reasoningTokens ?? usage.reasoningOutputTokens
@@ -1025,6 +1026,7 @@
         value.output_tokens ?? value.completion_tokens ?? value.candidatesTokenCount
       ),
       reasoningTokens: boundedUsageNumber(
+        value.output_tokens_details?.thinking_tokens ??
         value.output_tokens_details?.reasoning_tokens ??
         value.completion_tokens_details?.reasoning_tokens ?? value.thoughtsTokenCount
       ),
@@ -1032,7 +1034,12 @@
         value.prompt_cache_hit_tokens ?? value.cache_read_input_tokens ??
         value.cached_content_token_count
       ),
-      cacheMissTokens: boundedUsageNumber(value.prompt_cache_miss_tokens)
+      cacheMissTokens: boundedUsageNumber(value.prompt_cache_miss_tokens),
+      ...(value.server_tool_use ? {
+        webSearchRequests: boundedUsageNumber(value.server_tool_use.tool_search),
+        webFetchRequests: boundedUsageNumber(value.server_tool_use.tool_fetch),
+        imageSearchRequests: boundedUsageNumber(value.server_tool_use.tool_image_search)
+      } : {})
     };
   }
 
@@ -1192,6 +1199,7 @@
       let finishReason = '';
       let usageSeen = false;
       let actualModel = model;
+      let responseIdentity=null,streamDone=false;
       const usage = {};
       const mapPublicProcess = createPublicProcessMapper();
       let processFinished = false;
@@ -1199,7 +1207,28 @@
         for (const frame of frames) {
           sawSse = true;
           fallback = '';
-          const parsed = parseStreamJson(frame).data;
+          const parsedFrame=parseStreamJson(frame);if(parsedFrame.done)streamDone=true;
+          const parsed = parsedFrame.data;
+          // These are internal provider events, consumed by the DeepSeek adapter.
+          // Never flatten signatures or tool output into user-visible answer text.
+          if (request.captureDeepSeekTools === true && protocol === 'openai-chat' && parsed) {
+            if (parsed.error) {
+              if (parsed.usage) emitProviderTelemetry(request, { providerId, model, usage: parsed.usage, finishReason: 'error' });
+              throw new ProviderRequestError('PROVIDER_UNAVAILABLE', 'DeepSeek interrupted the tool request', { retryable: false });
+            }
+            const choice = parsed.choices?.[0];
+            if (choice?.server_tool_event) yield { type: 'provider_tool_event', event: choice.server_tool_event };
+            if (choice?.delta?.server_tool_calls) yield { type: 'provider_tool_result', calls: choice.delta.server_tool_calls,
+              annotations: choice.delta.annotations || [] };
+          }
+          if(request.requireResponseIdentity===true&&parsed){
+            if(protocol!=='openai-chat'||parsed.object!=='chat.completion.chunk'||typeof parsed.id!=='string'||!parsed.id.trim()||parsed.id.length>200||typeof parsed.model!=='string'||parsed.model!==model||!Array.isArray(parsed.choices)||parsed.choices.length>1||parsed.choices.some(c=>c.index!==undefined&&c.index!==0))
+              throw new ProviderRequestError('INVALID_RESPONSE','Provider stream identity is invalid');
+            if(processFinished&&(parsed.choices[0]?.delta?.content||parsed.choices[0]?.delta?.reasoning_content))throw new ProviderRequestError('INVALID_RESPONSE','Provider emitted content after completion');
+            const identity={id:parsed.id,model:parsed.model};
+            if(responseIdentity&&(identity.id!==responseIdentity.id||identity.model!==responseIdentity.model))throw new ProviderRequestError('INVALID_RESPONSE','Provider stream identity changed');
+            if(!responseIdentity){responseIdentity=identity;yield {type:'response_identity',identity};}
+          }
           const reportedModel = parsed?.model || parsed?.response?.model || parsed?.message?.model || parsed?.modelVersion;
           if (typeof reportedModel === 'string' && reportedModel.trim()) actualModel = reportedModel.slice(0, 160);
           for (const item of protocolEvents(protocol, frame, publicProcess)) {
@@ -1259,6 +1288,16 @@
         try { data = JSON.parse(fallback.trim()); } catch {
           throw new ProviderRequestError('INVALID_RESPONSE', 'Provider returned invalid streaming JSON');
         }
+        if (request.captureDeepSeekTools === true && protocol === 'openai-chat') {
+          if (data?.error) throw new ProviderRequestError('PROVIDER_REJECTED', 'DeepSeek rejected the tool request');
+          yield { type: 'provider_tool_result', calls: data?.choices?.[0]?.message?.server_tool_calls || [],
+            annotations: data?.choices?.[0]?.message?.annotations || [] };
+        }
+        if(request.requireResponseIdentity===true){
+          if(protocol!=='openai-chat'||data?.object!=='chat.completion'||typeof data.id!=='string'||!data.id.trim()||data.id.length>200||data.model!==model||!Array.isArray(data.choices)||data.choices.length!==1||data.choices[0]?.message?.role!=='assistant'||!data.choices[0]?.finish_reason)throw new ProviderRequestError('INVALID_RESPONSE','Provider fallback identity is invalid');
+          responseIdentity={id:data.id,model:data.model};streamDone=true;yield {type:'response_identity',identity:responseIdentity};
+          if(publicProcess==='deepseek-reasoning'&&typeof data.choices[0].message.reasoning_content==='string')yield {type:'public_reasoning_delta',visibility:'public',text:data.choices[0].message.reasoning_content};
+        }
         const result = nonStreamProtocolResult(protocol, data);
         actualModel = data?.model || data?.response?.model || data?.modelVersion || actualModel;
         const text = String(result.text || '');
@@ -1277,9 +1316,7 @@
         finishReason = result.finishReason || finishReason;
       }
 
-      if (!sawText) {
-        throw new ProviderRequestError('INVALID_RESPONSE', 'Provider stream did not contain text');
-      }
+      if(request.requireResponseIdentity===true&&(!responseIdentity||!finishReason||!streamDone))throw new ProviderRequestError('INVALID_RESPONSE','Provider stream identity or terminal marker missing');
       throwIfAborted();
       emitProviderTelemetry(request, {
         providerId, model: actualModel, elapsedMs: Date.now() - startedAt,
@@ -1298,6 +1335,12 @@
           'PROVIDER_UNAVAILABLE', 'Provider inference resources are temporarily unavailable',
           { retryable: true }
         );
+      }
+      if (['content_filter', 'tool_calls', 'function_call'].includes(finishReason)) {
+        throw new ProviderRequestError('PROVIDER_REJECTED', 'Provider did not complete an answer');
+      }
+      if (!sawText) {
+        throw new ProviderRequestError('INVALID_RESPONSE', 'Provider stream did not contain text');
       }
       throwIfAborted();
       yield { type: 'completed', finishReason: finishReason || 'stop' };

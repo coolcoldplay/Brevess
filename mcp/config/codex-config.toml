@@ -1,14 +1,17 @@
-# This HTTP form was verified by the coordinating session with an isolated
-# CODEX_HOME. Start the MCP server separately; do not edit the user's main
-# config unless they explicitly ask.
-
-[mcp_servers.brevess]
-url = "http://127.0.0.1:9537/mcp"
-bearer_token_env_var = "BREVESS_MCP_TOKEN"
-
-# Start the matching server in another terminal:
-# node mcp/server.js --http-only --allow-write
+# Reference only; do not import or overwrite an existing config.toml with this file.
+# Preferred: run Install-Brevess-Codex-Bridge.cmd and select Codex (or both clients).
+# The installer creates a stable, versioned runtime and a managed read-only entry.
+# Reuse that entry; do not replace it with an extracted package path or HTTP URL.
+# Verified automatic adapter: npm Codex CLI 0.151.0. See README.md for other versions.
 #
-# The token must be the same local bridge token printed by the server. Never
-# put an OpenAI/DeepSeek API key in this setting.
-
+# Shape of an installed read-only entry (all example lines are intentionally comments):
+# [mcp_servers.brevess]
+# command = "<absolute installed node.exe from the managed entry>"
+# args = ["<absolute installed mcp/server.js from the same entry>", "--stdio-only", "--state-dir", "<absolute installed state directory>", "--no-write", "--port", "9537"]
+# startup_timeout_sec = 30
+# tool_timeout_sec = 300
+#
+# Reload Codex, pair through Workbench Agent Connection, then check brevess.status.
+# No token belongs in this file. Enabling write transport requires separate user
+# consent and does not replace the target's browser approval. Do not start a second
+# default-port HTTP service alongside the installed shared service.

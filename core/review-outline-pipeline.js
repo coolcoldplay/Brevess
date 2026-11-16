@@ -337,7 +337,11 @@
           attempts: reduceAttempt,
           retryable: true
         };
-        if (reduceAttempt >= 3) break;
+        // One format-repair opportunity is enough for a structurally invalid
+        // synthesis. Keep the saved paragraph summaries instead of silently
+        // spending a third request on the same invalid shape.
+        const reduceAttemptLimit = error?.code === 'INVALID_RESPONSE' ? 2 : 3;
+        if (reduceAttempt >= reduceAttemptLimit) break;
         reduceAttempt += 1;
         const waitMs = retryDelay(error, reduceAttempt - 2);
         await report({

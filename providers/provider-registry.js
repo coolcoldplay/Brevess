@@ -68,50 +68,56 @@
       jsonMode: true, supportsVision: false
     },
     {
-      id: 'kimi', label: 'Kimi（月之暗面）',
+      id: 'grok', label: 'Grok（xAI）',
+      description: 'xAI 官方 OpenAI 兼容接口。',
+      baseUrl: 'https://api.x.ai/v1', defaultModel: 'grok-4.7',
+      authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: true
+    },
+    {
+      id: 'kimi', group: 'domestic', label: 'Kimi（月之暗面）',
       description: 'Kimi 官方 OpenAI Chat Completions 接口。',
       baseUrl: 'https://api.moonshot.cn/v1', defaultModel: 'kimi-k3',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: true
     },
     {
-      id: 'zhipu', label: '智谱 GLM',
+      id: 'zhipu', group: 'domestic', label: '智谱 GLM',
       description: '智谱开放平台通用 API。',
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4', defaultModel: 'glm-5.2',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'doubao', label: '豆包（火山方舟）',
+      id: 'doubao', group: 'domestic', label: '豆包（火山方舟）',
       description: '火山方舟 OpenAI 兼容 Chat 接口。',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
       defaultModel: 'doubao-seed-2-0-lite-260215',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'qwen', label: '通义千问（阿里云百炼）',
+      id: 'qwen', group: 'domestic', label: '通义千问（阿里云百炼）',
       description: '阿里云百炼 OpenAI 兼容接口（北京地域）。',
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-flash',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'hunyuan-tokenhub', label: '腾讯混元（TokenHub）',
+      id: 'hunyuan-tokenhub', group: 'domestic', label: '腾讯混元（TokenHub）',
       description: '腾讯云当前推荐的 TokenHub 接口，需要 TokenHub API Key。',
       baseUrl: 'https://tokenhub.tencentmaas.com/v1', defaultModel: 'hy3-preview',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'hunyuan-classic', label: '腾讯混元（经典 API）',
+      id: 'hunyuan-classic', group: 'domestic', label: '腾讯混元（经典 API）',
       description: '适用于已有混元经典 API Key 的账户。',
       baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', defaultModel: 'hunyuan-turbos-latest',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'qianfan', label: '百度千帆',
+      id: 'qianfan', group: 'domestic', label: '百度千帆',
       description: '千帆 v2 OpenAI 兼容接口。',
       baseUrl: 'https://qianfan.baidubce.com/v2', defaultModel: 'ernie-4.5-turbo-32k',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
     },
     {
-      id: 'minimax', label: 'MiniMax',
+      id: 'minimax', group: 'domestic', label: 'MiniMax',
       description: 'MiniMax M2.7 OpenAI 兼容文本接口。',
       baseUrl: 'https://api.minimaxi.com/v1', defaultModel: 'MiniMax-M2.7',
       authHeader: 'Authorization', authPrefix: 'Bearer', jsonMode: true, supportsVision: false
@@ -375,9 +381,10 @@
 
   function knownModelCapacity(config = {}) {
     const model = normalizedModelName(config);
-    if (/^deepseek-v4-(?:pro|flash)(?:[-_.]|$)/.test(model)) {
+    if (model === 'deepseek-flash' || /^deepseek-v4-(?:pro|flash)(?:[-_.]|$)/.test(model)) {
       return { contextWindowTokens: 1000000, maxOutputTokens: 384000 };
     }
+    if (/^grok-4\.7(?:[-_.]|$)/.test(model)) return { contextWindowTokens: 500000, maxOutputTokens: 32768 };
     if (/^gpt-4\.1(?:[-_.]|$)/.test(model)) {
       return { contextWindowTokens: 1047576, maxOutputTokens: 65536 };
     }
@@ -394,8 +401,7 @@
   }
 
   function getProviderContextWindowTokens(providerId, config = {}, override = null) {
-    const explicit = validContextWindowOverride(override);
-    if (explicit) return explicit;
+    // Context limits are derived from the selected model; legacy overrides remain stored but no longer control allocation.
     const known = knownModelCapacity(config);
     if (known) return known.contextWindowTokens;
     return DEFINITIONS[providerId]?.contextWindowTokens || 32768;

@@ -53,7 +53,12 @@ function adapterFor(fetchImpl, extra = {}) {
 
 async function collect(stream) {
   const events = [];
-  for await (const event of stream) events.push(event);
+  for await (const event of stream) {
+    // Public progress and unverified previews are observed separately; assert the
+    // verified result protocol here, with exactly one completed search event.
+    if (['public_summary','answer_preview'].includes(event.type) || event.type === 'search_progress' && event.stage !== 'completed') continue;
+    events.push(event);
+  }
   return events;
 }
 
@@ -79,8 +84,10 @@ test('official web search uses Search API then Chat Completions with exact sourc
 
   assert.deepEqual(events.map(event => event.type),
     ['started', 'search_progress', 'text_delta', 'web_grounding', 'usage', 'completed']);
-  assert.deepEqual(events[1],
-    { type: 'search_progress', verification: 'provider_verified', stage: 'completed' });
+  assert.equal(events[1].verification, 'provider_verified');
+  assert.equal(events[1].stage, 'completed');
+  assert.equal(events[1].sources.length, 2);
+  assert.equal(events[1].query, 'What does the figure show?');
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, searchEndpoint);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer fixture-key');
@@ -95,7 +102,7 @@ test('official web search uses Search API then Chat Completions with exact sourc
   assert.equal(calls[1].options.headers.Authorization, 'Bearer fixture-key');
   const chatBody = JSON.parse(calls[1].options.body);
   assert.equal(chatBody.model, 'deepseek-flash');
-  assert.equal(chatBody.stream, false);
+  assert.equal(chatBody.stream, true);
   assert.deepEqual(chatBody.thinking, { type: 'disabled' });
   assert.equal(chatBody.tools, undefined);
   assert.match(chatBody.messages[0].content, /\[S1\]/u);
@@ -185,8 +192,9 @@ test('answer citations must bind to one returned source and never rely on copied
     const events = await collect(adapter.generateWebSearchTextStream({
       userPrompt: 'question', webSearchQuestion: 'question'
     }));
-    assert.equal(calls, 2, name);
-    assert.deepEqual(events.map(event => event.type), ['started', 'error'], name);
+    assert.equal(calls, code === 'OUTPUT_TRUNCATED' ? 2 : 3, name);
+    assert.deepEqual(events.map(event => event.type), ['started', 'search_progress', 'error'], name);
+    assert.equal(events.some(event => event.type === 'text_delta'), false, name);
     assert.equal(events.at(-1).error.code, code, name);
   }
 });

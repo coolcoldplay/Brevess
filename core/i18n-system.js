@@ -146,7 +146,7 @@ AI 运行中	AI is running
 请在普通网页使用；浏览器内部页面及 PDF 请使用对应阅读入口。	Use this on a regular web page. For browser pages and PDFs, use their dedicated reading entry.
 从本文缩略词表移除 {0}？	Remove {0} from this article's abbreviation list?
 **问题：**	**Question:**
-注释：	Annotation:
+注释：	Annotation:\x20
 离线文献已切换，请重新打开	The offline article changed. Please reopen it.
 请从当前文献重新打开侧栏	Please reopen the sidebar from the current article.
 任务已取消	Task cancelled

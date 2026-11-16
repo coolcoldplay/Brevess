@@ -118,8 +118,27 @@
     };
   }
 
+  function scientificContextFor(chunk, boundary = Infinity) {
+    const contexts = Array.isArray(chunk.scientificContext) ? chunk.scientificContext : [];
+    if (boundary === Infinity || !Array.isArray(chunk.sourceSpans) ||
+        !Array.isArray(chunk.sourceSpanRanges)) return contexts;
+    const included = chunk.sourceSpans.filter((span, index) => {
+      const start = chunk.sourceSpanRanges[index]?.chunkStart;
+      return !Number.isFinite(Number(start)) || Number(start) < boundary;
+    });
+    return contexts.filter(context => included.some(span =>
+      span.paragraphId === context.paragraphId && span.sourceKey === context.sourceKey &&
+      span.textHash === context.textHash));
+  }
+
+  function chunkTokenCost(chunk, boundary = Infinity) {
+    const context = scientificContextFor(chunk, boundary);
+    return estimateTokens(String(chunk?.text || '').slice(0, boundary)) + 8 +
+      (context.length ? estimateTokens(JSON.stringify({ scientificContext: context })) : 0);
+  }
+
   function fitChunkToBudget(chunk, maximumTokens) {
-    const fullCost = estimateTokens(chunk?.text) + 8;
+    const fullCost = chunkTokenCost(chunk);
     if (fullCost <= maximumTokens) return chunk;
     const text = String(chunk?.text || '');
     if (!text || maximumTokens < 64) return null;
@@ -128,7 +147,7 @@
     let best = 0;
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
-      if (estimateTokens(text.slice(0, middle)) + 8 <= maximumTokens) {
+      if (chunkTokenCost(chunk, middle) <= maximumTokens) {
         best = middle;
         low = middle + 1;
       } else {
@@ -180,6 +199,7 @@
       ...chunk,
       chunkId: `${chunk.chunkId}:fit-${boundary}`,
       text: fittedText,
+      ...(chunk.scientificContext ? { scientificContext: scientificContextFor(chunk, boundary) } : {}),
       sourceSpans: spans.length ? spans : chunk.sourceSpans,
       sourceSpanRanges: spans.length
         ? fittedPairs.map(item => item.range) : chunk.sourceSpanRanges,
@@ -237,7 +257,11 @@
       input.kind === 'panelChat' ? 'panelChat' : 'articleChat', {
         units: Math.max(1, Number(input.outputUnits) || 1),
         tokenPolicy: profile.tokenPolicy || {},
-        adapterCap
+        adapterCap,
+        contextWindowTokens: resolveContextWindow(profile),
+        reasoningProviderId: profile.providerId,
+        reasoningEnabled: profile.config?.reasoningEnabled === true || profile.config?.thinking === true,
+        reasoningEffort: profile.config?.reasoningEffort || 'auto'
       }
     );
     const contextWindowTokens = resolveContextWindow(profile);
@@ -311,14 +335,14 @@
       throw contextError({ phase: 'required-article-context', requiredChunkIds });
     }
     const minimumArticleTokens = Math.max(MIN_ARTICLE_CONTEXT_TOKENS,
-      requiredChunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0));
+      requiredChunks.reduce((sum, chunk) => sum + chunkTokenCost(chunk), 0));
     const publicationMetadata = fitPublicationMetadata(input.metadata, Math.max(0, Math.min(
       Math.floor(inputBudgetTokens.available * 0.25), remainingForArticle - minimumArticleTokens
     )));
     const metadataTokens = publicationMetadata ? estimateTokens(JSON.stringify(publicationMetadata)) : 0;
     remainingForArticle -= metadataTokens;
     const completeArticleTokens = articleChunks.reduce((sum, chunk) =>
-      sum + estimateTokens(chunk.text) + 8, 0);
+      sum + chunkTokenCost(chunk), 0);
     const broadQuery = typeof shared.isBroadArticleChatQuery === 'function'
       ? shared.isBroadArticleChatQuery(input.query) : false;
     let mode = broadQuery && completeArticleTokens <= remainingForArticle
@@ -351,9 +375,9 @@
       ];
     }
 
-    let chunkTokens = chunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0);
+    let chunkTokens = chunks.reduce((sum, chunk) => sum + chunkTokenCost(chunk), 0);
     const requiredTokenCost = requiredChunks.reduce((sum, chunk) =>
-      sum + estimateTokens(chunk.text) + 8, 0);
+      sum + chunkTokenCost(chunk), 0);
     if (requiredTokenCost > remainingForArticle) {
       throw contextError({
         phase: 'required-article-context', inputBudgetTokens,
@@ -363,12 +387,12 @@
     while (chunks.length > Math.max(1, requiredChunks.length) &&
         chunkTokens > remainingForArticle) {
       chunks.pop();
-      chunkTokens = chunks.reduce((sum, chunk) => sum + estimateTokens(chunk.text) + 8, 0);
+      chunkTokens = chunks.reduce((sum, chunk) => sum + chunkTokenCost(chunk), 0);
     }
     if (!requiredChunks.length && chunks.length === 1 && chunkTokens > remainingForArticle) {
       const fitted = fitChunkToBudget(chunks[0], remainingForArticle);
       chunks = fitted ? [fitted] : [];
-      chunkTokens = fitted ? estimateTokens(fitted.text) + 8 : 0;
+      chunkTokens = fitted ? chunkTokenCost(fitted) : 0;
     }
     if (!chunks.length || chunkTokens > remainingForArticle) {
       throw contextError({

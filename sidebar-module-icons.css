@@ -1,10 +1,10 @@
 /* Selected R4.3 appearance is kept in vendor/semantic-icons-r42/icons.css.
  * Only production rail sizing, keyboard focus and real task progress live here. */
 body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button {
-  --icon-size: 24px;
+  --icon-size: 22px;
   min-width: 44px;
-  min-height: 48px;
-  padding: 7px;
+  min-height: 40px;
+  padding: 5px;
   gap: 0;
   border: 0;
   border-radius: 0;
@@ -15,7 +15,7 @@ body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button {
 body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:hover { background: #ededed; }
 body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button[data-selected="true"] { background: #202020; color: #fff; }
 body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:focus-visible { outline-offset: -4px; }
-body[data-ui-surface="sidebar"] .workspace-bottom-nav { flex-basis: 56px; }
+body[data-ui-surface="sidebar"] .workspace-bottom-nav { flex-basis: 42px; }
 body[data-ui-surface="sidebar"] .bvi-button .workspace-nav-task-progress { display: none; }
 .bvi-button .sr-slot { pointer-events: none; }
 .bvi-progress {
@@ -47,3 +47,8 @@ html[data-reduced="true"] .bvi-button[data-indeterminate="true"] .bvi-progress >
   .bvi-progress > span { animation: none !important; transition: none; }
   .bvi-button[data-indeterminate="true"] .bvi-progress > span { transform: none; }
 }
+
+/* Task failures remain in status text; mouse interaction never leaves a frame. */
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:not(:focus-visible) { outline: none; }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:focus-visible { outline: 2px solid currentColor; outline-offset: -4px; }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button::after { content: none; animation: none; }

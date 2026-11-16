@@ -192,6 +192,16 @@
     if (envelope.textualEvidence?.version !== 2) fail('PDF_FIGURE_CONTEXT_INVALID');
     const captions = verifiedEvidence(envelope.textualEvidence.captions, 'caption');
     const body = verifiedEvidence(envelope.textualEvidence.body, 'body');
+    const userCaption = envelope.textualEvidence.userCaption;
+    if (userCaption != null && (userCaption.source !== 'user' || userCaption.confirmed !== true ||
+        userCaption.documentHash !== binding.documentHash ||
+        userCaption.figureId !== input.figureId || typeof userCaption.text !== 'string' ||
+        !userCaption.text.trim() || userCaption.text.length > 20000 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffd]/u.test(userCaption.text) ||
+        !Array.isArray(userCaption.captionPageNumbers) || !userCaption.captionPageNumbers.length ||
+        userCaption.captionPageNumbers.some(page => !positive(page)))) {
+      fail('PDF_FIGURE_USER_CAPTION_INVALID');
+    }
     if ([...captions, ...body].reduce((sum, item) => sum + item.text.length, 0) > 128000) {
       fail('PDF_FIGURE_CONTEXT_BUDGET_EXCEEDED');
     }
@@ -280,7 +290,11 @@
     };
     await assertCurrent();
     return { figure: { ...input, figureLabel: envelope.figure.figureLabel,
-      caption: captions.map(item => item.text).join('\n'), contextParagraphs: [...bodyByParagraph.values()],
+      caption: userCaption
+        ? `[USER-SUPPLIED CAPTION — user transcription/correction, not a verified PDF quote]\n${userCaption.text}\n[END USER-SUPPLIED CAPTION]`
+        : captions.map(item => item.text).join('\n'),
+      ...(userCaption ? { pdfUserCaption: userCaption } : {}),
+      contextParagraphs: [...bodyByParagraph.values()],
       images, imageVariants: [], pdfEvidenceBinding: query }, assertCurrent,
       async validateDispatchImages(requestImages) {
         const actualImages = Array.isArray(requestImages) ? requestImages : [];

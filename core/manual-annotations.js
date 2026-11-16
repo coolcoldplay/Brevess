@@ -202,6 +202,8 @@
     if (!isPlainObject(input)) fail('INVALID_DOCUMENT_RECORD');
     const documentId = unicodeText(input.documentId).trim().toLowerCase();
     if (!/^sha256:[a-f0-9]{64}$/.test(documentId)) fail('INVALID_DOCUMENT_ID');
+    if (input.sourceIdentity !== undefined && input.sourceIdentity !== null && input.sourceIdentity !== '' &&
+        manualDocumentSourceIdentity(input) !== input.sourceIdentity) fail('INVALID_DOCUMENT_SOURCE_IDENTITY');
     if (input.studyType !== undefined && input.studyType !== null && input.studyType !== '' &&
         !(typeof shared.isStudyType === 'function'
           ? shared.isStudyType(input.studyType) : STUDY_TYPE_IDS.has(input.studyType))) {
@@ -352,6 +354,26 @@
     return { status: 'unresolved', reason: 'NOT_FOUND' };
   }
 
+  // A local source key describes independently verified bytes; it never grants
+  // access. Only the trusted reader preparation route may mint it. Publisher
+  // canonical URLs remain empty when no publisher identity is known.
+  function manualDocumentSourceIdentity(value) {
+    const own = key => {
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(value || {}, key);
+        return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+      } catch (_) { return undefined; }
+    };
+    const source = own('sourceIdentity');
+    if (source !== undefined && source !== null && source !== '') {
+      const hash = own('documentHash');
+      return typeof hash === 'string' && /^[a-f0-9]{64}$/u.test(hash) &&
+        own('documentId') === `sha256:${hash}` && source === `library-html:sha256:${hash}`
+        ? source : '';
+    }
+    return typeof own('canonicalUrl') === 'string' ? own('canonicalUrl').trim() : '';
+  }
+
   function sameManualAnnotationRefreshIdentity(committedState, response, expectedTabId) {
     const tabId = Number(expectedTabId);
     const documentId = unicodeText(response?.documentId).trim();
@@ -359,13 +381,14 @@
     const canonicalUrl = unicodeText(response?.canonicalUrl).trim();
     const contentWorldNonce = unicodeText(response?.contentWorldNonce).trim();
     const documentEpoch = Number(response?.documentEpoch);
-    if (!Number.isSafeInteger(tabId) || !documentId || !documentHash || !canonicalUrl ||
+    if (!Number.isSafeInteger(tabId) || !documentId || !documentHash || !manualDocumentSourceIdentity(response) ||
       !/^[a-f0-9]{32,64}$/iu.test(contentWorldNonce) ||
       !Number.isSafeInteger(documentEpoch) || documentEpoch < 1) return false;
     return Number(committedState?.tabId) === tabId &&
       unicodeText(committedState?.documentId).trim() === documentId &&
       unicodeText(committedState?.documentHash).trim() === documentHash &&
       unicodeText(committedState?.canonicalUrl).trim() === canonicalUrl &&
+      manualDocumentSourceIdentity(committedState) === manualDocumentSourceIdentity(response) &&
       unicodeText(committedState?.contentWorldNonce).trim() === contentWorldNonce &&
       Number(committedState?.documentEpoch) === documentEpoch;
   }
@@ -394,6 +417,7 @@
       documentId: unicodeText(response?.documentId).trim(),
       documentHash: unicodeText(response?.documentHash).trim(),
       canonicalUrl: unicodeText(response?.canonicalUrl).trim(),
+      sourceIdentity: response?.sourceIdentity,
       contentWorldNonce: unicodeText(response?.contentWorldNonce).trim(),
       documentEpoch: Number(response?.documentEpoch)
     };
@@ -436,6 +460,7 @@
     normalizeDocumentRecord,
     locateAnnotationInBlocks,
     makeCategorySnapshot,
+    manualDocumentSourceIdentity,
     sameManualAnnotationRefreshIdentity,
     manualAnnotationRefreshCommitMode,
     manualAnnotationEventCommitMode

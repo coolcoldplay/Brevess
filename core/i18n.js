@@ -1,10 +1,40 @@
 (function attach(root, factory) {
-  if (root.SciLLM?.INTERFACE_I18N_REVISION === 'r37-en-2' && !(typeof module === 'object' && module.exports)) return;
+  if (root.SciLLM?.INTERFACE_I18N_REVISION === 'r17-action-icons' && !(typeof module === 'object' && module.exports)) return;
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const EN = Object.freeze({
+    "Agent 连接": "Agent connection",
+    "刷新状态": "Refresh status",
+    "检测连接": "Check connection",
+    "重连 MCP": "Reconnect MCP",
+    "检测连接组件": "Check connection component",
+    "复制配置提示词": "Copy setup prompt",
+    "撤回写权限": "Revoke write permission",
+    "自动配对并自检": "Pair automatically and check",
+    "配对并检查": "Pair and check",
+    "前往工作台快捷连接": "Open workbench quick connection",
+    "前往工作台配对": "Open workbench pairing",
+    "正在刷新…": "Refreshing\u2026",
+    "正在检测连接…": "Checking connection\u2026",
+    "正在检测组件…": "Checking component\u2026",
+    "正在重连…": "Reconnecting\u2026",
+    "正在复制…": "Copying\u2026",
+    "正在配对并自检…": "Pairing and checking\u2026",
+    "正在配对并检查…": "Pairing and checking\u2026",
+    "正在撤回权限…": "Revoking permission\u2026",
+    "正在打开工作台…": "Opening workbench\u2026",
+    "Windows 本机模型桥：使用单独安装的本机配套组件（可选）。": "Windows local model bridge: use the companion component included with this acceptance package (optional).",
+    "查看本机文献概况与缩略词，管理工作区维护、目录同步与迁移。": "View local paper and abbreviation summaries; manage workspace maintenance, directory sync and migration.",
+    '浏览器本地翻译暂不可用，可改用已配置的默认 AI 模型翻译大纲。': 'Browser translation is unavailable. Use your configured default AI model to translate the outline.',
+    '仅切换大纲翻译；标题将发送给默认模型，并计入模型用量。': 'Only outline translation will change. Titles are sent to your default model and count toward its usage.',
+    '使用默认模型翻译': 'Translate with default model',
+    '重试本地翻译': 'Retry browser translation',
+    '翻译设置': 'Translation settings',
+    '浏览器本地英中翻译暂不可用。可在下方使用默认模型翻译，或打开翻译设置。': 'Browser English-to-Chinese translation is unavailable. Use the default model below or open translation settings.',
+    '请先在设置中心连接模型并启用 AI，再使用模型翻译。': 'Connect a model and enable AI in Settings before using model translation.',
+    '文件写入已结束。检测到版本冲突，目录原文件保持不变；浏览器版本已另存到 conflicts 文件夹。请核对后再合并。': 'File writing has finished. A version conflict was found: the original folder files are unchanged, and the browser versions are saved separately in the conflicts folder. Review both versions before merging.',
     '选择供应商并填写 API Key 即可接入，自动使用默认模型。具体模型与功能选项在下方表格设置。': 'Choose a provider and enter your API key to connect using its default model. Choose models and options for each feature in the table below.',
     '供应商': 'Provider',
     '已保存连接': 'Saved connections',
@@ -2222,6 +2252,7 @@
     } finally {
       applying = false;
     }
+    globalThis.SciLLM?.decorateActionIcons?.(rootNode);
   }
 
   function observeInterfaceRoot(rootNode) {
@@ -2232,13 +2263,18 @@
       if (applying) return;
       records.forEach(record => {
         if (record.target?.isConnected === false) return;
-        if (record.type === 'characterData') applyTextNode(record.target);
+        if (record.type === 'characterData') {
+          applyTextNode(record.target);
+          globalThis.SciLLM?.decorateActionIcons?.(record.target);
+        }
         // PDF.js moves staged leaves into the live layer and discards older
         // layers. Mutation records can retain obsolete, detached roots.
         record.addedNodes?.forEach(node => {
           if (node.isConnected !== false) applyTree(node);
         });
         if (record.type === 'attributes') applyAttributes(record.target);
+        // Also process removed labels and aria-busy transitions without a second observer.
+        if (record.type !== 'characterData') globalThis.SciLLM?.decorateActionIcons?.(record.target?.closest?.('button'));
       });
     });
     observer.observe(rootNode, {
@@ -2246,13 +2282,14 @@
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['placeholder', 'title', 'aria-label', 'alt']
+      attributeFilter: ['placeholder', 'title', 'aria-label', 'alt', 'aria-busy']
     });
     const dispose = () => { observer.disconnect(); observedRoots.delete(rootNode); };
     observedRoots.set(rootNode, { observer, dispose });
     return dispose;
   }
 
+  EN["在左侧画板绘制机制链，将解图证据拖到联系线上。"] = "Draw a mechanism chain on the left canvas and drag figure evidence onto its connections.";
   function setInterfaceLanguage(value, rootNode = globalThis.document) {
     languageRevision++;
     const selected = normalizeLanguage(value);
@@ -2269,6 +2306,7 @@
   }
 
   function registerInterfaceTranslations(entries = {}, patterns = []) {
+    globalThis.SciLLM?.invalidateActionIconTranslations?.();
     Object.assign(additionalTranslations, entries);
     additionalPatterns.push(...patterns);
     // Specific complete messages must precede generic “{value} failed” rules,
@@ -2289,7 +2327,7 @@
 
   // The existing settings key is shared by every extension surface. Reading
   // changes updates open views without persisting translations or new schemas.
-  globalThis.chrome?.storage?.onChanged?.addListener?.((changes, area) => {
+  (globalThis.SciLLM?.onPublicPreferencesChanged || globalThis.chrome?.storage?.onChanged?.addListener?.bind(globalThis.chrome.storage.onChanged))?.((changes, area) => {
     if (area !== 'local' || !changes.sciLlmSettingsV2?.newValue?.language) return;
     setInterfaceLanguage(changes.sciLlmSettingsV2.newValue.language, interfaceRoot);
   });
@@ -2310,7 +2348,7 @@
   }
 
   return {
-    INTERFACE_I18N_REVISION: 'r37-en-2',
+    INTERFACE_I18N_REVISION: 'r17-action-icons',
     INTERFACE_TRANSLATIONS_EN: EN,
     normalizeInterfaceLanguage: normalizeLanguage,
     translateInterfaceText: translateString,

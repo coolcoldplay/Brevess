@@ -5,6 +5,55 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   'use strict';
   const PAIR = Object.freeze({ sourceLanguage: 'en', targetLanguage: 'zh' });
+  const scientificApi = typeof module === 'object' && module.exports
+    ? require('./translation-checkpoint.js') : globalThis.BrevessTranslationCheckpoint;
+  function scientificChunks(source, context, start = 0) {
+    const parts = [];
+    while (start < source.length) {
+      let end = start + splitText(source.slice(start))[0].length;
+      const crossing = context.find(item => item.sourceStart < end && item.sourceEnd > end);
+      if (crossing) end = crossing.sourceStart > start ? crossing.sourceStart : crossing.sourceEnd;
+      if (end - start > 1800) throw failure('TOKEN_BUDGET_EXCEEDED', 'A complete scientific expression exceeds the translation input bound.');
+      const scientificContext = scientificApi.sliceScientificContext(source, context, start, end);
+      const text = source.slice(start, end);
+      if (scientificContext.length && JSON.stringify({sourceText:text, scientificContext}).length > 6000) {
+        throw failure('TOKEN_BUDGET_EXCEEDED', 'Scientific translation context exceeds the input bound.');
+      }
+      parts.push({text, scientificContext}); start = end;
+    }
+    return parts;
+  }
+  function nativeScientificText(source, context, start, end) {
+    let text = '', cursor = start;
+    const spans = [];
+    for (const item of context) {
+      if (item.sourceEnd <= start || item.sourceStart >= end) continue;
+      if (item.sourceStart < start || item.sourceEnd > end) throw failure('TRANSLATION_INVALID_REQUEST', 'A scientific expression cannot be split.');
+      text += source.slice(cursor, item.sourceStart);
+      spans.push({ ...item, modelStart: text.length, modelEnd: text.length + item.displayText.length });
+      text += item.displayText; cursor = item.sourceEnd;
+    }
+    return { text: text + source.slice(cursor, end), spans };
+  }
+  function nativeScientificChunks(source, context, start, end, limit) {
+    const chunks = [];
+    while (start < end) {
+      let next = start + splitText(source.slice(start, end), limit)[0].length;
+      const crossing = context.find(item => item.sourceStart < next && item.sourceEnd > next);
+      if (crossing) next = crossing.sourceStart > start ? crossing.sourceStart : crossing.sourceEnd;
+      const projected = nativeScientificText(source, context, start, next);
+      if (projected.text.length > limit) {
+        let cut = splitText(projected.text, limit)[0].length;
+        const formula = projected.spans.find(item => item.modelStart < cut && item.modelEnd > cut);
+        if (formula) cut = formula.modelStart || formula.modelEnd;
+        // Convert the chosen model boundary back to the original UTF-16 source.
+        next = start + cut + projected.spans.filter(item => item.modelEnd <= cut)
+          .reduce((delta, item) => delta + item.text.length - item.displayText.length, 0);
+      }
+      chunks.push(source.slice(start, next)); start = next;
+    }
+    return chunks;
+  }
   function failure(code, message, cause) {
     const error = new Error(message);
     error.code = code;
@@ -21,11 +70,33 @@
       Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
     });
   }
+  function nativeEnvironmentFailure() {
+    if (globalThis.isSecureContext === false) return failure('TRANSLATION_CONTEXT_UNAVAILABLE', 'The Translator API requires a secure context.');
+    const policy = globalThis.document?.permissionsPolicy || globalThis.document?.featurePolicy;
+    try {
+      if (policy?.features?.().includes('translator') && policy.allowsFeature('translator') === false) {
+        return failure('TRANSLATION_POLICY_BLOCKED', 'The page permissions policy blocks the Translator API.');
+      }
+    } catch { /* Older browsers need not expose policy inspection. */ }
+    return null;
+  }
+  function nativeDiagnostic(error, stage) {
+    const native = error?.cause || error;
+    return { stage, code: error?.code || '', name: String(native?.name || 'Error').slice(0, 80),
+      // Capability/create receive no article text. Keep those actionable native
+      // messages, but do not copy arbitrary translation-input text into status.
+      message: stage === 'translate' ? '' : String(native?.message || '').slice(0, 500),
+      sourceLanguage: 'en', targetLanguage: 'zh' };
+  }
   function classify(error, stage) {
     if (error?.code === 'ABORTED' || error?.name === 'AbortError') return abortError();
     if (error?.code && typeof error.code === 'string') return error;
-    if (error?.name === 'NotAllowedError') return failure('USER_ACTIVATION_REQUIRED', 'Start local translation from a click on the page.', error);
-    if (error?.name === 'NotSupportedError') return failure('LANGUAGE_UNAVAILABLE', 'This browser does not support English to Chinese translation.', error);
+    if (error?.name === 'NotAllowedError') return nativeEnvironmentFailure() || failure('USER_ACTIVATION_REQUIRED', 'The browser requires an active page interaction or permission before creating a Translator.', error);
+    if (stage === 'initialize' && /(?:model download hasn.t started|awaiting device capability check|model.*(?:not ready|not available yet))/iu.test(String(error?.message || ''))) {
+      return failure('MODEL_NOT_READY', 'The browser is still checking device capability or preparing its local translation model.', error);
+    }
+    if (error?.name === 'NotSupportedError') return failure(stage === 'initialize' ? 'NATIVE_UNAVAILABLE' : 'TRANSLATION_FAILED',
+      'The browser could not currently provide its native translation session.', error);
     return failure(stage === 'initialize' ? 'INITIALIZATION_FAILED' : 'TRANSLATION_FAILED',
       stage === 'initialize' ? 'The browser could not initialize or download its local translation model.' : 'The browser could not translate this text.', error);
   }
@@ -91,7 +162,58 @@
         return `${prefix}${lower} to ${upper}`;
       });
   }
+  function navigationTitleBatchItems(targets) {
+    return targets.map(target => ({ sourceKey: `${target.sourceKind}\u0000${target.sectionId}`,
+      sourceTitle: target.sourceTitle, parentTitle: target.parentTitle || '' }));
+  }
+  function parseNavigationTitleBatch(text) {
+    const invalid = () => { throw failure('TRANSLATION_INVALID_REQUEST', 'Invalid navigation title batch.'); };
+    if (typeof text !== 'string' || text.length > 6000) invalid();
+    let items; try { items = JSON.parse(text); } catch { invalid(); }
+    if (!Array.isArray(items) || !items.length || items.length > 12) invalid();
+    const seen = new Set();
+    for (const item of items) {
+      if (!item || Object.keys(item).sort().join(',') !== 'parentTitle,sourceKey,sourceTitle' ||
+          typeof item.sourceKey !== 'string' || !/^(?:html|pdf)\u0000[^\u0000-\u001f]+$/u.test(item.sourceKey) ||
+          item.sourceKey.length > 4096 || seen.has(item.sourceKey) ||
+          typeof item.sourceTitle !== 'string' || !item.sourceTitle.trim() || item.sourceTitle.length > 1800 ||
+          typeof item.parentTitle !== 'string' || item.parentTitle.length > 1800) invalid();
+      seen.add(item.sourceKey);
+    }
+    return items;
+  }
+  function validateNavigationTitleTranslations(items, result) {
+    const invalid = () => { throw failure('INVALID_TRANSLATION', 'Navigation title results do not match their source IDs.'); };
+    if (!result || Object.keys(result).length !== 1 || !Array.isArray(result.translations) ||
+        result.translations.length !== items.length) invalid();
+    const sources = new Map(items.map(item => [item.sourceKey, item])), translated = new Map();
+    for (const row of result.translations) {
+      if (!row || Object.keys(row).sort().join(',') !== 'sourceKey,translatedText' ||
+          !sources.has(row.sourceKey) || translated.has(row.sourceKey) ||
+          typeof row.translatedText !== 'string' || row.translatedText.length > 6000) invalid();
+      translated.set(row.sourceKey, validateTranslation(sources.get(row.sourceKey).sourceTitle, row.translatedText));
+    }
+    return items.map(item => ({ sourceKey: item.sourceKey, translatedText: translated.get(item.sourceKey) }));
+  }
+  function createNavigationTitleBatches(targets) {
+    // Translate specific Results headings first; retain hierarchy/document order
+    // within each priority, without changing request sizes or source identities.
+    const priority = target => target.resultsPriority === true ? 0 : 1;
+    const ordered = [...targets].sort((a, b) => priority(a) - priority(b) ||
+      (a.depth || 1) - (b.depth || 1)), batches = [];
+    for (const target of ordered) {
+      const previous = batches.at(-1), next = [...(previous || []), target];
+      if (previous && priority(previous[0]) === priority(target) &&
+          previous[0].depth === target.depth && next.length <= 12 &&
+          next.every(item => item.sourceTitle.length <= 1800 && (item.parentTitle || '').length <= 1800) &&
+          JSON.stringify(navigationTitleBatchItems(next)).length <= 6000) previous.push(target);
+      else batches.push([target]);
+    }
+    return batches;
+  }
   function createProvider(options = {}) {
+    const pair = options.sourceLanguage === 'zh' && options.targetLanguage === 'en'
+      ? Object.freeze({ sourceLanguage: 'zh', targetLanguage: 'en' }) : PAIR;
     const api = options.Translator ?? (typeof globalThis !== 'undefined' ? globalThis.Translator : undefined);
     const notify = typeof options.onState === 'function' ? options.onState : () => {};
     let session = null, initialization = null, lifecycle = null, generation = 0;
@@ -104,30 +226,92 @@
     const recoveryTimeoutMs = bounded(options.recoveryTimeoutMs, 8000, 15000);
     const nativeTimeoutMs = bounded(options.nativeTimeoutMs, 15000, 30000);
     const queueTimeoutMs = bounded(options.queueTimeoutMs, 15000, 30000);
+    const capabilityTimeoutMs = bounded(options.capabilityTimeoutMs, 10000, 30000);
+    // Allow slow first downloads: two minutes without advancing progress and
+    // ten minutes overall. Progress cannot extend the absolute bound forever.
+    const initializationTimeoutMs = bounded(options.initializationTimeoutMs, 120000, 300000);
+    const initializationMaxMs = bounded(options.initializationMaxMs, 600000, 900000);
+    const initializationRetryDelays = Array.isArray(options.initializationRetryDelays)
+      ? options.initializationRetryDelays.slice(0, 2).map(value => bounded(value, 1000, 10000)) : [1000, 3000];
+    let sessionFault = null, capabilitySequence = 0;
     let cacheSize = 0, nativeRunning = null, nativeSequence = 0, lastTranslation = null;
-    let state = { phase: 'idle', availability: null, progress: null, error: null };
+    let state = { phase: 'idle', availability: null, progress: null, error: null, diagnostic: null };
     function publish(update) { state = { ...state, ...update }; notify({ ...state }); }
-    async function availability({ signal } = {}) {
+    function createNativeSession(createOptions) {
+      let retries = 0;
+      const attempt = () => {
+        if (createOptions.signal.aborted) return Promise.reject(abortError());
+        let result;
+        // The first call must remain synchronous inside the real user gesture.
+        try { result = api.create(createOptions); } catch (error) { result = Promise.reject(error); }
+        return Promise.resolve(result).catch(async error => {
+          const classified = classify(error, 'initialize');
+          const recoverable = ['MODEL_NOT_READY', 'NATIVE_UNAVAILABLE'].includes(classified.code) ||
+            (classified.code === 'INITIALIZATION_FAILED' && ['InvalidStateError', 'NotReadableError', 'OperationError', 'UnknownError'].includes(error?.name));
+          if (!recoverable || retries >= initializationRetryDelays.length || createOptions.signal.aborted) throw classified;
+          const delay = initializationRetryDelays[retries++];
+          publish({ phase: 'initializing', error: null, diagnostic: nativeDiagnostic(classified, 'initialize') });
+          await new Promise((resolve, reject) => {
+            const signal = createOptions.signal;
+            const done = () => { signal.removeEventListener('abort', cancel); resolve(); };
+            const timer = setTimeout(done, delay);
+            const cancel = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); reject(abortError()); };
+            signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
+          });
+          return attempt();
+        });
+      };
+      return attempt();
+    }
+    async function availability({ signal, fromInitialization = false } = {}) {
       if (signal?.aborted) throw abortError();
-      if (!api || typeof api.availability !== 'function' || typeof api.create !== 'function') {
-        publish({ phase: 'unavailable', availability: 'unavailable', error: 'API_UNAVAILABLE' });
+      const environment = nativeEnvironmentFailure();
+      if (environment) {
+        publish({ phase: 'unavailable', availability: 'unavailable', error: environment.code, diagnostic: nativeDiagnostic(environment, 'capability') });
         return 'unavailable';
       }
-      const epoch = generation, controller = new AbortController();
+      if (session && !sessionFault && !nativeRunning?.signal.aborted) {
+        publish({ phase: 'ready', availability: 'available', error: null, diagnostic: null }); return 'available';
+      }
+      if (!api || typeof api.availability !== 'function' || typeof api.create !== 'function') {
+        publish({ phase: 'unavailable', availability: 'unavailable', error: 'API_UNAVAILABLE', diagnostic: nativeDiagnostic(failure('API_UNAVAILABLE', 'The Translator API is not exposed in this page context.'), 'capability') });
+        return 'unavailable';
+      }
+      const epoch = generation, controller = new AbortController(), sequence = ++capabilitySequence;
+      let capabilityTimer;
       const cancel = () => controller.abort();
       availabilityTasks.add(controller);
       signal?.addEventListener('abort', cancel, { once: true });
       try {
-        const value = await abortable(api.availability(PAIR), controller.signal);
+        const readySession = !fromInitialization && initialization && ['initializing', 'downloading'].includes(state.phase)
+          ? [initialization.promise.then(() => 'available')] : [];
+        const value = await abortable(Promise.race([api.availability(pair), ...readySession, new Promise((_, reject) => {
+          capabilityTimer = setTimeout(() => reject(failure('CAPABILITY_TIMEOUT', 'The browser capability check did not finish within its time limit.')), capabilityTimeoutMs);
+        })]), controller.signal);
         if (epoch !== generation || controller.signal.aborted) throw abortError();
         if (!['available', 'downloadable', 'downloading', 'unavailable'].includes(value)) throw failure('API_UNAVAILABLE', 'Unexpected browser translation availability.');
-        publish({ availability: value, error: value === 'unavailable' ? 'LANGUAGE_UNAVAILABLE' : null });
+        if (session && !sessionFault && !nativeRunning?.signal.aborted) {
+          publish({ phase: 'ready', availability: 'available', error: null, diagnostic: null }); return 'available';
+        }
+        if (value === 'unavailable' && !fromInitialization && initialization && ['initializing', 'downloading'].includes(state.phase)) {
+          clearTimeout(capabilityTimer);
+          await waitForInitialization(initialization, signal);
+          return 'available';
+        }
+        if (sequence !== capabilitySequence && state.availability !== null) return state.availability;
+        const recentFailure = value === 'unavailable' && state.diagnostic?.stage === 'initialize' ? state.diagnostic : null;
+        publish({ availability: value, error: value === 'unavailable' ? recentFailure?.code || 'NATIVE_UNAVAILABLE' : null,
+          diagnostic: value === 'unavailable' ? recentFailure || nativeDiagnostic(failure('NATIVE_UNAVAILABLE', 'The browser reports its local translation capability unavailable; this does not identify a language-support failure.'), 'capability') : null });
         return value;
       } catch (error) {
         const classified = classify(error, 'initialize');
-        if (epoch === generation && classified.code !== 'ABORTED') publish({ phase: 'error', error: classified.code });
+        if (epoch === generation && !controller.signal.aborted && session && !sessionFault && !nativeRunning?.signal.aborted) {
+          publish({ phase: 'ready', availability: 'available', error: null, diagnostic: null }); return 'available';
+        }
+        if (epoch === generation && sequence === capabilitySequence && classified.code !== 'ABORTED') publish({ phase: 'error', error: classified.code, diagnostic: state.diagnostic?.code === classified.code ? state.diagnostic : nativeDiagnostic(classified, 'capability') });
         throw classified;
       } finally {
+        clearTimeout(capabilityTimer);
         signal?.removeEventListener('abort', cancel);
         availabilityTasks.delete(controller);
       }
@@ -154,7 +338,7 @@
             task.controller.abort();
           }
         };
-        const cancelShared = () => finish(abortError());
+        const cancelShared = () => finish(task.failure || abortError());
         signal?.addEventListener('abort', cancel, { once: true });
         task.controller.signal.addEventListener('abort', cancelShared, { once: true });
         if (task.controller.signal.aborted) cancelShared();
@@ -164,6 +348,19 @@
     }
     function initialize({ signal } = {}) {
       if (signal?.aborted) return Promise.reject(abortError());
+      // Cancellation or a timeout may leave abort-ignoring native work busy forever.
+      // Retire that session on the next demand; preserve validated exact-text cache.
+      const environment = nativeEnvironmentFailure();
+      if (environment) { publish({ phase: 'unavailable', availability: 'unavailable', error: environment.code, diagnostic: nativeDiagnostic(environment, 'initialize') }); return Promise.reject(environment); }
+      if (session && (nativeRunning?.signal.aborted || sessionFault)) {
+        const previous = session; session = null; sessionFault = null;
+        nativeRunning = null;
+        for (const entry of nativeQueue.splice(0)) {
+          entry.signal.removeEventListener('abort', entry.cancel);
+          entry.reject(failure('TRANSLATION_FAILED', 'The stalled local session was retired; retry the unfinished text.'));
+        }
+        try { previous.destroy?.(); } catch { /* The browser may already have retired it. */ }
+      }
       if (session) return Promise.resolve(session);
       if (initialization) return waitForInitialization(initialization, signal);
       const epoch = ++generation;
@@ -176,20 +373,29 @@
       // the original synchronous call stack required for user activation.
       const waiting = waitForInitialization(task, signal);
       const run = async () => {
-        let monitoring = true;
+        let monitoring = true, preparationTimer, preparationReject, preparationEnd = 0, observedProgress = -1;
+        const armPreparationDeadline = () => {
+          clearTimeout(preparationTimer);
+          preparationTimer = setTimeout(() => preparationReject(failure('INITIALIZATION_TIMEOUT', 'The browser model preparation stopped making progress or exceeded its total time limit.')),
+            Math.max(1, Math.min(initializationTimeoutMs, preparationEnd - clock())));
+        };
         try {
           if (!api || typeof api.create !== 'function') throw failure('API_UNAVAILABLE', 'The official Translator API is not available in this context.');
           // A negative probe can change after browser resources or policy recover.
           // Recheck on explicit use; retain positive capability so create() still
           // runs synchronously inside the user's click when it was prewarmed.
           const ready = state.availability && state.availability !== 'unavailable'
-            ? state.availability : await availability({ signal: controller.signal });
+            ? state.availability : globalThis.navigator?.userActivation?.isActive === true
+              ? 'downloadable' : await availability({ signal: controller.signal, fromInitialization: true });
           if (ready === 'unavailable') throw failure(state.error || 'LANGUAGE_UNAVAILABLE', 'English to Chinese translation is not available.');
           if (controller.signal.aborted || epoch !== generation) throw abortError();
           // Availability can be masked as downloadable for a new site even
           // when the browser already has the language model cached.
-          publish({ phase: 'initializing', progress: null, error: null });
-          const creation = api.create({ ...PAIR, signal: controller.signal, monitor(monitor) {
+          publish({ phase: 'initializing', progress: null, error: null, diagnostic: null });
+          preparationEnd = clock() + initializationMaxMs;
+          const preparationDeadline = new Promise((_, reject) => { preparationReject = reject; });
+          armPreparationDeadline();
+          const creation = createNativeSession({ ...pair, signal: controller.signal, monitor(monitor) {
             monitor.addEventListener('downloadprogress', event => {
               if (!monitoring || epoch !== generation || controller.signal.aborted) return;
               const loaded = Number(event.loaded), total = Number(event.total);
@@ -198,24 +404,27 @@
               // The API emits 0 and 1 even without a download. Intermediate
               // progress is browser-reported resource preparation, not proof
               // of network traffic; only create() resolving makes it ready.
+              if (ratio > observedProgress) { observedProgress = ratio; armPreparationDeadline(); }
               publish({ phase: ratio > 0 && ratio < 1 ? 'downloading' : 'initializing', progress: ratio });
             });
           } });
-          const created = await abortable(Promise.resolve(creation).then(value => {
+          const created = await abortable(Promise.race([Promise.resolve(creation).then(value => {
             if (epoch !== generation || controller.signal.aborted) { value?.destroy?.(); throw abortError(); }
             return value;
-          }), controller.signal);
+          }), preparationDeadline]), controller.signal);
           if (epoch !== generation || controller.signal.aborted) { created?.destroy?.(); throw abortError(); }
           if (typeof created?.translate !== 'function') { created?.destroy?.(); throw failure('API_UNAVAILABLE', 'The browser did not return a Translator session.'); }
           session = created;
           task.settled = true;
-          publish({ phase: 'ready', availability: 'available', progress: 1, error: null });
+          publish({ phase: 'ready', availability: 'available', progress: 1, error: null, diagnostic: null });
           return created;
         } catch (error) {
           const classified = classify(error, 'initialize');
-          if (epoch === generation) publish({ phase: classified.code === 'ABORTED' ? 'idle' : 'error', error: classified.code });
+          if (classified.code === 'INITIALIZATION_TIMEOUT') { task.failure = classified; controller.abort(); }
+          if (epoch === generation) publish({ phase: classified.code === 'ABORTED' ? 'idle' : 'error', error: classified.code, diagnostic: nativeDiagnostic(classified, 'initialize') });
           throw classified;
         } finally {
+          clearTimeout(preparationTimer);
           monitoring = false;
           task.settled = true;
         }
@@ -231,13 +440,13 @@
       cache.delete(text); cache.set(text, value);
       return value;
     }
-    function remember(text, translatedText, sourceEnd = text.length) {
+    function remember(text, translatedText, sourceEnd = text.length, totalLength = text.length) {
       const size = text.length + translatedText.length;
       if (!cacheEntries || size > cacheCharacters) return;
       const previous = cache.get(text);
       if (previous && previous.sourceEnd > sourceEnd) return;
       if (previous) { cacheSize -= text.length + previous.translatedText.length; cache.delete(text); }
-      cache.set(text, { translatedText, sourceEnd, complete: sourceEnd === text.length }); cacheSize += size;
+      cache.set(text, { translatedText, sourceEnd, complete: sourceEnd === totalLength }); cacheSize += size;
       while (cache.size > cacheEntries || cacheSize > cacheCharacters) {
         const oldest = cache.keys().next().value;
         cacheSize -= oldest.length + cache.get(oldest).translatedText.length; cache.delete(oldest);
@@ -268,7 +477,13 @@
       Promise.resolve(operation).then(value => {
         entry.context.stats.nativeMs += Math.max(0, clock() - startedAt); entry.resolve(value);
       }, error => {
-        entry.context.stats.nativeMs += Math.max(0, clock() - startedAt); entry.reject(error);
+        entry.context.stats.nativeMs += Math.max(0, clock() - startedAt);
+        if (!entry.signal.aborted && entry.context.current === session &&
+            ['InvalidStateError', 'NotReadableError', 'OperationError', 'UnknownError', 'NotSupportedError', 'AbortError'].includes(error?.name)) {
+          sessionFault = nativeDiagnostic(classify(error, 'translate'), 'translate');
+          if (error.name === 'AbortError') error = failure('TRANSLATION_FAILED', 'The native session aborted without a caller cancellation.', error);
+        }
+        entry.reject(error);
       }).finally(() => {
         if (nativeRunning === entry) { nativeRunning = null; drainNative(); }
       });
@@ -288,6 +503,7 @@
         const timedOut = (phase, timeoutReason) => {
           const error = failure('TRANSLATION_TIMEOUT', 'The browser translation exceeded its time limit.');
           error.translationDetails = { reason: timeoutReason, phase, attempt: reason === 'recovery-timeout' ? 'recovery' : 'initial' };
+          if (phase === 'translating' && nativeRunning === entry) entry.timedOut = true;
           finish(error); controller.abort();
         };
         const entry = { text, context, attemptInfo, signal: controller.signal, sequence: ++nativeSequence,
@@ -312,13 +528,25 @@
         nativeQueue.push(entry); drainNative();
       });
     }
-    async function translate(text, { signal, priority = 0, getPriority, onProgress, onAttempt, foreground = false, resumeFrom } = {}) {
+    async function translate(text, { signal, priority = 0, getPriority, onProgress, onAttempt, foreground = false, resumeFrom, scientificContext: suppliedContext } = {}) {
       if (signal?.aborted) throw abortError();
+      if (sessionFault || nativeRunning?.signal.aborted || (!session && initialization)) await initialize({ signal });
       const current = session, epoch = generation;
       if (!current) throw failure('NOT_INITIALIZED', 'Initialize the browser translation model first.');
       const source = String(text || ''), startedAt = clock();
-      let saved = cached(source);
-      if ((!resumeFrom?.engineSignature || resumeFrom.engineSignature === 'browser-translator:en:zh:validated-prefix-v2') &&
+      const scientificContext = scientificApi.normalizeScientificContext(source, suppliedContext);
+      if (scientificContext.some(item => item.text.length > 1800 || item.displayText.length > 1800)) {
+        throw failure('TOKEN_BUDGET_EXCEEDED', 'A complete scientific expression exceeds the native input bound.');
+      }
+      // Namespace both identities so a plain source containing literal JSON can
+      // never collide with a scientific source. The cache remains memory-only.
+      const cacheKey = scientificContext.length ? JSON.stringify([source, scientificContext]) : source;
+      const cacheNamespace = scientificContext.length ? 'scientific\u0000' : 'plain\u0000';
+      const key = cacheNamespace + cacheKey;
+      let saved = cached(key);
+      if ((!resumeFrom?.engineSignature || resumeFrom.engineSignature === `browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`) &&
+          !resumeFrom?.manuallyEdited && JSON.stringify(resumeFrom?.scientificContext || []) === JSON.stringify(scientificContext) &&
+          !scientificContext.some(item => item.sourceStart < resumeFrom?.sourceEnd && item.sourceEnd > resumeFrom?.sourceEnd) &&
           resumeFrom?.sourceText === source && resumeFrom.sourceStart === 0 &&
           Number.isInteger(resumeFrom.sourceEnd) && resumeFrom.sourceEnd > 0 && resumeFrom.sourceEnd <= source.length) {
         try {
@@ -337,13 +565,15 @@
       let sourceEnd = 0, recoveryStarted = null, outcome = 'complete', errorCode = '', errorDetails = null;
       const valid = () => { if (job.signal.aborted || epoch !== generation) throw abortError(); };
       function progress(extra = {}) {
-        const value = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: sourceEnd === source.length, ...extra };
+        const value = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: sourceEnd === source.length,
+          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}), ...extra };
         try { onProgress?.({ ...value }); } catch { /* Display observers cannot break translation. */ }
         return value;
       }
       if (foreground) context.onStage = phase => {
         try { onProgress?.({ phase, translatedText: accepted.join(' '), sourceStart: 0, sourceEnd,
-          totalLength: source.length, complete: false }); } catch { /* Optional observer. */ }
+          totalLength: source.length, complete: false,
+          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}) }); } catch { /* Optional observer. */ }
       };
       function details(error, chunk, start, index, attempt, translated) {
         error.translationDetails = { reason: error.code === 'EMPTY_TRANSLATION' ? 'empty-output' : 'damaged-markers',
@@ -352,7 +582,7 @@
         if (stats.failures.length < 16) stats.failures.push({ ...error.translationDetails });
         return error;
       }
-      async function call(chunk, recovery, start, index, attempt) {
+      async function call(chunk, recovery, start, index, attempt, modelText = chunk) {
         valid();
         if (recovery && stats.recoveryCalls >= recoveryLimit) {
           const error = failure('INVALID_TRANSLATION', 'The local model could not recover this text within the bounded retry budget.');
@@ -367,9 +597,9 @@
           throw error;
         }
         if (recovery) stats.recoveryCalls++;
-        try { return await nativeCall(chunk, context, Math.min(nativeTimeoutMs, remaining), recovery ? 'recovery-timeout' : 'native-timeout',
+        try { return await nativeCall(modelText, context, Math.min(nativeTimeoutMs, remaining), recovery ? 'recovery-timeout' : 'native-timeout',
           recovery ? recoveryStarted + recoveryTimeoutMs : null, { sourceStart: start, sourceEnd: start + chunk.length,
-            recovery, engineSignature: 'browser-translator:en:zh:validated-prefix-v2' }); }
+            recovery, engineSignature: `browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2` }); }
         catch (error) {
           error.translationDetails = { reason: 'native-error', ...error.translationDetails, attempt,
             chunkIndex: index, sourceStart: start, sourceEnd: start + chunk.length, outputLength: 0 };
@@ -378,10 +608,11 @@
       }
       async function runChunk(chunk, level, start, index) {
         const attempt = ['initial', 'recovery', 'fine-recovery', 'fine-recovery'][level];
-        const translated = await call(chunk, level > 0, start, index, attempt);
+        const projected = nativeScientificText(source, scientificContext, start, start + chunk.length);
+        const translated = await call(chunk, level > 0, start, index, attempt, projected.text);
         valid();
         try {
-          const value = validateTranslation(chunk, translated);
+          const value = validateTranslation(projected.text, translated);
           if (start === sourceEnd) { accepted.push(value); sourceEnd = start + chunk.length; progress(); }
           return value;
         } catch (error) {
@@ -390,9 +621,9 @@
           if (level >= 2 || chunk.length <= 80) {
             const numberMarkers = typeof translated === 'string' ? translated.match(/(?:<|&lt;)\/?(?:b\d{3,}|\d{3,}(?:>|&gt;))/giu) || [] : [];
             const leakedNumbers = error.code === 'INVALID_TRANSLATION' && numberMarkers.some(marker => !chunk.includes(marker));
-            const replacement = leakedNumbers ? expressCountRanges(chunk) : chunk;
+            const replacement = leakedNumbers && !projected.spans.length ? expressCountRanges(chunk) : chunk;
             if (replacement !== chunk) {
-              const retried = await call(replacement, true, start, index, 'numeric-range-recovery'); valid();
+              const retried = await call(chunk, true, start, index, 'numeric-range-recovery', replacement); valid();
               try {
                 const value = validateTranslation(chunk, retried);
                 if (start === sourceEnd) { accepted.push(value); sourceEnd = start + chunk.length; progress(); }
@@ -407,7 +638,8 @@
           // Try sentence-sized blocks first. Only the damaged block becomes
           // smaller; all levels share one call and time budget for this entry.
           const limit = level === 0 ? (chunk.length > 600 ? 600 : 160) : level === 1 ? 160 : 80;
-          const pieces = splitText(chunk, level === 0 && chunk.length > 600 ? limit : Math.min(limit, Math.ceil(chunk.length / 2)));
+          const pieceLimit = level === 0 && chunk.length > 600 ? limit : Math.min(limit, Math.ceil(chunk.length / 2));
+          const pieces = scientificContext.length ? nativeScientificChunks(source, scientificContext, start, start + chunk.length, pieceLimit) : splitText(chunk, pieceLimit);
           if (pieces.length < 2) throw error;
           const recovered = [];
           let pieceStart = start;
@@ -426,21 +658,23 @@
           if (saved.complete) return saved.translatedText;
         }
         let sourceStart = sourceEnd;
-        const chunks = splitText(source.slice(sourceStart), foreground ? 600 : 1800);
+        const chunks = scientificContext.length ? nativeScientificChunks(source, scientificContext, sourceStart, source.length, foreground ? 600 : 1800) : splitText(source.slice(sourceStart), foreground ? 600 : 1800);
         for (let index = 0; index < chunks.length; index += 1) {
           const chunk = chunks[index];
           result.push(await runChunk(chunk, 0, sourceStart, index));
           sourceStart += chunk.length;
         }
-        const output = result.join(' '); valid(); remember(source, output); return output;
+        const output = result.join(' '); valid(); remember(key, output, source.length, source.length); return output;
       } catch (error) {
         const classified = classify(error, 'translate');
         outcome = classified.code === 'ABORTED' ? 'cancelled' : 'failed'; errorCode = classified.code;
+        if (epoch === generation && classified.code !== 'ABORTED') publish({ diagnostic: nativeDiagnostic(classified, 'translate') });
         if (classified.code !== 'ABORTED') {
           classified.translationDetails = { ...classified.translationDetails, nativeCalls: stats.nativeCalls, recoveryCalls: stats.recoveryCalls,
             elapsedMs: Math.max(0, clock() - startedAt), queueWaitMs: stats.queueWaitMs, failures: stats.failures.map(value => ({ ...value })) };
-          if (sourceEnd > 0) classified.partialTranslation = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: false };
-          if (sourceEnd > 0 && sourceEnd < source.length && epoch === generation && !job.signal.aborted) remember(source, accepted.join(' '), sourceEnd);
+          if (sourceEnd > 0) classified.partialTranslation = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: false,
+            ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}) };
+          if (sourceEnd > 0 && sourceEnd < source.length && epoch === generation && !job.signal.aborted) remember(key, accepted.join(' '), sourceEnd, source.length);
           errorDetails = { ...classified.translationDetails, failures: classified.translationDetails.failures.map(value => ({ ...value })) };
         }
         throw classified;
@@ -456,7 +690,7 @@
       availabilityTasks.clear();
       const previous = session; session = null; initialization = null;
       for (const entry of nativeQueue.splice(0)) { entry.signal.removeEventListener('abort', entry.cancel); entry.reject(abortError()); }
-      nativeRunning = null; cache.clear(); cacheSize = 0; lastTranslation = null;
+      nativeRunning = null; sessionFault = null; cache.clear(); cacheSize = 0; lastTranslation = null;
       try { previous?.destroy?.(); } catch { /* Already invalidated by the browser. */ }
       publish({ phase: 'idle', progress: null, error: null });
     }
@@ -473,10 +707,10 @@
     let state = { phase: 'idle', availability: null, engineSignature: '', taskId };
     const tasks = new Set();
     const cancellations = new Map();
-    const queryReceipts = taskId === 'full_text_translation' && typeof bridge.getReceipt === 'function';
+    const queryReceipts = typeof bridge.getReceipt === 'function';
     // Retained across stop/reinitialize: a lost reply never grants a fresh inference.
     const unresolved = new Set();
-    const publish = patch => { state = { ...state, ...patch }; try { onState({ ...state, ...stopState() }); } catch {} };
+    const publish = patch => { state = { ...state, ...patch }; try { onState({ ...state, ...(route?.mode === 'local' ? localProvider?.getState?.() : {}), ...stopState() }); } catch {} };
     function valid(epoch, identity, signal) {
       if (epoch !== generation || signal?.aborted || !isCurrent(identity)) throw abortError();
     }
@@ -507,34 +741,47 @@
         publish({ phase: 'ready', error: null });
       });
     }
-    async function translate(text, { signal, onProgress, resumeFrom, sourceKey, ...options } = {}) {
+    async function translate(text, { signal, onProgress, resumeFrom, sourceKey, navigationBatch, scientificContext: suppliedContext, ...options } = {}) {
       if (!initialized || !route) throw failure('NOT_INITIALIZED', 'Initialize the selected translation engine first.');
-      if (route.mode === 'local') return localProvider.translate(text, { signal, onProgress, resumeFrom, ...options });
-      if (typeof sourceKey !== 'string' || !sourceKey) throw failure('TRANSLATION_SOURCE_KEY_REQUIRED', 'A stable paragraph or section anchor is required.');
       const source = String(text || ''), epoch = generation, identity = captureIdentity(), signature = route.engineSignature;
+      const scientificContext = scientificApi.normalizeScientificContext(source, suppliedContext);
+      if (scientificContext.length && taskId !== 'full_text_translation') throw failure('TRANSLATION_INVALID_REQUEST', 'Scientific spans require a paragraph source.');
+      if (route.mode === 'local') return localProvider.translate(text, { signal, onProgress, resumeFrom, scientificContext, ...options });
+      if (typeof sourceKey !== 'string' || !sourceKey) throw failure('TRANSLATION_SOURCE_KEY_REQUIRED', 'A stable paragraph or section anchor is required.');
+      if (navigationBatch !== undefined && (navigationBatch !== true || taskId !== 'navigation_title_translation')) {
+        throw failure('TRANSLATION_INVALID_REQUEST', 'Only navigation titles support batches.');
+      }
+      if (navigationBatch) parseNavigationTitleBatch(source);
       const job = new AbortController(), cancel = () => job.abort();
       signal?.addEventListener('abort', cancel, { once: true }); tasks.add(job);
       let sourceEnd = 0, accepted = [], requests = 0, usage = [];
       const progress = () => {
         const value = { translatedText: accepted.join(' '), sourceText: source, sourceStart: 0, sourceEnd,
-          totalLength: source.length, complete: sourceEnd === source.length, engineSignature: signature, requests, usage: [...usage] };
+          totalLength: source.length, complete: sourceEnd === source.length, engineSignature: signature, requests, usage: [...usage],
+          ...(scientificContext.length ? {scientificContext} : {}) };
         try { onProgress?.(value); } catch {} return value;
       };
       try {
         valid(epoch, identity, signal);
         if (!source.trim()) throw failure('EMPTY_TRANSLATION', 'Source text is empty.');
-        if (resumeFrom?.sourceText === source && resumeFrom.engineSignature === signature && resumeFrom.sourceStart === 0 &&
+        if (resumeFrom?.sourceText === source && JSON.stringify(resumeFrom.scientificContext || []) === JSON.stringify(scientificContext) &&
+            !scientificContext.some(item => item.sourceStart < resumeFrom.sourceEnd && item.sourceEnd > resumeFrom.sourceEnd) &&
+            resumeFrom.engineSignature === signature && resumeFrom.sourceStart === 0 &&
             Number.isInteger(resumeFrom.sourceEnd) && resumeFrom.sourceEnd > 0 && resumeFrom.sourceEnd <= source.length && !resumeFrom.manuallyEdited) {
           accepted.push(validateTranslation(source.slice(0, resumeFrom.sourceEnd), resumeFrom.translatedText));
           sourceEnd = resumeFrom.sourceEnd; progress();
         }
-        for (const chunk of splitText(source.slice(sourceEnd))) {
+        for (const block of navigationBatch ? [{text:source, scientificContext:[]}] : scientificChunks(source, scientificContext, sourceEnd)) {
+          const chunk = block.text;
           valid(epoch, identity, job.signal);
           const operationId = 'translation-' + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
           const request = { type: 'LLM_TRANSLATE_TEXT', taskId, operationId, documentBinding: identity,
             expectedEngineSignature: signature, sourceKey, sourceText: chunk, sourceStart: sourceEnd,
-            sourceEnd: sourceEnd + chunk.length, sourceLanguage: 'en', targetLanguage: 'zh' };
-          const blockKey = JSON.stringify([identity.pageUrl, identity.documentHash || '', signature, sourceKey, sourceEnd, chunk]);
+            sourceEnd: sourceEnd + chunk.length, sourceLanguage: 'en', targetLanguage: 'zh',
+            ...(navigationBatch ? { navigationBatch: true } : {}),
+            ...(block.scientificContext.length ? {scientificContext:block.scientificContext} : {}) };
+          const blockKey = JSON.stringify([identity.pageUrl, identity.documentHash || '', signature, sourceKey, sourceEnd, chunk,
+            ...(block.scientificContext.length ? [block.scientificContext] : [])]);
           let dispatched = false;
           const run = async () => {
             valid(epoch, identity, job.signal);
@@ -587,7 +834,8 @@
             unresolved.add(blockKey);
             throw failure('TRANSLATION_RESPONSE_IDENTITY_MISMATCH', 'The translation response no longer matches this source or configuration.');
           }
-          const translated = validateTranslation(chunk, result.translatedText);
+          const translated = navigationBatch ? JSON.stringify({ translations: validateNavigationTitleTranslations(
+            parseNavigationTitleBatch(chunk), JSON.parse(result.translatedText)) }) : validateTranslation(chunk, result.translatedText);
           unresolved.delete(blockKey);
           for (const [id, value] of cancellations) if (value.blockKey === blockKey) cancellations.delete(id);
           accepted.push(translated); sourceEnd = request.sourceEnd;
@@ -601,6 +849,18 @@
         }
         throw error;
       } finally { signal?.removeEventListener('abort', cancel); tasks.delete(job); }
+    }
+    async function translateTitles(targets, { signal } = {}) {
+      const items = navigationTitleBatchItems(targets), sourceText = JSON.stringify(items);
+      parseNavigationTitleBatch(sourceText);
+      if (route?.mode === 'local') {
+        const translations = [];
+        for (const item of items) translations.push({ sourceKey: item.sourceKey,
+          translatedText: await translate(item.sourceTitle, { signal, sourceKey: item.sourceKey }) });
+        return translations;
+      }
+      const result = await translate(sourceText, { signal, sourceKey: items[0].sourceKey, navigationBatch: true });
+      return validateNavigationTitleTranslations(items, JSON.parse(result));
     }
     function destroy() {
       generation++; initialized = false; route = null;
@@ -638,8 +898,8 @@
       return confirmation;
     }
     // getState supplies current cancellation acknowledgments even after route retirement.
-    return { availability, initialize, translate, destroy, invalidate: destroy, confirmStopped, accountsAttempts: true, canQueryReceipt: queryReceipts,
-      getState: () => ({ ...(route?.mode === 'local' ? localProvider?.getState?.() : state), ...state, ...stopState() }) };
+    return { availability, initialize, translate, translateTitles, destroy, invalidate: destroy, confirmStopped, accountsAttempts: true, canQueryReceipt: queryReceipts,
+      getState: () => ({ ...state, ...(route?.mode === 'local' ? localProvider?.getState?.() : {}), ...stopState() }) };
   }
   function createRuntimeBridge({ runtime, taskId = 'full_text_translation' } = {}) {
     if (!runtime?.sendMessage) return null;
@@ -663,5 +923,6 @@
         documentBinding, engineSignature, translations, expectedRevision: options?.expectedRevision })
     };
   }
-  return { createProvider, createTaskProvider, createRuntimeBridge, splitText, validateTranslation };
+  return { createProvider, createTaskProvider, createRuntimeBridge, splitText, validateTranslation,
+    navigationTitleBatchItems, parseNavigationTitleBatch, validateNavigationTitleTranslations, createNavigationTitleBatches };
 });

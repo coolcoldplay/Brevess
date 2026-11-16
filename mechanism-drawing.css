@@ -56,6 +56,12 @@
 .md-story p { font-size: 11px; color: var(--md-muted); margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-workspace { flex: 1; display: flex; min-height: 140px; overflow: hidden; position: relative; }
 .md-canvas { flex: 1; min-width: 0; position: relative; overflow: hidden; touch-action: none; background-color: #fcfcfc; background-image: radial-gradient(#dadada .65px, transparent .65px); background-size: 18px 18px; outline-offset: -3px !important; }
+.md-canvas-tools { position: absolute; left: 12px; top: 12px; z-index: 9; display: flex; flex-direction: column; gap: 3px; padding: 5px; border: 1px solid var(--md-line); border-radius: 7px; background: var(--md-surface); box-shadow: 0 2px 8px #0001; }
+.md-shell .md-canvas-tools button { display: grid; place-items: center; width: 36px; height: 36px; padding: 8px; border-color: transparent; border-radius: 4px; }
+.md-canvas-tools svg { display: block; width: 20px; height: 20px; }
+.md-shell .md-canvas-tools button[aria-pressed="true"] { background: var(--md-ink); color: white; }
+.md-canvas-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 9; display: flex; align-items: center; gap: 3px; padding: 4px; background: var(--md-surface); border: 1px solid var(--md-line); border-radius: 6px; box-shadow: 0 2px 8px #0001; }
+.md-shell .md-canvas-zoom button { border-color: transparent; }
 .md-world { position: absolute; top: 0; left: 0; width: 1px; height: 1px; transform-origin: 0 0; }
 .md-svg { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
 .md-edge { fill: none; stroke: #666; stroke-width: 1.7px; pointer-events: none; }
@@ -68,7 +74,9 @@
 .md-node-layer, .md-label-layer { position: absolute; top: 0; left: 0; }
 .md-node { width: 168px; height: 68px; position: absolute; display: flex; justify-content: center; align-items: center; padding: 9px 15px; border: 1px solid #969696; border-radius: 3px; background: var(--md-surface); box-shadow: 0 1px 2px #0000000a; cursor: grab; user-select: none; text-align: center; z-index: 2; }
 .md-node:active { cursor: grabbing; }
-.md-node-label { font-size: 14px; line-height: 1.4; font-weight: 550; overflow: auto; max-height: 51px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.md-node-label { font-size: 14px; line-height: 1.4; font-weight: 550; overflow: auto; max-height: 100%; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
+.md-shell .md-node-resize { position: absolute; right: -5px; bottom: -5px; width: 11px; height: 11px; min-height: 0; padding: 0; border: 1px solid #555; background: white; cursor: nwse-resize; opacity: 0; }
+.md-node.md-selected .md-node-resize, .md-node:focus-within .md-node-resize { opacity: 1; }
 .md-node.md-selected { border: 2px solid var(--md-ink); box-shadow: 0 0 0 3px #20202012; }
 .md-node.md-connecting { border-color: #167a67; }
 .md-node.md-drop-target { border: 2px solid #167a67; box-shadow: 0 0 0 4px #167a6714; }
@@ -83,6 +91,8 @@
 .md-edge-evidence, .md-inspector-chips { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; }
 .md-shell .md-evidence { display: inline-block; min-height: 24px; padding: 2px 7px; font-size: 13px; line-height: 1.4; font-weight: 550; color: #454545; border: 1px solid #d6d6d6; border-radius: 3px; background: #f2f2f2; white-space: nowrap; vertical-align: middle; }
 .md-edge-evidence .md-evidence { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.md-evidence-name { display: block; white-space: normal; overflow-wrap: anywhere; }
+.md-evidence-ref { display: block; font-size: 11px; line-height: 16px; opacity: .8; white-space: normal; overflow-wrap: anywhere; }
 .md-shell .md-evidence:hover { border-color: #888; filter: brightness(.985); }
 .md-shell .md-evidence.md-sufficient, .md-type-option .md-sufficient { color: var(--md-red); background: var(--md-red-soft); border-color: #e5bebb; }
 .md-shell .md-evidence.md-necessary, .md-type-option .md-necessary { color: var(--md-blue); background: var(--md-blue-soft); border-color: #bad0ed; }
@@ -91,7 +101,7 @@
 .md-route-note { font-size: 10px; color: #a34538; }
 .md-selection-box { position: absolute; background: #7772; border: 1px solid #666; pointer-events: none; z-index: 10; }
 .md-empty { position: absolute; top: 42%; left: 20px; right: 20px; text-align: center; color: var(--md-muted); pointer-events: none; }
-.md-canvas-hint { position: absolute; bottom: 7px; left: 10px; max-width: calc(100% - 20px); padding: 2px 5px; font-size: 10px; color: #777; background: #fcfcfce8; pointer-events: none; }
+.md-canvas-hint { position: absolute; bottom: 7px; left: 10px; max-width: calc(100% - 240px); padding: 2px 5px; font-size: 10px; color: #777; background: #fcfcfce8; pointer-events: none; }
 .md-drop-hint { position: absolute; left: 12px; right: 12px; top: 12px; padding: 9px 12px; border: 1px solid #7fa79e; color: #174e43; background: #f0faf6f5; border-radius: 2px; pointer-events: none; z-index: 12; text-align: center; }
 .md-pan-mode .md-canvas, .md-pan-mode .md-node { cursor: grab; }
 .md-connect-mode .md-node { cursor: crosshair; }
@@ -179,3 +189,21 @@
   .md-story-heading strong { max-width: 83%; }.md-subtitle { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .md-shell * { scroll-behavior: auto !important; } }
+
+.md-binding-row{display:flex;align-items:center;gap:6px}.md-binding-row>.md-chip{flex:1}.md-binding-row>button:last-child{flex:none;min-width:28px}
+
+.md-edit-overlay{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;z-index:5;pointer-events:none}.md-route-handle{fill:white;stroke:#365f96;stroke-width:2;vector-effect:non-scaling-stroke;pointer-events:all;cursor:grab}.md-segment-handle{fill:#e6eef8;stroke-dasharray:2 1}.md-port-target{fill:#fff;stroke:#168577;stroke-width:3;vector-effect:non-scaling-stroke}.md-snap-guides>*{fill:none;stroke:#377fb1;stroke-width:1;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}
+
+/* An intentional empty relationship has no painted label plate; its keyboard target remains. */
+.md-edge-label.md-unlabelled:not(.md-selected):not(.md-drop-target){background:transparent;border-color:transparent}
+.md-edge-label.md-unlabelled:focus-within{outline:2px solid #555;outline-offset:2px}
+
+/* r18: persistent teaching is available on demand. */
+.md-canvas-help{position:absolute;left:18px;bottom:14px;z-index:4;max-width:calc(100% - 160px);font-size:11px;background:#fff;border:1px solid #ddd;padding:5px 8px}.md-canvas-help summary{cursor:pointer}.md-canvas-help .md-canvas-hint{position:static;margin:8px 0 0;max-width:none;pointer-events:auto}.md-matrix[hidden],.md-matrix-resizer[hidden]{display:none!important}@media(max-width:600px){.md-canvas-help{bottom:70px;max-width:calc(100% - 36px)}}
+
+.md-header { flex-wrap:wrap;gap:8px; }
+.md-heading-tools { display:flex;gap:4px;flex:1;justify-content:center;flex-wrap:wrap; }
+.md-heading-tools button { font:inherit;font-size:12px;padding:5px 8px;border:1px solid #d8d8d8;border-radius:4px;background:white;color:#222; }
+.md-heading-tools button[aria-pressed=true] { background:#222;color:white; }
+.md-header-actions { margin-left:auto; }
+.md-canvas-tools [data-action=undo],.md-canvas-tools [data-action=redo] { font-size:11px; }

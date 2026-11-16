@@ -1,91 +1,32 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Brevess Microsoft Edge extension privacy policy">
-  <title>Brevess Privacy Policy / 隐私政策</title>
-  <style>
-    :root { color-scheme: light; --navy:#0f4d78; --gold:#f7b51b; --ink:#1e2933; --muted:#5d6c79; --line:#d9e2e8; --paper:#fff; --canvas:#f4f7f9; }
-    * { box-sizing:border-box; }
-    body { margin:0; color:var(--ink); background:var(--canvas); font:16px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Arial,sans-serif; }
-    main { width:min(920px,calc(100% - 32px)); margin:32px auto; padding:clamp(24px,5vw,56px); border:1px solid var(--line); border-radius:18px; background:var(--paper); box-shadow:0 12px 36px rgba(25,55,76,.08); }
-    header { display:flex; align-items:center; gap:18px; margin-bottom:30px; padding-bottom:24px; border-bottom:4px solid var(--gold); }
-    .mark { display:grid; width:72px; height:72px; grid-template-columns:18px 1fr; grid-template-rows:repeat(3,10px); align-content:center; gap:7px 8px; padding:14px; border-radius:16px; background:var(--navy); }
-    .mark span { border-radius:99px; background:#fff; }
-    .mark span:nth-child(3) { grid-column:1 / -1; background:var(--gold); }
-    h1 { margin:0; color:var(--navy); font-size:clamp(26px,5vw,42px); line-height:1.16; }
-    h2 { margin:34px 0 10px; color:var(--navy); font-size:21px; }
-    p,li { max-width:78ch; }
-    .meta { color:var(--muted); }
-    a { color:var(--navy); }
-    code { padding:.08em .34em; border-radius:4px; background:#edf3f7; }
-    footer { margin-top:40px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:14px; }
-  </style>
-</head>
-<body>
-<main>
-  <header>
-    <div class="mark" aria-label="Brevess"><span></span><span></span><span></span><span></span><span></span></div>
-    <div>
-      <h1>Brevess Privacy Policy / 隐私政策</h1>
-      <div class="meta">Effective / 生效：2026-08-03 · Microsoft Edge extension</div>
-    </div>
-  </header>
-
-  <p>Brevess helps users read and analyze scientific article pages in Microsoft Edge. It provides local article navigation, abbreviation extraction, rule-based and manual highlighting, Figure/Panel organization, optional model-assisted analysis, full-text Q&amp;A, and local article workspaces.</p>
-  <p>Brevess 用于在 Microsoft Edge 中阅读和分析科研论文网页，提供本地论文导航、缩写提取、正则与手动高亮、Figure/Panel 整理、可选的模型辅助分析、全文问答及本地论文工作区。</p>
-
-  <h2>1. Data handled / 处理的数据</h2>
-  <ul>
-    <li><strong>Current article page / 当前论文网页：</strong>URL, title, DOI when available, headings, text, captions, Figure images or image URLs, and page structure. Extraction starts only after the user activates Brevess for the current tab; Brevess does not continuously monitor browsing. 包括网址、标题、DOI、标题层级、正文、图注、Figure 图片或地址及页面结构；仅在用户激活当前标签页后提取。</li>
-    <li><strong>User-created content / 用户内容：</strong>analysis modes, category rules, highlights, notes, questions, chat history, Panel follow-ups, feedback examples, and export preferences. 包括分析模式、规则、高亮、备注、问题、问答历史、Panel 追问和导出偏好。</li>
-    <li><strong>Configuration and authentication / 配置与鉴权：</strong>provider settings and API keys entered by the user. Keys remain in local extension storage by default; when portable backup is enabled, they are also written only to the authenticated ciphertext files described below. They are sent only to the endpoint selected by the user for authentication. Brevess has no developer server that receives these keys. API Key 默认保存在扩展本地存储；启用便携备份时也只写入下述认证密文文件，并且只发往用户选择的服务地址。</li>
-    <li><strong>Local usage records / 本地使用记录：</strong>per-article model, feature and token totals, task state, cache metadata and diagnostic errors. They stay on the user's device unless exported. 按论文、功能和模型统计的 Token、任务状态、缓存和诊断信息默认留在本机。</li>
-    <li><strong>Optional local integrations / 可选本地集成：</strong>a user-selected folder, loopback Zotero Connector, and separately installed Windows Local Codex bridge.</li>
-  </ul>
-
-  <h2>2. Storage and retention / 存储与保留</h2>
-  <p>Settings and article workspaces are stored locally using Microsoft Edge extension storage, IndexedDB, and—only when selected by the user—the local folder chosen through the File System Access API. Brevess does not upload a copy to a developer-operated cloud service.</p>
-  <p>设置和论文工作区保存在 Edge 扩展本地存储、IndexedDB 和用户主动选择的本地文件夹中，不会上传至开发者运营的云端。数据保留到用户删除工作区、清除扩展数据、删除目录文件或卸载扩展为止。明确导出的文件可能在卸载后继续存在；可选桥接数据位于 <code>%LOCALAPPDATA%\BrevessCodexBridge</code>，会保留到用户自行删除。</p>
-  <p>If the user enables portable configuration backup, Brevess writes model/API settings (including API credentials) and the global abbreviation table to the primary file <code>Brevess/settings/portable-config.enc.json</code>. After a successful update, it retains at most one rolling encrypted previous copy at <code>Brevess/backups/settings/portable-config.enc.previous.json</code>. Both files contain only AES-GCM authenticated ciphertext. Their key is derived from the user's backup password with PBKDF2. The password is never written to the folder or included in an export. The derived key is cached only on the local device and can be cleared with <strong>Forget backup unlock / 忘记备份解锁</strong>. A forgotten password makes the encrypted copies unrecoverable. Normal article exports, diagnostics, logs and token reports continue to exclude API credentials.</p>
-  <p>用户启用便携配置备份后，模型/API 设置（包括 API 凭据）和全局缩略词表会以 AES-GCM 认证密文写入所选目录的主文件 <code>Brevess/settings/portable-config.enc.json</code>；成功更新后，最多保留一个同样加密的滚动旧版副本 <code>Brevess/backups/settings/portable-config.enc.previous.json</code>。两个文件都只含认证密文；密钥由 PBKDF2 从备份口令派生。口令不写入目录或任何导出文件，派生密钥仅缓存在本机并可用“忘记备份解锁”清除。忘记口令后无法恢复密文；普通论文导出、诊断、日志和 Token 报告仍排除 API 凭据。</p>
-
-  <h2>3. Data transmission and third parties / 数据传输与第三方</h2>
-  <p>Model-assisted features remain disabled until the user configures a provider and grants the in-extension permission to send article content. Depending on the task, Brevess may send necessary article excerpts, captions, compressed Figure images, questions and limited conversation context directly to the provider or compatible endpoint selected by the user. Provider availability, retention, billing and processing are governed by that provider's terms and privacy policy.</p>
-  <p>只有在用户配置模型并勾选“正文发送许可”后，Brevess 才会把任务所需的论文片段、图注、压缩 Figure、问题和有限对话上下文直接发送给用户选择的服务。可选路由包括 OpenAI、Anthropic、Google Gemini、DeepSeek、用户配置的 OpenAI-compatible 服务或本机 Codex 桥。远程自定义地址必须使用 HTTPS；HTTP 仅允许用户明确配置的 <code>localhost</code> 或 <code>127.0.0.1</code>。</p>
-  <p>The Local Codex bridge is an optional Windows companion. It exchanges messages only with approved extension IDs on the same device and uses the user's extension-specific Codex sign-in. Codex processing is subject to the terms applicable to the user's account.</p>
-
-  <h2>4. User controls / 用户控制</h2>
-  <ul>
-    <li>Local navigation, abbreviations, regex highlighting, manual annotations and workspaces can be used without enabling an external model. 本地功能无需启用外部模型。</li>
-    <li>Users can revoke model sharing by clearing <strong>Permission to send article text / 正文发送许可</strong> and saving settings.</li>
-    <li>Users can edit or remove provider profiles; delete workspaces, highlights or chats; export data; clear extension storage; and avoid optional integrations.</li>
-  </ul>
-
-  <h2>5. No sale, advertising, or developer analytics / 不出售、无广告、无开发者遥测</h2>
-  <p>Brevess does not sell, license, broker, or use user data for advertising, creditworthiness, or unrelated profiling. It contains no advertising SDK and does not send product analytics or browsing telemetry to the developer.</p>
-
-  <h2>6. Security / 安全</h2>
-  <p>Remote model requests use HTTPS except explicit loopback services on the user's device. API keys are stored locally, masked after saving, and excluded from normal article exports and token reports. Users should protect their Edge profile, credentials, exported files and selected folders.</p>
-
-  <h2>7. Sensitive information and intended use / 敏感信息与用途</h2>
-  <p>Brevess is a research reading aid, not a medical device and not a substitute for clinical, legal or professional advice. Users should not submit private, identifiable patient data or confidential information to third-party models unless authorized and the provider is appropriate for that use.</p>
-  <p>Brevess 是科研阅读辅助工具，不是医疗器械，不能替代临床、法律或其他专业判断。未经授权，不应向第三方模型提交可识别患者身份的数据或其他机密信息。</p>
-
-  <h2>8. Children / 儿童</h2>
-  <p>Brevess is intended for researchers, students and professional readers. It is not directed to children under 13 and does not knowingly collect children's personal information.</p>
-
-  <h2>9. Changes / 政策变更</h2>
-  <p>Material changes will be published at this URL with a new effective date and, when appropriate, noted in release notes. 重大变更会在本页面更新生效日期，并在适当情况下写入版本说明。</p>
-
-  <h2>10. Contact / 联系方式</h2>
-  <ul>
-    <li>Email: <a href="mailto:brevess0729@163.com">brevess0729@163.com</a></li>
-    <li>Issues: <a href="https://github.com/coolcoldplay/Brevess/issues">GitHub Issues</a></li>
-    <li>Source: <a href="https://github.com/coolcoldplay/Brevess">GitHub repository</a></li>
-  </ul>
-  <footer>Brevess · Brevity · Evidence · Essence</footer>
-</main>
-</body>
-</html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Brevess Chrome and Edge privacy policy"><title>Brevess Privacy Policy / 隐私政策</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f9;color:#243442;font:16px/1.75 system-ui,-apple-system,sans-serif}main{max-width:940px;margin:32px auto;padding:36px 48px;background:white;border:1px solid #d9e2e8;border-radius:16px}h1{color:#104f7d;font-size:30px;line-height:1.3;border-bottom:4px solid #f7b51b;padding-bottom:24px}h2{margin-top:36px;color:#104f7d;font-size:21px}a{color:#104f7d;overflow-wrap:anywhere}li{margin:10px 0}code{font-size:.9em;background:#edf3f7;padding:2px 4px;overflow-wrap:anywhere}footer{border-top:1px solid #d9e2e8;padding-top:20px;margin-top:32px;color:#5d6c79}@media(max-width:640px){main{margin:0;padding:24px 20px;border:0;border-radius:0}h1{font-size:26px}}
+</style></head><body><main><h1>Brevess Privacy Policy / 隐私政策</h1>
+<p>Updated / 更新日期：2026-11-17</p>
+<p>Applies to / 适用产品：Brevess 1.0.2 for Google Chrome and Microsoft Edge.</p>
+<p>Brevess is a free research reading extension for navigating and annotating papers, understanding figures, source-based questions, and a local research workspace. Optional AI and other online services may require your own credentials and charge you separately.</p>
+<p>Brevess 是免费的科研阅读扩展，用于论文导航、标注、图表阅读、基于来源的问答和本地研究资料整理。可选 AI 及其他在线服务可能需要用户自备凭据，并由第三方另行收费。</p>
+<h2>1. Data and access / 数据与访问时机</h2>
+<ul><li>Page/document content: URLs, titles, DOI/PMID, headings, text, selections, captions, images, PDFs and extracted structure as needed for reading, saving, translation, search and annotation. The full reading workspace is activated for a selected document. Lightweight content scripts also initialize on matching pages for shortcuts, selection tools, translation controls and configured local page filters. Not every local page interaction requires clicking the toolbar icon first. Brevess does not collect a complete browser-history database or send browsing telemetry to its developer.</li><li>网页/文档内容：为阅读、保存、翻译、查找和标注处理必要的网址、标题、DOI/PMID、章节、正文、选区、图注、图片、PDF 和提取结构。完整阅读工作区针对选定文档激活；轻量内容脚本也会在匹配网页初始化快捷键、划词、翻译入口及已配置的本地页面过滤。因此，并非所有本地处理都要先点击工具栏图标。Brevess 不收集完整浏览历史数据库，也不向开发者发送浏览遥测。</li><li>User content: highlights, notes, questions/conversations, rules/prompts, literature queries, saved metadata, hypotheses, evidence links and figure plans. Local diagnostics include feature/task state, errors, cache metadata and token totals.</li><li>用户内容：高亮、备注、问题/对话、规则/提示词、文献检索式、已保存元数据、假说、证据关联和组图方案。本机诊断包括功能/任务状态、错误、缓存元数据和 Token 用量。</li><li>Credentials: provider API keys/custom headers, optional MinerU tokens, literature-source API/institution tokens and local integration credentials, used to authenticate to your selected service. This release does not offer a developer-operated Brevess account/cloud collaboration service.</li><li>凭据：模型 API Key/自定义鉴权头、可选 MinerU Token、文献来源 API/机构 Token 和本地集成凭据，用于向用户选择的服务鉴权。本版本不提供开发者运营的 Brevess 账号/云协作服务。</li></ul>
+<h2>2. Storage and retention / 存储与保留</h2>
+<p>Settings, credentials, annotations, caches, library and workbench data use local browser extension storage and IndexedDB. Content may also be saved to a folder you authorize. Brevess does not automatically back up this data to a developer cloud. Extension storage is not a system password vault; protect your device and browser profile.</p>
+<p>设置、凭据、标注、缓存、文献与工作台数据使用浏览器扩展本地存储和 IndexedDB，也可保存至用户授权的目录。Brevess 不自动备份至开发者云端。扩展存储不是系统密码保险库，请保护设备和浏览器配置。</p>
+<p>Data remains until you delete records, clear extension data or uninstall. Saved/exported files, optional companion data and third-party copies may remain after uninstalling; delete these separately or use the service's controls.</p>
+<p>数据保留到用户删除记录、清除扩展数据或卸载扩展。已保存/导出文件、可选伴侣数据及第三方副本可能在卸载后继续存在，需要另行删除或使用对应服务的数据管理功能。</p>
+<p>Optional portable configuration backup includes model/API credentials and configured backup fields, encrypted with AES-GCM using a PBKDF2-derived password key. The primary file is <code>Brevess/settings/portable-config.enc.json</code>; at most one previous encrypted copy is kept at <code>Brevess/backups/settings/portable-config.enc.previous.json</code>. The password is not saved in these files. A derived unlock key may be cached on your device and removed using “Forget backup unlock”. Ordinary paper/workbench exports and token reports are not credential backups. Treat settings/migration backups as sensitive.</p>
+<p>可选便携配置备份包含模型/API 凭据和配置的备份字段，以 PBKDF2 从口令派生密钥并用 AES-GCM 认证加密。主文件为 <code>Brevess/settings/portable-config.enc.json</code>，最多保留一个旧版密文 <code>Brevess/backups/settings/portable-config.enc.previous.json</code>。文件不保存口令；派生解锁密钥可在本机缓存，并通过“忘记备份解锁”清除。普通论文/工作台导出和 Token 报表不作为凭据备份。设置/迁移备份应作为敏感文件保管。</p>
+<h2>3. Network services / 联网服务</h2>
+<ul><li>AI analysis, Q&amp;A, figure understanding, semantic search and model translation: after configuring a provider and authorizing content transmission, your requested features (or enabled automatic modes) send necessary text, questions, context and sometimes images to the selected endpoint. Routes include OpenAI, Anthropic, Google Gemini, DeepSeek, Typesafe/Jina-compatible services and custom compatible endpoints. Search/fetch tools may send queries/source URLs. Model-list refresh and connection tests contact the selected service and use its credential where required.</li><li>AI 分析、问答、解图、语义查找和模型翻译：用户配置服务、授权内容发送后，所使用的功能（或已启用的自动模式）会把必要文本、问题、上下文及图片发送到选定地址。路由包括 OpenAI、Anthropic、Google Gemini、DeepSeek、Typesafe/Jina 兼容服务及自定义接口。联网搜索/抓取还可能发送检索式/来源网址。刷新模型列表和连接测试访问所选服务，并在需要时使用凭据。</li><li>PDF enhancement: original-page reading and native text indexing use packaged PDF.js locally. Choosing enhanced recognition sends the PDF file or URL to MinerU (<code>mineru.net</code>) and its upload/result storage endpoints. This separate service does not depend on the AI article-content checkbox. Precision parsing uses your configured MinerU token.</li><li>PDF 增强识别：原页阅读和原生文本索引使用随包提供的 PDF.js 在本机完成。选择增强识别会把 PDF 文件或网址发送至 MinerU（<code>mineru.net</code>）及其上传/结果存储地址。它独立于模型服务，不受 AI 正文发送勾选框控制；精准解析使用用户配置的 MinerU Token。</li><li>Literature discovery: manual checks and enabled scheduled radars send queries, filters and necessary source credentials to the selected source: NCBI PubMed, Europe PMC (also used for bioRxiv/medRxiv indexing), arXiv, Crossref, Asta/Allen AI, Web of Science or Scopus. Enabled schedules may run in the background while the browser runs. Results remain in the local library; optional AI scoring/translation separately uses your model settings.</li><li>文献发现：手动检查和已启用的定时雷达把检索式、筛选条件和必要凭据发送至所选来源，包括 NCBI PubMed、Europe PMC（也用于 bioRxiv/medRxiv 索引）、arXiv、Crossref、Asta/Allen AI、Web of Science、Scopus。启用的定时任务可在浏览器运行时后台检查。结果保存在本机文献库；可选 AI 评分/翻译另外使用模型设置。</li><li>Translation/speech: the browser Translator API works according to browser support and may download language models. Browser/system speech can use local or network voices. Local Kokoro, DeepSeek speech or a configured online speech endpoint receives the selected text when used. Automatic speech after selection is off by default and uses separate speech settings.</li><li>翻译/朗读：浏览器 Translator API 按浏览器支持情况工作，可能下载语言模型。浏览器/系统音色可能在本地或联网处理。使用本地 Kokoro、DeepSeek 语音或配置的在线语音接口时，选区文本会发送至对应服务。“选中后自动朗读”默认关闭，遵循独立朗读设置。</li><li>Local integrations/source retrieval: optional Zotero, local model/speech services, Native Messaging companion and workbench MCP bridge exchange data needed for the selected feature. An enabled external-agent MCP connection gives that agent access to permitted workspace operations/data; also review the agent service's terms. Loading papers, figures and PDFs contacts publisher/storage hosts, using the site's browser session where needed to retrieve material you can access.</li><li>本地集成/来源读取：可选 Zotero、本机模型/语音服务、Native Messaging 伴侣和工作台 MCP 桥交换所选功能需要的数据。启用外部 Agent 的 MCP 连接后，Agent 可使用获准的工作台操作/数据，也需查看 Agent 服务的条款。读取论文、图片和 PDF 会访问出版商/存储主机，必要时使用站点浏览器会话读取用户有权访问的材料。</li></ul>
+<p>Remote requests use HTTPS; configured loopback services may use HTTP. Recipients see normal request metadata such as IP address and timing. Third parties control their processing, retention, training and billing under their own terms. “Stored locally by Brevess” does not mean data you send to a service stays only on your device. Revoking a setting stops future requests governed by it, not copies already received; contact the recipient about deletion. Email/GitHub support also shares information you choose to submit with those platforms and the maintainer.</p>
+<p>远程请求使用 HTTPS，本机回环服务可使用 HTTP。接收方会看到 IP、请求时间等常规网络信息。第三方按其条款决定处理、保留、训练和收费。“Brevess 本地保存”不代表用户发给服务的数据只留在本机。撤销设置阻止其控制的后续请求，不能撤回已发送副本；删除问题需联系接收方。邮件/GitHub 反馈也会把主动提交的信息提供给对应平台和维护者。</p>
+<h2>4. Controls / 用户控制</h2>
+<p>Local navigation, regex highlighting, manual notes and workbench functions do not require an AI key. You can revoke AI content transmission, remove credentials, disable radar schedules/notifications, avoid PDF enhancement, choose browser/local speech, turn off automatic speech and page tools/filters, disconnect integrations, delete records and clear extension data. File URL access and notifications use separate browser permissions; a local folder requires your selection. Each online feature has its own setting/action. Disabling AI article transmission does not disable literature search, PDF enhancement or speech.</p>
+<p>本地导航、正则高亮、手动笔记和工作台不需要 AI Key。用户可撤销 AI 内容发送、删除凭据、停用雷达定时检查/通知、不使用 PDF 增强、选择浏览器/本机朗读、关闭自动朗读和页面工具/过滤、断开集成、删除记录及清除扩展数据。文件网址访问与通知由浏览器单独授权；本地目录由用户选择。每项联网功能各有独立设置/动作，关闭 AI 正文发送并不关闭文献检索、PDF 增强或朗读。</p>
+<h2>5. Limited Use and no advertising / 有限使用与无广告</h2>
+<p>Brevess uses data only for the disclosed research reading features and their operation. It does not sell data, use it for advertising, send product analytics or browsing telemetry to the developer, or assess creditworthiness. Transfers are limited to what the requested features need. The developer does not receive or routinely read your papers or credentials; information voluntarily sent for support is used to address that request. Brevess's use of user data follows the Chrome Web Store User Data Policy, including its Limited Use requirements.</p>
+<p>Brevess 仅为已披露的科研阅读功能及其运行使用数据，不出售数据、不用于广告、不向开发者发送产品分析或浏览遥测，也不评估信用。传输限于所请求功能所需范围。开发者不会接收或日常阅读用户论文和凭据；主动提交的支持信息用于处理对应问题。Brevess 对用户数据的使用遵守 Chrome Web Store 用户数据政策及其有限使用要求。</p>
+<h2>6. Intended use, changes and contact / 用途、变更与联系</h2>
+<p>Brevess is a research reading aid, not a medical device or a substitute for professional judgment. AI can be wrong; check original sources. Obtain necessary authorization before sending confidential or identifiable patient information to a service. The extension is not directed to children under 13.</p>
+<p>Brevess 是科研阅读辅助工具，不是医疗器械，也不能替代专业判断。AI 可能出错，请核对原始来源。向服务发送机密或可识别患者信息前，应具备必要授权。本扩展不面向 13 岁以下儿童。</p>
+<p>Material changes will update this policy and, as appropriate, release notes or in-product notices. 重大变更将更新本政策，并按需写入版本说明或在产品内提示。</p>
+<ul><li>Email / 邮箱：<a href="mailto:brevess0729@163.com">brevess0729@163.com</a></li><li>Support / 反馈：<a href="https://github.com/coolcoldplay/Brevess/issues">GitHub Issues</a></li><li>Project / 项目：<a href="https://github.com/coolcoldplay/Brevess">Brevess</a></li></ul><footer>Brevess · Brevity · Evidence · Essence</footer></main></body></html>

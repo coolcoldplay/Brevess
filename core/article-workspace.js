@@ -80,6 +80,28 @@
     return normalizeText(value, 500).toLocaleLowerCase('en-US');
   }
 
+  // A source label is provenance, never permission. Stored workspaces already
+  // carry this site alias; restore projections may carry the same explicit label.
+  // null means contradictory/malformed evidence, while '' is a legacy URL identity.
+  function workspaceRestoreSourceIdentity(value) {
+    const own = (object, key) => {
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(object || {}, key);
+        return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+      } catch (_) { return undefined; }
+    };
+    const raw = own(value, 'sourceIdentity');
+    const aliases = own(value, 'aliases');
+    const local = (Array.isArray(aliases) ? aliases : []).filter(alias =>
+      own(alias, 'type') === 'site' && String(own(alias, 'value') || '').startsWith('library-html:'))
+      .map(alias => own(alias, 'value'));
+    const sources = [...new Set([...(raw === undefined || raw === null || raw === '' ? [] : [raw]), ...local])];
+    if (!sources.length) return '';
+    if (sources.length !== 1 || typeof sources[0] !== 'string' ||
+        !/^library-html:sha256:[a-f0-9]{64}$/u.test(sources[0])) return null;
+    return sources[0];
+  }
+
   function assertWorkspaceSafeValue(value, depth = 0, seen = new Set(), path = []) {
     if (depth > 40) fail('WORKSPACE_VALUE_TOO_DEEP');
     if (value === null || value === undefined || typeof value !== 'object') return value;
@@ -408,6 +430,7 @@
     normalizeWorkspaceRelativePath,
     normalizeWorkspaceDoi: normalizeDoi,
     normalizeWorkspaceSiteId: normalizeSiteId,
+    workspaceRestoreSourceIdentity,
     assertWorkspaceSafeValue,
     createWorkspaceDirectoryName,
     createArticleWorkspaceIdentity,

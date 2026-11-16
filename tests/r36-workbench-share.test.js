@@ -7,6 +7,8 @@ const S = require('../core/research-workbench-model.js');
 const { createSession } = require('../workbench/session.js');
 const { createResearchWorkbenchStore, createMemoryResearchWorkbenchBackend } = require('../core/research-workbench-store.js');
 const SHARE = require('../workbench/share.js');
+const IO = require('../core/research-workbench-import-export.js');
+const SYNC = require('../core/research-workbench-sync.js');
 
 function setup() {
   const store = createResearchWorkbenchStore({ backend: createMemoryResearchWorkbenchBackend() });
@@ -87,6 +89,44 @@ async function seal(value) {
   share.integrity = { algorithm: 'SHA-256', contentHash: await S.wbSha256(S.wbJson(share)) };
   return share;
 }
+
+test('share makes omitted image bytes explicit even when the source asset is local', async () => {
+  const { project, plan, asset } = fixture();
+  asset.availability = 'local';
+  const share = await SHARE.createShare(project, { planIds: [plan.id] });
+  assert.equal(share.payload.assets[0].availability, 'unavailable');
+  assert.ok(share.warnings.some(w => w.code === 'SHARE_ASSET_BYTES_EXCLUDED'));
+});
+
+test('imported image references can be backed up, restored, synced and shared again', async () => {
+  const { project, plan, asset } = fixture();
+  const share = await SHARE.createShare(project, { planIds: [plan.id] });
+  // Legacy shares may claim that an image is local despite carrying no bytes.
+  share.payload.assets[0].availability = 'local';
+  const legacy = await seal(share);
+  const { store, session } = setup();
+  const imported = await SHARE.importShare(session, legacy, { destination: 'new' });
+  const stored = session.state.row.project.assets[0];
+  assert.equal(stored.sha256, undefined, 'a local checksum must only declare actual local bytes');
+  assert.equal(stored.sourceSha256, asset.sha256);
+  assert.equal(stored.availability, 'unavailable');
+  assert.ok(imported.warnings.some(w => w.code === 'SHARE_ASSET_BYTES_EXCLUDED'));
+  const backup = await IO.exportResearchWorkbenchBundle(store);
+  const target = setup();
+  await IO.importResearchWorkbenchBundle(target.store, backup);
+  const restored = (await target.store.listProjects())[0].project;
+  assert.equal(restored.assets[0].sourceSha256, asset.sha256);
+  assert.equal(restored.plans[0].figures[0].panels[0].ownAssetId, restored.assets[0].id);
+  const nextShare = await SHARE.createShare(restored, { planIds: [restored.plans[0].id] });
+  assert.equal(nextShare.payload.assets[0].sha256, asset.sha256);
+  const files = new Map();
+  const adapter = { read: async path => files.get(path) || null, write: async (path, bytes) => files.set(path, new Uint8Array(bytes)) };
+  const synced = await SYNC.syncResearchWorkbenchOutbox({ store, adapter, locks: { request: async (_name, _options, fn) => fn() } });
+  assert.ok(synced.length > 0 && synced.every(row => row.state === 'synced'));
+  const disk = await SYNC.readResearchWorkbenchDirectoryProject(adapter, imported.projectId);
+  assert.equal(disk.assets.length, 0);
+  assert.equal(disk.envelope.project.assets[0].sourceSha256, asset.sha256);
+});
 
 test('share supports single, multi-select, plan and mixed bundle with version and integrity metadata', async () => {
   const { project, h1, h2, plan, plan2 } = fixture();

@@ -26,8 +26,8 @@
   const pointSchema={type:'object',properties:{x:{type:'number'},y:{type:'number'}},additionalProperties:false};
   const directoryId={type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'};
   const directoryTargetSchema={oneOf:[{type:'object',properties:{kind:{const:'project'}},required:['kind'],additionalProperties:false},{type:'object',properties:{kind:{const:'figure'},planId:directoryId,figureId:directoryId},required:['kind','planId','figureId'],additionalProperties:false},{type:'object',properties:{kind:{const:'panel'},planId:directoryId,figureId:directoryId,panelId:directoryId},required:['kind','planId','figureId','panelId'],additionalProperties:false}]};
-  const paneDimensions={'--left':{unit:'px',min:125,max:280},'--right':{unit:'px',min:250,max:460},'--strip':{unit:'px',min:90,max:230},'--library':{unit:'%',min:28,max:72}};
-  const paneSchema={type:'object',properties:{libraryCollapsed:{type:'boolean'},inspectorCollapsed:{type:'boolean'},...Object.fromEntries(Object.entries(paneDimensions).map(([key,range])=>[key,{type:'string',description:range.min+'..'+range.max+range.unit+'；只接受数字加单位，不能含 CSS 表达式'}]))},additionalProperties:false};
+  const paneDimensions={'--left':{unit:'px',min:125,max:Number.MAX_SAFE_INTEGER},'--right':{unit:'px',min:200,max:Number.MAX_SAFE_INTEGER},'--strip':{unit:'px',min:90,max:230},'--library':{unit:'%',min:28,max:72}};
+  const paneSchema={type:'object',properties:{leftCollapsed:{type:'boolean'},rightCollapsed:{type:'boolean'},libraryCollapsed:{type:'boolean'},inspectorCollapsed:{type:'boolean'},...Object.fromEntries(Object.entries(paneDimensions).map(([key,range])=>[key,{type:'string',description:range.min+'..'+range.max+range.unit+'；只接受数字加单位，不能含 CSS 表达式'}]))},additionalProperties:false};
   const guardProperties={expectedProjectId:{type:['string','null'],description:'read_context 返回的当前课题 ID，空工作台用 null'},expectedRevision:{type:'integer',minimum:0,description:'read_context 返回的课题 revision；每次修改后更新'}};
   const segment={anyOf:[{type:'string'},{type:'integer',minimum:0},{type:'object',properties:{id:{type:'string'}},required:['id'],additionalProperties:false}]};
   function definition(name,description,properties={},required=[],write=false){return {name,description,inputSchema:{type:'object',properties:{...(write?guardProperties:{}),...properties},required:[...(write?['expectedProjectId','expectedRevision']:[]),...required],additionalProperties:false}};}
@@ -57,13 +57,14 @@
   function operationContracts(){
     const entityId={type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'},string={type:'string'},named={type:'string',minLength:1},idList={type:'array',items:entityId,minItems:1,uniqueItems:true};
     const scope={oneOf:[{type:'object',properties:{kind:{const:'hypothesis'},id:entityId},required:['kind','id'],additionalProperties:false},{type:'object',properties:{kind:{const:'figure'},id:entityId,planId:entityId},required:['kind','id','planId'],additionalProperties:false}]};
+    const schedule={"type":"object","properties":{"start":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"end":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"owner":{"type":"string","maxLength":200},"progress":{"type":["number","null"],"minimum":0,"maximum":100}},"additionalProperties":false};
     const target={planId:entityId,figureId:entityId},hypothesis={hypothesisId:entityId},contracts={};
     const materialType={enum:['paper','figure','panel','evidence-block']},sourceKind={enum:['library','plan']},stance={enum:['support','oppose','neutral']},note={type:'string',maxLength:4000},snapshot={type:['object','null']};
     const add=(operation,properties,required,extra={})=>{contracts[operation]={type:'object',properties:{...guardProperties,operation:{const:operation},...properties},required:['expectedProjectId','expectedRevision','operation',...required],additionalProperties:false,...extra};};
-    add('create_hypothesis',{name:named},['name']);add('create_plan',{name:named},['name']);add('create_figure',{planId:entityId,title:named,question:string,transition:string},['planId','title']);
+    add('create_hypothesis',{name:named},['name']);add('create_plan',{name:named},['name']);add('create_figure',{planId:entityId,title:named,supplementary:{type:'boolean'},question:string,transition:string},['planId','title']);
     add('create_node',{...hypothesis,label:string,kind:{enum:['bio','paper'],default:'bio'},point:pointSchema},['hypothesisId','label']);
     add('create_edge',{...hypothesis,source:entityId,target:entityId,claim:string,condition:{type:['string','null']},kind:{enum:['main','branch','feedback'],default:'main'}},['hypothesisId','source','target']);
-    add('create_panel',{...target,title:string,kind:{enum:['panel','text','arrow','annotation'],default:'panel'},point:pointSchema,w:{type:'number',minimum:40,maximum:4000},h:{type:'number',minimum:28,maximum:4000},purpose:string,experiment:string,readout:string,expectedResult:string,status:{enum:['planned','running','complete','review']}},['planId','figureId','title']);
+    add('create_panel',{...target,schedule,title:string,kind:{enum:['panel','text','arrow','annotation'],default:'panel'},point:pointSchema,w:{type:'number',minimum:40,maximum:4000},h:{type:'number',minimum:28,maximum:4000},purpose:string,experiment:string,readout:string,expectedResult:string,status:{enum:['planned','running','complete','review']}},['planId','figureId','title']);
     add('arrange',{scope,ids:idList,arrangement:{enum:M.ARRANGE_OPERATIONS||['left','top','horizontal','vertical']}},['scope','ids','arrangement']);
     add('layout',target,['planId','figureId']);add('duplicate',{scope,ids:idList,offset:{...pointSchema,required:['x','y']}},['scope','ids']);
     add('group',{...target,ids:{...idList,minItems:2}},['planId','figureId','ids']);add('ungroup',{...target,ids:idList},['planId','figureId','ids']);
@@ -72,6 +73,7 @@
     add('move_panels',{...target,targetFigureId:entityId,ids:idList},['planId','figureId','targetFigureId','ids']);add('reorder_figures',{planId:entityId,ids:idList},['planId','ids']);add('delete_objects',{scope,ids:idList},['scope','ids']);
     add('capture_resource',{resourceId:named},['resourceId']);
     add('bind_resource',{resourceId:named,...target,...hypothesis,panelId:entityId,edgeId:entityId,point:pointSchema,note:string,borrow:string},['resourceId'],{allOf:[{if:{required:['panelId']},then:{required:['planId','figureId']}},{if:{required:['edgeId']},then:{required:['hypothesisId']}},{if:{required:['panelId']},then:{properties:{edgeId:{enum:[]}}},else:{required:['hypothesisId']}}]});
+    add('set_panel_schedule',{...target,panelId:entityId,schedule},['planId','figureId','panelId','schedule']);
     add('set_panel_status',{...target,panelId:entityId,status:{enum:(M.PANEL_STATUS_OPTIONS||[{value:'planned'},{value:'running'},{value:'complete'},{value:'review'}]).map(row=>row.value)}},['planId','figureId','panelId','status']);
     const tableChanges=[],tableChange=(action,properties,required=[],extra={})=>tableChanges.push({type:'object',properties:{action:{const:action},...properties},required:['action',...required],additionalProperties:false,...extra}),index={type:'integer',minimum:0},tableName={type:'string',maxLength:M.TABLE_LIMITS?.nameLength||2000};
     tableChange('create',{rowCount:{type:'integer',minimum:0,maximum:M.TABLE_LIMITS?.rows||50},columnCount:{type:'integer',minimum:0,maximum:M.TABLE_LIMITS?.columns||20}});
@@ -80,7 +82,7 @@
     add('edit_group_table',{...target,panelId:entityId,change:{type:'object',properties:changeProperties,required:['action'],additionalProperties:false,oneOf:tableChanges}},['planId','figureId','panelId','change']);
     add('attach_material',{...hypothesis,targetType:{enum:['node','edge']},targetId:entityId,materialType,sourceKind,resourceId:named,sourceSnapshot:snapshot,stance,note},['hypothesisId','targetType','targetId','materialType','sourceKind','resourceId']);
     add('update_material_stance',{linkId:entityId,stance,note},['linkId','stance']);
-    add('create_evidence_block',{...target,title:named,panelIds:idList,summary:note,status:{enum:['draft','complete']}} ,['planId','figureId','title','panelIds']);
+    add('create_evidence_block',{...target,title:named,panelIds:idList,summary:note,method:note,observation:note,conclusion:note,status:{enum:['draft','complete']}} ,['planId','figureId','title','panelIds']);
     add('set_edge_relation',{...hypothesis,edgeId:entityId,kind:{enum:['main','branch','feedback']},claim:string,condition:string,status:string},['hypothesisId','edgeId','kind']);
     return contracts;
   }
@@ -92,7 +94,7 @@
       if(!match||match[0]!==value||match[2]!==range.unit||!Number.isFinite(number)||number<range.min||number>range.max)fail('pane 尺寸超出工作台允许范围');
     }
   }
-  function createAgentTools({session,adapter,projection=S,hooks={}}={}){
+  function createAgentTools({session,adapter,projection=S,hooks={},permissionGuard=null}={}){
     if(!session?.state||typeof session.edit!=='function')throw fault('WORKBENCH_AGENT_SESSION_REQUIRED');
     const resources=new Map();
     const contracts=operationContracts(),OPERATIONS=Object.keys(contracts);
@@ -111,7 +113,7 @@
       definition('restore','恢复当前课题的一条回收记录。',{recycleId:{type:'string'}},['recycleId'],true),
       definition('model_operation','执行与界面一致、可撤销的工作台模型操作。创建操作返回 createdId；排版、复制、方案分支、实验设计、状态和分组表格均保留来源和人工值。'),
       definition('navigate','打开课题或假说/Figure，并保存与人相同的导航状态；projectId 可用于切换课题。',{projectId:{type:['string','null']},selection:objectSchema},[],true),
-      definition('save_view','保存视图、缩放、平移、对象选择、故事视图、独立 pane 状态；提供 scope 保存假说/Figure 视图。panes 仅接受 libraryCollapsed/inspectorCollapsed 布尔值和 --left(125..280px)、--right(250..460px)、--strip(90..230px)、--library(28..72%)；未指定的原有人工字段会保留。',{view:objectSchema,scope:objectSchema,panes:paneSchema},[],true),
+      definition('save_view','保存视图、缩放、平移、对象选择、故事视图、独立 pane 状态；提供 scope 保存假说/Figure 视图。panes 仅接受 leftCollapsed/rightCollapsed/libraryCollapsed/inspectorCollapsed 布尔值和 --left(至少125px)、--right(至少200px)，无固定最大宽度，实际显示按视口可分配空间、--strip(90..230px)、--library(28..72%)；未指定的原有人工字段会保留。',{view:objectSchema,scope:objectSchema,panes:paneSchema},[],true),
       definition('invoke_action','执行明确的工作台界面动作；数据写入仍核对课题与 revision，未支持的动作会失败。',{action:{enum:ACTIONS},parameters:objectSchema},['action'],true),
       definition('import_project','导入完整课题 JSON，保留旧课题和图片/文献来源。',{bundle:{}},['bundle'],true),
       definition('export_project','导出课题完整 JSON，包括持久视图及图片；不会修改数据。',{projectIds:{type:'array',items:{type:'string'}}}),
@@ -144,10 +146,10 @@
     const receipt=result=>({projectId:session.state.row?.id||null,revision:session.state.row?.revision||0,contentRevision:session.state.row?.contentRevision||0,layoutRevision:session.state.row?.layoutRevision||0,...result});
     function requireProject(){if(!session.state.row)throw fault('WORKBENCH_PROJECT_NOT_FOUND');}
     function navigationCheck(selection,check){
-      return (state=session.state)=>{check(state);const p=state.row?.project;if(selection.mode!==undefined&&!['overview','hypothesis','figure'].includes(selection.mode))fail('导航模式无效');if(selection.projectId!==undefined&&selection.projectId!==(p?.id||null))throw fault('WORKBENCH_AGENT_PROJECT_CHANGED');if(selection.hypothesisId)entity(p,'hypothesis',selection.hypothesisId);if(selection.planId)entity(p,'plan',selection.planId);if(selection.figureId)entity(p,'figure',selection.figureId,selection.planId||state.selection.selection.planId);};
+      const verify=(state=session.state)=>{check(state);const p=state.row?.project;if(selection.mode!==undefined&&!['overview','hypothesis','figure'].includes(selection.mode))fail('导航模式无效');if(selection.projectId!==undefined&&selection.projectId!==(p?.id||null))throw fault('WORKBENCH_AGENT_PROJECT_CHANGED');if(selection.hypothesisId)entity(p,'hypothesis',selection.hypothesisId);if(selection.planId)entity(p,'plan',selection.planId);if(selection.figureId)entity(p,'figure',selection.figureId,selection.planId||state.selection.selection.planId);};return check.derive?check.derive(verify):verify;
     }
     function entity(project,kind,entityId,parentId){if(!project)throw fault('WORKBENCH_PROJECT_NOT_FOUND');id(entityId);const list=kind==='hypothesis'?project.hypotheses:kind==='plan'?project.plans:kind==='figure'?entity(project,'plan',parentId).figures:null;const row=list?.find(r=>r.id===entityId);if(!row)throw fault('WORKBENCH_ENTITY_NOT_FOUND');return row;}
-    function directoryCheck(target,check){return (state=session.state)=>{check(state);const project=state.row?.project;if(!project||state.row.deleted)throw fault('WORKBENCH_PROJECT_NOT_FOUND');if(target.kind==='project')return;const choose=(rows,key)=>{const found=rows?.find(row=>row.id===target[key]);if(!found)fail('找不到当前归属内的目录目标 '+key,{field:'target.'+key,path:['target',key],reason:'not_found',allowedValues:(rows||[]).map(row=>row.id),correction:'从当前课题选择实际存在且归属正确的 target.'+key});return found;};const plan=choose(project.plans,'planId'),figure=choose(plan.figures,'figureId');if(target.kind==='panel')choose(figure.panels,'panelId');};}
+    function directoryCheck(target,check){const verify=(state=session.state)=>{check(state);const project=state.row?.project;if(!project||state.row.deleted)throw fault('WORKBENCH_PROJECT_NOT_FOUND');if(target.kind==='project')return;const choose=(rows,key)=>{const found=rows?.find(row=>row.id===target[key]);if(!found)fail('找不到当前归属内的目录目标 '+key,{field:'target.'+key,path:['target',key],reason:'not_found',allowedValues:(rows||[]).map(row=>row.id),correction:'从当前课题选择实际存在且归属正确的 target.'+key});return found;};const plan=choose(project.plans,'planId'),figure=choose(plan.figures,'figureId');if(target.kind==='panel')choose(figure.panels,'panelId');};return check.derive?check.derive(verify):verify;}
     function scoped(project,scope){if(!isObject(scope)||!['hypothesis','figure'].includes(scope.kind))fail('请选择假说或 Figure scope');return entity(project,scope.kind,scope.id,scope.planId);}
     function selectObjects(list,requested){ids(requested);const chosen=list.filter(o=>requested.includes(o.id));if(chosen.length!==requested.length)throw fault('WORKBENCH_ENTITY_NOT_FOUND');return chosen;}
     function pathKey(owner,segment){
@@ -210,10 +212,10 @@
         switch(args.operation){
           case 'create_hypothesis':{const o=M.hypothesis(text(args.name,'name'));p.hypotheses.push(o);result.createdId=o.id;break;}
           case 'create_plan':{const o=M.plan(text(args.name,'name'));p.plans.push(o);result.createdId=o.id;break;}
-          case 'create_figure':{const o=M.figure(text(args.title,'title'));if(args.question!==undefined)o.question=String(args.question).slice(0,4000);if(args.transition!==undefined)o.transition=String(args.transition).slice(0,4000);plan().figures.push(o);result.createdId=o.id;break;}
+          case 'create_figure':{const o=M.figure(text(args.title,'title'),args.supplementary===true);if(args.question!==undefined)o.question=String(args.question).slice(0,4000);if(args.transition!==undefined)o.transition=String(args.transition).slice(0,4000);plan().figures.push(o);result.createdId=o.id;break;}
           case 'create_node':{const point=args.point||{x:0,y:0},o={id:M.uid('node'),label:text(args.label,'label'),kind:args.kind||'bio',x:M.finite(point.x),y:M.finite(point.y),w:190,h:82};hypothesis().nodes.push(o);result.createdId=o.id;break;}
           case 'create_edge':{const h=hypothesis();if(!h.nodes.some(n=>n.id===args.source)||!h.nodes.some(n=>n.id===args.target))throw fault('WORKBENCH_DANGLING_EDGE');const o={id:M.uid('edge'),source:args.source,target:args.target,claim:args.claim===undefined?'':text(args.claim,'claim'),condition:args.condition===undefined?'':args.condition,kind:['main','branch','feedback'].includes(args.kind)?args.kind:'main',status:'pending',bindings:[]};h.edges.push(o);result.createdId=o.id;break;}
-          case 'create_panel':{const o=M.panel(text(args.title,'title'),args.point,args.kind||'panel');if(args.w!==undefined)o.w=M.finite(args.w);if(args.h!==undefined)o.h=M.finite(args.h);for(const key of ['purpose','experiment','readout','expectedResult'])if(args[key]!==undefined)o[key]=String(args[key]).slice(0,20000);if(args.status!==undefined)o.status=args.status;figure().panels.push(o);result.createdId=o.id;break;}
+          case 'create_panel':{const o=M.panel(text(args.title,'title'),args.point,args.kind||'panel');if(args.w!==undefined)o.w=M.finite(args.w);if(args.h!==undefined)o.h=M.finite(args.h);for(const key of ['purpose','experiment','readout','expectedResult'])if(args[key]!==undefined)o[key]=String(args[key]).slice(0,20000);if(args.status!==undefined)o.status=args.status;if(args.schedule!==undefined){S.wbValidatePanelSchedule(args.schedule);o.schedule=M.clone(args.schedule);}figure().panels.push(o);result.createdId=o.id;break;}
           case 'arrange':{const o=scope();M.arrange(selectObjects(scopeObjects(o),args.ids),args.arrangement);break;}
           case 'layout':{const f=figure(),proposed=M.layout(f.panels);for(const row of proposed){const target=f.panels.find(o=>o.id===row.id);Object.assign(target,{x:row.x,y:row.y});}break;}
           case 'duplicate':{const o=scope(),chosen=selectObjects(scopeObjects(o),args.ids),offset=args.offset||{x:24,y:24};if(args.scope.kind==='hypothesis'){const copies=M.duplicateGraph(chosen,o.edges,offset);o.nodes.push(...copies.nodes);o.edges.push(...copies.edges);result.createdIds=copies.nodes.map(n=>n.id);}else{const copies=M.duplicatePanels(chosen,offset);o.panels.push(...copies);result.createdIds=copies.map(n=>n.id);}break;}
@@ -223,7 +225,7 @@
           case 'save_plan_version':{const pl=plan(),snapshot=M.clone(pl);delete snapshot.history;(pl.history ||= []).push({name:args.name===undefined?'版本 '+(pl.history.length+1):text(args.name,'name'),time:new Date().toISOString(),snapshot});result.historyIndex=pl.history.length-1;break;}
           case 'move_panels':{const from=figure(),to=entity(p,'figure',args.targetFigureId,args.planId),chosen=selectObjects(from.panels,args.ids);if(from.id===to.id)fail('目标 Figure 必须不同');if(chosen.some(row=>to.panels.some(o=>o.id===row.id)))fail('目标 Figure 存在相同 Panel 身份');from.panels=from.panels.filter(row=>!args.ids.includes(row.id));to.panels.push(...chosen);break;}
           case 'reorder_figures':{const pl=plan(),ordered=selectObjects(pl.figures,args.ids);if(ordered.length!==pl.figures.length)fail('顺序必须包含全部 Figure');pl.figures=args.ids.map(fid=>ordered.find(f=>f.id===fid));break;}
-          case 'delete_objects':{const o=scope();ids(args.ids);const all=args.scope.kind==='hypothesis'?[...o.nodes,...o.edges]:o.panels;selectObjects(all,args.ids);if(args.scope.kind==='hypothesis'){o.nodes=o.nodes.filter(n=>!args.ids.includes(n.id));o.edges=o.edges.filter(e=>!args.ids.includes(e.id)&&!args.ids.includes(e.source)&&!args.ids.includes(e.target));}else o.panels=o.panels.filter(n=>!args.ids.includes(n.id));break;}
+          case 'delete_objects':{const o=scope();ids(args.ids);const all=args.scope.kind==='hypothesis'?[...o.nodes,...o.edges]:o.panels;selectObjects(all,args.ids);if(args.scope.kind==='hypothesis'){o.nodes=o.nodes.filter(n=>!args.ids.includes(n.id));o.edges=o.edges.filter(e=>!args.ids.includes(e.id)&&!args.ids.includes(e.source)&&!args.ids.includes(e.target));if(p.materialLinks)p.materialLinks=p.materialLinks.filter(link=>link.hypothesisId!==o.id||(link.targetType==='node'?o.nodes:o.edges).some(row=>row.id===link.targetId));}else o.panels=o.panels.filter(n=>!args.ids.includes(n.id));break;}
           case 'capture_resource':{if(source.type==='asset')fail('自有素材已保存在课题');capture(p,source);result.resourceId=source.id;break;}
           case 'bind_resource':{
             if(args.panelId){const f=figure(),panel=f.panels.find(n=>n.id===args.panelId);if(!panel)throw fault('WORKBENCH_ENTITY_NOT_FOUND');if(source.type==='asset'){if(!p.assets.some(a=>a.id===source.id))fail('图片不属于当前课题');panel.ownAssetId=source.id;}else{capture(p,source);(panel.references ||= []).push({resourceId:source.id,borrow:args.borrow===undefined?'实验设计':text(args.borrow,'borrow'),note:args.note===undefined?'':text(args.note,'note'),sourceSnapshot:source.source?M.clone(source.source):null});}}
@@ -252,13 +254,14 @@
             const panelIds=args.panelIds;if(panelIds.some(panelId=>!figure.panels.some(panel=>panel.id===panelId)))throw fault('WORKBENCH_EVIDENCE_BLOCK_INVALID');
             figure.evidenceBlocks||=[];const duplicate=figure.evidenceBlocks.find(block=>block.title===args.title&&JSON.stringify(block.panelIds)===JSON.stringify(panelIds));
             if(duplicate){result.blockId=duplicate.id;result.idempotent=true;break;}
-            const block=M.evidenceBlock({title:args.title,panelIds,summary:args.summary||'',status:args.status||'complete'});figure.evidenceBlocks.push(block);result.blockId=block.id;break;
+            const complete=panelIds.every(id=>M.panelStatus(figure.panels.find(p=>p.id===id)).value==='complete');const block=M.evidenceBlock({title:args.title,panelIds,summary:args.conclusion??args.summary??'',status:complete?(args.status||'complete'):'draft'});for(const key of ['method','observation','conclusion'])if(args[key]!==undefined)block[key]=args[key];figure.evidenceBlocks.push(block);result.blockId=block.id;break;
           }
           case 'set_edge_relation':{
             const h=p.hypotheses.find(item=>item.id===args.hypothesisId),edge=h?.edges.find(item=>item.id===args.edgeId);if(!edge)throw fault('WORKBENCH_ENTITY_NOT_FOUND');
             edge.kind=args.kind;if(args.claim!==undefined)edge.claim=args.claim;if(args.condition!==undefined)edge.condition=args.condition;if(args.status!==undefined)edge.status=args.status;result.edgeId=edge.id;break;
           }
-          case 'set_panel_status':{if(typeof M.updatePanelStatus!=='function')throw fault('WORKBENCH_AGENT_CAPABILITY_UNAVAILABLE');const panel=figure().panels.find(row=>row.id===args.panelId);if(!panel)throw fault('WORKBENCH_ENTITY_NOT_FOUND');Object.assign(panel,M.updatePanelStatus(panel,args.status));break;}
+          case 'set_panel_schedule':{const panel=figure().panels.find(row=>row.id===args.panelId);if(!panel)throw fault('WORKBENCH_ENTITY_NOT_FOUND');const schedule={...(panel.schedule||{}),...args.schedule};S.wbValidatePanelSchedule(schedule);panel.schedule=schedule;break;}
+          case 'set_panel_status':{if(typeof M.updatePanelStatus!=='function')throw fault('WORKBENCH_AGENT_CAPABILITY_UNAVAILABLE');const panel=figure().panels.find(row=>row.id===args.panelId);if(!panel)throw fault('WORKBENCH_ENTITY_NOT_FOUND');Object.assign(panel,M.updatePanelStatus(panel,args.status));if(args.status!=='complete')for(const block of figure().evidenceBlocks||[])if(block.panelIds.includes(panel.id))block.status='draft';break;}
           case 'edit_group_table':{if(typeof M.editGroupTable!=='function'||typeof M.createGroupTable!=='function')throw fault('WORKBENCH_AGENT_CAPABILITY_UNAVAILABLE');const panel=figure().panels.find(row=>row.id===args.panelId);if(!panel)throw fault('WORKBENCH_ENTITY_NOT_FOUND');try{panel.groupTable=args.change.action==='create'?M.createGroupTable(args.change.rowCount??2,args.change.columnCount??2):M.editGroupTable(panel.groupTable,args.change);}catch(error){if(error.code!=='WORKBENCH_INVALID_GROUP_TABLE')throw error;const field=error.details?.field||'action',allowedValues=field==='rowId'?panel.groupTable?.rows.map(row=>row.id):field==='columnId'?panel.groupTable?.columns.map(column=>column.id):null;fail(error.message,{field:'change.'+field,path:['change',field],reason:error.details?.reason||'invalid_table',causeCode:error.code,...(allowedValues?{allowedValues}:{}),correction:panel.groupTable?'修正 change.'+field+' 后重试':'先用 change.action=create 创建表格'});}break;}
         }
       },{precondition:check});
@@ -268,8 +271,10 @@
     async function execute(name,input={}){
       if(!definitions.some(d=>d.name===name))throw fault('WORKBENCH_AGENT_UNKNOWN_TOOL');if(!isObject(input))fail();json(input);const args=M.clone(input),definition=definitions.find(d=>d.name===name);
       validateSchema(args,definition.inputSchema);
-      const write=Object.hasOwn(definition.inputSchema.properties,'expectedRevision'),check=write?precondition(args):null;if(check)check();
-      switch(name){
+      const grant=permissionGuard?await permissionGuard.acquire(name,args,session.state):null,commits=[];
+      const write=Object.hasOwn(definition.inputSchema.properties,'expectedRevision'),baseCheck=write?precondition(args):null,check=(state=session.state)=>{if(permissionGuard)permissionGuard.assert(grant);baseCheck?.(state);};
+      if(permissionGuard){const permissionOnly=()=>permissionGuard.assert(grant),submit=async(fn,guard)=>{const value=await (permissionGuard.withCommit?permissionGuard.withCommit(grant,()=>{guard();return fn();}):(guard(),fn()));if(value?.success!==false&&!value?.conflict){const r=value?.data||value?.value||value;commits.push(r&&typeof r==='object'?Object.fromEntries(['id','projectId','revision','saved','deleted','created','opened','workspaceId','workspaceGeneration','relativePath','tombstoneId'].filter(k=>r[k]!==undefined).map(k=>[k,r[k]])):{committed:true});}return value;};const bind=verify=>{verify.after=permissionOnly;verify.commit=fn=>submit(fn,verify);verify.derive=bind;return verify;};bind(permissionOnly);bind(check);}check();
+      try{switch(name){
         case 'read_context':return context();
         case 'list_projects':return M.clone(await session.store.listProjects());
         case 'get_project':{const row=await session.store.getProject(id(args.projectId));if(!row)throw fault('WORKBENCH_PROJECT_NOT_FOUND');return row;}
@@ -277,17 +282,17 @@
         case 'read_literature':{
           if(typeof adapter?.readWorkspace!=='function'||typeof adapter?.projectResources!=='function')throw fault('WORKBENCH_AGENT_CAPABILITY_UNAVAILABLE');const snapshot=await adapter.readWorkspace(args.source),result=adapter.projectResources(snapshot,projection),rows=M.versionedResources([...result.resources,...result.historicalResources],args.title||''),paper=rows.find(r=>r.type==='paper');for(const row of rows){if(paper&&row.type!=='paper')row.paperId=paper.id;resources.set(row.id,M.clone(row));}await hooks.onResources?.(M.clone(rows),{source:M.clone(args.source),title:args.title||''});return {snapshot,resources:rows.filter(r=>!r.sourceMismatch),historicalResources:rows.filter(r=>r.sourceMismatch)};
         }
-        case 'create_project':{const project=M.project(text(args.name,'name'),args.question===undefined?'':text(args.question,'question')),row=await session.create(project,{precondition:check});return receipt({createdId:row.id});}
+        case 'create_project':{const project=M.project(text(args.name,'name'),args.question===undefined?'':text(args.question,'question'));permissionGuard?.expectOwner?.(project.id);const row=await session.create(project,{precondition:check});return receipt({createdId:row.id});}
         case 'edit_project':{requireProject();if(!Array.isArray(args.operations)||!args.operations.length||args.operations.length>100)fail('需要 1 至 100 个编辑操作');await session.edit(args.label===undefined?'Agent · 编辑课题':text(args.label,'label'),p=>{check();const before=M.clone(p);for(const [index,operation]of args.operations.entries())try{applyPatch(p,operation);}catch(error){if(error.code==='WORKBENCH_AGENT_INVALID_ARGUMENT'&&!error.details.field){error.details.field='operations.'+index+'.path';error.details.path=['operations',index,'path'];}throw error;}validateEditedPanels(p,before);},{precondition:check});return receipt({});}
         case 'remove_entity':{requireProject();if(!['project','hypothesis','plan','figure'].includes(args.kind))fail('删除类型无效');id(args.id);if(args.kind==='project'&&args.id!==args.expectedProjectId)fail('只能删除当前课题');if(args.kind==='figure')id(args.parentId);const row=await session.remove(args.kind,args.id,args.parentId,{precondition:check});return receipt({recycleId:row.recycleId,deleted:row.deleted});}
         case 'undo':await session.undo({precondition:check});return receipt({});
         case 'redo':await session.redo({precondition:check});return receipt({});
         case 'list_recycle':requireProject();return session.store.listRecycle(session.state.row.id);
         case 'restore':await session.restore(id(args.recycleId),{precondition:check});return receipt({});
-        case 'model_operation':requireProject();return modelOperation(args,check);
+        case 'model_operation':requireProject();return await modelOperation(args,check);
         case 'navigate':{
-          if(Object.hasOwn(args,'projectId'))await session.open(args.projectId===null?null:id(args.projectId),{precondition:check});
-          if(args.selection){if(!isObject(args.selection))fail('导航选择无效');const baseCheck=Object.hasOwn(args,'projectId')?precondition({expectedProjectId:session.state.row?.id||null,expectedRevision:session.state.row?.revision||0}):check,selectCheck=navigationCheck(args.selection,baseCheck);selectCheck();if(hooks.navigate)await hooks.navigate(M.clone(args.selection),selectCheck);else await session.select(args.selection,{precondition:selectCheck});}
+          if(Object.hasOwn(args,'projectId')){permissionGuard?.expectOwner?.(args.projectId);await session.open(args.projectId===null?null:id(args.projectId),{precondition:check});}
+          if(args.selection){if(!isObject(args.selection))fail('导航选择无效');const baseCheck=Object.hasOwn(args,'projectId')?(check.derive?check.derive(precondition({expectedProjectId:session.state.row?.id||null,expectedRevision:session.state.row?.revision||0})):precondition({expectedProjectId:session.state.row?.id||null,expectedRevision:session.state.row?.revision||0})):check,selectCheck=navigationCheck(args.selection,baseCheck);selectCheck();if(hooks.navigate)await hooks.navigate(M.clone(args.selection),selectCheck);else await session.select(args.selection,{precondition:selectCheck});}
           return receipt({selection:M.clone(session.state.selection.selection)});
         }
         case 'save_view':{
@@ -295,16 +300,16 @@
           else if(args.scope){if(!isObject(args.scope)||!isObject(args.view))fail('需要 scope 和 view');await session.saveEntityView(args.scope,args.view,{precondition:check});}
           else{if(!isObject(args.view))fail('需要 view 或 panes');await session.saveView(args.view,{precondition:check});}return receipt({view:M.clone(session.state.view)});
         }
-        case 'invoke_action':if(!ACTIONS.includes(args.action))fail('未知工作台动作');return hook('invokeAction',{action:args.action,parameters:args.parameters||{}},check);
-        case 'import_project':if(!Object.hasOwn(args,'bundle'))fail('需要完整课题 bundle');return hook('importProject',args,check);
-        case 'export_project':return hook('exportProject',args);
-        case 'import_asset':return hook('importAsset',args,check);
-        case 'read_asset':return hook('readAsset',args);
-        case 'locate_source':return hook('locateSource',args,check);
-        case 'clipboard':if(!['copy','paste'].includes(args.operation))fail('剪贴板操作无效');return hook('clipboard',args,check);
-        case 'local_data':if(!LOCAL_OPERATIONS.includes(args.operation))fail('未知本地数据操作');return hook('localData',args,check);
+        case 'invoke_action':if(!ACTIONS.includes(args.action))fail('未知工作台动作');return await hook('invokeAction',{action:args.action,parameters:args.parameters||{}},check);
+        case 'import_project':if(!Object.hasOwn(args,'bundle'))fail('需要完整课题 bundle');return await hook('importProject',args,check);
+        case 'export_project':return await hook('exportProject',args);
+        case 'import_asset':return await hook('importAsset',args,check);
+        case 'read_asset':return await hook('readAsset',args);
+        case 'locate_source':return await hook('locateSource',args,check);
+        case 'clipboard':if(!['copy','paste'].includes(args.operation))fail('剪贴板操作无效');return await hook('clipboard',args,check);
+        case 'local_data':if(!LOCAL_OPERATIONS.includes(args.operation))fail('未知本地数据操作');return await hook('localData',args,check);
         case 'data_directory':{const verify=directoryCheck(args.target,check);verify();const result=await hook('dataDirectory',args,verify);verify();if(result?.success===false)throw fault(result.error?.code||'WORKBENCH_DATA_DIRECTORY_INVALID_RECEIPT',result.error?.message||'目录服务未完成操作');if(!isObject(result)||typeof result.created!=='boolean'||typeof result.relativePath!=='string'||!result.relativePath||args.operation==='open'&&result.opened!==true)throw fault('WORKBENCH_DATA_DIRECTORY_INVALID_RECEIPT','目录服务未返回真实创建或打开回执；操作尚未确认完成');return receipt(result);}
-      }
+      }}catch(error){if(commits.length){error.code='WORKBENCH_AGENT_PARTIALLY_COMMITTED';error.message='部分操作已保存，后续操作已停止；已保存的内容不会回滚，请核对回执。';error.details={...(error.details||{}),committed:true,commits};}throw error;}
     }
     return {definitions,execute,context};
   }

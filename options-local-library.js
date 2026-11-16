@@ -1,22 +1,6 @@
 (function localReadingLibraryOptions() {
   'use strict';
-
-  const SCOPE_LABELS = Object.freeze({
-    all: '全部范围', title: '标题', notes: '笔记', fulltext: '全文',
-    abstract: '摘要', method: '方法', caption: '图注'
-  });
-  const state = {
-    kind: 'articles',
-    query: '',
-    scope: 'all',
-    tags: [],
-    tagMode: 'any',
-    tagEditor: null,
-    directoryOpening: '',
-    pages: { articles: 1, abbreviations: 1 },
-    sequence: 0
-  };
-
+  const state = { kind: 'articles', query: '', pages: { articles: 1, abbreviations: 1 }, sequence: 0 };
   function element(tag, className, content) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -61,409 +45,57 @@
     }
   }
 
-  function savedArticleLink(source, label = '查看') {
-    if (!source?.hasOfflineSnapshot || !source.workspaceId) return safeArticleLink(source?.url, label);
-    const link = element('a', '', label);
-    link.href = chrome.runtime.getURL(`offline-reader.html?workspaceId=${encodeURIComponent(source.workspaceId)}`);
-    link.target = '_blank'; link.rel = 'noopener noreferrer';
-    link.title = '打开本机保存的网页，断网也可查看';
-    return link;
-  }
-
-  function appendOfflineReadingActions(heading, information, source) {
-    if (source.hasOfflineSnapshot && source.workspaceId) {
-      const view = savedArticleLink(source);
-      view.className = 'button quiet compact-button local-library__article-open';
-      heading.append(view);
-    }
-    const online = safeArticleLink(source.url, '在线原文');
-    online.className = 'button quiet compact-button local-library__article-online';
-    heading.append(online);
-    information.append(element('p', 'local-library__meta local-library__offline-status',
-      !source.hasOfflineSnapshot ? '尚未保存离线网页；在线原文需要网络和访问权限'
-        : source.lastSaveAttemptStatus === 'partial' && source.offlineSnapshotStatus === 'complete'
-          ? '最近一次保存不完整；查看将打开之前保留的离线网页'
-        : source.offlineSnapshotStatus === 'complete' ? '已保存离线网页与阅读图片'
-        : source.offlineSnapshotStatus === 'partial' ? '离线网页部分资源未保存，请联网重新保存'
-        : '已有离线网页；旧快照的图片与样式完整度未记录'));
-  }
-
   function date(value) {
     if (!value || Number.isNaN(Date.parse(value))) return '未知';
     return new Intl.DateTimeFormat(SciLLM.getInterfaceLanguage?.() === 'en' ? 'en' : 'zh-CN', { dateStyle: 'medium' }).format(new Date(value));
   }
 
-  function createShell(root) {
-    root.replaceChildren();
-    root.classList.add('local-library');
-    const heading = element('div', 'local-library__heading');
-    const headingCopy = element('div');
-    headingCopy.append(element('h3', '', '本地文献与缩略词库'));
-    headingCopy.append(element('p', '',
-      '直接检索已保存工作区。所有统计和搜索均在本机完成，不调用模型，也不上传正文。'));
-    const headingActions = element('div', 'local-library__heading-actions');
-    const add = button('新增缩略词', 'button secondary compact-button', () =>
-      openAbbreviationEditor(root));
-    add.dataset.libraryAdd = '';
-    headingActions.append(add,
-      button('刷新', 'button quiet compact-button', () => load(root)));
-    heading.append(headingCopy, headingActions);
+  function workbenchLink() {
+    const link = element('a', 'button primary compact-button', '打开文献总库 →');
+    link.href = globalThis.chrome?.runtime?.getURL?.('workbench/index.html#library') || new URL('workbench/index.html#library', globalThis.location.href).href;
+    link.target = '_blank'; link.rel = 'noopener noreferrer'; return link;
+  }
 
-    const tabs = element('div', 'local-library__tabs');
-    tabs.setAttribute('role', 'tablist');
-    [['articles', '本地文献'], ['abbreviations', '全局缩略词']].forEach(([kind, label]) => {
-      const tab = button(label, 'local-library__tab', () => {
-        selectLibraryKind(root, kind);
-      });
-      tab.dataset.libraryKind = kind;
-      tab.setAttribute('role', 'tab');
-      tab.setAttribute('aria-controls', 'localReadingLibraryResults');
-      tabs.append(tab);
-    });
+  function createShell(root) {
+    root.replaceChildren(); root.classList.add('local-library');
+    const heading = element('div', 'local-library__heading'), copy = element('div');
+    copy.append(element('h3', '', '本机阅读资料与缩略词'), element('p', '', '文献搜索、标签与附件请到文献总库。这里保留本机阅读资料概况与全局缩略词管理。'));
+    const actions = element('div', 'local-library__heading-actions');
+    const add = button('新增缩略词', 'button secondary compact-button', () => openAbbreviationEditor(root)); add.dataset.libraryAdd = '';
+    actions.append(workbenchLink(), add, button('刷新', 'button quiet compact-button', () => load(root))); heading.append(copy, actions);
+    const tabs = element('div', 'local-library__tabs'); tabs.setAttribute('role', 'tablist');
+    for (const [kind, label] of [['articles', '本机阅读资料'], ['abbreviations', '全局缩略词']]) {
+      const tab = button(label, 'local-library__tab', () => selectLibraryKind(root, kind));
+      tab.dataset.libraryKind = kind; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', 'localReadingLibraryResults'); tabs.append(tab);
+    }
     tabs.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      const kinds = ['articles', 'abbreviations'];
-      const current = Math.max(0, kinds.indexOf(state.kind));
-      const nextIndex = event.key === 'Home' ? 0
-        : event.key === 'End' ? kinds.length - 1
-          : (current + (event.key === 'ArrowRight' ? 1 : -1) + kinds.length) % kinds.length;
-      const nextKind = kinds[nextIndex];
-      event.preventDefault();
-      state.kind = nextKind;
-      updateControls(root);
-      load(root);
-      root.querySelector(`[data-library-kind="${nextKind}"]`)?.focus();
+      const kinds = ['articles', 'abbreviations'], current = kinds.indexOf(state.kind);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : (current + 1) % 2;
+      event.preventDefault(); selectLibraryKind(root, kinds[next]); root.querySelector(`[data-library-kind="${kinds[next]}"]`)?.focus();
     });
-
-    const controls = element('div', 'local-library__controls');
-    const searchField = element('label', 'local-library__search-field');
-    searchField.append(element('span', '', '检索已保存内容'));
-    const search = element('input');
-    search.type = 'search';
-    search.autocomplete = 'off';
-    search.placeholder = '搜索已保存文献';
-    search.setAttribute('aria-label', '搜索本地库');
-    let timer = null;
-    search.addEventListener('input', () => {
-      clearTimeout(timer);
-      state.query = search.value;
-      state.pages[state.kind] = 1;
-      timer = setTimeout(() => load(root), 180);
-    });
-    search.dataset.librarySearch = '';
-    searchField.append(search);
-    const scopeField = element('label', 'local-library__scope-field');
-    scopeField.dataset.libraryScopeField = '';
-    scopeField.append(element('span', '', '搜索范围'));
-    const scope = element('select');
-    scope.setAttribute('aria-label', '文献搜索范围');
-    Object.entries(SCOPE_LABELS).forEach(([value, label]) => {
-      const option = element('option', '', label);
-      option.value = value;
-      scope.append(option);
-    });
-    scope.addEventListener('change', () => {
-      state.scope = scope.value;
-      state.pages.articles = 1;
-      updateControls(root);
-      load(root);
-    });
-    scope.dataset.libraryScope = '';
-    scopeField.append(scope);
-    controls.append(searchField, scopeField);
-    const scopeSummary = element('p', 'local-library__scope-summary');
-    scopeSummary.dataset.libraryScopeSummary = '';
-
-    const editor = element('div', 'local-library__editor');
-    editor.dataset.libraryEditor = '';
-    editor.hidden = true;
-
-    const tagFilter = createTagFilter(root);
-    const tagEditor = element('section', 'local-library__tag-editor');
-    tagEditor.dataset.libraryTagEditor = '';
-    tagEditor.setAttribute('aria-label', '编辑文献标签');
-    tagEditor.hidden = true;
-    const directoryNotice = element('div', 'local-library__directory-notice');
-    directoryNotice.dataset.libraryDirectoryNotice = '';
-    directoryNotice.hidden = true;
-    const directoryStatus = element('p');
-    directoryStatus.dataset.libraryDirectoryStatus = '';
-    directoryStatus.setAttribute('role', 'status');
-    directoryStatus.setAttribute('aria-live', 'polite');
-    const directorySettings = button('目录与本机助手设置', 'button quiet compact-button', () => {
-      globalThis.openNativeDirectorySettings();
-    });
-    directorySettings.dataset.libraryDirectorySettings = '';
-    directorySettings.hidden = true;
-    directoryNotice.append(directoryStatus, directorySettings);
-
-    const status = element('p', 'local-library__status', '正在读取本地库…');
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
-    status.dataset.libraryStatus = '';
-    const results = element('div', 'local-library__results');
-    results.id = 'localReadingLibraryResults';
-    results.setAttribute('role', 'tabpanel');
-    results.dataset.libraryResults = '';
-    const pagination = element('div', 'local-library__pagination');
-    pagination.dataset.libraryPagination = '';
-    root.append(heading, tabs, controls, scopeSummary, tagFilter, directoryNotice, tagEditor, editor, status, results, pagination);
-    updateControls(root);
+    const controls = element('div', 'local-library__controls'); controls.dataset.libraryControls = '';
+    const searchField = element('label', 'local-library__search-field'); searchField.append(element('span', '', '搜索全局缩略词'));
+    const search = element('input'); search.type = 'search'; search.autocomplete = 'off'; search.placeholder = '搜索缩写、全称、中文或文献';
+    search.setAttribute('aria-label', '搜索全局缩略词'); search.dataset.librarySearch = ''; let timer;
+    search.addEventListener('input', () => { clearTimeout(timer); state.query = search.value; state.pages.abbreviations = 1; timer = setTimeout(() => load(root), 180); });
+    searchField.append(search); controls.append(searchField);
+    const editor = element('div', 'local-library__editor'); editor.dataset.libraryEditor = ''; editor.hidden = true;
+    const status = element('p', 'local-library__status', '正在读取本机资料…'); status.dataset.libraryStatus = ''; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const results = element('div', 'local-library__results'); results.id = 'localReadingLibraryResults'; results.dataset.libraryResults = ''; results.setAttribute('role', 'tabpanel');
+    const pagination = element('div', 'local-library__pagination'); pagination.dataset.libraryPagination = '';
+    root.append(heading, tabs, controls, editor, status, results, pagination); updateControls(root);
   }
-
   function selectLibraryKind(root, nextKind) {
     if (!['articles', 'abbreviations'].includes(nextKind)) return;
-    state.kind = nextKind;
-    state.pages[nextKind] = Math.max(1, Number(state.pages[nextKind]) || 1);
-    updateControls(root);
-    load(root);
+    state.kind = nextKind; updateControls(root); load(root);
   }
-
   function updateControls(root) {
-    root.querySelectorAll('[data-library-kind]').forEach(tab => {
-      const selected = tab.dataset.libraryKind === state.kind;
-      tab.classList.toggle('is-active', selected);
-      tab.setAttribute('aria-selected', String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-    });
-    const search = root.querySelector('[data-library-search]');
-    if (search) search.placeholder = state.kind === 'articles'
-      ? '搜索标题、笔记或已保存正文' : '搜索缩写、全称、中文或文献';
-    const scope = root.querySelector('[data-library-scope]');
-    const scopeField = root.querySelector('[data-library-scope-field]');
-    if (scopeField) scopeField.hidden = state.kind !== 'articles';
-    if (scope) scope.value = state.scope;
-    const scopeSummary = root.querySelector('[data-library-scope-summary]');
-    if (scopeSummary) scopeSummary.textContent = state.kind === 'articles'
-      ? `当前范围：${SCOPE_LABELS[state.scope]} · 文献行会标明已保存内容与未覆盖字段。`
-      : '当前范围：全局缩略词 · 可检索缩写、全称、中文释义与出现文献。';
-    const add = root.querySelector('[data-library-add]');
-    if (add) add.hidden = state.kind !== 'abbreviations';
-    const editor = root.querySelector('[data-library-editor]');
-    if (editor && state.kind !== 'abbreviations') editor.hidden = true;
-    const tagFilter = root.querySelector('[data-library-tag-filter]');
-    if (tagFilter) tagFilter.hidden = state.kind !== 'articles';
-  }
-
-  function createTagFilter(root) {
-    const group = element('div', 'local-library__tag-filter');
-    group.dataset.libraryTagFilter = '';
-    const label = element('label');
-    label.append(element('span', '', '按标签筛选'));
-    const choice = element('select');
-    choice.dataset.libraryTagChoice = '';
-    choice.setAttribute('aria-label', '添加标签筛选');
-    const placeholder = element('option', '', '选择标签…');
-    placeholder.value = '';
-    choice.append(placeholder);
-    choice.addEventListener('change', () => {
-      if (choice.value && !state.tags.includes(choice.value)) state.tags.push(choice.value);
-      choice.value = '';
-      changeTagFilter(root);
-    });
-    label.append(choice);
-    const modeLabel = element('label');
-    modeLabel.append(element('span', '', '匹配方式'));
-    const mode = element('select');
-    mode.dataset.libraryTagMode = '';
-    mode.setAttribute('aria-label', '标签匹配方式');
-    [['any', '任一标签'], ['all', '全部标签']].forEach(([value, text]) => {
-      const option = element('option', '', text); option.value = value; mode.append(option);
-    });
-    mode.addEventListener('change', () => { state.tagMode = mode.value; changeTagFilter(root); });
-    modeLabel.append(mode);
-    const clear = button('清除标签筛选', 'button quiet compact-button', () => {
-      state.tags = []; changeTagFilter(root);
-    });
-    clear.dataset.libraryTagClear = '';
-    clear.disabled = true;
-    const selected = element('div', 'local-library__tag-chips');
-    selected.dataset.librarySelectedTags = '';
-    selected.setAttribute('aria-label', '当前标签筛选');
-    group.append(label, modeLabel, clear, selected);
-    return group;
-  }
-
-  function changeTagFilter(root) {
-    state.pages.articles = 1;
-    const selected = root.querySelector('[data-library-selected-tags]');
-    selected.replaceChildren();
-    state.tags.forEach(tag => {
-      const remove = button(`${tag} ×`, 'local-library__tag-chip', () => {
-        state.tags = state.tags.filter(value => value !== tag); changeTagFilter(root);
-        root.querySelector('[data-library-tag-choice]').focus();
-      });
-      remove.setAttribute('aria-label', `移除筛选标签 ${tag}`);
-      selected.append(remove);
-    });
-    root.querySelector('[data-library-tag-clear]').disabled = state.tags.length === 0;
-    load(root);
-  }
-
-  function updateTagChoices(root, tags) {
-    const choice = root.querySelector('[data-library-tag-choice]');
-    const valid = Array.isArray(tags) ? tags.filter(tag => typeof tag === 'string' && tag) : [];
-    const signature = JSON.stringify(valid);
-    if (choice.dataset.options === signature) return;
-    choice.dataset.options = signature;
-    const placeholder = element('option', '', valid.length ? '选择标签…' : '暂无标签，可在文献行添加');
-    placeholder.value = '';
-    choice.replaceChildren(placeholder);
-    valid.forEach(tag => { const option = userElement('option', '', tag); option.value = tag; choice.append(option); });
-  }
-
-  async function readTagBase(workspaceId, generation) {
-    if (!Number.isSafeInteger(generation) || generation < 1) throw new Error('工作区身份无效，请刷新文献列表。');
-    const response = await chrome.runtime.sendMessage({ type: 'ARTICLE_WORKSPACE_GET_ASSET',
-      workspaceId, relativePath: SciLLM.LOCAL_LIBRARY_TAGS_ASSET_PATH });
-    if (!response?.success) throw Object.assign(new Error(response?.error?.message || '读取失败'), { code: response?.error?.code });
-    const data = response.data;
-    if (data?.workspaceGeneration !== generation) throw new Error('工作区版本已改变，请关闭编辑区并刷新文献列表。');
-    if (data.found === false && data.asset === null) return { generation, revision: 0, contentHash: '', tags: [] };
-    const asset = data.asset;
-    if (data.found !== true || !asset || asset.relativePath !== SciLLM.LOCAL_LIBRARY_TAGS_ASSET_PATH ||
-        !Number.isSafeInteger(asset.revision) || asset.revision < 1 ||
-        typeof asset.contentHash !== 'string' || !asset.contentHash || asset.contentHash.length > 200) {
-      throw new Error('标签资产版本信息无效');
-    }
-    const content = SciLLM.normalizeLocalLibraryTagsAsset(asset.content, { workspaceId });
-    return { generation, revision: asset.revision, contentHash: asset.contentHash, tags: [...content.tags] };
-  }
-
-  async function saveTagDraft(workspaceId, base, tags) {
-    if (!base || !Number.isSafeInteger(base.generation) || base.generation < 1 ||
-        !Number.isSafeInteger(base.revision) || base.revision < 0 ||
-        typeof base.contentHash !== 'string' || (base.revision > 0 && !base.contentHash)) {
-      throw new Error('没有可校验的标签保存基线');
-    }
-    const content = SciLLM.normalizeLocalLibraryTagsAsset({ schemaVersion: 1, workspaceId, tags }, { workspaceId });
-    const response = await chrome.runtime.sendMessage({ type: 'ARTICLE_WORKSPACE_SAVE_ASSET', workspaceId,
-      workspaceGeneration: base.generation, relativePath: SciLLM.LOCAL_LIBRARY_TAGS_ASSET_PATH, content,
-      expectedRevision: base.revision, expectedContentHash: base.contentHash, createOnly: base.revision === 0 });
-    if (!response?.success || response.data?.saved !== true) {
-      throw Object.assign(new Error(response?.error?.message || '标签未能保存'), { code: response?.error?.code });
-    }
-    const asset = response.data.asset;
-    if (!Number.isSafeInteger(asset?.revision) || asset.revision < 1 || typeof asset.contentHash !== 'string' || !asset.contentHash) {
-      throw Object.assign(new Error('保存回执无法校验，请读取最新标签确认。'), { code: 'TAG_SAVE_UNVERIFIED' });
-    }
-    return response.data;
-  }
-
-  function tagEditorDirty(session = state.tagEditor) {
-    return !!session && (session.input.value.length > 0 ||
-      JSON.stringify(session.tags) !== JSON.stringify(session.base?.tags || session.initialTags));
-  }
-
-  function openTagEditor(root, item) {
-    const previous = state.tagEditor;
-    if (previous && (previous.workspaceId === item.workspaceId || previous.busy || tagEditorDirty(previous))) {
-      if (previous.workspaceId !== item.workspaceId) previous.status.textContent = '请先保存或关闭当前文献的标签草稿，再编辑另一篇。';
-      previous.input.focus(); return;
-    }
-    const panel = root.querySelector('[data-library-tag-editor]');
-    panel.replaceChildren(); panel.hidden = false;
-    const heading = element('h4', '', `文献标签 · ${item.title || '未命名文献'}`);
-    const help = element('p', '', 'Enter 添加标签；移除只影响本篇文献。最多 32 个，每个最多 80 字。');
-    const chips = element('div', 'local-library__tag-chips');
-    const inputRow = element('div', 'local-library__tag-input-row');
-    const input = element('input'); input.dataset.tagInput = ''; input.autocomplete = 'off';
-    input.setAttribute('aria-label', '新文献标签'); input.placeholder = '输入标签，按 Enter 添加';
-    const status = element('p', 'local-library__tag-status'); status.dataset.tagStatus = '';
-    status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-    const session = { workspaceId: item.workspaceId, generation: item.workspaceGeneration, base: null,
-      initialTags: [...(item.tags || [])], tags: [...(item.tags || [])], input, status, busy: false, blocked: true };
-    state.tagEditor = session;
-    const addTag = () => {
-      if (!input.value) return true;
-      try {
-        session.tags = [...SciLLM.normalizeLocalLibraryTags([...session.tags, input.value])];
-        input.value = ''; status.textContent = '有未保存的标签修改。'; renderChips(); return true;
-      } catch (_) { status.textContent = '标签无效：最多 32 个，每个 1–80 字，不能包含换行或控制字符。输入已保留。'; return false; }
-    };
-    const add = button('添加', 'button secondary compact-button', () => { addTag(); input.focus(); });
-    inputRow.append(input, add);
-    input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); addTag(); }
-    });
-    const actions = element('div', 'local-library__tag-actions');
-    const save = button('保存标签', 'button primary compact-button', async () => {
-      if (session.busy || session.blocked || !addTag()) return;
-      setBusy(true); status.textContent = '正在保存标签…';
-      try {
-        const result = await saveTagDraft(session.workspaceId, session.base, session.tags);
-        session.base = { ...session.base, revision: result.asset.revision, contentHash: result.asset.contentHash, tags: [...session.tags] };
-        status.textContent = result.directoryPersisted ? '标签已保存到本机并已同步到目录。'
-          : `标签已保存到本机；${result.directoryErrorCode ? `目录同步未完成（${result.directoryErrorCode}）` : result.queued ? '目录同步排队中' : '目录尚未同步'}。`;
-        load(root);
-      } catch (error) {
-        // A transport failure can also follow a committed write: require a fresh
-        // read, not an automatic retry with a now-ambiguous baseline.
-        session.blocked = true;
-        status.textContent = /CONFLICT/.test(error.code || '')
-          ? '标签保存冲突：另一页面已更新。草稿保留，请读取最新标签后明确选择重新编辑。'
-          : `保存未确认：${error.message}。草稿保留，请读取最新标签后重新编辑。`;
-      } finally { setBusy(false); }
-    });
-    const close = button('关闭', 'button quiet compact-button', () => {
-      if (session.busy || (tagEditorDirty(session) && !globalThis.confirm(text('放弃当前文献未保存的标签草稿？')))) return;
-      state.tagEditor = null; panel.hidden = true; panel.replaceChildren();
-    });
-    const refresh = button('读取最新标签', 'button quiet compact-button', () => readLatest(false));
-    actions.append(save, refresh, close);
-    const latest = element('div', 'local-library__tag-latest'); latest.hidden = true;
-    const backup = element('label', 'local-library__tag-backup'); backup.hidden = true;
-    backup.append(element('span', '', '上次未保存草稿（保留供复制，不会自动覆盖新版本）'));
-    const backupText = element('textarea'); backupText.dataset.tagBackup = ''; backupText.readOnly = true;
-    backupText.setAttribute('aria-label', '上次未保存标签草稿'); backup.append(backupText);
-    panel.append(heading, help, chips, inputRow, status, actions, latest, backup);
-    function renderChips() {
-      chips.replaceChildren();
-      session.tags.forEach(tag => {
-        const remove = button(`${tag} ×`, 'local-library__tag-chip', () => {
-          session.tags = session.tags.filter(value => value !== tag); renderChips();
-          status.textContent = '有未保存的标签修改。'; input.focus();
-        });
-        remove.dataset.tagRemove = tag; remove.setAttribute('aria-label', `移除文献标签 ${tag}`);
-        remove.disabled = session.busy; chips.append(remove);
-      });
-    }
-    function setBusy(busy) {
-      session.busy = busy; input.disabled = busy; add.disabled = busy; close.disabled = busy;
-      refresh.disabled = busy; save.disabled = busy || session.blocked;
-      chips.querySelectorAll('button').forEach(node => { node.disabled = busy; });
-      latest.querySelectorAll('button').forEach(node => { node.disabled = busy; });
-    }
-    async function readLatest(initial) {
-      const requestingControl = document.activeElement;
-      setBusy(true); latest.hidden = true; latest.replaceChildren();
-      status.textContent = '正在校验已保存标签…';
-      try {
-        const base = await readTagBase(session.workspaceId, session.generation);
-        if (initial) {
-          session.base = base; session.tags = [...base.tags]; session.blocked = false; renderChips();
-          status.textContent = base.revision ? '已读取本机标签。' : '本篇尚无标签。';
-        } else {
-          session.blocked = true;
-          latest.append(element('p', '', `最新标签：${base.tags.join('、') || '无'}`));
-          latest.append(button('采用最新标签，重新编辑', 'button secondary compact-button', () => {
-            if (tagEditorDirty(session)) {
-              backupText.value += (backupText.value ? '\n\n' : '') + JSON.stringify({ tags: session.tags, input: input.value });
-              backup.hidden = false;
-            }
-            session.base = base; session.tags = [...base.tags]; input.value = ''; session.blocked = false;
-            latest.hidden = true; renderChips(); setBusy(false); status.textContent = '已采用最新标签；可重新增删后保存。'; input.focus();
-          }));
-          latest.hidden = false; status.textContent = '当前草稿仍保留。请核对最新标签，再选择是否重新编辑。';
-        }
-      } catch (error) {
-        session.blocked = true; status.textContent = `标签无法校验：${error.message}。禁止覆盖，已有草稿保留。`;
-      } finally {
-        setBusy(false);
-        if (initial && document.activeElement === requestingControl) input.focus();
-      }
-    }
-    renderChips(); readLatest(true);
+    root.querySelectorAll('[data-library-kind]').forEach(tab => { const selected = tab.dataset.libraryKind === state.kind;
+      tab.classList.toggle('is-active', selected); tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; });
+    root.querySelector('[data-library-controls]').hidden = state.kind !== 'abbreviations';
+    root.querySelector('[data-library-add]').hidden = state.kind !== 'abbreviations';
+    if (state.kind !== 'abbreviations') root.querySelector('[data-library-editor]').hidden = true;
   }
 
   async function mutateAbbreviation(mutation) {
@@ -553,180 +185,6 @@
     });
     editor.append(form);
     (item ? fullName : abbreviation).focus();
-  }
-
-  async function openArticleDirectory(root, item) {
-    if (state.directoryOpening) return;
-    state.directoryOpening = item.workspaceId;
-    const notice = root.querySelector('[data-library-directory-notice]');
-    const status = root.querySelector('[data-library-directory-status]');
-    const settings = root.querySelector('[data-library-directory-settings]');
-    notice.hidden = false; settings.hidden = true;
-    status.dataset.state = 'pending';
-    status.textContent = `正在核验「${item.title || '未命名文献'}」的文献目录…`;
-    syncDirectoryOpenButtons(root);
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'LOCAL_READING_LIBRARY_OPEN_DIRECTORY', workspaceId: item.workspaceId });
-      if (!response?.success) throw Object.assign(new Error(response?.error?.message || '未能确认目录打开结果，请检查本机助手和目录设置。'), { code: response?.error?.code });
-      if (response.data?.opened !== true) throw new Error('未收到有效的系统打开确认，请先查看文件管理器，避免重复打开。');
-      status.dataset.state = 'success';
-      status.textContent = `已请求系统打开「${item.title || '未命名文献'}」的文件夹，请查看文件管理器。`;
-    } catch (error) {
-      status.dataset.state = 'error'; settings.hidden = false;
-      status.textContent = `「${item.title || '未命名文献'}」：${error.message || '目录打开未确认，请先查看文件管理器。'}${error.code ? `（${error.code}）` : ''}`;
-    } finally {
-      state.directoryOpening = '';
-      syncDirectoryOpenButtons(root);
-    }
-  }
-
-  function syncDirectoryOpenButtons(root) {
-    root.querySelectorAll('[data-library-open-directory]').forEach(control => {
-      control.disabled = Boolean(state.directoryOpening);
-      control.setAttribute('aria-busy', String(control.dataset.workspaceId === state.directoryOpening));
-      control.textContent = control.dataset.workspaceId === state.directoryOpening ? '正在打开…' : '打开文件夹';
-    });
-  }
-
-  function coverageText(coverage) {
-    const available = ['notes', 'fulltext', 'abstract', 'method', 'caption']
-      .filter(scope => coverage?.[scope]).map(scope => text(SCOPE_LABELS[scope]));
-    const missing = ['fulltext', 'abstract', 'method', 'caption']
-      .filter(scope => !coverage?.[scope]).map(scope => text(SCOPE_LABELS[scope]));
-    const separator = SciLLM.getInterfaceLanguage?.() === 'en' ? ', ' : '、';
-    return text(`已保存：${available.join(separator) || text('仅标题')}`) +
-      (missing.length ? ` ${text(`· 未覆盖：${missing.join(separator)}`)}` : '');
-  }
-
-  function appendArticleSourceActions(information, item, container) {
-    const editTags = button(item.tagState === 'invalid' ? '标签异常 · 查看' : '编辑标签',
-      'button quiet compact-button local-library__edit-tags', () => openTagEditor(container.closest('.local-library'), item));
-    editTags.dataset.libraryEditTags = '';
-    editTags.dataset.workspaceId = String(item.workspaceId || '');
-    editTags.setAttribute('aria-label', `编辑 ${item.title || '未命名文献'} 的标签`);
-    const folder = button('打开文件夹', 'button quiet compact-button local-library__open-directory',
-      () => openArticleDirectory(container.closest('.local-library'), item));
-    folder.dataset.libraryOpenDirectory = '';
-    folder.dataset.workspaceId = String(item.workspaceId || '');
-    folder.setAttribute('aria-label', `打开 ${item.title || '未命名文献'} 的文件夹`);
-    folder.title = '通过本机助手打开已同步且归属验证通过的文献目录';
-    folder.disabled = Boolean(state.directoryOpening);
-    const actions = element('div', 'local-library__article-actions');
-    actions.append(editTags, folder);
-    information.append(actions);
-  }
-
-  function appendArticleSources(information, item, container) {
-    const documents = item.sourceDocuments;
-    const details = element('details', 'local-library__article-details local-library__article-sources');
-    details.open = true;
-    details.append(element('summary', '', `${documents.length} 个来源 · 笔记与批注分别保留`));
-    documents.forEach(source => {
-      const entry = element('div', 'local-library__article-source');
-      entry.dataset.workspaceId = String(source.workspaceId || '');
-      const heading = element('div', 'local-library__article-heading');
-      heading.append(element('strong', '', source.sourceKind === 'pdf' ? 'PDF 原文' : 'HTML 网页'));
-      appendOfflineReadingActions(heading, entry, source);
-      entry.append(heading, element('p', 'local-library__article-url', source.url || '来源未记录'));
-      if (source.tags?.length) entry.append(element('p', 'local-library__meta', `标签：${source.tags.join('、')}`));
-      entry.append(element('p', 'local-library__meta', coverageText(source.coverage)));
-      appendArticleSourceActions(entry, source, container);
-      details.append(entry);
-    });
-    information.append(details);
-  }
-
-  function renderArticles(container, items, data = {}) {
-    if (!items.length) {
-      const filtered = (state.tags || []).length > 0;
-      container.append(element('p', 'local-library__empty', data.totals?.articles === 0
-        ? '尚未保存文献。打开论文并开始研读后，会自动出现在这里。'
-        : filtered ? (state.query.trim()
-          ? '没有同时匹配关键词、范围与标签的文献。可分别调整这些条件。'
-          : '没有符合当前标签条件的文献。可切换任一/全部标签，或清除标签筛选。') : state.query.trim()
-        ? '没有匹配的已保存文献。试试其他关键词或搜索范围。'
-        : '尚未保存文献。打开论文并开始研读后，会自动出现在这里。'));
-      return;
-    }
-    const tableWrap = element('div', 'local-library__table-wrap local-library__article-table-wrap');
-    tableWrap.tabIndex = 0;
-    tableWrap.setAttribute('role', 'region');
-    tableWrap.setAttribute('aria-label', '已保存文献列表，窄屏可左右滚动查看四列');
-    const table = element('table', 'local-library__table local-library__article-table');
-    const caption = element('caption', 'sr-only', '已保存文献：论文标题、发表日期、杂志名称和保存时间');
-    const head = element('thead');
-    const headRow = element('tr');
-    ['论文标题', '发表日期', '杂志名称', '保存时间'].forEach(label => {
-      const cell = element('th', '', label);
-      cell.setAttribute('scope', 'col');
-      if (label === '保存时间') cell.title = '最近一次点击保存且完整存入本机的时间；不代表目录同步完成。未记录时不以页面更新时间替代';
-      headRow.append(cell);
-    });
-    head.append(headRow);
-    const body = element('tbody');
-    const recordedText = value => typeof value === 'string' && value.trim() ? value.trim() : '未记录';
-    items.forEach(item => {
-      const card = element('tr', 'local-library__article');
-      card.dataset.workspaceId = String(item.workspaceId || '');
-      if (item.paperId) card.dataset.paperId = String(item.paperId);
-      const hasSources = Array.isArray(item.sourceDocuments) && item.sourceDocuments.length > 0;
-      const information = element('td', 'local-library__article-information');
-      const heading = element('div', 'local-library__article-heading');
-      const title = element('h4');
-      const readingSource = hasSources
-        ? item.sourceDocuments.find(source => source.hasOfflineSnapshot) || item.sourceDocuments[0] : item;
-      title.append(preserveUserText(savedArticleLink(readingSource, item.title)));
-      heading.append(title);
-      appendOfflineReadingActions(heading, information, readingSource);
-      information.append(heading);
-      if (Array.isArray(item.authors) && item.authors.length) {
-        information.append(userElement('p', 'local-library__meta', item.authors.map(author => author.literal).join('；')));
-      }
-      if (item.publisherUrl) {
-        const publisherLink = safeArticleLink(item.publisherUrl, '出版社页面');
-        publisherLink.title = 'DOI 注册记录提供的出版社链接；网页可用性由出版社决定';
-        information.append(publisherLink);
-      }
-      if (!hasSources || item.doi) information.append(element('p', 'local-library__article-url',
-        item.doi ? `DOI：${item.doi}` : String(item.url || '来源未记录')));
-      const tags = Array.isArray(item.tags) ? item.tags.filter(tag => typeof tag === 'string' && tag.trim()) : [];
-      if (tags.length) {
-        const list = element('ul', 'local-library__article-tags');
-        list.setAttribute('aria-label', hasSources ? '来源标签汇总' : '文献标签');
-        tags.forEach(tag => list.append(userElement('li', '', tag)));
-        information.append(list);
-      }
-      if (hasSources) appendArticleSources(information, item, container);
-      else appendArticleSourceActions(information, item, container);
-      const details = element('details', 'local-library__article-details');
-      details.open = Boolean(state.query.trim() && (item.hitScopes?.length || item.snippets?.length));
-      details.append(element('summary', '', '本地内容与命中片段'));
-      details.append(element('p', 'local-library__meta', coverageText(item.coverage)));
-      if (item.hitScopes?.length) {
-        details.append(element('p', 'local-library__hits',
-          `命中范围：${item.hitScopes.map(scope => text(SCOPE_LABELS[scope])).join(', ')}`));
-      }
-      (item.snippets || []).forEach(hit => {
-        const snippet = element('p', 'local-library__snippet');
-        const heading = element('strong');
-        if (hit.sourceLabel) heading.append(userElement('span', '', hit.sourceLabel), document.createTextNode(' · '));
-        heading.append(element('span', '', SCOPE_LABELS[hit.scope]), document.createTextNode(' · '),
-          hit.label ? userElement('span', '', hit.label) : element('span', '', '命中'));
-        snippet.append(heading, userElement('span', '', ` ${hit.text}`));
-        details.append(snippet);
-      });
-      information.append(details);
-      card.append(information,
-        element('td', 'local-library__article-publication', recordedText(item.publicationDate) +
-          (item.publicationDate && item.publicationDateKind === 'cover' ? '（封面日期）' : '')),
-        item.journal ? userElement('td', 'local-library__article-journal', recordedText(item.journal))
-          : element('td', 'local-library__article-journal', '未记录'),
-        element('td', 'local-library__article-saved', recordedText(item.savedAt)));
-      body.append(card);
-    });
-    table.append(caption, head, body);
-    tableWrap.append(table);
-    container.append(tableWrap);
   }
 
   function renderAbbreviations(container, items) {
@@ -876,51 +334,122 @@
       element('span', '', `第 ${data.page} / ${data.pageCount} 页 · 共 ${data.total} 项`), next);
   }
 
-  async function load(root) {
-    const sequence = ++state.sequence;
-    const status = root.querySelector('[data-library-status]');
-    const results = root.querySelector('[data-library-results]');
-    status.textContent = '正在读取本地库…';
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'LOCAL_READING_LIBRARY_QUERY',
-        kind: state.kind,
-        query: state.query,
-        scope: state.scope,
-        page: state.pages[state.kind],
-        pageSize: state.kind === 'articles' ? 12 : 25,
-        ...(state.kind === 'articles' ? { tags: [...state.tags], tagMode: state.tagMode } : {})
-      });
-      if (sequence !== state.sequence) return;
-      if (!response?.success) throw new Error(response?.error?.message || '本地库读取失败');
+  async function readLocalSummary(sendMessage = message => chrome.runtime.sendMessage(message)) {
+    const papers = new Set(), sources = new Map(); let pages = 1, totals;
+    for (let page = 1; page <= pages; page++) {
+      const response = await sendMessage({ type: 'LOCAL_READING_LIBRARY_QUERY', kind: 'articles', query: '', scope: 'all', page, pageSize: 100 });
+      if (response?.success !== true) throw new Error(response?.error?.message || '本机资料读取失败');
       const data = response.data;
-      results.replaceChildren();
-      state.pages[state.kind] = Math.max(1, Number(data.page) || 1);
-      if (state.kind === 'articles') {
-        renderArticles(results, data.items || [], data);
-        updateTagChoices(root, data.availableTags);
+      if (!data || !Array.isArray(data.items) || !Number.isSafeInteger(data.pageCount) || data.pageCount < 1 || data.pageCount > 1000 || data.page !== page) throw new Error('本机资料分页无法校验，请刷新。');
+      if (totals && (totals.articles !== data.totals?.articles || totals.sources !== data.totals?.sources)) throw new Error('读取期间本机资料已变化，请刷新统计。');
+      totals = data.totals || {}; pages = data.pageCount;
+      for (const paper of data.items) {
+        const identity = paper.paperId || paper.workspaceId;
+        if (typeof identity !== 'string' || !identity) throw new Error('文献身份无法校验，请刷新。');
+        papers.add(identity);
+        for (const source of paper.sourceDocuments?.length ? paper.sourceDocuments : [paper]) {
+          if (/^workspace:[a-f0-9]{12,64}$/u.test(source.workspaceId || '') && source.inventoryOnly !== true) sources.set(source.workspaceId, source);
+        }
       }
-      else renderAbbreviations(results, data.items || []);
-      const totalArticles = Number(data.totals?.articles) || 0;
-      const totalAbbreviations = Number(data.totals?.abbreviations) || 0;
-      if (state.kind === 'articles' && state.scope !== 'all' && state.scope !== 'title') {
-        const hasMatched = Number.isSafeInteger(data.matchedCount) && data.matchedCoverage;
-        const covered = Number(data.totals?.coverage?.[state.scope]) || 0;
-        const matched = hasMatched && (state.tags.length || state.query.trim())
-          ? `当前匹配覆盖 ${Number(data.matchedCoverage[state.scope]) || 0} / ${data.matchedCount} 篇；` : '';
-        status.textContent = text(matched) + text(`全库${text(SCOPE_LABELS[state.scope])}可检索覆盖 ${covered} / ${totalArticles} 篇；`) +
-          text('未保存该部分的文献不会产生该范围命中。');
-      } else if (state.kind === 'articles' && (state.tags.length || state.query.trim())) {
-        status.textContent = `匹配 ${data.matchedCount ?? data.total} 篇文献 · 全库 ${totalArticles} 篇。`;
+    }
+    if (Number.isSafeInteger(totals.articles) && totals.articles !== papers.size || Number.isSafeInteger(totals.sources) && totals.sources !== sources.size) throw new Error('本机资料数量已变化或身份不完整，请刷新统计。');
+    const documents = [...sources.values()];
+    return { papers: papers.size, sources: sources.size, pdf: documents.filter(source => source.sourceKind === 'pdf').length,
+      html: documents.filter(source => source.sourceKind === 'html').length,
+      partialHtml: documents.filter(source => source.sourceKind === 'html' && source.offlineSnapshotStatus === 'partial').length,
+      unsavedHtml: documents.filter(source => source.sourceKind === 'html' && !source.hasOfflineSnapshot).length,
+      abbreviations: Number(totals.abbreviations) || 0, sourceRecords: documents };
+  }
+  let summaryPending;
+  function currentSummary() { if (!summaryPending) summaryPending = readLocalSummary().finally(() => { summaryPending = null; }); return summaryPending; }
+  function renderSummary(container, summary) {
+    const facts = element('dl', 'local-library__summary'); facts.dataset.librarySummary = '';
+    for (const [label, value] of [['本机文献', summary.papers], ['源文档', summary.sources], ['PDF 来源', summary.pdf], ['HTML 来源', summary.html], ['部分离线 HTML', summary.partialHtml], ['未保存离线网页的 HTML', summary.unsavedHtml]]) {
+      const stat = element('div', 'local-library__stat');
+      stat.append(element('dt', '', label), element('dd', '', value));
+      facts.append(stat);
+    }
+    container.append(facts, element('p', 'local-library__summary-note', '此处统计本机阅读工作区；PDF / HTML 为来源数量，不代表所有原件均完整。文献总库还可包含手工、导入和雷达元数据。'));
+  }
+  function parseLibraryDirectoryHash(hash) {
+    const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+    if (!params.has('libraryDirectory')) return null;
+    const values = params.getAll('libraryDirectory');
+    if (values.length !== 1 || !/^workspace:[a-f0-9]{64}$/u.test(values[0])) throw new Error('目录来源身份无效，请从文献总库重新选择。');
+    return values[0];
+  }
+  function createDirectoryConfirmationController({ readSummary, sendMessage, onChange = () => {} }) {
+    const state = { source: null, loading: false, opening: false, status: '', error: false }; let sequence = 0;
+    const change = () => onChange(state);
+    async function load(hash) {
+      const current = ++sequence; state.source = null; state.error = false;
+      let workspaceId;
+      try { workspaceId = parseLibraryDirectoryHash(hash); } catch (error) { state.loading = false; state.error = true; state.status = error.message; change(); return; }
+      if (!workspaceId) { state.loading = false; state.status = ''; change(); return; }
+      state.loading = true; state.status = '正在核对本机文献来源…'; change();
+      try {
+        const summary = await readSummary(); if (current !== sequence) return;
+        const source = summary.sourceRecords.find(item => item.workspaceId === workspaceId && item.inventoryOnly !== true && Number.isSafeInteger(item.workspaceGeneration) && item.workspaceGeneration >= 1);
+        if (!source) throw new Error('未找到可校验的本机文献来源，请刷新文献总库。');
+        state.source = { workspaceId, workspaceGeneration: source.workspaceGeneration, title: String(source.title || source.fileName || '未命名来源') };
+        state.status = '请核对文献，然后点击“打开文件夹”。目录归属与同步状态将由现有本机助手再次校验。';
+      } catch (error) { if (current === sequence) { state.error = true; state.status = error.message || '本机来源读取失败。'; } }
+      finally { if (current === sequence) { state.loading = false; change(); } }
+    }
+    async function open() {
+      if (!state.source || state.loading || state.opening) return false;
+      const source = { ...state.source }, current = sequence;
+      state.opening = true; state.error = false; state.status = `正在核验「${source.title}」的文献目录…`; change();
+      try {
+        const response = await sendMessage({ type: 'LOCAL_READING_LIBRARY_OPEN_DIRECTORY', workspaceId: source.workspaceId });
+        if (response?.success !== true) throw new Error(response?.error?.message || '目录打开未确认，请检查本机助手和目录设置。');
+        if (response.data?.opened !== true || response.data.workspaceId !== source.workspaceId) throw new Error('未收到有效的系统打开确认，请先查看文件管理器，避免重复打开。');
+        if (current === sequence) state.status = `已请求系统打开「${source.title}」的文件夹，请查看文件管理器。`;
+        return true;
+      } catch (error) { if (current === sequence) { state.error = true; state.status = error.message || '目录打开未确认，请先查看文件管理器。'; } return false; }
+      finally { state.opening = false; change(); }
+    }
+    return { state, load, open };
+  }
+  let directoryController, directoryCard;
+  function mountDirectoryConfirmation() {
+    const raw = new URLSearchParams(String(globalThis.location?.hash || '').replace(/^#/, ''));
+    if (!raw.has('libraryDirectory')) { directoryCard?.remove(); directoryCard = null; directoryController?.load(''); return; }
+    const host = document.getElementById('localStorageSettings'); if (!host) return;
+    if (!directoryCard) { directoryCard = element('section', 'settings-section'); directoryCard.dataset.libraryDirectoryConfirmation = ''; host.append(directoryCard); }
+    directoryController ||= createDirectoryConfirmationController({ readSummary: currentSummary, sendMessage: message => chrome.runtime.sendMessage(message), onChange: state => {
+      if (!directoryCard) return;
+      const title = element('h3', '', '打开文献文件夹'), source = userElement('p', '', state.source?.title || '正在选择来源');
+      const identity = element('small', '', state.source ? '已核对本机文献来源' : '');
+      const status = element('p', '', state.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+      const open = button(state.opening ? '正在打开…' : '打开文件夹', 'button primary compact-button', () => directoryController.open());
+      open.disabled = !state.source || state.loading || state.opening; open.dataset.libraryDirectoryConfirm = '';
+      const settings = button('目录与本机助手设置', 'button quiet compact-button', () => globalThis.openNativeDirectorySettings?.()); settings.hidden = !state.error;
+      directoryCard.replaceChildren(title, source, identity, status, open, settings);
+    } });
+    directoryController.load(globalThis.location.hash);
+  }
+
+  async function load(root) {
+    const sequence = ++state.sequence, kind = state.kind;
+    const status = root.querySelector('[data-library-status]'), results = root.querySelector('[data-library-results]');
+    status.textContent = '正在读取本机资料…';
+    try {
+      if (kind === 'articles') {
+        const summary = await currentSummary(); if (sequence !== state.sequence) return;
+        results.replaceChildren(); renderSummary(results, summary); root.querySelector('[data-library-pagination]').replaceChildren();
+        status.textContent = `本机共 ${summary.papers} 篇已保存文献、${summary.abbreviations} 个全局缩略词。`;
       } else {
-        status.textContent = `本机共 ${totalArticles} 篇已保存文献、${totalAbbreviations} 个全局缩略词。`;
+        const response = await chrome.runtime.sendMessage({ type: 'LOCAL_READING_LIBRARY_QUERY', kind: 'abbreviations', query: state.query, page: state.pages.abbreviations, pageSize: 25 });
+        if (sequence !== state.sequence) return;
+        if (response?.success !== true) throw new Error(response?.error?.message || '缩略词库读取失败');
+        const data = response.data; results.replaceChildren(); state.pages.abbreviations = Math.max(1, Number(data.page) || 1);
+        renderAbbreviations(results, data.items || []); renderPagination(root, data);
+        status.textContent = `本机共 ${Number(data.totals?.abbreviations) || 0} 个全局缩略词。`;
       }
-      renderPagination(root, data);
     } catch (error) {
       if (sequence !== state.sequence) return;
-      results.replaceChildren();
-      status.textContent = `本地库读取失败：${error.message}`;
-      root.querySelector('[data-library-pagination]').replaceChildren();
+      results.replaceChildren(); status.textContent = `本机资料读取失败：${error.message}`; root.querySelector('[data-library-pagination]').replaceChildren();
     }
   }
 
@@ -932,18 +461,13 @@
     return root;
   }
 
-  globalThis.mountLocalReadingLibrary = mountLocalReadingLibrary;
-  SciLLM.onInterfaceLanguageChange?.(() => {
-    const root = document.getElementById('localReadingLibrary');
-    if (root?.dataset.libraryMounted === 'true') load(root);
-  });
-  globalThis.addEventListener('beforeunload', event => {
-    if (!tagEditorDirty() && !state.tagEditor?.busy) return;
-    event.preventDefault(); event.returnValue = '';
-  });
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => mountLocalReadingLibrary(), { once: true });
-  } else {
-    mountLocalReadingLibrary();
+  if (typeof module === 'object' && module.exports) {
+    module.exports = { readLocalSummary, parseLibraryDirectoryHash, createDirectoryConfirmationController };
+    return;
   }
+  globalThis.mountLocalReadingLibrary = mountLocalReadingLibrary;
+  SciLLM.onInterfaceLanguageChange?.(() => { const root = document.getElementById('localReadingLibrary'); if (root?.dataset.libraryMounted === 'true') load(root); });
+  globalThis.addEventListener('hashchange', mountDirectoryConfirmation);
+  const mount = () => { mountLocalReadingLibrary(); mountDirectoryConfirmation(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true }); else mount();
 })();

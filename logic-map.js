@@ -44,6 +44,11 @@
   }
   const text = (value, maximum = 12000) => String(value || '')
     .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, maximum);
+  function researchText(value, maximum = 12000) {
+    const source = String(value || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+    if (source.length > maximum && source.normalize('NFKC') !== source) return '';
+    return source.slice(0, maximum);
+  }
   function safeMechanismDisplayLabel(value) {
     return text(value, 180)
       .replace(/<[^>]*>/gu, ' ')
@@ -222,10 +227,10 @@
   }
 
   function fallback(value, label = '待补充') {
-    return text(value, 4000) || label;
+    return researchText(value, 4000) || label;
   }
   function textItems(items) {
-    return (Array.isArray(items) ? items : []).map(item => text(item?.text ?? item, 3000)).filter(Boolean);
+    return (Array.isArray(items) ? items : []).map(item => researchText(item?.text ?? item, 3000)).filter(Boolean);
   }
   function selectedStep() {
     return logicMap?.steps?.find(step => step.stepId === selection.stepId) || null;
@@ -1221,12 +1226,12 @@
       ['figure', '补充图'], ['video', '补充视频'], ['table', '补充表格']
     ], value => { item.type = value; markObjectEdited(item, 'type'); });
     editorField(section, '名称', item.label, value => {
-      item.label = text(value, 240) ||
+      item.label = researchText(value, 240) ||
         `${supplementalTypeLabel(item.type)} ${logicMap.supplementalMaterials.indexOf(item) + 1}`;
       markObjectEdited(item, 'label');
     }, { multiline: false, maxLength: 240 });
     editorField(section, '折叠时显示的一句话功能', item.summary || '', value => {
-      item.summary = text(value, 320); markObjectEdited(item, 'summary');
+      item.summary = researchText(value, 320); markObjectEdited(item, 'summary');
     }, { rows: 2, maxLength: 320 });
     editorList(section, item.proofItems, {
       addLabel: '添加该材料证明的结论',

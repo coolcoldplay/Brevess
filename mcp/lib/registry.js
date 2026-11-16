@@ -4,10 +4,14 @@ const { createAgentTools } = require('../../workbench/agent-tools.js');
 const { createRadarAgentTools } = require('../../core/literature-radar-agent-tools.js');
 const { BrevessMcpError, asError } = require('./errors.js');
 const { WriteScopeManager } = require('./scopes.js');
+const { documentToolDefinitions } = require('./document-tools.js');
+const { WORKBENCH_OPERATIONS } = require('../../workbench/operation-registry.js');
+const { validateLibraryCatalogMcpArguments } = require('../../workbench/library-catalog-mcp.js');
+const catalogSchema = name => clone(WORKBENCH_OPERATIONS.find(operation => operation.name === name).inputSchema);
 
 const READ_CONTEXT = 'workbench.read_context';
 const SERVER_NAME = 'brevess-mcp';
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.1.1';
 const WORKBENCH_OPERATION_CONTRACT_VERSION = '1';
 const MCP_TOOL_CONTRACT_VERSION = '1';
 
@@ -229,16 +233,8 @@ function highLevelTools() {
       name: 'library.query_global_library',
       bridgeName: 'query_global_library',
       title: 'Query the global literature library',
-      description: 'Read the merged local library plus read:true radar metadata. Radar-only records are metadata-only and never impersonate a saved workspace.',
-      inputSchema: objectSchema({
-        page: { type: 'integer', minimum: 1 },
-        pageSize: { type: 'integer', minimum: 1, maximum: 100 },
-        query: { type: 'string' },
-        scope: { type: 'string' },
-        tags: { type: 'array', items: { type: 'string' } },
-        tagMode: { enum: ['any', 'all'] },
-        includeRadarRead: { type: 'boolean', default: true }
-      }),
+      description: 'Query the global library using field exact/contains conditions, stable tag/group IDs, global sorting and pagination. Manual empty values and identity conflicts are preserved. Radar/import-only sources never impersonate writable workspaces. Full-text matching returns no full-text body.',
+      inputSchema: catalogSchema('query_global_library'),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -246,6 +242,20 @@ function highLevelTools() {
         openWorldHint: false
       },
       _meta: { approvalClass: 'none', operationContract: WORKBENCH_OPERATION_CONTRACT_VERSION }
+    },
+    {
+      name: 'library.catalog_read', bridgeName: 'read_library_catalog', title: 'Read current global catalog metadata',
+      description: 'Read catalog revision, current entries, stable group/tag IDs and preferences without a current project. Paginate entries or select entryIds. Does not expose historical commands or idempotency receipts. Read this before planning a catalog command.',
+      inputSchema: catalogSchema('read_library_catalog'),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { approvalClass: 'none', operationContract: WORKBENCH_OPERATION_CONTRACT_VERSION }
+    },
+    {
+      name: 'library.catalog_command', bridgeName: 'command_library_catalog', title: 'Confirm one global catalog change',
+      description: 'Execute one CAS/idempotent catalog command after native UI confirmation of its concrete before/after values. Requires --allow-write but never creates a project scope or accepts a task-wide scope in place of confirmation. Removal is a recoverable association tombstone. No attachment byte upload, availability fabrication, or physical deletion. Use catalog_read for the latest revision and existing IDs; use a stable source:manual:<UUID> alias for a new manual paper without DOI/PMID.',
+      inputSchema: catalogSchema('command_library_catalog'),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { approvalClass: 'human_confirm', operationContract: WORKBENCH_OPERATION_CONTRACT_VERSION }
     },
     {
       name: 'pdf.open_local',
@@ -361,6 +371,7 @@ function highLevelTools() {
         title: { type: 'string', minLength: 1, maxLength: 4000 },
         panelIds: { type: 'array', minItems: 1, maxItems: 200, uniqueItems: true, items: { type: 'string' } },
         summary: { type: 'string', maxLength: 20000 },
+        method: { type: 'string', maxLength: 4000 }, observation: { type: 'string', maxLength: 4000 }, conclusion: { type: 'string', maxLength: 4000 },
         status: { enum: ['draft', 'complete'] }
       }, ['expectedProjectId', 'expectedRevision', 'planId', 'figureId', 'title', 'panelIds'])),
       annotations: {
@@ -482,6 +493,7 @@ const DIRECT_READ_ONLY = new Set([
 const DESTRUCTIVE = new Set(['remove_entity', 'delete_workspace']);
 const CONTRACT_READ_ONLY = new Set([
   'library.query_global_library',
+  'library.catalog_read',
   'library.export_transfer',
   'pdf.open_local'
 ]);
@@ -519,6 +531,8 @@ function createRegistry({
     throw new BrevessMcpError('BRIDGE_HUB_REQUIRED', 'A bridge hub is required.');
   }
   const tools = new Map();
+  const documentScopes = new Map();
+  for (const definition of documentToolDefinitions) tools.set(definition.name, definition);
 
   for (const definition of fakeAgentTools()) {
     const name = directToolName(definition.name);
@@ -568,6 +582,7 @@ function createRegistry({
   }
 
   function writeRequired(tool, args) {
+    if (tool.kind === 'document') return tool.annotations.readOnlyHint === false;
     if (tool.kind === 'control') {
       return !new Set(['brevess.status', 'brevess.capabilities']).has(tool.name);
     }
@@ -612,10 +627,12 @@ function createRegistry({
   }
 
   async function bridgeCall(tool, args, context) {
+    const catalogCommand = tool.bridgeName === 'command_library_catalog';
+    const catalogTimeout = Number.isFinite(context?.timeoutMs) && context.timeoutMs > 0 ? Math.min(context.timeoutMs, 120000) : 120000;
     return hub.call(tool.bridgeName || tool.name, args, {
       mcpRequestId: context?.requestId,
-      hostOptions: context?.scopeToken ? { scopeToken: context.scopeToken } : undefined,
-      timeoutMs: tool.bridgeName === 'radar_check'
+      hostOptions: catalogCommand ? { libraryCatalogDeadlineAt: Date.now() + catalogTimeout - Math.min(1000, Math.floor(catalogTimeout / 10)) } : context?.scopeToken ? { scopeToken: context.scopeToken } : undefined,
+      timeoutMs: catalogCommand ? catalogTimeout : tool.bridgeName === 'radar_check'
         ? Math.max(context?.timeoutMs || 0, 150000)
         : tool.bridgeName === 'local_data'
           ? Math.max(context?.timeoutMs || 0, 160000)
@@ -643,6 +660,9 @@ function createRegistry({
           correction: 'Restart the server with --allow-write before requesting a human-approved write scope.'
         }
       );
+    }
+    if (Array.isArray(args?.operations) && args.operations.includes('library.catalog_command')) {
+      throw new BrevessMcpError('HUMAN_CONFIRMATION_REQUIRED', 'Catalog commands require a separate native UI confirmation for each change; task-wide scopes cannot authorize them.');
     }
     const request = scopeManager.request(args);
     if (request.status === 'PENDING_HUMAN_ACTION') return request;
@@ -1121,6 +1141,26 @@ function createRegistry({
       });
     }
     const args = clone(input);
+    if (['query_global_library', 'read_library_catalog', 'command_library_catalog'].includes(tool.bridgeName)) {
+      try { validateLibraryCatalogMcpArguments(tool.bridgeName, args); }
+      catch (_) { throw new BrevessMcpError('LIBRARY_CATALOG_MCP_ARGUMENTS_INVALID', 'Invalid catalog arguments. Use the published tool schema and stable IDs.'); }
+    }
+    if (tool.kind === 'document') {
+      const mutating = tool.annotations.readOnlyHint === false;
+      if (mutating && !allowWrite) throw new BrevessMcpError('MCP_SCOPE_DENIED', 'Start MCP with --allow-write before requesting document consent.');
+      const targetKey = JSON.stringify(Object.keys(args.target || {}).sort().map(key => [key, args.target[key]]));
+      const token = documentScopes.get(targetKey);
+      if (name === 'mechanism.apply_commands' && !token) throw new BrevessMcpError('DOCUMENT_SCOPE_REQUIRED', 'Request document consent and collect its approval receipt first.');
+      const data = await hub.call(name, args, { mcpRequestId: context.requestId, timeoutMs: context.timeoutMs,
+        ...(name === 'mechanism.apply_commands' ? { hostOptions: { scopeToken: token } } : {}) });
+      if (name === 'brevess.request_document_write_scope' && data?.status === 'GRANTED' && typeof data.scopeToken === 'string') {
+        if (documentScopes.size >= 128) documentScopes.clear();
+        documentScopes.set(targetKey, data.scopeToken);
+      }
+      if (name === 'brevess.revoke_document_write_scope') documentScopes.delete(targetKey);
+      return { ok: true, data: stripSecretFields(data), warnings: [], changedPaths: name === 'mechanism.apply_commands' ? ['mechanismChain'] : [],
+        nextActions: [{ tool: 'mechanism.read_context', reason: 'Check this document revision and permission before the next operation.' }] };
+    }
     const mutating = writeRequired(tool, args);
     if (HUMAN_CONFIRM_TOOLS.has(name) ||
         name === 'library.local_data' && LOCAL_DATA_MUTATIONS.has(args?.operation)) {
@@ -1153,10 +1193,10 @@ function createRegistry({
       );
     }
     const idempotencyKey = args.idempotencyKey;
-    delete args.idempotencyKey;
+    if (tool.name !== 'library.catalog_command') delete args.idempotencyKey;
     let scopedContext = context;
     let activeScope = null;
-    if (mutating && !tool.name.startsWith('brevess.') && tool.name !== 'library.import_transfer') {
+    if (mutating && !tool.name.startsWith('brevess.') && !['library.import_transfer', 'library.catalog_command'].includes(tool.name)) {
       if (tool.kind === 'contract') projectGuard(args);
       const scope = scopeManager.require(args.expectedProjectId, name, hostOperationNames(name));
       activeScope = scope;
@@ -1232,6 +1272,7 @@ function createRegistry({
 
   function inferChangedPaths(name, args, data) {
     if (!args || !data) return [];
+    if (name === 'library.catalog_command') return data.replayed ? [] : ['library/catalog'];
     if (name === 'workbench.plan_hypotheses' && data.createdIds?.hypothesisId) {
       return [`projects/${args.expectedProjectId}/hypotheses/${data.createdIds.hypothesisId}`];
     }
@@ -1298,6 +1339,9 @@ function createRegistry({
   }
 
   function nextActions(name, mutating) {
+    if (['library.catalog_read', 'library.catalog_command', 'library.query_global_library'].includes(name)) {
+      return [{ tool: 'library.catalog_read', reason: 'Read current catalog revision and stable IDs before planning the next catalog command.' }];
+    }
     if (name === 'brevess.request_write_scope') {
       return [
         { tool: 'brevess.status', reason: 'Check whether the human approved the scope.' },

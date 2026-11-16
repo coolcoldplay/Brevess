@@ -4,6 +4,8 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const RUNTIME_REVISION = '1.0.1-build1-store-release';
+  const popupUiIdentity = typeof shared.isPopupUiDocumentUrl === 'function' ? shared
+    : (typeof require === 'function' ? require('./page-tools.js') : null);
   const pdfFigureRequests = typeof shared.validatePdfFigureRequest === 'function'
     ? shared : (typeof require === 'function' ? require('./pdf-figure-request.js') : null);
   const pdfPanelInventory = typeof shared.compilePdfFigurePanelInventoryPrompt === 'function'
@@ -3536,7 +3538,7 @@
       INVALID_MIGRATION_FEEDBACK: 'The migration feedback records are invalid.',
       MIGRATION_BUNDLE_TOO_LARGE: 'The migration file is too large.',
       PORTABLE_CONFIG_FAILED: 'Portable configuration request failed.',
-      TASK_COMMIT_UNCONFIRMED: '分析结果已生成，但档案保存尚未确认。请保留当前页面并重试保存。',
+      TASK_COMMIT_UNCONFIRMED: '任务完成状态尚未确认。请保留当前页面并重试；已完成内容会保留。',
       INTERNAL_ERROR: 'Unable to complete the request'
     };
     if (portableConfigCode) messages[portableConfigCode] = messages.PORTABLE_CONFIG_FAILED;
@@ -4173,8 +4175,6 @@
     }
 
     async function runIdempotentFigureRequest(message, context, task) {
-      assertFigureEvidenceContract(message);
-      assertModernFigureRequestContract(message);
       const supplied = message?.figureRequestReceipt;
       if (supplied === undefined || supplied === null || supplied === '') return task('');
       const receipt = normalizeFigureRequestReceipt(supplied);
@@ -4299,6 +4299,9 @@
       // durably charged retry allowance only after the local transport settles;
       // never overlap an abort-ignoring fetch or treat its first charge as zero.
       if (error.code === 'REQUEST_TIMEOUT' && ['request', 'response-body'].includes(error.diagnosticStage)) {
+        // HTTP 408 is a received server response, not evidence that a local
+        // deadline released its transport. Keep that outcome quarantined.
+        if (error.status === 408) return '';
         if (typeof shared.getProviderTransportLease !== 'function') return '';
         const lease = shared.getProviderTransportLease(error);
         if (!lease || lease.isSettled?.() === true) return 'REQUEST_TIMEOUT';
@@ -4607,7 +4610,7 @@
         return context.trustedExtensionSender === true && context.senderExtensionId === runtimeExtensionId &&
           Boolean(runtimeExtensionId) && /^(chrome|moz)-extension:$/.test(base.protocol) &&
           url.protocol === base.protocol && url.host === base.host && url.host === runtimeExtensionId &&
-          url.pathname === '/popup.html' && !url.search && !url.hash && !url.username && !url.password;
+          popupUiIdentity?.isPopupUiDocumentUrl(url.href, new URL('popup.html', base).href) === true;
       } catch (_) { return false; }
     }
     function figureConfirmationSource(figure) {
@@ -4848,6 +4851,27 @@
         (!internalOperationId || admitted.internalOperationId === internalOperationId) &&
         (!bindingSignature || admitted.bindingSignature === bindingSignature));
     }
+    function validFigureResumeNavigation(value, context) {
+      if (typeof value !== 'string' || !value || value.length > 8000) return false;
+      try {
+        const navigation = new URL(value);
+        if (navigation.username || navigation.password || navigation.hash) return false;
+        if (/^https?:$/u.test(navigation.protocol)) return true;
+        const base = new URL(context.runtimeBaseUrl);
+        if (!/^(chrome|moz)-extension:$/u.test(base.protocol) || base.host !== runtimeExtensionId ||
+            navigation.protocol !== base.protocol || navigation.host !== base.host ||
+            navigation.pathname !== '/pdf-reader.html') return false;
+        const sources = navigation.searchParams.getAll('source');
+        // A reader opened with the local picker can have no source query yet.
+        // The current document/hash/owner and PDF evidence are still checked by
+        // the existing dispatch/consumption boundaries; this is not file access.
+        if (!sources.length) return true;
+        if (sources.length !== 1 || !sources[0]) return false;
+        const source = new URL(sources[0]);
+        return /^(https?|file):$/u.test(source.protocol) && !source.username && !source.password;
+      } catch (_) { return false; }
+    }
+
     async function issueFigureUserResumeIntent(message, context) {
       let trusted = false;
       try {
@@ -4855,18 +4879,21 @@
         trusted = context.trustedExtensionSender === true && runtimeExtensionId &&
           context.senderExtensionId === runtimeExtensionId && /^(chrome|moz)-extension:$/.test(base.protocol) &&
           sender.protocol === base.protocol && sender.host === base.host && sender.host === runtimeExtensionId &&
-          sender.pathname === '/popup.html' && !sender.search && !sender.hash && !sender.username && !sender.password;
+          popupUiIdentity?.isPopupUiDocumentUrl(sender.href, new URL('popup.html', base).href) === true;
       } catch (_) {}
       const binding = message.figureUserResumeBinding;
       if (!trusted || message.operationScope !== 'figure' || !shared.normalizeOperationId?.(message.operationId) ||
           !isPlainObject(binding) || !Number.isSafeInteger(binding.tabId) || binding.tabId < 0 ||
           !Number.isSafeInteger(binding.workspaceLifecycle) || binding.workspaceLifecycle < 0 ||
           typeof binding.documentIdentity !== 'string' || !binding.documentIdentity || binding.documentIdentity.length > 160 ||
-          typeof binding.navigationIdentity !== 'string' || !/^https?:\/\//u.test(binding.navigationIdentity) ||
           typeof binding.documentHash !== 'string' || !binding.documentHash || binding.documentHash.length > 160 ||
           !Array.isArray(binding.figureIds) || !binding.figureIds.length || binding.figureIds.length > 50 ||
           binding.figureIds.some(id => typeof id !== 'string' || !id || id.length > 160) ||
           new Set(binding.figureIds).size !== binding.figureIds.length) throw invalidSettings(['figureUserResumeBinding']);
+      if (!validFigureResumeNavigation(binding.navigationIdentity, context)) {
+        throw invalidSettings(['figureUserResumeBinding.navigationIdentity'],
+          '解图来源校验失败，尚未调用模型；请重新打开当前文献后重试。');
+      }
       await reconcileFigureBrowserSession();
       const targets = await durableFigureLogicalRequestLedger.snapshotPending();
       if (!targets.length) return { figureUserResumeIntent: '' };
@@ -5414,6 +5441,7 @@
       const kind = input.kind === 'archive' ? 'archive'
         : input.kind === 'workspace' ? 'workspace' : '';
       const currentInput = isPlainObject(input.current) ? input.current : {};
+      const sourceIdentity = shared.workspaceRestoreSourceIdentity(currentInput);
       let canonicalUrl = '';
       try {
         canonicalUrl = shared.normalizeWorkspaceCanonicalUrl(currentInput.canonicalUrl);
@@ -5426,12 +5454,14 @@
         .toLowerCase().replace(/^sha256:/u, '');
       if (!kind || !/^workspace:[a-f0-9]{64}$/u.test(workspaceId) ||
           !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
-          !/^[a-f0-9]{64}$/u.test(contentHash) || !canonicalUrl) {
+          !/^[a-f0-9]{64}$/u.test(contentHash) || sourceIdentity === null ||
+          !(canonicalUrl || sourceIdentity)) {
         throw articleRestoreReceiptError();
       }
       const result = {
         kind,
-        current: { workspaceId, workspaceGeneration, canonicalUrl, contentHash },
+        current: { workspaceId, workspaceGeneration, canonicalUrl, contentHash,
+          ...(sourceIdentity ? { sourceIdentity } : {}) },
         operationNonce: safeRestoreReceiptText(input.operationNonce, 160)
       };
       if (!/^[A-Za-z0-9._:-]{12,160}$/u.test(result.operationNonce)) {
@@ -5442,10 +5472,13 @@
         result.archive = {
           documentId: normalizeRestoreDocumentId(archive.documentId),
           documentHash: safeRestoreReceiptText(archive.documentHash, 200),
-          canonicalUrl: shared.normalizeWorkspaceCanonicalUrl(archive.canonicalUrl)
+          canonicalUrl: shared.normalizeWorkspaceCanonicalUrl(archive.canonicalUrl),
+          ...(archive.sourceIdentity ? { sourceIdentity: archive.sourceIdentity } : {})
         };
         if (!result.archive.documentHash ||
-            result.archive.canonicalUrl !== canonicalUrl) {
+            result.archive.canonicalUrl !== canonicalUrl ||
+            (result.archive.sourceIdentity || '') !== sourceIdentity ||
+            (sourceIdentity && shared.manualDocumentSourceIdentity(result.archive) !== sourceIdentity)) {
           throw articleRestoreReceiptError();
         }
         // New content-changed restores bind the current live document and the
@@ -5459,10 +5492,13 @@
           documentHash: safeRestoreReceiptText(currentArchiveInput.documentHash, 200),
           canonicalUrl: shared.normalizeWorkspaceCanonicalUrl(
             currentArchiveInput.canonicalUrl
-          )
+          ),
+          ...(currentArchiveInput.sourceIdentity ? { sourceIdentity: currentArchiveInput.sourceIdentity } : {})
         };
         if (!result.currentArchive.documentHash ||
-            result.currentArchive.canonicalUrl !== canonicalUrl) {
+            result.currentArchive.canonicalUrl !== canonicalUrl ||
+            (result.currentArchive.sourceIdentity || '') !== sourceIdentity ||
+            (sourceIdentity && shared.manualDocumentSourceIdentity(result.currentArchive) !== sourceIdentity)) {
           throw articleRestoreReceiptError();
         }
         result.allowContentChanged = input.allowContentChanged === true;
@@ -5477,7 +5513,8 @@
         const manifest = normalizedRestoreCommitIdentity(input.manifest);
         if (!manifest || manifest.workspaceId !== workspaceId ||
             manifest.workspaceGeneration !== workspaceGeneration ||
-            manifest.canonicalUrl !== canonicalUrl) throw articleRestoreReceiptError();
+            manifest.canonicalUrl !== canonicalUrl ||
+            (manifest.sourceIdentity || '') !== sourceIdentity) throw articleRestoreReceiptError();
         result.manifest = manifest;
         result.match = input.match === 'content-changed' ? 'content-changed' : 'exact';
         result.allowContentChanged = input.allowContentChanged === true;
@@ -5527,14 +5564,52 @@
       }
     }
 
-    function issueArticleRestoreReceipt(binding, context = {}) {
+    async function checkedLocalRestoreSource(context, identity = null) {
+      if (context.trustedExtensionSender !== true || !runtimeExtensionId ||
+          context.senderExtensionId !== runtimeExtensionId ||
+          !Number.isSafeInteger(context.senderTabId) || context.senderTabId < 0 ||
+          !Number.isSafeInteger(context.senderFrameId) || context.senderFrameId < 0 ||
+          !safeRestoreReceiptText(context.senderDocumentId, 200) ||
+          typeof context.verifyLibraryHtmlIdentity !== 'function' ||
+          typeof context.assertLibraryHtmlCurrent !== 'function') throw articleRestoreReceiptError();
+      const sender = new URL(context.senderUrl);
+      if (!/^(?:chrome|moz)-extension:$/u.test(sender.protocol) || sender.host !== runtimeExtensionId ||
+          sender.pathname !== '/library-html-reader.html' || sender.username || sender.password || sender.hash)
+        throw articleRestoreReceiptError();
+      const source = await context.verifyLibraryHtmlIdentity();
+      const sourceIdentity = `library-html:sha256:${source?.documentHash}`;
+      if (shared.manualDocumentSourceIdentity({...source, sourceIdentity}) !== sourceIdentity ||
+          !Number.isSafeInteger(source.generation) || source.generation < 1 ||
+          !source.entryId || !source.attachmentId) throw articleRestoreReceiptError();
+      const project = value => ({documentId:value.documentId, documentHash:value.documentHash,
+        canonicalUrl:shared.normalizeWorkspaceCanonicalUrl(value.canonicalUrl),
+        entryId:value.entryId, attachmentId:value.attachmentId, generation:value.generation});
+      const captured = project(source);
+      if (identity) {
+        const expected = await shared.createArticleWorkspaceIdentity({ canonicalUrl:source.canonicalUrl,
+          doi:source.doi, siteId:sourceIdentity, contentHash:identity.contentHash });
+        const stored = await articleWorkspaceStore?.getWorkspace(identity.workspaceId);
+        if (identity.sourceIdentity !== sourceIdentity || expected.workspaceId !== identity.workspaceId ||
+            expected.canonicalUrl !== identity.canonicalUrl || !stored || stored.deletionPending ||
+            !sameRestoreCommitIdentity(normalizedRestoreCommitIdentity(stored), identity)) throw articleRestoreReceiptError();
+      }
+      const confirmed = await context.assertLibraryHtmlCurrent();
+      if (!jsonLikeEqual(captured, project(confirmed))) throw articleRestoreReceiptError();
+      return {...captured, sourceIdentity};
+    }
+
+    async function issueArticleRestoreReceipt(binding, context = {}) {
       if (context.trustedContentScript !== true ||
           !Number.isSafeInteger(context.senderTabId) || context.senderTabId < 0) {
         throw articleRestoreReceiptError();
       }
       const normalized = normalizeRestoreReceiptBinding(binding);
-      const senderUrl = restoreReceiptSenderCanonicalUrl(context);
-      if (senderUrl !== normalized.current.canonicalUrl) throw articleRestoreReceiptError();
+      const localSource = normalized.current.sourceIdentity
+        ? await checkedLocalRestoreSource(context, normalized.current) : null;
+      if (!localSource && restoreReceiptSenderCanonicalUrl(context) !== normalized.current.canonicalUrl)
+        throw articleRestoreReceiptError();
+      if (localSource && (normalized.kind === 'workspace' ? normalized.documentId : normalized.currentArchive.documentId)
+          !== localSource.documentId) throw articleRestoreReceiptError();
       const now = Number(nowImpl());
       const randomUuid = globalThis.crypto?.randomUUID;
       if (typeof randomUuid !== 'function') throw articleRestoreReceiptError();
@@ -5545,19 +5620,22 @@
       ].join('-').slice(0, 160);
       articleRestoreReceipts.set(receipt, {
         binding: normalized,
+        ...(localSource ? { localSource, localContext: context } : {}),
         senderTabId: context.senderTabId,
         expiresAt: now + 30000
       });
       return { receipt, expiresAt: now + 30000 };
     }
 
-    function consumeArticleRestoreReceipt(receipt, binding, now = Number(nowImpl())) {
+    async function consumeArticleRestoreReceipt(receipt, binding, now = Number(nowImpl())) {
       const key = safeRestoreReceiptText(receipt, 160);
       const stored = articleRestoreReceipts.get(key);
       articleRestoreReceipts.delete(key);
       const normalized = normalizeRestoreReceiptBinding(binding);
       if (!stored || stored.expiresAt <= now ||
           !sameJsonLike(stored.binding, normalized)) throw articleRestoreReceiptError();
+      if (stored.localSource && !jsonLikeEqual(stored.localSource,
+          await checkedLocalRestoreSource(stored.localContext, normalized.current))) throw articleRestoreReceiptError();
       return stored;
     }
 
@@ -5565,7 +5643,7 @@
       return Object.assign(new Error(code), { code });
     }
 
-    function documentCreationOwner(context = {}) {
+    async function documentCreationOwner(context = {}) {
       if (context.trustedExtensionSender !== true || !runtimeExtensionId ||
           context.senderExtensionId !== runtimeExtensionId ||
           !Number.isSafeInteger(context.senderTabId) || context.senderTabId < 0 ||
@@ -5574,16 +5652,19 @@
           typeof context.assertDocumentCreationOwnerCurrent !== 'function') {
         throw articleRestoreReceiptError();
       }
+      const local = typeof context.verifyLibraryHtmlIdentity === 'function'
+        ? await checkedLocalRestoreSource(context) : null;
       return { senderExtensionId: context.senderExtensionId,
         senderTabId: context.senderTabId, senderFrameId: context.senderFrameId,
         senderDocumentId: context.senderDocumentId,
-        canonicalUrl: restoreReceiptSenderCanonicalUrl(context) };
+        canonicalUrl: local ? local.canonicalUrl : restoreReceiptSenderCanonicalUrl(context),
+        ...(local ? { sourceIdentity: local.sourceIdentity, localSource: local } : {}) };
     }
 
     async function checkedDocumentCreationOwner(context) {
-      const owner = documentCreationOwner(context);
+      const owner = await documentCreationOwner(context);
       if (await context.assertDocumentCreationOwnerCurrent() === false ||
-          !jsonLikeEqual(owner, documentCreationOwner(context))) throw articleRestoreReceiptError();
+          !jsonLikeEqual(owner, await documentCreationOwner(context))) throw articleRestoreReceiptError();
       return owner;
     }
 
@@ -5605,6 +5686,7 @@
       if (!record || record.documentId !== prepared.documentId ||
           record.documentHash !== prepared.documentHash ||
           shared.normalizeWorkspaceCanonicalUrl(record.canonicalUrl) !== owner.canonicalUrl ||
+          (record.sourceIdentity || '') !== (owner.sourceIdentity || '') ||
           !Array.isArray(record.annotations) || record.annotations.length) return '';
       for (const [token, receipt] of documentCreationReceipts) {
         if (receipt.expiresAt <= now) {
@@ -5638,6 +5720,7 @@
           receipt.record.documentId !== identity.documentId ||
           receipt.record.documentHash !== identity.documentHash ||
           receipt.owner.canonicalUrl !== shared.normalizeWorkspaceCanonicalUrl(identity.canonicalUrl) ||
+          (receipt.owner.sourceIdentity || '') !== (shared.workspaceRestoreSourceIdentity(identity) || '') ||
           !jsonLikeEqual(receipt.record, expectedLocal.document)) return null;
       return receipt;
     }
@@ -6389,12 +6472,21 @@
                   if (error?.[field] !== undefined) ambiguous[field] = error[field];
                 throw ambiguous;
               }
-              await settleFigureProviderDispatch(
-                figureProviderAttemptBudget,
-                figureProviderAttemptBinding,
-                dispatch,
-                'responded'
-              );
+              try {
+                await settleFigureProviderDispatch(
+                  figureProviderAttemptBudget,
+                  figureProviderAttemptBinding,
+                  dispatch,
+                  'responded'
+                );
+              } catch (error) {
+                // Navigation may retire the ledger while the provider is in
+                // flight. Preserve the owner's cancellation instead of
+                // reporting a storage/replay failure for a retired document.
+                // The successful path keeps its existing post-write guard.
+                await assertFigureOwnerCurrent(context);
+                throw error;
+              }
               if (dispatchCollector instanceof Map) {
                 dispatchCollector.set(dispatch.attemptNumber, {
                   attemptNumber: dispatch.attemptNumber,
@@ -6652,12 +6744,45 @@
       return { documentId, documentHash, revision };
     }
 
+    function automaticPaperIdentity(document,documentHash,nativeIdentity,htmlIdentity) {
+      // Archived HTML must retain its validated source metadata; never infer an
+      // article identity from arbitrary archive DOM or from a DOI in body text.
+      if(htmlIdentity)return null;
+      const doi=shared.normalizeCrossFormatPaperDoi?.(document?.doi);
+      if(!doi)return null;
+      const metadata=document?.articleIdentityMetadata;
+      if(!isPlainObject(metadata))return null;
+      let path='';try{path=new URL(document.canonicalUrl||document.url).pathname;}catch(_){}
+      const title=String(metadata.title||document.title||'');
+      if(/supplement(?:ary|al)?|supporting[\s_-]+(?:information|material)|\b(?:esm|si[_-]file)\b|补充材料|补充信息/iu.test(title+' '+path+' '+String(metadata.opening||'')))return null;
+      let evidence='';
+      if(nativeIdentity){
+        const p=metadata.pdfDoiEvidence;
+        const normalized=shared.normalizePdfArticleDoiEvidence?.(p,{documentHash,documentGeneration:p?.documentGeneration});
+        if(normalized?.status!=='known'||normalized.value!==doi)return null;
+        evidence='pdf-own-doi';
+      }else{
+        if(!Array.isArray(metadata.doiValues)||!metadata.doiValues.length||metadata.doiValues.length>16||
+           !metadata.articleSignal||metadata.doiValues.some(v=>shared.normalizeCrossFormatPaperDoi(v)!==doi))return null;
+        evidence='article-meta-doi';
+      }
+      return {version:1,doi,documentHash,format:nativeIdentity?'pdf':'html',evidence};
+    }
     async function prepareStoredDocumentUnsafe(settings, document, context = {}, captureCreation = false) {
       const paragraphs = Array.isArray(document?.paragraphs) ? document.paragraphs : [];
       if (!paragraphs.length) throw invalidSettings(['paragraphs']);
       const paragraphDocumentHash = await shared.hashDocument(paragraphs);
       const nativeIdentity = trustedNativePdfIdentity(document, context);
-      const documentHash = nativeIdentity?.documentHash || paragraphDocumentHash;
+      let htmlIdentity = null;
+      if (document?.libraryHtmlIdentity !== undefined) {
+        if (typeof context.verifyLibraryHtmlIdentity !== 'function') throw invalidSettings(['libraryHtmlIdentity']);
+        htmlIdentity = await context.verifyLibraryHtmlIdentity();
+        const hint = document.libraryHtmlIdentity;
+        if (!isPlainObject(hint) || Object.keys(hint).sort().join(',') !== 'attachmentId,documentHash,entryId,generation' ||
+            ['entryId','attachmentId','documentHash','generation'].some(key => hint[key] !== htmlIdentity[key])) throw invalidSettings(['libraryHtmlIdentity']);
+        document = { ...document, title: htmlIdentity.title, doi: htmlIdentity.doi, canonicalUrl: htmlIdentity.canonicalUrl || '', url: '' };
+      }
+      const documentHash = htmlIdentity?.documentHash || nativeIdentity?.documentHash || paragraphDocumentHash;
       const computedDocumentId = await shared.createDocumentId({
         title: document?.title,
         canonicalUrl: document?.canonicalUrl || document?.url,
@@ -6666,8 +6791,8 @@
       });
       const requestedDocumentId = String(document?.documentId || '').trim();
       const previousDocumentHash = String(document?.previousDocumentHash || '').toLowerCase();
-      let documentId = nativeIdentity?.documentId || computedDocumentId;
-      if (!nativeIdentity && requestedDocumentId && /^[a-f0-9]{64}$/.test(previousDocumentHash)) {
+      let documentId = htmlIdentity?.documentId || nativeIdentity?.documentId || computedDocumentId;
+      if (!htmlIdentity && !nativeIdentity && requestedDocumentId && /^[a-f0-9]{64}$/.test(previousDocumentHash)) {
         try {
           const existing = await documentStore.getDocument(requestedDocumentId);
           const knownHashes = new Set([
@@ -6694,9 +6819,14 @@
         updatedAt: '',
         documentHash,
         documentHashes: [...new Set([documentHash, paragraphDocumentHash])],
+        ...(shared.normalizeCrossFormatPaperDoi?.(document?.doi) ? { doi: shared.normalizeCrossFormatPaperDoi(document.doi) } : {}),
+        sourceFormat: nativeIdentity ? 'pdf' : 'html',
+        automaticPaperIdentity: automaticPaperIdentity(document,documentHash,nativeIdentity,htmlIdentity),
+        ...(htmlIdentity ? { sourceIdentity: `library-html:sha256:${documentHash}` } : {}),
         ...(nativeIdentity ? { nativePdfRevision: nativeIdentity.revision } : {}),
         legacyStudyTypeMigrated: true
       };
+      if (htmlIdentity) await context.assertLibraryHtmlCurrent();
       const documentCreationInfo = captureCreation &&
         typeof documentStore.prepareDocumentWithCreationInfo === 'function'
         ? await documentStore.prepareDocumentWithCreationInfo(input) : null;
@@ -6726,8 +6856,16 @@
         if (!/^https?:$/u.test(source.protocol) || source.username || source.password) return '';
         // Existing document records discard queries. Only known tracking keys
         // can be removed here without losing an article identity parameter.
-        for (const key of source.searchParams.keys()) {
+        const scienceDirectArticle = source.hostname.toLowerCase() === 'www.sciencedirect.com' &&
+          /^\/science\/article\/pii\/[A-Z0-9]+\/?$/u.test(source.pathname);
+        for (const [key, value] of source.searchParams) {
+          // Elsevier redirects also emit the encoded form ?via%3Dihub.
+          // Accept only this known referral on a PII path, never an arbitrary
+          // encoded key or query that could select a different article.
+          const scienceDirectReferral = scienceDirectArticle &&
+            ((key === 'via' && value === 'ihub') || (key === 'via=ihub' && value === ''));
           if (!/^(?:utm_[a-z0-9_]+|gclid|fbclid|msclkid)$/iu.test(key) &&
+              !scienceDirectReferral &&
               !(source.hostname.toLowerCase() === 'www.cell.com' &&
                 (key === 'via' || key === '_returnURL'))) return '';
         }
@@ -7571,6 +7709,8 @@
         : String(text || '').normalize('NFKC')
           .replace(/\s+/g, ' ').trim().slice(0, maximum);
       const caption = evidenceText(value?.caption, verifiedPdf ? 100000 : 8000);
+      const captionScientificContext = !verifiedPdf
+        ? shared.normalizeFigureScientificCaption?.(value) : null;
       const boundedContext = !verifiedPdf && typeof shared.boundFigureContextParagraphs === 'function'
         ? shared.boundFigureContextParagraphs(value?.contextParagraphs) : null;
       const normalizeProviderImage = candidate => {
@@ -7629,6 +7769,7 @@
         figureId,
         figureLabel: String(value?.figureLabel || figureId).trim().slice(0, 80),
         caption,
+        ...(captionScientificContext ? { captionScientificContext } : {}),
         articleTitle: String(articleTitle || '').trim().slice(0, 500),
         panelHints: [...new Set((Array.isArray(value?.panelHints) ? value.panelHints : [])
           .slice(0, 30)
@@ -9480,7 +9621,9 @@
               progressDetails: batchBase
             });
             result = recovery.result;
-            visionFallback = recovery.visionFallback;
+            // Recovery reports only transitions made during recovery. Preserve
+            // the text decision already signed by earlier checkpoints.
+            visionFallback = visionFallback || recovery.visionFallback;
             useVisualInput = recovery.visualInput;
             lastError = null;
           } else if (!error?.figurePanelRecoveryAttempted && useVisualInput &&
@@ -10213,6 +10356,7 @@
               figureLabel: figure.figureLabel,
               articleTitle: figure.articleTitle,
               caption: figure.caption,
+              ...(figure.captionScientificContext ? { captionScientificContext: figure.captionScientificContext } : {}),
               panelHints: figure.panelHints,
               ...(figure.panelInventoryDigest ? { panelInventoryDigest: figure.panelInventoryDigest } : {}),
               contextParagraphs: figure.contextParagraphs,
@@ -10235,6 +10379,7 @@
             figureId: figure.figureId,
             figureLabel: figure.figureLabel,
             caption: figure.caption,
+            ...(figure.captionScientificContext ? { captionScientificContext: figure.captionScientificContext } : {}),
             panelHints: figure.panelHints,
             ...(figure.panelInventoryDigest ? { panelInventoryDigest: figure.panelInventoryDigest } : {}),
             contextParagraphs: figure.contextParagraphs,
@@ -14279,7 +14424,7 @@
       }, { maxCharacters: noteEvidencePolicy.captionFirst ? 128000 : 36000,
         noteEvidencePolicy, evidencePurpose: 'literature-note' });
       if (!originalEvidenceDocument.records.length) throw invalidSettings(['document.paragraphs']);
-      let requestEvidenceDocument = originalEvidenceDocument;
+      const requestEvidenceDocument = originalEvidenceDocument;
       const requireCompleteFindingsCoverage = preserveHtmlNoteEvidence && noteEvidencePolicy.captionFirst === true;
       const completeCaptionCoverage = coverage => coverage?.complete === true &&
         Array.isArray(coverage.allParagraphIds) && coverage.allParagraphIds.length > 0 &&
@@ -14379,7 +14524,7 @@
           textHash: String(record.textHash || '')
         })))
       });
-      if (!subsetRequest && message?.forceRefresh !== true) {
+      if (message?.forceRefresh !== true) {
         const cached = (await cacheStore.getMany([cacheKey])).get(cacheKey);
         if (cached?.schemaVersion === 3 && cached?.normalized &&
             cached?.templateId === template.id &&
@@ -14405,21 +14550,39 @@
               }
             });
           }
-          const normalized = shared.validateLiteratureNoteAutofillResponse({
+          const validated = shared.validateLiteratureNoteAutofillResponse({
             values: cachedValues,
             statuses: cached.normalized.statuses,
             sources: cached.normalized.sources
           }, template, originalEvidenceDocument, { outputLanguage, noteEvidencePolicy });
+          // Validate the complete historical record first, then project only
+          // this action's requested fields. Reusing an exact saved field must
+          // not regenerate it or expand the current write/receipt scope.
+          const pickRequested = values => Object.fromEntries(Object.entries(values || {})
+            .filter(([id]) => requestedFieldIds.includes(id)));
+          const normalized = subsetRequest ? {
+            ...validated, values: pickRequested(validated.values),
+            statuses: pickRequested(validated.statuses), sources: pickRequested(validated.sources),
+            summary: {
+              supported: requestedFieldIds.filter(id => validated.statuses[id] === 'supported').length,
+              missing: requestedFieldIds.filter(id => validated.statuses[id] === 'missing').length
+            }
+          } : validated;
           // A source-ledger dispute can originate from another draft of the
           // same paper. Keep saved text, but never reuse its stale review badge.
           const cachedReviewCurrent = await noteReviewRunner.isReviewCurrent(cached.findingsReview);
-          const cachedFindingsReview = cachedReviewCurrent ? cached.findingsReview || null : {
+          const fullFindingsReview = cachedReviewCurrent ? cached.findingsReview || null : {
             version: cached.findingsReview.version, status: 'unavailable',
             errorCode: 'NOTE_REVIEW_SOURCE_CACHE_CHANGED', changedCount: 0,
             uncertainCount: 0, cacheHit: true
           };
+          const cachedFindingsReview = subsetRequest && fullFindingsReview ? {
+            ...fullFindingsReview,
+            fieldIds: (fullFindingsReview.fieldIds || []).filter(id => requestedFieldIds.includes(id))
+          } : fullFindingsReview;
           const cachedFieldEvidence = Array.isArray(cached.fieldEvidence)
-            ? cached.fieldEvidence.map(field => !cachedReviewCurrent && field.findingsReview
+            ? cached.fieldEvidence.filter(field => !subsetRequest || requestedFieldIds.includes(field.fieldId))
+              .map(field => !cachedReviewCurrent && field.findingsReview
               ? { ...field, findingsReview: cachedFindingsReview } : field) : null;
           await waitForOperation(operation);
           runtimeOperations?.update(operation, 'validating');
@@ -14569,7 +14732,7 @@
       const nonfatal = error => !operation?.controller?.signal?.aborted &&
         (formatFailure(error) || ['OUTPUT_TRUNCATED', 'NETWORK_ERROR', 'PROVIDER_UNAVAILABLE',
           'RATE_LIMITED', 'REQUEST_TIMEOUT'].includes(error?.code));
-      const collect = (raw, fields) => {
+      const collect = (raw, fields, onFailure = error => { lastFieldError = error; }) => {
         const failed = [];
         for (const field of fields) {
           const singleTemplate = { ...template, fields: [field] };
@@ -14592,7 +14755,7 @@
               ...(noteEvidencePolicy.id ? { captionCoverage: requestEvidenceDocument.captionCoverage || null } : {}) });
           } catch (error) {
             if (!formatFailure(error)) throw error;
-            lastFieldError = error; failed.push(field);
+            onFailure(error); failed.push(field);
           }
         }
         return failed;
@@ -14686,9 +14849,13 @@
         typeof message.noteDocumentKey === 'string' && Boolean(message.noteDocumentKey.trim());
       const checkpointKey = id => `${cacheKey}:field:${id}`;
       const checkpointedIds = new Set();
-      const publishCheckpoint = async ({ restored = false } = {}) => {
+      const persistCheckpoint = async ({ restored = false } = {}) => {
         if (!checkpointEnabled) return;
-        const ids = Object.keys(normalized.statuses);
+        // Capture values and their evidence before the durable write awaits.
+        // A sibling may finish during that write; it belongs to the next snapshot.
+        const snapshot = cloneJsonLike(normalized);
+        const ids = requestedFieldIds.filter(id => Object.hasOwn(snapshot.statuses, id));
+        const checkpointEvidence = cloneJsonLike([...fieldEvidence.values()].filter(item => ids.includes(item.fieldId)));
         const fresh = ids.filter(id => !checkpointedIds.has(id));
         if (!fresh.length) return;
         await waitForOperation(operation);
@@ -14702,17 +14869,25 @@
         await waitForOperation(operation);
         fresh.forEach(id => checkpointedIds.add(id));
         operation.noteCheckpoint = cloneJsonLike({
-          ...normalized, runtimeTask: operation.runtimeTask?.snapshot(),
+          ...snapshot, runtimeTask: operation.runtimeTask?.snapshot(),
           templateId: template.id, documentHash: originalEvidenceDocument.documentHash,
           cacheHit: restored, operationId, operationReceipt: operationReceipt(restored, providerAttempts),
           ...(hasRequestedFields ? { requestedFieldIds } : {}), completedFieldIds: ids,
           pendingFieldIds: requestedFieldIds.filter(id => !ids.includes(id)), partial: true,
-          evidenceReceipt: { ...evidenceReceipt, fieldEvidence: [...fieldEvidence.values()],
+          evidenceReceipt: { ...evidenceReceipt, fieldEvidence: checkpointEvidence,
             ...(noteEvidencePolicy.id ? { captionCoverage: requestEvidenceDocument.captionCoverage || null } : {}) },
           noteEvidencePolicy, findingsReview, route: task.routePublic
         });
         await progress('literature_note_checkpoint', { fieldIds: fresh,
           completedFieldCount: ids.length, fieldCount: requestedFieldIds.length, restored });
+      };
+      // Provider work may finish out of order; keep checkpoint snapshots and
+      // durable writes ordered, under the existing document/operation guards.
+      let checkpointQueue = Promise.resolve();
+      const publishCheckpoint = options => {
+        const pending = checkpointQueue.then(() => persistCheckpoint(options));
+        checkpointQueue = pending.catch(() => undefined);
+        return pending;
       };
       if (checkpointEnabled && message.forceRefresh !== true) {
         const cachedFields = await cacheStore.getMany(requestedFields.map(field => checkpointKey(field.id)));
@@ -14724,9 +14899,10 @@
         }
         await publishCheckpoint({ restored: true });
       }
-      for (const [batchIndex, originalFields] of batchFields.entries()) {
+      const runNoteBatch = async (originalFields, batchIndex) => {
+        let batchError = null;
         const fields = originalFields.filter(field => !Object.hasOwn(normalized.statuses, field.id));
-        if (!fields.length) continue;
+        if (!fields.length) return;
         await waitForOperation(operation);
         const batchProgress = { batchIndex, batchCount: batchFields.length,
           completedFieldCount: Object.keys(normalized.statuses).length, fieldIds: fields.map(field => field.id) };
@@ -14734,15 +14910,15 @@
         // could return schema-valid prose from the remaining early Figures.
         if (requireCompleteFindingsCoverage && fields.some(field => field.id === 'main_findings') &&
             !completeCaptionCoverage(requestEvidenceDocument.captionCoverage)) {
-          lastFieldError = new Error('Complete Figure evidence is unavailable for the literature note');
-          lastFieldError.code = 'NOTE_EVIDENCE_COVERAGE_INCOMPLETE'; lastFieldError.retryable = false;
+          batchError = new Error('Complete Figure evidence is unavailable for the literature note');
+          batchError.code = 'NOTE_EVIDENCE_COVERAGE_INCOMPLETE'; batchError.retryable = false;
           pendingFieldIds.push('main_findings');
-          fieldFailures.push({ fieldId: 'main_findings', batchIndex, errorCode: lastFieldError.code });
+          fieldFailures.push({ fieldId: 'main_findings', batchIndex, errorCode: batchError.code });
           progress('literature_note_field_pending', { ...batchProgress, fieldIds: ['main_findings'],
-            errorCode: lastFieldError.code });
+            errorCode: batchError.code });
           progress('literature_note_batch_complete', { ...batchProgress,
             completedFieldCount: Object.keys(normalized.statuses).length, pendingFieldCount: pendingFieldIds.length });
-          continue;
+          return;
         }
         progress('literature_note_requesting', batchProgress);
         let failed = fields, raw = null;
@@ -14750,28 +14926,26 @@
           let prompt = compileBatchPrompt(fields);
           try { raw = await request(prompt); }
           catch (error) {
-            if (formatFailure(error)) lastFieldError = error;
+            if (formatFailure(error)) batchError = error;
             else {
               if (!error?.retryable || !['NETWORK_ERROR', 'PROVIDER_UNAVAILABLE', 'RATE_LIMITED', 'REQUEST_TIMEOUT'].includes(error.code) ||
-                  transportRetried || (!preserveHtmlNoteEvidence && typeof shared.compactResearchEvidenceDocument !== 'function')) throw error;
+                  transportRetried) throw error;
               transportRetried = true;
               // A transient connection/service failure says nothing about the
               // scientific input size. Keep the exact original HTML evidence
               // for this retry and every later built-in field batch.
-              if (!preserveHtmlNoteEvidence) {
-                requestEvidenceDocument = shared.compactResearchEvidenceDocument(originalEvidenceDocument, { maxCharacters: 18000 });
-                prompt = compileBatchPrompt(fields);
-              }
+              // Retry the identical frozen evidence in every source format.
+              // A sibling batch must never observe a shortened document.
               const waitMs = Math.max(800, Number(error?.retryAfterMs) || 0);
-              progress(preserveHtmlNoteEvidence ? 'literature_note_transient_retry' : 'literature_note_compact_retry',
+              progress('literature_note_transient_retry',
                 { ...batchProgress, errorCode: String(error.code), waitMs });
               await sleepForOperation(waitMs, operation);
               try { raw = await request(prompt); }
-              catch (retryError) { if (!formatFailure(retryError)) throw retryError; lastFieldError = retryError; }
+              catch (retryError) { if (!formatFailure(retryError)) throw retryError; batchError = retryError; }
             }
           }
           await waitForOperation(operation);
-          failed = collect(raw, fields);
+          failed = collect(raw, fields, error => { batchError = error; });
           await publishCheckpoint();
           if (failed.length) {
             progress('literature_note_schema_retry', { ...batchProgress, fieldIds: failed.map(field => field.id) });
@@ -14784,15 +14958,16 @@
             const repaired = await request({ ...repairPrompt,
               systemPrompt: `${repairPrompt.systemPrompt}\nSCHEMA_REPAIR_PASS: Return exactly values, statuses, and sources for every requested field id. supported requires non-empty value plus supplied paragraphIds; missing requires value="" and sources=[]. Keep values, statuses, and sources as sibling maps in one top-level JSON object. Respect these source limits: ${JSON.stringify(limits)}.${outputContractRepair ? `\n${outputContractRepair}` : ''}` });
             await waitForOperation(operation);
-            failed = collect(repaired, failed);
-              await publishCheckpoint();
+            failed = collect(repaired, failed, error => { batchError = error; });
+            await publishCheckpoint();
           }
         } catch (error) {
           if (!nonfatal(error)) throw error;
-          lastFieldError = error;
+          batchError = error;
         }
         if (failed.length) {
-          const errorCode = String(lastFieldError?.code || 'INVALID_RESPONSE');
+          lastFieldError = batchError || lastFieldError;
+          const errorCode = String(batchError?.code || 'INVALID_RESPONSE');
           for (const field of failed) {
             pendingFieldIds.push(field.id); fieldFailures.push({ fieldId: field.id, batchIndex, errorCode });
           }
@@ -14801,7 +14976,23 @@
         }
         progress('literature_note_batch_complete', { ...batchProgress,
           completedFieldCount: Object.keys(normalized.statuses).length, pendingFieldCount: pendingFieldIds.length });
-      }
+      };
+      let nextBatch = 0, fatalBatchError = null;
+      const noteWorker = async () => {
+        while (!fatalBatchError) {
+          const index = nextBatch++;
+          if (index >= batchFields.length) return;
+          try { await runNoteBatch(batchFields[index], index); }
+          catch (error) { fatalBatchError ||= error; }
+        }
+      };
+      // The existing field batches/prompts/budgets remain identical. Each
+      // worker owns its retries, so nested repair calls cannot exceed two.
+      await Promise.all(Array.from({ length: Math.min(2, batchFields.length) }, noteWorker));
+      await checkpointQueue;
+      if (fatalBatchError) throw fatalBatchError;
+      pendingFieldIds.sort((a, b) => requestedFieldIds.indexOf(a) - requestedFieldIds.indexOf(b));
+      fieldFailures.sort((a, b) => requestedFieldIds.indexOf(a.fieldId) - requestedFieldIds.indexOf(b.fieldId));
       await waitForOperation(operation);
       // Every generated field is available before the single source-first audit.
       // Checkpoint drafts remain durable while its atomic final revision is pending.
@@ -14875,20 +15066,24 @@
       } catch (_) {
         return null;
       }
+      const sourceIdentity = shared.workspaceRestoreSourceIdentity(input);
       const workspaceId = String(input.workspaceId || '').trim().toLowerCase();
       const workspaceGeneration = Number(input.workspaceGeneration);
       const contentHash = String(input.contentHash || '')
         .trim().toLowerCase().replace(/^sha256:/u, '');
       if (!/^workspace:[a-f0-9]{64}$/u.test(workspaceId) ||
           !Number.isSafeInteger(workspaceGeneration) || workspaceGeneration < 1 ||
-          !/^[a-f0-9]{64}$/u.test(contentHash) || !canonicalUrl) return null;
-      return { workspaceId, workspaceGeneration, canonicalUrl, contentHash };
+          !/^[a-f0-9]{64}$/u.test(contentHash) || sourceIdentity === null ||
+          !(canonicalUrl || sourceIdentity)) return null;
+      return { workspaceId, workspaceGeneration, canonicalUrl, contentHash,
+        ...(sourceIdentity ? { sourceIdentity } : {}) };
     }
 
     function sameRestoreCommitIdentity(left, right) {
       return Boolean(left && right && left.workspaceId === right.workspaceId &&
         left.workspaceGeneration === right.workspaceGeneration &&
         left.canonicalUrl === right.canonicalUrl &&
+        (left.sourceIdentity || '') === (right.sourceIdentity || '') &&
         left.contentHash === right.contentHash);
     }
 
@@ -14912,6 +15107,7 @@
           actualManifest.workspaceId !== current?.workspaceId ||
           actualManifest.workspaceGeneration !== current?.workspaceGeneration ||
           actualManifest.canonicalUrl !== current?.canonicalUrl ||
+          (actualManifest.sourceIdentity || '') !== (current?.sourceIdentity || '') ||
           (actualManifest.contentHash !== current?.contentHash && !allowContentChanged)) {
         throw articleWorkspaceRestoreTargetError();
       }
@@ -15457,7 +15653,7 @@
         delete value.answerProvenance;
       }
       const webSearch = isPlainObject(value.webSearch) ? value.webSearch : {};
-      const webIntent = ['off', 'on', 'auto'].includes(webSearch.mode)
+      const webIntent = ['off', 'on', 'deep', 'auto'].includes(webSearch.mode)
         ? { mode: webSearch.mode } : {};
       if (webIntent.mode === 'auto' && isPlainObject(webSearch.decision)) {
         try { webIntent.decision = shared.normalizeArticleChatSearchPlan(webSearch.decision); }
@@ -15981,6 +16177,13 @@
       }
 
       if (message.type === 'ARTICLE_WORKSPACE_ENSURE') {
+        if (message.readOnly === true) {
+          requireArticleWorkspaceStore('getWorkspace');
+          const existing = await articleWorkspaceStore.getWorkspace(message.workspace?.workspaceId);
+          if (existing?.deletionPending) throw Object.assign(new Error('WORKSPACE_DELETION_PENDING'), { code: 'WORKSPACE_DELETION_PENDING' });
+          if (!existing) return { workspace: { ...publicWorkspace(message.workspace), transient: true } };
+          // An already admitted owner keeps the original source-revision/restore behavior.
+        }
         requireArticleWorkspaceStore('ensureWorkspace');
         const workspace = await articleWorkspaceStore.ensureWorkspace(message.workspace, {
           expectedRevision: message.expectedRevision,
@@ -16868,8 +17071,11 @@
         await context.assertTrustedOwnerCurrent();
         const { plan, normalized } = checkedWorkspaceRestorePlan(message.planId, message.binding);
         const senderOwner = [context.senderTabId, context.senderFrameId, context.senderDocumentId];
-        if (!plan.operationNonce || restoreReceiptSenderCanonicalUrl(context) !==
-            normalized.current.canonicalUrl ||
+        const localSource = normalized.current.sourceIdentity
+          ? await checkedLocalRestoreSource(context, normalized.current) : null;
+        if (!plan.operationNonce || (!localSource && restoreReceiptSenderCanonicalUrl(context) !==
+            normalized.current.canonicalUrl) ||
+            (localSource && localSource.documentId !== normalized.documentId) ||
             (plan.senderTabId !== null && plan.senderTabId !== context.senderTabId) ||
             (plan.senderOwner && !sameJsonLike(plan.senderOwner, senderOwner))) {
           throw articleRestoreReceiptError();
@@ -16888,7 +17094,7 @@
           operationNonce: message.operationNonce, match: String(restore.match || 'exact'),
           allowContentChanged: message.restoreTarget?.allowContentChanged === true
         };
-        consumeArticleRestoreReceipt(message.receipt, receiptBinding);
+        await consumeArticleRestoreReceipt(message.receipt, receiptBinding);
         const { plan, normalized } = checkedWorkspaceRestorePlan(restore.restorePlanId, receiptBinding);
         const { restorePlanId: _ignored, ...candidate } = restore;
         if (!sameJsonLike(candidate, plan.restore)) throw workspaceRestorePlanError();
@@ -17695,7 +17901,26 @@
             code: 'WORKSPACE_GENERATION_CONFLICT'
           });
         }
+        let storedChat = null;
+        if (requestedPath === 'chat/index.json' && message.includeStoredTurns === true) {
+          if (Number(message.workspaceGeneration) !== Number(workspace.workspaceGeneration || 1)) {
+            throw Object.assign(new Error('WORKSPACE_GENERATION_CONFLICT'),{code:'WORKSPACE_GENERATION_CONFLICT'});
+          }
+          requireArticleWorkspaceStore('readChatRestoreSnapshot');
+          const snapshot = await articleWorkspaceStore.readChatRestoreSnapshot(workspace.workspaceId);
+          const latest = snapshot.workspace, source = snapshot.source, turns = snapshot.turns;
+          if (!latest || latest.deletionPending || Number(latest.workspaceGeneration || 1) !== Number(workspace.workspaceGeneration || 1) ||
+              latest.contentHash !== workspace.contentHash) {
+            throw Object.assign(new Error('ARTICLE_CHAT_READ_STALE'),{code:'ARTICLE_CHAT_READ_STALE'});
+          }
+          asset = snapshot.index;
+          storedChat = {storedTurns:turns.map(publicStoredArticleChatTurn),storedTurnsComplete:true,
+            workspaceContentHash:workspace.contentHash,assetWorkspaceGeneration:Number(asset?.workspaceGeneration??1),
+            chatSource:source?{workspaceGeneration:Number(source.workspaceGeneration??1),documentId:source.content?.documentId,
+              documentHash:source.content?.documentHash,url:source.content?.url}:null};
+        }
         return {
+          ...(storedChat || {}),
           found: Boolean(asset),
           workspaceGeneration: Number(workspace.workspaceGeneration || 1),
           asset: asset ? {
@@ -18093,10 +18318,11 @@
             archive: {
               documentId: archive.documentId,
               documentHash: archive.documentHash,
-              canonicalUrl: archive.canonicalUrl
+              canonicalUrl: archive.canonicalUrl,
+              ...(archive.documentRecord?.sourceIdentity ? { sourceIdentity: archive.documentRecord.sourceIdentity } : {})
             }
           };
-          const consumed = consumeArticleRestoreReceipt(message.receipt, receiptBinding);
+          const consumed = await consumeArticleRestoreReceipt(message.receipt, receiptBinding);
           const binding = consumed.binding;
           const live = binding.currentArchive;
           const contentChanged = binding.allowContentChanged === true && (
@@ -18185,6 +18411,8 @@
         // automatic writes. Credential backup is optional and has its own CAS
         // path; directorySync excludes its encrypted envelope from this queue.
           let result = await directorySync.flush(importUserDataAsset);
+          const totals = { written: Number(result?.written) || 0,
+            imported: Number(result?.imported) || 0, conflicts: Number(result?.conflicts) || 0 };
           if (message.drain === true) {
             for (let attempt = 0; attempt < 5 &&
                 result?.permission === 'granted' &&
@@ -18192,9 +18420,10 @@
                 Number(result?.pendingCount) > 0; attempt += 1) {
               await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)));
               result = await directorySync.flush(importUserDataAsset);
+              for (const key of Object.keys(totals)) totals[key] += Number(result?.[key]) || 0;
             }
           }
-          return result;
+          return { ...result, ...totals };
       }
 
       if (message.type === 'USER_DATA_REBUILD_INDEX') {
@@ -18528,6 +18757,67 @@
         return serializeSettingsMutation(async () => {
           const settings = await shared.loadSettings(storageArea);
           requireCurrentSettings(settings);
+          if (Object.prototype.hasOwnProperty.call(message, 'articleChatReasoning')) {
+            const update = message.articleChatReasoning;
+            if (Object.keys(message).some(key => !['type', 'articleChatReasoning'].includes(key)) ||
+                !isPlainObject(update) ||
+                Object.keys(update).length !== 3 ||
+                Object.keys(update).some(key => !['enabled', 'effort', 'profileId'].includes(key)) ||
+                typeof update.enabled !== 'boolean' || typeof update.effort !== 'string' ||
+                typeof update.profileId !== 'string') {
+              throw invalidSettings(['articleChatReasoning'], '思考设置格式无效，请重新选择。');
+            }
+            const taskId = 'article_chat';
+            const policy = settings.taskPolicies?.[taskId];
+            if (!isPlainObject(policy)) throw invalidSettings(['taskPolicies.article_chat']);
+            if (update.profileId && (!shared.PROFILE_ID_PATTERN?.test(update.profileId) ||
+                !Object.prototype.hasOwnProperty.call(settings.profiles || {}, update.profileId))) {
+              throw invalidSettings(['articleChatReasoning.profileId'], '所选模型配置已不存在，请重新选择。');
+            }
+            // Match createWebReadingTask's temporary profile without saving it.
+            // The real resolver applies taskModelForProfile and provider gates.
+            const routeSettings = update.profileId ? { ...settings, taskPolicies: {
+              ...settings.taskPolicies, [taskId]: { ...policy, mode: 'profile', profileId: update.profileId }
+            } } : settings;
+            const route = shared.resolveTaskProfile(routeSettings, taskId);
+            if (update.profileId && route.effectiveProfileId !== update.profileId) {
+              throw invalidSettings(['articleChatReasoning.profileId'], '所选模型配置不可用，请检查设置。');
+            }
+            const capability = shared.getProviderReasoningCapabilities(route.providerId, route.config);
+            if (capability.supported !== true || !Array.isArray(capability.levels)) {
+              throw invalidSettings(['articleChatReasoning'], '当前模型不支持思考深度设置。');
+            }
+            // Off is an explicit operation even for models whose enabled levels
+            // omit auto. Do not silently map an unsupported requested level.
+            if (update.enabled
+                ? (!capability.levels.includes(update.effort) || ['none', 'disabled'].includes(update.effort))
+                : (update.effort !== 'auto' && !capability.levels.includes(update.effort))) {
+              throw invalidSettings(['articleChatReasoning.effort'], '当前模型不支持所选思考深度。');
+            }
+            const reasoning = shared.normalizeReasoningForProvider(route.providerId, route.config, update);
+            if (reasoning.enabled !== update.enabled) {
+              throw invalidSettings(['articleChatReasoning.effort'], '当前模型无法应用所选思考状态。');
+            }
+            settings.taskPolicies[taskId] = { ...policy,
+              reasoningEnabled: reasoning.enabled, reasoningEffort: reasoning.effort };
+            return publicState(await saveRouterSettings(settings));
+          }
+          if (message.navigationTranslationMode !== undefined) {
+            if (message.navigationTranslationMode !== 'global' || message.taskPolicies !== undefined ||
+                message.taskRoutes !== undefined || message.globalProfileId !== undefined) {
+              throw invalidSettings(['navigationTranslationMode']);
+            }
+            requireLlmReady(settings);
+            const taskId = 'navigation_title_translation';
+            if (settings.taskPolicies?.[taskId]?.mode === 'profile') {
+              throw invalidSettings(['navigation_title_translation']);
+            }
+            // A sidebar recovery changes one task under the settings lock. Do
+            // not replay a public snapshot over concurrent feature settings.
+            settings.taskPolicies[taskId] = { ...settings.taskPolicies[taskId], mode: 'global', profileId: null };
+            shared.resolveTranslationTaskRoute(settings, taskId);
+            return publicState(await saveRouterSettings(settings));
+          }
           if (message.globalProfileId !== undefined) {
             const profileId = String(message.globalProfileId || '');
             if (!Object.prototype.hasOwnProperty.call(settings.profiles || {}, profileId)) {
@@ -18594,6 +18884,28 @@
         return serializeSettingsMutation(async () => {
           const settings = await shared.loadSettings(storageArea);
           requireCurrentSettings(settings);
+          // An explicit preset addition is atomic and idempotent. Never send a
+          // stale whole template array from the reading panel or resurrect a
+          // deleted preset during ordinary normalization/load.
+          if (Object.prototype.hasOwnProperty.call(message, 'addLiteratureNoteTemplateId')) {
+            if (message.addLiteratureNoteTemplateId !== 'general_web' ||
+                Object.keys(message).some(key => !['type', 'addLiteratureNoteTemplateId'].includes(key))) {
+              throw invalidSettings(['addLiteratureNoteTemplateId']);
+            }
+            const templates = shared.normalizeLiteratureNoteTemplates(settings.literatureNoteTemplates);
+            if (!templates.some(template => template.id === 'general_web')) {
+              if (templates.length >= 20) {
+                throw invalidSettings(['literatureNoteTemplates'], '最多保留 20 个笔记模板，请先在设置中删除一个模板。');
+              }
+              const preset = shared.DEFAULT_LITERATURE_NOTE_TEMPLATES.find(template => template.id === 'general_web');
+              if (!preset) throw invalidSettings(['addLiteratureNoteTemplateId']);
+              settings.literatureNoteTemplates = [...templates, cloneJsonLike(preset)];
+              return publicState(await saveRouterSettings(settings));
+            }
+            // An existing same-ID user template is authoritative, even when
+            // renamed or emptied; selecting it must never restore default text.
+            return publicState(settings);
+          }
           const preferences = message.preferences && typeof message.preferences === 'object'
             ? message.preferences : {};
           if (preferences.literatureUrlWhitelist !== undefined) {
@@ -18886,6 +19198,23 @@
         return { record: await documentStore.getDocument(documentId) };
       }
 
+      if (message.type === 'DOCUMENT_PAPER_SOURCES') {
+        return { records: await documentStore.listPaperDocuments(String(message.documentId || '')) };
+      }
+
+      if (['CROSS_FORMAT_LINK', 'CROSS_FORMAT_NOTE_EDIT', 'CROSS_FORMAT_SOURCE_ROLE'].includes(message.type)) {
+        return serializeDocumentMutation(async () => {
+          if (!isPlainObject(message.input)) throw invalidSettings(['input']);
+          if (typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings(['owner']);
+          await context.assertTrustedOwnerCurrent();
+          const input = { ...message.input, operation: message.type === 'CROSS_FORMAT_SOURCE_ROLE' ? 'role' : message.type === 'CROSS_FORMAT_NOTE_EDIT' ? 'edit'
+            : message.input.operation === 'state' ? 'state' : 'link' };
+          const result = await documentStore.crossFormatOperation(input, context.assertTrustedOwnerCurrent);
+          if (result.changedRecord) await mirrorDocumentRecord(result.changedRecord);
+          return { association: result.association, ...(result.record ? { record: result.record } : {}) };
+        });
+      }
+
       if (message.type === 'ANNOTATION_UPSERT') {
         return serializeDocumentMutation(async () => {
           const settings = await shared.loadSettings(storageArea);
@@ -18901,6 +19230,10 @@
             categoryId,
             categorySnapshot: shared.makeCategorySnapshot(category)
           };
+          if (context.assertLibraryHtmlCurrent) {
+            const identity = await context.assertLibraryHtmlCurrent();
+            if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
+          }
           const record = await documentStore.upsertAnnotation(documentId, trustedAnnotation);
           await mirrorDocumentRecord(record);
           return {
@@ -18920,6 +19253,10 @@
           const annotationId = String(message.annotationId || '').trim();
           if (!documentId) throw invalidSettings(['documentId']);
           if (!annotationId) throw invalidSettings(['annotationId']);
+          if (context.assertLibraryHtmlCurrent) {
+            const identity = await context.assertLibraryHtmlCurrent();
+            if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
+          }
           const record = await documentStore.deleteAnnotation(documentId, annotationId);
           await mirrorDocumentRecord(record);
           return { record };
@@ -18930,6 +19267,10 @@
         return serializeDocumentMutation(async () => {
           const documentId = String(message.documentId || '').trim();
           if (!documentId) throw invalidSettings(['documentId']);
+          if (context.assertLibraryHtmlCurrent) {
+            const identity = await context.assertLibraryHtmlCurrent();
+            if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
+          }
           const record = await documentStore.clearAnnotations(documentId);
           await mirrorDocumentRecord(record);
           return { record };
@@ -19242,6 +19583,14 @@
           route: routePublic
         };
         } catch(error) {runtimeOperations?.fail(operation,error);throw error;}
+      }
+
+      // Reject malformed/stale requests before displaying a modality decision.
+      // These are the same receipt admission checks formerly performed after
+      // admitFigureTextInputs; no extra model request or retry is introduced.
+      if (['LLM_ANALYZE_FIGURES', 'LLM_ANALYZE_FIGURE_PANEL', 'LLM_ASK_FIGURE_PANEL'].includes(message.type)) {
+        assertFigureEvidenceContract(message);
+        assertModernFigureRequestContract(message);
       }
 
       if (message.type === 'LLM_ANALYZE_FIGURES') {
@@ -19804,7 +20153,17 @@
       return queueTrustedTabRetirement(() => finishTrustedTabRetirement(trusted));
     }
 
-    return { handle, commitTrustedDocument, retireTrustedTab };
+    async function createWebReadingTask({profileId}={}) {
+      const settings=await shared.loadSettings(storageArea);if(profileId){if(!Object.hasOwn(settings.profiles||{},profileId))throw Error('PROFILE_NOT_FOUND');settings.taskPolicies={...settings.taskPolicies,article_chat:{...settings.taskPolicies?.article_chat,mode:'profile',profileId}};}requireLlmReady(settings);
+      const task=createTaskAdapter(settings,'article_chat',{}, {maxTokenLimitRetries:0,maxTruncationRetries:0});
+      const output=shared.computeOutputTokenBudget('article_chat',{tokenPolicy:task.tokenPolicy,taskRule:task.taskRule==='auto'?null:task.taskRule,adapterCap:task.rawAdapter.maxOutputTokens,contextWindowTokens:task.rawAdapter.contextWindowTokens,reasoningProviderId:task.route.providerId,reasoningEnabled:task.route.effectiveReasoning?.enabled===true,reasoningEffort:task.route.effectiveReasoning?.effort||'auto'});
+      const input=shared.computeInputTokenBudget({contextWindowTokens:task.rawAdapter.contextWindowTokens,outputTokens:output.initial,reservedTokens:1024,systemTokens:1024,safetyRatio:.85,taskRule:task.taskRule==='auto'?null:task.taskRule});
+      // Conservative UTF-8 byte bound: one byte cannot require more than one text token.
+      const maxCharacters=Math.min(120000,Math.floor(input.available/4));
+      if(maxCharacters<1000)throw Error('WEB_CONTEXT_TOO_SMALL');
+      return{adapter:task.adapter,maxCharacters,maxOutputTokens:output.initial,supportsVision:task.route.capabilities?.supportsVision===true,actualRoute:{providerId:String(task.route.providerId||''),model:String(task.route.model||''),profileName:String(task.route.publicProfile?.name||'')}};
+    }
+    return { handle, commitTrustedDocument, retireTrustedTab, createWebReadingTask };
   }
 
   return {

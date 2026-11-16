@@ -5,6 +5,20 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const PAGE_TOOLS_STORAGE_KEY = 'sciPageToolsV1';
   const defaults = Object.freeze({ semantic: true, selection: true, pageTranslation: true });
+  // A per-document URL disambiguates native side panels
+  // whose runtime sender omits documentId and whose contexts report windowId=-1.
+  // Load this URL before initializing the UI: history.replaceState alone does
+  // not change runtime MessageSender.url in Chromium native side panels.
+  function isPopupUiDocumentUrl(value, baseUrl) {
+    try {
+      const page = new URL(value), base = new URL(baseUrl);
+      return /^(chrome|moz)-extension:$/.test(base.protocol) && base.pathname === '/popup.html' &&
+        !base.search && !base.hash && !base.username && !base.password &&
+        page.protocol === base.protocol && page.host === base.host && page.pathname === base.pathname &&
+        !page.hash && !page.username && !page.password &&
+        (!page.search || /^\?brevess-ui=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(page.search));
+    } catch (_) { return false; }
+  }
   function normalizePageToolsSettings(value = {}) {
     return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) =>
       [key, typeof value?.[key] === 'boolean' ? value[key] : fallback]));
@@ -105,9 +119,9 @@
           await chromeApi.scripting.executeScript({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] },
             files: ['core/page-tools.js', 'semantic-find-launcher.js'] });
           if (preferences.pageTranslation) await ensureTranslation(target);
-          if (preferences.selection) await ensureReader(target, preferences);
+          await ensureReader(target, preferences);
         } else if (message.type === 'PAGE_TOOLS_BOOTSTRAP') {
-          if (preferences.selection) await ensureReader(target, preferences);
+          await ensureReader(target, preferences);
         } else if (message.type === 'PAGE_TOOLS_OPEN_SEARCH') {
           if (!preferences.semantic) fail('PAGE_TOOLS_DISABLED', '请先启用语义检索。');
           await ensureReader(target, preferences);
@@ -128,5 +142,5 @@
     }
     return { handles: type => types.has(type), handle, publicState, read };
   }
-  return { PAGE_TOOLS_STORAGE_KEY, normalizePageToolsSettings, pageToolsSupportedUrl, createPageToolsService };
+  return { PAGE_TOOLS_STORAGE_KEY, normalizePageToolsSettings, pageToolsSupportedUrl, createPageToolsService, isPopupUiDocumentUrl };
 });

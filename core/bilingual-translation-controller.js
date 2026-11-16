@@ -10,6 +10,9 @@
     'TRANSLATION_ROUTE_INVALID', 'NO_USABLE_PROFILE', 'LLM_NOT_READY', 'TOKEN_BUDGET_EXCEEDED',
     'CAPABILITY_MISMATCH', 'TRANSLATION_LEDGER_UNAVAILABLE', 'TRANSLATION_LEDGER_CAPACITY',
     'API_UNAVAILABLE', 'LANGUAGE_UNAVAILABLE']);
+  const LOCAL_INITIALIZATION_BLOCKING = new Set(['NATIVE_UNAVAILABLE', 'MODEL_NOT_READY', 'CAPABILITY_TIMEOUT',
+    'INITIALIZATION_TIMEOUT', 'INITIALIZATION_FAILED', 'API_UNAVAILABLE', 'TRANSLATION_POLICY_BLOCKED',
+    'TRANSLATION_CONTEXT_UNAVAILABLE', 'USER_ACTIVATION_REQUIRED']);
   function createController({ provider, autoRecovery = false, now = () => Date.now(), onState = () => {}, onResult = () => {}, onError = () => {}, onProgress = () => {}, onEntryState = () => {}, yieldTask = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     if (!provider) throw new TypeError('A local Translator provider is required.');
     const entries = new Map();
@@ -22,7 +25,7 @@
     let attempts = 0, retries = 0;
     let documentKey = '';
     const documentCounters = new Map();
-    let blockingSignature = null;
+    let blockingSignature = null, initializationBlock = null;
     let controller = null;
     function budgetError() { return Object.assign(new Error('Translation recovery budget exhausted.'), { code: 'TRANSLATION_RECOVERY_EXHAUSTED' }); }
     function clearTimer(id) {
@@ -34,6 +37,7 @@
       const values = [...entries.values()];
       const count = status => values.filter(e => e.status === status).length;
       return { enabled, paused, phase: paused ? 'paused' : !enabled ? 'idle' : !ready ? 'initializing' : active.size || timers.size ? 'translating' : 'ready',
+        initializationError: initializationBlock?.code || '',
         total: values.length, completed: values.filter(e => e.status === 'done').length,
         failed: values.filter(e => ['failed', 'blocked', 'save-failed', 'unknown'].includes(e.status)).length,
         unknown: values.filter(e => e.retryBlocked === true).length,
@@ -51,7 +55,7 @@
         if (!value || value.id === undefined || typeof value.text !== 'string' || !value.text.trim()) continue;
         const id = String(value.id); seen.add(id);
         const existing = entries.get(id);
-        if (existing && existing.text === value.text) {
+        if (existing && existing.text === value.text && JSON.stringify(existing.scientificContext || []) === JSON.stringify(value.scientificContext || [])) {
           existing.priority = Number(value.priority) || 0; existing.foreground = value.foreground === true;
           if (typeof value.confirmedTranslation === 'string' && (existing.translation !== value.confirmedTranslation || ['done', 'save-failed'].includes(existing.status))) {
             active.get(id)?.abort.abort(); clearTimer(id);
@@ -72,6 +76,7 @@
         if (autoRecovery && entry.translation === null && !(entry.retryBlocked && provider.canQueryReceipt) &&
             (saved.exhausted || attempts >= policy.maxRequests || retries >= policy.maxRetries ||
               blockingSignature === (provider.getState?.().engineSignature || ''))) entry.status = 'blocked';
+        if (initializationBlock && entry.translation === null) { entry.initializationBlocked = true; entry.status = 'blocked'; }
         entries.set(id, entry);
         publishEntry(entry, entry.status, 'queued');
       }
@@ -115,6 +120,7 @@
             if (translatedText === null) translatedText = await provider.translate(next.text, { signal: abort.signal,
               resumeFrom: next.resumeFrom,
               sourceKey: next.sourceKey,
+              scientificContext: next.scientificContext,
               foreground: next.foreground === true,
               priority: next.foreground ? 0 : 10 + next.priority,
               getPriority: () => next.foreground ? 0 : 10 + next.priority,
@@ -138,6 +144,20 @@
             publishEntry(next, 'done', 'result');
           } catch (error) {
             if (live()) {
+              if (!saving && (provider.getState?.().mode || 'local') === 'local' && LOCAL_INITIALIZATION_BLOCKING.has(error?.code)) {
+                // A native service failure is one engine-level incident, not a
+                // separate bad paragraph. Keep its first cause and all budgets.
+                initializationBlock = { code: error.code }; ready = false; paused = true;
+                for (const entry of entries.values()) {
+                  if (entry.translation !== null || ['done', 'unknown'].includes(entry.status)) continue;
+                  clearTimer(entry.id);
+                  if (entry !== next) active.get(entry.id)?.abort.abort();
+                  entry.initializationBlocked = true; entry.status = 'blocked';
+                  publishEntry(entry, 'blocked', 'native-initialization-blocked');
+                  try { onError({ ...entry, recovering: false }, error); } catch {}
+                }
+                publish(); return;
+              }
               if (!reported && !saving && inference && provider.accountsAttempts !== true && error?.code !== 'TRANSLATION_OUTCOME_UNKNOWN' && error?.code !== 'TRANSLATION_RECOVERY_EXHAUSTED') {
                 try { onAttempt(); } catch { error = budgetError(); }
               }
@@ -222,6 +242,8 @@
       for (const id of timers.keys()) clearTimer(id);
       for (const task of active.values()) task.abort.abort(); active.clear();
       provider.destroy();
+      initializationBlock = null;
+      for (const entry of entries.values()) if (entry.initializationBlocked) { delete entry.initializationBlocked; entry.status = 'pending'; }
       for (const entry of entries.values()) if (entry.status === 'pending' || entry.status === 'translating') publishEntry(entry, 'cancelled', 'stopped');
       for (const entry of entries.values()) if (['translating', 'retrying', 'saving'].includes(entry.status) || (entry.status === 'failed' && !entry.retryBlocked)) entry.status = 'pending';
       publish();
@@ -238,6 +260,14 @@
       publish(); return getState();
     }
     async function resume({ retryFailed = false } = {}) {
+      if (retryFailed && initializationBlock) {
+        // Explicit continuation may check the native service again, while all
+        // validated output and cumulative inference budgets stay untouched.
+        initializationBlock = null; ready = false; enabled = false; paused = false;
+        for (const entry of entries.values()) if (entry.initializationBlocked) {
+          delete entry.initializationBlocked; entry.status = 'pending'; publishEntry(entry, 'pending', 'native-initialization-retry');
+        }
+      }
       if (retryFailed) for (const entry of entries.values()) if ((entry.status === 'failed' && !entry.retryBlocked) || entry.status === 'save-failed') {
         entry.status = 'pending'; publishEntry(entry, 'pending', 'retry');
       }

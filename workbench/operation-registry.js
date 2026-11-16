@@ -38,6 +38,52 @@
     },
     additionalProperties: true
   };
+  const schedule = {"type":"object","properties":{"start":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"end":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"owner":{"type":"string","maxLength":200},"progress":{"type":["number","null"],"minimum":0,"maximum":100}},"additionalProperties":false};
+  const catalogId = prefix => ({ type: 'string', pattern: '^' + prefix + ':[A-Za-z0-9_-]{1,100}$', maxLength: 120 });
+  const catalogFields = ['title', 'authors', 'journal', 'doi', 'pmid', 'publicationDate'];
+  const catalogSort = { type: 'object', properties: { field: { enum: [...catalogFields, 'addedAt'] }, direction: { enum: ['asc', 'desc'] } }, required: ['field', 'direction'], additionalProperties: false };
+  const catalogQueryFields = [...catalogFields, 'addedAt', 'legacyTags', 'tags', 'all', 'fulltext', 'notes', 'abstract', 'method', 'caption'];
+  const catalogCondition = { oneOf: [
+    { type: 'object', properties: { field: { enum: catalogQueryFields }, operator: { enum: ['exact', 'contains', 'before', 'after'] }, value: { type: 'string', maxLength: 4000 }, groupId: catalogId('group') }, required: ['field', 'operator', 'value'], additionalProperties: false },
+    { type: 'object', properties: { field: { const: 'tagId' }, operator: { enum: ['has', 'notHas'] }, value: catalogId('tag') }, required: ['field', 'operator', 'value'], additionalProperties: false },
+    { type: 'object', properties: { field: { const: 'groupId' }, operator: { enum: ['has', 'notHas'] }, value: catalogId('group') }, required: ['field', 'operator', 'value'], additionalProperties: false }
+  ] };
+  const catalogQuerySchema = { type: 'object', properties: {
+    page: { type: 'integer', minimum: 1, default: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 40 },
+    query: { type: 'string', maxLength: 4000 }, field: { enum: catalogQueryFields }, operator: { enum: ['exact', 'contains', 'before', 'after'] }, groupId: catalogId('group'),
+    scope: { enum: ['all', 'local', 'radar', 'metadata-only', 'complete', 'partial', 'missing', 'unknown'] },
+    tags: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 4096 } }, tagMode: { enum: ['any', 'all'] },
+    includeRadarRead: { type: 'boolean', default: true }, includeRemoved: { type: 'boolean', default: false },
+    conditions: { type: 'array', maxItems: 50, items: catalogCondition }, match: { enum: ['all', 'any'] }, sort: catalogSort
+  }, additionalProperties: false };
+  const catalogDate = { type: ['string', 'null'], maxLength: 24, pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$' };
+  const catalogFieldSchema = { type: 'object', properties: Object.fromEntries(catalogFields.map(field => [field, { type: ['string', 'null'], maxLength: ['title', 'authors'].includes(field) ? 20000 : 2000 }])), additionalProperties: false };
+  const catalogAliases = { type: 'array', minItems: 1, maxItems: 256, uniqueItems: true, items: { type: 'string', maxLength: 800 } };
+  const commandSchemas = [];
+  const catalogCommand = (type, properties, required = []) => commandSchemas.push({ type: 'object', properties: { type: { const: type }, ...properties }, required: ['type', ...required], additionalProperties: false });
+  catalogCommand('entry.create', { aliases: catalogAliases, fields: catalogFieldSchema, addedAt: catalogDate }, ['aliases']);
+  catalogCommand('entry.update', { entryId: catalogId('entry'), fields: catalogFieldSchema, addedAt: catalogDate, clearOverrides: { type: 'array', maxItems: 6, uniqueItems: true, items: { enum: catalogFields } } }, ['entryId']);
+  catalogCommand('entry.aliases.add', { entryId: catalogId('entry'), aliases: catalogAliases }, ['entryId', 'aliases']);
+  for (const type of ['entry.remove', 'entry.restore']) catalogCommand(type, { entryId: catalogId('entry') }, ['entryId']);
+  catalogCommand('group.create', { name: { type: 'string', minLength: 1, maxLength: 240 }, mode: { enum: ['single', 'multiple'] } }, ['name', 'mode']);
+  catalogCommand('group.update', { groupId: catalogId('group'), name: { type: 'string', minLength: 1, maxLength: 240 }, mode: { enum: ['single', 'multiple'] } }, ['groupId']);
+  for (const type of ['group.remove', 'group.restore']) catalogCommand(type, { groupId: catalogId('group') }, ['groupId']);
+  catalogCommand('tag.create', { groupId: catalogId('group'), name: { type: 'string', minLength: 1, maxLength: 240 } }, ['groupId', 'name']);
+  catalogCommand('tag.update', { groupId: catalogId('group'), tagId: catalogId('tag'), name: { type: 'string', minLength: 1, maxLength: 240 } }, ['groupId', 'tagId', 'name']);
+  for (const type of ['tag.remove', 'tag.restore']) catalogCommand(type, { groupId: catalogId('group'), tagId: catalogId('tag') }, ['groupId', 'tagId']);
+  catalogCommand('entry.tags.set', { entryId: catalogId('entry'), groupId: catalogId('group'), tagIds: { type: 'array', maxItems: 1000, uniqueItems: true, items: catalogId('tag') } }, ['entryId', 'groupId', 'tagIds']);
+  catalogCommand('preferences.set', { preferences: { type: 'object', properties: {
+    columns: { type: 'array', maxItems: 100, uniqueItems: true, items: { type: 'string', maxLength: 120 } },
+    groupOrder: { type: 'array', maxItems: 100, uniqueItems: true, items: catalogId('group') }, sort: catalogSort
+  }, additionalProperties: false } }, ['preferences']);
+  for (const type of ['attachment.remove', 'attachment.restore']) catalogCommand(type, { entryId: catalogId('entry'), attachmentId: catalogId('attachment') }, ['entryId', 'attachmentId']);
+  const catalogCommandSchema = { type: 'object', properties: {
+    expectedRevision: { type: 'integer', minimum: 0 }, idempotencyKey: { type: 'string', minLength: 8, maxLength: 160 }, command: { oneOf: commandSchemas }
+  }, required: ['expectedRevision', 'idempotencyKey', 'command'], additionalProperties: false };
+  const catalogReadSchema = { type: 'object', properties: {
+    entryIds: { type: 'array', maxItems: 100, uniqueItems: true, items: catalogId('entry') },
+    includeRemoved: { type: 'boolean', default: false }, page: { type: 'integer', minimum: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: 100 }
+  }, additionalProperties: false };
   const operations = [
     {
       name: 'open_local_pdf',
@@ -70,25 +116,13 @@
     },
     {
       name: 'query_global_library',
-      description: '读取本地文献总库，并按 DOI/PMID/规范化标题合并雷达 read:true 的只读条目。',
+      description: '读取文献总库：先按稳定来源/DOI/PMID归并，再字段精准或字面包含筛选、全局排序与分页；保留标签组、人工空值和全文命中，冲突不按标题强行合并。',
       access: 'read',
       approvalClass: 'none',
       requiredScopes: ['workbench:read'],
       version: 1,
       idempotency: 'read-only',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          page: { type: 'integer', minimum: 1, default: 1 },
-          pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 40 },
-          query: { type: 'string', maxLength: 4000 },
-          scope: { type: 'string', maxLength: 80 },
-          tags: { type: 'array', items: { type: 'string' }, maxItems: 32 },
-          tagMode: { enum: ['any', 'all'], default: 'any' },
-          includeRadarRead: { type: 'boolean', default: true }
-        },
-        additionalProperties: false
-      },
+      inputSchema: catalogQuerySchema,
       outputSchema: {
         type: 'object',
         properties: {
@@ -97,10 +131,20 @@
           pageCount: { type: 'integer' },
           matchedCount: { type: 'integer' },
           sources: { type: 'object' },
-          warnings: { type: 'array', items: { type: 'string' } }
+          warnings: { type: 'array' }, catalogRevision: { type: 'integer' }, groups: { type: 'array' }, preferences: { type: 'object' }
         },
         additionalProperties: true
       }
+    },
+    {
+      name: 'read_library_catalog', description: '读取当前可选目录revision、稳定entry/group/tag ID与当前字段；不返回幂等回执或历史命令。无需当前课题。',
+      access: 'read', approvalClass: 'none', requiredScopes: ['workbench:read'], global: true, version: 1, idempotency: 'read-only',
+      inputSchema: catalogReadSchema, outputSchema: { type: 'object', additionalProperties: true }
+    },
+    {
+      name: 'command_library_catalog', description: '对全局目录执行一条CAS/幂等命令。每次实际写入必须由原生UI确认具体前后值；不能用课题scope绕过。移除为可恢复关联，不删除原件；禁止上传bytes或伪造附件可用性。',
+      access: 'write', approvalClass: 'human_confirm', requiredScopes: [], global: true, version: 1, idempotency: 'catalog CAS and exact command receipt',
+      inputSchema: catalogCommandSchema, outputSchema: { type: 'object', additionalProperties: true }
     },
     {
       name: 'create_project',
@@ -254,6 +298,7 @@
           experiment: { type: 'string', maxLength: 20000 },
           readout: { type: 'string', maxLength: 20000 },
           expectedResult: { type: 'string', maxLength: 20000 },
+          schedule,
           status: { enum: ['planned', 'running', 'complete', 'review'] }
         },
         required: ['expectedProjectId', 'expectedRevision', 'planId', 'figureId', 'title'],
@@ -277,9 +322,10 @@
       },
       outputSchema: { type: 'object', properties: { revision: { type: 'integer' } }, additionalProperties: true }
     },
+    {"name":"set_panel_schedule","description":"更新 Panel 排期，按字段合并；空日期/空负责人/null进度用于清除，保留0。","access":"write","approvalClass":"routine_write","requiredScopes":["workbench:write"],"version":1,"idempotency":"CAS guarded","inputSchema":{"type":"object","properties":{"expectedProjectId":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"planId":{"type":"string"},"figureId":{"type":"string"},"panelId":{"type":"string"},"schedule":{"type":"object","properties":{"start":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"end":{"type":"string","pattern":"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2})$"},"owner":{"type":"string","maxLength":200},"progress":{"type":["number","null"],"minimum":0,"maximum":100}},"additionalProperties":false}},"required":["expectedProjectId","expectedRevision","planId","figureId","panelId","schedule"],"additionalProperties":false},"outputSchema":{"type":"object","additionalProperties":true}},
     {
       name: 'set_panel_status',
-      description: '设置 Panel 的实验状态；已完成 Panel 才能由界面整理为证据块。',
+      description: '设置 Panel 的实验状态；未完成 Panel 的证据块保留为草稿。',
       access: 'write',
       approvalClass: 'routine_write',
       requiredScopes: ['workbench:write'],
@@ -362,7 +408,7 @@
     },
     {
       name: 'create_evidence_block',
-      description: '把一个 Figure 的已完成 Panel 组织成逻辑证据块；不改变 Panel 画板排布。',
+      description: '把一个 Figure 的 Panel 组织成逻辑证据块；含未完成 Panel 时保存为草稿；不改变 Panel 画板排布。',
       access: 'write',
       approvalClass: 'routine_write',
       requiredScopes: ['workbench:write'],
@@ -377,6 +423,7 @@
           title: { type: 'string', minLength: 1, maxLength: 500 },
           panelIds: { type: 'array', minItems: 1, maxItems: 64, items: id, uniqueItems: true },
           summary: { type: 'string', maxLength: 4000 },
+          method: note, observation: note, conclusion: note,
           status: { enum: ['draft', 'complete'], default: 'draft' }
         },
         required: ['expectedProjectId', 'expectedRevision', 'planId', 'figureId', 'title', 'panelIds'],
@@ -430,8 +477,9 @@
     WORKBENCH_OPERATIONS: Object.freeze(operations.map(Object.freeze)),
     WORKBENCH_CAPABILITIES: Object.freeze({
       contractVersion: WORKBENCH_OPERATION_CONTRACT_VERSION,
-      reads: Object.freeze(['query_global_library', 'open_local_pdf']),
+      reads: Object.freeze(['query_global_library', 'read_library_catalog', 'open_local_pdf']),
       writes: Object.freeze([
+        'command_library_catalog',
         'create_project',
         'create_hypothesis',
         'create_plan',
@@ -441,6 +489,7 @@
         'create_panel',
         'layout',
         'set_panel_status',
+        'set_panel_schedule',
         'attach_material',
         'update_material_stance',
         'create_evidence_block',

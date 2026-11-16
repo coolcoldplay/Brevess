@@ -1,6 +1,6 @@
 {
   "name": "brevess",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "AGPL browser extension for evidence-aware reading and full-text Q&A of scientific articles",
   "private": true,
   "license": "AGPL-3.0-or-later",
@@ -36,13 +36,20 @@
     "checkpoint2:review-tools": "node scripts/generate-checkpoint2-review-tools.mjs",
     "assets:edge-store": "node scripts/generate-edge-store-assets.mjs",
     "screenshots:edge-store": "node scripts/capture-edge-store-screenshots.mjs",
+    "build:chrome-store": "node scripts/build-chrome-store-release.mjs",
+    "verify:chrome-store": "node scripts/verify-chrome-store-release.mjs",
+    "test:chrome-store": "node --test tests/chrome-store-package.test.js tests/release-inventory.test.js",
+    "screenshots:chrome-store": "node scripts/capture-chrome-store-screenshots.mjs",
+    "assets:chrome-store": "node scripts/generate-chrome-store-assets.mjs",
+    "docs:privacy": "node scripts/render-privacy-policy.mjs",
     "qa:logic-map": "node scripts/capture-logic-map-qa.mjs",
     "build:pdf-engine": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-pdffigures2.ps1",
     "build:pdf-fallback": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-pdf-figure-fallback.ps1",
     "prepare:pdf-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-temurin-runtime.ps1",
     "build:codex-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-codex-native-host.ps1",
     "build:unpacked": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-unpacked-extension.ps1",
-    "build:edge-store": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-edge-store-release.ps1"
+    "build:edge-store": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-edge-store-release.ps1",
+    "build:public": "node scripts/build-public-test-release.mjs"
   },
   "devDependencies": {
     "mermaid": "^11.12.2",

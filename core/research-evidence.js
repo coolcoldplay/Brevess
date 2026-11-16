@@ -35,8 +35,8 @@
   // Keep the broader body scope opt-in so other research tasks retain their input.
   const NOTE_SECTION_PRIORITY = Object.freeze({ ...SECTION_PRIORITY, main: 2, methods: 4 });
 
-  function clean(value, maximum = 1600) {
-    return String(value || '').normalize('NFKC')
+  function clean(value, maximum = 1600, normalization = 'NFKC') {
+    return String(value || '').normalize(normalization)
       .replace(/<(script|style)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>[\s\S]*?(?:<\/\1\s*>|$)/giu, '')
       .replace(/<!--[\s\S]*?(?:-->|$)|<!DOCTYPE\b[^>]*>/giu, '')
       // Evidence is normally plain scientific text: < 0.05 ... > 0.05 is
@@ -47,8 +47,31 @@
       .replace(/\s+/gu, ' ').trim().slice(0, maximum);
   }
 
+  // Keep mathematical characters in source prose and claims. Identifiers and
+  // enum tokens continue to use the legacy compatibility normalization.
+  function scientificText(value, maximum) {
+    const text = clean(value, Infinity, 'NFC');
+    if (text.length > maximum && text !== text.normalize('NFKC')) {
+      const error = new Error('The complete mathematical text exceeds its input limit');
+      error.code = 'CONTEXT_BUDGET_EXCEEDED'; throw error;
+    }
+    return text.slice(0, maximum);
+  }
+
   function token(value) {
     return clean(value, 120).toLowerCase().replace(/[\s-]+/gu, '_');
+  }
+
+  function scientificDisplay(value, rawText) {
+    if (typeof value !== 'string') return '';
+    const display = value.normalize('NFC').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, '')
+      .replace(/\s+/gu, ' ').trim();
+    if (!display || display === String(rawText || '').normalize('NFC').replace(/\s+/gu, ' ').trim()) return '';
+    if (display.length > 64000) {
+      const error = new Error('The complete scientific evidence representation exceeds its input limit');
+      error.code = 'CONTEXT_BUDGET_EXCEEDED'; throw error;
+    }
+    return display;
   }
 
   function deepFreeze(value) {
@@ -72,7 +95,7 @@
     const sourceIdentity = clean(value.sourceIdentity || value.source_identity, 360);
     const sourceKey = clean(value.sourceKey || value.source_key, 360);
     const textHash = clean(value.textHash || value.text_hash, 160);
-    const quote = clean(value.quote, 360);
+    const quote = clean(value.quote, 360, 'NFC');
     if (!paragraphId && !sourceIdentity && !sourceKey && !quote) return null;
     return {
       paragraphId,
@@ -94,7 +117,7 @@
   function normalizeResearchEvidenceAtom(value) {
     if (!value || typeof value !== 'object') return null;
     const type = TYPE_ALIASES[token(value.type || value.atomType || value.atom_type)];
-    const statement = clean(value.statement || value.text, 1200);
+    const statement = scientificText(value.statement || value.text, 1200);
     if (!type || !statement) return null;
     const sourceRefs = (Array.isArray(value.sourceRefs || value.source_refs)
       ? value.sourceRefs || value.source_refs : [])
@@ -152,8 +175,13 @@
 
   function normalizeEvidenceRecord(record, documentHash, originalIndex, captionSource = false, noteBody = false) {
     if (!record || record.isTranslated || record.translated || record.presentationOnly) return null;
-    const text = clean(record.text || record.canonicalText, 12000);
+    const text = scientificText(record.text || record.canonicalText, 12000);
     if (!text) return null;
+    const displayText = scientificDisplay(record.displayText, text);
+    if (displayText && scientificText(record.text || record.canonicalText, 12001).length > 12000) {
+      const error = new Error('Scientific evidence must retain its complete raw paragraph');
+      error.code = 'CONTEXT_BUDGET_EXCEEDED'; throw error;
+    }
     const explicitKind = token(record.sectionKind);
     const sectionKind = captionSource ? 'figure' : noteBody && ['main', 'methods'].includes(explicitKind)
       ? explicitKind : normalizedSectionKind(record);
@@ -172,12 +200,14 @@
         ? record.sectionPath || record.headingPath : [])
         .map(item => clean(typeof item === 'string' ? item : item?.title, 180)).filter(Boolean).slice(0, 12),
       text,
+      ...(displayText ? { displayText } : {}),
       documentHash: clean(documentHash, 160),
       originalIndex
     };
   }
 
   function publicEvidenceRecord(record, maximumText = 12000) {
+    const displayText = scientificDisplay(record.displayText, record.text);
     return {
       paragraphId: clean(record.paragraphId, 240),
       sourceIdentity: clean(record.sourceIdentity, 360),
@@ -188,7 +218,8 @@
       sectionPath: (Array.isArray(record.sectionPath) ? record.sectionPath : [])
         .map(item => clean(typeof item === 'string' ? item : item?.title, 180))
         .filter(Boolean).slice(0, 12),
-      text: clean(record.text, maximumText),
+      text: scientificText(record.text, maximumText),
+      ...(displayText ? { displayText } : {}),
       documentHash: clean(record.documentHash, 160)
     };
   }
@@ -227,6 +258,9 @@
         let serialized = JSON.stringify(base);
         let accepted = base;
         if (serialized.length > available) {
+          // Raw and scientific representations are one evidence unit. Never
+          // clip an equation or leave its explanation attached to partial raw.
+          if (base.displayText || base.text !== base.text.normalize('NFKC')) continue;
           const overhead = serialized.length - base.text.length;
           const textBudget = Math.max(0, available - overhead - 8);
           if (textBudget < 160) continue;
@@ -311,7 +345,7 @@
       const normalized = normalizeEvidenceRecord(record, snapshot?.documentHash, index, captionSource, noteBody);
       if (normalized && captionSource) {
         normalized.captionSource = true;
-        normalized.captionTooLong = clean(record.text || record.canonicalText, 12001).length > 12000;
+        normalized.captionTooLong = scientificText(record.text || record.canonicalText, 12001).length > 12000;
       }
       return normalized;
     }).filter(Boolean);

@@ -7,7 +7,7 @@
   const BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
   // Small, non-resolving XML reader: works in MV3 workers without DOMParser.
   // No DTD/entity expansion or HTML insertion; unknown entities fail closed.
-  function parseRadarPubMedAbstracts(xml, ids) {
+  function parseRadarPubMedAbstracts(xml, ids, { includeMetadata = false } = {}) {
     const invalid = () => { throw m.radarError('RADAR_ABSTRACT_XML', 'PubMed 摘要 XML 不完整或格式无效。'); };
     if (typeof xml !== 'string' || xml.length > 12000000 || /<!ENTITY|<!DOCTYPE[^>]*\[/i.test(xml)) invalid();
     const decode = value => value.replace(/&([^;]+);/g, (_, code) => {
@@ -44,7 +44,22 @@
       const body=article.name==='PubmedArticle'?children(citation,'Article')[0]:citation;
       const abstract=children(body,'Abstract')[0];
       const abstractSections=children(abstract,'AbstractText').map(node=>({label:node.attrs.Label||'',text:text(node)})).filter(s=>s.text);
-      rows.set(id,{id,abstractSections,abstractStatus:abstractSections.length?'ready':'missing',
+      const articleIds = children(children(article,'PubmedData')[0],'ArticleIdList')[0];
+      const journal = children(body,'Journal')[0];
+      const pubDate = children(children(journal,'JournalIssue')[0],'PubDate')[0];
+      const metadata = includeMetadata ? {
+        title:text(children(body,'ArticleTitle')[0]),
+        authors:children(children(body,'AuthorList')[0],'Author').map(a=>({
+          name:[text(children(a,'ForeName')[0]),text(children(a,'LastName')[0])].filter(Boolean).join(' ') || text(children(a,'CollectiveName')[0]),
+          affiliations:children(a,'AffiliationInfo').map(info=>text(children(info,'Affiliation')[0]))
+        })),
+        journal:text(children(journal,'Title')[0]),
+        publicationDate:['Year','Month','Day','MedlineDate'].map(key=>text(children(pubDate,key)[0])).filter(Boolean).join(' '),
+        doi:text(children(articleIds,'ArticleId').find(node=>node.attrs.IdType==='doi')),
+        publicationTypes:children(children(body,'PublicationTypeList')[0],'PublicationType').map(text),
+        corrections:children(children(citation,'CommentsCorrectionsList')[0],'CommentsCorrections').map(node=>({type:node.attrs.RefType,pmid:text(children(node,'PMID')[0])}))
+      } : {};
+      rows.set(id,{id,...metadata,abstractSections,abstractStatus:abstractSections.length?'ready':'missing',
         abstractCopyright:text(children(abstract,'CopyrightInformation')[0]),abstractSource:'pubmed-efetch',abstractError:null});
     }
     if (ids.some(id=>!rows.has(id))) throw m.radarError('RADAR_INCOMPLETE_ABSTRACT','PubMed 未返回部分 PMID 的摘要记录，可稍后补齐。');

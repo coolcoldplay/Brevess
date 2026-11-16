@@ -9,7 +9,7 @@
   const MAX_NODES = 64, MAX_EDGES = 64, MAX_BINDINGS = 512, MAX_STAGES = 64;
   const MAX_STORY_BINDINGS = MAX_BINDINGS + MAX_EDGES * 32;
   const DRAWING_KEYS = ['schemaVersion', 'positions', 'viewport', 'matrixHeight',
-    'mode', 'activeStageId', 'bindings', 'edgeContexts', 'story', 'legacyEvidence'];
+    'mode', 'activeStageId', 'bindings', 'edgeContexts', 'story', 'legacyEvidence', 'edgeRoutes'];
   const CONTEXT_KEYS = ['species', 'tissue', 'model', 'time', 'condition',
     'predicate', 'effect', 'summary', 'cellType', 'compartment', 'timepoint', 'dose'];
   function error(code) { const result = new Error(code); result.code = code; return result; }
@@ -154,7 +154,7 @@
           panelLabel: panelLabel(figure, panelIds), title,
           method: isManual ? text(block.method) : text(block.method) || selectedPanels.map(panel => text(panel.experimentalMethods)).filter(Boolean).join('；'),
           observation: isManual ? text(block.observation) : text(block.observation) || selectedPanels.map(panel => text(panel.directObservation)).filter(Boolean).join('；'),
-          conclusion: isManual ? text(block.conclusion) : text(block.groupConclusion) || text(block.established) || text(block.groupGoal),
+          conclusion: isManual ? (block.groupConclusion?.humanReviewed === true ? text(block.groupConclusion) : text(block.conclusion) || text(block.groupConclusion)) : text(block.groupConclusion) || text(block.established) || text(block.groupGoal),
           ...(isManual ? { provenance: 'manual' } : {}),
           ...(isManual && block.originalSourceType ? { originalSourceType: text(block.originalSourceType, 80),
             originalPanelIds: ids(block.originalPanelIds, 32), originalSource: {
@@ -166,6 +166,9 @@
             } } : {}),
           sourceType: text(block.sourceType, 80)
         };
+        // Authored display names are a view projection, not new scientific content.
+        const displayName = record(block.displayName);
+        if (displayName.humanReviewed === true || Number(displayName.editedAt) > 0) source.displayTitle = text(displayName.value);
         source.sourceFingerprint = fingerprint([figureId, blockId, isManual ? text(block.originalSourceType, 80) || source.sourceType : source.sourceType, [...panelIds].sort()]);
         const panelSemantics = selectedPanels.map(panel => ['purpose', 'evidenceType', 'directObservation',
           'experimentalMethods', 'statisticalMethods', 'comparison', 'note', 'phenotypeName',
@@ -173,6 +176,10 @@
         const blockSemantics = (isManual ? ['kind', 'title', 'method', 'observation', 'conclusion']
           : ['kind', 'sourceType', 'groupGoal', 'groupConclusion', 'upstreamContext',
             'established', 'handoff', 'evidenceLevel', 'transitionToNext', 'title', 'method', 'observation', 'conclusion']).map(field => text(block[field]));
+        if (isManual) {
+          const unified = ['upstreamContext', 'groupConclusion', 'evidenceLevel'].map(field => text(block[field]));
+          if (unified.some(Boolean)) blockSemantics.push(...unified);
+        }
         source.contentFingerprint = fingerprint([source.title, source.method, source.observation,
           source.conclusion, panelSemantics, blockSemantics]);
         result.push(source);
@@ -196,6 +203,33 @@
     }
     return result;
   }
+  function drawingEdgeRoute(value, strict = false) {
+    if (strict && (!value || typeof value !== 'object' || Array.isArray(value))) fail();
+    const raw = record(value), result = {};
+    for (const key of ['sourcePort', 'targetPort']) if (raw[key] !== undefined) {
+      const p = record(raw[key]);
+      if (!['left','right','top','bottom'].includes(p.side) || !Number.isFinite(p.offset) || p.offset < 0 || p.offset > 1) { if (strict) fail(); continue; }
+      result[key] = { side: p.side, offset: p.offset };
+    }
+    if (raw.waypoints !== undefined) {
+      if (!Array.isArray(raw.waypoints) || raw.waypoints.length > 64 || raw.waypoints.some(p => !Number.isFinite(p?.x) || !Number.isFinite(p?.y) || Math.abs(p.x) > 100000 || Math.abs(p.y) > 100000)) { if (strict) fail(); }
+      else result.waypoints = raw.waypoints.map(p => ({x:p.x,y:p.y}));
+    }
+    if (raw.labelPosition !== undefined) {
+      const p = raw.labelPosition;
+      if (!Number.isFinite(p?.x) || !Number.isFinite(p?.y) || Math.abs(p.x) > 100000 || Math.abs(p.y) > 100000) { if (strict) fail(); }
+      else result.labelPosition = { x: p.x, y: p.y };
+    }
+    if (strict && Object.keys(raw).some(key => !['sourcePort','targetPort','waypoints','labelPosition'].includes(key))) fail();
+    return result;
+  }
+  function drawingNodeSize(value) {
+    const size = {};
+    for (const [key, min, max] of [['width', 80, 1600], ['height', 48, 1200]]) {
+      if (Number.isFinite(value?.[key]) && value[key] > 0) size[key] = Math.max(min, Math.min(max, value[key]));
+    }
+    return size;
+  }
   function normalizeMechanismDrawing(value, options = {}) {
     if (value === undefined || value === null) return undefined;
     const raw = record(value), chain = record(options.chain);
@@ -205,7 +239,7 @@
     for (const [nodeId, item] of Object.entries(record(raw.positions)).slice(0, MAX_NODES)) {
       const point = record(item);
       if (!nodeIds.has(nodeId) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-      positions[nodeId] = { x: finite(point.x), y: finite(point.y), ...(point.pinned === true ? { pinned: true } : {}) };
+      positions[nodeId] = { x: finite(point.x), y: finite(point.y), ...drawingNodeSize(point), ...(point.pinned === true ? { pinned: true } : {}) };
     }
     const viewport = record(raw.viewport), sources = mechanismCanvasSources(options.figures);
     const catalog = new Map(sources.map(source => [source.id, source]));
@@ -273,7 +307,12 @@
       legacyEvidence.push({ edgeId: judgment.edgeId, figureId: judgment.figureId, panelId: judgment.panelId,
         types: types(judgment.types), needsReview: judgment.needsReview === true });
     }
-    return { schemaVersion: 1, positions,
+    const edgeRoutes = {};
+    for (const [edgeId, route] of Object.entries(record(raw.edgeRoutes)).slice(0, MAX_EDGES)) {
+      if (!edgeIds.has(edgeId)) continue;
+      const clean = drawingEdgeRoute(route); if (Object.keys(clean).length) edgeRoutes[edgeId] = clean;
+    }
+    return { schemaVersion: 1, positions, ...(Object.keys(edgeRoutes).length ? { edgeRoutes } : {}),
       viewport: { x: finite(viewport.x), y: finite(viewport.y), zoom: finite(viewport.zoom, 1, .1, 4) },
       matrixHeight: finite(raw.matrixHeight, 198, 80, 800),
       mode: raw.mode === 'all' ? 'all' : 'main', activeStageId: id(raw.activeStageId, 80),
@@ -341,6 +380,10 @@
     for (const [nodeId, rawPoint] of Object.entries(record(raw.positions))) {
       const point = record(rawPoint);
       if (!nodes.has(nodeId) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) errors.push('drawing.positions: invalid node or coordinates');
+    }
+    for (const [edgeId, route] of Object.entries(record(raw.edgeRoutes))) {
+      if (!edges.has(edgeId)) errors.push('drawing.edgeRoutes: unknown edge');
+      try { drawingEdgeRoute(route, true); } catch (_) { errors.push('drawing.edgeRoutes: invalid route'); }
     }
     for (const edgeId of Object.keys(record(raw.edgeContexts))) if (!edges.has(edgeId)) errors.push('drawing.edgeContexts: unknown edge');
     return errors;
@@ -411,6 +454,13 @@
   }
   function applyMechanismCanvasCommand(chain, rawCommand, options = {}) {
     assertData(rawCommand);
+    if (rawCommand?.type === 'batch') {
+      const commands = rawCommand.commands;
+      if (!Array.isArray(commands) || !commands.length || commands.length > 32 ||
+          new TextEncoder().encode(JSON.stringify(rawCommand)).length > 131072 ||
+          commands.some(command => !command || ['batch', 'restore_snapshot', 'undo', 'redo'].includes(command.type))) fail();
+      return commands.reduce((next, command) => applyMechanismCanvasCommand(next, command, options), clone(chain));
+    }
     const command = record(rawCommand), now = Math.max(0, Math.trunc(options.now ?? Date.now()));
     const next = clone(chain), node = nodeId => next.nodes.find(item => item.id === nodeId), edge = edgeId => next.edges.find(item => item.id === edgeId);
     next.drawing = normalizeMechanismDrawing(next.drawing || {}, { chain: next, figures: options.figures });
@@ -431,6 +481,7 @@
       }
       for (const nodeId of Object.keys(drawing.positions)) if (!nodes.has(nodeId)) delete drawing.positions[nodeId];
       for (const edgeId of Object.keys(drawing.edgeContexts)) if (!edges.has(edgeId)) delete drawing.edgeContexts[edgeId];
+      for (const edgeId of Object.keys(drawing.edgeRoutes || {})) if (!edges.has(edgeId)) delete drawing.edgeRoutes[edgeId];
       for (const [field, known] of [['baselineNodeIds', nodes], ['baselineEdgeIds', edges], ['baselineBindingIds', bindings]]) {
         if (drawing.story[field]) drawing.story[field] = drawing.story[field].filter(value => known.has(value));
       }
@@ -457,12 +508,21 @@
         if (command.position) drawing.positions[nodeId] = { x: finite(record(command.position).x), y: finite(record(command.position).y) };
         break;
       }
+      case 'set_edge_route': {
+        requireEdge(command.edgeId);
+        if (command.route === null) { if (drawing.edgeRoutes) delete drawing.edgeRoutes[command.edgeId]; }
+        else { drawing.edgeRoutes ||= {}; drawing.edgeRoutes[command.edgeId] = drawingEdgeRoute(command.route, true); }
+        break;
+      }
       case 'move_nodes':
         if (!Array.isArray(command.positions) || command.positions.length > MAX_NODES) fail();
         for (const item of command.positions) {
           const point = record(item); requireNode(point.nodeId);
           if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) fail();
-          drawing.positions[point.nodeId] = { x: finite(point.x), y: finite(point.y), ...(point.pinned === true ? { pinned: true } : {}) };
+          for (const [key, min, max] of [['width', 80, 1600], ['height', 48, 1200]]) {
+            if (Object.hasOwn(point, key) && (!Number.isFinite(point[key]) || point[key] < min || point[key] > max)) fail();
+          }
+          drawing.positions[point.nodeId] = { x: finite(point.x), y: finite(point.y), ...drawingNodeSize(drawing.positions[point.nodeId]), ...drawingNodeSize(point), ...(point.pinned === true ? { pinned: true } : {}) };
         }
         break;
       case 'update_node': {
@@ -484,7 +544,7 @@
       }
       case 'update_edge': {
         const value = requireEdge(command.edgeId), before = clone(value), beforeContext = drawing.edgeContexts[value.id] || {};
-        for (const field of ['from', 'to']) if (command[field] !== undefined) { requireNode(command[field]); value[field] = command[field]; }
+        for (const field of ['from', 'to']) if (command[field] !== undefined) { requireNode(command[field]); if (value[field] !== command[field] && drawing.edgeRoutes) delete drawing.edgeRoutes[value.id]; value[field] = command[field]; }
         if (command.label !== undefined) value.label = reviewed(command.label, now);
         if (command.polarity !== undefined) { if (!['neutral', 'positive', 'negative'].includes(command.polarity)) fail(); value.polarity = command.polarity; }
         if (value.from === value.to && value.polarity === 'neutral') fail();
@@ -630,7 +690,7 @@
         if (prior) { prior.types = types([...prior.types, ...selectedTypes]); prior.unresolved ||= reference.unresolved === true; continue; }
         evidence.push({ id: virtualId, edgeId: edge.id, index, figureId: reference.figureId, blockId: '', panelIds: [reference.panelId], panelLabel: text(reference.value, 80), types: selectedTypes, needsReview: judgment?.needsReview === true, legacy: true, unresolved: reference.unresolved === true });
       }
-      return { id: edge.id, from: edge.from, to: edge.to, label: text(edge.label), polarity: edge.polarity || 'neutral', context: drawing.edgeContexts[edge.id] || generatedContexts[edge.id] || {}, evidence };
+      return { id: edge.id, from: edge.from, to: edge.to, label: text(edge.label), polarity: edge.polarity || 'neutral', context: drawing.edgeContexts[edge.id] || generatedContexts[edge.id] || {}, ...drawing.edgeRoutes?.[edge.id], evidence };
     });
     const nodeIds = nodes.map(node => node.id), cells = nodeIds.map(target => nodeIds.map(source => edges.filter(edge => edge.from === source && edge.to === target)));
     const snapshot = getMechanismCanvasSnapshot(chain);
@@ -664,7 +724,9 @@
   }
   function mechanismCanvasCommandIsPresentation(command, chain, options = {}) {
     const raw = record(command);
-    if (['move_nodes', 'set_view', 'set_story'].includes(raw.type)) return true;
+    if (raw.type === 'batch') return Array.isArray(raw.commands) && raw.commands.length > 0 && raw.commands.length <= 32 &&
+      raw.commands.every(command => ['move_nodes', 'set_view', 'set_story', 'set_edge_route'].includes(command?.type));
+    if (['move_nodes', 'set_view', 'set_story', 'set_edge_route'].includes(raw.type)) return true;
     if (raw.type !== 'restore_snapshot' || !chain) return false;
     const snapshot = record(raw.snapshot);
     const fields = value => {

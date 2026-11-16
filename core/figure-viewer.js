@@ -496,6 +496,11 @@
     if (container?.querySelectorAll) {
       Array.from(container.querySelectorAll('a[href]'))
         .filter(looksLikeFigureViewerAnchor)
+        .filter(anchor => {
+          const linkedImages = Array.from(anchor.querySelectorAll?.('img') || []);
+          if (linkedImages.length) return linkedImages.includes(imageElement);
+          return container.querySelectorAll('img').length <= 1 || anchor === directAnchor;
+        })
         .slice(0, 12)
         .forEach(anchor => push(elementAttribute(anchor, 'href') || anchor.href));
     }
@@ -549,6 +554,28 @@
       .replace(/&#47;/gi, '/')
       .replace(/&quot;/gi, '"')
       .trim();
+  }
+
+  function matchFigureViewerCandidates(candidates, { imageSources = [], figureLabel = '', baseUrl = '' } = {}) {
+    const number = value => {
+      const match = String(value || '').match(/(?:^|[^a-z0-9])(?:fig(?:ure)?|gr|g|f)[\s._-]*(s?)[0]*(\d+)(?=$|[^0-9])/i);
+      return match ? match[1].toLowerCase() + String(Number(match[2])) : '';
+    };
+    const filename = value => {
+      try { return decodeURIComponent(new URL(value, baseUrl).pathname.split('/').pop()); }
+      catch (_) { return ''; }
+    };
+    const sources = imageSources.map(value => safeFigureSource(value, baseUrl)).filter(Boolean);
+    const known = new Set(sources.flatMap(value => [value, ...collectOriginalUrlVariants(value, baseUrl)]));
+    const labelNumber = number(figureLabel);
+    const expected = new Set(labelNumber ? [labelNumber] : sources.map(value => number(filename(value))).filter(Boolean));
+    const safe = [...new Set(candidates.map(value => safeFigureSource(value, baseUrl)).filter(Boolean))];
+    const matched = safe.filter(value => known.has(value) || expected.has(number(filename(value))));
+    if (matched.length) return matched;
+    // A wrapper with several unrelated/opaque images is not evidence that the
+    // biggest one belongs to this Figure. Keep the article's direct fallback.
+    const unknown = safe.filter(value => !number(filename(value)));
+    return safe.length === 1 && unknown.length === 1 ? unknown : [];
   }
 
   function extractFigureImageCandidatesFromHtml(html, baseUrl = '') {
@@ -699,7 +726,8 @@
     const read = () => {
       for (const [image, entry] of entries) if (!current(image, entry)) remove(image);
       return new Map(Array.from(entries, ([image, entry]) => [image, { ...entry,
-        cacheReceipt: { ...entry.cacheReceipt }, originalStyles: entry.originalStyles.map(style => ({ ...style })) }]));
+        display: { ...entry.display }, cacheReceipt: entry.cacheReceipt ? { ...entry.cacheReceipt } : null,
+        displayReceipt: entry.displayReceipt ? { ...entry.displayReceipt } : null, originalStyles: entry.originalStyles.map(style => ({ ...style })) }]));
     };
     const observer = new windowRef.MutationObserver(read);
     observer.observe(documentRef.documentElement, { childList: true, subtree: true, attributes: true,
@@ -720,9 +748,10 @@
     return {
       entries: read, dispose,
       async apply(image, resource, metadata = {}) {
-        const receipt = resource?.cacheReceipt, bytes = resource?.bytes;
+        const persistent = resource?.cacheStored === true;
+        const receipt = persistent ? resource?.cacheReceipt : resource?.transientDisplay === true ? resource?.displayReceipt : null, bytes = resource?.bytes;
         const originalArea = Number(image?.naturalWidth) * Number(image?.naturalHeight);
-        if (closed || !image?.isConnected || !originalArea || resource?.cacheStored !== true ||
+        if (closed || !image?.isConnected || !originalArea ||
             !receipt || !/^[a-f0-9]{64}$/.test(receipt.sha256 || '') || !bytes?.length || receipt.byteLength !== bytes.length ||
             !/^https?:\/\//.test(receipt.cacheKey || '') || !/^data:image\//.test(resource.dataUrl || '') ||
             !(resource.pixelWidth * resource.pixelHeight > originalArea)) return false;
@@ -753,7 +782,12 @@
           // Read CSSOM's canonical spelling for exact cleanup comparisons.
           for (const property of properties) appliedStyles[property] = image.style.getPropertyValue(property);
           const entry = { ...metadata, pageIdentity, sourceIdentity: identity, objectUrl, dataUrl: resource.dataUrl,
-            cacheReceipt: { ...receipt }, originalStyles, appliedStyles, originalContentValue: image.style.getPropertyValue('content'),
+            display: { source: objectUrl,
+              width: size.endsWith('px') ? image.naturalWidth : resource.pixelWidth,
+              height: size.endsWith('px') ? image.naturalHeight : resource.pixelHeight,
+              fit: size === 'contain' || size === 'cover' ? size : size.endsWith('px') ? 'none' : 'fill', position },
+            cacheStored: persistent, cacheReceipt: persistent ? { ...receipt } : null,
+            displayReceipt: persistent ? null : { ...receipt }, originalStyles, appliedStyles, originalContentValue: image.style.getPropertyValue('content'),
             originalContentPriority: image.style.getPropertyPriority('content') };
           entries.set(image, entry);
           image.addEventListener?.('load', read);
@@ -774,6 +808,7 @@
   }
 
   return {
+    matchFigureViewerCandidates,
     figureOriginalDisplaySourceIdentity,
     createFigureOriginalDisplayManager,
     bindFigureViewerViewport,

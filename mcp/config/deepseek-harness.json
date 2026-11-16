@@ -1,16 +1,20 @@
 {
-  "mcpServers": {
-    "brevess": {
-      "command": "node",
-      "args": [
-        "D:\\path\\to\\BREVESS-Deepseek\\mcp\\server.js",
-        "--stdio-only",
-        "--allow-write"
-      ],
-      "env": {
-        "BREVESS_MCP_STATE_DIR": "%LOCALAPPDATA%\\BrevessMcp"
-      }
-    }
-  }
+  "purpose": "Documentation only. This file is not an importable Harness client configuration.",
+  "verifiedDesktopVersion": "0.2.0-rc.2",
+  "setup": "Open Install-Brevess-Codex-Bridge.cmd and select Harness or both clients; reuse its stable managed entry.",
+  "actualConfiguration": "The verified adapter merges a named @deepseek-ai/dsh-mcp-client entry into profiles/desktop/cordis.patch.yml under DSH_HOME or the default .dsh directory.",
+  "referenceOnly": {
+    "transport": "stdio",
+    "command": "<absolute installed node.exe from the managed entry>",
+    "args": [
+      "<absolute installed mcp/server.js from the same entry>",
+      "--stdio-only",
+      "--state-dir",
+      "<absolute installed state directory>",
+      "--no-write",
+      "--port",
+      "9537"
+    ]
+  },
+  "verification": "Reload Harness, pair through Workbench Agent Connection, then call brevess.status and brevess.capabilities. Do not start another HTTP service."
 }
-

@@ -438,6 +438,36 @@
     return { ...value, evidence };
   }
 
+
+  // Read only a top-level JSON string value, including a safely decoded unfinished
+  // value. Never eval model output or mistake a nested evidence quote for an answer.
+  function readArticleChatDraftString(raw, wanted) {
+    const text=String(raw||'').trimStart(); if(text[0]!=='{')return null;
+    let depth=0;
+    for(let i=0;i<text.length;i++){
+      const c=text[i]; if(c==='{'||c==='['){depth++;continue;} if(c==='}'||c===']'){depth--;continue;}
+      if(c!=='"')continue;
+      const start=i;let escaped=false;
+      for(i++;i<text.length;i++){if(escaped){escaped=false;continue;}if(text[i]==='\\'){escaped=true;continue;}if(text[i]==='"')break;}
+      if(i===text.length)return null;
+      let key;try{key=JSON.parse(text.slice(start,i+1));}catch{return null;}
+      let p=i+1;while(/\s/.test(text[p]||'')&&p<text.length)p++;
+      if(depth!==1||text[p]!==':'||key!==wanted)continue;
+      p++;while(/\s/.test(text[p]||'')&&p<text.length)p++;
+      if(text[p]!== '"')return null;
+      let result='';
+      for(p++;p<text.length;p++){
+        const ch=text[p];if(ch==='"')return result;if(ch<' ')return null;
+        if(ch!=='\\'){result+=ch;continue;}
+        const escape=text[++p];if(escape===undefined)break;
+        if(escape==='u'){const hex=text.slice(p+1,p+5);if(!/^[0-9a-f]{4}$/i.test(hex))break;result+=String.fromCharCode(parseInt(hex,16));p+=4;}
+        else {const map={'"':'"','\\':'\\','/':'/',b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'};if(!Object.hasOwn(map,escape))return null;result+=map[escape];}
+      }
+      return result.replace(/[\uD800-\uDBFF]$/u,'');
+    }
+    return null;
+  }
+
   function createArticleChatNdjsonParser(options = {}) {
     const cloneRecord = value => JSON.parse(JSON.stringify(value));
     const snapshot = options.snapshot || { revision: 0, paragraphs: [] };
@@ -482,6 +512,14 @@
     const blockIds = new Map();
     const blockFingerprints = new Set();
     let buffer = '';
+    let lastPreview='';
+    function previewPending(){
+      const value=readArticleChatDraftString(buffer,'type')==='answer_block'
+        ? readArticleChatDraftString(buffer,'markdown') : '';
+      const draft=String(value||'').slice(0,32768);
+      if(draft===lastPreview)return;lastPreview=draft;
+      try{options.onPreview?.({text:draft,blockId:readArticleChatDraftString(buffer,'block_id')||''});}catch{}
+    }
     let summary = '';
     let final = null;
     let usage = null;
@@ -622,6 +660,7 @@
           buffer = buffer.slice(boundary + 1);
           processLine(line);
         }
+        previewPending();
       },
       finish() {
         const pending = buffer.trim();
@@ -647,6 +686,7 @@
       discardPending() {
         const discarded = buffer.length;
         buffer = '';
+        previewPending();
         return discarded;
       },
       clearFinalRecord() {
@@ -670,6 +710,7 @@
     createMarkdownBlockStreamCoalescer,
     createBlockStreamCoalescer: createMarkdownBlockStreamCoalescer,
     validateArticleChatAnswerBlock,
-    createArticleChatNdjsonParser
+    createArticleChatNdjsonParser,
+    readArticleChatDraftString
   };
 });

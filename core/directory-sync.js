@@ -1644,6 +1644,45 @@
       });
     }
 
+
+    async function removeSelectedWorkspaceFiles(workspaceInput, options={}) {
+      const flushed=await flush();if(flushed.failed||flushed.conflicts||flushed.pendingCount)fail('DIRECTORY_SYNC_UNRESOLVED');
+      return serializeWorkspaceMutation(async()=>{
+        const location=workspaceDirectory(workspaceInput),handle=await handleStore.load(),permission=await permissionState(handle);
+        if(!handle||permission!=='granted')fail('DIRECTORY_PERMISSION_REQUIRED');
+        const root=await getRootDirectory(handle,true),paths=new Set((options.paths||[]).map(p=>workspaceAssetPath(workspaceInput,p).fullPath));
+        const currentRaw=await readText(root,location.manifestPath);let manifest=currentRaw?shared.validateWorkspaceManifest(JSON.parse(currentRaw)):location.manifest;
+        if(manifest.workspaceId!==location.manifest.workspaceId||manifest.workspaceGeneration!==location.manifest.workspaceGeneration)fail('WORKSPACE_GENERATION_CONFLICT');
+        const canonical=shared.normalizeWorkspaceCanonicalUrl;
+        const external=(options.externalPaths||[]).map(p=>normalizeRelativePath(p));
+        for(const path of external){if(!/^(articles|annotations)\/[^/]+\.json$/.test(path))fail('INVALID_RELATIVE_PATH');const disk=await readText(root,path),queued=await queueStore.get(path);for(const raw of [disk,queued?.content])if(raw){const value=JSON.parse(raw);if(String(value.documentId||value.documentRecord?.documentId||'')!==options.documentId||canonical(value.canonicalUrl||value.documentRecord?.canonicalUrl||'')!==canonical(location.manifest.canonicalUrl))fail('WORKSPACE_ASSET_IDENTITY_CONFLICT');}paths.add(path);}
+        async function remove(path){const parts=normalizeRelativePath(path,{internal:true}).split('/'),leaf=parts.pop();let parent=root;try{for(const part of parts)parent=await parent.getDirectoryHandle(part,{create:false});await parent.removeEntry(leaf);}catch(e){if(e.name!=='NotFoundError')throw e;}}
+        async function copies(path){const found=[backupRelativePath(path)],parts=path.split('/'),file=parts.pop(),dot=file.lastIndexOf('.'),stem=dot>0?file.slice(0,dot):file,extension=dot>0?file.slice(dot):'.txt';let parent=root;try{for(const p of ['conflicts',...parts])parent=await parent.getDirectoryHandle(p,{create:false});for await(const [name,entry]of parent.entries())if(entry.kind==='file'&&name.startsWith(stem+'.r')&&name.endsWith(extension)&&/^\d+\.[a-z0-9_-]{1,40}$/i.test(name.slice(stem.length+2,-extension.length)))found.push(['conflicts',...parts,name].join('/'));}catch(e){if(e.name!=='NotFoundError')throw e;}return found;}
+        const copyPaths=new Map();for(const path of [...paths,...(options.redactedPaths||[]).map(p=>workspaceAssetPath(workspaceInput,p).fullPath)])copyPaths.set(path,await copies(path));
+        // Validate every primary envelope before any deletion.
+        for(const path of paths)if(path.startsWith(location.rootPath+'/')){const raw=await readText(root,path);if(raw){const v=JSON.parse(raw);if(v.kind!=='sci-logic-highlighter-workspace-asset'||v.workspaceId!==location.manifest.workspaceId||v.workspaceGeneration!==location.manifest.workspaceGeneration||v.relativePath!==path.slice(location.rootPath.length+1))fail('WORKSPACE_ASSET_IDENTITY_CONFLICT');}}
+        // Legacy flat archives have weaker filenames: validate their older copies too.
+        for(const path of external)for(const copy of copyPaths.get(path)||[]){const raw=await readText(root,copy);if(raw){const v=JSON.parse(raw);if(String(v.documentId||v.documentRecord?.documentId||'')!==options.documentId||canonical(v.canonicalUrl||v.documentRecord?.canonicalUrl||'')!==canonical(location.manifest.canonicalUrl))fail('WORKSPACE_ASSET_IDENTITY_CONFLICT');}}
+        for(const path of paths){const queued=await queueStore.get(path);if(queued)await queueStore.remove(path,queued.queueRevision);await remove(path);}
+        for(const list of copyPaths.values())for(const path of list)await remove(path);
+        manifest=shared.validateWorkspaceManifest({...manifest,revision:manifest.revision+1,updatedAt:new Date().toISOString(),assets:manifest.assets.filter(a=>!paths.has(location.rootPath+'/'+a.path))});
+        await writeText(root,location.manifestPath,JSON.stringify(manifest,null,2)+'\n');
+        const index=await loadIndex(root);await writeText(root,'index.json',JSON.stringify({...index,revision:index.revision+1,assets:index.assets.filter(a=>!paths.has(a.path))},null,2)+'\n');
+        const wi=await loadWorkspaceIndexForRead(root);await writeText(root,WORKSPACE_INDEX_PATH,JSON.stringify(workspaceIndexWithManifest(wi,manifest,manifest.revision),null,2)+'\n');
+        return{removed:true,permission,count:paths.size};
+      });
+    }
+
+    async function clearWebReadingBackup(workspaceInput,expected){
+      const location=workspaceAssetPath(workspaceInput,'reading/web-page.json');
+      const current=await readWorkspaceAsset(workspaceInput,'reading/web-page.json');
+      if(!current.found||stableStringify(current.value)!==stableStringify(expected)||current.value.data?.redacted!==true)fail('WEB_REDACTION_CONFLICT');
+      const handle=await handleStore.load();if(await permissionState(handle)!=='granted')fail('DIRECTORY_PERMISSION_REQUIRED');
+      const root=await getRootDirectory(handle,false),parts=backupRelativePath(location.fullPath).split('/'),leaf=parts.pop();let parent=root;
+      try{for(const part of parts)parent=await parent.getDirectoryHandle(part,{create:false});await parent.removeEntry(leaf);}catch(e){if(e.name!=='NotFoundError')throw e;}
+      let conflicts=root;try{for(const part of ['conflicts',...location.fullPath.split('/').slice(0,-1)])conflicts=await conflicts.getDirectoryHandle(part,{create:false});for await(const [name,entry]of conflicts.entries())if(entry.kind==='file'&&/^web-page\.r\d+\.[a-z0-9_-]{1,40}\.json$/i.test(name))await conflicts.removeEntry(name);}catch(e){if(e.name!=='NotFoundError')throw e;}
+      return{removed:true};
+    }
     async function runFlush(importer) {
       const result = {
         permission: 'unconfigured', written: 0, imported: 0,
@@ -1743,7 +1782,17 @@
                 await queueStore.remove(item.relativePath, item.queueRevision);
                 return;
               }
-              if (existing.revision > incoming.revision) {
+              const workspacePath = /^workspaces\/([^/]+)\/(.+)$/u.exec(item.relativePath);
+              const newerWorkspace = existing.revision > incoming.revision && workspacePath &&
+                ['sci-logic-highlighter-workspace-asset', 'sci-logic-highlighter-workspace'].includes(incoming.kind);
+              if (newerWorkspace && (existing.kind !== incoming.kind ||
+                  existing.workspaceId !== incoming.workspaceId ||
+                  existing.workspaceGeneration !== incoming.workspaceGeneration ||
+                  (incoming.kind === 'sci-logic-highlighter-workspace-asset' &&
+                    (incoming.relativePath !== workspacePath[2] || existing.relativePath !== incoming.relativePath)))) {
+                fail('WORKSPACE_ASSET_IDENTITY_CONFLICT');
+              }
+              if (existing.revision > incoming.revision && !newerWorkspace) {
                 const importNewer = async () => {
                   // Importers may mutate documents. They run after the archive lock
                   // is released, then reacquire it and re-read both durable records.
@@ -1765,12 +1814,40 @@
                 };
                 return guardedArchive ? importNewer : importNewer();
               }
-              if (existing.revision === incoming.revision) {
-                if (stableStringify(existing) !== stableStringify(incoming)) {
+              if (existing.revision === incoming.revision || newerWorkspace) {
+                // Workspace envelopes are restored through their manifest, never
+                // the categories/annotations importer. Retain both divergent
+                // versions on disk and let unrelated papers finish saving.
+                const identicalWorkspaceData = newerWorkspace &&
+                  incoming.kind === 'sci-logic-highlighter-workspace-asset' &&
+                  Object.hasOwn(existing, 'data') && Object.hasOwn(incoming, 'data') &&
+                  stableStringify(existing.data) === stableStringify(incoming.data);
+                if (identicalWorkspaceData) {
+                  const manifestPath = `workspaces/${workspacePath[1]}/manifest.json`;
+                  const pending = await queueStore.get(manifestPath);
+                  if (pending?.content) {
+                    const manifest = shared.validateWorkspaceManifest(JSON.parse(pending.content));
+                    if (manifest.workspaceId !== existing.workspaceId ||
+                        manifest.workspaceGeneration !== existing.workspaceGeneration) fail('WORKSPACE_MANIFEST_CONFLICT');
+                    const corrected = shared.validateWorkspaceManifest({ ...manifest,
+                      revision: Math.max(manifest.revision, existing.revision),
+                      assets: manifest.assets.map(asset => asset.path === existing.relativePath
+                        ? { ...asset, revision: existing.revision, contentHash: existing.contentHash,
+                          updatedAt: existing.updatedAt } : asset)
+                    });
+                    await enqueueWorkspaceJson(manifestPath, corrected);
+                    const workspaceIndex = await readQueuedOrDiskJson(WORKSPACE_INDEX_PATH);
+                    await enqueueWorkspaceJson(WORKSPACE_INDEX_PATH,
+                      workspaceIndexWithManifest(workspaceIndex, corrected, corrected.revision));
+                  }
+                }
+                if (!identicalWorkspaceData && stableStringify(existing) !== stableStringify(incoming)) {
                   const conflictPath = conflictRelativePath(
                     item.relativePath, item.revision, item.sourceId
                   );
-                  await writeText(root, conflictPath, item.content);
+                  const priorConflict = await readText(root, conflictPath);
+                  if (priorConflict !== null && priorConflict !== item.content) fail('WORKSPACE_CONFLICT_EXISTS');
+                  if (priorConflict === null) await writeText(root, conflictPath, item.content);
                   await recordConflict(item, conflictPath);
                   result.conflicts += 1;
                   const match = /^workspaces\/([^/]+)\/(?!manifest\.json$).+/u
@@ -2123,6 +2200,8 @@
       status,
       readJson,
       enqueueWorkspaceAsset,
+      clearWebReadingBackup,
+      removeSelectedWorkspaceFiles,
       enqueueWorkspaceBinary,
       readWorkspaceAsset,
       readWorkspaceBinary,

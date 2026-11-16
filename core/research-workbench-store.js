@@ -61,7 +61,8 @@
   }
   function createResearchWorkbenchStore({ indexedDB = globalThis.indexedDB, backend, locks = globalThis.navigator?.locks } = {}) {
     backend ||= createIndexedDbResearchWorkbenchBackend(indexedDB);
-    const atomic = (names,fn,selections) => backend.transaction(names,fn,selections);
+    const guardedAtomic=(names,fn,selections,precondition)=>{const run=()=>backend.transaction(names,maps=>{precondition?.();return fn(maps);},selections);return precondition?.commit?precondition.commit(run):run();};
+    const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections);
     const withProjectLock = (id,fn) => locks?.request ? locks.request(`brevess-workbench-project:${s.wbId(id)}`, {mode:'exclusive'}, fn) : fn();
     function expected(current, revision, proposed, maps) {
       if (!Number.isSafeInteger(revision) || revision < 0) throw s.wbError('WORKBENCH_EXPECTED_REVISION_REQUIRED');
@@ -86,7 +87,7 @@
       maps.meta.set(`sync:${project.id}`,{localSaved:true,state:'pendingDir',revision,syncedRevision:maps.meta.get(`sync:${project.id}`)?.syncedRevision || 0});
       return envelope;
     }
-    async function mutate(id, revision, update) {
+    async function mutate(id, revision, update, precondition) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
       return withProjectLock(id, async () => {
         const result=await atomic(['projects','outbox','recycle','conflicts','meta','views'],maps=>{
           const old=maps.projects.get(id); if (!old) throw s.wbError('WORKBENCH_PROJECT_NOT_FOUND');
@@ -100,7 +101,7 @@
       backend, locks, withProjectLock,
       async getProject(id,{includeDeleted=false}={}) { return atomic(['projects'],m=>{const r=m.projects.get(s.wbId(id));return r && (includeDeleted || !r.deleted) ? s.wbClone(r) : null;}); },
       async listProjects() { return atomic(['projects'],m=>[...m.projects.values()].filter(r=>!r.deleted).map(s.wbClone)); },
-      async saveProject(project,{expectedRevision,assets=[]}={}) {
+      async saveProject(project,{precondition,expectedRevision,assets=[]}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         project=s.wbValidateProject(project); const prepared=[];
         for(const asset of assets) { s.wbId(asset.id);const bytes=await s.wbBytes(asset.bytes);const sha256=await s.wbSha256(bytes);if(asset.sha256 && asset.sha256!==sha256)throw s.wbError('WORKBENCH_ASSET_HASH_MISMATCH');if(!project.assets.some(a=>a.id===asset.id))throw s.wbError('WORKBENCH_ASSET_NOT_REFERENCED');prepared.push({id:asset.id,projectId:project.id,bytes,sha256,mimeType:asset.mimeType || 'application/octet-stream'}); }
         return withProjectLock(project.id,async()=>{
@@ -117,7 +118,7 @@
         });
       },
       async getAsset(projectId,id) { const key=`${s.wbId(projectId)}/${s.wbId(id)}`;return backend.get?s.wbClone(await backend.get('assets',key) || null):atomic(['assets'],m=>s.wbClone(m.assets.get(key) || null)); },
-      async saveView(projectId,view,{expectedRevision}={}) {
+      async saveView(projectId,view,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         s.wbJson(view);return atomic(['projects','views','meta'],m=>{
           const p=m.projects.get(s.wbId(projectId));if(!p || p.deleted)throw s.wbError('WORKBENCH_PROJECT_NOT_FOUND');
           const old=m.views.get(projectId);if(!Number.isSafeInteger(expectedRevision) || (old?.revision || 0)!==expectedRevision)throw s.wbError('WORKBENCH_VIEW_CONFLICT');
@@ -127,7 +128,7 @@
       async getView(projectId) { return atomic(['views'],m=>s.wbClone(m.views.get(projectId) || null)); },
       async getLastProjectId() { return atomic(['meta'],m=>m.meta.get('lastProject') || null); },
       async getWorkbenchSelection() { return atomic(['meta'],m=>s.wbClone(m.meta.get('workbenchSelection') || {revision:0,selection:{projectId:null,mode:'overview',hypothesisId:null,planId:null,figureId:null}})); },
-      async saveWorkbenchSelection(selection,{expectedRevision}={}) {
+      async saveWorkbenchSelection(selection,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         s.wbJson(selection);return atomic(['projects','meta'],m=>{
           const old=m.meta.get('workbenchSelection');if(!Number.isSafeInteger(expectedRevision)||(old?.revision || 0)!==expectedRevision)throw s.wbError('WORKBENCH_SELECTION_CONFLICT');
           const p=selection.projectId?m.projects.get(s.wbId(selection.projectId)):null;if(selection.projectId&&(!p||p.deleted))throw s.wbError('WORKBENCH_PROJECT_NOT_FOUND');
@@ -136,12 +137,12 @@
           const row={revision:expectedRevision+1,selection:s.wbClone(selection)};m.meta.set('workbenchSelection',row);m.meta.set('lastProject',selection.projectId || null);return row;
         });
       },
-      async setLastProjectId(projectId,{expectedRevision}={}) { return api.saveWorkbenchSelection({projectId,mode:'overview',hypothesisId:null,planId:null,figureId:null},{expectedRevision}); },
+      async setLastProjectId(projectId,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition); return api.saveWorkbenchSelection({projectId,mode:'overview',hypothesisId:null,planId:null,figureId:null},{precondition,expectedRevision}); },
       async getEntityView(projectId,{kind,id,planId}={}) {
         if(!['hypothesis','figure'].includes(kind))throw s.wbError('WORKBENCH_INVALID_VIEW_SCOPE');const key=`${s.wbId(projectId)}/${kind}/${kind==='figure'?s.wbId(planId)+'/':''}${s.wbId(id)}`;
         return atomic(['views'],m=>s.wbClone(m.views.get(key) || null));
       },
-      async saveEntityView(projectId,{kind,id,planId},view,{expectedRevision}={}) {
+      async saveEntityView(projectId,{kind,id,planId},view,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         s.wbJson(view);if(!['hypothesis','figure'].includes(kind))throw s.wbError('WORKBENCH_INVALID_VIEW_SCOPE');const key=`${s.wbId(projectId)}/${kind}/${kind==='figure'?s.wbId(planId)+'/':''}${s.wbId(id)}`;
         return atomic(['projects','views'],m=>{
           const p=m.projects.get(projectId);if(!p||p.deleted)throw s.wbError('WORKBENCH_PROJECT_NOT_FOUND');const exists=kind==='hypothesis'?p.project.hypotheses.some(h=>h.id===id):p.project.plans.find(plan=>plan.id===planId)?.figures.some(f=>f.id===id);if(!exists)throw s.wbError('WORKBENCH_ENTITY_NOT_FOUND');
@@ -150,29 +151,40 @@
       },
       async listViews(projectId) { return atomic(['views'],m=>[...m.views.values()].filter(r=>r.projectId===projectId).map(s.wbClone)); },
       async listConflicts() { return atomic(['conflicts'],m=>[...m.conflicts.values()].map(s.wbClone)); },
-      async deleteProject(id,{expectedRevision}={}) { return mutate(id,expectedRevision,(m,old)=>{
+      async deleteProject(id,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition); return mutate(id,expectedRevision,(m,old)=>{
         if(old.deleted)throw s.wbError('WORKBENCH_PROJECT_DELETED');const recycle={id:s.wbNewId('recycle'),projectId:id,kind:'project',original:old.project,createdAt:Date.now()};m.recycle.set(recycle.id,recycle);
         if(m.meta.get('lastProject')===id)m.meta.set('lastProject',null);const selected=m.meta.get('workbenchSelection');if(selected?.selection.projectId===id)m.meta.set('workbenchSelection',{revision:selected.revision+1,selection:{...selected.selection,projectId:null,mode:'overview',hypothesisId:null,planId:null,figureId:null}});return {...putRevision(m,old.project,old,true),recycleId:recycle.id};
-      }); },
-      async deleteEntity(projectId,{kind,id,parentId,expectedRevision}={}) { return mutate(projectId,expectedRevision,(m,old)=>{
+      },precondition); },
+      async deleteEntity(projectId,{kind,id,parentId,precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition); return mutate(projectId,expectedRevision,(m,old)=>{
         if(old.deleted)throw s.wbError('WORKBENCH_PROJECT_DELETED');const previous=s.wbClone(old);const p=old.project;let list;
         if(kind==='plan')list=p.plans;else if(kind==='hypothesis')list=p.hypotheses;else if(kind==='figure')list=p.plans.find(x=>x.id===parentId)?.figures;else throw s.wbError('WORKBENCH_INVALID_RECYCLE_KIND');
         const index=list?.findIndex(x=>x.id===id) ?? -1;if(index<0)throw s.wbError('WORKBENCH_ENTITY_NOT_FOUND');
         const [original]=list.splice(index,1);const recycle={id:s.wbNewId('recycle'),projectId,kind,parentId:parentId || null,original,index,createdAt:Date.now()};
         const removedIds=removedEntityIds(original);
         // Remove navigation selections only; retain scientific references for explicit review.
-        if(kind==='hypothesis'){recycle.associatedPlanIds=p.plans.filter(plan=>plan.hypothesisIds.includes(id)).map(plan=>plan.id);for(const plan of p.plans)plan.hypothesisIds=plan.hypothesisIds.filter(x=>x!==id);}
+        if(kind==='hypothesis'){recycle.associatedPlanIds=p.plans.filter(plan=>plan.hypothesisIds.includes(id)).map(plan=>plan.id);for(const plan of p.plans)plan.hypothesisIds=plan.hypothesisIds.filter(x=>x!==id);
+          // Target-bound associations travel with the hypothesis; source records stay in the project.
+          recycle.materialLinks=s.wbClone((p.materialLinks||[]).filter(link=>link.hypothesisId===id));
+          if(p.materialLinks)p.materialLinks=p.materialLinks.filter(link=>link.hypothesisId!==id);
+        }
         const clear=value=>clearNavigationSelection(value,removedIds);
         clear(p.lastView);for(const h of p.hypotheses)clear(h.view);for(const plan of p.plans){clear(plan.view);for(const f of plan.figures)clear(f.view);}recycle.viewSnapshots=[];for(const [key,view]of m.views)if(view.projectId===projectId){const before=s.wbClone(view);clear(view.view);if(s.wbJson(before.view)!==s.wbJson(view.view)||removedIds.has(view.id)){view.revision++;recycle.viewSnapshots.push({key,row:before,after:s.wbClone(view)});m.views.set(key,view);}}const selection=m.meta.get('workbenchSelection');if(selection?.selection.projectId===projectId){const before=s.wbJson(selection.selection);clear(selection.selection);if(s.wbJson(selection.selection)!==before){selection.revision++;m.meta.set('workbenchSelection',selection);}}
         m.recycle.set(recycle.id,recycle);return {...putRevision(m,p,previous),recycleId:recycle.id};
-      }); },
+      },precondition); },
       async listRecycle(projectId) { return atomic(['recycle'],m=>[...m.recycle.values()].filter(r=>!projectId || r.projectId===projectId).map(s.wbClone)); },
-      async restoreRecycle(recycleId,{expectedRevision}={}) {
+      async restoreRecycle(recycleId,{precondition,expectedRevision}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         const item=await atomic(['recycle'],m=>s.wbClone(m.recycle.get(s.wbId(recycleId)) || null));if(!item)throw s.wbError('WORKBENCH_RECYCLE_NOT_FOUND');
         return mutate(item.projectId,expectedRevision,(m,old)=>{
           const current=m.recycle.get(recycleId);if(!current)throw s.wbError('WORKBENCH_RECYCLE_NOT_FOUND');const previous=s.wbClone(old);const p=old.project;
           if(item.kind==='project'){if(!old.deleted)throw s.wbError('WORKBENCH_RESTORE_CONFLICT');old.project=s.wbClone(item.original);}
           else {if(old.deleted)throw s.wbError('WORKBENCH_PROJECT_DELETED');const list=item.kind==='plan'?p.plans:item.kind==='hypothesis'?p.hypotheses:p.plans.find(x=>x.id===item.parentId)?.figures;if(!list)throw s.wbError('WORKBENCH_RESTORE_PARENT_MISSING');if(list.some(x=>x.id===item.original.id))throw s.wbError('WORKBENCH_RESTORE_CONFLICT');list.splice(Math.min(item.index,list.length),0,s.wbClone(item.original));if(item.kind==='hypothesis')for(const plan of p.plans)if(item.associatedPlanIds?.includes(plan.id)&&!plan.hypothesisIds.includes(item.original.id))plan.hypothesisIds.push(item.original.id);}
+          if(item.kind==='hypothesis'&&item.materialLinks?.length){
+            p.materialLinks||=[];
+            for(const link of item.materialLinks){
+              if(p.materialLinks.some(existing=>existing.id===link.id))throw s.wbError('WORKBENCH_RESTORE_CONFLICT');
+              p.materialLinks.push(s.wbClone(link));
+            }
+          }
           const removedIds=removedEntityIds(item.original);
           for(const snapshot of item.viewSnapshots || []){
             const current=m.views.get(snapshot.key);let after=snapshot.after;
@@ -182,7 +194,7 @@
             if(current&&s.wbJson(current)!==s.wbJson(after))continue;
             m.views.set(snapshot.key,{...s.wbClone(snapshot.row),revision:(current?.revision || 0)+1});
           }m.recycle.delete(recycleId);return putRevision(m,old.project,previous,false);
-        });
+        },precondition);
       },
       async listOutbox() { return atomic(['outbox'],m=>[...m.outbox.values()].sort((a,b)=>a.revision-b.revision).map(s.wbClone)); },
       async getSyncStatus(projectId) { return atomic(['meta'],m=>s.wbClone(m.meta.get(`sync:${projectId}`) || {localSaved:false,state:'localSaved',revision:0,syncedRevision:0})); },
@@ -191,7 +203,7 @@
         if(p?.revision===item.revision && p.deleted===item.deleted)m.meta.set(`sync:${item.projectId}`,{localSaved:true,state:state==='synced'?'synced':state==='pending'?'pendingDir':state==='obsolete'?'pendingDir':'failed',revision:p.revision,syncedRevision:state==='synced'?p.revision:(m.meta.get(`sync:${item.projectId}`)?.syncedRevision || 0),error});
       }); },
       // All validation/hash work happens before one transaction: invalid imports cannot partially appear.
-      async importProjects(entries,{selection}={}) {
+      async importProjects(entries,{selection,precondition}={}) { const atomic=(names,fn,selections)=>guardedAtomic(names,fn,selections,precondition);
         for(const entry of entries){s.wbValidateProject(entry.project);for(const a of entry.assets || [])if(await s.wbSha256(a.bytes)!==a.sha256)throw s.wbError('WORKBENCH_ASSET_HASH_MISMATCH');}
         return atomic(['projects','assets','outbox','meta','views'],m=>{
           for(const e of entries)if(m.projects.has(e.project.id))throw s.wbError('WORKBENCH_IMPORT_ID_COLLISION');

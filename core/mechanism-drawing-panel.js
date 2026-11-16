@@ -75,6 +75,7 @@
       }
       if (message.kind === 'close') { close(); return { success: true }; }
       if (message.kind === 'selectEdge') return { success: true };
+      if (message.kind === 'agentConnection') { await options.onAgent?.(); return { success: true }; }
       if (message.kind === 'locateEvidence') {
         const source = message.source;
         const exists = getView().sources?.some(item => item.figureId === source?.figureId &&

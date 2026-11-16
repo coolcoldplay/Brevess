@@ -19,13 +19,13 @@
     void refreshShortcut();
     async function refreshPageTools() {
         try {
-            const stored = await chrome.storage.local.get('sciPageToolsV1');
+            const stored = await SciLLM.publicPageStorage.get('sciPageToolsV1');
             globalThis.__brevessPageToolsPreferences = SciLLM.normalizePageToolsSettings(stored.sciPageToolsV1);
             await chrome.runtime.sendMessage({ type: 'PAGE_TOOLS_BOOTSTRAP' });
         } catch (_) { /* Restricted documents stay untouched. */ }
     }
     void refreshPageTools();
-    chrome.storage.onChanged.addListener((changes, area) => {
+    SciLLM.onPublicPreferencesChanged((changes, area) => {
         if (area === 'local' && (changes.sciLlmSettingsV2 || changes.sciPageToolsV1)) void refreshShortcut();
         if (area === 'local' && changes.sciPageToolsV1) void refreshPageTools();
     });
@@ -44,7 +44,8 @@
         document.documentElement.append(notice);
         failureNotice = notice;
     }
-    document.addEventListener('keydown', event => {
+    document.addEventListener('keydown', event => {if(globalThis.BrevessInputTools?.isEditingEvent(event))return;
+        if (event.target?.closest?.('#brevess-mechanism-drawing-host')) return;
         if (event.key === 'Escape') failureNotice?.remove();
         // Once loaded, the reader owns key handling, including Enter and Escape.
         if (globalThis.__brevessSemanticFind || event.defaultPrevented ||

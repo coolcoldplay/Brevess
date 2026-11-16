@@ -131,6 +131,9 @@
   function normalizeRecord(input) {
     if (!isPlainObject(input)) fail('INVALID_DOCUMENT_RECORD');
     const documentId = normalizeDocumentId(input.documentId);
+    if (input.sourceIdentity !== undefined && input.sourceIdentity !== null && input.sourceIdentity !== '' &&
+        (typeof shared.manualDocumentSourceIdentity !== 'function' ||
+         shared.manualDocumentSourceIdentity(input) !== input.sourceIdentity)) fail('INVALID_DOCUMENT_SOURCE_IDENTITY');
     const studyType = input.studyType || null;
     if (studyType !== null && !validStudyType(studyType)) fail('INVALID_STUDY_TYPE');
     if (input.annotations !== undefined && !Array.isArray(input.annotations)) {
@@ -203,6 +206,21 @@
 
   function finishPut(record, previous) {
     const normalized = normalizeRecord(record);
+    // Older exports do not know about links. They must not erase a revocation
+    // and cause the next DOI lookup to silently recreate an active relation.
+    if (Array.isArray(previous?.crossFormatLinks)) {
+      const links = new Map((Array.isArray(normalized.crossFormatLinks) ? normalized.crossFormatLinks : [])
+        .map(link => [JSON.stringify([link.id, link.scope]), link]));
+      for (const link of previous.crossFormatLinks) {
+        const key = JSON.stringify([link.id, link.scope]), incoming = links.get(key);
+        if (!incoming || !Number.isSafeInteger(incoming.revision) || incoming.revision <= link.revision) links.set(key, cloneJsonLike(link));
+      }
+      normalized.crossFormatLinks = [...links.values()];
+    }
+    if (previous?.sourceRoleEvidence === 'user-confirmed-v1') {
+      normalized.sourceRole = previous.sourceRole;
+      normalized.sourceRoleEvidence = previous.sourceRoleEvidence;
+    }
     normalized.revision = Math.max(previous?.revision || 0, normalized.revision) + 1;
     normalized.updatedAt = nextTimestamp(previous?.updatedAt || normalized.updatedAt);
     return normalized;
@@ -228,6 +246,9 @@
       studyType: current.studyType ||
         (!legacyAlreadyMigrated ? incoming.studyType : null),
       annotations: current.annotations,
+      ...(current.crossFormatLinks ? { crossFormatLinks: current.crossFormatLinks } : {}),
+      ...(current.sourceRoleEvidence === 'user-confirmed-v1' ? {
+        sourceRole: current.sourceRole, sourceRoleEvidence: current.sourceRoleEvidence } : {}),
       revision: current.revision,
       updatedAt: current.updatedAt
     });
@@ -285,6 +306,88 @@
       index: documentIndex(documents),
       documents
     };
+  }
+
+  function crossFormatRecordSource(record) {
+    if (!record || !shared.automaticCrossFormatRole(record)) fail('INVALID_SOURCE_RECORD');
+    return shared.normalizeCrossFormatSource({ documentId: record.documentId,
+      documentHash: record.documentHash, doi: record.doi, format: record.sourceFormat, role: shared.automaticCrossFormatRole(record) });
+  }
+
+  function paperDocuments(records, documentId) {
+    let target;
+    try { target = crossFormatRecordSource(records.find(row => row.documentId === documentId)); }
+    catch (_) { return []; }
+    return records.filter(record => {
+      try {
+        const source = crossFormatRecordSource(record);
+        return source.documentHash !== target.documentHash && source.doi === target.doi;
+      } catch (_) { return false; }
+    }).map(cloneJsonLike);
+  }
+
+  async function planCrossFormatOperation(input, getRecord) {
+    const documentId = normalizeDocumentId(input.documentId);
+    const targetRecord = await getRecord(documentId);
+    if (input.operation === 'role') {
+      if (!targetRecord || !shared.normalizeCrossFormatPaperDoi(targetRecord.doi) ||
+          !['html', 'pdf'].includes(targetRecord.sourceFormat) ||
+          !/^(?:sha256:)?[a-f0-9]{64}$/iu.test(targetRecord.documentHash || '') ||
+          input.documentHash !== targetRecord.documentHash || !['main', 'supplement'].includes(input.role)) fail('INVALID_SOURCE_RECORD');
+      if (input.expectedDocumentRevision !== targetRecord.revision) fail('STALE_DOCUMENT');
+      const record = finishMutation({ ...targetRecord, sourceRole: input.role, sourceRoleEvidence: 'user-confirmed-v1' },
+        targetRecord.revision, targetRecord.updatedAt);
+      return { record, changedRecord: record };
+    }
+    const target = crossFormatRecordSource(targetRecord);
+    const local = input.scope?.kind === 'local';
+    if ((!local && input.sourceDocumentId) || (input.operation === 'edit' && !local)) fail('LOCAL_SOURCE_REQUIRED');
+    const sourceRecord = local ? await getRecord(normalizeDocumentId(input.sourceDocumentId)) : null;
+    const source = local ? crossFormatRecordSource(sourceRecord) : shared.normalizeCrossFormatSource(input.source);
+    const ordered = [source, target].sort((a, b) => a.documentHash.localeCompare(b.documentHash));
+    const candidate = shared.createCrossFormatAssociation({ id: `link-${ordered[0].documentHash}-${ordered[1].documentHash}`,
+      source: ordered[0], target: ordered[1], scope: input.scope });
+    const owner = local && sourceRecord.documentId.localeCompare(targetRecord.documentId) < 0 ? sourceRecord : targetRecord;
+    const links = owner.crossFormatLinks === undefined ? [] : owner.crossFormatLinks;
+    if (!Array.isArray(links) || links.length > 1000) fail('INVALID_ASSOCIATIONS');
+    const index = links.findIndex(link => link.id === candidate.id && jsonLikeEqual(link.scope, candidate.scope));
+    const previous = index < 0 ? null : links[index];
+    if (previous) {
+      // Validate all persisted fields, including tombstones, before using them.
+      shared.revokeCrossFormatAssociation(previous, previous.revision);
+      if (!jsonLikeEqual(previous.source, candidate.source) || !jsonLikeEqual(previous.target, candidate.target)) fail('SOURCE_IDENTITY_CHANGED');
+    }
+    let association = previous || candidate;
+    const operation = input.operation || 'link';
+    if (!['link', 'state', 'edit'].includes(operation)) fail('INVALID_ASSOCIATION_OPERATION');
+    if (operation !== 'link' && (!previous || input.expectedAssociationRevision !== previous.revision)) fail('STALE_ASSOCIATION');
+    if (operation === 'edit') {
+      if (association.state !== 'active') fail('ASSOCIATION_REVOKED');
+      if (!Number.isSafeInteger(input.expectedDocumentRevision) || sourceRecord.revision !== input.expectedDocumentRevision) fail('STALE_DOCUMENT');
+      const annotation = sourceRecord.annotations.find(row => row.annotationId === input.annotationId);
+      if (!annotation || typeof input.note !== 'string') fail('INVALID_ANNOTATION');
+      // Only the note can change. Original quote, offsets, category and IDs are
+      // obtained here, never from a projected location or caller-supplied clone.
+      if (annotation.note === input.note) return { association, record: sourceRecord };
+      const next = cloneJsonLike(sourceRecord);
+      next.annotations = next.annotations.map(row => row.annotationId === annotation.annotationId
+        ? shared.normalizeManualAnnotation({ ...row, note: input.note, updatedAt: nextTimestamp(row.updatedAt) }) : row);
+      const record = finishMutation(next, sourceRecord.revision, sourceRecord.updatedAt);
+      return { association, record, changedRecord: record };
+    }
+    if (operation === 'state') {
+      if (!['active', 'revoked'].includes(input.state)) fail('INVALID_ASSOCIATION_STATE');
+      if (association.state !== input.state) {
+        if (association.revision >= Number.MAX_SAFE_INTEGER) fail('INVALID_ASSOCIATION');
+        association = { ...association, state: input.state, revision: association.revision + 1 };
+      }
+    }
+    if (previous && jsonLikeEqual(previous, association)) return { association };
+    if (!previous && links.length >= 1000) fail('ASSOCIATION_LIMIT_REACHED');
+    const next = cloneJsonLike(owner);
+    next.crossFormatLinks = links.map(cloneJsonLike);
+    if (index < 0) next.crossFormatLinks.push(association); else next.crossFormatLinks[index] = association;
+    return { association, changedRecord: finishMutation(next, owner.revision, owner.updatedAt) };
   }
 
   function createMemoryDocumentStore() {
@@ -390,6 +493,19 @@
       return documentIndex(await allRecords());
     }
 
+    async function listPaperDocuments(documentId) {
+      return paperDocuments(await allRecords(), documentId);
+    }
+
+    async function crossFormatOperation(input, assertCurrent) {
+      return serialize(async () => {
+        if (assertCurrent) await assertCurrent();
+        const result = await planCrossFormatOperation(input, async id => cloneJsonLike(records.get(id)));
+        if (result.changedRecord) records.set(result.changedRecord.documentId, result.changedRecord);
+        return cloneJsonLike(result);
+      });
+    }
+
     async function exportAll() {
       return exportRecords(await allRecords());
     }
@@ -412,7 +528,7 @@
       clearAnnotations,
       listDocumentIndex,
       exportAll,
-      countCategoryReferences
+      countCategoryReferences, listPaperDocuments, crossFormatOperation
     };
   }
 
@@ -432,6 +548,25 @@
   }
 
   function createIndexedDbDocumentStore(indexedDbRef) {
+    async function listPaperDocuments(documentId) {
+      return paperDocuments(await allRecords(), documentId);
+    }
+
+    async function crossFormatOperation(input, assertCurrent) {
+      const ids = [...new Set([input.documentId, ...(input.scope?.kind === 'local' && input.operation !== 'role' ? [input.sourceDocumentId] : [])]
+        .map(normalizeDocumentId))].sort();
+      const operation = async () => {
+        if (assertCurrent) await assertCurrent();
+        return runTransaction('readwrite', async store => {
+        const result = await planCrossFormatOperation(input, id => requestToPromise(store.get(id)));
+        if (result.changedRecord) await requestToPromise(store.put(result.changedRecord));
+        return cloneJsonLike(result);
+        });
+      };
+      const locked = index => index === ids.length ? operation()
+        : withDocumentArchiveLock(indexedDbRef, ids[index], () => locked(index + 1));
+      return locked(0);
+    }
     function openDatabase() {
       if (typeof shared.openUserDataDatabase !== 'function') {
         return Promise.reject(new Error('USER_DATA_DATABASE_UNAVAILABLE'));
@@ -567,7 +702,7 @@
       clearAnnotations,
       listDocumentIndex,
       exportAll,
-      countCategoryReferences
+      countCategoryReferences, listPaperDocuments, crossFormatOperation
     };
   }
 

@@ -307,7 +307,9 @@
       }
       const binary = atob(result.audioBase64);
       if (binary.length !== result.byteLength) throw failure('TTS_RESPONSE_TYPE', '朗读音频无效。', { phase: 'receiving' });
-      return { bytes: Uint8Array.from(binary, character => character.charCodeAt(0)), mimeType: result.mimeType };
+      return { bytes: Uint8Array.from(binary, character => character.charCodeAt(0)), mimeType: result.mimeType,
+        playbackRate: operation.mode === 'deepseek' && Number.isFinite(result.playbackRate)
+          ? Math.max(0.25, Math.min(4, result.playbackRate)) : 1 };
     }
     function prefetch(operation) {
       const index = operation.index + 1;
@@ -334,6 +336,7 @@
       } catch (error) { failOperation(operation, error); }
     }
     async function install(operation, result) {
+      operation.playbackRate = result.playbackRate || 1;
       operation.phase = 'decode-audio'; progress(operation, 'loading');
       if (operation.context) {
         let buffer;
@@ -348,6 +351,7 @@
         if (!current(operation)) throw failure('TTS_CANCELLED', '朗读已停止。');
         operation.url = urlApi.createObjectURL(new Blob([result.bytes], { type: result.mimeType }));
         operation.audio = new AudioCtor(operation.url);
+        operation.audio.playbackRate = operation.playbackRate;
         const index = operation.index, audio = operation.audio;
         operation.audio.onended = () => { void ended(operation, index, audio); };
         operation.audio.onerror = () => {
@@ -364,6 +368,7 @@
           if (operation.context.state !== 'running') { progress(operation, 'awaiting_play', { errorCode: 'TTS_PLAY_GESTURE_REQUIRED' }); return false; }
           const source = operation.context.createBufferSource();
           source.buffer = operation.buffer; source.connect(operation.context.destination);
+          if (source.playbackRate) source.playbackRate.value = operation.playbackRate;
           const index = operation.index;
           source.onended = () => { void ended(operation, index, source); };
           operation.source = source; source.start();
@@ -413,7 +418,7 @@
           await prepareBrowser(operation, settings);
           return await playBrowser(operation);
         }
-        if (!['local', 'online'].includes(operation.mode)) throw failure('TTS_BROWSER_UNAVAILABLE', safeMessages.TTS_BROWSER_UNAVAILABLE);
+        if (!['local', 'online', 'deepseek'].includes(operation.mode)) throw failure('TTS_BROWSER_UNAVAILABLE', safeMessages.TTS_BROWSER_UNAVAILABLE);
         if (automatic) prime();
         if (operation.primeError) throw operation.primeError;
         operation.phase = 'synthesis'; progress(operation, 'loading');

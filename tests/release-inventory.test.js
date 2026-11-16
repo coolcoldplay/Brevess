@@ -35,8 +35,10 @@ test('source traversal and missing required files stop staging',t=>{
 });
 test('common release inventory includes all application entry points and licenses',()=>{
  const root=path.join(__dirname,'..'),files=inventory.releaseInventory(root,'browser').map(x=>x.path);
- for(const file of ['manifest.json','background.js','action-popup.html','popup.html','options.html','offscreen.html','pdf-reader.html','pdf-native-reader.mjs','semantic-find-controller.js','ui-swiss.css','LICENSE','THIRD_PARTY_NOTICES.md','vendor/pdfjs/build/pdf.worker.min.mjs'])assert.ok(files.includes(file),file);
+ for(const file of ['web-filters-general/ux-workflow.js','web-filters-general/generalization.js','web-filters-general/ux-page.js','manifest.json','background.js','action-popup.html','popup.html','options.html','offscreen.html','pdf-reader.html','pdf-native-reader.mjs','semantic-find-controller.js','ui-swiss.css','LICENSE','THIRD_PARTY_NOTICES.md','vendor/pdfjs/build/pdf.worker.min.mjs'])assert.ok(files.includes(file),file);
  const manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json')));
  assert.ok(files.includes(manifest.background.service_worker));
+ for(const group of manifest.content_scripts||[])for(const file of [...group.js||[],...group.css||[]])assert.ok(files.includes(file),'content script missing: '+file);
+ for(const html of ['popup.html','options.html'])for(const match of fs.readFileSync(path.join(root,html),'utf8').matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)){if(!/^(?:https?:|data:)/.test(match[1]))assert.ok(files.includes(match[1]),'HTML dependency missing: '+match[1]);}
  for(const entry of [manifest.action.default_popup,manifest.options_ui.page,manifest.side_panel.default_path])assert.ok(files.includes(entry));
 });

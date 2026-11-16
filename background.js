@@ -1,11 +1,17 @@
+importScripts('core/credential-boundary.js');
+const credentialStorageReady = SciLLM.installCredentialBoundary(chrome);
+importScripts('core/r20-agent-bridge.js');
 importScripts(
   'core/sharing-background.js',
   'core/literature-radar-model.js',
   'core/literature-radar-store.js',
   'core/literature-radar-pubmed.js',
+  'core/literature-radar-asta.js',
+  'core/literature-radar-sources.js',
   'core/literature-radar-service.js',
   'core/literature-radar-background.js',
   'core/literature-radar-ai.js',
+  'core/ui-action-icons.js',
   'core/i18n.js',
   'core/i18n-extension.js',
     'core/i18n-reader.js',
@@ -19,6 +25,11 @@ importScripts(
   'core/literature-url.js',
   'core/page-load-indicator.js',
   'core/pdf-workspace.js',
+  'core/pdf-source-store.js',
+  'core/library-catalog-model.js',
+  'core/library-catalog-store.js',
+  'core/library-attachment-store.js',
+  'core/library-html-reader.js',
   'core/pdf-figure-engine.js',
   'core/tab-messenger.js',
   'core/category-store.js',
@@ -60,6 +71,7 @@ importScripts(
   'core/article-chat-citations.js',
   'core/article-chat-stream.js',
   'core/article-chat-attachments.js',
+  'core/article-chat-research.js',
   'core/article-chat.js',
   'core/research-evidence.js',
   'core/research-logic-pipeline.js',
@@ -116,6 +128,7 @@ importScripts(
   'core/corpus-store.js',
   'core/pdf-annotations.js',
   'core/manual-annotations.js',
+  'core/cross-format-anchors.js',
   'core/user-data-database.js',
   'core/figure-image-cache.js',
   'core/figure-viewer.js',
@@ -144,8 +157,20 @@ importScripts(
   'core/research-workbench-import-export.js',
   'core/research-workbench-resources.js',
   'core/runtime-workbench-bridge.js',
+  'core/document-agent-bridge.js',
+  'core/agent-connection-manager.js',
   'core/background-router.js'
 );
+
+const agentConnectionManager = SciLLM.createAgentConnectionManager(chrome);
+chrome.runtime.onConnect.addListener(port => agentConnectionManager.onConnect(port));
+
+const documentAgentBroker = SciLLM.createDocumentAgentBroker({
+  authorizeWorkbench: sender => getRuntimeWorkbenchBridge().authorize(sender),
+  authorizeUi: (sender, previous, binding) => assertFigureResumeUiOwnerCurrent(sender, previous, chrome, binding),
+  sourceAuthority: (sender, binding) => createFigureSourceTargetAuthority(sender, chrome, binding)
+});
+chrome.runtime.onConnect?.addListener(port => documentAgentBroker.connect(port));
 
 const onboardingController = SciLLM.createOnboardingController({
   storageArea: chrome.storage.local
@@ -211,10 +236,13 @@ async function configureSidePanelAction() {
   await setGlobalSidePanelAvailability(true);
 }
 
+function r20WorkbenchTab(tab){try{const u=new URL(tab?.url||''),base=new URL(chrome.runtime.getURL('/'));return u.protocol===base.protocol&&u.host===base.host&&u.pathname==='/workbench/index.html';}catch{return false;}}
+async function r20PanelPath(){const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});return r20WorkbenchTab(tab)?'workbench/agent-sidebar.html':'popup.html';}
+async function r20WorkbenchContext(tabId){const rows=await chrome.runtime.getContexts({contextTypes:['TAB']});const own=rows.filter(c=>c.tabId===tabId&&c.frameId===0&&r20WorkbenchTab({url:c.documentUrl}));return own.length===1?own[0]:null;}
 async function setGlobalSidePanelAvailability(enabled) {
   if (!chrome.sidePanel?.setOptions) return;
   await chrome.sidePanel.setOptions({
-    path: 'popup.html',
+    path: await r20PanelPath(),
     enabled: enabled === true
   });
 }
@@ -223,7 +251,7 @@ async function ensureGlobalSidePanelAvailability() {
   const current = chrome.sidePanel?.getOptions
     ? await chrome.sidePanel.getOptions({}).catch(() => null)
     : null;
-  if (current && current.enabled === true && current.path === 'popup.html') {
+  if (current && current.enabled === true && current.path === await r20PanelPath()) {
     return;
   }
   await setGlobalSidePanelAvailability(true);
@@ -237,13 +265,14 @@ async function repairLegacyTabSidePanelOptions(tabOrId) {
   const current = chrome.sidePanel?.getOptions
     ? await chrome.sidePanel.getOptions({ tabId }).catch(() => null)
     : null;
-  if (current?.enabled === true && current?.path === 'popup.html') return false;
+  const r20Path=typeof tabOrId==='object'&&r20WorkbenchTab(tabOrId)?'workbench/agent-sidebar.html':'popup.html';
+  if (current?.enabled === true && current?.path === r20Path) return false;
   // Builds before 2.4.10 wrote disabled tab-specific options. Those overrides
   // survive an unpacked-extension update and take precedence over the new
   // window-level default, which makes the panel vanish after a tab switch.
   await chrome.sidePanel.setOptions({
     tabId,
-    path: 'popup.html',
+    path: r20Path,
     enabled: true
   });
   return true;
@@ -278,9 +307,11 @@ function actionPopupReadableTab(tab) {
   if (!Number.isInteger(Number(tab?.id)) || !Number.isInteger(Number(tab?.windowId))) {
     return false;
   }
+  if(r20WorkbenchTab(tab))return true;
   const value = String(tab?.url || tab?.pendingUrl || '').trim();
   if (!value) return false;
   if (SciLLM.parseOfflineArticleReaderUrl(value, chrome.runtime.getURL(''))) return true;
+  if (SciLLM.parseLibraryHtmlReaderUrl?.(value, chrome.runtime.getURL(''))) return true;
   if (SciLLM.isPdfReaderUrl(value) || SciLLM.isLikelyPdfUrl(value, tab?.title)) return true;
   try {
     const url = new URL(value);
@@ -313,21 +344,40 @@ function rememberActionPopupTab(tab, documentId) {
   return nonce;
 }
 
-async function actionPopupPublicState() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+async function actionPopupPublicState(sender, popupWindowId) {
+  // A service worker's currentWindow can belong to another extension view.
+  // Resolve the browser-owned popup context before issuing a tab receipt.
+  const popupUrl = chrome.runtime.getURL('action-popup.html');
+  const unavailable = () => new Error('ACTION_POPUP_OWNER_UNAVAILABLE');
+  if (sender?.id !== chrome.runtime.id || sender.url !== popupUrl ||
+      typeof chrome.runtime.getContexts !== 'function') throw unavailable();
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ['POPUP'], documentUrls: [popupUrl],
+    ...(sender.documentId ? { documentIds: [sender.documentId] } : {})
+  });
+  const owners = contexts.filter(context => context.contextType === 'POPUP' &&
+    context.documentUrl === popupUrl &&
+    (!sender.documentId || context.documentId === sender.documentId));
+  if (owners.length !== 1) throw unavailable();
+  // Native toolbar popups may report windowId -1 in getContexts. The trusted
+  // popup supplies windows.getCurrent(), which is scoped to its own window.
+  const ownerWindowId = owners[0].windowId >= 0 ? owners[0].windowId : popupWindowId;
+  if (!Number.isInteger(ownerWindowId) || ownerWindowId < 0 ||
+      (popupWindowId !== undefined && popupWindowId !== ownerWindowId)) throw unavailable();
+  const tabs = await chrome.tabs.query({ active: true, windowId: ownerWindowId });
   const tab = tabs[0] || null;
   const readable = actionPopupReadableTab(tab);
   const activatedBefore = readable && (
     activatedSidePanelTabIds.has(tab.id) ||
     await SciLLM.isTabActivated(chrome.storage.session, tab).catch(() => false)
   );
-  const frame = readable ? await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 }).catch(() => null) : null;
+  const frame = r20WorkbenchTab(tab)?await r20WorkbenchContext(tab.id):readable ? await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 }).catch(() => null) : null;
   return {
     tabId: Number.isInteger(Number(tab?.id)) ? Number(tab.id) : null,
     title: String(tab?.title || '当前页面').trim().slice(0, 120),
     readable,
     activatedBefore,
-    primaryLabel: activatedBefore ? '继续研读' : '开始研读',
+    primaryLabel: r20WorkbenchTab(tab)?'Agent辅助':activatedBefore ? '继续研读' : '开始研读',
     historyUrl: 'options.html#page=data',
     settingsUrl: 'options.html#page=overview',
     nonce: readable ? rememberActionPopupTab(tab, frame?.documentId) : '',
@@ -594,7 +644,9 @@ async function openOnboardingForTab(tab) {
   });
 }
 
-async function handleToolbarAction(tab, panelOpen) {
+async function handleToolbarAction(tab, panelOpen, expectedDocumentId) {
+  if(r20WorkbenchTab(tab)){const current=await chrome.tabs.get(tab.id);const frame=await r20WorkbenchContext(tab.id);if(!r20WorkbenchTab(current)||!frame?.documentId||expectedDocumentId&&frame.documentId!==expectedDocumentId)throw Error('WORKBENCH_AGENT_OWNER_CHANGED');await panelOpen?.enablePromise;await repairLegacyTabSidePanelOptions(current);await panelOpen?.openPromise;return {agent:true};}
+
   if (SciLLM.isLikelyPdfUrl(tab?.url || tab?.pendingUrl, tab?.title)) {
     await activatePdfReaderAndOpenSidePanel(tab, panelOpen);
     return;
@@ -830,6 +882,15 @@ const workspaceDirectoryController = SciLLM.createWorkspaceDirectoryController({
   articleWorkspaceStore,
   runtimeExtensionId: chrome.runtime.id
 });
+let libraryHtmlCatalogStore = null;
+let libraryHtmlAttachmentStore = null;
+function libraryHtmlOwnerGuard(sender) {
+  libraryHtmlCatalogStore ||= BrevessLibraryCatalog.createLibraryCatalogStore();
+  libraryHtmlAttachmentStore ||= BrevessLibraryAttachments.createLibraryAttachmentStore();
+  return SciLLM.createLibraryHtmlOwnerGuard({ chromeApi: chrome, sender,
+    catalogStore: libraryHtmlCatalogStore, attachmentStore: libraryHtmlAttachmentStore });
+}
+
 const llmRouter = SciLLM.createBackgroundRouter({
   settingsMutationBarrier,
   storageArea: chrome.storage.local,
@@ -1086,6 +1147,10 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_SET_STUDY_TYPE',
   'DOCUMENT_PREPARE',
   'DOCUMENT_GET',
+  'DOCUMENT_PAPER_SOURCES',
+  'CROSS_FORMAT_LINK',
+  'CROSS_FORMAT_NOTE_EDIT',
+  'CROSS_FORMAT_SOURCE_ROLE',
   'ANNOTATION_UPSERT',
   'ANNOTATION_DELETE',
   'ANNOTATION_CLEAR_DOCUMENT',
@@ -1140,6 +1205,7 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_ANALYZE_PAPER_INNOVATION',
   'LLM_ANALYZE_PAPER_LIMITATIONS',
   'LLM_AUTOFILL_LITERATURE_NOTE',
+  'LLM_LITERATURE_NOTE_CHECKPOINT_GET',
   'LLM_ANALYZE_REVIEW_OUTLINE',
   'LLM_TRANSLATE_ABBREVIATIONS',
   'LLM_RECORD_FEEDBACK',
@@ -1802,10 +1868,12 @@ async function assertFigureResumeUiOwnerCurrent(sender, previous = null, chromeA
   const runtime = chromeApi.runtime;
   let expectedUrl, origin;
   try {
-    expectedUrl = runtime.getURL('popup.html');
+    const baseUrl = runtime.getURL('popup.html');
+    if (!SciLLM.isPopupUiDocumentUrl(sender?.url, baseUrl)) cancelled();
+    expectedUrl = sender.url;
     const page = new URL(expectedUrl);
     if (!/^(chrome|moz)-extension:$/.test(page.protocol) || page.host !== runtime.id ||
-        page.pathname !== '/popup.html' || page.search || page.hash || page.username || page.password) cancelled();
+        page.pathname !== '/popup.html' || page.username || page.password) cancelled();
     origin = page.protocol + '//' + page.host;
   } catch (_) { cancelled(); }
   // Edge native side panels can omit all sender document/tab/frame identity.
@@ -1840,8 +1908,8 @@ async function assertFigureResumeUiOwnerCurrent(sender, previous = null, chromeA
       ? { documentUrls: [expectedUrl] } : { documentIds: [sender.documentId] }); }
     catch (_) { cancelled(); }
     if (!Array.isArray(contexts)) cancelled();
-    // Count every matching UI context before checking its type. A TAB or a
-    // second panel at this URL makes a document-less sender ambiguous.
+    // The browser's sender URL pins the document instance. Still reject
+    // multiple contexts at that exact URL; never choose an arbitrary panel.
     const owners = contexts.filter(item => discoverNativePanel
       ? item?.documentUrl === expectedUrl : item?.documentId === sender.documentId);
     if (owners.length !== 1) cancelled();
@@ -1969,6 +2037,12 @@ async function handleRoutedMessage(
   message, sender, onProgress, reverseState = {}, onFigureCheckpoint = null,
   onWorkspaceCommitGuard = null
 ) {
+  try { await credentialStorageReady; SciLLM.assertCredentialMessageOwner(message, sender, chrome); }
+  catch (_) { return {success:false,error:{code:'CREDENTIAL_ACCESS_DENIED'}}; }
+  if (message?.type === 'BREVESS_DOCUMENT_AGENT_CALL') {
+    try { return { success: true, data: await documentAgentBroker.handle(message, sender) }; }
+    catch (error) { return { success: false, error: { code: error.code || 'DOCUMENT_HOST_FAILED', details: error.details } }; }
+  }
   if (sender?.id === chrome.runtime.id && SciLLM.isOfflineArticleMutationType(message?.type)) {
     let offlineSource = SciLLM.parseOfflineArticleReaderUrl(sender.url, chrome.runtime.getURL(''));
     if (!offlineSource) {
@@ -1987,9 +2061,13 @@ async function handleRoutedMessage(
     try { return { success: true, data: await getRuntimeWorkbenchBridge().handle(message, sender) }; }
     catch (error) { return { success: false, error: { code: error.code || 'WORKBENCH_RUNTIME_FAILED' } }; }
   }
+  const htmlReader = SciLLM.parseLibraryHtmlReaderUrl?.(sender?.url, chrome.runtime.getURL(''));
+  const assertHtmlReaderCurrent = htmlReader ? libraryHtmlOwnerGuard(sender) : null;
+  if (assertHtmlReaderCurrent) await assertHtmlReaderCurrent();
   const taskStartedAt = Number.isFinite(reverseState.startedAt) ? reverseState.startedAt : Date.now();
   let figureResumeUiOwner = null;
   const assertOwnerCurrent = async (strictCreationOwner = false) => {
+    if (assertHtmlReaderCurrent) { await assertHtmlReaderCurrent(); return true; }
     if (!strictCreationOwner && message?.type === 'LLM_CONTROL_OPERATION' &&
         message.operationScope === 'figure' &&
         ['authorize-user-resume', 'figure-vision-decision'].includes(message.command)) {
@@ -2098,10 +2176,12 @@ async function handleRoutedMessage(
     }
     return frame.url;
   };
-  const runtimeOwnerRequired=['LLM_ANALYZE_DOCUMENT','LLM_ANALYZE_REVIEW_OUTLINE','LLM_AUTOFILL_LITERATURE_NOTE','RUNTIME_TASK_CONFIRM_SAVE'].includes(message?.type) || message?.operationScope==='runtime' || message?.runtimeCommit===true;
+  const runtimeOwnerRequired=['CROSS_FORMAT_LINK','CROSS_FORMAT_NOTE_EDIT','CROSS_FORMAT_SOURCE_ROLE','LLM_ANALYZE_DOCUMENT','LLM_ANALYZE_REVIEW_OUTLINE','LLM_AUTOFILL_LITERATURE_NOTE','LLM_LITERATURE_NOTE_CHECKPOINT_GET','RUNTIME_TASK_CONFIRM_SAVE'].includes(message?.type) || message?.operationScope==='runtime' || message?.runtimeCommit===true;
   const assertTrustedOwnerCurrent = () => assertOwnerCurrent(runtimeOwnerRequired);
   const assertDocumentCreationOwnerCurrent = () => assertOwnerCurrent(true);
   let response = await llmRouter.handle(message, {
+    verifyLibraryHtmlIdentity: assertHtmlReaderCurrent,
+    assertLibraryHtmlCurrent: assertHtmlReaderCurrent,
     verifyNavigationArchiveContext: async binding => {
       await assertDocumentCreationOwnerCurrent();
       const result = await chrome.tabs.sendMessage(sender.tab.id, {
@@ -2178,6 +2258,17 @@ async function handleRoutedMessage(
     message: error?.code === 'CANCELLED' ? '任务已取消' : '任务未完成，请查看服务设置和诊断'
   } }));
   const taskFinishedAt = Date.now();
+  if (response?.success && (['CROSS_FORMAT_NOTE_EDIT', 'CROSS_FORMAT_SOURCE_ROLE'].includes(message?.type) ||
+      message?.type === 'CROSS_FORMAT_LINK' && message.input?.operation === 'state')) {
+    // Invalidate projections in open readers; no annotations or account data
+    // are broadcast. Each reader re-reads its own current record and ACLs.
+    try {
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) if (Number.isInteger(tab.id)) {
+        void chrome.tabs.sendMessage(tab.id, { type: 'BREVESS_CROSS_FORMAT_CHANGED' }).catch(() => {});
+      }
+    } catch (_) {}
+  }
   if (Array.isArray(reverseState.tokenUsageWrites) &&
       reverseState.tokenUsageWrites.length) {
     await Promise.allSettled(reverseState.tokenUsageWrites);
@@ -2943,6 +3034,14 @@ const standaloneSemanticFind = SciLLM.createSemanticFindLauncher({
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'BREVESS_AGENT_MANAGER') {
+    return agentConnectionManager.onMessage(message, sender, sendResponse);
+  }
+  if (message?.type === 'BREVESS_DOCUMENT_AGENT_CALL') {
+    SciLLM.keepAliveUntil(handleRoutedMessage(message, sender), chrome).then(sendResponse)
+      .catch(error => sendResponse({success:false,error:{code:error.code || 'DOCUMENT_HOST_FAILED'}}));
+    return true;
+  }
   if (message?.type === 'OFFLINE_ARTICLE_GET_SNAPSHOT' || message?.type === 'OFFLINE_READER_START_READING') {
     const ownBase = chrome.runtime.getURL('');
     const readerSender = sender?.id === chrome.runtime.id && sender.frameId === 0 &&
@@ -2983,6 +3082,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (standaloneSemanticFind.handles(message?.type)) {
     SciLLM.keepAliveUntil(standaloneSemanticFind.handle(message, sender), chrome).then(sendResponse);
+    return true;
+  }
+  if (message?.type === 'LIBRARY_HTML_START_READING') {
+    const reader = SciLLM.parseLibraryHtmlReaderUrl?.(sender?.url, chrome.runtime.getURL(''));
+    if (!reader || sender?.id !== chrome.runtime.id || sender?.frameId !== 0 || !Number.isInteger(sender?.tab?.id)) {
+      sendResponse({ success: false, error: { code: 'LIBRARY_HTML_CONTEXT_STALE' } }); return false;
+    }
+    const tab = { ...sender.tab, url: sender.url };
+    const opening = beginToolbarSidePanelOpen(tab);
+    libraryHtmlOwnerGuard(sender)().then(() => activateTabAndOpenSidePanel(tab, opening))
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: { code: error.code || 'LIBRARY_HTML_UNAVAILABLE' } }));
     return true;
   }
   if (message?.type === 'PDF_READER_START_READING' && sender.id === chrome.runtime.id &&
@@ -3214,8 +3325,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if(message?.type==='R20_OPEN_WORKBENCH_AGENT'){
+    if(sender?.id!==chrome.runtime.id||sender.frameId!==0||!sender.tab||!r20WorkbenchTab({url:sender.url})){sendResponse({success:false,error:{code:'WORKBENCH_AGENT_OWNER_INVALID'}});return false;}
+    const opening=beginToolbarSidePanelOpen(sender.tab);handleToolbarAction(sender.tab,opening,sender.documentId).then(()=>sendResponse({success:true})).catch(e=>sendResponse({success:false,error:{code:e.code||'WORKBENCH_AGENT_OPEN_FAILED'}}));return true;
+  }
   if (message?.type === 'ACTION_POPUP_GET_STATE') {
-    actionPopupPublicState()
+    actionPopupPublicState(sender, message.windowId)
       .then(data => sendResponse({ success: true, data }))
       .catch(error => sendResponse({
         success: false,
@@ -3245,7 +3360,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return false;
     }
-    handleToolbarAction(tab, panelOpen)
+    handleToolbarAction(tab, panelOpen, snapshot.documentId)
       .then(data => sendResponse({ success: true, data: { opened: true, ...data } }))
       .catch(error => sendResponse({
         success: false,
@@ -3307,7 +3422,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       tab = freshTab;
       const recognized = Boolean(SciLLM.parseOfflineArticleReaderUrl(currentUrl, chrome.runtime.getURL(''))) || SciLLM.isLikelyPdfUrl(currentUrl, tab.title) ||
-        SciLLM.classifyLiteratureUrl(currentUrl, settings.literatureUrlWhitelist).recognized;
+        (await BrevessReadingFocusController.preview(tab)).type === 'paper';
       if (!recognized && message.confirmedNonLiterature !== true) {
         const error = new Error('请先确认是否在此网页开启研读侧栏。');
         error.code = 'SIDE_PANEL_CONFIRMATION_REQUIRED';
@@ -3483,3 +3598,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // RADAR-001: rebuild alarms on worker activation and resume due literature checks.
 BrevessRadar.installRadarBackground({ keepAlive: task => SciLLM.keepAliveUntil(task, chrome) });
 BrevessSharingBackground.install(chrome);
+
+importScripts('core/reading-focus-model.js','core/reading-focus-classifier.js','core/reading-focus-background.js','core/web-reading-core.js','core/web-reading-background.js','core/page-storage-policy.js','core/workspace-storage.js');
+const BrevessExperimentSharedStore=BrevessWebReading.createStore({store:articleWorkspaceStore,workspaceApi:SciLLM,directorySync});
+const BrevessWebReadingController=BrevessWebReading.createWebController({browser:chrome,core:BrevessWebReading,focus:BrevessReadingFocusController,persistence:BrevessExperimentSharedStore,createTask:()=>llmRouter.createWebReadingTask(),deletePaper:(m,tab)=>BrevessWorkspaceStorage.deletePaper({browser:chrome,store:articleWorkspaceStore,directory:directorySync,documentStore,api:SciLLM,coordinate:coordinateOpenArticleWorkspaceTabs},m,tab)});
+BrevessWebReadingController.register();
+
+importScripts('web-filters-general/schema.js','web-filters-general/model.js','web-filters-general/background.js','web-filters-general/research.js','web-filters-general/multitab.js','web-filters-general/ux-context.js','web-filters-general/ux-background.js','web-filters-general/reading-modules.js','web-filters-general/reading-pubmed.js','web-filters-general/reading-background.js','web-filters-general/generalization.js');
+globalThis.WFGUX_CONTENT_FILES=['schema.js','engine.js','reading-modules.js','reading-pubmed.js','reading-page.js','ux-page.js','ux-entry.js'].map(f=>'web-filters-general/'+f);
+const BrevessGeneralBroker=WFGBackground.install({browser:chrome,createTask:()=>llmRouter.createWebReadingTask()});
+const BrevessMultiController=WFGMulti.install({browser:chrome,broker:BrevessGeneralBroker,persistence:BrevessExperimentSharedStore,core:BrevessWebReading,store:articleWorkspaceStore,classify:async tab=>(await BrevessReadingFocusController.preview(tab)).type,createTask:options=>llmRouter.createWebReadingTask(options)});
+const BrevessUXController=WFGUX.install({browser:chrome,broker:BrevessGeneralBroker,multi:BrevessMultiController,createTask:options=>llmRouter.createWebReadingTask(options)});
+globalThis.BrevessReadingModulesController=WFGReadingBackground.install({browser:chrome,getLegacy:()=>BrevessUXController.legacy});
+
+importScripts('core/r20-agent-broker.js');

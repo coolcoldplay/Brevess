@@ -75,7 +75,7 @@
       if (message.type === 'TTS_GET_PUBLIC_SETTINGS') {
         const settings = await loadSettings();
         assertCurrent(origin);
-        return shared.getTtsPublicSettings(settings.tts);
+        return shared.getTtsPublicSettings(shared.resolveTtsSettings(settings));
       }
       if (['TTS_GET_SETTINGS', 'TTS_SAVE_SETTINGS', 'TTS_LIST_VOICES'].includes(message.type) && !origin.options) {
         throw error('TTS_FORBIDDEN');
@@ -114,7 +114,7 @@
       }
       const entry = reserve(origin, message.type === 'TTS_LIST_VOICES' ? 'voices' : message.requestId);
       try {
-        const settings = shared.normalizeTtsSettings((await loadSettings()).tts);
+        const settings = shared.resolveTtsSettings(await loadSettings());
         check(entry);
         if (settings.mode === 'browser') throw error('TTS_BROWSER_ONLY');
         if (message.type === 'TTS_SYNTHESIZE' && message.automatic === true && !settings.autoPlay) {

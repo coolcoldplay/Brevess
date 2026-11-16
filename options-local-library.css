@@ -1,3 +1,11 @@
+/* Reading totals retain their source-count semantics. */
+.local-library__summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:0; }
+.local-library__stat { min-width:0; padding:14px 16px; border:1px solid var(--border,#d8dee6); border-radius:8px; background:var(--surface,#fff); }
+.local-library__stat dt { color:var(--muted,#5f6b78); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.local-library__stat dd { margin:6px 0 0; font-size:26px; font-weight:650; line-height:1.2; font-variant-numeric:tabular-nums; }
+.local-library__summary-note { margin:0; color:var(--muted,#5f6b78); font-size:12px; line-height:1.6; }
+@media(max-width:640px) { .local-library__summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:360px) { .local-library__summary { grid-template-columns:1fr; } }
 .local-library {
   display: grid;
   gap: 16px;

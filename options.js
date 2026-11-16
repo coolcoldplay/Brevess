@@ -204,10 +204,11 @@ const codexAuthUi = {
 const harnessAuthUi = { pending: false, generation: 0, binding: '' };
 let pendingMigrationBundle = null;
 const SETTINGS_PAGE_ORDER = [
-  'overview', 'account', 'storage', 'models', 'workbench', 'modes',
-  'categories', 'reading', 'shortcuts', 'data', 'about'
+  'overview', 'storage', 'models', 'workbench', 'modes',
+  'categories', 'reading-preferences', 'reading', 'shortcuts', 'data', 'about', 'voice', 'notes', 'privacy'
 ];
 const SETTINGS_PAGE_COPY = Object.freeze({
+  'reading-preferences': {eyebrow:'Brevess · 网页滤镜',title:'更适合你的阅读方式',subtitle:'管理自动应用的排版与大纲模块。'},
   account: {
     eyebrow: 'BREVESS 账号',
     title: '账号管理',
@@ -256,7 +257,7 @@ const SETTINGS_PAGE_COPY = Object.freeze({
   data: {
     eyebrow: 'Local First · 本地数据',
     title: '阅读资料与本地数据',
-    subtitle: '先检索本地文献与缩略词，需要时再展开维护、同步与迁移。'
+    subtitle: '查看本机文献概况与缩略词，管理工作区维护、目录同步与迁移。'
   },
   about: {
     eyebrow: 'Project · 关于与反馈',
@@ -277,6 +278,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initializeTtsSettings();
   initializeLiteratureUrlSettings();
   organizeSettingsContent();
+  globalThis.BrevessSettingsUI?.mount({ navigate: activateSettingsPage, savePreferences: () => persistForm(false) });
   if (location.hash === '#onboarding') enterOnboardingLayout();
   bindEvents();
   activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
@@ -358,7 +360,7 @@ function bindEvents() {
   document.getElementById('duplicateApiProfile').addEventListener('click', duplicateApiProfile);
   document.getElementById('deleteApiProfile').addEventListener('click', deleteApiProfile);
   ['profileName', 'providerId', 'model', 'apiKey', 'baseUrl', 'authHeader', 'authPrefix',
-    'jsonMode', 'supportsVision', 'contextWindowTokens', 'reasoningEffort'].forEach(id => {
+    'jsonMode', 'supportsVision', 'reasoningEffort'].forEach(id => {
       document.getElementById(id).addEventListener('input', markProfileEditorDirty);
       document.getElementById(id).addEventListener('change', markProfileEditorDirty);
     });
@@ -389,6 +391,9 @@ function bindEvents() {
   (document.getElementById('taskPolicyModules') ? ['taskPolicyModules'] :
     ['llmTaskPolicyTableBody', 'llmAdvancedTaskPolicyTableBody']).forEach(id => {
     document.getElementById(id)?.addEventListener('change', handleTaskPolicyTableChange);
+    document.getElementById(id)?.addEventListener('input', event => {
+      if (updateTaskModelDraft(event.target)) markProfileEditorDirty('taskPolicyModules');
+    });
     document.getElementById(id)?.addEventListener('click', handleTaskPolicyTableClick);
   });
   document.getElementById('taskTokenRuleForm')
@@ -491,6 +496,16 @@ function bindEvents() {
   });
   document.getElementById('addLiteratureNoteTemplate')
     .addEventListener('click', addLiteratureNoteTemplate);
+  document.getElementById('addGeneralWebNoteTemplate').addEventListener('click', () => {
+    const templates = collectLiteratureNoteTemplates(true);
+    if (templates.some(template => template.id === 'general_web') || templates.length >= 20) return;
+    const preset = SciLLM.DEFAULT_LITERATURE_NOTE_TEMPLATES.find(template => template.id === 'general_web');
+    if (!preset) return;
+    renderLiteratureNoteTemplates([...templates, structuredClone(preset)]);
+    activateLiteratureNoteTemplate('general_web', { focus: true });
+    markProfileEditorDirty('literatureNoteTemplateList');
+    setLiteratureNoteTemplateEditState('有未保存修改', 'unsaved');
+  });
   document.getElementById('resetLiteratureNoteTemplates').addEventListener('click', () => {
     renderLiteratureNoteTemplates(state?.literatureNoteTemplateDefaults || []);
     markProfileEditorDirty('literatureNoteTemplateList');
@@ -827,6 +842,8 @@ function renderTtsSettings(value) {
   ttsDraft = SciLLM.normalizeTtsSettings(value);
   ttsDraft.online.hasApiKey = value?.online?.hasApiKey === true;
   delete ttsDraft.online.apiKey;
+  ttsDraft.deepseek.hasApiKey = value?.deepseek?.hasApiKey === true;
+  delete ttsDraft.deepseek.apiKey;
   document.getElementById('ttsMode').value = ttsDraft.mode;
   document.getElementById('ttsSpeed').value = String(ttsDraft.speed);
   document.getElementById('ttsAutoPlay').checked = ttsDraft.autoPlay;
@@ -848,7 +865,7 @@ function selectedTtsVoice(id) {
 
 function ttsVoiceMatchesLanguage(voice, id) {
   if (ttsDraft.mode === 'browser') return (id === 'ttsVoiceEn' ? /^en(?:[-_]|$)/iu : /^zh(?:[-_]|$)/iu).test(voice.lang || '');
-  return ttsDraft.mode === 'online' || (id === 'ttsVoiceEn' ? /^[ab]/u : /^z/u).test(voice.id);
+  return ['online', 'deepseek'].includes(ttsDraft.mode) || (id === 'ttsVoiceEn' ? /^[ab]/u : /^z/u).test(voice.id);
 }
 
 function renderTtsVoiceChoices(id, value, voices = ttsVoiceDiscovery.voices) {
@@ -864,7 +881,7 @@ function renderTtsVoiceChoices(id, value, voices = ttsVoiceDiscovery.voices) {
   for (const voice of compatible) add(voice.id, browser
     ? `${voice.name} · ${voice.lang} · ${voice.localService ? '本机' : '联网'}`
     : voice.name === voice.id ? voice.id : `${voice.name} (${voice.id})`);
-  if (!browser) add('__custom__', '手动输入音色 ID');
+  if (!browser && ttsDraft.mode !== 'deepseek') add('__custom__', '手动输入音色 ID');
   field.value = value;
   custom.value = value; custom.hidden = true;
 }
@@ -881,7 +898,7 @@ async function refreshTtsVoices({ force = false } = {}) {
   if (!force && key === ttsVoiceDiscovery.key && (ttsVoiceDiscovery.loaded || ttsVoiceDiscovery.pending)) return ttsVoiceDiscovery.pending;
   const config = ttsDraft[ttsDraft.mode];
   const browser = ttsDraft.mode === 'browser';
-  if (!browser && (!config.endpoint || !config.model)) { status.textContent = '保存服务配置后可加载音色；也可手动填写。'; return; }
+  if (!browser && ttsDraft.mode !== 'deepseek' && (!config.endpoint || !config.model)) { status.textContent = '保存服务配置后可加载音色；也可手动填写。'; return; }
   const generation = ++ttsVoiceDiscovery.generation;
   if (ttsVoiceDiscovery.key !== key) ttsVoiceDiscovery.voices = [];
   ttsVoiceDiscovery.key = key; ttsVoiceDiscovery.loaded = false;
@@ -917,13 +934,14 @@ async function refreshTtsVoices({ force = false } = {}) {
 function renderTtsConnection() {
   const config = ttsDraft[ttsDraft.mode];
   const browser = ttsDraft.mode === 'browser';
-  const online = ttsDraft.mode === 'online';
+  const deepseek = ttsDraft.mode === 'deepseek';
+  const online = ttsDraft.mode === 'online' || deepseek;
   for (const id of ['ttsEndpointField', 'ttsModelField']) {
-    const field = document.getElementById(id); if (field) field.hidden = browser;
+    const field = document.getElementById(id); if (field) field.hidden = browser || deepseek;
   }
   const browserHint = document.getElementById('ttsBrowserHint'); if (browserHint) browserHint.hidden = !browser;
   for (const [field, key] of [['ttsEndpoint', 'endpoint'], ['ttsModel', 'model']]) document.getElementById(field).value = config[key] || '';
-  const voices = ttsVoiceDiscovery.key === ttsVoiceConnectionKey() ? ttsVoiceDiscovery.voices : [];
+  const voices = deepseek ? SciLLM.TTS_DEEPSEEK_VOICES : ttsVoiceDiscovery.key === ttsVoiceConnectionKey() ? ttsVoiceDiscovery.voices : [];
   renderTtsVoiceChoices('ttsVoiceEn', config.voiceEn || '', voices);
   renderTtsVoiceChoices('ttsVoiceZh', config.voiceZh || '', voices);
   const transport = document.getElementById('ttsTransport');
@@ -939,17 +957,19 @@ function renderTtsConnection() {
   document.getElementById('ttsEndpointHint').textContent = online
     ? '只向你保存的 HTTPS 语音接口发送所选文字；在线服务可能收费。'
     : '本地模式只连接本机回环地址；请先启动 Kokoro。';
+  document.getElementById('ttsDeepSeekHint').hidden = !deepseek;
+  if (deepseek && !config.hasApiKey) document.getElementById('ttsKeyState').textContent = '留空沿用已配置的官方 DeepSeek 连接，无需重复填写。';
 }
 
 function captureTtsConnection() {
   if (!ttsDraft) ttsDraft = SciLLM.normalizeTtsSettings();
   const config = ttsDraft[ttsDraft.mode];
-  if (ttsDraft.mode !== 'browser') {
+  if (!['browser', 'deepseek'].includes(ttsDraft.mode)) {
     for (const [field, key] of [['ttsEndpoint', 'endpoint'], ['ttsModel', 'model']]) config[key] = document.getElementById(field).value.trim();
   }
   config.voiceEn = selectedTtsVoice('ttsVoiceEn'); config.voiceZh = selectedTtsVoice('ttsVoiceZh');
   if (ttsDraft.mode === 'local' && document.getElementById('ttsTransport')) config.transport = document.getElementById('ttsTransport').value;
-  if (ttsDraft.mode === 'online') {
+  if (['online', 'deepseek'].includes(ttsDraft.mode)) {
     const key = document.getElementById('ttsApiKey').value.trim();
     if (document.getElementById('ttsClearApiKey').checked) config.apiKey = '';
     else if (key) config.apiKey = key;
@@ -964,6 +984,7 @@ async function saveTtsPreferences() {
   const revision = ttsEditorRevision;
   const patch = structuredClone(ttsDraft);
   delete patch.online.hasApiKey;
+  delete patch.deepseek.hasApiKey;
   const config = patch[patch.mode];
   if (!Number.isFinite(patch.speed) || patch.speed < 0.25 || patch.speed > 4) {
     throw new Error('请填写 0.25–4 范围的语速。');
@@ -971,7 +992,7 @@ async function saveTtsPreferences() {
   if (patch.mode === 'browser') SciLLM.validateBrowserTtsSettings(patch);
   else {
     SciLLM.validateTtsEndpoint(config.endpoint, patch.mode);
-    if (!config.model || !/^[a-zA-Z0-9][a-zA-Z0-9_.+-]{0,79}$/u.test(config.voiceEn) ||
+    if ((patch.mode !== 'deepseek' && !config.model) || !/^[a-zA-Z0-9][a-zA-Z0-9_.+-]{0,79}$/u.test(config.voiceEn) ||
         !/^[a-zA-Z0-9][a-zA-Z0-9_.+-]{0,79}$/u.test(config.voiceZh)) {
       throw new Error('请填写模型、中英文音色及 0.25–4 范围的语速。');
     }
@@ -1024,7 +1045,7 @@ function initializeTtsSettings() {
   document.getElementById('ttsMode').addEventListener('change', () => {
     captureTtsConnection();
     const mode = document.getElementById('ttsMode').value;
-    ttsDraft.mode = ['local', 'online'].includes(mode) ? mode : 'browser';
+    ttsDraft.mode = ['local', 'online', 'deepseek'].includes(mode) ? mode : 'browser';
     document.getElementById('ttsClearApiKey').checked = false;
     renderTtsConnection(); dirty();
   });
@@ -1093,7 +1114,7 @@ function settingsPageFromHash() {
     support: 'about',
     'pdf-mineru': 'reading'
   };
-  return legacyPages[legacy] || 'overview';
+  return legacyPages[legacy] || 'models';
 }
 
 function settingsPageHash(page) {
@@ -1115,7 +1136,8 @@ function syncSettingsPageVisibility({ animate = false } = {}) {
 }
 
 function activateSettingsPage(page, { updateHash = true, animate = true } = {}) {
-  const nextPage = SETTINGS_PAGE_ORDER.includes(page) ? page : 'overview';
+  if (page === 'storage') page = 'data';
+  const nextPage = SETTINGS_PAGE_ORDER.includes(page) ? page : 'models';
   const previousIndex = SETTINGS_PAGE_ORDER.indexOf(activeSettingsPage);
   const nextIndex = SETTINGS_PAGE_ORDER.indexOf(nextPage);
   document.body.dataset.settingsDirection =
@@ -1144,9 +1166,11 @@ function activateSettingsPage(page, { updateHash = true, animate = true } = {}) 
   }
   globalThis.scrollTo?.({ top: 0, behavior: animate ? 'smooth' : 'auto' });
   renderOnboarding();
+  globalThis.BrevessSettingsUI?.updateChrome();
 }
 
 async function callBackground(message) {
+  if (["LLM_SAVE_PROFILE","LLM_DUPLICATE_PROFILE","LLM_DELETE_PROFILE","LLM_TEST_PROFILE","CODEX_LOCAL_LOGIN_START"].includes(message?.type)) await globalThis.BrevessRiskGate.requireAcknowledgement();
   const response = await chrome.runtime.sendMessage(message);
   if (!response?.success) {
     const error = new Error(response?.error?.message || '操作失败');
@@ -1450,6 +1474,19 @@ function renderSettingsOverview() {
   document.getElementById('overviewConfigureApi').textContent = apiConfigured ? '查看配置' : '去配置';
   document.getElementById('overviewConfigureStorage').textContent = directoryConfigured
     ? '查看目录' : '选择目录';
+  document.getElementById('overviewModelState').textContent = currentProfile
+    ? (apiConfigured ? '已配置 · ' : '已选择 · ') + (currentProfile.name || currentProfile.providerId) + ' · ' + (currentProfile.config?.model || '未选模型') : '仅本地功能';
+  document.getElementById('overviewStorageState').textContent = directoryConfigured ? userDataUi.lastStatus.directoryName : '浏览器本地';
+  document.getElementById('setupApiRow').hidden = apiConfigured && !onboardingUi.active;
+  document.getElementById('setupStorageRow').hidden = directoryConfigured && !onboardingUi.active;
+  document.getElementById('setupConsentRow').hidden = consentGranted && !onboardingUi.active;
+  const pendingRows = ['setupApiRow','setupStorageRow','setupConsentRow'].some(id=>!document.getElementById(id).hidden);
+  document.getElementById('onboardingGuide').hidden = !pendingRows && !onboardingUi.active;
+  for(const [id,page] of [['overviewModelCard','models'],['overviewStorageCard','storage'],['overviewConsentCard','models']]){
+    const card=document.getElementById(id);card.setAttribute('role','button');card.tabIndex=0;
+    card.onclick=()=>activateSettingsPage(page);
+    card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activateSettingsPage(page);}};
+  }
 }
 
 function openOnboardingStep(step) {
@@ -3062,6 +3099,7 @@ function showMigrationStatus(message, type = 'info') {
 
 async function exportMigrationBundle() {
   if (userDataUi.pendingAction) return;
+  if (!confirm('迁移文件将包含 API Key、自定义鉴权头等敏感凭据，且未加密。请勿公开分享或上传至不可信位置；同步目录也可能将文件上传。是否继续导出？')) return;
   setUserDataActionPending(true);
   showMigrationStatus('正在整理完整迁移文件…', 'info');
   try {
@@ -4190,6 +4228,7 @@ function applyState(nextState, { replaceTaskPolicyDrafts = false, replaceDrafts 
   renderCategoryList();
   renderSettingsOverview();
   if (typeof renderProviderWorkflow === 'function') renderProviderWorkflow();
+  globalThis.BrevessSettingsUI?.sync(state);
 }
 
 function renderKeyboardShortcutSettings(shortcuts) {
@@ -4522,6 +4561,7 @@ function focusTaskPolicyFromHash({ behavior = 'auto' } = {}) {
   activateSettingsPage('models', { updateHash: false, animate: false });
   const row = document.querySelector(`[data-task-policy-id="${taskId}"]`);
   if (!row) return false;
+  globalThis.BrevessSettingsUI?.reveal(row);
   let disclosure = row.parentNode;
   while (disclosure) {
     if (disclosure.tagName === 'DETAILS') disclosure.open = true;
@@ -4778,6 +4818,11 @@ function syncLiteratureNoteTemplateNavigation(preferredId = '') {
   if (!list || !nav || !selector) return '';
   const previousId = preferredId || selector.value;
   const rows = [...list.querySelectorAll('.literature-note-template-row')];
+  const addWeb = document.getElementById('addGeneralWebNoteTemplate');
+  if (addWeb) {
+    addWeb.hidden = rows.some(row => row.dataset.literatureTemplateId === 'general_web');
+    addWeb.disabled = rows.length >= 20;
+  }
   nav.replaceChildren();
   selector.replaceChildren();
   rows.forEach(row => {
@@ -5363,6 +5408,10 @@ function renderModelSuggestions(providerId = document.getElementById('providerId
 }
 
 function handleProviderChange() {
+  // Choosing the explicit custom entry must not retain the previous vendor preset.
+  if (document.getElementById('providerId').value === 'openai-compatible') {
+    document.getElementById('compatiblePreset').value = 'custom';
+  }
   const descriptor = providerSelectionDescriptor();
   const nameInput = document.getElementById('profileName');
   const previous = profileById(selectedProfileId);
@@ -5397,7 +5446,7 @@ function renderProvider() {
   const typesafe = providerId === 'typesafe';
   document.getElementById('compatibleFields').hidden = !compatible || descriptor.presetId !== 'custom';
   const compatibleAdvanced = document.getElementById('compatibleAdvancedFields');
-  if (compatibleAdvanced) compatibleAdvanced.hidden = !compatible;
+  if (compatibleAdvanced) compatibleAdvanced.hidden = !compatible || descriptor.presetId !== 'custom';
   document.getElementById('codexLocalFields').hidden = !localCodex;
   document.getElementById('harnessLocalFields').hidden = !localHarness;
   document.getElementById('apiKeyField').hidden = localCodex || localHarness;
@@ -5410,10 +5459,8 @@ function renderProvider() {
   document.getElementById('compatiblePresetField').hidden =
     compatible && descriptor.selection !== 'openai-compatible';
   if (compatible) {
-    const profile = profileById(selectedProfileId);
-    const config = { ...(profile?.config || {}) };
-    config.supportsVision = providerVisionCapability(providerId, config);
-    document.getElementById('supportsVision').checked = config.supportsVision === true;
+    // Profile rendering and preset selection already populated these controls.
+    // Do not replace an unsaved new preset with the previous profile's capabilities.
     renderCompatiblePresetOptions();
     renderCompatiblePresetHint(compatiblePresetFor(document.getElementById('compatiblePreset').value));
   }
@@ -5958,6 +6005,10 @@ function friendlyError(error) {
     CODEX_NOT_AUTHENTICATED: '插件专用 Codex 会话未登录或已过期，请点击本页“登录 / 重新登录”',
     CODEX_BRIDGE_UNAVAILABLE: '本机 Codex 桥未安装、未注册或已断开',
     CODEX_PROVIDER_REJECTED: '本机 Codex 拒绝了这次请求；请查看登录状态后重新测试',
+    CODEX_JSON_PROTOCOL_UNAVAILABLE: '本机 Codex 桥版本过旧，不支持当前结构化输出协议。请更新 BREVESS Windows 配套组件，再重新测试；仅更新扩展不够。',
+    CODEX_JSON_PROTOCOL_INVALID: '本机 Codex 返回的结构化结果不符合桥协议，请更新配套组件后重试',
+    CODEX_SCHEMA_UNSUPPORTED: '本次 JSON Schema 包含本机 Codex 尚不支持的结构',
+    CODEX_SCHEMA_COMPLEXITY_LIMIT: '本次 JSON Schema 超出本机 Codex 的结构预算',
     HARNESS_NOT_INSTALLED: '未找到官方 Harness，请先安装并在官方桌面登录',
     HARNESS_NOT_AUTHENTICATED: '官方 Harness 尚未保存登录或登录已失效，请在官方桌面登录后重试',
     HARNESS_START_FAILED: '本机 Harness 桥不可用，请检查安装和注册状态',
@@ -6044,6 +6095,11 @@ function renderProviderWorkflow() {
     if (probe?.status === 'failed' && /^[A-Z_]{2,64}$/.test(String(probe.code || ''))) result.textContent += ` · ${probe.code}`;
     if (id === 'web_search' && !probe) result.textContent = '未测试；须按接入路径验证';
     row.append(title, result);
+    if (probe?.code === 'CODEX_JSON_PROTOCOL_UNAVAILABLE') {
+      const detail = document.createElement('small');
+      detail.textContent = friendlyError({ code: probe.code });
+      row.appendChild(detail);
+    }
     if (probe?.status === 'failed' && ['JSON_PARSE_FAILED', 'JSON_CONTRACT_MISMATCH', 'AbortError', 'HtmlResponse', 'JsonSyntaxError', 'SyntaxError', 'TimeoutError', 'TypeError'].includes(probe.diagnosticType)) result.textContent += ` · ${probe.diagnosticType}`;
     if (id !== 'web_search') {
       const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button quiet compact-button';
@@ -6293,6 +6349,7 @@ function renderProfileList() {
     empty.textContent = '尚未创建 API Profile';
     list.appendChild(empty);
   }
+  globalThis.BrevessSettingsUI?.sync(state);
 }
 
 function profileById(id) {
@@ -6322,7 +6379,8 @@ function renderProviderOptions() {
     const option = document.createElement('option');
     option.value = `${COMPATIBLE_PROVIDER_VALUE_PREFIX}${preset.id}`;
     option.textContent = preset.label;
-    domesticGroup.appendChild(option);
+    // Compatibility describes the API protocol, not the provider's region.
+    (preset.group === 'domestic' ? domesticGroup : directGroup).appendChild(option);
   });
   select.appendChild(domesticGroup);
 
@@ -6397,8 +6455,7 @@ function renderProfileEditor() {
   document.getElementById('compatiblePresetField').hidden =
     compatible && selectionValue !== 'openai-compatible';
   renderModelSuggestions(selectionValue);
-  document.getElementById('contextWindowTokens').value =
-    profile?.contextWindowTokens ?? '';
+
   renderReasoningEffort(config);
   renderProfileList();
   renderTaskPolicyTable();
@@ -6647,6 +6704,7 @@ function renderTaskPolicyTable() {
   const moduleBodies = new Map();
   if (moduleHost) {
     const closed = new Set([...moduleHost.querySelectorAll('details')].filter(item => !item.open).map(item => item.dataset.taskModule));
+    if (document.body.classList.contains('settings-focus') && !moduleHost.childElementCount) TASK_POLICY_MODULES.forEach(module => closed.add(module.id));
     moduleHost.replaceChildren();
     TASK_POLICY_MODULES.forEach(module => {
       const section = document.createElement('details');
@@ -6660,7 +6718,7 @@ function renderTaskPolicyTable() {
       wrap.setAttribute('aria-label', interfaceText(module.label));
       const table = document.createElement('table'); table.className = 'task-policy-table';
       const head = document.createElement('thead'); const headerRow = document.createElement('tr');
-      ['功能', '连接与模型', '思考', '推理强度', '联网', 'Token 规则', '编辑预览'].forEach(label => {
+      ['功能', '连接与模型', '思考', '推理强度', '联网', 'Token 规则'].forEach(label => {
         const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = interfaceText(label); headerRow.appendChild(cell);
       });
       head.appendChild(headerRow);
@@ -6761,15 +6819,40 @@ function renderTaskPolicyTable() {
     tokenButton.setAttribute('aria-label', copy.tokenAria);
     tokenCell.appendChild(tokenButton);
 
-    const statusCell = document.createElement('td');
     const status = taskPolicyStatus(definition, policy);
-    const statusLabel = document.createElement('span');
+    const statusLabel = document.createElement('button');
+    statusLabel.type = 'button';
     statusLabel.className = `task-policy-status is-${status.key}`;
     statusLabel.dataset.taskPolicyStatus = definition.id;
-    statusLabel.textContent = status.label;
-    statusCell.appendChild(statusLabel);
+    statusLabel.textContent = 'ⓘ';
+    statusLabel.title = status.label;
+    statusLabel.setAttribute('aria-label', copy.label + '：' + status.label);
+    const statusDescription = document.createElement('span');
+    statusDescription.id = 'task-policy-status-description-' + definition.id;
+    statusDescription.className = 'task-policy-status-description';
+    statusDescription.setAttribute('role', 'tooltip');
+    statusDescription.textContent = status.label;
+    statusDescription.hidden = true;
+    statusLabel.setAttribute('aria-describedby', statusDescription.id);
+    statusLabel.setAttribute('aria-expanded', 'false');
+    const discloseStatus = open => {
+      statusDescription.hidden = !open;
+      statusLabel.setAttribute('aria-expanded', String(open));
+    };
+    statusLabel.addEventListener('focus', () => discloseStatus(true));
+    statusLabel.addEventListener('click', () => discloseStatus(true));
+    statusLabel.addEventListener('blur', () => discloseStatus(false));
+    statusLabel.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation(); discloseStatus(false);
+      }
+    });
+    featureCell.append(statusLabel, statusDescription);
 
-    row.append(featureCell, modelCell, reasoningCell, effortCell, webCell, tokenCell, statusCell);
+    const cells = [featureCell, modelCell, reasoningCell, effortCell, webCell, tokenCell];
+    const labels = ['功能', '连接与模型', '思考', '推理强度', '联网', 'Token 规则'];
+    cells.forEach((cell, index) => { cell.dataset.label = interfaceText(labels[index]); });
+    row.append(...cells);
     if (moduleBodies.has(definition.id)) {
       moduleBodies.get(definition.id).appendChild(row);
     } else if (advancedBody && !COMMON_TASK_POLICY_IDS.has(definition.id)) {
@@ -6779,6 +6862,20 @@ function renderTaskPolicyTable() {
     }
   });
   if (profileMutationInFlight) setProfileMutationPending(true);
+}
+
+// Capture typing immediately: delayed model discovery can rebuild the table before blur.
+function updateTaskModelDraft(target) {
+  const taskId = target?.dataset?.taskPolicyModel;
+  if (!taskId || !SciLLM.LLM_TASK_IDS.includes(taskId)) return false;
+  const policy = taskPolicyDraft(taskId);
+  policy.model = target.value.trim();
+  policy.modelProfileId = effectiveTaskProfile(policy).profileId;
+  const connection = profileForTaskPolicy(policy.modelProfileId);
+  policy.modelProviderId = connection?.providerId || '';
+  policy.modelPresetId = String(connection?.config?.presetId || '');
+  if (!policy.model) { delete policy.model; delete policy.modelProfileId; }
+  return true;
 }
 
 function handleTaskPolicyTableChange(event) {
@@ -7090,14 +7187,14 @@ function collectProfile() {
   } else {
     delete config.reasoningEffort;
   }
-  const contextWindowValue = document.getElementById('contextWindowTokens').value;
+
   return {
     id: selectedProfileId,
     name: document.getElementById('profileName').value.trim(),
     providerId,
     config,
     capabilities: { vision: providerVisionCapability(providerId, config) },
-    contextWindowTokens: contextWindowValue ? Number(contextWindowValue) : null,
+    contextWindowTokens: null,
     tokenPolicy: { mode: 'auto', autoCap: null, manualMax: null }
   };
 }

@@ -145,6 +145,7 @@
         shadow.append(stylesheet, mount);
         (document.body || document.documentElement).appendChild(host);
         ui = options.createUi({ mount,
+          onAgent: () => send('agentConnection'),
           onCommand: command => send('command', { command }),
           onLocateEvidence: source => send('locateEvidence', { source }),
           onLocateFigure: figureId => send('locateFigure', { figureId }),

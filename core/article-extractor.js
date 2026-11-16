@@ -18,7 +18,7 @@
   const PRIMARY_CONTENT_TAGS = new Set(['P', 'LI', 'CAPTION']);
   const EXTRACTOR_VERSION = '2.1.0-extractor-r18';
   const UNRECOGNIZED_BLOCK_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'DD']);
-  const SOURCE_UI_SELECTOR = '[data-sci-plugin-ui],[data-sci-translation]';
+  const SOURCE_UI_SELECTOR = '[data-sci-plugin-ui],[data-sci-translation],[data-wfg-reading-owned]';
   const INJECTED_TRANSLATION_SELECTOR = [
     '.immersive-translate-target-wrapper',
     '[class*="immersive-translate-target-translation" i]',
@@ -238,6 +238,7 @@
     // Do not reuse EXCLUDED_ANCESTOR_SELECTOR here: its broad citation match
     // would also discard the visible inline reference and independent entries.
     const selector = `${SOURCE_UI_SELECTOR},${INJECTED_TRANSLATION_SELECTOR},` +
+      'figcaption button,figcaption [role="button"],.caption button,.figure-caption button,' +
       '.reference-citations .dropBlock__holder,.reference-citations .citation,' +
       '.reference-citations .citation-content';
     const excluded = Boolean(element?.closest?.(selector) || element?.matches?.(selector));
@@ -245,13 +246,15 @@
     return excluded;
   }
 
-  function scientificInlineText(element) {
+  function scientificInlineText(element, options = {}) {
     if (!element) return '';
-    if (sourceReadCache?.text.has(element)) return sourceReadCache.text.get(element);
+    const describeMath = options?.preserveMath === true && globalThis.SciLLM?.libraryHtmlScientificText;
+    if (!describeMath && sourceReadCache?.text.has(element)) return sourceReadCache.text.get(element);
     const visit = node => {
       if (!node) return '';
       if (isScientificInlineTextExcluded(node)) return '';
       if (node.nodeType === 3) return String(node.nodeValue || '');
+      if (describeMath && node.namespaceURI === 'http://www.w3.org/1998/Math/MathML') return describeMath(node);
       const tagName = String(node.tagName || '').toUpperCase();
       const childNodes = [...(node.childNodes || [])];
       const content = childNodes.length
@@ -265,7 +268,7 @@
       return content;
     };
     const text = visit(element).replace(/\s+/g, ' ').trim();
-    sourceReadCache?.text.set(element, text);
+    if (!describeMath) sourceReadCache?.text.set(element, text);
     return text;
   }
 
@@ -277,6 +280,12 @@
       .trim();
     if (element) sourceReadCache?.canonical.set(element, text);
     return text;
+  }
+
+  function scientificDisplayText(element) {
+    // The local reader loads this helper before extraction. Canonical source
+    // reads continue through scientificInlineText and keep their old offsets.
+    return scientificInlineText(element, { preserveMath: true });
   }
 
   // Extraction and source navigation must derive a caption from the same DOM
@@ -308,7 +317,7 @@
       const source = typeof discover === 'function' && discover(documentRef).find(item => item.publisher === 'frontiers' && item.titleElement === element);
       if (!source) return null;
       return { element: source.element, titleElement: element, parts: [element, ...source.captionParts],
-        text: source.caption, displayText: [element, ...source.captionParts].map(scientificInlineText).join(' '),
+        text: source.caption, displayText: [element, ...source.captionParts].map(scientificDisplayText).join(' '),
         sourceIdentity: source.materialId, panelScope: source.captionElement };
     }
     if (element.matches?.('#artText .supplementary-material > h3.siTitle')) {
@@ -323,7 +332,7 @@
       if (!source) return null;
       const parts = source.captionElement === element ? [element] : [element, source.captionElement];
       return { element: owner, titleElement: element, parts,
-        text: source.caption, displayText: parts.map(scientificInlineText).join(' '),
+        text: source.caption, displayText: parts.map(scientificDisplayText).join(' '),
         sourceIdentity: owner.querySelector('a.link-target[id]').id,
         panelScope: source.captionElement };
     }
@@ -339,7 +348,29 @@
     const frontiersOwner = figcaption &&
       /(^|\.)frontiersin\.org$/i.test(String(locationLike?.hostname || '')) &&
       closestSafely(element, '.ArticleFigure');
-    if (jciLegend) {
+    const elifeArticle = /(^|\.)elifesciences\.org$/i.test(String(locationLike?.hostname || '')) &&
+      /^\/articles\/([1-9]\d*)(?:\/figures)?\/?$/.exec(String(locationLike?.pathname || ''));
+    const elifeOwner = figcaption && elifeArticle && closestSafely(element, '.asset-viewer-inline');
+    if (elifeOwner) {
+      const labels = queryAllSafely(elifeOwner, '.asset-viewer-inline__header_text__prominent');
+      const legends = queryAllSafely(elifeOwner, 'figcaption');
+      const label = /^Figure\s+([1-9]\d{0,2})(?:\s*[-\u2010-\u2015\u2212]\s*figure\s+supplement\s+([1-9]\d{0,2}))?$/i.exec(canonicalContentText(labels[0]));
+      const images = queryAllSafely(elifeOwner, 'img');
+      if (labels.length !== 1 || legends.length !== 1 || legends[0] !== element || !label ||
+          elifeOwner.id !== `fig${label[1]}${label[2] ? 's' + label[2] : ''}` ||
+          (label[2] && (elifeOwner.getAttribute('data-parent-asset-id') !== `fig${label[1]}` ||
+            elifeOwner.getAttribute('data-supplement-ordinal') !== label[2])) || !images.length ||
+          images.some(image => {
+            try {
+              const url = new URL(image.getAttribute('src'), locationLike.href);
+              return closestSafely(image, '.asset-viewer-inline') !== elifeOwner ||
+                !/^https?:$/.test(url.protocol) || url.hostname !== 'iiif.elifesciences.org' ||
+                !new RegExp(`^/lax:${elifeArticle[1]}/elife-${elifeArticle[1]}-fig${label[1]}${label[2] ? '-figsupp' + label[2] : ''}-v\\d+\\.tif/`, 'i').test(decodeURIComponent(url.pathname));
+            } catch (_) { return true; }
+          })) return null;
+      parts = [labels[0], element]; focusElement = elifeOwner;
+      sourceIdentity = elifeOwner.id; panelScope = element;
+    } else if (jciLegend) {
       const container = element.parentElement;
       const labels = queryAllSafely(container, ':scope > a.figure_number');
       const legends = queryAllSafely(container, ':scope > p').filter(node =>
@@ -404,7 +435,7 @@
       const label = /^Figure\s+(\d+)\s*$/i.exec(canonicalContentText(titles[0]));
       const innerLabel = /^Fig(?:ure)?\.?\s*(\d+)\b/i.exec(canonicalContentText(element));
       if (titles.length !== 1 || legends.length !== 1 || legends[0] !== element ||
-          !label || frontiersOwner.id !== `f${Number(label[1])}` ||
+          !label || String(frontiersOwner.id || '').toLowerCase() !== `f${Number(label[1])}` ||
           (innerLabel && Number(innerLabel[1]) !== Number(label[1])) ||
           !canonicalContentText(element)) return null;
       const images = queryAllSafely(frontiersOwner, 'img');
@@ -483,8 +514,9 @@
         ? element.querySelector?.('[id]')?.id : container.id) || '');
       panelScope = descriptions[0];
     }
-    const displayText = parts.map(scientificInlineText).filter(Boolean).join(' ');
-    const text = displayText.replace(/<\/?(?:sup|sub)>/gi, '').replace(/\s+/g, ' ').trim();
+    const rawDisplayText = parts.map(scientificInlineText).filter(Boolean).join(' ');
+    const displayText = parts.map(scientificDisplayText).filter(Boolean).join(' ');
+    const text = rawDisplayText.replace(/<\/?(?:sup|sub)>/gi, '').replace(/\s+/g, ' ').trim();
     return text ? { element: focusElement, titleElement: element, parts, text, displayText, sourceIdentity, panelScope } : null;
   }
 
@@ -906,6 +938,18 @@
     ), null) || documentRef.body;
   }
 
+  // A single synchronous annotation preparation may need the same root for
+  // page blocks and headings. Cache source reads only inside this call; the
+  // existing try/finally restores an outer cache even when reading throws.
+  function collectManualSourceContext(documentRef, adapter = null) {
+    return withSourceReadCache(() => {
+      const root = selectContentRoot(documentRef, adapter) || documentRef.body;
+      // Heading discovery historically uses no publisher adapter. Retain that
+      // exact selection instead of reusing an adapter-filtered element list.
+      return { root, headingElements: collectContentElements(root) };
+    });
+  }
+
   function buildRecordsFromElements(elements) {
     const blocks = elements.flatMap((element, sourceIndex) => blocksWithCaptionSource(element, {
       kind: getBlockKind(element),
@@ -913,7 +957,7 @@
       text: canonicalContentText(element),
       displayText: isHeadingElement(element)
         ? bilingualHeadingDisplayText(element)
-        : scientificInlineText(element),
+        : scientificDisplayText(element),
       sourceIndex,
       domId: String(element.id || ''),
       dataSelector: element.dataset?.sciLlmParagraphId
@@ -1134,7 +1178,7 @@
           kind,
           level: 0,
           text: canonicalContentText(element),
-          displayText: scientificInlineText(element),
+          displayText: scientificDisplayText(element),
           sourceIndex,
           domId: String(element.id || ''),
           sourceKey: String(
@@ -1834,6 +1878,96 @@
       }
       add(name, affiliations, isCorresponding ? true : null, rdfa ? 'rdfa' : 'microdata');
     }
+    // ScienceDirect's visible byline is neither citation metadata nor RDFa.
+    // Restrict this publisher fallback to its own byline; references/recommendations
+    // and unlinked correspondence notes must never create an author relation.
+    let scienceDirect = false;
+    try { scienceDirect = /^(?:www\.)?sciencedirect\.com$/iu.test(new URL(sourceUrl).hostname); } catch (_) {}
+    if (scienceDirect) {
+      for (const group of all(documentRef, '.author-group', 12)) {
+        if (authorContext(group).foreign || group.closest?.('aside,nav,footer,.references,#bibliography')) continue;
+        for (const node of all(group, '.author', 201)) {
+          const given = text(node.querySelector?.('.given-name'));
+          const surname = text(node.querySelector?.('.surname'));
+          const name = [given, surname].filter(Boolean).join(' ') ||
+            text(node.querySelector?.('.author-name'));
+          if (!name || authorContext(node).foreign) continue;
+          const affiliations = [];
+          let isCorresponding = false;
+          for (const link of all(node, 'a[href^="#"]', 30)) {
+            const id = String(link.getAttribute('href') || '').slice(1);
+            const target = documentRef.getElementById?.(id);
+            if (!target || authorContext(target).foreign) continue;
+            if (/^aff(?:iliation)?[-_\d]/iu.test(id)) affiliations.push(text(target));
+            if (correspondence(text(target))) {
+              isCorresponding = true;
+              note(text(target), '#' + id, 'correspondence');
+            }
+          }
+          // Only explicit accessibility labels, never an email or author order.
+          if (all(node, '[aria-label],[title]', 30).some(value =>
+            correspondence(clean(value.getAttribute('aria-label') || value.getAttribute('title'))))) isCorresponding = true;
+          add(name, affiliations, isCorresponding ? true : null, 'sciencedirect-byline');
+        }
+      }
+    }
+    // Nature declares correspondence outside its byline. Bind only exact names
+    // already supplied by the article, inside its own author-information section.
+    let nature = false;
+    try { nature = /^(?:www\.)?nature\.com$/iu.test(new URL(sourceUrl).hostname); } catch (_) {}
+    if (nature) {
+      const bindName = visibleName => {
+        const name = clean(visibleName, 200), lower = name.toLocaleLowerCase();
+        const matches = authors.filter(a => {
+          const parts = a.name.split(/,\s*/u);
+          return a.name.toLocaleLowerCase() === lower ||
+            parts.length === 2 && (parts[1] + ' ' + parts[0]).toLocaleLowerCase() === lower;
+        });
+        if (matches.length !== 1) return '';
+        matches[0].name = name;
+        byName.set(lower, matches[0]);
+        return name;
+      };
+      const section = documentRef.querySelector?.('#author-information-content');
+      if (section && !authorContext(section).foreign) {
+        const corresponding = section.querySelector?.('#corresponding-author-list');
+        if (corresponding && correspondence(text(corresponding))) {
+          for (const link of all(corresponding, 'a', 30)) {
+            const name = bindName(text(link));
+            if (name) add(name, [], true, 'nature-correspondence');
+          }
+          note(text(corresponding), '#corresponding-author-list', 'correspondence');
+        }
+        for (const item of all(section, '.c-article-author-affiliation__list > li', 100)) {
+          const affiliation = text(item.querySelector?.('.c-article-author-affiliation__address'));
+          const names = text(item.querySelector?.('.c-article-author-affiliation__authors-list'))
+            .split(/\s*(?:,|&|\band\b)\s*/u);
+          for (const visibleName of names) {
+            const name = bindName(visibleName);
+            if (name) add(name, [affiliation], null, 'nature-affiliation');
+          }
+        }
+      }
+    }
+    const metaValue = names => {
+      for (const name of names) {
+        const value = clean(documentRef.querySelector?.('meta[name="' + name + '" i]')?.content, 1000);
+        if (value) return value;
+      }
+      return '';
+    };
+    const doiValue = value => {
+      const cleaned = clean(value, 500).replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, '').replace(/^doi:\s*/iu, '');
+      return /^10\.\d{4,9}\/[^\s<>]+$/iu.test(cleaned) ? cleaned : '';
+    };
+    let doi = doiValue(metaValue(['citation_doi', 'dc.identifier']));
+    if (!doi && scienceDirect) {
+      const link = all(documentRef, 'a.doi, .doi a', 10).find(value => !authorContext(value).foreign &&
+        !value.closest?.('.references,#bibliography,aside'));
+      doi = doiValue(link?.getAttribute?.('href') || text(link));
+    }
+    const journal = metaValue(['citation_journal_title']);
+    const publicationDate = metaValue(['citation_publication_date', 'citation_date', 'dc.date']);
     // Folded correspondence notes are page evidence too. Preserve their exact
     // labels; the model must not infer a corresponding author from an email alone.
     for (const node of all(documentRef, '[id^="cor"], [role="doc-footnote"]', 100)) {
@@ -1841,7 +1975,9 @@
       const content = text(node);
       if (correspondence(content)) note(content, node.id ? `#${node.id}` : 'doc-footnote', 'correspondence');
     }
-    return { sourceUrl, authors, notes, truncated };
+    return { sourceUrl, authors, notes, truncated,
+      ...(title ? { title } : {}), ...(doi ? { doi } : {}),
+      ...(journal ? { journal } : {}), ...(publicationDate ? { publicationDate } : {}) };
   }
 
   function extractArticle(documentRef, options = {}) {
@@ -1906,21 +2042,24 @@
   }
 
   function createArticleReadinessCompletionNotifier({ documentRef, windowRef,
-    isWaiting, getIdentity, notify, schedule = (callback, delay) => setTimeout(callback, delay),
+    isWaiting, getIdentity, notify, getProgress = () => documentRef.readyState,
+    schedule = (callback, delay) => setTimeout(callback, delay),
     cancelSchedule = token => clearTimeout(token) } = {}) {
-    let timer = null, pendingIdentity = '', notifiedIdentity = '', destroyed = false;
+    let timer = null, pendingIdentity = '', pendingProgress = '', notifiedKey = '', destroyed = false;
     function onReady() {
       if (destroyed || !isWaiting() || !['interactive', 'complete'].includes(documentRef.readyState)) return;
-      const identity = getIdentity();
-      if (!identity || identity === notifiedIdentity) return;
-      pendingIdentity = identity;
+      const identity = getIdentity(), progress = String(getProgress());
+      const key = JSON.stringify([identity, progress]);
+      if (!identity || key === notifiedKey) return;
+      pendingIdentity = identity; pendingProgress = progress;
       if (timer !== null) return;
       timer = schedule(async () => {
         timer = null;
-        const expected = pendingIdentity;
+        const expected = pendingIdentity, expectedProgress = pendingProgress;
         if (destroyed || !isWaiting() || getIdentity() !== expected || documentRef.readyState === 'loading') return;
-        notifiedIdentity = expected;
-        try { await notify(expected); } catch (_) { /* One bounded signal; manual retry stays available. */ }
+        if (String(getProgress()) !== expectedProgress) { onReady(); return; }
+        notifiedKey = JSON.stringify([expected, expectedProgress]);
+        try { await notify(expected); } catch (_) { /* At most one signal per source progress state. */ }
       }, 300);
     }
     documentRef?.addEventListener?.('readystatechange', onReady);
@@ -1953,6 +2092,7 @@
     normalizeTextWithOffsets,
     isScientificInlineTextExcluded,
     scientificInlineText,
+    scientificDisplayText,
     articleCaptionSource,
     collectArticleCaptionSources,
     immersiveTranslationTexts,
@@ -1960,6 +2100,7 @@
     collectContentElements,
     scoreContentRoot,
     selectContentRoot,
+    collectManualSourceContext,
     summarizeUnrecognizedTextBlocks,
     diagnoseArticleExtraction,
     extractArticleFromOutline,

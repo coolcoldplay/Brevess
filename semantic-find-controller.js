@@ -823,6 +823,7 @@
     }
 
     function handleKeydown(event) {
+      if(globalThis.BrevessInputTools?.isEditingEvent(event))return;
       if (!openState || destroyed || event?.defaultPrevented || event?.isComposing ||
           event?.repeat ||
           event?.key === 'Process') return false;

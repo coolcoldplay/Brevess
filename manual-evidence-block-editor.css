@@ -17,3 +17,6 @@
 
 .manual-evidence-dialog :is(button, input, textarea, select, summary):focus-visible { outline: 2px solid var(--swiss-ink, #202020); outline-offset: 2px; }
 .manual-evidence-regroup { padding: 12px 0; border-block: 1px solid var(--color-border, #ddd); }
+
+/* r21: occupied Panels remain visibly unavailable, including after a failed save. */
+.manual-evidence-choice.is-occupied { opacity: .45; background: #eee; cursor: not-allowed; }

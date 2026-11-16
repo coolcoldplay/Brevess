@@ -56,13 +56,41 @@
   function project(name,question=''){return {id:uid('project'),name,question,hypotheses:[],plans:[],assets:[],resources:[],materialLinks:[]};}
   function hypothesis(name){return {id:uid('hypothesis'),name,nodes:[],edges:[],papers:[],revision:0};}
   function plan(name){return {id:uid('plan'),name,hypothesisIds:[],figures:[],history:[],references:[]};}
-  function figure(title=T('未命名 Figure')){return {id:uid('figure'),title,question:'',transition:'',panels:[],references:[],evidenceBlocks:[]};}
+  function figure(title=T('未命名 Figure'),supplementary=false){return {id:uid('figure'),title,...(supplementary===true?{supplementary:true}:{}),question:'',transition:'',panels:[],references:[],evidenceBlocks:[]};}
+  function figureLabel(plan,id){const figure=plan?.figures.find(f=>f.id===id);if(!figure)return '';const list=plan.figures.filter(f=>(f.supplementary===true)===(figure.supplementary===true));return 'Figure '+(figure.supplementary===true?'S':'')+(list.findIndex(f=>f.id===id)+1);}
+  function panelLetter(index){let label='';for(let n=index+1;n>0;n=Math.floor((n-1)/26))label=String.fromCharCode(65+(n-1)%26)+label;return label;}
+  function createPanelOrder(panels){
+    const ids=panels.filter(p=>!p.kind||p.kind==='panel').map(p=>p.id),chosen=[];
+    return {ids:[...ids],pick(id){if(ids.includes(id)&&!chosen.includes(id))chosen.push(id);},undo(){chosen.pop();},complete:()=>chosen.length===ids.length,
+      label:id=>chosen.includes(id)?panelLetter(chosen.indexOf(id)):'',count:()=>chosen.length,
+      apply(current){const now=current.filter(p=>!p.kind||p.kind==='panel').map(p=>p.id);if(JSON.stringify(now)!==JSON.stringify(ids))throw Error('WORKBENCH_PANEL_ORDER_CHANGED');if(chosen.length!==ids.length)throw Error('WORKBENCH_PANEL_ORDER_INCOMPLETE');const byId=new Map(current.map(p=>[p.id,p]));let index=0;return current.map(p=>ids.includes(p.id)?byId.get(chosen[index++]):p);}};
+  }
   function panel(title=T('新 Panel'),point={x:0,y:0},kind='panel'){return {id:uid('panel'),title,kind,x:finite(point.x),y:finite(point.y),w:kind==='text'?260:250,h:kind==='arrow'?60:190,purpose:'',experiment:'',readout:'',expectedResult:'',result:'',status:'planned',references:[],ownAssetId:null,links:[]};}
   function materialLink(data={}){
     return {id:data.id||uid('material-link'),targetType:data.targetType||'node',hypothesisId:data.hypothesisId||'',targetId:data.targetId||'',materialType:data.materialType||'paper',sourceKind:data.sourceKind||'library',resourceId:data.resourceId||'',sourceSnapshot:data.sourceSnapshot?clone(data.sourceSnapshot):null,stance:['support','oppose','neutral'].includes(data.stance)?data.stance:'neutral',note:String(data.note??'').slice(0,4000),createdAt:data.createdAt||new Date().toISOString(),updatedAt:data.updatedAt||new Date().toISOString()};
   }
   function evidenceBlock(data={}){
     return {id:data.id||uid('evidence-block'),title:data.title||T('新证据块'),panelIds:Array.isArray(data.panelIds)?[...new Set(data.panelIds)]:[],status:['draft','complete'].includes(data.status)?data.status:'draft',summary:String(data.summary??'').slice(0,4000),createdAt:data.createdAt||new Date().toISOString(),updatedAt:data.updatedAt||new Date().toISOString()};
+  }
+  function panelTimeline(plan, today=new Date().toISOString().slice(0,10)) {
+    const day=value=>/^\d{4}-\d{2}-\d{2}$/.test(value||'')&&Number.isFinite(Date.parse(value))?Date.parse(value)/86400000:null;
+    const groups=(plan?.figures||[]).map(figure=>({
+      id:figure.id,title:figure.title,
+      panels:figure.panels.filter(panel=>!panel.kind||panel.kind==='panel').map(panel=>{
+        const schedule=panel.schedule||{},start=day(schedule.start),end=day(schedule.end);
+        return {id:panel.id,title:panel.title,status:panelStatus(panel),owner:schedule.owner||'',
+          progress:typeof schedule.progress==='number'?schedule.progress:null,
+          start,end,scheduled:start!==null&&end!==null&&end>=start};
+      })
+    }));
+    const scheduled=groups.flatMap(g=>g.panels).filter(p=>p.scheduled),fallback=day(today)||0;
+    const start=scheduled.length?Math.min(...scheduled.map(p=>p.start)):fallback;
+    const end=scheduled.length?Math.max(...scheduled.map(p=>p.end)):fallback+13;
+    const days=Math.max(1,end-start+1);
+    for(const group of groups)for(const panel of group.panels)if(panel.scheduled){
+      panel.left=(panel.start-start)/days*100;panel.width=(panel.end-panel.start+1)/days*100;
+    }
+    return {groups,start,end,days,scheduled:scheduled.length};
   }
   function selection(project,requested={}){const next={projectId:project?.id||null,mode:requested.mode||'overview',hypothesisId:null,planId:null,figureId:null};if(!project)return next;next.hypothesisId=project.hypotheses.find(h=>h.id===requested.hypothesisId)?.id||null;const p=project.plans.find(p=>p.id===requested.planId);next.planId=p?.id||null;next.figureId=p?.figures.find(f=>f.id===requested.figureId)?.id||null;return next;}
   const ARRANGE_OPERATIONS=Object.freeze(['left','center-x','right','top','center-y','bottom','horizontal','vertical','horizontal-centers','vertical-centers']);
@@ -118,5 +146,5 @@
   function normalizeResource(row,paperTitle=''){const r=clone(row);r.title=String(sourceLabel(r));r.subtitle=paperTitle||r.subtitle||'';r.detail=String(r.detail??r.data?.description??r.data?.summary??r.data?.text??'');if(r.type==='paragraph')r.type='fragment';r.availability ||= r.sourceMismatch?'review':'local';return r;}
   function versionedResources(rows,paperTitle=''){const keys=new Map(rows.map(r=>[r.id,r.source?r.id+':v'+r.source.revision+':'+r.source.contentHash+':'+(r.source.bindings||[]).map(b=>b.revision+'-'+b.contentHash).join('_'):r.id]));return rows.map(row=>{const r=normalizeResource(row,paperTitle);r.id=keys.get(row.id);if(r.parentResourceId)r.parentResourceId=keys.get(r.parentResourceId)||r.parentResourceId;return r;});}
   function locator(resource,resources){if(!resource?.source)return null;const parent=resource.parentResourceId?resources.find(r=>r.id===resource.parentResourceId):null;const figure=resource.type==='figure'?resource:parent?.type==='figure'?parent:resources.find(r=>r.type==='figure'&&r.figureId===resource.figureId&&r.source?.workspaceId===resource.source.workspaceId&&r.source?.workspaceGeneration===resource.source.workspaceGeneration&&r.source?.contentHash===resource.source.contentHash);if(resource.figureId&&figure?.source)return {source:clone(figure.source),target:{kind:'figure',figureId:figure.figureId}};if(resource.type==='fragment'&&resource.source.resourceId!=='mechanism-canvas')return {source:clone(resource.source),target:{kind:'paragraph',paragraphId:resource.data?.paragraphId||resource.data?.id||resource.source.resourceId}};return null;}
-  return {clone,uid,finite,PANEL_STATUS_OPTIONS,panelStatus,updatePanelStatus,TABLE_LIMITS,createGroupTable,validateGroupTable,editGroupTable,ARRANGE_OPERATIONS,rect,portForPoint,bounds,fit,zoomAt,world,project,hypothesis,plan,figure,panel,materialLink,evidenceBlock,selection,arrange,layout,duplicatePanels,duplicateGraph,branch,designPanels,normalizeResource,versionedResources,locator};
+  return {clone,uid,finite,PANEL_STATUS_OPTIONS,panelStatus,updatePanelStatus,panelTimeline,TABLE_LIMITS,createGroupTable,validateGroupTable,editGroupTable,ARRANGE_OPERATIONS,rect,portForPoint,bounds,fit,zoomAt,world,project,hypothesis,plan,figure,figureLabel,panelLetter,createPanelOrder,panel,materialLink,evidenceBlock,selection,arrange,layout,duplicatePanels,duplicateGraph,branch,designPanels,normalizeResource,versionedResources,locator};
 });

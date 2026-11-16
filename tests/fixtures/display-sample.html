@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Display sample</title>
+<style>body{font:16px/1.5 sans-serif;margin:24px}.paper-body{max-width:720px}.related{border:1px solid #aaa;padding:12px}table{border:1px solid}</style></head><body>
+<h1 class="paper-title">Academic sample</h1><main><article class="paper-body"><p>Macrophages maintain intestinal homeostasis. These sample sentences test paragraph layout, unchanged citations, and preserved scientific content.</p><p>Alpha-synuclein pathology is studied with evidence from several experimental models. <a href="#citation">Reference 1</a> remains a working document link.</p><table><tr><td>Preserved table</td></tr></table><figure><img class="paper-figure" src="/tests/fixtures/display-figure.svg" width="240" height="120" alt="Two-to-one QA figure"><figcaption>Figure 1. Example microscopy panel; labels and links must remain readable. <a href="#citation">Figure reference</a></figcaption></figure></article></main>
+<div id="js-enable-context-bar"><div class="context-inner">Article navigation <a href="#citation">References</a></div></div><aside class="related"><p>Sidebar text must retain its original font size.</p></aside><nav class="site-navigation">Site navigation</nav>
+<script src="/web-filters-general/schema.js"></script><script src="/web-filters-general/engine.js"></script><script src="/web-filters-general/reading-modules.js"></script><script src="/web-filters-general/reading-page.js"></script><script src="/web-filters-general/ux-page.js"></script>
+<script>
+(async()=>{
+ const suffix=location.pathname.split('/').pop(),article=document.querySelector('article');article.id='body-'+suffix;
+ if(suffix==='b'){const wrapper=document.createElement('section');article.before(wrapper);wrapper.append(article);const p=document.createElement('p');p.textContent='An additional scientific paragraph changes the sample count and verifies generalization beyond fixed positions.';article.append(p);}
+ if(suffix==='form'){const input=document.createElement('input');article.append(input);}
+ if(location.pathname.startsWith('/help/'))document.querySelector('h1').className='help-title';
+ const engine=WFGEngine.create({document}),reading=WFGReadingPage.create({document});
+ const base={schemaVersion:1,id:'fixture-root',revision:0,name:'Fixture root',description:'',priority:50,match:{hosts:['127.0.0.1'],excludeHosts:[],pathPrefixes:[],excludePrefixes:[],pathMode:'any'},rules:WFGReadingModules.baseRules({pageType:'document',roots:['.paper-body'],required:['h1.paper-title'],outline:[]})};
+ const mapFrame=(value,frame)=>Array.isArray(value)?value.map(v=>mapFrame(v,frame)):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,k==='frame'?frame:mapFrame(v,frame)])):value;
+ const portable=value=>mapFrame(value,'top'),native=value=>mapFrame(value,engine.query('overview').frame);
+ const config=module=>({version:1,generation:0,entries:[{enabled:true,builtinId:null,module}],deletedBuiltins:[]});
+ reading.setConfig(config(base));
+ window.qa={engine,reading,base,config,portable,native,picker:WFGUXPage.create({document,engine,onDirect:async()=>{}}),async preview(){const plan={schemaVersion:2,id:'fixture-'+suffix,revision:0,name:'Paragraph style',scope:await WFGSchema.scope(location.href),operations:[{type:'style',target:{frame:'top',roots:[],selector:'#body-'+suffix+' > p'},styles:{'font-size':'22px','line-height':'1.8',color:'#234567'}}]};reading.setPreview(true);const feedback=engine.apply(native(plan),engine.session());const target=portable(engine.describeElement(article.querySelector('p')));return {plan,feedback,target};},rpc(command,data={}){if(command==='GENERALIZATION_STATUS')return {session:engine.session(),plan:portable(engine.previewPlan()),verified:engine.status()?.verified===true};if(command==='READING_VALIDATE_PLAN')return reading.validatePlan(data.plan,{reusable:data.reusable});if(command==='READING_VALIDATE_MODULE')return reading.validateModule(data.module);if(command==='TOOL')return portable(engine.query(data.tool,native(data.args)));throw Error(command);}};
+})();
+</script></body></html>
