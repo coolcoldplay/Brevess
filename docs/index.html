@@ -1,67 +1,145 @@
-<!DOCTYPE html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="BREVESS，让论文阅读与科研思路相连。浏览 AlphaFold 真实解图、问答和工作台演示，下载免费的 Chrome / Edge 扩展。">
+  <meta name="theme-color" content="#ffffff">
+  <meta property="og:title" content="BREVESS — 读懂论文，连接灵感。">
+  <meta property="og:description" content="读图、追问、记笔记，在论文旁边完成。">
+  <meta property="og:image" content="https://coolcoldplay.github.io/Brevess/assets/site/r27-figures-after.webp">
+  <meta property="og:url" content="https://coolcoldplay.github.io/Brevess/">
+  <title>BREVESS — 论文阅读与课题工作台</title>
+  <link rel="canonical" href="https://coolcoldplay.github.io/Brevess/">
+  <link rel="icon" href="assets/site/favicon.png">
+  <link rel="stylesheet" href="assets/site/homepage.css?v=20261117-mono1">
+  <script defer src="assets/site/site.js?v=20261117-mono1"></script>
+  <script defer src="assets/site/demo-player.js?v=20261117-mono1"></script>
+</head>
+<body>
+<svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+</defs></svg>
+<a class="skip" href="#main" data-en="Skip to content">跳到正文</a>
+<header class="shell nav">
+  <a class="brand" href="#" aria-label="BREVESS 首页">BREVESS</a>
+  <nav aria-label="主导航">
+    <a href="#features" data-en="Demos">功能演示</a>
+    <a href="#workbench" data-en="Workbench">工作台</a>
+    <a href="https://github.com/coolcoldplay/Brevess">GitHub</a>
+    <button id="language" type="button" aria-label="Switch to English">EN</button>
+  </nav>
+</header>
+<main id="main">
+  <section class="hero shell" aria-labelledby="hero-title">
+    <h1 id="hero-title" data-en="Read papers. Connect ideas.">读懂论文，连接灵感。</h1>
+    <p class="lead" data-en="Explore figures, ask questions and take notes. Right beside your paper.">读图、追问、记笔记，在论文旁边完成。</p>
+    <div class="hero-actions">
+      <a class="button primary" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip" data-en="Download preview">下载测试版</a>
+      <button class="text-link" type="button" data-dialog="install-guide" data-en="Installation guide">安装指南</button>
+    </div>
+  </section>
 
-<html lang="zh-CN"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/>
-<title>BREVESS — 论文阅读与课题工作台</title><meta content="BREVESS（Brevity · Evidence · Essence）：通过 AI 增强文献阅读，连接解图、证据整理、假说形成与实验规划。提供五个阅读模块与课题工作台。" name="description"/>
-<meta content="#ffffff" name="theme-color"/><meta content="BREVESS — 论文阅读与课题工作台" property="og:title"/><meta content="导航 · 高亮 · 解图 · 问答 · 笔记 · 课题工作台" property="og:description"/><meta content="website" property="og:type"/><meta content="https://coolcoldplay.github.io/Brevess/" property="og:url"/><meta content="https://coolcoldplay.github.io/Brevess/assets/site/r27-figures-after.webp" property="og:image"/>
-<link href="https://coolcoldplay.github.io/Brevess/" rel="canonical"/><link href="assets/site/favicon.png" rel="icon"/><link href="assets/site/homepage.css" rel="stylesheet"/><link href="assets/site/real-module-showcase.css" rel="stylesheet"/><script defer="" src="assets/site/site.js"></script><script defer="" src="assets/site/workbench-showcase.js"></script><script defer="" src="assets/site/real-module-showcase.js"></script></head>
-<body><a class="skip" data-en="Skip to content" href="#main">跳到正文</a>
-<header class="shell nav"><a aria-label="BREVESS 首页" class="brand" href="#"><img alt="" height="44" src="assets/site/logo.svg" width="44"/><span>BREVESS</span></a><nav aria-label="主导航"><a data-en="Features" href="#features">功能</a><a data-en="Figures" href="#figures">解图</a><a data-en="Workbench" href="#workbench">工作台</a><a data-en="Install" href="#install">安装</a><a href="https://github.com/coolcoldplay/Brevess">GitHub</a><button aria-label="Switch to English" id="language" type="button">EN</button></nav></header>
-<main id="main"><section aria-labelledby="hero-title" class="hero shell">
-<div class="hero-copy"><p class="brand-meaning">Brevity · Evidence · Essence</p>
-<h1 data-en="From reading papers to research ideas." id="hero-title">从文献阅读，到科研思路。</h1>
-<p class="lead" data-en="AI across five reading modules, connecting evidence, hypotheses and experiment planning.">AI 增强五个阅读模块，连接证据整理、假说梳理与实验规划。</p>
-</div>
-<div class="hero-action"><a class="button primary" data-en="Download test build" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip">下载插件测试版</a><span data-en="Chrome / Edge · Free &amp; open source">Chrome / Edge · 免费开源</span></div>
-</section><section aria-labelledby="features-heading" class="shell features" id="features">
-<div class="section-heading"><h2 data-en="Five modules, inside the browser" id="features-heading">五个模块，就在浏览器侧栏</h2><a class="workbench-link" href="#workbench"><span data-en="Continue into your research workbench">继续到课题工作台</span><span aria-hidden="true">↗</span></a></div>
-<div aria-label="五个模块真实 AI 操作" class="module-tabs" role="tablist">
-<button aria-controls="real-showcase" aria-selected="true" class="module-choice" data-module="navigation" id="module-navigation" role="tab"><span data-en="Navigation">导航</span><em data-en="Structure &amp; summaries">结构与概述</em></button>
-<button aria-controls="real-showcase" aria-selected="false" class="module-choice" data-module="highlights" id="module-highlights" role="tab" tabindex="-1"><span data-en="Highlights">高亮</span><em data-en="Semantic categories">按语义标注</em></button>
-<button aria-controls="real-showcase" aria-selected="false" class="module-choice" data-module="figures" id="module-figures" role="tab" tabindex="-1"><span data-en="Figures">解图</span><em data-en="Experiment &amp; evidence">实验与证据</em></button>
-<button aria-controls="real-showcase" aria-selected="false" class="module-choice" data-module="chat" id="module-chat" role="tab" tabindex="-1"><span data-en="Q&amp;A">问答</span><em data-en="Answers with sources">回答有依据</em></button>
-<button aria-controls="real-showcase" aria-selected="false" class="module-choice" data-module="notes" id="module-notes" role="tab" tabindex="-1"><span data-en="Notes">笔记</span><em data-en="Structured reading notes">整理阅读所得</em></button>
-</div>
-<div class="real-paper-line"><strong>AlphaFold 2</strong><span>Jumper et al. · Nature · 2021</span><a data-en="Read the paper ↗" href="https://www.nature.com/articles/s41586-021-03819-2" rel="noopener" target="_blank">阅读原论文 ↗</a><span data-en="Actual AI output · DeepSeek">真实 AI 输出 · DeepSeek</span></div>
-<div aria-labelledby="module-figures" class="real-showcase" id="real-showcase" role="tabpanel">
-<div class="real-toolbar"><p id="real-outcome">Figure 原图 → Panel 证据解读</p><div class="real-view-actions"><button aria-pressed="false" data-en="Before AI" data-real-state="before" type="button">生成前</button><button aria-pressed="true" data-en="After AI" data-real-state="after" type="button">生成后</button><button id="real-play" type="button">播放操作</button></div></div>
-<div class="real-browser-label"><span>nature.com / AlphaFold</span><span><i aria-hidden="true" class="record-dot"></i><span id="real-version">Chrome · 1.0.2 r27 · 2026-11-17</span></span></div>
-<div class="real-stage" data-current="true" data-zoom="full"><img alt="Chrome 中 AlphaFold Figure 1 与 BREVESS 的实际解读画面" class="real-still" height="1154" src="assets/site/r27-figures-after.webp" width="1920"/><video height="1154" hidden="" muted="" playsinline="" poster="assets/site/r27-figures-after.webp" preload="metadata" src="assets/site/r27-figures.webm" width="1920"><a href="assets/site/r27-figures.webm">观看视频 / Watch video</a></video></div>
-<div class="real-controls"><input aria-label="演示进度" id="real-progress" max="100" min="0" step="0.1" type="range" value="0"/><output id="real-time">0:00</output><button aria-pressed="false" id="real-zoom" type="button">放大侧栏</button><button data-en="Fullscreen" id="real-fullscreen" type="button">全屏</button></div>
-</div>
-<p class="real-caption" id="real-caption">双击导航，概述所选章节；单击段落标记返回原文。</p>
-<div class="real-source"><span data-en="Paper and figures: Jumper et al., Nature (2021).">原文与图表：Jumper 等，Nature（2021）。</span> <a href="https://creativecommons.org/licenses/by/4.0/" rel="noopener" target="_blank">CC BY 4.0</a><span data-en=" · AI annotations are produced by BREVESS and are separate from the published paper."> · AI 标注与解读由 BREVESS 生成，不属于原论文。</span><details><summary data-en="Versions, source and capture notes">版本与实录说明</summary><p data-en="Figure and Q&amp;A captures were made in Chrome with BREVESS 1.0.2 r27 on 17 November 2026, using actual DeepSeek V4.1 Flash responses. The new videos sequence captured workflow states; they are not continuous recordings or timing benchmarks. Browser tabs and account chrome are cropped out; AI answers are unaltered. Navigation, highlights and notes retain clearly labelled earlier Edge recordings. Supplementary-figure retrieval remains incomplete on this paper, and AI interpretations need source checking.">解图与问答画面于 2026-11-17 在 Chrome、BREVESS 1.0.2 r27 中采集，使用 DeepSeek V4.1 Flash 的实际返回。新版视频为操作关键画面剪辑，不是连续录屏，也不表示请求耗时。仅裁掉浏览器标签页与账户区域，未改写 AI 回答。导航、高亮与笔记保留明确标注的早期 Edge 实录。这篇论文的补充图抓取仍不完整，AI 解读需要核对原文。</p><a data-en="Capture details" href="https://github.com/coolcoldplay/Brevess/blob/main/docs/media/alphafold-r27.md">查看素材说明</a></details></div>
-<noscript><p>操作视频 / Recordings：<a href="assets/site/real-navigation.mp4">导航</a> · <a href="assets/site/real-highlights.mp4">高亮</a> · <a href="assets/site/r27-figures.webm">解图</a> · <a href="assets/site/r27-chat.webm">问答</a> · <a href="assets/site/real-notes.mp4">笔记</a></p></noscript>
-</section><section aria-labelledby="wb-heading" class="workbench-showcase shell" id="workbench"><div class="workbench-content">
-<div class="wb-heading-row"><div><h2 data-en="Research workbench" id="wb-heading">课题工作台</h2></div><p class="wb-lead" data-en="Bring what you read into your project. Track literature, map competing hypotheses and plan the experiments behind each figure.">把阅读所得带进自己的课题，追踪文献、梳理不同假说，再规划每张图背后的实验。</p></div>
-<div aria-label="课题工作台演示" class="wb-tabs" role="tablist">
-<button aria-controls="wb-player" aria-selected="false" data-wb="radar" id="wb-tab-radar" role="tab" tabindex="-1"><div><b data-en="Literature radar">文献雷达</b><small data-en="Track papers and reading status">追踪文献与阅读状态</small></div></button>
-<button aria-controls="wb-player" aria-selected="false" data-wb="library" id="wb-tab-library" role="tab" tabindex="-1"><div><b data-en="Global library">文献总库</b><small data-en="Find papers and check sources">查找文献与来源记录</small></div></button>
-<button aria-controls="wb-player" aria-selected="true" data-wb="hypothesis" id="wb-tab-hypothesis" role="tab"><div><b data-en="Hypothesis mapping">假说梳理</b><small data-en="Map mechanisms and evidence">梳理机制与证据关系</small></div></button>
-<button aria-controls="wb-player" aria-selected="false" data-wb="figures" id="wb-tab-figures" role="tab" tabindex="-1"><div><b data-en="Figure planning">组图规划</b><small data-en="Plan experiments and figure order">安排实验与组图顺序</small></div></button>
-</div>
-<div aria-labelledby="wb-tab-hypothesis" class="wb-player" id="wb-player" role="tabpanel"><div class="window-title"><span id="wb-clip-label">BREVESS / 假说梳理</span></div><video aria-label="课题工作台实际操作演示" controls="" height="900" id="wb-video" loop="" muted="" playsinline="" poster="assets/site/wb-hypothesis-poster.webp" preload="none" width="1440"><source src="assets/site/wb-hypothesis.mp4" type="video/mp4"/><a href="assets/site/wb-hypothesis.mp4">下载操作视频 / Download video</a></video><div class="wb-description"><div><h3 id="wb-detail-heading">把机制假说画出来，并记录依据</h3><p id="wb-detail-copy">用节点表示研究对象，用连线表达主线、条件分支与反馈；在属性区记录判断和证据。支持拖动调整、撤销与重做。</p></div><button data-en="Play demo" id="wb-play" type="button">播放演示</button></div></div>
-</div><div class="workbench-overview-details"><div class="wb-capabilities"><div><h3 data-en="Compare hypotheses">比较不同假说</h3><p data-en="Keep multiple hypotheses and figure plans within a project, and switch between them from the project tree.">同一课题可维护多个假说和组图方案，通过左侧目录切换。</p></div><div><h3 data-en="Plan each panel">规划每个 Panel</h3><p data-en="Record its purpose, experimental design, intended claim and progress. Review the board, story order and content plan.">记录目的、实验设计、拟支持的结论与进度，并切换画板、故事和内容规划。</p></div><div><h3 data-en="Save and transfer">保存与迁移</h3><p data-en="Save locally and export a project, selected hypothesis or figure plan. Import exported files on another device.">本机保存，可导出完整课题、选中假说或组图方案，再导入到其他设备。</p></div></div><p class="demo-note" data-en="Earlier-version workbench recordings with synthetic literature and the built-in demo project. No live PubMed search or AI calls. Library entries shown here contain metadata, not downloaded full texts.">早期版本工作台实录，使用合成文献和内置演示课题；未执行实时 PubMed 检索或 AI 调用。画面中的总库条目为文献元数据，不代表已下载全文。</p></div></section><section aria-label="从文献阅读到科研思路" class="shell research-flow"><h2 class="flow-intro" data-en="From reading to research">从文献阅读到科研思路</h2><ol><li><b data-en="Read &amp; understand">阅读与理解</b><small data-en="Outline, translation and full-text Q&amp;A">大纲、翻译与全文问答</small></li><li><b data-en="Organize evidence">提炼与整理证据</b><small data-en="Highlights, figure analysis and notes">高亮、解图与结构化笔记</small></li><li><b data-en="Develop hypotheses">形成与比较假说</b><small data-en="Mechanism mapping and evidence links">机制关系与支撑材料</small></li><li><b data-en="Plan experiments">规划实验与组图</b><small data-en="Figure questions and Panel designs">Figure 问题与 Panel 设计</small></li></ol></section>
+  <section class="shell reading-showcase" id="features" aria-labelledby="reading-title">
+    <div class="tabs reading-tabs" role="tablist" aria-label="阅读功能">
+      <button id="tab-figures" role="tab" aria-selected="true" aria-controls="reading-panel" data-demo="figures" data-en="Figures">解图</button>
+      <button id="tab-chat" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="chat" tabindex="-1" data-en="Q&amp;A">问答</button>
+      <button id="tab-navigation" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="navigation" tabindex="-1" data-en="Outline">导航</button>
+      <button id="tab-highlights" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="highlights" tabindex="-1" data-en="Highlights">高亮</button>
+      <button id="tab-notes" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="notes" tabindex="-1" data-en="Notes">笔记</button>
+    </div>
+    <div id="reading-panel" role="tabpanel" aria-labelledby="tab-figures" data-gallery="reading">
+      <h2 class="feature-heading" id="reading-title">读懂每一张图。</h2>
+      <div class="demo-player" data-player="reading">
+        <div class="media-screen">
+          <button class="still-button" type="button" aria-label="放大查看解图实测画面"><img class="demo-still" src="assets/site/r27-figures-after.webp" width="1920" height="1154" fetchpriority="high" alt="AlphaFold Figure 1 原图与 BREVESS 的 Panel 解读"></button>
+          <video hidden muted playsinline preload="none" poster="assets/site/r27-figures-after.webp" src="assets/site/r27-figures.webm" width="1920" height="1154"><a href="assets/site/r27-figures.webm">观看演示 / Watch demo</a></video>
+        </div>
+        <div class="media-controls">
+          <button class="play-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>播放演示</span></button>
+          <div class="state-switch" role="group" aria-label="演示画面"><button type="button" data-state="before" aria-pressed="false">生成前</button><button type="button" data-state="after" aria-pressed="true">生成后</button></div>
+          <button class="expand-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg><span data-en="Enlarge">放大查看</span></button>
+          <span class="media-caption">AlphaFold 2 · 实测剪辑</span>
+        </div>
+        <div class="playback" hidden><input type="range" min="0" max="100" step="0.1" value="0" aria-label="播放进度"><output>0:00 / 0:14</output></div>
+        <p class="media-error" role="status" hidden></p>
+      </div>
+    </div>
+    <noscript><p><a href="assets/site/r27-figures.webm">解图演示</a> · <a href="assets/site/r27-chat.webm">问答演示</a></p></noscript>
+  </section>
 
-<section aria-labelledby="figure-heading" class="shell figure-showcase" id="figures">
-<div class="figure-copy"><div class="figure-intro"><h2 data-en="Read figures as evidence" id="figure-heading">解图，逐项核对依据</h2><p data-en="Use AI to unpack what each panel tests, how it was designed, what was observed and what it supports. Review the source, ask follow-up questions and revise your notes.">借助 AI 梳理每个 Panel 在研究什么、怎样设计实验、观察到了什么，以及能支持什么结论，再回到原图与原文核对、追问和修订。</p></div>
-<ol class="figure-flow">
-<li><div><h3 data-en="Image and context">原图与上下文</h3><p data-en="Browse Figure / Panel entries with captions and relevant text. Inspect the original image before interpreting the evidence.">按 Figure / Panel 建立目录，结合图注与正文定位实验，查看原图。</p></div></li>
-<li><div><h3 data-en="Experiment and conclusion">实验与结论</h3><p data-en="Read structured fields for purpose, evidence type, model, methods, groups, statistics, observations and conclusions.">按实验目的、证据类型、模型、方法、分组、统计、观察和结论查看解读。</p></div></li>
-<li><div><h3 data-en="Panel follow-up">Panel 追问</h3><p data-en="Ask about controls, methods or alternative explanations. Edit individual fields and keep your own reading notes.">围绕对照设计、方法或替代解释继续提问；可逐项编辑解读字段、补充自己的笔记。</p></div></li>
-<li><div><h3 data-en="Cross-figure reasoning">跨图研究逻辑</h3><p data-en="Review how figures contribute to the paper’s argument, organize evidence blocks and record open questions for hypothesis development.">把不同图中的发现放回论文论证过程，整理证据块与待解决问题，为后续假说梳理提供依据。</p></div></li>
-</ol><p class="figure-model-note" data-en="BREVESS 1.0.2 r27, 17 Nov 2026: actual AlphaFold Figure 1 image analysis using DeepSeek V4.1 Flash; A–E results were generated.">BREVESS 1.0.2 r27 · 2026-11-17：AlphaFold Figure 1 原图与 DeepSeek V4.1 Flash，实际生成 Panel A–E 解读。</p></div>
-<div class="figure-demo"><div class="window-title"><span data-en="Panel A · Actual sidebar detail">Panel A · 实际侧栏局部</span></div><video aria-label="解图模块实际界面演示" controls="" height="863" id="figure-video" loop="" muted="" playsinline="" poster="assets/site/r27-figures-sidebar.webp" preload="none" width="382"><source src="assets/site/r27-figures-sidebar.webm" type="video/webm"/><a href="assets/site/r27-figures-sidebar.webm">下载操作视频 / Download video</a></video><button class="figure-play" data-en="Play demo" id="figure-play" type="button">播放演示</button></div>
-</section>
+  <section class="shell workbench-showcase" id="workbench" aria-labelledby="workbench-title">
+    <div class="section-heading"><h2 id="workbench-title"><span data-en="Turn reading">把阅读，</span><wbr><span data-en=" into research.">变成研究思路。</span></h2><p class="lead" data-en="Connect your literature, hypotheses and figure plans in one workspace.">文献、假说与组图，在一个工作台里串起来。</p></div>
+    <div class="tabs workbench-tabs" role="tablist" aria-label="工作台功能">
+      <button id="tab-hypothesis" role="tab" aria-selected="true" aria-controls="workbench-panel" data-demo="hypothesis" data-en="Hypotheses">假说梳理</button>
+      <button id="tab-planning" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="planning" tabindex="-1" data-en="Figure planning">组图规划</button>
+      <button id="tab-library" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="library" tabindex="-1" data-en="Library">文献总库</button>
+      <button id="tab-radar" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="radar" tabindex="-1" data-en="Literature radar">文献雷达</button>
+    </div>
+    <div id="workbench-panel" role="tabpanel" aria-labelledby="tab-hypothesis" data-gallery="workbench">
+      <div class="demo-player" data-player="workbench">
+        <div class="media-screen">
+          <button class="still-button" type="button" aria-label="放大查看假说梳理演示"><img class="demo-still" src="assets/site/wb-hypothesis-poster.webp" width="1440" height="900" loading="lazy" alt="BREVESS 工作台中的假说节点、条件分支与反馈关系"></button>
+          <video hidden muted playsinline preload="none" poster="assets/site/wb-hypothesis-poster.webp" src="assets/site/wb-hypothesis.mp4" width="1440" height="900"><a href="assets/site/wb-hypothesis.mp4">观看演示 / Watch demo</a></video>
+        </div>
+        <div class="media-controls">
+          <button class="play-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>播放演示</span></button>
+          <button class="expand-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg><span data-en="Enlarge">放大查看</span></button>
+          <span class="media-caption">演示课题 · 早期实录</span>
+        </div>
+        <div class="playback" hidden><input type="range" min="0" max="100" step="0.1" value="0" aria-label="播放进度"><output>0:00</output></div>
+        <p class="media-error" role="status" hidden></p>
+      </div>
+    </div>
+    <noscript><p><a href="assets/site/wb-hypothesis.mp4">工作台演示 / Watch workbench demo</a></p></noscript>
+  </section>
 
-<section class="install-band" id="install"><div class="shell"><div class="install-heading"><div><h2 data-en="Install the test build">安装测试版</h2></div><a class="text-link" data-en="Full installation guide" href="https://github.com/coolcoldplay/Brevess/blob/main/%E4%BD%BF%E7%94%A8%E6%95%99%E7%A8%8B.md">完整安装教程</a></div><ol class="steps"><li><div><h3 data-en="Download &amp; unzip">下载并解压</h3><p><a data-en="Download the test package" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip">下载测试包</a><span data-en=", and extract it into a dedicated folder.">，解压到独立文件夹。</span></p></div></li><li><div><h3 data-en="Load the extension">加载插件</h3><p data-en="Open your browser’s extension manager → Developer mode → Load unpacked, then select that folder.">浏览器扩展管理 → 开发人员模式 → 加载解压缩的扩展，选择该文件夹。</p></div></li><li><div><h3 data-en="Open a paper">打开论文</h3><p data-en="Pin BREVESS to the toolbar. Click it on a full-text article to navigate, highlight and take notes.">固定 BREVESS 图标，在论文全文页点击，开始导航、划句与记录。</p></div></li></ol><p class="install-note" data-en="Navigation, manual annotations and the research workbench work without an API key. AI features use your own model and key. This 1.0.2 r27 preview is installed in developer mode; the full regression suite has remaining failures.">无需 API 也能体验导航、手动标注与课题工作台。AI 功能使用你自己的模型与 API Key。当前为开发者模式安装的 1.0.2 r27 预览版，完整回归仍有未通过项。</p></div></section>
-<section aria-labelledby="usage-heading" class="shell bottom-grid"><div class="faq"><h2 data-en="Before you start" id="usage-heading">开始使用前</h2><article class="faq-row"><h3 data-en="Which features use AI?">哪些功能需要 AI？</h3><div class="faq-answer"><p data-en="Outline navigation, offline rules, manual highlights, notes and workbench editing can be used without an API key. Translation, AI highlighting, figure explanations, Q&amp;A and AI-assisted notes require your own model connection.">大纲导航、离线规则、手动高亮、笔记和工作台编辑无需 API Key。翻译、AI 高亮、解图、问答和笔记辅助填写需要自行配置模型连接。</p></div></article><article class="faq-row"><h3 data-en="Where is data stored?">数据存在哪里？</h3><div class="faq-answer"><p data-en="Reading records and settings are primarily stored locally. AI requests send the required content to your configured provider; notes are shared only when you choose to publish them. Enter API keys locally and optionally enable encrypted configuration backups.">阅读档案和配置以本机存储为主。AI 请求会向你配置的服务商发送所需内容；共享仅在你主动发布时上传对应备注。API Key 在本机填写，加密配置备份由你选择开启。</p><a data-en="Read the privacy policy" href="privacy-policy.html">查看隐私政策</a></div></article><article class="faq-row"><h3 data-en="What are the limits?">测试版有哪些限制？</h3><div class="faq-answer"><p data-en="Extraction depends on the publisher and PDF structure. Some enhanced PDF features and local Codex integration need an optional native companion; its binaries are not included in the public package.">页面提取受出版社与 PDF 结构影响。部分 PDF 增强能力和本机 Codex 接入需要可选本机伴侣，公开包不附带其二进制。</p><p data-en="Public notes and research-group comments are still in development.">公开备注与课题组评论仍在开发中。</p></div></article></div>
-</section></main>
-<footer class="footer shell"><aside class="contact" id="contact"><h2 data-en="Contact &amp; support">联系与赞赏</h2><a class="mail" href="mailto:brevess0729@163.com">brevess0729@163.com</a><p><a data-en="Report an issue" href="https://github.com/coolcoldplay/Brevess/issues">反馈问题</a><span class="sep">/</span><a data-en="Contribute" href="https://github.com/coolcoldplay/Brevess/blob/main/CONTRIBUTING.md">参与贡献</a></p><div class="qr-pair"><figure><img alt="微信赞赏二维码 / WeChat support QR" height="150" loading="lazy" src="assets/support/wechat-plugin-display.png" width="150"/><figcaption data-en="WeChat">微信赞赏</figcaption></figure><figure><img alt="支付宝赞赏二维码 / Alipay support QR" height="150" loading="lazy" src="assets/support/alipay-plugin-display.png" width="150"/><figcaption data-en="Alipay">支付宝赞赏</figcaption></figure></div><p class="fine" data-en="Support is optional. Thank you for helping development.">赞赏自愿，感谢支持持续开发。</p></aside><div class="footer-bottom"><div class="footer-brand"><p aria-hidden="true" class="footer-wordmark">BREVESS</p><p class="footer-note">Brevity · Evidence · Essence</p></div><div class="footer-links"><a href="https://github.com/coolcoldplay/Brevess/blob/main/LICENSE">AGPL-3.0</a><a data-en="Release notes" href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.1-r37-r4-public">版本记录</a><a data-en="Privacy" href="privacy-policy.html">隐私政策</a></div></div>
+  <section class="install-band" id="install" aria-labelledby="install-title">
+    <div class="shell">
+      <h2 id="install-title" data-en="Read your next paper with BREVESS.">下一篇论文，用 BREVESS 读。</h2>
+      <p class="lead" data-en="Chrome / Edge · Free &amp; open source">Chrome / Edge · 免费开源</p>
+      <div class="hero-actions"><a class="button inverse" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip" data-en="Download preview">下载测试版</a><button type="button" class="text-link" data-dialog="install-guide" data-en="Installation guide">安装指南</button></div>
+      <ol class="install-steps"><li><span aria-hidden="true">01</span><b data-en="Download &amp; unzip">下载并解压</b></li><li><span aria-hidden="true">02</span><b data-en="Load the extension">加载扩展</b></li><li><span aria-hidden="true">03</span><b data-en="Connect your model">配置模型</b></li></ol>
+    </div>
+  </section>
+</main>
+<footer class="shell footer">
+  <div class="footer-main"><a class="brand" href="#">BREVESS</a><nav aria-label="更多信息"><button type="button" data-dialog="install-guide" data-en="Help">使用帮助</button><a href="privacy-policy.html" data-en="Privacy">隐私</a><a href="https://github.com/coolcoldplay/Brevess">GitHub</a><button type="button" data-dialog="contact" data-en="Contact &amp; support">联系与支持</button></nav></div>
+  <div class="footer-source"><p><a href="https://www.nature.com/articles/s41586-021-03819-2" target="_blank" rel="noopener">AlphaFold 2 · Jumper et al., Nature (2021)</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p><button type="button" data-dialog="capture-notes" data-en="About the demos">素材说明</button></div>
 </footer>
-<!-- Cloudflare Web Analytics for the published website only. -->
+
+<dialog id="media-viewer" class="media-viewer" aria-labelledby="viewer-title">
+  <div class="viewer-toolbar"><h2 id="viewer-title">解图</h2><div class="viewer-actions"><button type="button" id="viewer-scale" aria-pressed="false" data-en="Original size">原始大小</button><button type="button" class="close-dialog icon-button" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div></div>
+  <div id="viewer-content"></div>
+</dialog>
+<dialog id="install-guide" class="info-dialog" aria-labelledby="guide-title">
+  <button type="button" class="close-dialog icon-button" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+  <h2 id="guide-title" data-en="Start with your next paper.">从下一篇论文开始。</h2>
+  <ol class="guide-steps"><li><h3 data-en="Download &amp; unzip">下载并解压</h3><p data-en="Download the preview and keep the extracted folder on your computer.">下载测试版，解压后保留该文件夹。</p></li><li><h3 data-en="Load into Chrome or Edge">在 Chrome 或 Edge 中加载</h3><p data-en="Open the extension manager, enable Developer mode and choose Load unpacked. Select the extracted folder.">打开浏览器扩展管理，开启「开发者模式」，点击「加载已解压的扩展程序」，选择刚才的文件夹。</p></li><li><h3 data-en="Open a paper and connect your model">打开论文，配置模型</h3><p data-en="Click BREVESS on a full-text paper. Connect your model and API key in Settings to use AI; manual annotations and the workbench also work without one.">在论文全文页点击 BREVESS，在设置中填写模型和 API Key，即可使用 AI。手动标注与工作台无需 API。</p></li></ol>
+  <a class="button primary" href="https://www.nature.com/articles/s41586-021-03819-2" target="_blank" rel="noopener" data-en="Try the AlphaFold paper">打开 AlphaFold 论文</a>
+  <p class="dialog-links"><a href="https://github.com/coolcoldplay/Brevess/blob/main/%E4%BD%BF%E7%94%A8%E6%95%99%E7%A8%8B.md" data-en="Full guide">完整教程</a><a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-20261117" data-en="Preview release notes">测试版说明</a></p>
+</dialog>
+<dialog id="capture-notes" class="info-dialog" aria-labelledby="capture-title">
+  <button type="button" class="close-dialog icon-button" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+  <h2 id="capture-title" data-en="Real interfaces. Real output.">真实界面，实际输出。</h2>
+  <p data-en="Figure and Q&amp;A captures: Chrome, BREVESS 1.0.2 r27, 17 Nov 2026, using actual DeepSeek responses. The videos are edited sequences of captured workflow states, not continuous recordings or speed benchmarks.">解图与问答画面采集于 2026-11-17，来自 Chrome 中的 BREVESS 1.0.2 r27 和 DeepSeek 实际返回。视频为实测关键画面剪辑，不是连续录屏，不表示生成速度。</p>
+  <p data-en="Outline, highlights, notes and workbench videos show earlier versions. Workbench recordings use synthetic demo data, not personal research or live PubMed results.">导航、高亮、笔记和工作台为早期版本实录。工作台使用演示资料，不含个人研究数据，也不代表实时 PubMed 检索结果。</p>
+  <p data-en="The paper and figures are by Jumper et al., Nature (2021), licensed under CC BY 4.0. AI interpretations are separate from the published paper and need source checking. Supplementary-figure retrieval is incomplete; this remains a preview release.">原文与图表来自 Jumper 等，Nature（2021），采用 CC BY 4.0。AI 解读不属于原论文，需核对原文；补充图抓取尚不完整，当前为测试版。</p>
+  <a href="https://github.com/coolcoldplay/Brevess/blob/main/docs/media/alphafold-r27.md" class="text-link" data-en="Capture details">完整素材记录</a>
+</dialog>
+<dialog id="contact" class="info-dialog" aria-labelledby="contact-title">
+  <button type="button" class="close-dialog icon-button" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+  <h2 id="contact-title" data-en="Make BREVESS better, together.">一起让 BREVESS 更好用。</h2>
+  <a class="contact-email" href="mailto:brevess0729@163.com">brevess0729@163.com</a>
+  <p class="dialog-links"><a href="https://github.com/coolcoldplay/Brevess/issues" data-en="Report an issue">反馈问题</a><a href="https://github.com/coolcoldplay/Brevess/blob/main/CONTRIBUTING.md" data-en="Contribute">参与贡献</a><a href="https://github.com/coolcoldplay/Brevess/blob/main/LICENSE">AGPL-3.0</a></p>
+  <details class="support"><summary data-en="Support development">赞赏支持</summary><div class="qr-pair"><figure><img src="assets/support/wechat-plugin-display.png" alt="微信赞赏二维码 / WeChat support QR" width="160" height="160" loading="lazy"><figcaption data-en="WeChat">微信赞赏</figcaption></figure><figure><img src="assets/support/alipay-plugin-display.png" alt="支付宝赞赏二维码 / Alipay support QR" width="160" height="160" loading="lazy"><figcaption data-en="Alipay">支付宝赞赏</figcaption></figure></div></details>
+</dialog>
 <script id="cloudflare-analytics" type="module">
-if (location.origin === 'https://coolcoldplay.github.io' &&
-    (location.pathname === '/Brevess' || location.pathname.startsWith('/Brevess/'))) {
+if (location.origin === 'https://coolcoldplay.github.io' && (location.pathname === '/Brevess' || location.pathname.startsWith('/Brevess/'))) {
   const beacon = document.createElement('script');
   beacon.type = 'module';
   beacon.src = 'https://static.cloudflareinsights.com/beacon.min.js';
@@ -69,4 +147,5 @@ if (location.origin === 'https://coolcoldplay.github.io' &&
   document.body.appendChild(beacon);
 }
 </script>
-</body></html>
+</body>
+</html>
