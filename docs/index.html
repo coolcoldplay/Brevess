@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="BREVESS，让论文阅读与科研思路相连。浏览 AlphaFold 真实解图、问答和工作台演示，下载免费的 Chrome / Edge 扩展。">
+  <meta name="description" content="BREVESS · Brevity · Evidence · Essence。快速凝练真实有用的信息，构建知识结构，推动科学研究。大部分功能支持手动完成，也可由 AI 辅助。">
   <meta name="theme-color" content="#ffffff">
-  <meta property="og:title" content="BREVESS — 读懂论文，连接灵感。">
-  <meta property="og:description" content="读图、追问、记笔记，在论文旁边完成。">
+  <meta property="og:title" content="BREVESS — 凝练信息，推动研究。">
+  <meta property="og:description" content="快速提取真实、有用的信息，构建自己的知识结构。手动完成，也可由 AI 辅助。">
   <meta property="og:image" content="https://coolcoldplay.github.io/Brevess/assets/site/r27-figures-after.webp">
   <meta property="og:url" content="https://coolcoldplay.github.io/Brevess/">
   <title>BREVESS — 论文阅读与课题工作台</title>
   <link rel="canonical" href="https://coolcoldplay.github.io/Brevess/">
   <link rel="icon" href="assets/site/favicon.png">
-  <link rel="stylesheet" href="assets/site/homepage.css?v=20261117-mono1">
+  <link rel="stylesheet" href="assets/site/homepage.css?v=20261117-brand1">
   <script defer src="assets/site/site.js?v=20261117-mono1"></script>
-  <script defer src="assets/site/demo-player.js?v=20261117-mono1"></script>
+  <script defer src="assets/site/demo-player.js?v=20261117-brand1"></script>
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
@@ -26,7 +26,7 @@
 </defs></svg>
 <a class="skip" href="#main" data-en="Skip to content">跳到正文</a>
 <header class="shell nav">
-  <a class="brand" href="#" aria-label="BREVESS 首页">BREVESS</a>
+  <a class="brand" href="#" aria-label="BREVESS 首页"><img src="assets/site/logo.svg" width="40" height="40" alt=""><span class="brand-copy"><span>BREVESS</span><span class="brand-meaning">Brevity · Evidence · Essence</span></span></a>
   <nav aria-label="主导航">
     <a href="#features" data-en="Demos">功能演示</a>
     <a href="#workbench" data-en="Workbench">工作台</a>
@@ -36,8 +36,9 @@
 </header>
 <main id="main">
   <section class="hero shell" aria-labelledby="hero-title">
-    <h1 id="hero-title" data-en="Read papers. Connect ideas.">读懂论文，连接灵感。</h1>
-    <p class="lead" data-en="Explore figures, ask questions and take notes. Right beside your paper.">读图、追问、记笔记，在论文旁边完成。</p>
+    <h1 id="hero-title" data-en="Distill knowledge. Advance research.">凝练信息，推动研究。</h1>
+    <p class="lead" data-en="Quickly extract reliable, useful information and build your own structure of knowledge.">快速提取真实、有用的信息，构建自己的知识结构。</p>
+    <p class="workflow-choice" data-en="Most features work manually, with AI assistance when you want it.">大部分功能支持手动完成，也可由 AI 辅助。</p>
     <div class="hero-actions">
       <a class="button primary" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip" data-en="Download preview">下载测试版</a>
       <button class="text-link" type="button" data-dialog="install-guide" data-en="Installation guide">安装指南</button>
@@ -46,24 +47,24 @@
 
   <section class="shell reading-showcase" id="features" aria-labelledby="reading-title">
     <div class="tabs reading-tabs" role="tablist" aria-label="阅读功能">
-      <button id="tab-figures" role="tab" aria-selected="true" aria-controls="reading-panel" data-demo="figures" data-en="Figures">解图</button>
-      <button id="tab-chat" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="chat" tabindex="-1" data-en="Q&amp;A">问答</button>
-      <button id="tab-navigation" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="navigation" tabindex="-1" data-en="Outline">导航</button>
+      <button id="tab-navigation" role="tab" aria-selected="true" aria-controls="reading-panel" data-demo="navigation" data-en="Outline">大纲</button>
       <button id="tab-highlights" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="highlights" tabindex="-1" data-en="Highlights">高亮</button>
+      <button id="tab-figures" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="figures" tabindex="-1" data-en="Figures">解图</button>
+      <button id="tab-chat" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="chat" tabindex="-1" data-en="Q&amp;A">问答</button>
       <button id="tab-notes" role="tab" aria-selected="false" aria-controls="reading-panel" data-demo="notes" tabindex="-1" data-en="Notes">笔记</button>
     </div>
-    <div id="reading-panel" role="tabpanel" aria-labelledby="tab-figures" data-gallery="reading">
-      <h2 class="feature-heading" id="reading-title">读懂每一张图。</h2>
+    <div id="reading-panel" role="tabpanel" aria-labelledby="tab-navigation" data-gallery="reading">
+      <h2 class="feature-heading" id="reading-title">先看脉络，再读细节。</h2>
       <div class="demo-player" data-player="reading">
         <div class="media-screen">
-          <button class="still-button" type="button" aria-label="放大查看解图实测画面"><img class="demo-still" src="assets/site/r27-figures-after.webp" width="1920" height="1154" fetchpriority="high" alt="AlphaFold Figure 1 原图与 BREVESS 的 Panel 解读"></button>
-          <video hidden muted playsinline preload="none" poster="assets/site/r27-figures-after.webp" src="assets/site/r27-figures.webm" width="1920" height="1154"><a href="assets/site/r27-figures.webm">观看演示 / Watch demo</a></video>
+          <button class="still-button" type="button" aria-label="放大查看大纲演示"><img class="demo-still" src="assets/site/real-navigation-after.webp" width="1472" height="908" fetchpriority="high" alt="AlphaFold 原文与 BREVESS 大纲、段落概述并排阅读"></button>
+          <video hidden muted playsinline preload="none" poster="assets/site/real-navigation-after.webp" src="assets/site/real-navigation.mp4" width="1472" height="908"><a href="assets/site/real-navigation.mp4">观看演示 / Watch demo</a></video>
         </div>
         <div class="media-controls">
           <button class="play-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>播放演示</span></button>
           <div class="state-switch" role="group" aria-label="演示画面"><button type="button" data-state="before" aria-pressed="false">生成前</button><button type="button" data-state="after" aria-pressed="true">生成后</button></div>
           <button class="expand-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg><span data-en="Enlarge">放大查看</span></button>
-          <span class="media-caption">AlphaFold 2 · 实测剪辑</span>
+          <span class="media-caption">AlphaFold 2 · 早期实录</span>
         </div>
         <div class="playback" hidden><input type="range" min="0" max="100" step="0.1" value="0" aria-label="播放进度"><output>0:00 / 0:14</output></div>
         <p class="media-error" role="status" hidden></p>
@@ -73,18 +74,18 @@
   </section>
 
   <section class="shell workbench-showcase" id="workbench" aria-labelledby="workbench-title">
-    <div class="section-heading"><h2 id="workbench-title"><span data-en="Turn reading">把阅读，</span><wbr><span data-en=" into research.">变成研究思路。</span></h2><p class="lead" data-en="Connect your literature, hypotheses and figure plans in one workspace.">文献、假说与组图，在一个工作台里串起来。</p></div>
+    <div class="section-heading"><h2 id="workbench-title"><span data-en="Turn reading">把阅读，</span><wbr><span data-en=" into research.">变成研究思路。</span></h2><p class="lead" data-en="Track papers, collect evidence, connect hypotheses and plan your experiments and figures.">追踪文献、汇集证据、梳理假说，再规划实验与组图。</p></div>
     <div class="tabs workbench-tabs" role="tablist" aria-label="工作台功能">
-      <button id="tab-hypothesis" role="tab" aria-selected="true" aria-controls="workbench-panel" data-demo="hypothesis" data-en="Hypotheses">假说梳理</button>
-      <button id="tab-planning" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="planning" tabindex="-1" data-en="Figure planning">组图规划</button>
+      <button id="tab-radar" role="tab" aria-selected="true" aria-controls="workbench-panel" data-demo="radar" data-en="Literature radar">文献雷达</button>
       <button id="tab-library" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="library" tabindex="-1" data-en="Library">文献总库</button>
-      <button id="tab-radar" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="radar" tabindex="-1" data-en="Literature radar">文献雷达</button>
+      <button id="tab-hypothesis" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="hypothesis" tabindex="-1" data-en="Hypotheses">假说梳理</button>
+      <button id="tab-planning" role="tab" aria-selected="false" aria-controls="workbench-panel" data-demo="planning" tabindex="-1" data-en="Figure planning">组图规划</button>
     </div>
-    <div id="workbench-panel" role="tabpanel" aria-labelledby="tab-hypothesis" data-gallery="workbench">
+    <div id="workbench-panel" role="tabpanel" aria-labelledby="tab-radar" data-gallery="workbench">
       <div class="demo-player" data-player="workbench">
         <div class="media-screen">
-          <button class="still-button" type="button" aria-label="放大查看假说梳理演示"><img class="demo-still" src="assets/site/wb-hypothesis-poster.webp" width="1440" height="900" loading="lazy" alt="BREVESS 工作台中的假说节点、条件分支与反馈关系"></button>
-          <video hidden muted playsinline preload="none" poster="assets/site/wb-hypothesis-poster.webp" src="assets/site/wb-hypothesis.mp4" width="1440" height="900"><a href="assets/site/wb-hypothesis.mp4">观看演示 / Watch demo</a></video>
+          <button class="still-button" type="button" aria-label="放大查看文献雷达演示"><img class="demo-still" src="assets/site/wb-radar-poster.webp" width="1440" height="900" loading="lazy" alt="BREVESS 文献雷达的文献追踪与阅读状态"></button>
+          <video hidden muted playsinline preload="none" poster="assets/site/wb-radar-poster.webp" src="assets/site/wb-radar.mp4" width="1440" height="900"><a href="assets/site/wb-radar.mp4">观看演示 / Watch demo</a></video>
         </div>
         <div class="media-controls">
           <button class="play-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>播放演示</span></button>
@@ -95,7 +96,7 @@
         <p class="media-error" role="status" hidden></p>
       </div>
     </div>
-    <noscript><p><a href="assets/site/wb-hypothesis.mp4">工作台演示 / Watch workbench demo</a></p></noscript>
+    <noscript><p><a href="assets/site/wb-radar.mp4">工作台演示 / Watch workbench demo</a></p></noscript>
   </section>
 
   <section class="install-band" id="install" aria-labelledby="install-title">
@@ -108,7 +109,7 @@
   </section>
 </main>
 <footer class="shell footer">
-  <div class="footer-main"><a class="brand" href="#">BREVESS</a><nav aria-label="更多信息"><button type="button" data-dialog="install-guide" data-en="Help">使用帮助</button><a href="privacy-policy.html" data-en="Privacy">隐私</a><a href="https://github.com/coolcoldplay/Brevess">GitHub</a><button type="button" data-dialog="contact" data-en="Contact &amp; support">联系与支持</button></nav></div>
+  <div class="footer-main"><a class="brand" href="#"><img src="assets/site/logo.svg" width="32" height="32" alt="">BREVESS</a><nav aria-label="更多信息"><button type="button" data-dialog="install-guide" data-en="Help">使用帮助</button><a href="privacy-policy.html" data-en="Privacy">隐私</a><a href="https://github.com/coolcoldplay/Brevess">GitHub</a><button type="button" data-dialog="contact" data-en="Contact &amp; support">联系与支持</button></nav></div>
   <div class="footer-source"><p><a href="https://www.nature.com/articles/s41586-021-03819-2" target="_blank" rel="noopener">AlphaFold 2 · Jumper et al., Nature (2021)</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p><button type="button" data-dialog="capture-notes" data-en="About the demos">素材说明</button></div>
 </footer>
 
@@ -127,7 +128,7 @@
   <button type="button" class="close-dialog icon-button" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
   <h2 id="capture-title" data-en="Real interfaces. Real output.">真实界面，实际输出。</h2>
   <p data-en="Figure and Q&amp;A captures: Chrome, BREVESS 1.0.2 r27, 17 Nov 2026, using actual DeepSeek responses. The videos are edited sequences of captured workflow states, not continuous recordings or speed benchmarks.">解图与问答画面采集于 2026-11-17，来自 Chrome 中的 BREVESS 1.0.2 r27 和 DeepSeek 实际返回。视频为实测关键画面剪辑，不是连续录屏，不表示生成速度。</p>
-  <p data-en="Outline, highlights, notes and workbench videos show earlier versions. Workbench recordings use synthetic demo data, not personal research or live PubMed results.">导航、高亮、笔记和工作台为早期版本实录。工作台使用演示资料，不含个人研究数据，也不代表实时 PubMed 检索结果。</p>
+  <p data-en="Outline, highlights, notes and workbench videos show earlier versions. Workbench recordings use synthetic demo data, not personal research or live PubMed results.">大纲、高亮、笔记和工作台为早期版本实录。工作台使用演示资料，不含个人研究数据，也不代表实时 PubMed 检索结果。</p>
   <p data-en="The paper and figures are by Jumper et al., Nature (2021), licensed under CC BY 4.0. AI interpretations are separate from the published paper and need source checking. Supplementary-figure retrieval is incomplete; this remains a preview release.">原文与图表来自 Jumper 等，Nature（2021），采用 CC BY 4.0。AI 解读不属于原论文，需核对原文；补充图抓取尚不完整，当前为测试版。</p>
   <a href="https://github.com/coolcoldplay/Brevess/blob/main/docs/media/alphafold-r27.md" class="text-link" data-en="Capture details">完整素材记录</a>
 </dialog>

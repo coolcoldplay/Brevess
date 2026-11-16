@@ -111,10 +111,29 @@ p {
   gap:24px;
 }
 .brand {
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
   font-size:25px;
   font-weight:750;
   letter-spacing:-.6px;
   line-height:1;
+}
+.brand>img {
+  flex:none;
+}
+.brand-copy {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.brand-meaning {
+  font-size:14px;
+  font-weight:450;
+  letter-spacing:0;
+  line-height:1.2;
+  color:var(--muted);
+  white-space:nowrap;
 }
 .brand:hover {
   text-decoration:none;
@@ -142,6 +161,11 @@ p {
   color:var(--muted);
   line-height:1.55;
   margin-top:18px;
+}
+.workflow-choice {
+  margin-top:8px;
+  font-size:18px;
+  line-height:1.55;
 }
 .hero-actions {
   display:flex;
@@ -638,6 +662,10 @@ body:has(dialog[open]) {
   .brand {
     font-size:21px;
   }
+  .nav .brand>img {
+    width:34px;
+    height:34px;
+  }
   .nav nav {
     gap:18px;
     font-size:13px;
@@ -662,6 +690,9 @@ body:has(dialog[open]) {
     font-size:18px;
     line-height:1.65;
     margin-top:18px;
+  }
+  .workflow-choice {
+    font-size:17px;
   }
   .hero-actions {
     gap:24px;
@@ -836,6 +867,11 @@ body:has(dialog[open]) {
   .media-viewer .still-button {
     width:100%;
     height:100%;
+  }
+}
+@media(max-width:480px) {
+  .nav nav>a {
+    display:none;
   }
 }
 @media(prefers-reduced-motion:reduce) {

@@ -3,8 +3,8 @@
   const asset = name => `assets/site/${name}`;
   const demos = {
     figures: { title: ['读懂每一张图。', 'Understand every figure.'], name: ['解图', 'Figures'], before: 'r27-figures-before.webp', after: 'r27-figures-after.webp', detail: 'r27-figures-sidebar.webp', video: 'r27-figures.webm', size: [1920, 1154], current: true },
-    chat: { title: ['带着问题，回到证据。', 'Ask questions. Follow the evidence.'], name: ['问答', 'Q&A'], before: 'r27-chat-citation.webp', after: 'r27-chat-table.webp', video: 'r27-chat.webm', size: [1920, 1154], current: true, states: [['回答与引用', 'Cited answer'], ['展开表格', 'Expanded table']] },
-    navigation: { title: ['先看脉络，再读细节。', 'See the structure. Explore the details.'], name: ['导航', 'Outline'], detail: 'real-navigation-sidebar.webp' },
+    chat: { title: ['与 AI 讨论论文，循着引用找依据。', 'Discuss the paper. Follow the evidence.'], name: ['问答', 'Q&A'], before: 'r27-chat-table.webp', after: 'r27-chat-citation.webp', detail: 'r27-chat-sidebar.webp', video: 'r27-chat.webm', size: [1920, 1154], current: true, states: [['侧栏对话', 'Conversation'], ['展开表格', 'Expanded table']] },
+    navigation: { title: ['先看脉络，再读细节。', 'See the structure. Explore the details.'], name: ['大纲', 'Outline'], detail: 'real-navigation-sidebar.webp' },
     highlights: { title: ['让重要内容，一目了然。', 'Keep the important parts in sight.'], name: ['高亮', 'Highlights'], detail: 'real-highlights-detail.webp' },
     notes: { title: ['把读过的，留下来。', 'Keep what you learn.'], name: ['笔记', 'Notes'], detail: 'real-notes-sidebar.webp' },
     hypothesis: { name: ['假说梳理', 'Hypotheses'], workbench: 'hypothesis' },
@@ -104,6 +104,7 @@
       video.setAttribute('aria-label', `${text(demo.name)} · ${caption()}`);
       player.querySelector('.media-caption').textContent = caption();
       states.forEach((button, index) => {
+        button.dataset.state = demo.states ? index ? 'before' : 'after' : index ? 'after' : 'before';
         button.textContent = demo.states ? text(demo.states[index]) : index ? tr('生成后', 'After AI') : tr('生成前', 'Before AI');
         button.setAttribute('aria-pressed', String(button.dataset.state === gallery.state));
       });

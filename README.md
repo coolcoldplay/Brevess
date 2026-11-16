@@ -1,57 +1,77 @@
 <p align="center"><img src="icons/Brevess-logo.svg" alt="BREVESS logo" width="72"></p>
 <h1 align="center">BREVESS</h1>
-<p align="center"><strong>Brevity · Evidence · Essence</strong><br>从文献阅读，到科研思路。</p>
+<p align="center"><strong>Brevity · Evidence · Essence</strong></p>
+<p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
 <p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 实测演示</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-20261117"><strong>1.0.2 r27 预览版</strong></a> · <a href="使用教程.md">使用教程</a></p>
 
-**读论文 → 理解实验 → 整理证据 → 形成假说 → 规划实验与组图。**
-
-## 最新版真实论文实测
-
-继续使用 **AlphaFold 2 的 Nature 原论文**。以下画面采集于 **2026-11-17，Chrome，BREVESS 1.0.2 r27**，AI 输出来自实际 DeepSeek V4.1 Flash 调用。
-
-### 原图与解读并排，逐项查看证据
-
-选择 Figure 1 的图像输入，实际生成 A–E 五个 Panel 的解读。展开 1A，查看实验目的、设计、观察和解释。
-
-![当前版本：AlphaFold Figure 1 与真实 Panel 解读](docs/assets/site/r27-figures-after.webp)
-
-[播放操作关键画面](https://coolcoldplay.github.io/Brevess/#features) · [直接查看 WebM](https://coolcoldplay.github.io/Brevess/assets/site/r27-figures.webm)
-
-### 问答带原文引用，宽表格单独展开
-
-提问：“用表格比较 Evoformer、结构模块和 recycling 的输入、核心操作、作用及原文依据。”点击回答中的引用回到论文，表格可在大窗口中完整浏览。
-
-![当前版本：AlphaFold 模块对比表格的独立阅读窗口](docs/assets/site/r27-chat-table.webp)
-
-[查看原文引用定位画面](docs/assets/site/r27-chat-citation.webp) · [观看问答关键画面](https://coolcoldplay.github.io/Brevess/assets/site/r27-chat.webm)
-
-**素材说明：**真实截图仅做裁剪、压缩和元数据清除，未改写 AI 回答。新视频按顺序展示操作关键画面，不是连续录屏，也不表示请求耗时。论文及 Figure 1：Jumper et al., [Nature (2021)](https://www.nature.com/articles/s41586-021-03819-2)，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。AI 解读需核对原文；[采集范围与限制](docs/media/alphafold-r27.md)。
+**大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
 ## 五个阅读模块
 
-- **导航**：从大纲进入段落概述，单击段落标记回到原文。
-- **高亮**：手动划句，或按背景、问题、方法与结果标注正文。
-- **解图**：逐 Figure / Panel 拆解实验，核对依据，继续追问。
-- **问答**：围绕全文提问，通过引用定位原文，展开宽表格阅读。
-- **笔记**：按研究背景、科学问题、主要发现等字段整理阅读所得。
+**大纲 → 高亮 → 解图 → 问答 → 笔记**
 
-段落标记与 Fig 标签：**单击定位，双击 AI 解读**。笔记字段圆点：单击选择、双击填写。问答输入问题后发送。阅读时不要求先选择文献类型。
+以下均使用 **AlphaFold 2 的 Nature 原论文**。解图与问答来自 2026-11-17 的 Chrome / BREVESS 1.0.2 r27 实测和 DeepSeek 实际输出；大纲、高亮和笔记保留早期版本实录。
 
-当前版本包括重新整理的设置中心、模型服务商图标、紧凑的侧栏工具，以及跨网页显示滤镜。滤镜推广到相似网页前，需用至少两个网页样本比较并预览验证。
+### 1. 大纲
+
+先看论文结构，再进入段落；需要时由 AI 辅助概述，点击标记回到原文。
+
+![大纲：AlphaFold 原文与段落概述并排阅读](docs/assets/site/real-navigation-after.webp)
+
+[观看大纲演示](https://coolcoldplay.github.io/Brevess/assets/site/real-navigation.mp4)
+
+### 2. 高亮
+
+手动标记重要句子，或让 AI 按背景、问题、方法与结果梳理正文。
+
+![高亮：在 AlphaFold 原文中提取关键信息](docs/assets/site/real-highlights-after.webp)
+
+[观看高亮演示](https://coolcoldplay.github.io/Brevess/assets/site/real-highlights.mp4)
+
+### 3. 解图
+
+原图与解读并排，逐 Figure / Panel 查看目的、设计、观察和结论，继续追问或手动修订。
+
+![解图：AlphaFold Figure 1 与真实 Panel 解读](docs/assets/site/r27-figures-after.webp)
+
+[观看解图关键画面](https://coolcoldplay.github.io/Brevess/assets/site/r27-figures.webm)
+
+### 4. 问答
+
+在侧栏与大模型讨论论文：比较 Evoformer、结构模块与 recycling，追问方法与结论，再循着回答中的引用核对原文。
+
+![问答：AlphaFold 原文与侧栏中的 DeepSeek 讨论、解释和引用](docs/assets/site/r27-chat-citation.webp)
+
+[观看问答关键画面](https://coolcoldplay.github.io/Brevess/assets/site/r27-chat.webm) · [查看宽表格展开示例](docs/assets/site/r27-chat-table.webp)
+
+### 5. 笔记
+
+把研究背景、科学问题与主要发现整理为笔记；可手动编辑，也可让 AI 辅助填写。
+
+![笔记：将 AlphaFold 阅读所得整理为知识结构](docs/assets/site/real-notes-after.webp)
+
+[观看笔记演示](https://coolcoldplay.github.io/Brevess/assets/site/real-notes.mp4)
+
+论文及图表：Jumper et al., [Nature (2021)](https://www.nature.com/articles/s41586-021-03819-2)，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。截图未改写 AI 回答；新视频为关键画面剪辑，不表示生成速度。[素材记录与限制](docs/media/alphafold-r27.md)。
 
 ## 课题工作台
 
 **文献雷达 → 文献总库 → 假说梳理 → 组图规划**
 
-| 追踪与整理文献 | 形成机制假说 |
+| [1. 文献雷达](https://coolcoldplay.github.io/Brevess/assets/site/wb-radar.mp4) | [2. 文献总库](https://coolcoldplay.github.io/Brevess/assets/site/wb-library.mp4) |
 | :---: | :---: |
-| ![文献雷达操作示例](docs/assets/site/wb-radar.gif) | ![假说画布操作示例](docs/assets/site/wb-hypothesis.gif) |
-| 保存检索式、跟踪新增文献、查找来源。 | 用节点与连线梳理机制，记录支撑证据。 |
+| ![文献雷达操作示例](docs/assets/site/wb-radar-poster.webp) | ![文献总库操作示例](docs/assets/site/wb-library-poster.webp) |
+| 保存检索式，追踪文献与阅读状态。 | 汇集文献，查找来源与阅读记录。 |
 
-为每个 Panel 安排目的、实验设计与拟支持的结论。支持多套方案、本机保存、撤销重做与导入导出。
+| [3. 假说梳理](https://coolcoldplay.github.io/Brevess/assets/site/wb-hypothesis.mp4) | [4. 组图规划](https://coolcoldplay.github.io/Brevess/assets/site/wb-figures.mp4) |
+| :---: | :---: |
+| ![假说梳理操作示例](docs/assets/site/wb-hypothesis-poster.webp) | ![组图规划操作示例](docs/assets/site/wb-figures-poster.webp) |
+| 用节点与连线组织机制，关联支撑证据。 | 按 Figure / Panel 规划实验与论证顺序。 |
 
-工作台动画为**早期版本实录**，使用合成文献和内置演示课题；未执行实时 PubMed 检索，不含个人研究资料，不作为本次版本的验收证据。
+从手动整理开始，也可借助 AI 辅助完善研究思路。支持多套方案、本机保存、撤销重做与导入导出。
+
+工作台画面为**早期版本实录**，使用合成文献和内置演示课题；点击模块标题可观看视频。
 
 ## 安装预览版
 
