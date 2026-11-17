@@ -14,6 +14,8 @@
   <link rel="icon" href="assets/site/favicon.png">
   <link rel="stylesheet" href="assets/site/homepage.css?v=20261117-brand1">
   <script defer src="assets/site/site.js?v=20261117-mono1"></script>
+  <link rel="stylesheet" href="assets/site/scroll-story.css?v=20261117-scroll1">
+  <script defer src="assets/site/scroll-story.js?v=20261117-scroll1"></script>
   <script defer src="assets/site/demo-player.js?v=20261117-brand1"></script>
 </head>
 <body>
@@ -35,14 +37,37 @@
   </nav>
 </header>
 <main id="main">
-  <section class="hero shell" aria-labelledby="hero-title">
-    <h1 id="hero-title" data-en="Distill knowledge. Advance research.">凝练信息，推动研究。</h1>
+  <section class="scroll-story is-static" aria-label="BREVESS：从论文发现到研究规划">
+    <div class="story-sticky">
+      <div class="story-header" aria-hidden="true"><img src="assets/site/logo.svg" alt="" width="36" height="36"><span>BREVESS</span></div>
+      <div class="story-canvas">
+        <div class="story-scene story-brand" aria-label="BREVESS，Brevity · Evidence · Essence">
+          <div class="story-brand-layout" aria-hidden="true">
+            <span class="story-seed">BRE<span class="story-extra">VITY</span></span>
+            <span class="story-seed"><span class="story-shared-letter">E</span>V<span class="story-extra">IDENCE</span></span>
+            <span class="story-seed">ESS<span class="story-extra">ENCE</span></span>
+            <span class="story-meaning" data-en="Brevity">凝练</span><span class="story-meaning" data-en="Evidence">证据</span><span class="story-meaning" data-en="Essence">本质</span>
+          </div>
+          <p class="story-brand-caption" data-en="Distill knowledge. Advance research.">凝练信息，推动研究。</p>
+        </div>
+        <div class="story-scene story-position">
+          <div class="story-browser"><div class="story-browser-dots" aria-hidden="true"><i></i><i></i><i></i></div><h1 data-en="A browser extension.">一个浏览器插件。</h1><p data-en="Turn reading into research.">让阅读，推进研究。</p><small>Chrome / Edge</small></div>
+        </div>
+        <div class="story-scene story-dual">
+          <div class="story-dual-grid"><div><h2 data-en="You">人工</h2><p data-en="Your judgment">你来判断</p><small data-en="Select · Verify · Refine">选择 · 核对 · 修改</small></div><span class="story-times" aria-hidden="true">×</span><div><h2>AI</h2><p data-en="AI acceleration">帮你加速</p><small data-en="Search · Organize · Generate">检索 · 整理 · 生成</small></div></div>
+          <div class="story-dual-line" aria-hidden="true"></div><p class="story-dual-caption" data-en="One workflow. Always in your hands.">同一条工作流。始终由你掌控。</p>
+        </div>
+        <div class="story-scene story-workflow"><h2 data-en="From paper discovery to research planning.">从论文发现，到研究规划。</h2><ol class="story-flow"><li data-en="Discover">论文发现</li><li data-en="Read">论文精读</li><li data-en="Connect">体系构建</li><li data-en="Hypothesize">假说梳理</li><li data-en="Plan figures">组图规划</li></ol><p data-en="The same materials. Reusable. Traceable.">同一份材料 · 可复用 · 可回溯</p></div>
+      </div>
+      <div class="story-footer"><a href="#features" data-en="Explore features">查看功能</a><a href="#install" data-en="Get BREVESS">开始使用</a></div>
+      <div class="story-scroll-track" aria-hidden="true"></div>
+    </div>
+  </section>
+  <section class="hero shell story-intro" aria-labelledby="hero-title">
+    <h2 id="hero-title" data-en="Distill knowledge. Advance research.">凝练信息，推动研究。</h2>
     <p class="lead" data-en="Quickly extract reliable, useful information and build your own structure of knowledge.">快速提取真实、有用的信息，构建自己的知识结构。</p>
     <p class="workflow-choice" data-en="Most features work manually, with AI assistance when you want it.">大部分功能支持手动完成，也可由 AI 辅助。</p>
-    <div class="hero-actions">
-      <a class="button primary" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip" data-en="Download preview">下载测试版</a>
-      <button class="text-link" type="button" data-dialog="install-guide" data-en="Installation guide">安装指南</button>
-    </div>
+    <div class="hero-actions"><a class="button primary" href="https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-20261117/Brevess-v1.0.2-r27-Chrome.zip" data-en="Download preview">下载测试版</a><button class="text-link" type="button" data-dialog="install-guide" data-en="Installation guide">安装指南</button></div>
   </section>
 
   <section class="shell reading-showcase" id="features" aria-labelledby="reading-title">
