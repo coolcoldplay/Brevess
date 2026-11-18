@@ -1,0 +1,94 @@
+/* Website shell around the unmodified production BREVESS sidebar/workbench. */
+(() => {
+ 'use strict';
+ const D=window.BV_DEMO_DATA, root=document.getElementById('reading-demo'), wb=document.getElementById('workbench-demo');if(!D||!root||!wb)return;
+ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const en=()=>document.documentElement.lang==='en',t=(zh,eng)=>en()?eng:zh;
+ const svg=p=>`<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+ const ico={help:svg('<circle cx="12" cy="12" r="9"/><path d="M9 8a3 3 0 0 1 6 1c0 2-3 2-3 4m0 4h.01"/>'),expand:svg('<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>'),reset:svg('<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>')};
+ let visibleSources=['manual','llm','regex'];
+ let module='navigation',reading={figures:[],annotations:[],notes:{},chat:[]},annotations=[],selected=null,nextId=0,timer,tourStep=-1,guideSeen=false;
+ const $=(s,inRoot=root)=>inRoot.querySelector(s);
+ const paper=()=>$('.bv-paper'),sidebar=()=>$('#native-sidebar'),workbench=()=>$('#native-workbench',wb);
+ const send=(frame,type,data={})=>frame?.contentWindow?.postMessage({source:'brevess-website',type,...data},location.origin);
+ function article(){return `<div class="bv-journal">nature</div><h1>${D.title}</h1><p class="bv-paper-meta">Jumper et al. · Nature 596, 583–589 (2021)<br>${t('开放获取 · 论文节选','Open access · Excerpts')}</p>`+D.paragraphs.map(p=>`<section><h2 id="bv-${p.id}">${p.heading}</h2>${p.caption?`<small>${t('节选自 Figure 4 图注','Excerpt from the Figure 4 caption')}</small>`:''}<p data-paragraph="${p.id}">${esc(p.text)}</p>${D.figures.filter(f=>f.section===p.id).map(f=>`<figure id="bv-figure-${f.id}"><figcaption>Fig. ${f.id}: ${f.title}</figcaption><button data-action="image" data-id="${f.id}" aria-label="${t('放大查看 Figure','Enlarge Figure')} ${f.id}"><img src="assets/demo/figure-${f.id}.png" width="${f.width}" height="${f.height}" loading="lazy" alt="${esc(f.title)}"></button></figure>`).join('')}</section>`).join('')+`<footer>Jumper et al. · CC BY 4.0 · ${t('节选省略引用编号','Citation markers omitted')}<br><a href="${D.source}" target="_blank" rel="noopener">${t('查看完整论文 ↗','Read the full paper ↗')}</a></footer>`;}
+ function tools(scope){return `<button data-action="${scope==='wb'?'wb-help':'help'}" aria-label="${t('操作提示','Show tips')}">${ico.help}</button><button data-action="${scope==='wb'?'wb-expand':'expand'}" aria-label="${t('展开体验','Expand demo')}">${ico.expand}</button>${scope==='wb'?'':`<button data-action="reset" aria-label="${t('重置体验','Reset demo')}">${ico.reset}</button>`}`;}
+ root.innerHTML=`<div class="bv-topbar"><span>nature.com</span><span class="bv-preview">${t('真实界面 · AI 为预置示例','Real UI · Prepared AI examples')}</span>${tools('read')}</div><div class="bv-helpbar"><span id="demo-context-tip"></span><button data-action="sample">${t('试试划句','Try selecting text')}</button><button data-action="generate">${t('运行 AI 示例','Run AI example')}</button></div><div class="bv-mobile-switch"><button data-action="paper-view">${t('论文原文','Paper')}</button><button data-action="sidebar-view">BREVESS</button></div><div class="bv-layout"><article class="bv-paper" tabindex="0" aria-label="${t('论文节选，可选择文字','Paper excerpts; select text')}">${article()}</article><aside class="bv-sidebar"><div class="bv-brand"><img src="assets/site/logo.svg" alt="" width="19" height="23">BREVESS</div><iframe id="native-sidebar" data-src="assets/demo/native/popup.html" title="BREVESS ${t('真实侧栏交互体验','real sidebar demo')}" loading="lazy"></iframe></aside></div><div class="bv-tour" hidden></div><div class="bv-selection" hidden role="dialog" aria-label="${t('选区阅读工具','Selection tools')}"></div><div class="bv-toast" role="status" hidden></div>`;
+ wb.innerHTML=`<div class="bv-topbar"><span>${t('课题工作台','Research workbench')}</span><span class="bv-preview">${t('真实画布 · 可编辑 · 仅本页保存','Real canvas · Editable · In-memory')}</span>${tools('wb')}</div><div class="bv-workbench-scroll"><iframe id="native-workbench" data-src="assets/demo/native/workbench/index.html" title="BREVESS ${t('真实课题工作台交互体验','real workbench demo')}" loading="lazy"></iframe></div><div class="bv-wb-tip" hidden></div>`;
+ root.dataset.view='sidebar';
+ function toast(text){clearTimeout(timer);const el=$('.bv-toast');el.textContent=text;el.hidden=false;timer=setTimeout(()=>el.hidden=true,4200);}
+ function setView(view){root.dataset.view=view;}
+ function jump(id){hideSelection();if(matchMedia('(max-width:760px)').matches)setView('paper');const el=$('#bv-'+id)||$('[data-paragraph="'+id+'"]');if(!el)return;const p=paper();p.scrollTo({top:el.getBoundingClientRect().top-p.getBoundingClientRect().top+p.scrollTop-24,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});el.classList.remove('bv-flash');requestAnimationFrame(()=>el.classList.add('bv-flash'));}
+ function updateTip(){const names={navigation:t('大纲','Outline'),highlights:t('高亮','Highlights'),figures:t('解图','Figures'),chat:t('问答','Q&A'),notes:t('笔记','Notes')};$('#demo-context-tip').textContent=module==='chat'?t('试问：AlphaFold 为什么需要 MSA？','Try: Why does AlphaFold need an MSA?'):`${names[module]} · ${t('单击切换，双击底部图标启动 AI','Click to switch. Double-click below for AI.')}`;}
+ function tour(step){tourStep=step;const el=$('.bv-tour');if(step<0){el.hidden=true;return;}
+   const rows=[
+    [t('从底部五个模块开始','Start with the five modules'),t('单击切换；双击大纲、高亮、解图或笔记，启动 AI。问答直接输入后发送。','Click to switch. Double-click Outline, Highlights, Figures or Notes for AI. Type and send in Q&A.')],
+    [t('在原文里划一句','Select a sentence'),t('拖动选择文字，会出现高亮、翻译和备注工具。也可点击“试试划句”。','Drag to select text for highlighting, translation and notes. Or use “Try selecting text”.')],
+    [t('同一份材料，继续使用','Reuse what you read'),t('点击侧栏的保存图标，再到下方工作台。展开右侧论文，拖动 Figure 或 Panel 到画布。','Save with the sidebar icon. In the workbench below, expand the paper and drag a Figure or Panel onto the canvas.')]
+   ];const [title,desc]=rows[step];el.innerHTML=`<button data-action="dismiss-tour" aria-label="${t('关闭提示','Close tips')}">×</button><small>${step+1} / 3</small><strong>${title}</strong><p>${desc}</p><div><button data-action="dismiss-tour">${t('自己探索','Explore')}</button><button data-action="next-tour">${step===2?t('开始体验','Let’s try it'):t('下一步','Next')}</button></div>`;el.hidden=false;el.dataset.step=step;
+ }
+ function syncAnnotations(){reading.annotations=annotations.flatMap(a=>a.segments.map(s=>({id:a.id,source:a.source||'manual',p:s.p,text:D.paragraphs.find(p=>p.id===s.p).text.slice(s.start,s.end),note:a.note||'',color:a.color})));send(sidebar(),'annotations',{items:reading.annotations});}
+ function paint(){for(const p of root.querySelectorAll('[data-paragraph]')){const text=D.paragraphs.find(x=>x.id===p.dataset.paragraph).text,spans=annotations.flatMap(a=>a.segments.filter(s=>s.p===p.dataset.paragraph).map(s=>({...s,id:a.id,color:a.color,source:a.source||'manual'}))),edges=[...new Set([0,text.length,...spans.flatMap(s=>[s.start,s.end])])].sort((a,b)=>a-b);p.innerHTML=edges.slice(0,-1).map((start,i)=>{const end=edges[i+1],a=spans.findLast(s=>s.start<=start&&s.end>=end),part=esc(text.slice(start,end));return a?`<mark data-annotation="${a.id}" data-color="${a.color}" class="${visibleSources.includes(a.source)?'':'bv-mark-hidden'}">${part}</mark>`:part;}).join('');}}
+ function offset(p,node,o){const r=document.createRange();r.selectNodeContents(p);r.setEnd(node,o);return r.toString().length;}
+ function selection(){const s=getSelection();if(!s||s.isCollapsed||!s.rangeCount)return;const r=s.getRangeAt(0);if(!paper().contains(r.startContainer)||!paper().contains(r.endContainer))return;const segments=[];for(const p of root.querySelectorAll('[data-paragraph]'))if(r.intersectsNode(p)){const start=p.contains(r.startContainer)?offset(p,r.startContainer,r.startOffset):0,end=p.contains(r.endContainer)?offset(p,r.endContainer,r.endOffset):p.textContent.length;if(end>start)segments.push({p:p.dataset.paragraph,start,end});}if(!segments.length)return;selected={segments,rect:r.getBoundingClientRect(),color:'yellow'};tour(-1);showSelection();}
+ function selectedAnnotation(){return annotations.find(a=>a.id===selected?.id);}
+ function save(){if(!selected)return;let a=selectedAnnotation();if(!a){a={id:++nextId,segments:selected.segments,color:selected.color||'yellow',note:''};annotations.push(a);selected.id=a.id;}a.color=selected.color||a.color;paint();syncAnnotations();return a;}
+ function showSelection(mode='translation'){if(!selected)return;const el=$('.bv-selection'),a=selectedAnnotation(),p=D.paragraphs.find(p=>p.id===selected.segments[0].p);el.innerHTML=`<div class="bv-selection-top"><span>${t('阅读摘句','Reading excerpt')}</span><button data-action="color" data-color="yellow" aria-label="${t('黄色高亮','Yellow highlight')}"></button><button data-action="color" data-color="green" aria-label="${t('绿色高亮','Green highlight')}"></button><button data-action="color" data-color="purple" aria-label="${t('紫色高亮','Purple highlight')}"></button><button data-action="close-selection" aria-label="${t('关闭选区工具','Close selection tools')}">×</button></div><div class="bv-selection-tabs"><button data-action="translate" aria-pressed="${mode==='translation'}">${t('翻译','Translate')}</button><button data-action="note" aria-pressed="${mode==='note'}">${t('备注','Note')}</button><button data-action="highlight">${t('高亮','Highlight')}</button></div><div class="bv-selection-detail">${mode==='note'?`<textarea aria-label="${t('写下备注','Write a note')}" maxlength="2000" placeholder="${t('你的理解、疑问或下一步…','Your interpretation, question or next step…')}">${esc(a?.note||'')}</textarea><button data-action="save-note">${t('保存备注','Save note')}</button>`:`<small>${t('所在段落译文 · 预置示例','Paragraph translation · Prepared example')}</small><p>${esc(p.zh)}</p>`}</div>`;el.hidden=false;const base=root.getBoundingClientRect(),rect=selected.rect;el.style.left=Math.max(10,Math.min(rect.left-base.left,base.width-el.offsetWidth-10))+'px';el.style.top=Math.max(50,Math.min(rect.bottom-base.top+10,base.height-el.offsetHeight-16))+'px';if(mode==='note')$('textarea',el).focus();}
+ function hideSelection(){$('.bv-selection').hidden=true;}
+ function sample(){tour(-1);setView('paper');hideSelection();const p=$('[data-paragraph="msa"]');paper().scrollTop=p.getBoundingClientRect().top-paper().getBoundingClientRect().top+paper().scrollTop-95;const range=document.createRange();range.selectNodeContents(p);getSelection().removeAllRanges();getSelection().addRange(range);selected={segments:[{p:'msa',start:0,end:p.textContent.length}],rect:p.getBoundingClientRect(),color:'purple'};showSelection();}
+ function image(id){const f=D.figures.find(x=>x.id===id),dialog=document.createElement('dialog');dialog.className='bv-image-dialog';dialog.innerHTML=`<header><strong>Fig ${id} · ${esc(f.title)}</strong><button aria-label="${t('关闭原图','Close figure')}">×</button></header><img src="assets/demo/figure-${id}.png" alt="${esc(f.title)}">`;document.body.appendChild(dialog);dialog.querySelector('button').onclick=()=>dialog.close();dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();}
+ function expand(el){if(el.classList.contains('bv-expanded')){el.classList.remove('bv-expanded');document.body.style.overflow='';}else{document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));el.classList.add('bv-expanded');document.body.style.overflow='hidden';}hideSelection();}
+ function helpWorkbench(){const el=$('.bv-wb-tip',wb);el.innerHTML=`<strong>${t('把阅读材料拖入课题','Bring reading materials into your project')}</strong><p>${t('先在上方切换文献雷达、文献总库、假说梳理和组图规划。进入后两个模块后，在右侧展开论文 → Figure → Panel，拖到画布即可引用。','Explore Radar, Library, Hypotheses and Figure Planning above. In the last two modules, expand the paper → Figure → Panel in Materials and drag it onto the canvas.')}</p><button data-action="wb-dismiss">${t('知道了','Got it')}</button>`;el.hidden=false;}
+ root.addEventListener('pointerup',e=>{if(e.target.closest('.bv-paper'))setTimeout(selection,0);});
+ root.addEventListener('keyup',e=>{if(e.shiftKey)selection();});
+ root.addEventListener('pointerdown',e=>{if(!e.target.closest('.bv-selection')&&!e.target.closest('mark'))hideSelection();});
+ root.addEventListener('click',e=>{
+   const mark=e.target.closest('mark');if(mark){const a=annotations.find(a=>a.id===Number(mark.dataset.annotation));selected={...a,rect:mark.getBoundingClientRect()};showSelection(a.note?'note':'translation');return;}
+   const b=e.target.closest('[data-action]');if(!b)return;switch(b.dataset.action){
+    case 'help':tour(0);break;case 'dismiss-tour':tour(-1);break;case 'next-tour':tour(tourStep<2?tourStep+1:-1);break;
+    case 'sample':sample();break;case 'paper-view':setView('paper');break;case 'sidebar-view':setView('sidebar');break;
+    case 'expand':expand(root);break;case 'generate':send(sidebar(),'generate',{module});tour(-1);break;
+    case 'reset':annotations=[];reading={figures:[],annotations:[],notes:{},chat:[]};paint();hideSelection();sidebar().src=sidebar().dataset.src;workbench().src=workbench().dataset.src;tour(0);break;
+    case 'translate':showSelection('translation');break;case 'note':showSelection('note');break;case 'close-selection':hideSelection();break;
+    case 'highlight':save();hideSelection();toast(t('已高亮，可在侧栏「高亮」查看','Highlighted. Find it in Highlights.'));break;
+    case 'color':selected.color=b.dataset.color;save();break;
+    case 'save-note':{const a=save();a.note=$('.bv-selection textarea').value;syncAnnotations();hideSelection();toast(t('备注已保留，可在侧栏「高亮」查看','Note kept in Highlights.'));break;}
+    case 'image':image(Number(b.dataset.id));break;
+   }
+ });
+ wb.addEventListener('click',e=>{switch(e.target.closest('[data-action]')?.dataset.action){case 'wb-help':helpWorkbench();break;case 'wb-dismiss':$('.bv-wb-tip',wb).hidden=true;break;case 'wb-expand':expand(wb);break;}});
+ addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('.bv-selection').hidden){hideSelection();return;}document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';tour(-1);}});
+ addEventListener('message',e=>{
+   if(e.origin!==location.origin||e.data?.source!=='brevess-native-demo')return;
+   const tableFrame=document.querySelector('.bv-table-dialog iframe');
+   if(e.data.type==='close-table'&&e.source===tableFrame?.contentWindow){tableFrame.closest('dialog').close();return;}
+   const isSidebar=e.source===sidebar()?.contentWindow,isWB=e.source===workbench()?.contentWindow,isRadar=e.source===workbench()?.contentWindow?.document.querySelector('iframe')?.contentWindow;
+   if(!isSidebar&&!isWB&&!isRadar)return;
+   const m=e.data;
+   if(m.type==='table'&&isSidebar){
+     const url=new URL(m.url);if(url.origin!==location.origin||!url.pathname.endsWith('/native/table-viewer.html')||!m.key.startsWith('brevess.tableView.'))return;
+     window.__bvTableSnapshots={[m.key]:m.value};
+     const dialog=document.createElement('dialog');dialog.className='bv-table-dialog';
+     const frame=document.createElement('iframe');frame.title=t('完整表格','Complete table');frame.src=url.href;dialog.append(frame);document.body.append(dialog);
+     dialog.addEventListener('close',()=>{delete window.__bvTableSnapshots;dialog.remove();});dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});dialog.showModal();return;
+   }
+   if(m.type==='module'){module=m.module;updateTip();}
+   if(m.type==='jump'){if(isWB||isRadar){document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';}jump(m.id);if(isWB||isRadar)root.scrollIntoView({behavior:'smooth',block:'center'});}
+   if(m.type==='toast')toast(m.message);
+   if(m.type==='highlight-visibility'){visibleSources=m.sources;paint();}
+   if(m.type==='annotation'){const a=annotations.find(a=>String(a.id)===String(m.id));if(a){jump(a.segments[0].p);requestAnimationFrame(()=>{const mark=root.querySelector('[data-annotation="'+a.id+'"]');if(mark){selected={...a,rect:mark.getBoundingClientRect()};showSelection(a.note?'note':'translation');}});}}
+   if(m.type==='generated'){reading={...m.reading,annotations:reading.annotations};toast(t('已展示预置 AI 结果，可继续展开与编辑','Prepared AI example is ready to explore and edit.'));}
+   if(m.type==='ai-highlights'){const p=D.paragraphs[4];annotations.push({id:++nextId,source:'llm',segments:[{p:p.id,start:0,end:p.text.indexOf(' We observe')}],color:'purple',note:'关键边界：浅 MSA 时精度下降。'});paint();syncAnnotations();jump('msa');}
+   if(m.type==='save'){reading={...m.reading,annotations:reading.annotations};loadFrame(workbench());send(workbench(),'reading',{reading});toast(t('已存入下方文献库；在材料库展开论文即可引用','Saved to the library below. Expand the paper in Materials to reuse it.'));helpWorkbench();}
+   if(m.type==='ready'&&isWB){send(workbench(),'reading',{reading});if(en())send(workbench(),'language',{language:'en'});}
+   if(m.type==='ready'&&isSidebar){syncAnnotations();if(en())send(sidebar(),'language',{language:'en'});}
+   if(m.type==='escape'){document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';hideSelection();tour(-1);}
+   if(m.type==='install'){document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';document.getElementById('install').scrollIntoView({behavior:'smooth'});toast(t('账号、模型与本机文件配置请在安装后的插件中使用','Configure accounts, models and local folders in the installed extension.'));}
+ });
+ function loadFrame(frame){if(frame&&!frame.getAttribute('src'))frame.src=frame.dataset.src;}
+ const lazy=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){loadFrame(entry.target.querySelector('iframe'));lazy.unobserve(entry.target);}},{rootMargin:'600px'});lazy.observe(root);lazy.observe(wb);
+ const guide=new IntersectionObserver(entries=>{if(!guideSeen&&entries.some(e=>e.isIntersecting)){guideSeen=true;tour(0);guide.disconnect();}},{threshold:.35});guide.observe(root);
+ const wbGuide=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)){helpWorkbench();wbGuide.disconnect();}},{threshold:.5});wbGuide.observe(wb);
+ addEventListener('resize',hideSelection);document.addEventListener('brevess-languagechange',()=>{updateTip();send(sidebar(),'language',{language:en()?'en':'zh-CN'});send(workbench(),'language',{language:en()?'en':'zh-CN'});if(tourStep>=0)tour(tourStep);});
+ updateTip();
+})();

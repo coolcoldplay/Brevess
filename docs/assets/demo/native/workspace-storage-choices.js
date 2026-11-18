@@ -1,0 +1,5 @@
+(()=>{'use strict';let pending=null;
+ function choose(mode){if(pending)return pending;const dialog=document.createElement('dialog');dialog.className='brevess-storage-choice';dialog.innerHTML=mode==='save'?'<form method="dialog"><h3>保存当前资料</h3><p>保存正文、图片和已有的翻译、高亮、笔记、解图与问答。</p><label><input name="page" type="checkbox" checked>包含网页与离线阅读副本</label><p><small>未勾选时不新增网页副本，已存在的副本保留。</small></p><div><button value="cancel">取消</button><button value="confirm">保存</button></div></form>':'<form method="dialog"><h3>删除当前资料</h3><label><input name="page" type="checkbox">网页正文与离线副本</label><label><input name="user" type="checkbox">用户数据（高亮、备注、笔记和AI结果）</label><p><small>只删除勾选部分。</small></p><div><button value="cancel">取消</button><button value="confirm">删除所选内容</button></div></form>';
+ document.body.append(dialog);pending=new Promise(resolve=>{dialog.addEventListener('close',()=>{const value=dialog.returnValue==='confirm'?{page:dialog.querySelector('[name="page"]').checked,user:!!dialog.querySelector('[name="user"]')?.checked}:null;dialog.remove();pending=null;resolve(value);},{once:true});dialog.showModal();});return pending;
+ }
+ globalThis.BrevessWorkspaceChoices={choose};})();

@@ -3,7 +3,7 @@
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 实测演示</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r10"><strong>1.0.2 r27 · 自适应解图 r10</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r10"><strong>1.0.2 r27 · 自适应解图 r10</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -11,7 +11,9 @@
 
 **大纲 → 高亮 → 解图 → 问答 → 笔记**
 
-以下均使用 **AlphaFold 2 的 Nature 原论文**。解图与问答来自 2026-11-17 的 Chrome / BREVESS 1.0.2 r27 实测和 DeepSeek 实际输出；大纲、高亮和笔记保留早期版本实录。
+**[直接体验真实侧栏与工作台](https://coolcoldplay.github.io/Brevess/#features)**：划句、翻译备注、展开 Figure / Panel、问答和编辑笔记；保存后将材料拖入课题。无需登录或填写 API Key，AI 为预置示例。
+
+以下截图均使用 **AlphaFold 2 的 Nature 原论文**。解图与问答来自 2026-11-17 的 Chrome / BREVESS 1.0.2 r27 实测和 DeepSeek 实际输出；大纲、高亮和笔记保留早期版本实录。
 
 ### 1. 大纲
 
@@ -19,7 +21,7 @@
 
 ![大纲：AlphaFold 原文与段落概述并排阅读](docs/assets/site/real-navigation-after.webp)
 
-[观看大纲演示](https://coolcoldplay.github.io/Brevess/assets/site/real-navigation.mp4)
+[亲手体验大纲](https://coolcoldplay.github.io/Brevess/#features)
 
 ### 2. 高亮
 
@@ -27,7 +29,7 @@
 
 ![高亮：在 AlphaFold 原文中提取关键信息](docs/assets/site/real-highlights-after.webp)
 
-[观看高亮演示](https://coolcoldplay.github.io/Brevess/assets/site/real-highlights.mp4)
+[亲手体验高亮](https://coolcoldplay.github.io/Brevess/#features)
 
 ### 3. 解图
 
@@ -35,7 +37,7 @@
 
 ![解图：AlphaFold Figure 1 与真实 Panel 解读](docs/assets/site/r27-figures-after.webp)
 
-[观看解图关键画面](https://coolcoldplay.github.io/Brevess/assets/site/r27-figures.webm)
+[亲手体验解图](https://coolcoldplay.github.io/Brevess/#features)
 
 ### 4. 问答
 
@@ -43,7 +45,7 @@
 
 ![问答：AlphaFold 原文与侧栏中的 DeepSeek 讨论、解释和引用](docs/assets/site/r27-chat-citation.webp)
 
-[观看问答关键画面](https://coolcoldplay.github.io/Brevess/assets/site/r27-chat.webm) · [查看宽表格展开示例](docs/assets/site/r27-chat-table.webp)
+[亲手体验问答](https://coolcoldplay.github.io/Brevess/#features) · [查看宽表格展开示例](docs/assets/site/r27-chat-table.webp)
 
 ### 5. 笔记
 
@@ -51,27 +53,27 @@
 
 ![笔记：将 AlphaFold 阅读所得整理为知识结构](docs/assets/site/real-notes-after.webp)
 
-[观看笔记演示](https://coolcoldplay.github.io/Brevess/assets/site/real-notes.mp4)
+[亲手体验笔记](https://coolcoldplay.github.io/Brevess/#features)
 
-论文及图表：Jumper et al., [Nature (2021)](https://www.nature.com/articles/s41586-021-03819-2)，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。截图未改写 AI 回答；新视频为关键画面剪辑，不表示生成速度。[素材记录与限制](docs/media/alphafold-r27.md)。
+论文及图表：Jumper et al., [Nature (2021)](https://www.nature.com/articles/s41586-021-03819-2)，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。保留的截图未改写 AI 回答；官网现已改为可点击的交互体验，AI 结果为预置示例。[素材记录与限制](docs/media/alphafold-r27.md)。
 
 ## 课题工作台
 
 **文献雷达 → 文献总库 → 假说梳理 → 组图规划**
 
-| [1. 文献雷达](https://coolcoldplay.github.io/Brevess/assets/site/wb-radar.mp4) | [2. 文献总库](https://coolcoldplay.github.io/Brevess/assets/site/wb-library.mp4) |
+| [1. 文献雷达](https://coolcoldplay.github.io/Brevess/#workbench) | [2. 文献总库](https://coolcoldplay.github.io/Brevess/#workbench) |
 | :---: | :---: |
 | ![文献雷达操作示例](docs/assets/site/wb-radar-poster.webp) | ![文献总库操作示例](docs/assets/site/wb-library-poster.webp) |
 | 保存检索式，追踪文献与阅读状态。 | 汇集文献，查找来源与阅读记录。 |
 
-| [3. 假说梳理](https://coolcoldplay.github.io/Brevess/assets/site/wb-hypothesis.mp4) | [4. 组图规划](https://coolcoldplay.github.io/Brevess/assets/site/wb-figures.mp4) |
+| [3. 假说梳理](https://coolcoldplay.github.io/Brevess/#workbench) | [4. 组图规划](https://coolcoldplay.github.io/Brevess/#workbench) |
 | :---: | :---: |
 | ![假说梳理操作示例](docs/assets/site/wb-hypothesis-poster.webp) | ![组图规划操作示例](docs/assets/site/wb-figures-poster.webp) |
 | 用节点与连线组织机制，关联支撑证据。 | 按 Figure / Panel 规划实验与论证顺序。 |
 
 从手动整理开始，也可借助 AI 辅助完善研究思路。支持多套方案、本机保存、撤销重做与导入导出。
 
-工作台画面为**早期版本实录**，使用合成文献和内置演示课题；点击模块标题可观看视频。
+以上工作台截图为**早期版本实录**。点击模块标题可进入使用最新版真实界面组件的[官网工作台](https://coolcoldplay.github.io/Brevess/#workbench)，体验材料引用、画布编辑和撤销。
 
 ## 安装预览版
 

@@ -1,0 +1,90 @@
+/* Workbench chrome shares the quiet, neutral settings design. Canvas artwork
+   and scientific content keep their own styling and zoom. */
+:root{--wb-ink:#242424;--wb-muted:#777b80;--wb-line:#ededee;--wb-hover:#f4f4f5;--wb-selected:#eaeaec}
+body{color:var(--wb-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,.btn,select,input{font:inherit}
+button,.btn{border-color:transparent;border-radius:7px;box-shadow:none;min-height:32px;line-height:1.35}
+button:hover,.btn:hover{background:var(--wb-hover)}
+button:disabled{opacity:.4}
+button.primary,.btn.primary{background:var(--wb-ink);color:#fff}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #777;outline-offset:3px}
+input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{border:1px solid #e3e3e6;border-radius:7px;background:#fff;min-height:34px}
+input[type=checkbox]{accent-color:#242424}
+.actions,.catalog-toolbar{align-items:center;gap:8px}
+button.icon-button,button.brevess-icon-button,button[data-icon],.actions>button:has(>svg:only-child){display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;width:32px;min-width:32px;height:32px;padding:7px;box-shadow:none}
+button.icon-button:hover,button.brevess-icon-button:hover{background:var(--wb-hover)}
+button>svg,.btn>svg{width:18px;height:18px;flex:none;stroke-width:1.65;vertical-align:middle}
+.brandbar{min-height:52px;padding:6px 18px;border-bottom:1px solid var(--wb-line);gap:14px;background:#fff}
+.brandbar .brand{font-size:20px;letter-spacing:.06em}
+.brandbar .workspacebar{gap:10px}
+.brandbar .workspacebar .mode-switch{border:0;padding-left:10px;margin:0;gap:4px}
+.brandbar .mode-switch button,.brandbar .workspacebar select,.brandbar .file-menu>summary{font-size:14px;font-weight:550;min-height:34px;padding:7px 12px}
+.brandbar .mode-switch button.active{background:#242424;color:#fff}
+.brandbar #save-status{font-size:12px;white-space:nowrap}
+.pane-title{min-height:48px;padding:10px 16px;border:0;font-size:14px;font-weight:600;gap:8px;align-items:center}
+#directory{background:#fafafa;border:0}
+#directory-list{padding:8px}
+#directory-list .section-title{font-size:12px;color:var(--wb-muted);font-weight:500;margin:20px 10px 8px}
+#directory-list button{font-size:13px;line-height:1.5;border:0;border-radius:7px}
+#directory-list button.active{background:var(--wb-selected);color:#242424}
+#directory-list small{font-size:11px;font-weight:400;color:var(--wb-muted)}
+.split{background:transparent;border:0;position:relative}
+.split::after{content:'';position:absolute;inset:0 2px;background:var(--wb-line)}
+.split:hover::after{background:#aaa}
+#contextbar{padding:8px 18px;min-height:44px;border:0;gap:12px;background:#fff}
+#contextbar:empty{display:none}
+#contextbar button,#contextbar select{font-size:13px}
+#right{border:0;background:#fff}
+#library-view .library-view-head{padding:14px 24px 6px}
+#library-view .library-view-head h1{font-size:20px;font-weight:650}
+.library-view-tools{padding:12px 24px;gap:10px;align-items:center;border:0}
+.library-view-tools .searchbox{display:flex;align-items:center;gap:4px;flex:1 1 220px;max-width:440px}
+.library-view-tools .searchbox input{min-width:0;flex:1;background:#f5f5f6;border:0;padding:9px 12px}
+.library-view-tools select{font-size:12px;border:0;background:#f5f5f6;padding:7px 10px}
+#library-view>.catalog-toolbar{margin:0;padding:0 24px 8px;gap:6px}
+#library-view>.catalog-toolbar button{font-size:12px;padding:6px 10px}
+#library-view-list{padding:0 24px 24px}
+.catalog-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;padding:4px 0 10px;color:var(--wb-muted);font-size:12px}
+.catalog-summary button{font-size:12px;color:#8d3028}
+.catalog-table-scroll{border:0;border-radius:0}
+.catalog-table{font-size:13px;color:var(--wb-ink)}
+.catalog-table th{background:#fafafa;color:#777b80;font-size:12px;font-weight:500}
+.catalog-table th,.catalog-table td{padding:13px 12px;border-bottom:1px solid #f0f0f1;vertical-align:middle}
+.catalog-table th button{min-height:24px}
+.catalog-table .catalog-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;text-align:left;font-size:13px;line-height:1.55;font-weight:550;min-height:0;padding:0;background:transparent;border:0}
+.catalog-table tr.selected td{background:#eeeeef}
+.catalog-table tbody tr:hover td{background:#f6f6f7}
+.catalog-tag{background:#f6f6f7;border:0;color:#555;border-radius:4px}
+#library-detail{padding:20px 18px;font-size:13px;line-height:1.6}
+.library-detail-head,.library-detail-section,.catalog-detail-actions{border:0;padding:0;margin:0 0 20px}
+.library-detail-head h2{font-size:19px;line-height:1.45;font-weight:650;margin:10px 0 16px;overflow-wrap:anywhere}
+.library-detail-kicker{font-size:11px;color:var(--wb-muted);line-height:1.5}
+.library-detail-head .actions{gap:8px;flex-wrap:wrap}
+.library-detail-head button,.catalog-detail-actions button,.catalog-detail-actions .btn{font-size:12px}
+.detail-tabs{display:flex;gap:4px;border:0;padding:0;margin:0 0 20px}
+.detail-tabs button{border:0;padding:7px 12px;font-size:12px;flex:1}
+.detail-tabs button.active{background:#f0f0f2;color:#242424;font-weight:600}
+.library-facts:empty,.library-detail-section:has(>.library-facts:only-child:empty){display:none}
+.library-facts{font-size:12px;gap:7px 12px}
+.catalog-search-coverage{font-size:12px;color:var(--wb-muted);margin:10px 0}
+.catalog-coverage-details{margin:16px 0;color:var(--wb-muted);font-size:12px}
+.catalog-detail-actions .field{margin:14px 0;gap:5px}
+.catalog-detail-actions .field>span{font-size:12px;color:var(--wb-muted)}
+.catalog-source,.library-source-row,.library-use{border:0;border-radius:0;padding:12px 0;margin:0;border-bottom:1px solid var(--wb-line)}
+.catalog-detail-actions>p.muted{font-size:12px;margin:12px 0 18px}
+#materials .resource,.resource{box-shadow:none;border-color:var(--wb-line);border-radius:8px}
+#inspector{border:0}
+.statusbar{border-top:1px solid var(--wb-line);font-size:11px;min-height:24px;background:#fff;color:var(--wb-muted)}
+.statusbar button{font-size:11px;min-height:24px}
+.menu>div{border:1px solid var(--wb-line);border-radius:10px;box-shadow:0 8px 32px #00000012;padding:6px}
+.modal{border:1px solid var(--wb-line);border-radius:14px;box-shadow:0 16px 64px #00000020}
+@media(max-width:1050px){.brandbar{gap:8px;padding:8px 12px}.brandbar #save-status{font-size:11px}.library-view-tools{flex-wrap:wrap}#library-view-list{padding:0 16px 16px}.library-view-tools{padding:10px 16px}.library-detail-head h2{font-size:17px}}
+@media(prefers-reduced-motion:no-preference){button,.btn{transition:background-color .12s ease,color .12s ease}}
+
+body button[data-brevess-action-icon]:not([hidden]){border:0!important;border-radius:7px!important;background:transparent;box-shadow:none!important}
+body [data-brevess-action-row]>button:not([hidden]){border-radius:7px!important}
+
+.reading-task-dialog{width:min(700px,calc(100vw - 40px));max-height:85dvh;overflow:auto;border:1px solid #eee;border-radius:14px;padding:24px;color:#242424;box-shadow:0 20px 80px #0002}
+.reading-task-dialog::backdrop{background:#0004}.reading-task-dialog header{display:flex;justify-content:space-between;align-items:center;gap:20px}.reading-task-dialog h2{font-size:20px;margin:0}.reading-task-dialog>p{color:#777;font-size:13px}.reading-task-actions{display:flex;gap:8px;margin:16px 0;align-items:center}.reading-task-dialog section{padding:12px 0;border-bottom:1px solid #eee}.reading-task-dialog label{display:flex;align-items:flex-start;gap:8px;font-size:13px}.reading-task-dialog input[type=checkbox]{margin-top:5px;flex:none}.reading-figure-choice{margin:8px 0 0 24px}.reading-job{padding:16px 0;border-top:1px solid #eee;font-size:12px}.reading-job button{float:right}.reading-job p{overflow-wrap:anywhere;margin:8px 0}.reading-job small{color:#777}
+
+.reading-task-dialog>[data-tabs]{max-height:42vh;overflow:auto;margin-top:12px}.reading-task-dialog>[data-filter]{width:100%;padding:8px 12px}.reading-task-dialog section[hidden]{display:none}.reading-task-dialog .reading-task-actions{flex-wrap:wrap}.reading-task-dialog .reading-job button[data-open-tab]{float:none;margin:6px 0}

@@ -1,0 +1,43 @@
+/* Workbench shell; message and Markdown rules come from the shared QA stylesheet. */
+.agent-panel{--color-primary:#235f80;--color-text:#20333d;--color-border:#cad9e1;width:min(480px,calc(100vw - 20px));border:1px solid #c5d3db;border-radius:12px;background:#f8fafb;color:var(--color-text);box-shadow:0 12px 40px #17384e26;font-size:14px;line-height:1.5}
+.agent-panel [hidden]{display:none!important}
+.agent-heading{padding:12px 16px;background:#fff;flex-shrink:0;border-color:#dbe4e9;font-size:15px}
+.agent-heading button{height:30px;min-width:30px;border:0;border-radius:6px;background:transparent;font-size:22px;color:#627681}
+.agent-config{padding:10px 16px 6px;gap:6px 12px;font-size:12px;flex-shrink:0}
+.agent-config label{gap:3px;color:#526875;font-size:12px}
+.agent-config select{height:30px;padding:2px 6px;border-color:#ccd9e0;border-radius:6px;background:#fff;font:inherit;color:#233e4d}
+.agent-config a{grid-column:1/-1;justify-self:end;font-size:12px;color:#43677c;text-decoration:none}
+.agent-connection{padding:0 16px 10px;font-size:12px;color:#526c7a;flex-shrink:0}
+.agent-messages.article-chat-messages{padding:16px;gap:20px;border-color:#dbe4e9;min-height:50px;scrollbar-gutter:stable;overflow-x:hidden}
+.agent-panel .article-chat-turn{gap:10px;contain:layout style;flex-shrink:0}
+.agent-panel .article-chat-turn+.article-chat-turn{padding-top:18px;border-color:#dce6eb}
+.agent-panel .article-chat-message{box-sizing:border-box;font-size:14px}
+.agent-panel .article-chat-message.is-user{background:#e6eef3;color:#203e50;border-color:#d4e2ea;border-radius:10px 10px 3px 10px;max-width:94%;box-shadow:none}
+.agent-panel .article-chat-message.is-assistant{padding:4px 0;max-width:100%;min-width:0;overflow:hidden}
+.agent-panel .article-chat-message-meta{font-size:11px;margin:0 0 5px;color:#567180}
+.agent-user-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.agent-empty{margin:24px 4px;color:#5d7482;font-size:13px;line-height:1.75}
+.agent-empty strong{font-size:16px;color:#294957}
+.agent-empty p{margin-top:8px}
+.agent-tools{padding:8px 10px;background:#eef3f6;border:1px solid #dbe5eb;border-radius:8px;color:#526b7a;font-size:12px;min-width:0}
+.agent-tools summary{cursor:pointer;font-weight:600;line-height:1.7;outline-offset:3px}
+.agent-tool{padding:6px 0 0;overflow-wrap:anywhere;line-height:1.65}
+.agent-tool[data-state=running]::before{content:'• ';color:#2779a0}
+.agent-tool[data-state=completed]::before{content:'✓ ';color:#31775e}
+.agent-run-status{margin:0;font-size:12px;color:#637b88;overflow-wrap:anywhere}
+.agent-run-status.is-error,.agent-tool.is-error,.agent-notice.error{color:#9c3b35}
+.agent-notice{font-size:12px;color:#526b7a;white-space:pre-wrap;overflow-wrap:anywhere}
+.agent-panel [data-agent-latest]{align-self:center;flex-shrink:0;margin:0 0 7px;padding:4px 10px;border:1px solid #c4d6e1;border-radius:16px;background:#fff;font-size:12px;color:#315e78}
+.agent-panel form.article-chat-composer{padding:12px 14px;background:#fff;border-color:#dbe4e9;flex-shrink:0;margin:0}
+.agent-panel .field>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.agent-panel textarea{min-height:76px;max-height:120px;padding:9px 10px;border:1px solid #cbd9e1;border-radius:8px;background:#f8fafb;color:#20333d;line-height:1.6;font:inherit;resize:vertical}
+.agent-panel textarea:focus{outline:2px solid #81afc8;outline-offset:1px}
+.agent-panel .actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
+.agent-input-hint{font-size:11px;color:#71838d;margin-right:auto}
+.agent-panel .actions button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid #bbceda;border-radius:7px;background:#fff;color:#355e75;white-space:nowrap}
+.agent-panel .actions [data-agent-send]{background:#235f80;border-color:#235f80;color:#fff}
+.agent-panel .actions button:disabled{opacity:.5;cursor:default}
+.agent-approval{border:1px solid #b68151;border-radius:8px;background:#fff9f0;padding:12px;color:#634529;font-size:13px}
+.agent-approval details{margin:8px 0}
+.agent-approval button{min-height:32px;font:inherit}
+@media(max-width:440px){.agent-heading{padding:9px 12px}.agent-config{padding:8px 12px 5px}.agent-connection{padding:0 12px 8px}.agent-messages.article-chat-messages{padding:12px;gap:16px}.agent-input-hint{max-width:122px;line-height:1.4}.agent-panel .actions button{padding:6px 9px}.agent-panel form.article-chat-composer{padding:10px 12px}.agent-panel textarea{min-height:66px}}
