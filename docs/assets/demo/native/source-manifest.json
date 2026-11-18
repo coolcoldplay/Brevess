@@ -1269,5 +1269,5 @@
       }
     ]
   },
-  "note": "UI source copies are unchanged. HTML only adds isolated adapters and deferred loading. Selection, regex and translation functions are exact production excerpts in environment factories."
+  "note": "UI source copies are unchanged. HTML only adds isolated versioned adapters and deferred loading. Selection, regex, translation and figure viewer functions are exact production excerpts in environment factories."
 }

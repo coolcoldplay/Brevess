@@ -11,8 +11,8 @@ const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 for(const entry of manifest.entries){
  const file=path.join(dir,'native',entry.file),buf=await fs.readFile(file);let content=buf;
  if(entry.file.endsWith('.html')){
-   content=buf.toString().replace(/ defer data-bv-defer/g,'').replace(/<script data-bv-adapter[^>]*><\/script>/g,'').replace(/<meta http-equiv="Content-Security-Policy"[^>]*><script src="[^"\n]*native-transport\.js"><\/script><script src="[^"\n]*paper-data\.js"><\/script><script src="[^"\n]*native-data\.js"><\/script>/,'')
-     .replace(/<script src="[^"\n]*(?:native-(?:workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|highlight-examples|reading-tools-data)\.js"><\/script>/g,'');
+   content=buf.toString().replace(/ defer data-bv-defer/g,'').replace(/<script data-bv-adapter[^>]*><\/script>/g,'').replace(/<meta http-equiv="Content-Security-Policy"[^>]*><script src="[^"\n]*native-transport\.js(?:\?[^"\n]*)?"><\/script><script src="[^"\n]*paper-data\.js(?:\?[^"\n]*)?"><\/script><script src="[^"\n]*native-data\.js(?:\?[^"\n]*)?"><\/script>/,'')
+     .replace(/<script src="[^"\n]*(?:native-(?:workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|highlight-examples|reading-tools-data)\.js(?:\?[^"\n]*)?"><\/script>/g,'');
    check(buf.toString().includes("connect-src 'self'"),`${entry.file}: isolated network policy missing`);
  }
  check(hash(content)===entry.sha256,`Production source changed: ${entry.file}`);bytes+=buf.length;
