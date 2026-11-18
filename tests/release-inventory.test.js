@@ -40,6 +40,9 @@ test('common release inventory includes all application entry points and license
  const manifest=JSON.parse(fs.readFileSync(projectFile('manifest.json')));
  assert.ok(files.includes(manifest.background.service_worker));
  for(const group of manifest.content_scripts||[])for(const file of [...group.js||[],...group.css||[]])assert.ok(files.includes(file),'content script missing: '+file);
- for(const html of ['popup.html','options.html'])for(const match of fs.readFileSync(projectFile(html),'utf8').matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)){if(!/^(?:https?:|data:)/.test(match[1]))assert.ok(files.includes(match[1]),'HTML dependency missing: '+match[1]);}
+ for(const html of ['popup.html','options.html','diagram-viewer.html']){
+  assert.ok(files.includes(html), 'HTML entry missing: '+html);
+  for(const match of fs.readFileSync(projectFile(html),'utf8').matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)){if(!/^(?:https?:|data:)/.test(match[1]))assert.ok(files.includes(match[1]),'HTML dependency missing: '+match[1]);}
+ }
  for(const entry of [manifest.action.default_popup,manifest.options_ui.page,manifest.side_panel.default_path])assert.ok(files.includes(entry));
 });

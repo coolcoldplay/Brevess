@@ -5,7 +5,7 @@
 })(globalThis,function(root){
   'use strict';
   const fail=()=>{throw Object.assign(new Error('CREDENTIAL_ACCESS_DENIED'),{code:'CREDENTIAL_ACCESS_DENIED'});};
-  const sensitive=new Set(['MIGRATION_EXPORT','MIGRATION_IMPORT','LLM_SAVE_PROFILE','LLM_SAVE_PROVIDER','LLM_DUPLICATE_PROFILE','LLM_DELETE_PROFILE','LLM_TEST_PROFILE','LLM_TEST_PROVIDER','LLM_TEST_CONNECTION','LLM_DISCOVER_MODELS','LLM_LIST_MODELS']);
+  const sensitive=new Set(['MIGRATION_EXPORT','MIGRATION_IMPORT','LLM_SAVE_PROFILE','LLM_QUICK_SETUP_SAVE','LLM_CONNECT_AGENT','LLM_SAVE_PROVIDER','LLM_DUPLICATE_PROFILE','LLM_DELETE_PROFILE','LLM_TEST_PROFILE','LLM_TEST_PROVIDER','LLM_TEST_CONNECTION','LLM_DISCOVER_MODELS','LLM_LIST_MODELS']);
   function assertCredentialMessageOwner(message,sender,browser){
     if(!sensitive.has(message?.type)&&!String(message?.type||'').startsWith('PORTABLE_CONFIG_'))return;
     let url;try{url=new URL(sender?.url);}catch{fail();}

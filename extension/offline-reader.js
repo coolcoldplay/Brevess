@@ -1,91 +1,59 @@
-(async () => {
-  const t = value => globalThis.SciLLM?.translateInterfaceText?.(value) || value;
-  await globalThis.SciLLM?.bootstrapInterfaceLanguage?.();
-  const title = document.getElementById('offlineArticleTitle');
-  const status = document.getElementById('offlineArticleStatus');
-  const frame = document.getElementById('offlineArticleFrame');
-  const workspaceId = new URLSearchParams(location.search).get('workspaceId') || '';
-  const imageDialog = document.getElementById('offlineImageDialog');
-  const startReading = document.getElementById('offlineArticleStartReading');
-  startReading.addEventListener('click', async () => {
-    startReading.disabled = true;
-    try {
-      const opened = await chrome.runtime.sendMessage({ type: 'OFFLINE_READER_START_READING' });
-      if (!opened?.success) throw new Error(opened?.error?.message || '保存记录暂不可用，请重新打开');
-    } catch (error) { status.textContent = error.message; }
-    finally { startReading.disabled = false; }
+(async function(){
+  'use strict';
+  let publication=null;
+  const invalidate=()=>{if(publication)publication.active=false;globalThis.__brevessSavedArticleDocument=null;};
+  window.addEventListener('pagehide',invalidate);
+  window.addEventListener('popstate',()=>{invalidate();location.reload();});
+  chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+    if(message?.action!=='validateSavedArticleReader')return;
+    const current=publication?.active&&sender.id===chrome.runtime.id&&location.href===publication.binding.readerUrl;
+    respond(current?{success:true,binding:publication.binding,navigationIdentity:location.href}:{success:false});return false;
   });
-  document.getElementById('offlineImageClose').addEventListener('click', () => imageDialog.close());
-  document.getElementById('offlineArticleClose').addEventListener('click', () => close());
-  try {
-    const saved = await chrome.runtime.sendMessage({ type: 'OFFLINE_ARTICLE_GET_SNAPSHOT', readerUrl: location.href });
-    if (!saved?.success || !saved.data?.binding || saved.data.binding.workspaceId !== workspaceId) {
-      throw new Error(saved?.error?.message || '保存记录的文献归属未确认，请从本机历史重新打开');
+  let status=document.getElementById('offlineArticleStatus');
+  try{
+    const saved=await chrome.runtime.sendMessage({type:'OFFLINE_ARTICLE_GET_SNAPSHOT',readerUrl:location.href,includeAssets:true});
+    if(!saved?.success||!saved.data?.binding||!saved.data?.snapshot?.paragraphs?.length)throw Error('未找到完整正文，请在有原文访问权限时重新保存。');
+    const {binding,snapshot,assetReceipt}=saved.data;
+    const response=await chrome.runtime.sendMessage({type:'ARTICLE_WORKSPACE_GET_ASSET',workspaceId:binding.workspaceId,relativePath:'article/offline-snapshot.html'});
+    if(!response?.success)throw Error(response?.error?.message||response?.error?.code||'本机快照不可用');
+    if(response.data?.asset?.revision!==assetReceipt.revision||response.data.asset.contentHash!==assetReceipt.contentHash||
+      (Number(response.data.workspaceGeneration)||1)!==binding.workspaceGeneration)throw Error('文献保存版本已变化，请重新打开。');
+    const html=String(response.data.asset.content);
+    SciLLM.mountSavedArticleHtml(document,html);document.title=snapshot.title||'本机文献 · BREVESS';
+    const canonical=document.createElement('link');canonical.rel='canonical';canonical.href=snapshot.url;document.head.append(canonical);
+    publication={active:true,binding:Object.freeze({...binding}),snapshot,metadata:saved.data.metadata,
+      structure:SciLLM.bindSavedArticleDom(document,snapshot),source:{title:snapshot.title,canonicalUrl:snapshot.url,
+        documentId:snapshot.documentId,documentHash:snapshot.documentHash,
+        doi:(snapshot.localWorkspace?.aliases||[]).find(row=>row.type==='doi')?.value||''}};
+    globalThis.__brevessSavedArticleDocument=publication;
+    // Keep the compact toolbar isolated from publisher CSS. Reading uses the
+    // same content runtime and sidebar as a publisher tab.
+    const host=document.createElement('div');host.setAttribute('data-sci-plugin-ui','');
+    host.style.cssText='position:sticky!important;top:0!important;display:block!important;z-index:2147483646!important;margin:0!important;';
+    const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
+    style.textContent=':host{all:initial}header{display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fffefc;border-bottom:1px solid #eee;font:13px/1.4 system-ui;color:#555}strong{font-size:14px;color:#161616}span{flex:1}button,a{font:inherit;color:#161616;text-decoration:none;background:none;border:0;padding:5px 10px;border-radius:6px;cursor:pointer}button{background:#181818;color:white}button:disabled{opacity:.4}';
+    const bar=document.createElement('header'),brand=document.createElement('strong');brand.textContent='BREVESS';
+    status=document.createElement('span');status.setAttribute('role','status');status.textContent='正在恢复阅读成果…';
+    const original=document.createElement('a');original.textContent='在线原文';original.href=snapshot.url;original.target='_blank';original.rel='noopener noreferrer';
+    const start=document.createElement('button');start.type='button';start.textContent='打开研读侧栏';start.disabled=true;
+    bar.append(brand,status,original,start);shadow.append(style,bar);document.body.prepend(host);
+    const loaded=new Set([...document.scripts].map(script=>script.getAttribute('src')));
+    for(const file of SciLLM.CONTENT_SCRIPT_FILES){
+      if(loaded.has(file))continue;
+      await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=chrome.runtime.getURL(file);
+        script.onload=resolve;script.onerror=()=>reject(Error('研读模块加载失败：'+file));document.body.append(script);});
     }
-    const binding = saved.data.binding;
-    const response = await chrome.runtime.sendMessage({
-      type: 'ARTICLE_WORKSPACE_GET_ASSET',
-      workspaceId,
-      relativePath: 'article/offline-snapshot.html'
-    });
-    if (!response?.success || !response.data?.asset?.content) {
-      throw new Error(response?.error?.message || '未找到离线正文快照');
-    }
-    if ((Number(response.data.workspaceGeneration) || 1) !== binding.workspaceGeneration ||
-        response.data.asset.revision !== saved.data.assetReceipt.revision ||
-        response.data.asset.contentHash !== saved.data.assetReceipt.contentHash) {
-      throw new Error('这篇文献的保存版本已变化，请重新打开');
-    }
-    const html = String(response.data.asset.content);
-    const parsed = new DOMParser().parseFromString(html, 'text/html');
-    let metadata = null;
-    try {
-      metadata = JSON.parse(decodeURIComponent(parsed.querySelector('meta[name="brevess-offline-snapshot"]')?.content || ''));
-      if (metadata.schemaVersion !== 1 || metadata.workspaceId !== workspaceId ||
-          metadata.workspaceGeneration !== (Number(response.data.workspaceGeneration) || Number(response.data.asset.workspaceGeneration) || 1)) metadata = null;
-    } catch (_) { metadata = null; }
-    frame.srcdoc = html;
-    document.documentElement.dataset.offlineWorkspaceId = binding.workspaceId;
-    document.documentElement.dataset.offlineWorkspaceGeneration = String(binding.workspaceGeneration);
-    const original = document.getElementById('offlineArticleOriginal');
-    if (/^https?:\/\//i.test(saved.data.snapshot?.url || '')) { original.href = saved.data.snapshot.url; original.hidden = false; }
-    startReading.disabled = false;
-    title.textContent = parsed.title || 'Brevess 离线文献';
-    if (parsed.title) title.setAttribute('data-i18n-ignore', '');
-    status.textContent = metadata?.complete === true
-      ? '已从本机恢复网页、样式与阅读图片 · 点击“查看保存记录”可在侧栏阅读已保存结果 · 离线只读'
-      : metadata?.complete === false
-        ? `已从本机恢复部分网页 · ${metadata.missingResources?.length ? `${metadata.missingResources.length} 项资源未保存` : '部分布局或资源完整度未确认'}，请联网后重新保存 · 保存记录可在侧栏只读查看`
-        : '已从本机恢复旧网页快照 · 图片与样式完整度未记录 · 保存记录可在侧栏只读查看';
-    const missingList = document.getElementById('offlineArticleMissing');
-    for (const item of metadata?.missingResources || []) {
-      const line = document.createElement('li');
-      line.setAttribute('data-i18n-ignore', '');
-      line.textContent = `${t(item.kind || '资源')}: ${item.url || t('嵌入资源')} (${t(item.reason || '未保存')})`;
-      missingList.append(line);
-    }
-    if (missingList.childElementCount) document.getElementById('offlineArticleReport').hidden = false;
-    const imageList = document.getElementById('offlineArticleImageList');
-    const seen = new Set();
-    for (const source of parsed.querySelectorAll('img[src]')) {
-      const dataUrl = source.getAttribute('data-brevess-original-image') || source.getAttribute('src') || '';
-      if (!/^data:image\/(?:avif|gif|jpe?g|png|webp|bmp|tiff?);base64,[a-z0-9+/]+={0,2}$/i.test(dataUrl) || seen.has(dataUrl)) continue;
-      seen.add(dataUrl);
-      const label = source.alt || t(`图片 ${seen.size}`);
-      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
-      button.setAttribute('data-i18n-ignore', '');
-      button.addEventListener('click', () => {
-        const heading = document.getElementById('offlineImageLabel');
-        heading.setAttribute('data-i18n-ignore', ''); heading.textContent = label;
-        const preview = document.getElementById('offlineImagePreview'); preview.src = dataUrl; preview.alt = label;
-        preview.setAttribute('data-i18n-ignore', '');
-        imageDialog.showModal();
-      });
-      imageList.append(button);
-    }
-    if (seen.size) document.getElementById('offlineArticleImages').hidden = false;
-  } catch (error) {
-    title.textContent = '无法打开离线文献';
-    status.textContent = error.message;
-  }
+    await globalThis.initializeSavedArticleWorkspace(saved.data);
+    if(!publication.active)return;
+    chrome.runtime.sendMessage({type:'SAVED_ARTICLE_READY',binding}).catch(()=>{});
+    const updateStatus=()=>{status.textContent=navigator.onLine?'原文已保存在本机 · 可继续研读':'原文已保存在本机 · 断网时仍可阅读和编辑';};
+    updateStatus();window.addEventListener('online',updateStatus);window.addEventListener('offline',updateStatus);start.disabled=false;
+    start.onclick=async()=>{
+      start.disabled=true;
+      try{const result=await chrome.runtime.sendMessage({type:'OFFLINE_READER_START_READING'});
+        if(!result?.success)throw Error(result?.error?.message||'侧栏暂不可用，请重新打开。');}
+      catch(error){status.textContent=error.message;}
+      finally{if(publication.active)start.disabled=false;}
+    };
+  }catch(error){invalidate();if(status)status.textContent='本机文献打开失败：'+error.message;}
 })();

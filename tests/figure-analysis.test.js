@@ -275,7 +275,7 @@ test('fresh synthesis rejects empty, missing, unknown and overlapping evidence g
 });
 
 test('defines a versioned strict Figure walkthrough response schema', () => {
-  assert.equal(FIGURE_ANALYSIS_VERSION, '14-evidence-block-upstream');
+  assert.equal(FIGURE_ANALYSIS_VERSION, '15-scientific-prose');
   const schema = createFigureAnalysisSchema('standard');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.basis.enum, ['vision_text', 'caption_context']);
@@ -989,7 +989,7 @@ test('prompt separates role, phenotype, and open method evidence without guessin
 });
 
 test('prompt binds each concrete fact to its real source and keeps statistics out of experimental methods', () => {
-  assert.equal(FIGURE_ANALYSIS_PROMPT_VERSION, '25-evidence-certainty');
+  assert.equal(FIGURE_ANALYSIS_PROMPT_VERSION, '27-elife-supplement-ownership');
   const visual = compileFigureAnalysisPrompt(figureInput, { visualInput: true }).systemPrompt;
   assert.match(visual, /each concrete fact/i);
   assert.match(visual, /visible only in pixels.*image_observation/i);

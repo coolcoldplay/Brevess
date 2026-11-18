@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  if(globalThis.BrevessWebReadingPage?.version===4)return;
+  if(globalThis.BrevessWebReadingPage?.version===5)return;
   globalThis.BrevessWebReadingPage?.stop();
   // Native annotation marks are interactive wrappers around original text.
   // Their button role must not erase that text from snapshots or anchor reads.
@@ -122,6 +122,13 @@
     // DOM order, never deduplicate by text: the same question can occur twice.
     return found.filter((m, i) => !found.some((other, j) => i !== j && other.node.contains(m.node)))
       .sort((a, b) => a.node === b.node ? 0 : a.node.compareDocumentPosition(b.node) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+  }
+
+  // Shared with the native selection/highlight tools. Keep every supported
+  // conversation adapter on the same message boundaries; omit app navigation.
+  function manualSourceRoots(){
+    const site=r18SiteInfo(url());
+    return site.conversation ? r18MessageRoots(site.family).map(message=>message.node) : null;
   }
 
   function collect(){
@@ -260,5 +267,5 @@
   });
   // Pure DOM tests do not have chrome, but still need mutation invalidation.
   if(!globalThis.chrome?.runtime?.id){observer=new MutationObserver(()=>{dirty=true;});observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});}
-  globalThis.BrevessWebReadingPage={version:4,read,locate,stop,capture,restore,locateAnchor,redactSnapshot};
+  globalThis.BrevessWebReadingPage={version:5,read,locate,stop,capture,restore,locateAnchor,redactSnapshot,manualSourceRoots};
 })();

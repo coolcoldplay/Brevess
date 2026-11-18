@@ -5,6 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
   const ORIGINAL_IMAGE_ATTRIBUTES = Object.freeze([
     'data-original',
+    'data-brevess-original-image',
     'data-original-src',
     'data-viewer-src',
     'data-full',
@@ -702,6 +703,61 @@
         ['src', 'srcset', 'sizes', 'media', 'type'].map(name => [name, source.getAttribute(name)]))]);
   }
 
+  const ORIGINAL_ASSET_SCHEMA = 'brevess-figure-original-v1';
+  const originalDigest = async value => Array.from(new Uint8Array(await globalThis.crypto.subtle.digest(
+    'SHA-256', typeof value === 'string' ? new TextEncoder().encode(value) : value
+  )), byte => byte.toString(16).padStart(2, '0')).join('');
+  function originalPublicUrl(value) {
+    try {
+      const url = new URL(value);
+      if (!/^https?:$/.test(url.protocol)) return '';
+      url.username = ''; url.password = ''; url.search = ''; url.hash = '';
+      return url.href;
+    } catch (_) { return ''; }
+  }
+  async function createFigureOriginalAsset(resource, metadata, candidates = []) {
+    const receipt = resource?.cacheReceipt || resource?.displayReceipt;
+    if (!receipt || !resource.bytes?.length || resource.bytes.length > 64 * 1024 * 1024 ||
+        receipt.byteLength !== resource.bytes.length || await originalDigest(resource.bytes) !== receipt.sha256 ||
+        !/^data:image\/(?:png|jpeg|webp|gif|avif);base64,/i.test(resource.dataUrl || '') ||
+        !metadata.documentHash || !metadata.figureId || !Number.isSafeInteger(metadata.imageIndex) || metadata.imageIndex < 0 ||
+        !originalPublicUrl(metadata.pageUrl) || !originalPublicUrl(receipt.cacheKey)) throw Error('FIGURE_ORIGINAL_ASSET_INVALID');
+    const assetPath = 'figures/originals/' + await originalDigest(JSON.stringify([metadata.figureId, metadata.imageIndex])) + '.json';
+    const record = { schema: ORIGINAL_ASSET_SCHEMA, assetPath, pageUrl: originalPublicUrl(metadata.pageUrl),
+      documentHash: metadata.documentHash, figureId: metadata.figureId, imageIndex: metadata.imageIndex,
+      sourceFingerprint: await originalDigest(metadata.sourceIdentity),
+      candidateFingerprints: [...new Set(await Promise.all(candidates.slice(0, 128).map(originalDigest)))],
+      sourceUrl: originalPublicUrl(receipt.cacheKey), sha256: receipt.sha256, byteLength: receipt.byteLength,
+      pixelWidth: resource.pixelWidth, pixelHeight: resource.pixelHeight, dataUrl: resource.dataUrl };
+    await readFigureOriginalAsset(record, record);
+    return record;
+  }
+  async function matchFigureOriginalAsset(entry, {pageUrl, documentHash, figureId, imageIndex, sourceIdentity, candidates = [], savedReader = false}) {
+    if (entry?.schema !== ORIGINAL_ASSET_SCHEMA || entry.pageUrl !== originalPublicUrl(pageUrl) ||
+        entry.documentHash !== documentHash || entry.figureId !== figureId || entry.imageIndex !== imageIndex ||
+        !/^figures\/originals\/[a-f0-9]{64}\.json$/.test(entry.assetPath || '') ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256 || '')) return false;
+    // The saved reader is already bound to the original workspace, generation and
+    // document hash. Its data: image URLs intentionally differ from the publisher.
+    if (savedReader) return true;
+    if (entry.sourceFingerprint === await originalDigest(sourceIdentity)) return true;
+    const hashes = await Promise.all(candidates.slice(0, 128).map(originalDigest));
+    return hashes.some(hash => entry.candidateFingerprints?.includes(hash));
+  }
+  async function readFigureOriginalAsset(record, expected) {
+    if (!record || !expected || ['assetPath','pageUrl','documentHash','figureId','imageIndex','sha256','byteLength'].some(key => record[key] !== expected[key]) ||
+        record.schema !== ORIGINAL_ASSET_SCHEMA || !/^https?:\/\//.test(record.sourceUrl || '') ||
+        !Number.isSafeInteger(record.byteLength) || record.byteLength <= 0 || record.byteLength > 64 * 1024 * 1024 ||
+        !Number.isSafeInteger(record.pixelWidth) || !Number.isSafeInteger(record.pixelHeight) || record.pixelWidth <= 0 || record.pixelHeight <= 0) throw Error('FIGURE_ORIGINAL_ASSET_INVALID');
+    const match = /^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=]+)$/i.exec(record.dataUrl || '');
+    if (!match || match[2].length > Math.ceil(record.byteLength / 3) * 4) throw Error('FIGURE_ORIGINAL_ASSET_INVALID');
+    const bytes = Uint8Array.from(atob(match[2]), char => char.charCodeAt(0));
+    if (bytes.length !== record.byteLength || await originalDigest(bytes) !== record.sha256) throw Error('FIGURE_ORIGINAL_ASSET_INVALID');
+    return { bytes, dataUrl: record.dataUrl, contentType: match[1], pixelWidth: record.pixelWidth, pixelHeight: record.pixelHeight,
+      workspaceStored: true, cacheStored: true, requestedSourceUrl: record.sourceUrl,
+      cacheReceipt: {cacheKey: record.sourceUrl, sha256: record.sha256, byteLength: bytes.length} };
+  }
+
   function createFigureOriginalDisplayManager({ windowRef = globalThis, documentRef = globalThis.document, getPageIdentity } = {}) {
     const entries = new Map(), pending = new WeakMap();
     const properties = ['background-image', 'background-size', 'background-position', 'background-repeat',
@@ -786,7 +842,7 @@
               width: size.endsWith('px') ? image.naturalWidth : resource.pixelWidth,
               height: size.endsWith('px') ? image.naturalHeight : resource.pixelHeight,
               fit: size === 'contain' || size === 'cover' ? size : size.endsWith('px') ? 'none' : 'fill', position },
-            cacheStored: persistent, cacheReceipt: persistent ? { ...receipt } : null,
+            cacheStored: persistent, workspaceStored: resource.workspaceStored === true, cacheReceipt: persistent ? { ...receipt } : null,
             displayReceipt: persistent ? null : { ...receipt }, originalStyles, appliedStyles, originalContentValue: image.style.getPropertyValue('content'),
             originalContentPriority: image.style.getPropertyPriority('content') };
           entries.set(image, entry);
@@ -810,6 +866,9 @@
   return {
     matchFigureViewerCandidates,
     figureOriginalDisplaySourceIdentity,
+    createFigureOriginalAsset,
+    matchFigureOriginalAsset,
+    readFigureOriginalAsset,
     createFigureOriginalDisplayManager,
     bindFigureViewerViewport,
     safeFigureSource,

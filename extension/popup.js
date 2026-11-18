@@ -4209,6 +4209,15 @@ function captureFigureWorkspaceEditContext() {
     });
 }
 
+function isCurrentFigureBadgeContext(context) {
+    const live = captureFigureWorkspaceEditContext();
+    return context.tabId === live.tabId && context.contextKey === live.contextKey &&
+        context.documentKey === live.documentKey && context.documentId === live.documentId &&
+        context.workspaceId === live.workspaceId && context.workspaceContentHash === live.workspaceContentHash &&
+        Object.is(context.workspaceGeneration, live.workspaceGeneration) &&
+        Object.is(context.workspaceLifecycle, live.workspaceLifecycle);
+}
+
 function isCurrentFigureWorkspaceEditContext(context) {
     const live = captureFigureWorkspaceEditContext();
     return Number(context?.tabId) === live.tabId &&
@@ -6008,6 +6017,11 @@ function setupActiveTabSynchronization() {
             activePanelTabContext.activated) {
             void receiveParagraphNoteRevealIntent(message.request, capturePanelContext());
         }
+        if (message?.type === 'SAVED_ARTICLE_READY' && sender?.tab?.id === activePanelTabContext.tabId &&
+            activePanelTabContext.offlineMode && message.binding?.readerUrl === activePanelTabContext.url) {
+            void initializeCurrentArticle({ retry: true });
+            return;
+        }
         if (message?.type === 'FIGURE_WORKSPACE_STATE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
@@ -7383,13 +7397,7 @@ function renderSidebarBatchActions() {
     const documentId = sidebarTaskDocumentId();
     document.querySelectorAll('[data-sidebar-batch-module]').forEach(button => {
         const module = button.dataset.sidebarBatchModule;
-        if (activePanelTabContext.offlineMode === true) {
-            button.title = `${button.dataset.batchLabel || '保存记录'}：单击查看 · 离线只读`;
-            button.setAttribute('aria-label', button.title); button.setAttribute('aria-busy', 'false');
-            button.dataset.taskRunning = 'false'; button.dataset.taskStatus = 'idle';
-            const progress = button.querySelector('.workspace-nav-task-progress'); if (progress) progress.hidden = true;
-            return;
-        }
+
         const intent = sidebarBatchIntents.get(sidebarBatchKey(module));
         const savedTask = sidebarRuntimeTasks.get(documentId, module);
         const cleanupPending = intent?.sourceCleanupPending === true;
@@ -7536,10 +7544,7 @@ async function pollSidebarRuntimeTasks() {
 async function performSidebarModuleBatch(
     module, trustedUserGesture = false, { noteFieldIds = null } = {}
 ) {
-    if (activePanelTabContext.offlineMode === true) {
-        showStatus('离线记录为只读；需要重新分析时请打开在线原文。', 'info');
-        return false;
-    }
+
     const context = capturePanelContext();
     const key = sidebarBatchKey(module, context);
     let intent = sidebarBatchIntents.get(key);
@@ -10105,7 +10110,6 @@ function updateFigureWorkspaceInlineEditStatus(state = {}) {
 }
 
 async function openFigureWorkspaceInlineEditor(target, descriptor, value, label, isList) {
-    if (activePanelTabContext.offlineMode === true) return;
     if (!target?.isConnected || activeSupplementalPlacementCleanup) return;
     const occurrence = target.dataset.figureEditOccurrence;
     const nodeId = target.dataset.mechanismNodeId;
@@ -10168,10 +10172,7 @@ async function openFigureWorkspaceInlineEditor(target, descriptor, value, label,
 }
 
 function bindFigureWorkspaceNameEditor(target, descriptor, value, label) {
-    if (activePanelTabContext.offlineMode === true) {
-        target.setAttribute('aria-label', `${label}：${target.textContent}`);
-        return;
-    }
+
     target.dataset.figureEditPath = figureWorkspaceEditDescriptorKey(descriptor);
     target.dataset.figureName = descriptor.scope;
     target.id = `figure-name-${encodeURIComponent(target.dataset.figureEditPath)}`;
@@ -10708,7 +10709,6 @@ function closeFigureResultEditor() {
 }
 
 function openFigureResultEditor(figure, result) {
-    if (activePanelTabContext.offlineMode === true) return;
     const dialog = document.getElementById('figureResultEditorDialog');
     if (!dialog || !figure?.figureId || !result) return;
     const analysisDepth = result.analysisDepth === 'deep' ? 'deep' : 'standard';
@@ -13514,6 +13514,8 @@ function setupGlobalKeyboardShortcuts() {
         void sendLlmMessage({ type: 'LLM_GET_SETTINGS' })
             .then(nextState => {
                 llmSettingsState = nextState;
+                renderArticleChatProfileOptions();
+                renderArticleSemanticHighlightControls();
                 return publishSidePanelShortcutScope();
             })
             .catch(() => undefined);
@@ -18197,9 +18199,12 @@ function renderSupplementalFigureCoverage(snapshot = currentWorkspaceSnapshot) {
     if (!shouldShow) return;
 
     const status = String(coverage?.status || 'unparsed');
+    const found = Number(coverage?.foundFigureCount) || 0;
+    const analyzed = Number(coverage?.analyzedFigureCount) || 0;
     const statusLabels = {
         complete: '覆盖完整',
-        found: '已找到，待补全解读',
+        found: found > 0 && found === analyzed && coverage?.uninspectedMaterialIds?.length
+            ? '已收录补图均已解读，附件待核对' : '已找到，待补全解读',
         partial: '仍有缺失',
         unparsed: '等待解析',
         none: '未发现引用'
@@ -18233,8 +18238,6 @@ function renderSupplementalFigureCoverage(snapshot = currentWorkspaceSnapshot) {
     }
 
     const expected = Number(coverage?.expectedFigureCount) || 0;
-    const found = Number(coverage?.foundFigureCount) || 0;
-    const analyzed = Number(coverage?.analyzedFigureCount) || 0;
     body.appendChild(createWorkspaceElement(
         'p',
         'supplemental-coverage-summary',
@@ -19014,7 +19017,7 @@ function renderFigureWorkspaceSnapshot(
         const disposeGesture = SciLLM.SidebarUI.bindFigureGesture(summaryHeading, {
             // In-page navigation is reversible; do not wait for a possible double click.
             immediateLocate: !figure.sourceExternal,
-            isCurrent: () => summaryHeading.isConnected && isCurrentFigureWorkspaceEditContext(gestureContext),
+            isCurrent: () => summaryHeading.isConnected && isCurrentFigureBadgeContext(gestureContext),
             onLocate: () => void handleFigureWorkspaceJump(figure, summaryHeading).catch(error => showStatus(error.message, 'error')),
             onAnalyze: event => {
                 if (loading) return;
@@ -19352,54 +19355,10 @@ function renderArticleWorkspaceSnapshot(snapshot) {
 }
 
 function renderOfflineArticleReadOnlyState(snapshot = currentWorkspaceSnapshot) {
-    const readOnly = activePanelTabContext.offlineMode === true;
-    let notice = document.getElementById('offlineArticleReadOnlyNotice');
-    if (!notice) {
-        notice = document.createElement('p'); notice.id = 'offlineArticleReadOnlyNotice';
-        notice.setAttribute('role', 'status');
-        notice.style.cssText = 'margin:8px 12px;padding:9px 12px;border:1px solid #b8d4e8;border-radius:8px;background:#eef7ff;color:#205477;font-size:12px;line-height:1.6';
-        document.getElementById('sidePanelDocumentStatus')?.insertAdjacentElement('afterend', notice);
-    }
-    notice.hidden = !readOnly;
-    notice.textContent = '离线记录 · 只读；已恢复保存的分析与手动记录。需要修改或重新分析时请打开在线原文。';
-    if (readOnly) {
-        const status = document.getElementById('sidePanelDocumentStatusText');
-        if (status) { status.dataset.layoutStatusBase = '离线记录 · 只读'; status.textContent = '离线记录 · 只读'; }
-        const manual = snapshot?.manual;
-        manualAnnotationState = { ...manualAnnotationState, tabId: activePanelTabContext.tabId,
-            documentId: snapshot?.documentId || '', documentHash: snapshot?.documentHash || '', canonicalUrl: snapshot?.url || '',
-            title: snapshot?.title || '', annotationCount: manual?.annotations?.length || 0,
-            unresolvedCount: manual?.annotations?.filter(item => item.unresolved).length || 0 };
-        renderManualAnnotationSummary();
-        const noteStatus = document.getElementById('literatureNoteStatus');
-        if (noteStatus) noteStatus.textContent = '离线记录 · 只读';
-    }
-    const controls = '#applyHighlight,#analyzeFiguresFromFigures,#analyzeFigures,#reanalyzeArticle,#saveCurrentArticleWorkspace,#clearArticleWorkspace,#clearArticleChat,#clearAutomaticHighlights,#clearManualAnnotations,#sendArticleChat,#articleChatInput,#articleNavigationTree input[type="checkbox"],#literatureNoteTemplateSelect,#literatureNoteFields textarea,#literatureNoteFields [data-literature-note-field-selector],#autofillLiteratureNote,#translateArticleAbbreviations,#defineArticleAbbreviations,#importArticleAbbreviationsToGlobal';
-    for (const control of document.querySelectorAll(controls)) {
-        if (readOnly) {
-            if (!Object.hasOwn(control.dataset, 'offlineOriginalTitle')) control.dataset.offlineOriginalTitle = control.title || '';
-            if (control.tagName === 'TEXTAREA') {
-                if (!Object.hasOwn(control.dataset, 'offlineOriginalReadOnly')) control.dataset.offlineOriginalReadOnly = String(control.readOnly);
-                control.readOnly = true;
-                literatureNoteEditors.get(control)?.refresh();
-            } else {
-                if (!Object.hasOwn(control.dataset, 'offlineOriginalDisabled')) control.dataset.offlineOriginalDisabled = String(control.disabled);
-                control.disabled = true;
-            }
-            control.title = '离线记录为只读，请打开在线原文后操作';
-        } else {
-            if (Object.hasOwn(control.dataset, 'offlineOriginalDisabled')) {
-                control.disabled = control.dataset.offlineOriginalDisabled === 'true'; delete control.dataset.offlineOriginalDisabled;
-            }
-            if (Object.hasOwn(control.dataset, 'offlineOriginalReadOnly')) {
-                control.readOnly = control.dataset.offlineOriginalReadOnly === 'true'; delete control.dataset.offlineOriginalReadOnly;
-                literatureNoteEditors.get(control)?.refresh();
-            }
-            if (Object.hasOwn(control.dataset, 'offlineOriginalTitle')) {
-                control.title = control.dataset.offlineOriginalTitle; delete control.dataset.offlineOriginalTitle;
-            }
-        }
-    }
+    document.getElementById('offlineArticleReadOnlyNotice')?.remove();
+    if (!activePanelTabContext.offlineMode) return;
+    const status = document.getElementById('sidePanelDocumentStatusText');
+    if (status) { status.dataset.layoutStatusBase = '本机原文'; status.textContent = '本机原文 · 可继续研读'; }
 }
 
 function getArticleChatProfiles() {
@@ -19437,10 +19396,7 @@ function requireUsableLlm(featureLabel) {
         showStatus('正文已更新，当前解图完成后刷新。', 'warning');
         return false;
     }
-    if (activePanelTabContext.offlineMode === true) {
-        showStatus('离线记录为只读；需要重新分析时请打开在线原文。', 'info');
-        return false;
-    }
+
     if (hasUsableLlm()) return true;
     showStatus(llmUnavailableMessage(featureLabel), 'error');
     return false;
@@ -20148,122 +20104,7 @@ function renderArticleChatMarkdown(...args) { return articleChatMessageRenderer.
 function isUnsafeArticleChatWebHostname(...args) { return articleChatMessageRenderer.isUnsafeArticleChatWebHostname(...args); }
 
 function createArticleChatMermaid(source) {
-    const wrapper = createWorkspaceElement('section', 'article-chat-mermaid-block');
-    const toolbar = createWorkspaceElement('div', 'article-chat-mermaid-toolbar');
-    toolbar.setAttribute('role', 'toolbar');
-    toolbar.setAttribute('aria-label', '示意图视野');
-    const viewport = createWorkspaceElement('div', 'article-chat-mermaid-viewport');
-    viewport.tabIndex = 0;
-    viewport.setAttribute('role', 'region');
-    viewport.setAttribute('aria-label', '回答中的示意图；滚轮缩放，拖动平移，方向键移动，加减键缩放，Home适应视野');
-    viewport.title = '滚轮缩放 · 拖动平移 · Home 适应视野';
-    const diagram = createWorkspaceElement('div', 'article-chat-mermaid');
-    diagram.textContent = source;
-    const disclosure = createWorkspaceElement('details', 'article-chat-mermaid-source');
-    const pre = createWorkspaceElement('pre');
-    const code = createWorkspaceElement('code');
-    code.textContent = source;
-    pre.appendChild(code);
-    disclosure.append(createWorkspaceElement('summary', '', '图形源码'), pre);
-    const zoomLabel = createWorkspaceElement('output', 'article-chat-mermaid-zoom', '100%');
-    zoomLabel.setAttribute('aria-label', '缩放比例');
-    let svg = null, naturalWidth = 1, naturalHeight = 1, scale = 1, x = 0, y = 0, frame = 0, drag = null;
-    function paint() {
-        frame = 0;
-        if (!svg) return;
-        diagram.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + scale + ')';
-        zoomLabel.value = Math.round(scale * 100) + '%';
-        zoomLabel.textContent = zoomLabel.value;
-    }
-    function schedulePaint() { if (!frame) frame = requestAnimationFrame(paint); }
-    function zoom(next, atX = viewport.clientWidth / 2, atY = viewport.clientHeight / 2) {
-        if (!svg) return;
-        next = Math.max(.02, Math.min(6, next));
-        x = atX - (atX - x) * next / scale;
-        y = atY - (atY - y) * next / scale;
-        scale = next;
-        schedulePaint();
-    }
-    function reset(fit) {
-        if (!svg) return;
-        const width = Math.max(32, viewport.clientWidth - 24), height = Math.max(32, viewport.clientHeight - 24);
-        scale = fit ? Math.max(.02, Math.min(1, width / naturalWidth, height / naturalHeight)) : 1;
-        x = naturalWidth * scale <= width ? (viewport.clientWidth - naturalWidth * scale) / 2 : 12;
-        y = naturalHeight * scale <= height ? (viewport.clientHeight - naturalHeight * scale) / 2 : 12;
-        schedulePaint();
-    }
-    function button(text, label, action) {
-        const control = createWorkspaceElement('button', '', text);
-        control.type = 'button'; control.title = label; control.setAttribute('aria-label', label);
-        control.disabled = true; control.addEventListener('click', action); return control;
-    }
-    toolbar.append(button('−', '缩小示意图', () => zoom(scale / 1.25)), zoomLabel,
-        button('+', '放大示意图', () => zoom(scale * 1.25)),
-        button('适应', '适应视野', () => reset(true)),
-        button('1:1', '原始大小', () => reset(false)));
-    viewport.appendChild(diagram); wrapper.append(toolbar, viewport, disclosure);
-    viewport.addEventListener('wheel', event => {
-        if (!svg) return;
-        event.preventDefault(); event.stopPropagation();
-        const rect = viewport.getBoundingClientRect();
-        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
-        zoom(scale * Math.exp(-Math.max(-500, Math.min(500, delta)) * .002), event.clientX - rect.left, event.clientY - rect.top);
-    }, { passive: false });
-    viewport.addEventListener('pointerdown', event => {
-        if (!svg || event.button !== 0 || event.isPrimary === false) return;
-        event.preventDefault(); viewport.focus({ preventScroll: true });
-        drag = { id: event.pointerId, clientX: event.clientX, clientY: event.clientY, x, y };
-        viewport.setPointerCapture(event.pointerId); viewport.classList.add('is-dragging');
-    });
-    viewport.addEventListener('pointermove', event => {
-        if (!drag || event.pointerId !== drag.id) return;
-        x = drag.x + event.clientX - drag.clientX; y = drag.y + event.clientY - drag.clientY; schedulePaint();
-    });
-    function endDrag(event) {
-        if (!drag || event.pointerId !== drag.id) return;
-        drag = null; viewport.classList.remove('is-dragging');
-        if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
-    }
-    viewport.addEventListener('pointerup', endDrag); viewport.addEventListener('pointercancel', endDrag);
-    viewport.addEventListener('lostpointercapture', endDrag);
-    viewport.addEventListener('keydown', event => {
-        if (!svg || event.altKey || event.ctrlKey || event.metaKey) return;
-        if (event.key === '+' || event.key === '=') zoom(scale * 1.25);
-        else if (event.key === '-') zoom(scale / 1.25);
-        else if (event.key === 'Home') reset(true);
-        else if (event.key === '0') reset(false);
-        else if (event.key === 'ArrowLeft') { x += 40; schedulePaint(); }
-        else if (event.key === 'ArrowRight') { x -= 40; schedulePaint(); }
-        else if (event.key === 'ArrowUp') { y += 40; schedulePaint(); }
-        else if (event.key === 'ArrowDown') { y -= 40; schedulePaint(); }
-        else return;
-        event.preventDefault(); event.stopPropagation();
-    });
-    // Keep the bundled strict renderer and unmodified source; never apply model configuration.
-    void Promise.resolve().then(async () => {
-        if (source.length > 20000 || /%%\s*\{|^\s*---/m.test(source) ||
-            !SciLLM.renderMechanismDiagramInMeasurableHost) throw new Error('UNSUPPORTED_DIAGRAM');
-        const rendered = await SciLLM.renderMechanismDiagramInMeasurableHost(diagram, { mermaid: globalThis.mermaid });
-        if (!rendered || diagram.querySelector('.error-icon, .error-text')) throw new Error('INVALID_DIAGRAM');
-        if (!diagram.isConnected) return;
-        diagram.querySelectorAll('a').forEach(link => {
-            link.removeAttribute('href'); link.removeAttribute('xlink:href');
-        });
-        svg = diagram.querySelector('svg');
-        const box = svg?.viewBox?.baseVal;
-        if (!box || !(box.width > 0 && box.height > 0)) throw new Error('INVALID_DIAGRAM');
-        naturalWidth = box.width; naturalHeight = box.height;
-        svg.style.width = naturalWidth + 'px'; svg.style.height = naturalHeight + 'px'; svg.style.maxWidth = 'none';
-        diagram.style.width = naturalWidth + 'px'; diagram.style.height = naturalHeight + 'px';
-        toolbar.querySelectorAll('button').forEach(control => { control.disabled = false; });
-        reset(false);
-    }).catch(() => {
-        if (frame) cancelAnimationFrame(frame);
-        toolbar.remove(); viewport.remove();
-        disclosure.open = true;
-        wrapper.prepend(createWorkspaceElement('p', 'article-chat-mermaid-error', '示意图暂无法渲染，已保留原始代码。'));
-    });
-    return wrapper;
+    return globalThis.BrevessDiagramViewer.create(source, { document, createElement: createWorkspaceElement });
 }
 
 function normalizeArticleChatWebSource(source = {}) {
@@ -21130,10 +20971,17 @@ async function admitArticleChatStateEvent(event, sender) {
         (sender.frameId !== undefined && sender.frameId !== 0) || !url || normalize(sender.url) !== url || !current()) return false;
     const key = JSON.stringify([tabId,sequence,url,senderDocumentId]);
     if (articleChatEventDocumentCheck?.key !== key) {
-        articleChatEventDocumentCheck = {key,promise:chrome.webNavigation.getAllFrames({tabId}).then(frames=>{
-            const top = frames?.find(frame=>frame.frameId===0);
-            return top?.documentId === senderDocumentId && normalize(top.url) === url;
-        }).catch(()=>false)};
+        const proof = context.offlineMode
+            ? chrome.tabs.sendMessage(tabId, {action:'validateSavedArticleReader'}, {frameId:0,documentId:senderDocumentId}).then(result =>
+                result?.success === true && normalize(result.navigationIdentity) === url &&
+                result.binding?.workspaceId === snapshot.localWorkspace?.workspaceId &&
+                result.binding?.workspaceGeneration === Number(snapshot.localWorkspace?.workspaceGeneration || 1) &&
+                result.binding?.documentHash === documentHash)
+            : chrome.webNavigation.getAllFrames({tabId}).then(frames => {
+                const top = frames?.find(frame => frame.frameId === 0);
+                return top?.documentId === senderDocumentId && normalize(top.url) === url;
+            });
+        articleChatEventDocumentCheck = {key,promise:proof.catch(()=>false)};
     }
     if (!await articleChatEventDocumentCheck.promise || !current()) return false;
     applyArticleChatStateEvent(event);
@@ -21719,22 +21567,14 @@ async function performArticleWorkspaceRefresh({
         isCurrentPanelContext(panelContext) && isCurrentOwner(snapshot);
     if (!isCurrent()) return null;
     try {
-        if (panelContext.offlineMode === true) {
-            const response = await chrome.runtime.sendMessage({ type: 'OFFLINE_ARTICLE_GET_SNAPSHOT',
-                tabId: panelContext.tabId, readerUrl: panelContext.url });
-            if (!isCurrent()) return null;
-            if (!response?.success || !response.data?.snapshot) throw Object.assign(
-                new Error(response?.error?.message || '这篇离线文献的记录暂不可用'), { code: response?.error?.code || 'OFFLINE_READER_UNAVAILABLE' });
-            return renderArticleWorkspaceSnapshot(response.data.snapshot);
-        }
         let figureRefreshResult = null;
-        if (panelContext.pdfMode !== true &&
+        if (panelContext.pdfMode !== true && panelContext.offlineMode !== true &&
             typeof SciLLM.ensureCompatibleContentRevision === 'function') {
             await SciLLM.ensureCompatibleContentRevision(chrome, panelContext.tabId);
             if (!isCurrent()) return null;
         }
         if ((announce || !currentWorkspaceSnapshot) &&
-            panelContext.pdfMode !== true &&
+            panelContext.pdfMode !== true && panelContext.offlineMode !== true &&
             typeof SciLLM.refreshFigureExtractorInTab === 'function') {
             figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(
                 chrome,
@@ -23591,19 +23431,7 @@ async function initializeCurrentArticle({ retry = false } = {}) {
     articleInitializationState = initialization;
     const isCurrent = () => !signal.aborted && requestId === articlePreparationSequence &&
         isCurrentPanelContext(initialization.context);
-    if (initialization.context.offlineMode === true) {
-        try {
-            const snapshot = await refreshArticleWorkspace({ throwOnError: true, panelContext: initialization.context, signal });
-            if (!isCurrent()) return null;
-            initialization.ready = Boolean(snapshot);
-            renderOfflineArticleReadOnlyState(snapshot);
-            return snapshot;
-        } catch (error) {
-            initialization.error = error;
-            if (isCurrent()) renderArticleConnectionFailure(error);
-            return null;
-        } finally { finishInitialization(initialization.ready && isCurrent()); }
-    }
+
     const retryButton = document.getElementById('retryArticlePreparation');
     if (retryButton) {
         retryButton.hidden = true;
@@ -24226,11 +24054,6 @@ async function loadLiteratureNoteDocumentState() {
     const localState = normalizeLiteratureNoteDocumentState(
         entries[key] || (legacyKey && entries[legacyKey]) || null
     );
-    if (activePanelTabContext.offlineMode === true) {
-        literatureNoteDocumentState = currentWorkspaceSnapshot?.literatureNote
-            ? normalizeLiteratureNoteDocumentState(currentWorkspaceSnapshot.literatureNote) : localState;
-        return literatureNoteDocumentState;
-    }
     let workspaceState = null;
     try {
         workspaceState = (await readLiteratureNoteWorkspaceState(loadContext.target))
@@ -24509,7 +24332,6 @@ async function handleLiteratureNoteTemplateChange(event) {
 }
 
 function scheduleLiteratureNoteSave() {
-    if (activePanelTabContext.offlineMode === true) return;
     // Metadata joins an existing edit intent; opening the editor never creates it.
     if (literatureNoteDirtyRevisions.size > 0) applyCurrentPaperMetaToLiteratureNote();
     clearTimeout(literatureNoteSaveTimer);
@@ -26451,8 +26273,10 @@ async function observeStoppedFigureNativeRequest(tabId, taskToken, operationId) 
 let activeFigureVisionDialog = null;
 const shownFigureVisionDecisions = new Set();
 function maybeShowFigureVisionConfirmation(status) {
-    const decision=getFigureProgressEntries(status).map(item=>item.visionConfirmation).find(Boolean);
-    if (!decision || shownFigureVisionDecisions.has(decision.id)) return;
+    if (activeFigureVisionDialog || status?.running === false) return;
+    const decision = getFigureProgressEntries(status).map(item => item.visionConfirmation)
+        .find(item => item && !shownFigureVisionDecisions.has(item.id));
+    if (!decision) return;
     const panelContext=capturePanelContext();
     if (Number(panelContext.tabId)!==decision.tabId) return;
     // Pin this live UI before any asynchronous Figure validation. A replacement
@@ -26462,7 +26286,6 @@ function maybeShowFigureVisionConfirmation(status) {
         : Promise.resolve({binding:null});
     shownFigureVisionDecisions.add(decision.id);
     if (shownFigureVisionDecisions.size>128) shownFigureVisionDecisions.delete(shownFigureVisionDecisions.values().next().value);
-    if (activeFigureVisionDialog) activeFigureVisionDialog.finish('pause');
     const dialog=document.createElement('dialog');dialog.className='confirmation-dialog';
     const box=document.createElement('div');box.className='confirmation-dialog-content';
     const title=document.createElement('h3');title.textContent='继续文字解读？';
@@ -26492,7 +26315,6 @@ function maybeShowFigureVisionConfirmation(status) {
         }
         clearInterval(timer);window.removeEventListener('pagehide',onHide);
         if(dialog.open)dialog.close();dialog.remove();
-        if(activeFigureVisionDialog===session)activeFigureVisionDialog=null;
         try {
             const owner=await uiOwner;
             if(owner.error || session.pageHidden || !isCurrentPanelContext(panelContext))return;
@@ -26503,6 +26325,11 @@ function maybeShowFigureVisionConfirmation(status) {
                 ...(choice==='continue_text' && pdfTextEnvelope ? {pdfTextEnvelope} : {})});
             if(!result?.success && isCurrentPanelContext(panelContext))showStatus('本次确认已失效，Figure 解读保持暂停。','warning');
         }catch(_){if(isCurrentPanelContext(panelContext))showStatus('Figure 解读保持暂停。','warning');}
+        finally {
+            if (activeFigureVisionDialog === session) activeFigureVisionDialog = null;
+            if (!session.pageHidden && isCurrentPanelContext(panelContext))
+                maybeShowFigureVisionConfirmation(figureAnalysisState);
+        }
     }};
     const onHide=()=>{session.pageHidden=true;session.closed=true;void session.finish('pause');};
     const timer=setInterval(()=>{if(!isCurrentPanelContext(panelContext))void session.finish('pause');},250);
@@ -27286,7 +27113,7 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
         item.className = analysisMode === 'llm'
             ? 'category-item category-item-compact'
             : 'category-item';
-        
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.id = `cat-${key}${idSuffix}`;
@@ -27318,15 +27145,15 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
         const colorDiv = document.createElement('div');
         colorDiv.className = 'category-color';
         colorDiv.style.backgroundColor = rule.color;
-        
+
         const infoDiv = document.createElement('div');
         infoDiv.className = 'category-info';
-        
+
         const nameDiv = document.createElement('div');
         nameDiv.className = 'category-name';
         nameDiv.textContent = rule.name;
         if (customName) nameDiv.setAttribute('translate', 'no');
-        
+
         // 显示匹配计数
         if (matchCounts[key] !== undefined && matchCounts[key] > 0) {
             const matchBadge = document.createElement('span');
@@ -27334,7 +27161,7 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
             matchBadge.textContent = matchCounts[key];
             nameDiv.appendChild(matchBadge);
         }
-        
+
         const countDiv = document.createElement('div');
         countDiv.className = 'category-count';
         const engines = Array.isArray(rule.enabledEngines)
@@ -27357,14 +27184,14 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
                 ? (rule.persistence === 'one-off' ? '正则识别 · 仅本次会话' : '正则识别')
                 : '需要 LLM 识别';
         }
-        
+
         infoDiv.appendChild(nameDiv);
         infoDiv.appendChild(countDiv);
-        
+
         // 操作按钮
         const actionsDiv = document.createElement('div');
         actionsDiv.className = 'category-actions';
-        
+
         const editBtn = document.createElement('button');
         editBtn.className = 'category-rule-button';
         editBtn.textContent = '查看/编辑规则';
@@ -27372,7 +27199,7 @@ function createCategoryItem(key, rule, { checked, idSuffix = '' } = {}) {
             event.stopPropagation();
             openCategoryRuleEditor(key);
         });
-        
+
         actionsDiv.appendChild(editBtn);
 
         item.appendChild(checkbox);
@@ -27434,7 +27261,7 @@ function renderCategories() {
     moreButton.hidden = false;
     const activeCategoryIds = currentEntries.map(([categoryId]) => categoryId);
     renderMoreCategoryGroups(entries, activeCategoryIds);
-    
+
     // 更新总匹配数
     updateTotalMatchCount();
     renderHighlightPresentationControls();
@@ -27463,7 +27290,7 @@ async function requestMatchCounts() {
             action: 'getMatchCounts',
             rules
         });
-        
+
         if (response && response.counts) {
             matchCounts = response.counts;
             renderCategories();
@@ -28668,20 +28495,7 @@ async function sendTabMessage(tabId, message, options = {}) {
         throw error;
     }
     if (activePanelTabContext.offlineMode === true) {
-        const context = capturePanelContext();
-        const response = await chrome.runtime.sendMessage({ type: 'OFFLINE_ARTICLE_GET_SNAPSHOT', tabId, readerUrl: context.url });
-        if (!isCurrentPanelContext(context) || !response?.success || !response.data?.snapshot) throw Object.assign(
-            new Error('这篇离线文献的保存记录暂不可用，请重新打开'), { code: 'OFFLINE_READER_UNAVAILABLE' });
-        const snapshot = response.data.snapshot;
-        if (message.action === 'getArticleWorkspaceSnapshot') return { success: true, snapshot };
-        if (message.action === 'getFigureWorkspaceSnapshot') return { success: true, snapshot: snapshot.figures };
-        if (message.action === 'getArticleAbbreviations') return { success: true, abbreviations: snapshot.abbreviations };
-        if (message.action === 'getReviewOutlineStatus') return { success: true, status: { running: false, phase: 'idle' }, hasOutline: Boolean(snapshot.reviewOutline), outline: snapshot.reviewOutline };
-        if (message.action === 'getContentScriptRevision') return { revision: 'offline-saved-records', documentIdentity: snapshot.documentId, navigationIdentity: context.url };
-        if (message.action === 'prepareManualAnnotations') return { success: true, documentId: snapshot.documentId, documentHash: snapshot.documentHash,
-            canonicalUrl: snapshot.url, title: snapshot.title, annotationCount: snapshot.manual?.annotations?.length || 0,
-            unresolvedCount: snapshot.manual?.annotations?.filter(item => item.unresolved).length || 0 };
-        throw Object.assign(new Error('离线记录为只读；需要修改或重新分析时请打开在线原文。'), { code: 'OFFLINE_ARTICLE_READ_ONLY' });
+        return chrome.tabs.sendMessage(tabId, message);
     }
     return SciLLM.sendTabMessageWithRecovery(chrome, tabId, message, options);
 }
@@ -29912,7 +29726,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                 isSidebarOperationStopping(operationId) || outerIntent?.sourceController?.signal.aborted)
                 throw Object.assign(new Error('图解已取消，已完成结果会保留'), { code: 'CANCELLED' });
             if (outerIntent) { outerIntent.analysisDispatched = true; outerIntent.sourcePhasePending = false; }
-            startFigureProgressPolling(tab.id);
+            startFigureProgressPolling(tab.id, { waitForSnapshot: true });
             response = await sendTabMessage(tab.id, {
                 action: 'analyzeFiguresWithLLM',
                 ...(allFigures ? { allFigures: true, figureSourcePreflight: { ...figureSourcePreflight, figureIds },
@@ -29958,7 +29772,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
         if (response.phaseUsage.length && SciLLM.mergeTaskTelemetry) {
             response.usage = SciLLM.mergeTaskTelemetry(response.phaseUsage, {
                 label: '逐图解读', operationId: outerOperationId, startedAt, finishedAt: Date.now(),
-                status: response.partial ? 'failed' : 'success'
+                status: response.failedCount > 0 ? 'failed' : 'success'
             });
             response.usage.taskSummaryText = SciLLM.formatTaskTelemetry(response.usage);
         }
@@ -29985,7 +29799,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                 (details.length ? '（' + details.join('，') + '）' : ''),
                 response.route
             ),
-                'error',
+                failedCount > 0 ? 'error' : 'info',
                 response.usage
             );
         } else {

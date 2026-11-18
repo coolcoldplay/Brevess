@@ -50,6 +50,7 @@
     'core/figure-annotations.js',
     'core/figure-annotation-ui.js',
     'core/figure-image-tiles.js',
+    'core/figure-concurrency.js',
     'core/figure-analysis.js',
     'core/figure-result-binding.js',
     'core/figure-stage-diagnostics.js',
@@ -60,6 +61,7 @@
     'core/cross-figure-logic.js',
     'core/pdf-annotations.js',
     'core/manual-annotations.js',
+    'core/web-reading-page.js',
     'core/cross-format-anchors.js',
     'core/cross-format-view.js',
     'core/pdf-native-document.js',
@@ -108,8 +110,17 @@
   ];
   const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.2-store-first-r1';
+    '1.0.2-adaptive-figures-r10';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.2-adaptive-figures-r9',
+    '1.0.2-adaptive-figures-r8',
+    '1.0.2-adaptive-figures-r7',
+    '1.0.2-adaptive-figures-r6',
+    '1.0.2-adaptive-figures-r5',
+    '1.0.2-adaptive-figures-r4',
+    '1.0.2-adaptive-figures-r3',
+    '1.0.2-adaptive-figures-r2',
+    '1.0.2-store-first-r1',
     '1.0.1-visibility-sharing-r38-v29',
     '1.0.1-visibility-sharing-r38-v28',
     '1.0.1-visibility-sharing-r37-v26',

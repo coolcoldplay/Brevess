@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { chromeFiles, storeManifest, auditPackage, createZip, readZip, sha256 } from './chrome-store-package.mjs';
+import { chromeFiles, auditPackage, createZip, readZip, sha256 } from './chrome-store-package.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -20,7 +20,9 @@ files.set('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n')
 // Reuse the strict browser/dependency/credential audit. Only the public identity
 // key differs from the store manifest; it is not a private signing key.
 const auditFiles = new Map(files);
-auditFiles.set('manifest.json', Buffer.from(JSON.stringify(storeManifest(manifest))));
+const auditManifest = { ...manifest };
+delete auditManifest.key;
+auditFiles.set('manifest.json', Buffer.from(JSON.stringify(auditManifest)));
 const audit = auditPackage(auditFiles);
 if (audit.errors.length) throw new Error(audit.errors.join('\n'));
 const zip = createZip([...files].map(([name, bytes]) => ({ name, bytes })));
@@ -31,7 +33,8 @@ if (decoded.size !== files.size || [...files].some(([name, bytes]) => !decoded.g
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const revision = { sourceCommit: git(['rev-parse', 'HEAD']), sourceDirty: Boolean(git(['status', '--porcelain'])) };
 const label = manifest.version_name?.match(/\br\d+\b/)?.[0];
-const name = `Brevess-v${manifest.version}${label ? '-' + label : ''}-Chrome.zip`;
+const revisionLabel = manifest.version_name?.match(/Adaptive Figures (r\d+)$/)?.[1];
+const name = ['Brevess-v' + manifest.version, label, revisionLabel && 'adaptive-' + revisionLabel, 'Chrome.zip'].filter(Boolean).join('-');
 const keyHash = Buffer.from(sha256(Buffer.from(manifest.key, 'base64')), 'hex').subarray(0, 16);
 const extensionId = [...keyHash].map(b => String.fromCharCode(97 + (b >> 4), 97 + (b & 15))).join('');
 fs.mkdirSync(path.dirname(release), { recursive: true });
@@ -47,7 +50,7 @@ const metadata = { kind: 'public-unpacked-preview', version: manifest.version,
   artifact: { file: name, bytes: zip.length, sha256: sha256(zip) },
   files: [...files].map(([name, bytes]) => ({ path: name, bytes: bytes.length, sha256: sha256(bytes) })) };
 fs.writeFileSync(path.join(release, 'release-manifest.json'), JSON.stringify(metadata, null, 2) + '\n');
-fs.writeFileSync(path.join(release, 'package-audit.json'), JSON.stringify({ ...audit, extensionId,
+fs.writeFileSync(path.join(release, 'package-audit.json'), JSON.stringify({ ...audit, manifest, bytes: [...files.values()].reduce((sum, file) => sum + file.length, 0), extensionId,
   identityNote: 'The public manifest key is retained for unpacked-install continuity.' }, null, 2) + '\n');
 fs.writeFileSync(path.join(release, 'SHA256SUMS.txt'), `${sha256(zip)}  ${name}\n`);
 console.log(JSON.stringify({ ...revision, extensionId, file: name, files: files.size, bytes: zip.length, staticAudit: audit.status }));

@@ -1,5 +1,113 @@
 const { projectFile } = require('../scripts/project-paths.cjs');
 const test = require('node:test');
+test('quick setup rejects missing consent and directory permission before any provider request', async () => {
+  for (const consent of [false, true]) {
+    const storageArea = createMemoryStorage(consent ? { brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } } : {});
+    const router = createBackgroundRouter({ storageArea,
+      directorySync: { async status() { return { permission: 'prompt' }; } },
+      fetchImpl: async () => assert.fail('no network before consent and folder permission') });
+    const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true });
+    assert.equal(result.success, false);
+    assert.equal(result.error.code, consent ? 'QUICK_SETUP_DIRECTORY_REQUIRED' : 'AI_PRIVACY_ACK_REQUIRED');
+    assert.equal(storageArea.values.sciLlmSettingsV2, undefined);
+  }
+});
+
+test('quick setup tests a private draft then atomically saves the global route without changing specialized settings', async () => {
+  const original = SciLLM.createDefaultSettings();
+  original.tts.provider = 'kokoro';
+  original.autoAnalyze = false;
+  const storageArea = createMemoryStorage({ sciLlmSettingsV2: original,
+    brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } });
+  const previous = await SciLLM.loadSettings(storageArea);
+  let requests = 0;
+  const router = createBackgroundRouter({ storageArea,
+    directorySync: { async status() { return { permission: 'granted' }; } },
+    fetchImpl: async (url, options) => {
+      requests++;
+      assert.equal(storageArea.values.sciLlmSettingsV2.consentGranted, false);
+      assert.equal(storageArea.values.sciLlmSettingsV2.profiles.profile_quick_test, undefined);
+      assert.match(options.body, /Minimal connectivity probe/);
+      return jsonResponse({ choices: [{ message: { content: 'OK' } }] });
+    } });
+  const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
+    profile: { id: 'profile_quick_test', providerId: 'openai', config: { apiKey: 'fixture-key', model: 'fixture-model' } } });
+  assert.equal(result.success, true, JSON.stringify(result.error));
+  assert.equal(requests, 1);
+  assert.equal(result.data.settings.globalProfileId, 'profile_quick_test');
+  assert.equal(result.data.settings.mode, 'llm');
+  assert.equal(result.data.settings.consentGranted, true);
+  assert.equal(result.data.settings.profiles.profile_quick_test.config.hasApiKey, true);
+  assert.equal(result.data.settings.profiles.profile_quick_test.config.apiKey, undefined);
+  assert.deepEqual(result.data.settings.taskPolicies, previous.taskPolicies);
+  assert.deepEqual(result.data.settings.tts, SciLLM.toPublicSettings(previous).tts);
+  assert.equal(result.data.settings.autoAnalyze, false);
+});
+
+test('quick setup failed authentication leaves existing configuration intact', async () => {
+  const storageArea = createMemoryStorage({ sciLlmSettingsV2: SciLLM.createDefaultSettings(),
+    brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } });
+  const before = JSON.stringify(storageArea.values);
+  const router = createBackgroundRouter({ storageArea,
+    directorySync: { async status() { return { permission: 'granted' }; } },
+    fetchImpl: async () => jsonResponse({ error: { message: 'bad key' } }, 401) });
+  const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
+    profile: { id: 'profile_quick_bad', providerId: 'openai', config: { apiKey: 'fixture-key', model: 'fixture-model' } } });
+  assert.equal(result.success, false);
+  assert.equal(result.error.code, 'AUTH_INVALID');
+  assert.equal(JSON.stringify(storageArea.values), before);
+});
+
+test('quick setup rechecks risk, directory and window ownership after the network wait', async () => {
+  for (const scenario of ['risk', 'directory', 'window', 'concurrent']) {
+    const storageArea = createMemoryStorage({ sciLlmSettingsV2: SciLLM.createDefaultSettings(),
+      brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } });
+    let permission = 'granted';
+    const router = createBackgroundRouter({ storageArea,
+      directorySync: { async status() { return { permission }; } },
+      fetchImpl: async () => {
+        if (scenario === 'risk') storageArea.values.brevessAiPrivacyAcknowledgementV1.acknowledged = false;
+        if (scenario === 'directory') permission = 'denied';
+        if (scenario === 'concurrent') storageArea.values.sciLlmSettingsV2.profiles.profile_quick_race = { providerId: 'openai', name: 'edited elsewhere', config: { model: 'other', apiKey: 'other-key' } };
+        return jsonResponse({ choices: [{ message: { content: 'OK' } }] });
+      } });
+    const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
+      profile: { id: 'profile_quick_race', providerId: 'openai', config: { apiKey: 'fixture-key', model: 'fixture-model' } } }, {
+      async assertQuickSetupCurrent() { if (scenario === 'window') throw Object.assign(new Error('closed'), { code: 'QUICK_SETUP_OWNER_CLOSED' }); }
+    });
+    assert.equal(result.success, false, scenario);
+    assert.equal(storageArea.values.sciLlmSettingsV2.consentGranted, false, scenario);
+    assert.equal(storageArea.values.sciLlmSettingsV2.globalProfileId, 'profile_default_openai', scenario);
+    if (scenario === 'concurrent') assert.equal(storageArea.values.sciLlmSettingsV2.profiles.profile_quick_race.name, 'edited elsewhere');
+  }
+});
+
+test('quick setup refuses insecure or credential-bearing custom endpoints', async () => {
+  for (const baseUrl of ['http://remote.example/v1', 'https://secret@example.org/v1', 'https://example.org/v1?key=fixture']) {
+    const router = createBackgroundRouter({ storageArea: createMemoryStorage({ brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } }),
+      directorySync: { async status() { return { permission: 'granted' }; } }, fetchImpl: async () => assert.fail('unsafe endpoint') });
+    const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
+      profile: { id: 'profile_quick_url', providerId: 'openai-compatible', config: { apiKey: 'fixture-key', model: 'fixture-model', baseUrl } } });
+    assert.equal(result.success, false);
+  }
+});
+
+test('quick setup never forwards a saved credential when its API destination changes', async () => {
+  const settings = SciLLM.createDefaultSettings();
+  settings.profiles.profile_saved_custom = { name: 'Saved', providerId: 'openai-compatible', config: {
+    model: 'fixture-model', apiKey: 'fixture-saved-key', baseUrl: 'https://original.example/v1'
+  } };
+  const storageArea = createMemoryStorage({ sciLlmSettingsV2: settings,
+    brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } });
+  const router = createBackgroundRouter({ storageArea,
+    directorySync: { async status() { return { permission: 'granted' }; } },
+    fetchImpl: async () => assert.fail('must require explicit key for a changed destination') });
+  const result = await router.handle({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
+    profile: { id: 'profile_saved_custom', providerId: 'openai-compatible', config: { apiKey: '', model: 'fixture-model', baseUrl: 'https://different.example/v1' } } });
+  assert.equal(result.success, false);
+  assert.equal(result.error.code, 'INVALID_SETTINGS');
+  assert.equal(storageArea.values.sciLlmSettingsV2.profiles.profile_saved_custom.config.baseUrl, 'https://original.example/v1');
+});
 test('Figure cancelled before provider admission acknowledges a later release across worker restart', async () => {
   const storageArea=createMemoryStorage(),sessionStorageArea=createMemoryStorage();
   const make=()=>createBackgroundRouter({storageArea,sessionStorageArea,runtimeExtensionId:'extension-id',
@@ -88,6 +196,7 @@ require('../extension/providers/anthropic.js');
 require('../extension/providers/gemini.js');
 require('../extension/providers/deepseek.js');
 require('../extension/providers/codex-local.js');
+require('../extension/providers/deepseek-harness.js');
 require('../extension/providers/openai-compatible.js');
 require('../extension/providers/provider-registry.js');
 require('../extension/core/provider-model-discovery.js');
@@ -512,7 +621,7 @@ test('split Figure routes carry exact Panel admission pixels into a DeepSeek vis
 
   const bodies = [];
   const router = createBackgroundRouter({
-    storageArea,
+    storageArea, sessionStorageArea: createMemoryStorage(),
     runtimeExtensionId: 'extension-id',
     fetchImpl: async (url, options) => {
       const body = JSON.parse(options.body);
@@ -584,6 +693,7 @@ test('split Figure routes carry exact Panel admission pixels into a DeepSeek vis
       ),
       assertCurrentPdfFigurePanelResult: () => undefined,
       normalizeRequestedPanelId: executableContentFunction('normalizeRequestedPanelId'),
+      admitArticleWorkspacePersistence: async () => ({ ready: true }),
       recoverPendingFigureOperationRelease: async () => undefined,
       synchronizeFigureWorkspaceLifecycle: async () => undefined,
       articleWorkspaceLifecycleGeneration: 1,
@@ -4540,7 +4650,9 @@ function figureOutput(figureId, basis = 'caption_context', depth = 'standard') {
     figure_id: figureId,
     analysis_depth: depth,
     basis,
+    figure_title_zh: '',
     figure_question_zh: '该处理是否改变目标表型？',
+    remaining_question_zh: '',
     panels: [{
       panel: 'A',
       role: 'phenotype',
@@ -4558,6 +4670,7 @@ function figureOutput(figureId, basis = 'caption_context', depth = 'standard') {
     }],
     panel_groups: [{
       panels: ['A'], group_goal_zh: '建立表型', group_conclusion_zh: '处理抑制目标表型',
+      upstream_context_zh: '',
       grouping_basis: fixtureGroupingBasis(['A'])
     }],
     logic_bridges: [],
@@ -4589,7 +4702,28 @@ function figureOutput(figureId, basis = 'caption_context', depth = 'standard') {
   return value;
 }
 
+function unlabeledFigureOutput(input) {
+  return {
+    figure_id: input.figure_id,
+    analysis_depth: input.analysis_depth,
+    basis: input.analysis_basis,
+    figure_title_zh: '',
+    figure_question_zh: 'What does this Figure establish?',
+    remaining_question_zh: '',
+    evidence_steps: [{
+      source_zh: 'The supplied Figure evidence.',
+      established_zh: 'The intervention changes the reported phenotype.',
+      handoff_zh: 'The next experiment tests mechanism.',
+      evidence_level: 'intervention_effect'
+    }],
+    author_assembly_zh: 'The author moves from phenotype to mechanism.',
+    core_conclusion_zh: 'The intervention changes the phenotype.',
+    claim_boundary_zh: 'The supplied evidence does not establish every mechanism.'
+  };
+}
+
 function figurePassOutput(input) {
+  if (input.pass === 'unlabeled_figure_overview') return unlabeledFigureOutput(input);
   const output = figureOutput(
     input.figure_id, input.analysis_basis, input.analysis_depth
   );
@@ -4632,6 +4766,84 @@ function figureCheckpointContext(progress = [], checkpoints = [], persist = null
     }
   };
 }
+
+test('batch scheduling grows on fully validated explicit-text Figures and uses the real transport cap across tabs', async () => {
+  const { runFigureBatchQueue } = require('../extension/core/figure-concurrency.js');
+  const figures = Array.from({ length: 12 }, (_, index) => ({ ...figureInput(index + 1), panelHints: ['A'] }));
+  const calls = [], feedback = [];
+  let inFlight = 0, peak = 0;
+  const router = createConfirmedFigureRouter({
+    storageArea: createMemoryStorage(), sessionStorageArea: createMemoryStorage(),
+    fetchImpl: async (_url, options) => {
+      const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+      calls.push(input.figure_id);
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(resolve => setTimeout(resolve, 70));
+      inFlight--;
+      return jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(figurePassOutput(input)) } }] });
+    }
+  });
+  assert.equal((await router.handle({ type: 'LLM_SAVE_PROVIDER', providerId: 'deepseek',
+    config: { apiKey: 'fixture-key', model: 'deepseek-flash' } })).success, true);
+  assert.equal((await router.handle({ type: 'LLM_UPDATE_PREFERENCES',
+    preferences: { mode: 'llm', providerId: 'deepseek', consentGranted: true } })).success, true);
+  await runFigureBatchQueue(figures.length, 4, async index => {
+    const response = await router.handle(figureMessage([figures[index]], {
+      figureInputMode: 'text', parallelBatch: true, analysisDepth: 'standard'
+    }), { senderTabId: 31 + index % 2 });
+    assert.equal(response.success, true, JSON.stringify(response.error));
+    const result = response.data.figureResults[0];
+    assert.equal(result.inputMode, 'caption_context');
+    assert.deepEqual(result.panels.map(p => p.panel), ['A']);
+    feedback.push(response.data.figureBatchConcurrency);
+    return response.data.figureBatchConcurrency;
+  }, 0);
+  assert.deepEqual(calls.toSorted(), figures.map(f => f.figureId).toSorted());
+  assert.ok(feedback.includes(3) && feedback.includes(4));
+  assert.equal(peak, 4);
+});
+
+test('an existing pending receipt is serial only on the matching source and route', async () => {
+  let calls = 0;
+  const entered = Promise.withResolvers(), finish = Promise.withResolvers();
+  const router = createConfirmedFigureRouter({
+    storageArea: createMemoryStorage(), sessionStorageArea: createMemoryStorage(),
+    fetchImpl: async (_url, options) => {
+      calls++;
+      entered.resolve();
+      await finish.promise;
+      const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+      return jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(figurePassOutput(input)) } }] });
+    }
+  });
+  await router.handle({ type: 'LLM_SAVE_PROVIDER', providerId: 'deepseek', config: { apiKey: 'fixture-key', model: 'deepseek-flash' } });
+  await router.handle({ type: 'LLM_UPDATE_PREFERENCES', preferences: { mode: 'llm', providerId: 'deepseek', consentGranted: true } });
+  const paper = figureMessage([{ ...figureInput(1), panelHints: ['A'] }], { figureInputMode: 'text' });
+  const pending = router.handle(paper);
+  try {
+    await Promise.race([entered.promise, pending.then(result => { throw Error(JSON.stringify(result.error)); })]);
+    const navigationIdentity = 'https://example.org/next-paper';
+    const owner = { trustedExtensionSender: true, senderExtensionId: 'extension-id', senderTabId: 35, senderFrameId: 0,
+      senderUrl: navigationIdentity, senderDocumentId: '35353535-3535-4535-8535-353535353535' };
+    const binding = { tabId: owner.senderTabId, workspaceLifecycle: 35, documentIdentity: owner.senderDocumentId,
+      navigationIdentity, documentHash: 'next-paper', figureIds: ['figure-1', 'figure-2'] };
+    const control = { type: 'LLM_CONTROL_OPERATION', operationScope: 'figure', workspaceLifecycle: 35,
+      operationId: 'figure-probe-second-paper', figureUserResumeBinding: binding };
+    const grant = await router.handle({ ...control, command: 'authorize-user-resume' }, { trustedExtensionSender: true,
+      senderExtensionId: 'extension-id', senderUrl: 'chrome-extension://extension-id/popup.html', runtimeBaseUrl: 'chrome-extension://extension-id/' });
+    assert.ok(grant.data?.figureUserResumeIntent, JSON.stringify(grant.error));
+    const probe = { ...control, command: 'check-user-resume-source', figureUserResumeIntent: grant.data.figureUserResumeIntent,
+      analysisDepth: 'standard', figures: [{ figureId: 'figure-1' }, { figureId: 'figure-2' }], document: paper.document };
+    assert.deepEqual((await router.handle(probe, owner)).data, { scopeMatches: true });
+    const unrelated = { paragraphs: [{ paragraphId: 'p1', text: 'A separate paper describes different observations.' }] };
+    assert.deepEqual((await router.handle({ ...probe, document: unrelated }, owner)).data, { scopeMatches: false });
+    assert.equal((await router.handle(probe, { ...owner, senderTabId: 36 })).success, false);
+    assert.equal(calls, 1);
+  } finally {
+    finish.resolve();
+    await pending;
+  }
+});
 
 test('mechanism browser-session identity is same-realm atomic, stable and fails closed', async () => {
   const sharedStorage = createDelayedCloneStorage();
@@ -5255,7 +5467,7 @@ test('resumes an exact ready checkpoint with zero duplicate provider calls and f
     }
   });
   await configureOpenAIRouter(router);
-  const secret = 'sk-private-paper-secret-should-not-leak';
+  const secret = 'sk-' + 'test-only'.repeat(5);
   const privatePath = 'D:\\private\\paper\\source.pdf';
   const message = evidenceFirstMessage({
     document: {
@@ -5568,7 +5780,7 @@ test('ignored AbortSignal provider timeouts quarantine without retry late writes
       return baseCache.compareAndSetManyGuarded(values, guard);
     }
   };
-  const secret = 'sk-hung-provider-secret-123456789';
+  const secret = 'sk-' + 'test-only'.repeat(5);
   const privatePath = 'D:\\Users\\private\\paper.pdf';
   const rawCanary = 'RAW_PROVIDER_RESPONSE_MUST_NOT_PERSIST';
   const providerBodies = [];
@@ -10886,7 +11098,7 @@ test('concurrent disjoint Figure targets independently reserve the shared operat
   const progress = [];
   const providerAttemptsSeenAtDispatch = [];
   let providerCalls = 0;
-  const createRouter = () => createBackgroundRouter({
+  const createRouter = () => createConfirmedFigureRouter({
     storageArea,
     sessionStorageArea: figureAttemptLedgerStorage,
     fetchImpl: async (url, options) => {
@@ -13410,12 +13622,13 @@ test('cancelling a Figure operation during router backoff stops retries and cann
 
 test('resumes a durable deep Figure checkpoint without repeating completed Panels', async () => {
   const storageArea = createMemoryStorage();
+  const sessionStorageArea = createMemoryStorage();
   const operationId = 'figure-checkpoint-resume-operation';
   const firstCheckpoints = [];
   const firstProgress = [];
   const firstRequests = [];
-  const firstRouter = createBackgroundRouter({
-    storageArea,
+  const firstRouter = createConfirmedFigureRouter({
+    storageArea, sessionStorageArea,
     fetchImpl: async (url, options) => {
       const input = openAIInputPayload(JSON.parse(options.body));
       firstRequests.push(input);
@@ -13440,8 +13653,8 @@ test('resumes a durable deep Figure checkpoint without repeating completed Panel
 
   const resumedRequests = [];
   const resumedProgress = [];
-  const restartedRouter = createBackgroundRouter({
-    storageArea,
+  const restartedRouter = createConfirmedFigureRouter({
+    storageArea, sessionStorageArea,
     fetchImpl: async (url, options) => {
       const input = openAIInputPayload(JSON.parse(options.body));
       resumedRequests.push(input);
@@ -13457,7 +13670,13 @@ test('resumes a durable deep Figure checkpoint without repeating completed Panel
     figureOperationPlan: [{ figureId: 'figure-1', panelCount: 5 }],
     providerAttemptsConsumed: consumed,
     figureResumeCheckpoint: firstCheckpoints.at(-1).checkpointEnvelope
-  }), figureCheckpointContext(resumedProgress, []));
+  }), figureCheckpointContext(resumedProgress, [], value => {
+    const count = value.figureResult.panels.length;
+    if (count <= firstCheckpoints.at(-1).figureResult.panels.length) {
+      return { success: false, code: 'FIGURE_CHECKPOINT_CONFLICT' };
+    }
+    return { success: true, savedPanelCount: count };
+  }));
   assert.equal(resumed.success, true, JSON.stringify(resumed));
   assert.deepEqual(resumedRequests.map(input => ({
     pass: input.pass,
@@ -14771,8 +14990,8 @@ test('recovers a missing Panel inside one deep extraction batch without retrying
   const progress = [];
   let inFlight = 0;
   let maximumInFlight = 0;
-  const router = createBackgroundRouter({
-    storageArea,
+  const router = createConfirmedFigureRouter({
+    storageArea, sessionStorageArea: createMemoryStorage(),
     fetchImpl: async (url, options) => {
       inFlight += 1;
       maximumInFlight = Math.max(maximumInFlight, inFlight);
@@ -14821,8 +15040,8 @@ test('recovers a missing Panel inside one deep extraction batch without retrying
 test('preserves an unresolved deep-batch Panel and continues later extraction safely', async () => {
   const storageArea = createMemoryStorage();
   const requests = [];
-  const router = createBackgroundRouter({
-    storageArea,
+  const router = createConfirmedFigureRouter({
+    storageArea, sessionStorageArea: createMemoryStorage(),
     fetchImpl: async (url, options) => {
       const input = openAIInputPayload(JSON.parse(options.body));
       requests.push(input);
@@ -19451,23 +19670,7 @@ test('explicit current confirmation: exact Figure policy gates every visual fall
     { name: 'deep', panelHints: ['A', 'B', 'C'], analysisDepth: 'deep' },
     { name: 'missing_recovery', panelHints: ['A', 'B'], analysisDepth: 'standard' }
   ];
-  const unlabeledOutput = input => ({
-    figure_id: input.figure_id,
-    analysis_depth: input.analysis_depth,
-    basis: input.analysis_basis,
-    figure_title_zh: '',
-    figure_question_zh: 'What does this Figure establish?',
-    remaining_question_zh: '',
-    evidence_steps: [{
-      source_zh: 'The supplied Figure evidence.',
-      established_zh: 'The intervention changes the reported phenotype.',
-      handoff_zh: 'The next experiment tests mechanism.',
-      evidence_level: 'intervention_effect'
-    }],
-    author_assembly_zh: 'The author moves from phenotype to mechanism.',
-    core_conclusion_zh: 'The intervention changes the phenotype.',
-    claim_boundary_zh: 'The supplied evidence does not establish every mechanism.'
-  });
+
 
   async function runScenario(scenario, allowTextFallback) {
     const storageArea = createMemoryStorage();
@@ -19491,7 +19694,7 @@ test('explicit current confirmation: exact Figure policy gates every visual fall
           return jsonResponse({ output_text: 'not valid JSON' });
         }
         let output;
-        if (scenario.name === 'unlabeled') output = unlabeledOutput(input);
+        if (scenario.name === 'unlabeled') output = unlabeledFigureOutput(input);
         else if (scenario.name === 'missing_recovery' && pass === 'single_pass') {
           output = partialFigurePassOutput(input, ['A']);
         } else if (pass === 'missing_panel_recovery') {
@@ -22899,4 +23102,96 @@ test('deleting the only profile leaves an empty non-dangling profile state', asy
     assert.equal(policy.mode, translationTasks.includes(taskId) ? 'local' : 'global', taskId);
     assert.equal(policy.profileId, null, taskId);
   });
+});
+
+test('Agent quick connection publishes a tested Harness profile without replacing defaults', async () => {
+  const original = SciLLM.createDefaultSettings();
+  original.consentGranted = true;
+  original.tts.provider = 'kokoro';
+  const storageArea = createMemoryStorage({ sciLlmSettingsV2: original,
+    brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: true, updatedAt: 1 } });
+  const before = await SciLLM.loadSettings(storageArea);
+  let turns = 0;
+  const router = createBackgroundRouter({ storageArea, harnessClient: {
+    async listModels() { return { models: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash' }] }; },
+    async health() { return { credentialStored: true }; },
+    async *streamTurn(input) {
+      turns++;
+      assert.equal(input.model, 'deepseek-flash');
+      assert.match(input.userPrompt, /OK/);
+      if (turns === 1) assert.equal(storageArea.values.sciLlmSettingsV2.profiles.profile_agent_dsh, undefined);
+      yield { type: 'text_delta', text: 'OK' }; yield { type: 'completed' };
+    }
+  } });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await router.handle({ type: 'LLM_CONNECT_AGENT', providerId: 'deepseek-harness' });
+    assert.equal(result.success, true, JSON.stringify(result.error));
+    assert.equal(result.data.connected, true);
+    assert.equal(result.data.profile.id, 'profile_agent_dsh');
+    assert.equal(result.data.profile.model, 'deepseek-flash');
+    assert.equal(result.data.settings.globalProfileId, before.globalProfileId);
+    assert.deepEqual(result.data.settings.taskPolicies, before.taskPolicies);
+    assert.deepEqual(result.data.settings.tts, SciLLM.toPublicSettings(before).tts);
+    assert.equal(Object.values(result.data.settings.profiles).filter(p => p.providerId === 'deepseek-harness').length, 1);
+  }
+  assert.equal(turns, 2);
+});
+
+test('Agent quick connection never publishes untested models or overwrites a concurrent edit', async () => {
+  for (const scenario of ['risk', 'failed', 'concurrent', 'unknown']) {
+    const storageArea = createMemoryStorage({ sciLlmSettingsV2: SciLLM.createDefaultSettings(),
+      brevessAiPrivacyAcknowledgementV1: { version: 1, acknowledged: scenario !== 'risk', updatedAt: 1 } });
+    const before = JSON.stringify(storageArea.values);
+    let turns = 0;
+    const router = createBackgroundRouter({ storageArea, nativeClient: {
+      async health() { return { connected: true }; },
+      async *streamTurn() {
+        turns++;
+        if (scenario === 'concurrent') {
+          storageArea.values.sciLlmSettingsV2.profiles.profile_agent_codex = { providerId: 'codex-local', name: 'Edited elsewhere', config: { model: 'custom-model' } };
+          yield { type: 'text_delta', text: 'OK' }; yield { type: 'completed' };
+        } else yield { type: 'error', error: { code: 'CODEX_NOT_AUTHENTICATED', message: 'not authenticated' } };
+      }
+    } });
+    const result = await router.handle({ type: 'LLM_CONNECT_AGENT', providerId: scenario === 'unknown' ? 'qwen' : 'codex-local' });
+    assert.equal(result.success, false, scenario);
+    if (scenario === 'concurrent') {
+      assert.equal(result.error.code, 'AGENT_PROFILE_CHANGED');
+      assert.equal(storageArea.values.sciLlmSettingsV2.profiles.profile_agent_codex.name, 'Edited elsewhere');
+    } else assert.equal(JSON.stringify(storageArea.values), before, scenario);
+    assert.equal(turns, ['risk', 'unknown'].includes(scenario) ? 0 : 1);
+  }
+});
+
+test('saved page annotation lookup uses the trusted sender URL and rechecks navigation', async () => {
+  const url='https://chatgpt.com/c/test';let lookups=0,checks=0;
+  const router=createBackgroundRouter({storageArea:createMemoryStorage(),documentStore:{findAnnotatedSource:async source=>{
+    lookups++;assert.equal(source,url);return {documentId:'test',annotations:[]};
+  }}});
+  const owner={trustedExtensionSender:true,senderUrl:url,assertTrustedOwnerCurrent:async()=>{checks++;}};
+  assert.equal((await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:url},owner)).data.record.documentId,'test');
+  assert.equal(checks,2);
+  const result=await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:'https://chatgpt.com/c/other'},owner);
+  assert.equal(result.success,false);assert.equal(lookups,1);
+  const untrusted=await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:url},{});
+  assert.equal(untrusted.success,false);assert.equal(lookups,1);
+});
+
+test('annotation source preparation separates URL queries and preserves annotations through content remounts', async () => {
+ const store=SciLLM.createMemoryDocumentStore();
+ const router=createBackgroundRouter({storageArea:createMemoryStorage(),documentStore:store});
+ const firstUrl='https://example.org/view?id=one', otherUrl='https://example.org/view?id=two';
+ const owner=url=>({trustedExtensionSender:true,senderUrl:url,assertTrustedOwnerCurrent:async()=>{}});
+ const input=url=>({title:'Same visible title',canonicalUrl:'https://example.org/view',annotationSourceUrl:url,paragraphs:[{paragraphId:'p',text:'The same visible source text for both pages.',sectionTitle:''}]});
+ const first=await router.handle({type:'DOCUMENT_PREPARE',document:input(firstUrl)},owner(firstUrl));
+ const second=await router.handle({type:'DOCUMENT_PREPARE',document:input(otherUrl)},owner(otherUrl));
+ assert.equal(first.success,true,JSON.stringify(first.error));assert.equal(second.success,true,JSON.stringify(second.error));
+ assert.notEqual(first.data.documentId,second.data.documentId);
+ await store.upsertAnnotation(first.data.documentId,{annotationId:'source-check',categoryId:'result',categorySnapshot:{name:'Result',color:'#FFE66D'},
+ quote:'source',prefix:'visible ',suffix:' text',blockFingerprint:'p',startOffset:17,endOffset:23,note:'Keep this note'});
+ const remounted=await router.handle({type:'DOCUMENT_PREPARE',document:{...input(firstUrl),title:'Updated title',documentId:first.data.documentId,
+ previousDocumentHash:first.data.documentHash,paragraphs:[{paragraphId:'p2',text:'An appended response changes the body hash.'}]}},owner(firstUrl));
+ assert.equal(remounted.success,true,JSON.stringify(remounted.error));
+ assert.equal(remounted.data.documentId,first.data.documentId);assert.equal(remounted.data.record.annotations[0].note,'Keep this note');
+ const wrong=await router.handle({type:'DOCUMENT_PREPARE',document:input(firstUrl)},owner(otherUrl));assert.equal(wrong.success,false);
 });

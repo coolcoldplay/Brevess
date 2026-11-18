@@ -301,3 +301,27 @@ test('IndexedDB adapter uses the required database and stores and recovers after
   assert.equal(saved.studyType, 'clinical_trial');
   assert.equal(saved.revision, 1);
 });
+
+test('annotated source lookup stays scoped and ignores empty records and query-dependent pages', async () => {
+  const store = createMemoryDocumentStore();
+  const url = 'https://chatgpt.com/c/one';
+  await store.putDocument({documentId:DOCUMENT_ONE,canonicalUrl:url,annotations:[manualAnnotation(1)]});
+  await store.putDocument({documentId:DOCUMENT_TWO,canonicalUrl:'https://chatgpt.com/c/two',annotations:[manualAnnotation(2)]});
+  assert.equal((await store.findAnnotatedSource(url+'#part')).documentId,DOCUMENT_ONE);
+  assert.equal(await store.findAnnotatedSource('https://chatgpt.com/c/three'),null);
+  assert.equal(await store.findAnnotatedSource(url+'?conversation=another'),null);
+  await store.clearAnnotations(DOCUMENT_ONE);
+  assert.equal(await store.findAnnotatedSource(url),null);
+});
+
+
+test('query pages, hash-router pages and local files retain distinct annotation source identity', async () => {
+ const store=createMemoryDocumentStore();
+ for(const [a,b] of [['https://example.org/search?q=one','https://example.org/search?q=two'],
+ ['https://example.org/app#/chat/one','https://example.org/app#/chat/two'],['file:///papers/one.html','file:///papers/two.html']]) {
+  await store.putDocument({documentId:DOCUMENT_ONE,canonicalUrl:a,annotationSourceUrl:a,annotations:[manualAnnotation(1)]});
+  await store.putDocument({documentId:DOCUMENT_TWO,canonicalUrl:b,annotationSourceUrl:b,annotations:[manualAnnotation(2)]});
+  assert.equal((await store.findAnnotatedSource(a)).documentId,DOCUMENT_ONE);
+  assert.equal((await store.findAnnotatedSource(b)).documentId,DOCUMENT_TWO);
+ }
+});

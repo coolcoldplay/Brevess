@@ -20,6 +20,7 @@ importScripts(
     'core/i18n-tools.js',
     'core/i18n-reader-patterns.js',
   'core/onboarding.js',
+  'core/onboarding-window.js',
   'core/tab-activation.js',
   'core/page-tools.js',
   'core/literature-url.js',
@@ -57,6 +58,7 @@ importScripts(
   'core/evidence-ledger.js',
   'core/figure-panel-planner.js',
   'core/figure-panel-recovery.js',
+  'core/figure-concurrency.js',
   'core/figure-analysis.js',
   'core/figure-stage-diagnostics.js',
   'core/pdf-figure-request.js',
@@ -137,6 +139,7 @@ importScripts(
   'core/article-workspace-save.js',
   'core/article-workspace-store.js',
   'core/offline-article-workspace.js',
+  'core/saved-reader-runtime.js',
   'core/local-library-tags.js',
   'core/article-bibliography.js',
   'core/pdf-bibliography.js',
@@ -344,6 +347,16 @@ function rememberActionPopupTab(tab, documentId) {
   return nonce;
 }
 
+async function actionPopupSetupPending() {
+  // Read the saved configuration each time. Guide progress may be stale after
+  // configuring settings elsewhere, skipping setup, or removing a connection.
+  const [directory, settings] = await Promise.all([
+    SciLLM.loadDirectoryHandle(indexedDB),
+    SciLLM.loadSettings(portableSettingsStorage)
+  ]);
+  return !directory || !Object.values(settings.profiles || {}).some(SciLLM.isConfiguredProfile);
+}
+
 async function actionPopupPublicState(sender, popupWindowId) {
   // A service worker's currentWindow can belong to another extension view.
   // Resolve the browser-owned popup context before issuing a tab receipt.
@@ -377,6 +390,7 @@ async function actionPopupPublicState(sender, popupWindowId) {
     title: String(tab?.title || '当前页面').trim().slice(0, 120),
     readable,
     activatedBefore,
+    setupPending: await actionPopupSetupPending().catch(() => false),
     primaryLabel: r20WorkbenchTab(tab)?'Agent辅助':activatedBefore ? '继续研读' : '开始研读',
     historyUrl: 'options.html#page=data',
     settingsUrl: 'options.html#page=overview',
@@ -528,11 +542,11 @@ function normalizedWarmUrl(tab) {
   }
 }
 
-async function readOfflineArticleForTab(tab, expectedUrl = '') {
+async function readOfflineArticleForTab(tab, expectedUrl = '', includeAssets = false) {
   const readerUrl = normalizedWarmUrl(tab);
   if (expectedUrl && expectedUrl !== readerUrl) throw Object.assign(new Error('离线文献已切换，请重新打开'), { code: 'OFFLINE_READER_CHANGED' });
   const result = await SciLLM.readOfflineArticleWorkspace({ store: articleWorkspaceStore,
-    readerUrl, runtimeBaseUrl: chrome.runtime.getURL('') });
+    readerUrl, runtimeBaseUrl: chrome.runtime.getURL(''), includeAssets });
   const current = await chrome.tabs.get(tab.id);
   if (current?.windowId !== tab.windowId || normalizedWarmUrl(current) !== readerUrl) {
     throw Object.assign(new Error('离线文献已切换，请重新打开'), { code: 'OFFLINE_READER_CHANGED' });
@@ -630,18 +644,12 @@ async function activateTabFromOpenSidePanel(tab) {
     : activateTabAndOpenSidePanel(tab, panelOpen);
 }
 
+const openQuickSetupWindow = SciLLM.createQuickSetupWindow(chrome);
 async function openOnboardingForTab(tab) {
-  if (!tab?.id || !tab?.windowId) return;
-  onboardingSnapshot = await onboardingController.begin({
-    tabId: tab.id,
-    windowId: tab.windowId,
-    url: tab.url || ''
-  });
-  await chrome.tabs.create({
-    url: chrome.runtime.getURL('options.html#onboarding'),
-    active: true,
-    windowId: tab.windowId
-  });
+  onboardingSnapshot = await onboardingController.begin(tab && actionPopupReadableTab(tab) ? {
+    tabId: tab.id, windowId: tab.windowId, url: tab.url || ''
+  } : {});
+  return openQuickSetupWindow();
 }
 
 async function handleToolbarAction(tab, panelOpen, expectedDocumentId) {
@@ -1122,6 +1130,8 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_GET_SETTINGS',
   'LLM_PREFLIGHT_TASK_ROUTE',
   'LLM_SAVE_PROFILE',
+  'LLM_QUICK_SETUP_SAVE',
+  'LLM_CONNECT_AGENT',
   'LLM_DUPLICATE_PROFILE',
   'LLM_DELETE_PROFILE',
   'LLM_UPDATE_PROFILE_ROUTING',
@@ -1147,6 +1157,7 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'LLM_SET_STUDY_TYPE',
   'DOCUMENT_PREPARE',
   'DOCUMENT_GET',
+  'DOCUMENT_FIND_ANNOTATED_SOURCE',
   'DOCUMENT_PAPER_SOURCES',
   'CROSS_FORMAT_LINK',
   'CROSS_FORMAT_NOTE_EDIT',
@@ -2043,19 +2054,11 @@ async function handleRoutedMessage(
     try { return { success: true, data: await documentAgentBroker.handle(message, sender) }; }
     catch (error) { return { success: false, error: { code: error.code || 'DOCUMENT_HOST_FAILED', details: error.details } }; }
   }
-  if (sender?.id === chrome.runtime.id && SciLLM.isOfflineArticleMutationType(message?.type)) {
-    let offlineSource = SciLLM.parseOfflineArticleReaderUrl(sender.url, chrome.runtime.getURL(''));
-    if (!offlineSource) {
-      let sourceTab = sender.tab?.id ? await chrome.tabs.get(sender.tab.id).catch(() => null) : null;
-      if (!sourceTab && String(sender?.url || '').split(/[?#]/)[0] === chrome.runtime.getURL('popup.html')) {
-        sourceTab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null;
-      }
-      offlineSource = SciLLM.parseOfflineArticleReaderUrl(sourceTab?.url || sourceTab?.pendingUrl, chrome.runtime.getURL(''));
-    }
-    if (offlineSource) {
-      return { success: false, error: { code: 'OFFLINE_ARTICLE_READ_ONLY',
-        message: '离线记录为只读；需要修改或重新分析时请打开在线原文。' } };
-    }
+  const savedReader = SciLLM.parseOfflineArticleReaderUrl(sender?.url, chrome.runtime.getURL(''));
+  const assertSavedReaderCurrent = savedReader ? SciLLM.createSavedReaderOwnerGuard({ chromeApi: chrome, sender, store: articleWorkspaceStore }) : null;
+  if (assertSavedReaderCurrent && SciLLM.isOfflineArticleMutationType(message?.type)) {
+    try { SciLLM.assertSavedReaderMessage(message, await assertSavedReaderCurrent()); }
+    catch (error) { return { success: false, error: { code: error.code || 'SAVED_READER_CONTEXT_CHANGED', message: error.message } }; }
   }
   if (globalThis.SciLLM?.RUNTIME_WORKBENCH_MESSAGE_TYPES?.has(message?.type)) {
     try { return { success: true, data: await getRuntimeWorkbenchBridge().handle(message, sender) }; }
@@ -2067,6 +2070,7 @@ async function handleRoutedMessage(
   const taskStartedAt = Number.isFinite(reverseState.startedAt) ? reverseState.startedAt : Date.now();
   let figureResumeUiOwner = null;
   const assertOwnerCurrent = async (strictCreationOwner = false) => {
+    if (assertSavedReaderCurrent) { await assertSavedReaderCurrent(); return true; }
     if (assertHtmlReaderCurrent) { await assertHtmlReaderCurrent(); return true; }
     if (!strictCreationOwner && message?.type === 'LLM_CONTROL_OPERATION' &&
         message.operationScope === 'figure' &&
@@ -2181,7 +2185,8 @@ async function handleRoutedMessage(
   const assertDocumentCreationOwnerCurrent = () => assertOwnerCurrent(true);
   let response = await llmRouter.handle(message, {
     verifyLibraryHtmlIdentity: assertHtmlReaderCurrent,
-    assertLibraryHtmlCurrent: assertHtmlReaderCurrent,
+    verifySavedReaderIdentity: assertSavedReaderCurrent,
+    assertLibraryHtmlCurrent: assertHtmlReaderCurrent || assertSavedReaderCurrent,
     verifyNavigationArchiveContext: async binding => {
       await assertDocumentCreationOwnerCurrent();
       const result = await chrome.tabs.sendMessage(sender.tab.id, {
@@ -2248,6 +2253,13 @@ async function handleRoutedMessage(
     senderFrameId: Number(sender?.frameId),
     senderDocumentId: String(sender?.documentId || ''),
     assertTrustedOwnerCurrent,
+    assertQuickSetupCurrent: async () => {
+      const contexts = sender.documentId && await chrome.runtime.getContexts({ documentIds: [sender.documentId] });
+      if (!Array.isArray(contexts) || !contexts.some(item =>
+        item.documentId === sender.documentId && String(item.documentUrl || '').split(/[?#]/)[0] === chrome.runtime.getURL('options.html'))) {
+        throw Object.assign(new Error('配置窗口已关闭。'), { code: 'QUICK_SETUP_OWNER_CLOSED' });
+      }
+    },
     assertRadarOwnerCurrent: globalThis.BrevessRadar.createRadarOwnerGuard({ runtime: chrome.runtime, webNavigation: chrome.webNavigation, sender }),
     readTrustedFrameUrl,
     assertDocumentCreationOwnerCurrent,
@@ -3057,7 +3069,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.tabs.get(tabId).then(async tab => {
       const expectedUrl = readerSender ? normalizedWarmUrl({ url: sender.url }) : String(message.readerUrl || '');
       if (!expectedUrl) throw Object.assign(new Error('离线文献已切换，请重新打开'), { code: 'OFFLINE_READER_CHANGED' });
-      const result = await readOfflineArticleForTab(tab, expectedUrl);
+      const result = await readOfflineArticleForTab(tab, expectedUrl, Boolean(readerSender && message.includeAssets));
       if (message.type === 'OFFLINE_READER_START_READING') return activateOfflineArticleReaderAndOpenSidePanel(tab, opening);
       return result;
     }).then(data => sendResponse({ success: true, data }))
@@ -3204,6 +3216,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
     return false;
+  }
+
+  if (message?.type === 'QUICK_SETUP_OPEN') {
+    const page = String(sender?.url || '').split(/[?#]/)[0];
+    if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 ||
+        !['options.html', 'action-popup.html', 'popup.html'].some(path => page === chrome.runtime.getURL(path))) {
+      sendResponse({ success: false, error: { code: 'QUICK_SETUP_OWNER_INVALID' } }); return false;
+    }
+    chrome.tabs.query({ active: true, lastFocusedWindow: true })
+      .then(tabs => openOnboardingForTab(tabs[0]))
+      .then(data => sendResponse({ success: true, data }))
+      .catch(() => sendResponse({ success: false, error: { message: '无法打开快速配置。' } }));
+    return true;
   }
 
   if (message?.type === 'ONBOARDING_GET') {
@@ -3612,3 +3637,10 @@ const BrevessUXController=WFGUX.install({browser:chrome,broker:BrevessGeneralBro
 globalThis.BrevessReadingModulesController=WFGReadingBackground.install({browser:chrome,getLegacy:()=>BrevessUXController.legacy});
 
 importScripts('core/r20-agent-broker.js');
+importScripts('core/reading-agent-tools.js','core/reading-job-controller.js','core/reading-pack.js','core/export-bundle.js','core/reading-agent-background.js');
+const readingAgentController = BrevessReadingAgent.installReadingAgentBackground({
+  browser: chrome, authorize: sender => getRuntimeWorkbenchBridge().authorize(sender),
+  router: llmRouter, directory: directorySync,
+  ensureContent: tab => SciLLM.ensureContentScriptForActivation(chrome, tab.id, {expectedUrl: tab.url}),
+  keepAlive: task => SciLLM.keepAliveUntil(task, chrome)
+});

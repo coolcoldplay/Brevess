@@ -16,8 +16,8 @@
   }
 
   function sourceTab(input = {}) {
-    const tabId = Number(input.tabId);
-    const windowId = Number(input.windowId);
+    const tabId = input.tabId == null ? NaN : Number(input.tabId);
+    const windowId = input.windowId == null ? NaN : Number(input.windowId);
     return {
       tabId: Number.isInteger(tabId) && tabId >= 0 ? tabId : null,
       windowId: Number.isInteger(windowId) && windowId >= 0 ? windowId : null,

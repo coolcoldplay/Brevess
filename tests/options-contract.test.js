@@ -1815,7 +1815,7 @@ test('settings reuse directory and API controls from a persistent skippable setu
   assert.match(script, /location\.hash\s*===\s*['"]#onboarding['"]/);
   assert.match(script, /ONBOARDING_GET/);
   assert.match(script, /ONBOARDING_SET_STEP/);
-  assert.match(script, /ONBOARDING_RESTART/);
+  assert.match(script, /async function reopenOnboarding\(\)\s*\{\s*try\s*\{\s*await globalThis\.BrevessQuickSetup\.open\(/);
   assert.match(script, /ONBOARDING_PREPARE_FINISH/);
   assert.match(script, /ONBOARDING_FINISH/);
   assert.match(script, /finish\.disabled\s*=\s*busy[\s\S]*onboardingUi\.finishPrepared !== true/);

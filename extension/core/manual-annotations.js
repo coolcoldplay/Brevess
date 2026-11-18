@@ -62,6 +62,17 @@
     }
   }
 
+  function normalizeAnnotationSourceUrl(value) {
+    try {
+      const url = new URL(String(value || '').trim());
+      if (!['http:', 'https:', 'file:'].includes(url.protocol)) return '';
+      url.username = ''; url.password = '';
+      // Fragment navigation is the same document; hash-router views are not.
+      if (!/^#!?\//.test(url.hash)) url.hash = '';
+      return url.href;
+    } catch (_) { return ''; }
+  }
+
   function normalizeDoi(value, canonicalUrl) {
     let doi = unicodeText(value).trim();
     if (!doi) {
@@ -111,6 +122,7 @@
       title: normalizeWhitespace(input.title).toLocaleLowerCase('en-US'),
       canonicalUrl: normalizeCanonicalUrl(input.canonicalUrl || input.url),
       doi: normalizeDoi(input.doi, input.canonicalUrl || input.url),
+      ...(input.annotationSourceUrl ? { annotationSourceUrl: normalizeAnnotationSourceUrl(input.annotationSourceUrl) } : {}),
       paragraphText: normalizedBody
     });
     return `sha256:${await digestHex(identity)}`;
@@ -456,6 +468,7 @@
     WARNING_ANNOTATIONS_PER_DOCUMENT,
     MAX_ANNOTATIONS_PER_DOCUMENT,
     createDocumentId,
+    normalizeAnnotationSourceUrl,
     normalizeManualAnnotation,
     normalizeDocumentRecord,
     locateAnnotationInBlocks,

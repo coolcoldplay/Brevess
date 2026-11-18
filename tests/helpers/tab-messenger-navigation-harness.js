@@ -263,6 +263,7 @@ function createBackgroundNavigationHarness({
     },
     runtime: {
       id: 'brevess-test',
+      onConnect: listenerRegistry(),
       onInstalled: events.installed,
       onStartup: events.startup,
       onMessage: events.runtimeMessage,
@@ -284,6 +285,14 @@ function createBackgroundNavigationHarness({
     BrevessRadar: { installRadarBackground() {} },
     // Sharing transport is exercised separately in the feature bridge suite.
     BrevessSharingBackground: { install() {} },
+    // These additional listeners do not participate in the navigation handshake.
+    BrevessWebReading: { createStore: inertFactory, createWebController: inertFactory },
+    BrevessReadingFocusController: {},
+    WFGBackground: { install: inertFactory },
+    WFGMulti: { install: inertFactory },
+    WFGUX: { install: inertFactory },
+    WFGReadingBackground: { install: inertFactory },
+    BrevessReadingAgent: { installReadingAgentBackground: inertFactory },
     URL,
     console: { log() {}, warn() {}, error() {} },
     importScripts() {},

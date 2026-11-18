@@ -1,6 +1,6 @@
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;Object.assign(root.SciLLM ||= {},api);})(globalThis,function(){
   'use strict';
-  const SETUP_PROMPT='请帮我检查 BREVESS MCP 接入。先检查当前客户端已有的 BREVESS 配置，保留其他服务。配套连接组件安装程序可选择配置 Codex、DeepSeek Harness 或两者，默认只读；使用安装程序写入的稳定启动路径，不改成临时解压目录。若尚未安装，告诉我需要打开哪个配套安装程序，不假称配置成功。加载随包 brevess skill，重新发现工具并调用 brevess.status / brevess.capabilities。在设置的模型与连接页自动配对并检测；凭据不得出现在聊天、截图或课题里。然后读取我指定的模块：课题用 workbench.read_context，文献机制图用 mechanism.read_context。报告真实连接状态和可用能力；不要自动写入或调用付费模型。需要写入时先征得我同意启用客户端写能力，再请求对应目标的短期授权或总库写入确认；测试只能在我明确指定的合成目标中进行。';
+  const SETUP_PROMPT='请帮我配置当前 Agent 与 BREVESS 的连接。先从设置的“连接你的 Agent”选择当前客户端并取得匹配提示词；阅读 docs/AGENT_QUICK_CONNECT.md，保留已有配置、登录和研究资料，先备份再增量配置。完成后点击“连接并测试”，再从客户端真实调用 brevess.status、brevess.capabilities 和 library.query_global_library。分别报告浏览器连接、客户端读取和模型调用的真实状态，不以配置完成代替验收。凭据不要出现在聊天或报告；不要自动修改研究资料。';
   function parseAgentPairingLink(value){
     let url;try{url=new URL(String(value||'').trim());}catch(_){throw Error('请粘贴 MCP 服务提供的完整本机配对链接。');}
     const token=url.searchParams.get('token');
@@ -31,132 +31,293 @@
       }catch{finish(fail('AGENT_CONNECTION_NATIVE_UNAVAILABLE'));}
     });
   }
-  function showAgentConnectionCenter(options){
-    if(!options.settingsOwner)return showAgentModuleStatus(options);
-    const doc=options.document,dialog=doc.createElement('dialog');dialog.className='brevess-agent-connection';dialog.setAttribute('aria-label','Agent 连接');
-    const style=doc.createElement('style');
-    // Match ui-swiss.css; the standalone workbench uses the same neutral fallbacks.
-    style.textContent=`
-      .brevess-agent-connection {
-        box-sizing:border-box;width:min(640px,calc(100vw - 28px));max-height:calc(100vh - 32px);
-        overflow:auto;padding:20px;border:1px solid var(--swiss-line,#d5d5d5);border-radius:0;
-        box-shadow:none;background:#fff;color:var(--swiss-ink,#202020);
-        font:13px/1.6 Inter,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-      }
-      .brevess-agent-connection::backdrop{background:#0004}
-      .brevess-agent-connection h2{font-size:18px;margin:0 0 14px}
-      .brevess-agent-connection h3{font-size:14px;margin:20px 0 8px;padding-top:12px;border-top:1px solid var(--swiss-line,#d5d5d5)}
-      .brevess-agent-connection p{margin:6px 0;overflow-wrap:anywhere}
-      .brevess-agent-connection input,.brevess-agent-connection textarea {
-        box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--swiss-line,#d5d5d5);
-        border-radius:0;background:#fff;color:inherit;font:inherit;
-      }
-      .brevess-agent-connection textarea{height:112px;resize:vertical}
-      .brevess-agent-connection button {
-        box-sizing:border-box;height:32px;padding:6px 10px;margin:0;vertical-align:middle;border:1px solid var(--swiss-line,#d5d5d5);
-        border-radius:0;box-shadow:none;background:#fff;color:var(--swiss-ink,#202020);
-        font:inherit;line-height:18px;cursor:pointer;transition:background-color .12s,border-color .12s,color .12s;
-      }
-      .brevess-agent-connection button:hover:not(:disabled){background:#ededed;border-color:var(--swiss-ink,#202020)}
-      .brevess-agent-connection button:active:not(:disabled){background:var(--swiss-ink,#202020);color:#fff}
-      .brevess-agent-connection :is(button,input,textarea):focus-visible{outline:2px solid var(--swiss-ink,#202020);outline-offset:3px}
-      .brevess-agent-connection button:disabled{opacity:.45;cursor:default}
-      .brevess-agent-connection button[aria-busy="true"]{opacity:1;cursor:progress;background:var(--swiss-soft,#f4f4f4);border-color:var(--swiss-ink,#202020)}
-      .brevess-agent-connection .agent-message {
-        position:sticky;top:0;z-index:1;min-height:24px;padding:8px 10px;
-        border:1px solid var(--swiss-line,#d5d5d5);border-left:3px solid var(--swiss-ink,#202020);
-        border-radius:0;background:var(--swiss-soft,#f4f4f4);color:var(--swiss-ink,#202020);
-      }
-      .brevess-agent-connection .agent-message:empty{display:none}
-      .brevess-agent-connection .agent-message[data-state="error"]{color:var(--color-danger,#b42318);border-left-color:var(--color-danger,#b42318)}
-      .brevess-agent-connection .agent-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}
-      .brevess-agent-connection .agent-close{float:right;margin-top:0}
-      .brevess-agent-connection dl{display:grid;grid-template-columns:78px minmax(0,1fr);gap:5px 12px;margin:12px 0}
-      .brevess-agent-connection dt{color:var(--swiss-muted,#646464)}
-      .brevess-agent-connection dd{margin:0;overflow-wrap:anywhere}
-      @media(max-width:480px){.brevess-agent-connection{padding:14px}}
-      @media(prefers-reduced-motion:reduce){.brevess-agent-connection button{transition:none}}
-    `;dialog.append(style);
-    const add=(tag,text,parent=dialog)=>{const node=doc.createElement(tag);node.textContent=text||'';parent.append(node);return node;};
-    const close=add('button','关闭');close.type='button';close.className='agent-close';close.onclick=()=>dialog.close();add('h2','Agent 连接');
-    const message=add('p');message.className='agent-message';message.setAttribute('role','status');message.setAttribute('aria-live','polite');message.setAttribute('aria-atomic','true');
-    const report=(text,state='info')=>{if(dialog.isConnected){message.textContent=text;message.dataset.state=state;}};
-    const errorText=error=>{
-      const codes={AGENT_CONNECTION_STATUS_FAILED:'读取状态失败；保留当前数据，可重试。',AGENT_CONNECTION_NATIVE_UNAVAILABLE:'尚未检测到连接组件，请先打开配套安装程序。',AGENT_CONNECTION_TIMEOUT:'组件响应超时，请稍后重试检测。',INVALID_SETTINGS:'当前组件版本较旧，请更新配套连接组件。',AGENT_CONNECTION_COMPONENT_UPDATE_REQUIRED:'当前组件版本不支持此操作，请更新配套连接组件。',AGENT_CONNECTION_RECEIPT_INVALID:'组件回执与当前扩展不匹配，请核对扩展与组件版本。',
-        AGENT_ACTION_INVALID:'连接组件不支持当前操作，请核对组件版本。',AGENT_ORIGIN_MISMATCH:'当前扩展与已安装的连接组件身份不一致，请核对加载版本。',AGENT_NOT_INSTALLED:'尚未安装 Agent 连接组件，请打开配套安装程序。',AGENT_INSTALLATION_MISMATCH:'连接组件安装不完整或路径已变化，请核对安装状态。',AGENT_CONNECTION_CLOSED:'组件在检查完成前断开，请重新检测连接。',AGENT_CONNECTION_BUSY:'组件正在处理另一项连接检查，请等待完成。',SERVICE_IDENTITY_MISMATCH:'本地端口对应另一服务，请核对连接服务。',SERVICE_RESTART_REQUIRED:'当前运行服务与已安装组件版本不同，需先协调退出旧服务再重连。',SERVICE_LOCK_STALE:'连接服务启动锁异常，请通过配套安装程序检查。',AGENT_CONNECTION_FAILED:'本地组件检查失败，请核对组件诊断信息。',
-        MCP_BRIDGE_SERVER_INVALID:'本机服务地址格式不正确，请重新自动配对。',MCP_BRIDGE_CONFIG_INVALID:'配对配置无效，请重新自动配对。',MCP_BRIDGE_TOKEN_INVALID:'配对信息无效，请重新自动配对。',BRIDGE_UNAUTHORIZED:'配对已失效，请重新自动配对。',BRIDGE_VERSION_MISMATCH:'工作台与本地服务协议版本不一致，请核对版本。',MCP_WORKBENCH_HOST_UNAVAILABLE:'工作台操作模块尚未就绪，请等待工作台加载完成。'};
-      const stages={'native-status':'本地组件检查','native-pair':'本地组件配对','bridge-pair':'扩展配对','bridge-check':'连接自检','connection-status':'连接状态读取'};
-      Object.assign(codes,{CANCELLED:'连接已停止，请重新配对。',MCP_BRIDGE_RECEIPT_INVALID:'扩展登记回执不匹配，请核对连接服务。',DOCUMENT_REGISTRATION_TIMEOUT:'文献登记超时，请保持侧栏打开后重试。',DOCUMENT_UI_CLOSED:'文献连接已关闭，请重新打开侧栏。',FIGURE_RUNTIME_BINDING_FAILED:'文献界面归属尚未确认，请重新打开侧栏后重试。'});
-      const prefix=Object.hasOwn(stages,error?.agentConnectionStage)?stages[error.agentConnectionStage]+'：':'';
-      if(Object.hasOwn(codes,error?.code))return prefix+codes[error.code]+' ['+error.code+']';
-      // Only locally worded guidance is displayable; provider URLs/tokens may be secrets.
-      const text=String(error?.message||'');
-      if(text.length<=180&&/[\u4e00-\u9fff]/u.test(text)&&!/(?:https?:|token|secret|bearer|凭据|密钥)/iu.test(text))return prefix+text;
-      return prefix+'未完成，请保留此提示以核查连接诊断。';
-    };
-    // Stage names come from this UI, and only allowlisted codes reach the screen.
-    // Never forward native/provider message objects, URLs or pairing material.
-    const step=async(stage,fn)=>{try{return await fn();}catch(error){throw Object.assign(new Error(error?.message||''),{code:error?.code,agentConnectionStage:stage});}};
-    let busy=false,refreshVersion=0,connectionNotice='',nativePairSummary=null;
-    const actions=[];
-    const button=(label,pending,fn)=>{
-      const previous=dialog.lastElementChild;
-      const row=previous?.className==='agent-actions'?previous:add('div');row.className='agent-actions';
-      const node=add('button',label,row);node.type='button';actions.push(node);
-      node.onclick=async()=>{
-        if(busy)return;busy=true;connectionNotice='';for(const action of actions)action.disabled=true;
-        node.setAttribute('aria-busy','true');node.textContent=pending;node.dataset.state='busy';report(pending);
-        try{const result=await fn();connectionNotice=result?.connectionNotice||'';node.dataset.state=result?.state||'success';report(result?.message||'操作已完成。',result?.state||'success');}
-        catch(error){node.dataset.state='error';report(errorText(error),'error');}
-        finally{busy=false;node.removeAttribute('aria-busy');node.textContent=label;for(const action of actions)action.disabled=false;}
-      };return node;
-    };
-    const details=add('dl'),fields={},fieldLabels={};for(const [key,label]of [['module','当前模块'],['target','当前目标'],['bridge','MCP 连接'],['document','文献接入'],['permission','写入权限'],['capabilities','可用能力']]){fieldLabels[key]=add('dt',label,details);fields[key]=add('dd','检查中…',details);if(key==='document')fieldLabels[key].hidden=fields[key].hidden=true;}
-    const states={connected:'已连接',connecting:'连接中',unpaired:'待配对',offline:'未检测到服务',unauthorized:'配对已失效',incompatible:'版本不匹配',unknown:'尚未取得连接状态',disconnecting:'正在等待模块断开',waiting:'已保存配对 · 等待打开工作台',multiple:'多个工作台 · 请保留一个后连接',paused:'已断开 · 配对已保留',error:'操作未确认'};
-    async function refresh(){
-      const version=++refreshVersion;
-      try{const s=await options.status();if(!dialog.isConnected||version!==refreshVersion)return s;
-        fields.module.textContent=s.module||'BREVESS';fields.target.textContent=s.target||'尚未选择目标';fields.bridge.textContent=states[s.bridge?.state]||states.unknown;
-        if(s.bridge?.message)fields.bridge.textContent+='；'+errorText({message:s.bridge.message});
-        fieldLabels.document.hidden=fields.document.hidden=!s.document;
-        if(s.document)fields.document.textContent=({connected:'已接入',connecting:'正在登记',unavailable:'尚未接入'}[s.document.state]||'尚未接入')+(s.document.message?'；'+errorText({message:s.document.message}):'');
-        if(nativePairSummary!==null)nativeStatus.textContent=s.bridge?.state==='connected'?`扩展已配对；本地服务发现 ${nativePairSummary} 个工具。请在客户端调用 brevess.status 完成客户端核验。`:'本地组件已就绪；'+(states[s.bridge?.state]||states.unknown)+'。';
-        fields.permission.textContent=s.permission||'只读';fields.capabilities.textContent=(s.capabilities||[]).join('、')||'未取得模块能力';return s;
-      }catch(_){if(!dialog.isConnected||version!==refreshVersion)return null;for(const field of Object.values(fields))if(field.textContent==='检查中…')field.textContent='未取得';fields.bridge.textContent=states.unknown;throw Object.assign(Error('读取状态失败'),{code:'AGENT_CONNECTION_STATUS_FAILED'});}
+  async function startCodexAgentLogin({ request, openTab }) {
+    const login = await request({ type: 'CODEX_LOCAL_LOGIN_START', force: false });
+    let url;
+    try { url = new URL(String(login?.authUrl || '')); } catch {}
+    if (!url || url.protocol !== 'https:' || !['auth.openai.com', 'chatgpt.com'].includes(url.hostname) || url.port || url.username || url.password) {
+      throw Object.assign(Error('Invalid official Codex login URL'), { code: 'CODEX_PROVIDER_REJECTED' });
     }
-    const connectionResult=(s,prefix)=>({message:prefix+'；'+(states[s?.bridge?.state]||states.unknown)+(s?.document?(s.document.state==='connected'?'；文献已接入':'；文献尚未接入'):'')+(s?.bridge?.message?'。'+errorText({message:s.bridge.message}):'。'),state:s?.bridge?.state==='connected'&&(!s.document||s.document.state==='connected')?'success':'warning',connectionNotice:prefix});
-    button('刷新状态','正在刷新…',async()=>connectionResult(await refresh(),'状态已刷新'));
-    if(options.check)button('检测连接','正在检测连接…',async()=>{await options.check();return connectionResult(await refresh(),'检测已完成');});
-    if(options.reconnect)button('重连 MCP','正在重连…',async()=>{await options.reconnect();return connectionResult(await refresh(),'重连请求已完成');});
-    if(options.disconnect)button('断开连接','正在断开…',async()=>{await options.disconnect();return connectionResult(await refresh(),'已断开，配对已保留');});
-    if(options.forget)button('移除配对','正在移除…',async()=>{if(!doc.defaultView.confirm('移除本机 MCP 配对？再次连接需重新配对；不会删除文献或课题。'))return{message:'已取消，配对保留。'};await options.forget();return connectionResult(await refresh(),'已移除配对');});
-    if(options.revoke)button('撤回写权限','正在撤回权限…',async()=>{await options.revoke();try{await refresh();return{message:'已撤回当前目标的写权限。'};}catch(_){return{message:'已撤回写权限；状态读取失败，可刷新重试。',state:'warning'};}});
-    add('h3','快捷连接');add('p','先打开配套连接组件的安装程序，选择 Codex、DeepSeek Harness 或两者，并确认系统提示。完成后在这里自动配对。');
-    const nativeStatus=add('p','尚未检查本地连接组件。');
-    button('检测连接组件','正在检测组件…',async()=>{try{const result=await step('native-status',()=>requestNativeAgentConnection('status'));nativeStatus.textContent=result.service==='ready'?'本地服务已就绪；客户端实际读取状态仍需在客户端核验。':'组件已安装，可自动启动并配对。';return{message:nativeStatus.textContent};}catch(error){nativeStatus.textContent=errorText(error);throw error;}});
-    if(options.pair)button('自动配对并自检','正在配对并自检…',async()=>{
-      nativeStatus.textContent='正在连接本地组件…';
-      nativePairSummary=null;
-      try{
-        const result=await step('native-pair',()=>requestNativeAgentConnection('pair'));
-        const config={server:result.serverUrl,token:result.pairing.token};
-        delete result.pairing;
-        try{await step('bridge-pair',()=>options.pair(config));}finally{config.token='';}
-        nativePairSummary=Number.isSafeInteger(result.toolCount)?result.toolCount:'若干';
-        if(options.check)await step('bridge-check',()=>options.check());const status=await step('connection-status',refresh);
-        nativeStatus.textContent=status?.bridge?.state==='connected'?`扩展已配对；本地服务发现 ${Number.isSafeInteger(result.toolCount)?result.toolCount:'若干'} 个工具。请在客户端调用 brevess.status 完成客户端核验。`:'组件已就绪，扩展连接尚未确认，请刷新状态。';
-        return{...connectionResult(status,'配对检查'),message:nativeStatus.textContent};
-      }catch(error){nativeStatus.textContent=errorText(error);throw error;}
+    await openTab({ url: url.href });
+  }
+
+  function agentConnectionView(status, tested = false) {
+    const state = status?.bridge?.state || 'unknown';
+    const views = {
+      connected: [tested ? '浏览器连接测试通过' : '浏览器已连接', '在所选 Agent 中执行试读指令，确认客户端也已接通。', 'success'],
+      unpaired: ['尚未连接', '先把配置提示词发给 Agent；配置完成后，点击连接并测试。', 'idle'],
+      waiting: ['等待打开工作台', '点击连接并测试，将自动打开工作台并检查连接。', 'idle'],
+      paused: ['连接已暂停', '点击连接并测试即可恢复，已保存的配对仍然有效。', 'idle'],
+      connecting: ['正在连接', '正在等待工作台响应。', 'busy'],
+      multiple: ['请保留一个工作台', '关闭多余的 BREVESS 工作台标签页，再重新测试。', 'warning'],
+      unauthorized: ['需要重新连接', '配对已失效，点击连接并测试可重新配对。', 'warning'],
+      incompatible: ['连接组件需要更新', '重新复制配置提示词给 Agent，完成更新后再试。', 'warning'],
+      offline: ['暂时未连接', '点击连接并测试可启动本机服务并重试。', 'warning'],
+      disconnecting: ['正在断开', '请等待当前操作完成。', 'busy'],
+      error: ['连接尚未确认', '请重新测试；仍未成功时，复制配置提示词让 Agent 修复。', 'warning'],
+      unknown: ['正在读取连接状态', '稍候即可查看连接结果。', 'idle']
+    };
+    const [title, detail, tone] = views[state] || views.unknown;
+    return { state, title, detail, tone };
+  }
+
+  // One explicit action owns startup, pairing, opening the host and checking it.
+  // A successful browser probe is not a claim that the selected external client
+  // has discovered its MCP tools or that an official model account is signed in.
+  async function connectAndTestAgent(options) {
+    const progress = options.progress || (() => {});
+    const alive = () => { if (options.signal?.aborted) throw Object.assign(Error('CANCELLED'), { code: 'CANCELLED' }); };
+    const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const native = options.native || requestNativeAgentConnection;
+    alive(); progress('正在检查连接…');
+    let status = await options.status(); alive();
+    if (status?.bridge?.state === 'multiple') return status;
+    if (!options.manualPairing && !['connected', 'connecting', 'waiting', 'paused'].includes(status?.bridge?.state)) {
+      progress('正在启动并配对…');
+      const receipt = await native('pair'); alive();
+      const config = { server: receipt.serverUrl, token: receipt.pairing.token };
+      delete receipt.pairing;
+      try { await options.pair(config); } finally { config.token = ''; }
+      alive(); status = await options.status();
+    } else if (status?.bridge?.state === 'paused') {
+      await options.reconnect(); alive(); status = await options.status();
+    }
+    if (status?.bridge?.state === 'waiting' && options.openWorkbench) {
+      progress('正在打开工作台…');
+      await options.openWorkbench({ active: false }); alive();
+    }
+    const waitForHost = async () => {
+      for (let i = 0; i < (options.pollAttempts ?? 60); i++) {
+        status = await options.status(); alive();
+        if (!['waiting', 'connecting'].includes(status?.bridge?.state) && !(status?.bridge?.configured && ['unpaired', 'unknown'].includes(status?.bridge?.state))) break;
+        progress('正在等待工作台连接…'); await sleep(500); alive();
+      }
+    };
+    await waitForHost();
+    if (status?.bridge?.state === 'offline' && !options.manualPairing) {
+      progress('正在恢复本机服务…');
+      const receipt = await native('pair'); alive();
+      const config = { server: receipt.serverUrl, token: receipt.pairing.token }; delete receipt.pairing;
+      try { await options.pair(config); } finally { config.token = ''; }
+      alive(); await waitForHost();
+    }
+    if (status?.bridge?.state === 'connected') {
+      progress('正在测试连接…'); await options.check(); alive();
+      status = await options.status();
+    }
+    return status;
+  }
+
+  function showAgentConnectionCenter(options) {
+    if (!options.settingsOwner) return showAgentModuleStatus(options);
+    const doc = options.document;
+    const existing = doc.querySelector('.brevess-agent-connection');
+    if (existing) { existing.querySelector('select')?.focus(); return { dialog: existing }; }
+    const dialog = doc.createElement('dialog');
+    dialog.className = 'brevess-agent-connection'; dialog.setAttribute('aria-label', '连接 Agent');
+    dialog.setAttribute('data-action-icon', 'none');
+    const style = doc.createElement('style');
+    style.textContent = `
+      body dialog.brevess-agent-connection {box-sizing:border-box;width:min(500px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid #e7e7e9;border-radius:20px;background:#fff;color:#222;box-shadow:0 24px 90px #0002;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+      .brevess-agent-connection::backdrop {background:#17171750;backdrop-filter:blur(3px)}
+      .brevess-agent-connection [hidden] {display:none!important}
+      .brevess-agent-connection .agent-head {display:flex;align-items:center;justify-content:space-between;margin:0 0 8px}
+      .brevess-agent-connection h2 {font-size:22px;line-height:1.3;letter-spacing:-.5px;margin:0;font-weight:650}
+      .brevess-agent-connection p {margin:0;overflow-wrap:anywhere}
+      .brevess-agent-connection .agent-subtitle {color:#787b80;font-size:13px;margin-bottom:24px}
+      .brevess-agent-connection .agent-label {display:block;font-size:12px;font-weight:600;color:#64686d;margin-bottom:8px}
+      dialog.brevess-agent-connection :is(select,input) {box-sizing:border-box;display:block;width:100%;height:44px;padding:9px 12px;border:1px solid #dddfe2;border-radius:10px;background:#fff;color:#222;font:inherit}
+      .brevess-agent-connection .agent-capability {font-size:12px;color:#777b81;margin-top:8px;min-height:18px}
+      .brevess-agent-connection .agent-primary-actions {display:flex;gap:10px;margin-top:22px}
+      dialog.brevess-agent-connection button {box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:auto;height:auto;min-height:38px;margin:0;padding:9px 14px;gap:6px;border:1px solid #e2e3e5;border-radius:10px;background:#fff;color:#25272b;font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer;box-shadow:none}
+      dialog.brevess-agent-connection .agent-primary-actions button {flex:1;min-height:42px;white-space:nowrap}
+      dialog.brevess-agent-connection .agent-primary {background:#222;color:#fff;border-color:#222}
+      dialog.brevess-agent-connection button:hover:not(:disabled) {background:#f4f4f5}
+      dialog.brevess-agent-connection .agent-primary:hover:not(:disabled) {background:#3a3a3a}
+      dialog.brevess-agent-connection button:disabled {opacity:.5;cursor:default}
+      dialog.brevess-agent-connection .agent-close {flex:none;padding:5px;min-height:28px;width:28px;height:28px;border:0;background:transparent;color:#777;font-size:24px;font-weight:300;line-height:1}
+      .brevess-agent-connection :is(button,select,input,summary):focus-visible {outline:2px solid #3866ba;outline-offset:3px}
+      .brevess-agent-connection .agent-result {display:flex;align-items:flex-start;gap:11px;margin:22px 0 18px;padding:15px 16px;border-radius:12px;background:#f6f6f7}
+      .brevess-agent-connection .agent-result-icon {width:18px;height:18px;flex:none;margin-top:2px;color:#92969c}
+      .brevess-agent-connection .agent-result-icon svg {width:18px;height:18px;display:block}
+      .brevess-agent-connection .agent-result[data-state="success"] .agent-result-icon {color:#24815b}
+      .brevess-agent-connection .agent-result[data-state="warning"] .agent-result-icon,.brevess-agent-connection .agent-result[data-state="error"] .agent-result-icon {color:#a46b17}
+      .brevess-agent-connection .agent-result[data-state="busy"] .agent-result-icon {animation:agent-connect-spin 1.2s linear infinite}
+      .brevess-agent-connection .agent-result-title {font-size:13px;font-weight:600;line-height:1.5}
+      .brevess-agent-connection .agent-result-detail {color:#72767c;font-size:12px;line-height:1.6;margin-top:4px}
+      dialog.brevess-agent-connection .agent-text-action {padding:0;min-height:24px;border:0;background:none;color:#30343a;font-size:12px;text-decoration:underline;text-underline-offset:3px;margin-top:8px}
+      .brevess-agent-connection details {border-top:1px solid #ededee;padding-top:14px;margin-top:18px}
+      .brevess-agent-connection summary {font-size:12px;color:#7a7e83;cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
+      .brevess-agent-connection summary::-webkit-details-marker {display:none}
+      .brevess-agent-connection summary::after {content:'⌄';font-size:16px}
+      .brevess-agent-connection details[open]>summary::after {content:'⌃'}
+      .brevess-agent-connection .agent-advanced-body {padding-top:16px}
+      .brevess-agent-connection .agent-advanced-actions {display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+      .brevess-agent-connection .agent-advanced-body p {font-size:12px;color:#777b81;margin:10px 0}
+      .brevess-agent-connection .agent-diagnostic {font-size:11px;color:#85898e;white-space:pre-wrap;overflow-wrap:anywhere}
+      .brevess-agent-connection .agent-manual {margin-top:18px}
+      .brevess-agent-connection a {color:inherit;font-size:12px;text-underline-offset:3px}
+      @keyframes agent-connect-spin {to {transform:rotate(360deg)}}
+      @media(max-width:420px) {dialog.brevess-agent-connection {padding:22px;width:calc(100vw - 24px)}.brevess-agent-connection .agent-primary-actions {gap:8px}dialog.brevess-agent-connection .agent-primary-actions button {padding:10px 8px;font-size:12px}}
+      @media(prefers-reduced-motion:reduce) {.brevess-agent-connection .agent-result[data-state="busy"] .agent-result-icon {animation:none}}
+    `;
+    dialog.append(style);
+    const add = (tag, text, parent = dialog, cls = '') => { const node = doc.createElement(tag); node.textContent = text || ''; if (cls) node.className = cls; parent.append(node); return node; };
+    const head = add('div', '', dialog, 'agent-head'); add('h2', '连接 Agent', head);
+    const close = add('button', '×', head, 'agent-close'); close.type = 'button'; close.setAttribute('aria-label', '关闭'); close.onclick = () => dialog.close();
+    add('p', '让常用 Agent 直接读取文献、协作课题。', dialog, 'agent-subtitle');
+    const label = add('label', '选择你的 Agent', dialog, 'agent-label'); label.htmlFor = 'agentSetupClient';
+    const select = add('select'); select.id = 'agentSetupClient';
+    const clients = globalThis.SciLLM.getAgentSetupClients();
+    for (const [name, predicate] of [['常用', c => !!c.modelAdapter], ['国内 Agent', c => c.region === 'cn' && !c.modelAdapter], ['其他 Agent', c => !c.modelAdapter && c.region !== 'cn']]) {
+      const group = add('optgroup', '', select); group.label = name;
+      for (const client of clients.filter(predicate)) { const item = add('option', client.label, group); item.value = client.id; }
+    }
+    let preferred = options.client;
+    try { preferred ||= doc.defaultView.sessionStorage?.getItem('brevess-agent-setup-client'); } catch {}
+    if (clients.some(c => c.id === preferred)) select.value = preferred;
+    const capability = add('p', '', dialog, 'agent-capability');
+    const updateClient = () => {
+      const client = clients.find(c => c.id === select.value);
+      capability.textContent = client?.modelAdapter ? '连接测试通过后，自动加入问答模型列表。' : '支持 Agent 读取与操作；暂不支持在插件内调用该 Agent。';
+      try { doc.defaultView.sessionStorage?.setItem('brevess-agent-setup-client', select.value); } catch {}
+    };
+    select.onchange = updateClient; updateClient();
+    const primaryRow = add('div', '', dialog, 'agent-primary-actions');
+    const result = add('div', '', dialog, 'agent-result'); result.setAttribute('role', 'status'); result.setAttribute('aria-live', 'polite'); result.setAttribute('aria-atomic', 'true');
+    const glyph = add('span', '', result, 'agent-result-icon'); glyph.setAttribute('aria-hidden', 'true');
+    const resultCopy = add('div', '', result); const title = add('div', '', resultCopy, 'agent-result-title'); const detail = add('p', '', resultCopy, 'agent-result-detail');
+    const advanced = add('details'); add('summary', '高级选项', advanced); const advancedBody = add('div', '', advanced, 'agent-advanced-body');
+    const diagnostic = add('p', '', advancedBody, 'agent-diagnostic');
+    const controller = new AbortController(); const actions = []; let busy = false, latest = null, tested = false, epoch = 0, loginAction = null;
+    const report = (headline, description = '', tone = 'idle') => {
+      if (!dialog.isConnected) return;
+      title.textContent = headline; detail.textContent = description; result.dataset.state = tone;
+      const path = tone === 'success' ? 'M5 12l4 4L19 6' : tone === 'busy' ? 'M20 12a8 8 0 1 1-5-7.4' : 'M12 8v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0';
+      glyph.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="' + path + '"/></svg>';
+    };
+    const knownErrors = {
+      AGENT_CONNECTION_NATIVE_UNAVAILABLE: '先复制配置提示词给 Agent，完成配置后再连接。',
+      AGENT_NOT_INSTALLED: '先复制配置提示词给 Agent，完成配置后再连接。',
+      AGENT_CONNECTION_TIMEOUT: '连接超时，请确认客户端配置已完成后重试。',
+      AGENT_CONNECTION_BUSY: '另一项连接操作正在进行，请稍后重试。',
+      AGENT_CONNECTION_COMPONENT_UPDATE_REQUIRED: '请重新复制配置提示词，让 Agent 更新连接组件。',
+      AGENT_INSTALLATION_MISMATCH: '请重新复制配置提示词，让 Agent 修复安装路径。',
+      AGENT_ORIGIN_MISMATCH: '请重新复制配置提示词，匹配当前安装的 BREVESS。',
+      SERVICE_RESTART_REQUIRED: '连接组件已更新。请在高级选项断开连接，退出旧客户端连接后重试。',
+      MCP_BRIDGE_CONFIG_INVALID: '配对链接无效，请使用本机服务提供的完整链接。',
+      CANCELLED: '连接操作已停止，可重新测试。'
+    };
+    const errorView = error => {
+      const code = typeof error?.code === 'string' && /^(?:AGENT|MCP|SERVICE|BRIDGE|DOCUMENT)_[A-Z_]{1,70}$/.test(error.code) ? error.code : 'AGENT_CONNECTION_FAILED';
+      diagnostic.textContent = '诊断代码：' + code;
+      report('连接未完成', knownErrors[code] || '请重试；仍未成功时，复制配置提示词让 Agent 检查。', 'error');
+    };
+    const render = status => {
+      if (loginAction) loginAction.hidden = true;
+      latest = status;
+      const view = agentConnectionView(status, tested);
+      report(view.title, view.detail, view.tone);
+      connectButton.textContent = view.state === 'connected' ? '重新测试' : '连接并测试';
+      readButton.hidden = view.state !== 'connected';
+      diagnostic.textContent = ['连接：' + view.state, '权限：' + (status?.permission || '由任务单独确认')].join('\n');
+      disconnectButton.hidden = ['unpaired', 'paused', 'unknown'].includes(view.state);
+      forgetButton.hidden = view.state === 'unpaired';
+    };
+    select.onchange = () => { updateClient(); tested = false; if (latest) render(latest); };
+    const refresh = async () => {
+      const version = ++epoch; const status = await options.status();
+      if (dialog.isConnected && version === epoch && !busy && (!latest || status?.bridge?.state !== latest?.bridge?.state)) { tested = false; render(status); }
+      return status;
+    };
+    const button = (text, parent, handler, cls = '') => {
+      const node = add('button', text, parent, cls); node.type = 'button'; actions.push(node);
+      node.onclick = async () => {
+        if (busy) return;
+        busy = true; epoch++; select.disabled = true; actions.forEach(a => { a.disabled = true; }); node.setAttribute('aria-busy', 'true');
+        try { await handler(); } catch (error) { if (dialog.isConnected) errorView(error); }
+        finally { busy = false; node.removeAttribute('aria-busy'); select.disabled = false; actions.forEach(a => { a.disabled = false; }); }
+      };
+      return node;
+    };
+    const copyButton = button('复制配置提示词', primaryRow, async () => {
+      const copied = await globalThis.SciLLM.copyAgentSetupPrompt(select.value, { document: doc });
+      const name = clients.find(c => c.id === select.value)?.label || 'Agent';
+      report(copied.copied ? '提示词已复制' : '请复制提示词', '粘贴到 ' + name + '，待配置完成后回来点击连接并测试。');
+    }); copyButton.id = 'copyAgentSetupPrompt';
+    if (options.loginModel) {
+      loginAction = button('登录 Codex', resultCopy, async () => {
+        try {
+          await options.loginModel('codex');
+          report('官方登录页已打开', '完成登录后回到这里，点击“重新测试”即可加入问答模型。', 'warning');
+        } catch {
+          report('登录页未能打开', '请重新点击登录；仍未成功时检查本机 Codex 连接。', 'warning');
+        }
+      }, 'agent-text-action');
+      loginAction.id = 'loginAgentModel'; loginAction.hidden = true;
+    }
+    const connectModel = async () => {
+      if (loginAction) loginAction.hidden = true;
+      if (!tested || !dialog.isConnected || !options.connectModel || !clients.find(c => c.id === select.value)?.modelAdapter) return;
+      report('正在测试 Agent 问答', '使用一条简短测试消息；通过后自动加入模型列表。', 'busy');
+      try {
+        const profile = await options.connectModel(select.value);
+        if (profile) report('浏览器与问答连接测试通过', `已加入问答模型：${profile.name} · ${profile.model}。可在问答中直接切换。`, 'success');
+      } catch (error) {
+        const help = {
+          CODEX_NOT_AUTHENTICATED: loginAction ? 'Codex 尚未登录。点击下方“登录 Codex”，完成后回来重新测试。' : 'Codex 尚未登录插件专用会话，请到模型连接中完成登录后重试。',
+          HARNESS_NOT_AUTHENTICATED: '请先在官方 DeepSeek Harness 中登录，再回来重新测试。',
+          HARNESS_MODEL_UNAVAILABLE: '已保存的 Harness 模型当前不可用，请在模型连接中更换后重试。',
+          AGENT_PROFILE_CHANGED: '连接配置已在其他窗口变化，请重新测试。',
+          AI_PRIVACY_ACK_REQUIRED: '请先在设置中确认 AI 隐私提醒，再重新测试。'
+        };
+        if (loginAction) loginAction.hidden = error.code !== 'CODEX_NOT_AUTHENTICATED' || select.value !== 'codex';
+        report('浏览器已连接，问答尚未就绪', help[error.code] || '模型调用未通过测试；请检查官方账号登录和本机组件后重试。', 'warning');
+      }
+    };
+    const connectButton = button('连接并测试', primaryRow, async () => {
+      tested = false;
+      const status = await connectAndTestAgent({ ...options, signal: controller.signal, progress: text => report(text, '', 'busy') });
+      tested = status?.bridge?.state === 'connected'; render(status);
+      await connectModel();
+    }, 'agent-primary'); connectButton.id = 'testAgentConnection';
+    const readButton = button('复制试读指令', resultCopy, async () => {
+      const text = '请使用 BREVESS MCP：先调用 brevess.status 和 brevess.capabilities，再调用 library.query_global_library（pageSize: 3）。只返回连接是否正常、文献总数及最多 3 篇标题。不要创建或修改资料；若工具未加载，请检查当前客户端的 MCP 配置并重新加载。';
+      await doc.defaultView.navigator.clipboard.writeText(text);
+      report('试读指令已复制', '粘贴到所选 Agent，核对它是否能读到你的文献。', 'success');
+    }, 'agent-text-action'); readButton.hidden = true;
+    const advancedActions = add('div', '', advancedBody, 'agent-advanced-actions');
+    if (options.openWorkbench) button('打开工作台', advancedActions, async () => { await options.openWorkbench({ active: true }); render(await options.status()); });
+    const disconnectButton = button('断开连接', advancedActions, async () => { await options.disconnect(); tested = false; render(await options.status()); });
+    const forgetButton = button('移除配对', advancedActions, async () => {
+      if (!doc.defaultView.confirm('移除本机配对？文献和课题会保留，再次连接时需要重新配对。')) return;
+      await options.forget(); tested = false; render(await options.status());
     });
-    else if(options.openWorkbench)button('前往工作台快捷连接','正在打开工作台…',async()=>{await options.openWorkbench();return{message:'已打开工作台连接入口。'};});
-    add('h3','手动接入');add('p','也可使用已启动的 MCP 服务配对链接。连接 MCP 不要求另接收费模型。');
-    if(options.pair){add('p','MCP 服务启动后，将它给出的本机配对链接粘贴到此处。');const input=add('input');input.type='password';input.autocomplete='off';input.placeholder='本机配对链接（仅保存在本机）';input.setAttribute('aria-label','本机配对链接');button('配对并检查','正在配对并检查…',async()=>{const config=parseAgentPairingLink(input.value);input.value='';try{await step('bridge-pair',()=>options.pair(config));}finally{config.token='';}if(options.check)await step('bridge-check',()=>options.check());return connectionResult(await step('connection-status',refresh),'配对请求已完成');});}
-    else if(options.openWorkbench)button('前往工作台配对','正在打开工作台…',async()=>{await options.openWorkbench();return{message:'已打开工作台配对入口。'};});
-    add('p','MCP 服务通过源码中的 mcp/server.js 单独启动。Windows 模型调用桥需另外安装本机配套组件；浏览器扩展包不包含本机二进制。');
-    if(options.readmeUrl){const link=add('a','随包安装与客户端配置说明');link.href=options.readmeUrl;link.target='_blank';link.rel='noopener';}
-    add('h3','让 Agent 帮你配置');const prompt=add('textarea',SETUP_PROMPT);prompt.readOnly=true;prompt.setAttribute('aria-label','Agent 接入提示词');button('复制配置提示词','正在复制…',async()=>{try{await doc.defaultView.navigator.clipboard.writeText(SETUP_PROMPT);return{message:'配置提示词已复制。'};}catch(_){prompt.focus();prompt.select();return{message:'自动复制未完成；请复制已选中的提示词。',state:'warning'};}});
-    add('p','配对后先读取当前模块。文献与课题分别授权；未确认前不会向真实画布写入测试对象。');
-    const onStatus=()=>{if(!busy)void refresh().then(status=>{if(connectionNotice&&status){const result=connectionResult(status,connectionNotice);report(result.message,result.state);}}).catch(error=>report(errorText(error),'error'));};doc.defaultView.addEventListener('brevess:mcp-status',onStatus);dialog.addEventListener('close',()=>{refreshVersion++;doc.defaultView.removeEventListener('brevess:mcp-status',onStatus);dialog.remove();},{once:true});doc.body.append(dialog);dialog.showModal();void refresh().catch(error=>{if(!busy)report(errorText(error),'error');});return{dialog,refresh};
+    if (options.revoke) button('撤回写入权限', advancedActions, async () => { await options.revoke(); render(await options.status()); });
+    if (options.pair) {
+      const manual = add('div', '', advancedBody, 'agent-manual');
+      const manualLabel = add('label', '手动配对', manual, 'agent-label'); manualLabel.htmlFor = 'agentPairingLink';
+      const input = add('input', '', manual); input.id = 'agentPairingLink'; input.type = 'password'; input.autocomplete = 'off'; input.placeholder = '粘贴本机配对链接';
+      const row = add('div', '', manual, 'agent-advanced-actions');
+      button('使用此链接连接', row, async () => {
+        let config;
+        try { config = parseAgentPairingLink(input.value); } catch { throw Object.assign(Error('invalid pairing link'), { code: 'MCP_BRIDGE_CONFIG_INVALID' }); }
+        input.value = '';
+        try { await options.pair(config); } finally { config.token = ''; }
+        const status = await connectAndTestAgent({ ...options, manualPairing: true, signal: controller.signal, progress: text => report(text, '', 'busy') });
+        tested = status?.bridge?.state === 'connected'; render(status);
+        await connectModel();
+      });
+    }
+    add('p', 'Codex 与 DSH 会同时测试问答调用；其他客户端检查浏览器连接。写入文献或课题时仍需授权。', advancedBody);
+    if (options.readmeUrl) { const link = add('a', '接入说明', advancedBody); link.href = options.readmeUrl; link.target = '_blank'; link.rel = 'noopener'; }
+    const onStatus = () => { if (!busy) void refresh().catch(errorView); };
+    doc.defaultView.addEventListener('brevess:mcp-status', onStatus);
+    const timer = setInterval(() => { if (!busy && dialog.open && doc.visibilityState !== 'hidden') void refresh().catch(errorView); }, 5000);
+    dialog.addEventListener('close', () => { controller.abort(); epoch++; clearInterval(timer); doc.defaultView.removeEventListener('brevess:mcp-status', onStatus); dialog.remove(); }, { once: true });
+    doc.body.append(dialog); dialog.showModal();
+    report('正在读取连接状态', '', 'busy'); void refresh().catch(errorView);
+    return { dialog, refresh };
   }
   function showAgentModuleStatus(options){
     const doc=options.document,dialog=doc.createElement('dialog');dialog.className='brevess-agent-module-status';dialog.setAttribute('aria-label','当前任务 Agent');
@@ -168,5 +329,5 @@
     dialog.append(close);dialog.addEventListener('close',()=>dialog.remove(),{once:true});doc.body.append(dialog);dialog.showModal();
     Promise.resolve().then(()=>options.status()).then(value=>{if(!dialog.isConnected)return;const states={connected:'已连接',connecting:'连接中',unpaired:'未配对',offline:'未连接',unauthorized:'配对失效',incompatible:'版本不匹配',unknown:'状态未确认'};status.textContent=[value.module,value.target,value.permission,'MCP：'+(states[value.bridge?.state]||'状态未确认'),value.document?'文献：'+(value.document.state==='connected'?'已登记':'尚未登记'):''].filter(Boolean).join(' · ');}).catch(()=>{status.textContent='当前目标状态读取失败';});return{dialog};
   }
-  return{showAgentConnectionCenter,parseAgentPairingLink,requestNativeAgentConnection,AGENT_SETUP_PROMPT:SETUP_PROMPT};
+  return{showAgentConnectionCenter,parseAgentPairingLink,requestNativeAgentConnection,connectAndTestAgent,startCodexAgentLogin,agentConnectionView,AGENT_SETUP_PROMPT:SETUP_PROMPT};
 });

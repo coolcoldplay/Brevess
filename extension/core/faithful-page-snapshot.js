@@ -13,7 +13,7 @@
   const DROP_TAGS = new Set(('script noscript base meta link style form input button select textarea option datalist iframe frame frameset object embed portal video audio track source canvas template dialog foreignobject animate animatemotion animatetransform set discard annotation-xml xmp plaintext noembed noframes').split(' '));
   const UI_IDS = /^(?:sci-(?:reading-panel|article-navigator-panel|figure-image-viewer|llm-feedback|manual-toolbar|highlight-context-popover|manual-status|side-panel-restore|highlight-tooltip)|esSidebar|esSideButton|epmt|immersive-translate-browser-popup|codex-agent-overlay-root)$/i;
   const PRIVATE_NODE = /login|account|paywall|subscription|logout|sign-in|user-menu/i;
-  const HTML_ATTRS = new Set(('abbr alt class colspan datetime dir headers height hidden id lang open rel reversed role rowspan scope span start title width align valign border cellpadding cellspacing face color size name encoding display mathvariant mathsize mathcolor mathbackground stretch largeop movablelimits accent accentunder fence separator stretchy symmetric minsize maxsize lspace rspace linethickness columnalign rowalign columnspacing rowspacing columnlines rowlines frame framespacing equalrows equalcolumns notation subscriptshift superscriptshift scriptlevel displaystyle data-theme data-color-mode data-layout data-component data-section data-figure data-db-target-of').split(' '));
+  const HTML_ATTRS = new Set(('abbr alt class colspan datetime dir headers height hidden id lang open rel reversed role rowspan scope span start title width align valign border cellpadding cellspacing face color size name encoding display mathvariant mathsize mathcolor mathbackground stretch largeop movablelimits accent accentunder fence separator stretchy symmetric minsize maxsize lspace rspace linethickness columnalign rowalign columnspacing rowspacing columnlines rowlines frame framespacing equalrows equalcolumns notation subscriptshift superscriptshift scriptlevel displaystyle data-theme data-color-mode data-layout data-component data-section data-figure data-db-target-of data-brevess-layout-slot').split(' '));
   const SVG_ATTRS = new Set(('viewbox preserveaspectratio d x y x1 x2 y1 y2 dx dy cx cy r rx ry points transform fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity clip-path clip-rule mask filter marker-start marker-mid marker-end gradientunits gradienttransform spreadmethod offset stop-color stop-opacity patternunits patterncontentunits patterntransform text-anchor dominant-baseline font-family font-size font-style font-weight lengthadjust textlength xmlns xmlns:xlink').split(' '));
   const CSS_IMAGE_FUNCTIONS = new Set(['image-set', '-webkit-image-set', 'image']);
   const bytes = value => typeof TextEncoder === 'function' ? new TextEncoder().encode(String(value)).length : unescape(encodeURIComponent(String(value))).length;
@@ -311,6 +311,11 @@
       }
       if (inline || frozenStyle.length) capture.inlineStyles.push({ node: clone, text: inline, frozenStyle: frozenStyle.join(';'), baseUrl: capture.baseUrl });
       if (tag === 'img' || tag === 'image' || tag === 'feimage') {
+        const binding = options.imageBindingByElement?.get?.(live);
+        if (tag === 'img' && binding?.figureId && Number.isSafeInteger(binding.imageIndex)) {
+          clone.setAttribute('data-brevess-figure-id', binding.figureId);
+          clone.setAttribute('data-brevess-image-index', String(binding.imageIndex));
+        }
         const resource = options.embeddedImageByElement?.get?.(live);
         const raw = live.currentSrc || attr(live, 'src') || attr(live, 'href') || attr(live, 'xlink:href');
         const preserveLayout = tag === 'img' && Number(live.naturalWidth) > 0 && Number(live.naturalHeight) > 0;
@@ -886,6 +891,26 @@
     const bundle = await collectFaithfulSnapshotResources(capture, options);
     return serializeFaithfulPageSnapshot(capture, bundle);
   }
-  return { captureFaithfulPageSnapshot, collectFaithfulSnapshotResources, serializeFaithfulPageSnapshot, exportFaithfulPageSnapshot,
+  function shouldReplaceOfflineSnapshot(previousHtml, next) {
+    if (!previousHtml || next?.complete === true) return true;
+    try {
+      const marker = /name=["']brevess-offline-snapshot["']\s+content=["']([^"']+)["']/i.exec(previousHtml);
+      const previous = JSON.parse(decodeURIComponent(marker?.[1] || ''));
+      if (previous.complete !== false || previous.documentHash !== next.documentHash) return false;
+      // A newer partial capture may improve an older partial capture, but must
+      // never replace a complete copy or introduce another missing resource.
+      const key = row => JSON.stringify([row.kind, row.url, row.reason]);
+      const missing = new Set((previous.missingResources || []).map(key));
+      const warnings = new Set(previous.warnings || []);
+      const fewerMissing = (next.missingResources || []).length < missing.size;
+      // Embedded counts include deduplicated CSS backgrounds and resized image
+      // variants; a different count alone is not proof of a lost reading image.
+      const stableCounts = Number(next.embeddedImages || 0) >= Number(previous.embeddedImages || 0) &&
+        Number(next.embeddedFonts || 0) >= Number(previous.embeddedFonts || 0);
+      return (next.missingResources || []).every(row => missing.has(key(row))) &&
+        (next.warnings || []).every(row => warnings.has(row)) && (fewerMissing || stableCounts);
+    } catch (_) { return false; }
+  }
+  return { captureFaithfulPageSnapshot, collectFaithfulSnapshotResources, serializeFaithfulPageSnapshot, exportFaithfulPageSnapshot, shouldReplaceOfflineSnapshot,
     FAITHFUL_SNAPSHOT_LIMITS: LIMITS, FAITHFUL_SNAPSHOT_CSP: CSP };
 });

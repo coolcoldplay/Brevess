@@ -27,16 +27,16 @@
   ]);
   const LEGACY_READ_ONLY = new Set([
     'read_context', 'list_projects', 'get_project', 'query_library', 'read_literature',
-    'list_recycle', 'export_project', 'read_asset', 'radar_list', 'radar_get'
+    'list_recycle', 'export_project', 'read_asset', 'radar_list', 'radar_get', 'reading_list_tabs', 'reading_inspect', 'reading_status'
   ]);
   const LEGACY_WRITE = new Set([
     'create_project', 'edit_project', 'remove_entity', 'undo', 'redo', 'restore',
     'model_operation', 'navigate', 'save_view', 'invoke_action', 'import_project',
     'import_asset', 'locate_source', 'data_directory',
-    'radar_save', 'radar_check', 'radar_backfill_abstracts', 'radar_mark_read'
+    'radar_save', 'radar_check', 'radar_backfill_abstracts', 'radar_mark_read', 'reading_open', 'reading_start', 'reading_cancel', 'reading_bundle'
   ]);
   const LOCAL_READ_OPERATIONS = new Set(['query_library', 'read_workspace', 'read_export', 'read_asset']);
-  const GLOBAL_WRITE_OPERATIONS = new Set(['radar_save', 'radar_check', 'radar_backfill_abstracts', 'radar_mark_read']);
+  const GLOBAL_WRITE_OPERATIONS = new Set(['radar_save', 'radar_check', 'radar_backfill_abstracts', 'radar_mark_read', 'reading_open', 'reading_start', 'reading_cancel', 'reading_bundle']);
   const fail = (code, message, details) => Object.assign(new Error(message || code), { code, details });
   const now = () => new Date().toISOString();
   const auditId = () => `audit-${root.crypto?.randomUUID?.() || Date.now()}`;

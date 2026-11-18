@@ -14,7 +14,7 @@ async function control(request, options = {}) {
   let active;
   try { active = JSON.parse(fs.readFileSync(activePath, 'utf8')); }
   catch { fail('AGENT_NOT_INSTALLED', 'The Agent connection component is not installed. Run its setup.'); }
-  if (active.version !== 1 || path.resolve(active.payloadRoot) !== path.resolve(payloadRoot) || !path.isAbsolute(active.stateDir)) fail('AGENT_INSTALLATION_MISMATCH', 'The active Agent payload does not match. Re-run companion setup.');
+  if (active.version !== 1 || fs.realpathSync(active.payloadRoot) !== fs.realpathSync(payloadRoot) || !path.isAbsolute(active.stateDir)) fail('AGENT_INSTALLATION_MISMATCH', 'The active Agent payload does not match. Re-run companion setup.');
   const extensionIds = extensionIdsFromManifest(path.join(payloadRoot, 'manifest.json'));
   const extensionId = request.extensionId;
   if (!extensionIds.includes(extensionId)) fail('AGENT_ORIGIN_MISMATCH', 'This extension does not match the installed companion.');

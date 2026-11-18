@@ -661,6 +661,7 @@
     // return visit is much more likely to be a zero-token local cache hit.
     const maxEntries = Number(options.maxEntries) || DEFAULT_ANALYSIS_CACHE_MAX_ENTRIES;
     const maxAgeMs = Number(options.maxAgeMs) || DEFAULT_ANALYSIS_CACHE_MAX_AGE_MS;
+    const maxBytes = Number(options.maxBytes) || 64 * 1024 * 1024;
     let databasePromise;
     let pruneFailureReported = false;
 
@@ -720,12 +721,27 @@
       const store = transaction.objectStore('analysisCache');
       const done = transactionDone(transaction);
       done.catch(() => {});
-      const all = await requestToPromise(store.getAll());
+      const metadata = entry => ({key: entry.key, createdAt: entry.createdAt,
+        lastAccessedAt: entry.lastAccessedAt, bytes: new TextEncoder().encode(JSON.stringify(entry)).byteLength});
+      const all = typeof store.openCursor === 'function' ? await new Promise((resolve, reject) => {
+        const rows = [], request = store.openCursor();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve(rows);
+          if (!isProtectedAnalysisCacheKey(cursor.value?.key)) rows.push(metadata(cursor.value));
+          cursor.continue();
+        };
+      }) : (await requestToPromise(store.getAll())).filter(entry => !isProtectedAnalysisCacheKey(entry?.key)).map(metadata);
       const cutoff = Date.now() - maxAgeMs;
-      const sorted = all.filter(entry => !isProtectedAnalysisCacheKey(entry?.key)).sort((a, b) =>
+      const sorted = all.sort((a, b) =>
         Number(b.lastAccessedAt || b.createdAt) - Number(a.lastAccessedAt || a.createdAt));
+      let retainedBytes = 0;
       const removeKeys = sorted
-        .filter((entry, index) => entry.createdAt < cutoff || index >= maxEntries)
+        .filter((entry, index) => {
+          if (entry.createdAt < cutoff || index >= maxEntries || retainedBytes + entry.bytes > maxBytes) return true;
+          retainedBytes += entry.bytes; return false;
+        })
         .map(entry => entry.key);
       removeKeys.forEach(key => store.delete(key));
       await done;

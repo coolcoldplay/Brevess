@@ -1892,6 +1892,7 @@ test('supplemental analysis state re-reads, merges and CAS-saves the durable dra
       'return persistImportedSupplementalFigureState;'
   )(
     {
+      mergeSupplementalFigureAssets: require('../extension/core/supplemental-materials').mergeSupplementalFigureAssets,
       supplementalFigureAssetPath: materialId =>
         `figures/supplemental/${materialId}.json`
     },

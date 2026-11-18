@@ -2,11 +2,11 @@
 
 ## 首次连接与文献机制图
 
-工作台、雷达、文献总库和文献机制图的 **Agent 连接**入口显示当前目标、连接状态和写入权限。Windows 首次接入先打开匹配配套组件的 `Install-Brevess-Codex-Bridge.cmd`，选择已安装的 Codex、DeepSeek Harness 或两者。默认只读；空选择仅安装组件，不配置 Agent。安装器合并所选客户端配置，使用固定版本的本机 Node/MCP payload；已有配置应复用，不改成临时解压路径，不另开 HTTP 服务。
+在「设置 → 模型与连接 → 连接你的 Agent」选择客户端，复制配置提示词给它执行。支持 macOS / Windows；国内入口包含 DeepSeek Harness、Qwen Code、Kimi Code、Qoder、CodeBuddy Code、TRAE，国际入口包含 Codex、Claude Code、Gemini CLI、Cursor、Copilot CLI、OpenCode。具体支持方向与配置差异见 [快速接入](../docs/AGENT_QUICK_CONNECT.md)。
 
-重载所选客户端，在工作台连接中心依次选择“检测连接组件”和“自动配对并自检”，再从客户端调用 `brevess.status` / `brevess.capabilities`。自动配对不需要把凭据复制到聊天；确需手动配对时仅在连接中心粘贴完整本机链接。组件就绪、服务在线、扩展配对和客户端读工具成功分别核验。MCP 不需要收费模型调用或插件专用模型登录；它与插件发起模型调用所用的 Windows 模型桥是不同能力。
+配置完成后点击「连接并测试」，自动完成启动、配对、打开工作台与浏览器连接检查。已连接时可复制「试读指令」，让所选客户端调用 `brevess.status`、`brevess.capabilities` 和 `library.query_global_library`；只有拿到真实工具结果，才算该客户端已读通。手动配对、断开与移除入口收在「高级选项」。账号登录和 BREVESS 内的模型调用分别验证，不用 MCP 连接成功替代。
 
-安装及已核验客户端版本见 [客户端说明](config/README.md)。配套组件包必须包含匹配版本的 native host、Node 和 Agent payload；仅更新扩展不能更新旧 native 协议。当前没有已核实的公开安装下载 URL，不提供猜测地址。“未检测到服务”只说明本次连接失败，不代表没有安装。随包 `Start-BREVESS-MCP.cmd` 只帮助打开配套安装选择器；缺少组件时给出说明，不启动第二个服务。
+安装器 `scripts/setup-agent-connection.mjs` 先运行 `--dry-run`，保留其他配置并备份；不将令牌放进聊天。配套源码缺失时获取匹配版本，不猜测下载 URL。已有安装复用稳定 payload，不另开第二个服务。Windows 旧配套安装器仍保留，具体参数见 [客户端说明](config/README.md)。
 
 机制图使用独立接口：`mechanism.read_context` → `mechanism.list_evidence` → `brevess.request_document_write_scope` → `mechanism.apply_commands` → `mechanism.read_context`。文献解图界面必须保持打开并显示正确文献；多个有效文献界面会拒绝含糊的目标。`target` 使用读取结果中的完整身份，不能自行编造。请求权限后在该文献界面确认，再重新请求取得授权回执。
 
@@ -20,6 +20,10 @@ This directory is the transport and adapter layer between an external MCP
 client and the BREVESS Workbench. It does not implement project storage.
 Workbench remains the only authority for project data, CAS, undo and source
 identity.
+
+## 阅读任务协作
+
+新增 `reading.*` 工具将已打开网页、指定 Figure 解读、进度与取消、本地完整保存及阅读包导出连接起来。插件和 Agent 使用同一执行服务与落盘回执；没有新增峰谷时段调度。详见 [阅读协作接口](../docs/READING_AGENT_WORKFLOW.md)。
 
 ## What is implemented
 
@@ -140,7 +144,7 @@ forwarding; see `extension/HOST-INTEGRATION.md`.
 Namespaces are fixed:
 
 ```text
-workbench.*  library.*  pdf.*  figure.*  radar.*  settings.*  brevess.*
+workbench.*  library.*  pdf.*  figure.*  radar.*  reading.*  settings.*  brevess.*
 ```
 
 The first Workbench contract adapters are:

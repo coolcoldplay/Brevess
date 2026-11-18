@@ -31,7 +31,10 @@ const MAX_PDF_TRANSLATION_HTML_BYTES = 48 * 1024 * 1024;
 const DEFAULT_PDF_TRANSLATION_TTL_MS = 6 * 60 * 60 * 1000;
 
 function stateDirectory() {
-  const root = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  if (process.env.BREVESS_NATIVE_STATE_DIR && path.isAbsolute(process.env.BREVESS_NATIVE_STATE_DIR)) return process.env.BREVESS_NATIVE_STATE_DIR;
+  const root = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support')
+    : process.platform === 'win32' ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+    : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
   return path.join(root, 'BrevessCodexBridge');
 }
 
@@ -703,6 +706,11 @@ function classifyTurnError(turnError = {}) {
 function findCodexBinary() {
   const configured = String(process.env.SCI_READER_CODEX_BIN || '').trim();
   if (configured && fs.existsSync(configured)) return configured;
+  if (process.platform === 'darwin') {
+    const apps = ['/Applications/Codex.app/Contents/Resources/codex',
+      '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'];
+    for (const binary of apps) if (fs.existsSync(binary)) return binary;
+  }
   const command = process.platform === 'win32' ? 'where.exe' : 'which';
   const names = process.platform === 'win32' ? ['codex', 'codex.exe'] : ['codex'];
   for (const name of names) {
@@ -1198,25 +1206,20 @@ class Pdffigures2Runner {
   bundledJarCandidates() {
     return [
       this.jarPath,
-      path.join(path.dirname(process.execPath), 'pdffigures2', 'pdffigures2.jar'),
-      path.join(path.dirname(process.execPath), '..', 'pdffigures2', 'pdffigures2.jar'),
-      path.join(__dirname, 'pdffigures2', 'pdffigures2.jar')
+      ...this.bundledImageIoDirectories().map(dir => path.join(dir, 'pdffigures2.jar'))
     ].filter(Boolean);
   }
 
   bundledFallbackJarCandidates() {
-    return [
-      path.join(path.dirname(process.execPath), 'pdffigures2', 'brevess-pdf-fallback.jar'),
-      path.join(path.dirname(process.execPath), '..', 'pdffigures2', 'brevess-pdf-fallback.jar'),
-      path.join(__dirname, 'pdffigures2', 'brevess-pdf-fallback.jar')
-    ];
+    return this.bundledImageIoDirectories().map(dir => path.join(dir, 'brevess-pdf-fallback.jar'));
   }
 
   bundledImageIoDirectories() {
     return [
       path.join(path.dirname(process.execPath), 'pdffigures2'),
       path.join(path.dirname(process.execPath), '..', 'pdffigures2'),
-      path.join(__dirname, 'pdffigures2')
+      path.join(__dirname, 'pdffigures2'),
+      path.join(stateDirectory(), 'pdf-tools', 'pdffigures2')
     ];
   }
 
@@ -1233,12 +1236,14 @@ class Pdffigures2Runner {
 
   bundledJavaCandidates() {
     const environmentHome = process.env.BREVESS_JAVA_HOME || process.env.JAVA_HOME || '';
+    const executable = process.platform === 'win32' ? 'java.exe' : 'java';
     return [
       this.javaPath,
-      path.join(path.dirname(process.execPath), 'runtime', 'bin', 'java.exe'),
-      path.join(path.dirname(process.execPath), '..', 'runtime', 'bin', 'java.exe'),
-      path.join(__dirname, 'runtime', 'bin', 'java.exe'),
-      environmentHome ? path.join(environmentHome, 'bin', 'java.exe') : ''
+      path.join(path.dirname(process.execPath), 'runtime', 'bin', executable),
+      path.join(path.dirname(process.execPath), '..', 'runtime', 'bin', executable),
+      path.join(__dirname, 'runtime', 'bin', executable),
+      environmentHome ? path.join(environmentHome, 'bin', executable) : '',
+      path.join(stateDirectory(), 'pdf-tools', 'runtime', 'bin', executable)
     ].filter(Boolean);
   }
 
@@ -1884,7 +1889,7 @@ class PdfTranslationPageServer {
 }
 
 // This backend remains in host.js: the Windows SEA build embeds only this file.
-const HARNESS_SUPPORTED_VERSION = '0.2.0-rc.2';
+const HARNESS_SUPPORTED_VERSIONS = new Set(['0.2.0-rc.2', '0.2.2-rc.2']);
 const HARNESS_PROVIDER = 'deepseek-account';
 const HARNESS_MAX_TEXT = 2 * 1024 * 1024;
 
@@ -2015,16 +2020,19 @@ function readHarnessArchiveManifest(archive, entry) {
 }
 
 function findHarnessInstallation() {
-  if (process.platform !== 'win32') throw codedError('HARNESS_NOT_INSTALLED', 'Harness Windows installation unavailable');
-  const candidates = [path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'DeepSeek Harness'),
-    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'DeepSeek Harness')];
+  const mac = process.platform === 'darwin';
+  if (!mac && process.platform !== 'win32') throw codedError('HARNESS_NOT_INSTALLED', 'Harness desktop installation unavailable');
+  const candidates = mac ? ['/Applications/DeepSeek Harness.app', path.join(os.homedir(), 'Applications', 'DeepSeek Harness.app')]
+    : [path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'DeepSeek Harness'),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'DeepSeek Harness')];
   for (const candidate of candidates) {
-    const exe = path.join(candidate, 'DeepSeek Harness.exe'), archive = path.join(candidate, 'resources', 'app.asar');
+    const exe = mac ? path.join(candidate, 'Contents', 'MacOS', 'DeepSeek Harness') : path.join(candidate, 'DeepSeek Harness.exe');
+    const archive = path.join(candidate, ...(mac ? ['Contents', 'Resources'] : ['resources']), 'app.asar');
     if (!fs.existsSync(exe) || !fs.existsSync(archive)) continue;
     try {
       const version = readHarnessArchiveManifest(archive, 'package.json').version;
       const sdkVersion = readHarnessArchiveManifest(archive, 'dsh/node_modules/@deepseek-ai/dsh-sdk-protocol/package.json').version;
-      if (version !== HARNESS_SUPPORTED_VERSION || sdkVersion !== HARNESS_SUPPORTED_VERSION) throw codedError('HARNESS_VERSION_UNSUPPORTED', 'Unsupported Harness installation');
+      if (!HARNESS_SUPPORTED_VERSIONS.has(version) || sdkVersion !== version) throw codedError('HARNESS_VERSION_UNSUPPORTED', 'Unsupported Harness installation');
       return { executable: fs.realpathSync(exe), archive: fs.realpathSync(archive), version, sdkVersion };
     } catch (error) {
       if (error.code === 'HARNESS_VERSION_UNSUPPORTED') throw error;
@@ -2041,11 +2049,14 @@ async function closedHarnessBootstrap() {
   for (const method of ['log', 'info', 'debug', 'warn', 'error']) console[method] = () => {};
   const archive = process.argv[2];
   const base = path.join(archive, 'dsh', 'node_modules', '@deepseek-ai');
+  const modern = JSON.parse(fs.readFileSync(path.join(archive, 'package.json'), 'utf8')).version === '0.2.2-rc.2';
+  const accountModule = modern ? 'dsh-deepseek-account' : 'dsh-deepseek-account-platform';
   const names = ['cordis', 'dsh-session', 'dsh-agent', 'dsh-llm', 'dsh-session-projection',
     'dsh-system-prompt', 'dsh-tools', 'dsh-agent-loop', 'dsh-attachment-local',
-    'dsh-credentials-local', 'dsh-authorization', 'dsh-deepseek-account-platform',
+    'dsh-credentials-local', 'dsh-authorization', accountModule,
     'dsh-llm-deepseek-account', 'dsh-sdk-protocol', 'dsh-sdk-jsonrpc-server',
     'dsh-web', 'dsh-web-search-deepseek', 'dsh-tool-web', 'dsh-tool-call-timeout-policy'];
+  if (modern) names.push('dsh-tool-executor-native', 'dsh-deepseek-llm-api-extensions');
   const modules = {};
   for (const name of names) modules[name] = await import(pathToFileURL(path.join(base, name, 'lib', 'index.js')).href);
   const { Context } = modules.cordis;
@@ -2054,7 +2065,8 @@ async function closedHarnessBootstrap() {
   await mount('dsh-session'); await mount('dsh-agent'); await mount('dsh-llm');
   await mount('dsh-session-projection');
   await mount('dsh-system-prompt', { includeHarnessIdentity: false, includeRuntimeContext: false });
-  await mount('dsh-tools', { mode: 'native' });
+  await mount('dsh-tools', modern ? {} : { mode: 'native' });
+  if (modern) { await mount('dsh-tool-executor-native'); await mount('dsh-deepseek-llm-api-extensions'); }
   // Search producers mount only for an explicit standalone web request below.
   // No loader, filesystem, skills, jobs, PTC or subagent plugins.
   await mount('dsh-agent-loop', { agents: [] });
@@ -2062,7 +2074,7 @@ async function closedHarnessBootstrap() {
     maxImageBytes: 4194304, maxMessageImageBytes: 25165824 });
   await mount('dsh-credentials-local', { watch: false });
   await mount('dsh-authorization');
-  await mount('dsh-deepseek-account-platform', { desktopPlatform: 'win32' });
+  await mount(accountModule, { desktopPlatform: process.platform });
   // Explicit official endpoint prevents an inherited project env changing auth destination.
   await mount('dsh-llm-deepseek-account', { baseURL: 'https://api.deepseek.com/anthropic' });
   let webSearch = false, searchCalls = 0;
@@ -2074,8 +2086,10 @@ async function closedHarnessBootstrap() {
     searchCalls++;
   });
   ctx.on('system-prompt/assemble', (assembly) => {
-    if (webSearch ? assembly.tools.length !== 1 || assembly.tools[0].name !== 'web_search'
-      : assembly.tools.length !== 0) throw new Error('HARNESS_TOOL_DISABLED');
+    // 0.2.2 assembles tool schemas after this event; inspect the closed registry.
+    const tools = modern ? ctx.tools.schemas() : assembly.tools;
+    if (!Array.isArray(tools) || (webSearch ? tools.length !== 1 || tools[0].name !== 'web_search'
+      : tools.length !== 0)) throw new Error('HARNESS_TOOL_DISABLED');
     return assembly;
   });
   const transport = new modules['dsh-sdk-protocol'].JsonRpcLineTransport(process.stdin, process.stdout);
@@ -2291,7 +2305,7 @@ class HarnessBridgeService {
       const data = await child.request(message.type === 'harness.health.check' ? 'brevess.health' : 'brevess.models', {});
       if (context.terminal || this.closed || this.controls.get(requestId) !== context) return;
       this.finishControl(context, 'completed', null, { type: message.type === 'harness.health.check' ? 'harness.health.result' : 'harness.models.result', requestId,
-        hostVersion: HOST_VERSION, version: child.installation?.version || HARNESS_SUPPORTED_VERSION,
+        hostVersion: HOST_VERSION, version: child.installation?.version || 'unknown',
         installed: true, toolsEnabled: false, webSearchSupported: true,
         allowedWebTools: ['web_search'], provider: HARNESS_PROVIDER,
         ...(message.type === 'harness.health.check' ? { accountStatus: data.accountStatus,

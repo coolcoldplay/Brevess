@@ -18,10 +18,10 @@ const batchSource = () => {
 
 test('Figure batch parallelism is bounded and keeps resume or explicit-window runs serial', () => {
   const batch = batchSource();
-  assert.match(content, /const FIGURE_BATCH_WORKER_LIMIT = 2;/u);
-  assert.match(batch, /options\.figureUserResumeIntent \|\|\s*options\.figureExecutionWindow !== undefined \? 1 :/u);
-  assert.match(batch, /Math\.min\(FIGURE_BATCH_WORKER_LIMIT, figures\.length\)/u);
-  assert.match(batch, /Promise\.all\(Array\.from\(\{ length: figureBatchWorkerCount \},[\s\S]*runFigureWorker\(workerIndex\)/u);
+  assert.match(batch, /const figureBatchWorkerLimit = figureUserResumeIntent \|\|\s*options\.figureExecutionWindow !== undefined \? 1 :/u);
+  assert.match(batch, /Math\.min\(SciLLM\.MAX_FIGURE_CONCURRENCY, figures\.length\)/u);
+  assert.match(batch, /await SciLLM\.runFigureBatchQueue\(figures\.length, figureBatchWorkerLimit, processFigure\)/u);
+  assert.match(batch, /match\?\.success === true && match\.data\?\.scopeMatches === false/u);
   assert.match(batch, /withFigureCommit/u);
 });
 

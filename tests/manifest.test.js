@@ -282,7 +282,8 @@ test('background worker keeps routed LLM operations alive until completion', () 
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(background, /chrome\.runtime\.onStartup\.addListener/);
   assert.match(background, /core\/onboarding\.js/);
-  assert.match(background, /options\.html#onboarding/);
+  assert.match(background, /createQuickSetupWindow/);
+  assert.match(fs.readFileSync(projectFile('core/onboarding-window.js'), 'utf8'), /options\.html#quick-setup/);
   assert.doesNotMatch(
     background,
     /ACTION_POPUP_START_READING[\s\S]{0,1200}shouldStartOnboarding/,

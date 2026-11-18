@@ -217,3 +217,24 @@ body[data-ui-surface="action"] .action-popup__header { padding-top: 10px; paddin
 [data-ui-surface="action"] .page-tools__row{display:grid;grid-template-columns:minmax(0,1fr) 30px 30px;column-gap:8px}
 [data-ui-surface="action"] .page-tools__row>input{grid-column:3;margin:0}
 [data-ui-surface="action"] .page-tools__row>.page-tools__icon{grid-column:2}
+
+/* Optional setup entry: compact, separate from the main action grid. */
+body[data-ui-surface="action"] .action-popup__setup {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 32px;
+  margin-top: 12px;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: #555;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+body[data-ui-surface="action"] .action-popup__setup:hover { background: #f2f2f2; color: #202020; }
+body[data-ui-surface="action"] [hidden] { display: none !important; }

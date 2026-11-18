@@ -117,6 +117,7 @@ async function loadState() {
   try {
     currentState = await runtimeMessage({ type: 'ACTION_POPUP_GET_STATE' });
     pageTitle.textContent = currentState.title || '当前页面';
+    document.getElementById('resumeQuickSetup').hidden = !currentState.setupPending;
     updatePrimaryLabel('侧栏打开工作台');
     startButton.disabled = currentState.readable !== true;
     if (currentState.pageTools?.supported) {
@@ -192,5 +193,9 @@ async function initializeActionPopup() {
   await globalThis.SciLLM?.bootstrapInterfaceLanguage?.();
   await loadState();
 }
+
+document.getElementById('resumeQuickSetup').addEventListener('click', () => {
+  runtimeMessage({ type: 'QUICK_SETUP_OPEN' }).then(() => window.close()).catch(() => setStatus('无法打开快速配置，请稍后重试。', 'error'));
+});
 
 void initializeActionPopup();

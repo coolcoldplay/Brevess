@@ -38,6 +38,20 @@ BREVESS 设置	BREVESS settings
 问答、解图、笔记等任务可分别指定。	Choose separate models for Q&A, figures, notes and more.
 模型与 Token	Models & tokens
 连接与权限	Connections & permissions
+连接你的 Agent	Connect your Agent
+选择你在用的客户端，让它帮你完成接入。	Choose your client and let it set up the connection.
+选择 Agent 客户端	Choose an Agent client
+插件内调用与 MCP	Model access and MCP
+国内 Agent · MCP	Chinese agents · MCP
+其他 Agent · MCP	Other agents · MCP
+复制接入提示词	Copy setup prompt
+连接状态与权限	Connection status and permissions
+配置完成后自动配对，检查读取与写入权限。	Pair after setup and check read/write permissions.
+支持插件内调用与 Agent 操作文献、课题；接通后分别测试。	Supports model access and Agent operations on literature and projects. Test each direction after connecting.
+通过 MCP 读取与操作 BREVESS。插件内调用此 Agent 尚未适配。	Read and operate BREVESS through MCP. Model calls from BREVESS are not yet supported for this client.
+已复制，粘贴到所选客户端即可开始。	Copied. Paste into the selected client to begin.
+请复制已选中的提示词。	Copy the selected prompt.
+复制未完成，请重试。	Copy failed. Please try again.
 外部 Agent	External agents
 管理已配对客户端与连接。	Manage paired clients and connections.
 决定模型能否读取论文正文、图注与图片。	Control whether models can read article text, captions and images.
@@ -183,6 +197,9 @@ Panel 追问	Panel follow-ups
     input.setAttribute('aria-controls', 'focus-search-results'); searchBox.append(input); oldRail.append(searchBox);
     const results = element('div', 'focus-search-results'); results.id = 'focus-search-results'; results.hidden = true; oldRail.append(results);
     const nav = element('nav', 'focus-nav'); nav.setAttribute('aria-label', '设置分类');
+    const quickSetup = button('', () => { void globalThis.BrevessQuickSetup?.open().catch(() => {}); });
+    quickSetup.innerHTML = icon('gear'); quickSetup.append(element('span', '', '快速配置'));
+    quickSetup.id = 'openQuickSetup'; nav.append(quickSetup);
     for (const [id, label, name] of navigation) {
       const b = button('', () => {}); b.dataset.settingsNav = id; b.innerHTML = icon(name);
       b.append(element('span', 'settings-nav-title', label)); if (id === 'data') b.classList.add('focus-nav-divider'); nav.append(b);
@@ -223,8 +240,12 @@ Panel 追问	Panel follow-ups
     const defaults = row('默认连接与模型', '新任务使用已保存的模型配置。', () => open(routingDialog)); defaults.id = 'focus-default-model'; usage.append(defaults);
     usage.append(row('按功能分配模型', '问答、解图、笔记等任务可分别指定。', () => open(routingDialog), '模型与 Token'));
     const permission = group('连接与权限', summary);
-    const agent = document.querySelector('.external-agent-settings'); const agentDialog = modal('外部 Agent', agent, 'focus-agent-dialog');
-    permission.append(row('外部 Agent', '管理已配对客户端与连接。', () => open(agentDialog)));
+    const agent = document.querySelector('.external-agent-settings');
+    agent.hidden = true; summary.append(agent);
+    const agentGroup = group('Agent', summary);
+    const agentEntry = row('连接你的 Agent', '选择客户端、复制配置提示词、连接测试。', () => $('externalAgentManage').click());
+    agentEntry.id = 'focus-agent-entry'; agentGroup.append(agentEntry);
+    usage.before(agentGroup);
     const consentRow = row('正文发送许可', '决定模型能否读取论文正文、图注与图片。', () => api.navigate('privacy')); consentRow.id = 'focus-consent-row'; permission.append(consentRow);
     const riskLink = button('查看隐私与权限', () => api.navigate('privacy'), 'focus-text-button'); riskLink.id = 'focus-risk-link'; summary.append(riskLink);
     const warning = element('p', 'focus-risk-status'); warning.setAttribute('role', 'status'); warning.id = 'focus-risk-status'; summary.append(warning);
@@ -330,7 +351,7 @@ Panel 追问	Panel follow-ups
       ['网页滤镜', '规则 显示 跨页 导入 导出', 'reading-preferences'],
       ['保存目录与备份', '数据 同步 加密 迁移', 'data', 'directorySyncSettings'],
       ['隐私与权限', '正文发送 同意 风险', 'privacy'],
-      ['外部 Agent', 'MCP 配对', 'models', 'externalAgentHeading'],
+      ['外部 Agent', 'MCP 配对', 'models', 'focus-agent-entry'],
       ['通用', '快捷键 语言', 'shortcuts'], ['关于 BREVESS', '反馈 许可 开源', 'about']
     ];
     input.addEventListener('input', () => {

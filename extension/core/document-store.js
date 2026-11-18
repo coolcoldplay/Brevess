@@ -282,6 +282,19 @@
     return record;
   }
 
+  function newerAnnotatedSource(current, record, sourceUrl) {
+    const source = shared.normalizeAnnotationSourceUrl(sourceUrl);
+    if (!source || !record?.annotations?.length) return current;
+    if (record.annotationSourceUrl) {
+      if (shared.normalizeAnnotationSourceUrl(record.annotationSourceUrl) !== source) return current;
+    } else {
+      // Legacy records did not retain query/hash-route identity. Do not guess.
+      const url = new URL(source);
+      if (url.search || url.hash || normalizeUrl(record.canonicalUrl) !== normalizeUrl(source)) return current;
+    }
+    return !current || String(record.updatedAt).localeCompare(String(current.updatedAt)) > 0 ? record : current;
+  }
+
   function documentIndex(records) {
     return records.map(record => ({
       documentId: record.documentId,
@@ -489,6 +502,13 @@
       return [...records.values()].map(cloneJsonLike);
     }
 
+    async function findAnnotatedSource(sourceUrl) {
+      await settled();
+      let found = null;
+      for (const record of records.values()) found = newerAnnotatedSource(found, record, sourceUrl);
+      return found ? cloneJsonLike(found) : null;
+    }
+
     async function listDocumentIndex() {
       return documentIndex(await allRecords());
     }
@@ -526,7 +546,7 @@
       upsertAnnotation,
       deleteAnnotation,
       clearAnnotations,
-      listDocumentIndex,
+      listDocumentIndex, findAnnotatedSource,
       exportAll,
       countCategoryReferences, listPaperDocuments, crossFormatOperation
     };
@@ -676,6 +696,22 @@
       return records.map(record => normalizeRecord(record));
     }
 
+    async function findAnnotatedSource(sourceUrl) {
+      // A cursor keeps memory bounded; never materialize every saved annotation
+      // just to restore one page. This lookup does not create browsing records.
+      return runTransaction('readonly', store => new Promise((resolve, reject) => {
+        let found = null;
+        const request = store.openCursor();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) { resolve(found ? cloneJsonLike(found) : null); return; }
+          found = newerAnnotatedSource(found, cursor.value, sourceUrl);
+          cursor.continue();
+        };
+      }));
+    }
+
     async function listDocumentIndex() {
       return documentIndex(await allRecords());
     }
@@ -700,7 +736,7 @@
       upsertAnnotation,
       deleteAnnotation,
       clearAnnotations,
-      listDocumentIndex,
+      listDocumentIndex, findAnnotatedSource,
       exportAll,
       countCategoryReferences, listPaperDocuments, crossFormatOperation
     };

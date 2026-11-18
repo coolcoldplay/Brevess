@@ -1020,6 +1020,25 @@
     );
   }
 
+  function matchSupplementalPdfInventoryEntry(asset, entry) {
+    const key = supplementalFigureKey(entry.figureLabel || entry.label || entry.name || entry.figureId);
+    const matches = (asset.figures || []).filter(figure =>
+      supplementalFigureKey(figure.figureLabel || figure.originalFigureId || figure.figureId) === key);
+    if (matches.length === 1) return matches[0];
+    // Parent saves retain the reader's source ID alongside its editable canonical record.
+    if (matches.length !== 2 || !entry.figureId || !entry.image?.sha256) return null;
+    const raw = matches.find(figure => figure.figureId === entry.figureId);
+    if (!raw) return null;
+    const canonicalId = normalizeSupplementalFigure(raw, asset).figureId;
+    const canonical = matches.find(figure => figure !== raw && figure.figureId === canonicalId &&
+      figure.originalFigureId === raw.figureId);
+    if (!canonical || canonical.caption !== raw.caption || matches.some(figure =>
+      figure.imageAssetPath !== entry.image.workspacePath || figure.imageSha256 !== entry.image.sha256 ||
+      figure.sourceMaterialId !== asset.materialId ||
+      figure.sourceDocumentFingerprint !== asset.parsedDocument?.pdfFigureManifest?.documentFingerprint)) return null;
+    return canonical;
+  }
+
   function supplementalPdfSourceImageEntries(manifest) {
     const figures = Array.isArray(manifest?.figures) ? manifest.figures : [];
     const entries = [], ids = new Set();
@@ -1085,12 +1104,12 @@
       for (const entry of supplementalPdfLogicalEntries(manifest)) {
         const key = supplementalFigureKey(entry.figureLabel || entry.label || entry.name || entry.figureId);
         const path = String(entry.image?.workspacePath || ''), hash = String(entry.image?.sha256 || '');
-        const matches = asset.figures.filter(figure => supplementalFigureKey(figure.figureLabel || figure.originalFigureId || figure.figureId) === key);
-        if (!key || keys.includes(key) || matches.length !== 1 || !String(matches[0].caption || '').trim() ||
+        const figure = matchSupplementalPdfInventoryEntry(asset, entry);
+        if (!key || keys.includes(key) || !String(figure?.caption || '').trim() ||
             !/^pdf\/figures\/supplemental\/[^/]+\.(?:png|jpe?g|webp)$/i.test(path) || path.includes('..') || path.includes('\\') ||
             !/^[a-f0-9]{64}$/.test(hash) || paths.has(path) && paths.get(path) !== hash ||
             !persisted.verifiedAssets.some(item => item.relativePath === path && item.sha256 === hash && item.verified === true && Number.isSafeInteger(item.byteLength) && item.byteLength > 0)) return null;
-        paths.set(path,hash);keys.push(key);ids.push(normalizeSupplementalFigure(matches[0],asset).figureId);
+        paths.set(path,hash);keys.push(key);ids.push(normalizeSupplementalFigure(figure,asset).figureId);
       }
       if (!Array.isArray(proof.figureIds) || proof.figureIds.length !== ids.length || new Set(proof.figureIds).size !== ids.length || ids.some(id => !proof.figureIds.includes(id))) return null;
       // The original byte SHA survives in older native manifests; byte length
@@ -1508,7 +1527,7 @@
   }
 
   return {
-    groupSupplementalPdfFigureRegions, supplementalPdfSourceImageEntries,
+    groupSupplementalPdfFigureRegions, supplementalPdfSourceImageEntries, matchSupplementalPdfInventoryEntry,
     supplementalPdfLogicalEntries,
     projectSupplementalDocxNoFigureMaterial,
     normalizeSupplementalMaterialInspection, createSupplementalMaterialInspection, completeSupplementalMaterialInspection, supplementalMaterialInspectionFromAsset,

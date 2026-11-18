@@ -5,7 +5,9 @@
     "THIRD_PARTY_NOTICES.md",
     "OPEN_SOURCE.md",
     "CODEX_LOCAL_SETUP.md",
-    "docs/R26_HARNESS_SETUP.md"
+    "docs/R26_HARNESS_SETUP.md",
+    "docs/AGENT_QUICK_CONNECT.md",
+    "docs/READING_AGENT_WORKFLOW.md"
   ],
   "browserRootFiles": [
     "manifest.json",
@@ -53,6 +55,8 @@
     "options.css",
     "settings-focus.css",
     "settings-focus.js",
+    "quick-setup.css",
+    "quick-setup.js",
     "options-workbench.js",
     "options-local-library.js",
     "options-local-library.css",
@@ -72,7 +76,10 @@
     "workspace-storage-choices.js",
     "table-viewer.html",
     "table-viewer.js",
-    "table-viewer.css"
+    "table-viewer.css",
+    "diagram-viewer.html",
+    "diagram-viewer.js",
+    "diagram-viewer.css"
   ],
   "browserDirectories": [
     "web-filters-general",
@@ -94,7 +101,9 @@
     "BUILD39_OPTIMIZATION.md",
     "CODEX_LOCAL_SETUP.md",
     "docs/mcp/CAPABILITY-MATRIX.md",
-    "docs/R26_HARNESS_SETUP.md"
+    "docs/R26_HARNESS_SETUP.md",
+    "docs/AGENT_QUICK_CONNECT.md",
+    "docs/READING_AGENT_WORKFLOW.md"
   ],
   "localDocumentationDirectories": [
     "docs/changelog",
@@ -110,7 +119,8 @@
     "native-host/Uninstall-Brevess-Codex-Bridge.cmd",
     "native-host/README-STORE.md",
     "native-host/bin/brevess-codex-host.exe",
-    "native-host/runtime-version.json"
+    "native-host/runtime-version.json",
+    "native-host/entry.cjs"
   ],
   "nativeHostDirectories": [
     "native-host/pdffigures2",
@@ -132,6 +142,9 @@
       "content.css",
       "content.js",
       "core",
+      "diagram-viewer.css",
+      "diagram-viewer.html",
+      "diagram-viewer.js",
       "help",
       "icons",
       "licenses",
@@ -170,6 +183,8 @@
       "popup.js",
       "prototypes",
       "providers",
+      "quick-setup.css",
+      "quick-setup.js",
       "reading-focus-ui.js",
       "reading-focus.css",
       "same-paper-sidebar.js",

@@ -7,14 +7,18 @@ description: Read or edit BREVESS literature, hypotheses, Figure/Panel plans and
 
 先使用 MCP 的 `brevess.status` 获取真实连接状态，再读 `tools/list` 和 `brevess.capabilities`。按用户指定目标读取：课题用 `workbench.read_context`，总库用 `library.query_global_library` / `library.catalog_read`，单篇文献用 `mechanism.read_context`。总库读取不要求先创建课题或申请项目 scope。只调用实际工具目录存在的工具，不猜测工具或对象 ID。
 
-若当前会话没有 BREVESS 工具，先检查客户端是否已配置、重新加载，以及初始化错误。Windows 用户入口是配套组件的 `Install-Brevess-Codex-Bridge.cmd`：选择已安装的 Codex、DeepSeek Harness 或两者；默认只读，空选择仅安装组件。先检查并复用安装器写入的稳定启动路径，不改成临时解压目录，不另开 HTTP 服务，不覆盖其他 MCP 服务。当前自动适配已核验 Codex npm CLI 0.151.0 和 Harness Desktop 0.2.0-rc.2；其他版本按实际支持情况处理，不能猜配置字段。没有组件包时说明需取得匹配安装包，不编造下载 URL 或宣称安装成功。
+若当前会话没有 BREVESS 工具，先检查客户端配置、重新加载和初始化错误。当前快速入口是「设置 → 模型与连接 → 连接你的 Agent」，选择实际客户端并复制配置提示词。使用匹配版本的 `scripts/setup-agent-connection.mjs`，先 `--dry-run`，再增量配置；详见 `docs/AGENT_QUICK_CONNECT.md`。支持 macOS 和 Windows，复用已有安装、保留其他 MCP 服务。安装器返回 `client-setup-required` 时，继续按对应客户端官方界面/CLI 完成，不能把生成文件当作已接通。
 
-重新载入所选客户端后，在工作台“Agent 连接”使用“检测连接组件”和“自动配对并自检”，再从客户端调用 `brevess.status` / `brevess.capabilities`。连接令牌仅在本机使用，不写入课题、聊天、截图或报告。组件可用、服务在线、扩展已配对和客户端成功读工具是不同层次；只报告已验证的层次。此流程不需要调用付费模型，也不要求登录插件专用模型账户。
+完成后在同一窗口点击「连接并测试」，插件会自动打开工作台。再从客户端调用 `brevess.status`、`brevess.capabilities` 和文献查询，分别报告浏览器连接与客户端实际读取的结果。令牌仅在本机使用，不写入课题、聊天、截图或报告。此流程无需付费模型调用，也不代表 BREVESS 内的模型账号已登录。
+
+## 网页阅读任务
+
+使用 `reading.list_tabs` / `reading.inspect` 读取真实 tabId、binding 和 Figure ID。用户授权批量解图后，按现有写入 scope 机制调用 `reading.start`，明确列出 figureIds；不得把缺省选择扩大成全部图。以 `reading.status` 的逐篇回执确认模型结果与目录落盘，必要时 `reading.cancel`。`reading.bundle` 只导出本地阅读包，不发送给任何人。重新加载中断的任务不自动重跑，先查既有结果。文献雷达发现、何时处理和筛选条件由 Agent 按用户需求编排，插件不预置峰谷定时任务。接口与离线边界见 `docs/READING_AGENT_WORKFLOW.md`。
 
 ## 读写顺序
 
 - 查询文献使用 `library.*` / `radar.*` 可用工具；读取课题使用 `workbench.*`。不直接改 IndexedDB、浏览器存储或项目 JSON 文件绕过领域接口。
-- 客户端默认只读。需要写入时，先取得用户对启用写传输的同意，再通过配套安装器的 `-AgentAllowWrite` 或经核验的高级配置启用 `--allow-write`；同时管理两客户端时按安装器要求一起更新。不得默默改写用户配置。写传输不能替代下面的目标授权。
+- 客户端默认只读。需要写入时，先取得用户对启用写传输的同意，再通过快速安装器的 `--allow-write`（Windows 旧安装器使用 `-AgentAllowWrite`）启用写传输；同时管理两客户端时按安装器要求一起更新。不得默默改写用户配置。写传输不能替代下面的目标授权。
 - 课题修改前调用 `brevess.request_write_scope`，由工作台给本任务作用域；已有有效作用域按其范围继续。课题修改带最新 `expectedProjectId`、`expectedRevision` 和工具要求的 `idempotencyKey`。文献机制图使用独立 document scope，不能复用课题授权。
 - 总库读取 `library.query_global_library` / `library.catalog_read` 无需项目 scope。`library.catalog_command` 必须同时满足 `--allow-write` 和工作台浏览器原生的逐次变更确认，带总库最新 `expectedRevision`、稳定 `idempotencyKey` 和精确 command；不能用项目 scope 跳过确认。拒绝、取消、超时或撤回后不得追加写入。
 - CAS 冲突重新读取后重新规划；超时先读回确认，不盲目重复创建。回执中的新修订号用于下一次操作。

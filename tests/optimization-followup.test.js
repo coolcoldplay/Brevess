@@ -15,10 +15,10 @@ test('batch Figure reading is bounded-parallel, ordered on commit, and skips com
   assert.match(batch, /getImportedSupplementalFigureInventory\(\)/);
   assert.match(batch, /\.\.\.visibleMainFigures,\s*\.\.\.supplementalFigures/);
   assert.match(batch, /manualMainLabels/);
-  assert.match(batch, /parallelBatch:\s*figureBatchWorkerCount > 1/);
-  assert.match(batch, /FIGURE_BATCH_WORKER_LIMIT/);
-  assert.match(batch, /figureBatchWorkerCount/);
-  assert.match(batch, /Promise\.all\(Array\.from\(\{ length: figureBatchWorkerCount \}/);
+  assert.match(batch, /parallelBatch:\s*figureBatchWorkerLimit > 1/);
+  assert.match(batch, /Math\.min\(SciLLM\.MAX_FIGURE_CONCURRENCY, figures\.length\)/);
+  assert.match(batch, /return response\.data\.figureBatchConcurrency/);
+  assert.match(batch, /await SciLLM\.runFigureBatchQueue\(figures\.length, figureBatchWorkerLimit, processFigure\)/);
   assert.match(batch, /withFigureCommit/);
   assert.match(batch, /requestOperationByFigure/);
   assert.match(batch, /skippedExisting:\s*true/);
@@ -89,21 +89,27 @@ test('progressive Panel checkpoints clear only after every durable completion wr
   let supplementalSaved = false;
   let inventorySaved = false;
   const writes = [];
+  const figureWalkthroughState = new Map();
   const persistCompleted = new Function(
     'persistImportedSupplementalFigureState',
     'buildFigureWorkspaceSnapshot',
     'persistFigureInventoryWithCas',
-    `${completion}\nreturn persistCompletedFigureCheckpointState;`
+    'figureWalkthroughState',
+    `let figurePartialCheckpointCommitTail = Promise.resolve();
+     const articleWorkspaceLifecycleGeneration = 1;
+     const currentArticleWorkspace = { workspaceId: 'fixture', workspaceGeneration: 1 };
+     ${completion}\nreturn persistCompletedFigureCheckpointState;`
   )(
     async (_figure, _state, options) => {
       writes.push({ kind: 'supplemental', options });
-      return { saved: supplementalSaved };
+      return { saved: supplementalSaved, content: supplementalSaved ? { figureId: 'figure-s1' } : null };
     },
     () => ({ schemaVersion: 2, figures: [{ figureId: 'figure-s1' }] }),
     async (_inventory, options) => {
       writes.push({ kind: 'inventory', options });
       return { saved: inventorySaved };
-    }
+    },
+    figureWalkthroughState
   );
   const envelope = { version: 'figure-checkpoint-envelope-v1' };
   const freshState = () => ({
@@ -116,6 +122,7 @@ test('progressive Panel checkpoints clear only after every durable completion wr
   });
 
   let state = freshState();
+  figureWalkthroughState.set('figure-s1', state);
   await assert.rejects(
     persistCompleted(
       state, 'standard', 'figure-op-complete', envelope, ['standard']
@@ -127,6 +134,7 @@ test('progressive Panel checkpoints clear only after every durable completion wr
 
   supplementalSaved = true;
   state = freshState();
+  figureWalkthroughState.set('figure-s1', state);
   await assert.rejects(
     persistCompleted(
       state, 'standard', 'figure-op-complete', envelope, ['standard']
@@ -137,6 +145,7 @@ test('progressive Panel checkpoints clear only after every durable completion wr
 
   inventorySaved = true;
   state = freshState();
+  figureWalkthroughState.set('figure-s1', state);
   const receipt = await persistCompleted(
     state, 'standard', 'figure-op-complete', envelope, ['standard']
   );
@@ -156,7 +165,10 @@ test('progressive Panel checkpoints clear only after every durable completion wr
     pendingOperationId: 'figure-op-signed'
   });
   assert.equal(finalSupplemental.options.stateFields.includes('pendingStandard'), true);
-  assert.deepEqual(finalInventory.options, {
+  const { getAssetCheckpoint, persistAssetCheckpoint, ...finalBinding } = finalInventory.options;
+  assert.equal(typeof getAssetCheckpoint, 'function');
+  assert.equal(typeof persistAssetCheckpoint, 'function');
+  assert.deepEqual(finalBinding, {
     figureId: 'figure-s1',
     analysisDepth: 'standard',
     clearCheckpointEnvelope: envelope,

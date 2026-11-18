@@ -80,7 +80,7 @@ test('protocol initialize, tools/list and resources work without a bridge', asyn
   const listed = await protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   assert.ok(listed.result.tools.length >= 30);
   assert.ok(listed.result.tools.every(tool =>
-    /^(workbench|library|pdf|figure|radar|settings|brevess)\./u.test(tool.name)));
+    /^(workbench|library|pdf|figure|radar|settings|brevess|document|mechanism|ppt|reading)\./u.test(tool.name)));
   assert.ok(listed.result.tools.some(tool => tool.name === 'workbench.model_operation'));
   assert.ok(listed.result.tools.some(tool => tool.name === 'radar.list'));
   assert.ok(listed.result.tools.some(tool => tool.name === 'workbench.plan_hypotheses'));

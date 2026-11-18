@@ -85,7 +85,7 @@ test('manual selection reacts immediately to mouse, pointer, and touch completio
   assert.match(manualSection, /type: 'mouseup'/);
   assert.match(manualSection, /type: 'pointerup'/);
   assert.match(manualSection, /type: 'touchend'/);
-  assert.match(manualSection, /restoreManualAnnotations\([^)]+\);\s*scheduleManualSelectionInspection\(0\)/);
+  assert.match(manualSection, /restoreManualAnnotations\([^)]+\);(?:\s*void refreshLocalCrossFormatNotes\(\)\.catch\(\(\) => \{\}\);)?\s*scheduleManualSelectionInspection\(0\)/);
   assert.match(manualSection, /function handleManualPointerUp[\s\S]*inspectManualSelection\(event\)/);
   assert.match(manualSection, /handleManualSelectionChange[\s\S]*scheduleManualSelectionInspection\(16\)/);
   assert.doesNotMatch(manualSection, /setTimeout\([\s\S]{0,120}prepareManualDocument\(\)[\s\S]{0,80}950/);

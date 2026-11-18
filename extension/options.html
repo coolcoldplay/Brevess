@@ -14,6 +14,8 @@
 <script src="core/local-translator.js"></script>
 <script src="core/input-tools.js"></script>
   <link rel="stylesheet" href="settings-focus.css">
+  <link rel="stylesheet" href="quick-setup.css">
+  <script src="quick-setup.js"></script>
 </head>
 <body data-ui-surface="settings">
   <header class="topbar">
@@ -574,8 +576,8 @@
               <div id="codexLocalFields" class="compatible-fields" hidden>
                 <p class="support-message"><strong>本机 Codex</strong> 使用插件专用的 Codex 登录空间，不读取桌面 Codex、CLI 或其他程序的令牌，也不会在插件中保存 API Key。请在这里单独登录一次，避免多个 Codex 进程争用刷新令牌。</p>
                 <div class="open-source-links codex-bridge-links">
-                  <span class="support-email">Windows 本机模型桥：使用单独安装的本机配套组件（可选）。</span>
-                  <a class="support-email" href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noreferrer">查看安装说明</a>
+                  <span class="support-email">macOS / Windows：在模型与连接页复制接入提示词，让 Agent 自动配置。</span>
+                  <a class="support-email" href="https://github.com/coolcoldplay/Brevess/blob/main/docs/AGENT_QUICK_CONNECT.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noreferrer">查看安装说明</a>
                 </div>
                 <div class="codex-auth-card">
                   <div>
@@ -974,7 +976,7 @@
             </div>
             <p id="nativeDirectoryStatus" class="native-directory-status" role="status" aria-live="polite">尚未检查。绑定只核验现有目录，不会选择新的保存位置或创建文献文件夹。</p>
             <p class="native-directory-help">需要支持目录打开功能的本机助手；旧版请随插件一起更新。此处不会自动安装助手。
-              <a href="https://github.com/coolcoldplay/Brevess/blob/main/CODEX_LOCAL_SETUP.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noopener noreferrer">查看本机助手安装说明</a>
+              <a href="https://github.com/coolcoldplay/Brevess/blob/main/docs/AGENT_QUICK_CONNECT.md" data-i18n-href-en="help/companion-setup.html" target="_blank" rel="noopener noreferrer">查看本机助手安装说明</a>
             </p>
           </section>
           <section class="portable-config-card" aria-labelledby="portableConfigHeading">
@@ -1273,6 +1275,7 @@
 
     <script src="core/i18n-builtins.js"></script>
     <script src="core/i18n-export.js"></script>
+    <script src="core/agent-setup-prompt.js"></script>
     <script src="core/agent-connection-ui.js"></script>
     <script src="core/r20-privacy-gate.js"></script>
   <script src="core/provider-brand-icons.js"></script>

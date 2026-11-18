@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>BREVESS 图片粘贴验收</title>
+<style>body{font:16px/1.6 system-ui;margin:32px;color:#222}#paste{padding:24px;border:1px solid #aaa;border-radius:8px;min-height:80px}img{display:block;max-width:100%;max-height:75vh;object-fit:contain;object-position:left top}#status{font-weight:600}</style></head>
+<body><h1>图片粘贴验收</h1><div id="paste" contenteditable="true" aria-label="在此粘贴复制的示意图">点击这里，再粘贴图片。</div><p id="status" role="status">等待粘贴 PNG</p><img id="preview" alt="粘贴的完整示意图">
+<script>
+document.getElementById('paste').addEventListener('paste',event=>{
+ event.preventDefault();
+ const file=[...event.clipboardData.items].find(item=>item.type==='image/png')?.getAsFile();
+ const status=document.getElementById('status'), image=document.getElementById('preview');
+ if(!file){status.textContent='未收到 PNG 图片';return;}
+ const url=URL.createObjectURL(file);
+ image.onload=()=>{status.textContent=`已收到 PNG 图片：${image.naturalWidth} × ${image.naturalHeight} · ${file.size} 字节`;URL.revokeObjectURL(url);};
+ image.onerror=()=>{status.textContent='PNG 无法解码';URL.revokeObjectURL(url);};
+ image.src=url;
+});
+</script></body></html>

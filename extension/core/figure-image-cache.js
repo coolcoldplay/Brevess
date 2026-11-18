@@ -82,7 +82,20 @@
         'readwrite',
         async transaction => {
           const store = transaction.objectStore(FIGURE_IMAGE_STORE_NAME);
-          const records = await shared.requestToPromise(store.getAll());
+          // Retain only LRU metadata. getAll() cloned every image buffer at
+          // once (up to 192 MiB) on each downloaded figure.
+          const records = await new Promise((resolve, reject) => {
+            const rows = [], request = store.openCursor();
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const cursor = request.result;
+              if (!cursor) return resolve(rows);
+              const value = cursor.value;
+              rows.push({cacheKey: value.cacheKey, lastAccessedAt: value.lastAccessedAt,
+                byteLength: figureImageCacheByteLength(value)});
+              cursor.continue();
+            };
+          });
           const evictions = selectFigureImageCacheEvictions(
             records,
             maxBytes,

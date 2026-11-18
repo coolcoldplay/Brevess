@@ -5944,16 +5944,6 @@ body[data-ui-surface="sidebar"] #translateNavigationTitles[data-translation-stat
 .article-chat-draft{margin:10px 0}.article-chat-draft>small{color:#777;font-size:11px}
 .article-chat-draft-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
 
-/* r16: retain the diagram's native text size inside a bounded interactive view. */
-.article-chat-mermaid-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:4px; padding:4px 0; }
-.article-chat-mermaid-toolbar button { display:inline-flex; align-items:center; justify-content:center; min-width:30px; min-height:30px; padding:3px 8px; border:1px solid var(--color-border,#d8d8d8); border-radius:5px; background:var(--color-bg-primary,#fff); color:var(--color-text,#202020); font:inherit; font-size:12px; line-height:1.4; cursor:pointer; }
-.article-chat-mermaid-toolbar button:focus-visible, .article-chat-mermaid-viewport:focus-visible { outline:2px solid var(--color-primary,#285879); outline-offset:2px; }
-.article-chat-mermaid-zoom { min-width:42px; text-align:center; font-size:11px; color:var(--color-text-muted,#646464); font-variant-numeric:tabular-nums; }
-.article-chat-mermaid-viewport { position:relative; width:100%; height:280px; overflow:hidden; border:1px solid var(--color-border,#ddd); border-radius:5px; background:var(--color-bg-primary,#fff); cursor:grab; touch-action:none; contain:layout paint; }
-.article-chat-mermaid-viewport.is-dragging { cursor:grabbing; }
-.article-chat-mermaid-viewport .article-chat-mermaid { position:absolute; left:0; top:0; max-width:none; overflow:visible; transform-origin:0 0; user-select:none; }
-.article-chat-mermaid-viewport .article-chat-mermaid svg { display:block; max-width:none; pointer-events:none; }
-
 /* r17: metadata belongs to its own answer, below its content. */
 .article-chat-turn-footer { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:5px 12px; min-width:0; margin-top:7px; }
 .article-chat-turn-footer .article-chat-message-meta { flex:1 1 180px; min-width:0; margin:0; padding:0; font-size:11px; line-height:1.5; font-weight:400; color:var(--swiss-muted,#646464); overflow-wrap:anywhere; }

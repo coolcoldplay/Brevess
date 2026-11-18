@@ -1,6 +1,7 @@
 'use strict';
 
 const { createAgentTools } = require('../../workbench/agent-tools.js');
+const { readingAgentDefinitions } = require('../../core/reading-agent-tools.js');
 const { createRadarAgentTools } = require('../../core/literature-radar-agent-tools.js');
 const { BrevessMcpError, asError } = require('./errors.js');
 const { WriteScopeManager } = require('./scopes.js');
@@ -473,6 +474,7 @@ function directToolName(bridgeName) {
   if (bridgeName === 'query_library') return 'library.query_library';
   if (bridgeName === 'read_literature') return 'library.read_workspace';
   if (bridgeName === 'local_data') return 'library.local_data';
+  if (bridgeName.startsWith('reading_')) return `reading.${bridgeName.slice('reading_'.length)}`;
   if (bridgeName.startsWith('radar_')) return `radar.${bridgeName.slice('radar_'.length)}`;
   return `workbench.${bridgeName}`;
 }
@@ -488,7 +490,7 @@ const DIRECT_READ_ONLY = new Set([
   'export_project',
   'read_asset',
   'radar_list',
-  'radar_get'
+  'radar_get', 'reading_list_tabs', 'reading_inspect', 'reading_status'
 ]);
 const DESTRUCTIVE = new Set(['remove_entity', 'delete_workspace']);
 const CONTRACT_READ_ONLY = new Set([
@@ -548,7 +550,7 @@ function createRegistry({
       kind: 'direct'
     });
   }
-  for (const definition of radarDefinitions()) {
+  for (const definition of [...radarDefinitions(), ...readingAgentDefinitions]) {
     const name = directToolName(definition.name);
     tools.set(name, {
       name,

@@ -3,6 +3,8 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
+  const figureConcurrency = typeof shared.createFigureDispatchScheduler === 'function' ? shared
+    : (typeof require === 'function' ? require('./figure-concurrency.js') : null);
   const RUNTIME_REVISION = '1.0.1-build1-store-release';
   const popupUiIdentity = typeof shared.isPopupUiDocumentUrl === 'function' ? shared
     : (typeof require === 'function' ? require('./page-tools.js') : null);
@@ -64,9 +66,7 @@
     highlight: 3,
     summary: 2,
     chat: 1,
-    // Figure requests are large multimodal calls. A single ordered worker avoids
-    // provider throttling and prevents late responses from interleaving state
-    // checkpoints while still preserving per-Figure retry/resume behavior.
+    // Default within one Figure. Inter-Figure transport capacity is shared by origin.
     figure: 1,
     crossFigure: 1
   });
@@ -637,7 +637,7 @@
       snapshotPending() {
         return mutate(ledger => ({ value: ledger.targets.filter(target =>
           target.attempts.some(entry => entry.status !== 'sealed')).map(target =>
-          ({ key: target.key, attempts: structuredClone(target.attempts) })) }));
+          ({ key: target.key, scopeKey: target.scopeKey, attempts: structuredClone(target.attempts) })) }));
       },
       inspect(inputs, actor, proofDigest = '', explicitResume = null) {
         return mutate(ledger => {
@@ -3200,6 +3200,7 @@
             'HARNESS_MODEL_REQUIRED', 'HARNESS_MODEL_UNAVAILABLE', 'HARNESS_IMAGE_UNSUPPORTED',
             'HARNESS_TOOL_DISABLED', 'HARNESS_MAX_TOKENS', 'HARNESS_TURN_FAILED', 'HARNESS_PROCESS_EXITED'
           ]),
+      'AI_PRIVACY_ACK_REQUIRED', 'QUICK_SETUP_DIRECTORY_REQUIRED', 'QUICK_SETUP_CHANGED', 'QUICK_SETUP_OWNER_CLOSED', 'AGENT_PROFILE_CHANGED',
       'INVALID_SETTINGS', 'LLM_NOT_READY', 'OPERATION_IN_PROGRESS', 'PROVIDER_COMPLETION_UNKNOWN',
       'PDF_FIGURE_OWNER_UNAVAILABLE', 'PDF_FIGURE_CONTEXT_STALE',
       'PDF_FIGURE_CONTEXT_INVALID', 'PDF_FIGURE_CONTEXT_INCOMPLETE', 'PDF_FIGURE_CAPTION_INCOMPLETE',
@@ -3345,6 +3346,11 @@
       PDF_FIGURE_ASSET_BINDING_CONFLICT: 'PDF 图像与当前文献不匹配，请重新准备原图。',
       PDF_FIGURE_ASSET_HASH_MISMATCH: 'PDF 图像已变化，请重新准备原图。',
       PDF_FIGURE_DIGEST_UNAVAILABLE: '当前浏览器无法校验 PDF 图像，请重新打开阅读页。',
+      AI_PRIVACY_ACK_REQUIRED: '请确认隐私风险。',
+      QUICK_SETUP_DIRECTORY_REQUIRED: '请授权保存文件夹。',
+      QUICK_SETUP_CHANGED: '此连接已在另一窗口修改，请重新打开快速配置。',
+      QUICK_SETUP_OWNER_CLOSED: '配置窗口已关闭，设置未提交。',
+      AGENT_PROFILE_CHANGED: 'Agent 连接已在另一窗口修改，请重新测试。',
       AUTH_INVALID: 'API authentication failed',
       HARNESS_NOT_INSTALLED: 'Official DeepSeek Harness installation was not found.',
       HARNESS_VERSION_UNSUPPORTED: 'This Harness version is unsupported by the local bridge.',
@@ -3839,6 +3845,7 @@
     mechanismSessionIdentityProvider = null,
     evidenceProviderRequestTimeoutMs = EVIDENCE_FIRST_POLICY.providerRequestTimeoutMs
   }) {
+    const figureDispatchScheduler = figureConcurrency.createFigureDispatchScheduler();
     let memorySessionCategories = [];
     const documentIdsByHash = new Map();
     let documentMutationTail = Promise.resolve();
@@ -4933,7 +4940,8 @@
       if (!value || (value.admission
           ? !isFigureUserResumeAdmissionActive(value, operationIdentity.internalOperationId)
           : value.expiresAt <= Number(nowImpl())) || taskId !== 'figure_walkthrough' ||
-          message.analysisDepth !== 'standard' || message.type !== 'LLM_ANALYZE_FIGURES' || message.forceRefresh === true ||
+          message.analysisDepth !== 'standard' || message.forceRefresh === true ||
+          !(message.type === 'LLM_ANALYZE_FIGURES' || (message.type === 'LLM_CONTROL_OPERATION' && message.command === 'check-user-resume-source')) ||
           value.operationId !== operationIdentity.publicOperationId || operationIdentity.scope?.senderFrameId !== 0 ||
           operationIdentity.scope?.senderTabId !== value.binding.tabId ||
           operationIdentity.scope?.workspaceLifecycle !== value.binding.workspaceLifecycle ||
@@ -4944,6 +4952,36 @@
         throw figureContractError('FIGURE_REQUEST_REPLAY_AMBIGUOUS');
       assertFigureUserResumeSettled(value, targets);
       return value;
+    }
+
+    function figureBudgetPolicyDigest(settings, taskId) {
+      const taskPolicy = settings?.taskPolicies?.[taskId] || {};
+      return strongSha256({ taskId, taskPolicy,
+        resolvedTokenRule: shared.normalizeTaskTokenRule(taskId, taskPolicy.tokenRule) }, cryptoImpl);
+    }
+
+    function figureLogicalScopeKey(taskId, analysisDepth, sourceDigest, taskPolicyDigest, routeDigest) {
+      // Keep the same durable accounting identity across result-contract upgrades.
+      return strongSha256({ domain: 'figure-logical-budget-v1', sourceDigest,
+        taskId, analysisDepth, routeDigest, taskPolicyDigest }, cryptoImpl);
+    }
+
+    async function checkFigureResumeSource(message, context) {
+      if (!message.figureUserResumeIntent || !Array.isArray(message.figures) ||
+          !message.figures.length || message.figures.length > 50 ||
+          !Array.isArray(message.document?.paragraphs) || !message.document.paragraphs.length) {
+        throw invalidSettings(['figureUserResumeBinding']);
+      }
+      const identity = await figureOperationIdentity(message, context, { requireModern: true });
+      const settings = await shared.loadSettings(storageArea);
+      const taskId = 'figure_walkthrough', route = shared.resolveTaskProfile(settings, taskId);
+      const intent = await resolveFigureUserResumeIntent(message, identity, settings, route, taskId, [], context);
+      await assertFigureOwnerCurrent(context);
+      const source = await figureStableSourceIdentity(message, context, []);
+      const key = await figureLogicalScopeKey(taskId, message.analysisDepth, source,
+        await figureBudgetPolicyDigest(settings, taskId),
+        await strongFigureRouteDigest(settings, route, taskId, { includeEvidenceContract: false }));
+      return { scopeMatches: intent.targets.some(target => !target.scopeKey || target.scopeKey === key) };
     }
 
     async function bindFigureProviderAttemptBudget({
@@ -4990,11 +5028,7 @@
         topologyLimit: plan.explicit ? derived.topologyLimit : 'legacy',
         ...(discoveryPlan ? { discoveryPlan } : {})
       }, cryptoImpl);
-      const taskPolicyDigest = await strongSha256({
-        taskId,
-        taskPolicy,
-        resolvedTokenRule: taskRule
-      }, cryptoImpl);
+      const taskPolicyDigest = await figureBudgetPolicyDigest(settings, taskId);
       // Every value in this projection is consumed only by strongSha256. The
       // resulting digest is the sole value stored or exposed, so credentials
       // and custom header values remain secret while credential/tenant changes
@@ -5039,11 +5073,8 @@
       let logicalActor = '';
       if (durableIdentity) {
         const sourceDigest = sourceIdentityDigest || await figureStableSourceIdentity(message, null, figures);
-        // Accounting identity predates result contracts. Retain its target and
-        // scope so a token upgrade cannot erase consumption or bypass unknowns.
         const accountingRouteDigest = await strongFigureRouteDigest(settings, route, taskId, { includeEvidenceContract: false });
-        const scopeKey = await strongSha256({ domain: 'figure-logical-budget-v1', sourceDigest,
-          taskId, analysisDepth, routeDigest: accountingRouteDigest, taskPolicyDigest }, cryptoImpl);
+        const scopeKey = await figureLogicalScopeKey(taskId, analysisDepth, sourceDigest, taskPolicyDigest, accountingRouteDigest);
         for (const figure of figures) {
           const limitForFigure = deriveFigureProviderAttemptBudget({
             figures: [{ panelCount: pdfDiscoveryWorkflow ? 30 : figure.panelHints?.length || 0 }], analysisDepth,
@@ -6313,192 +6344,208 @@
         typeof providerRawAdapter?.generateJson === 'function'
         ? Object.assign({}, providerRawAdapter, {
           async generateJson(request) {
-            await context.validatePdfFigureDispatch?.(request);
             const dispatchCollector = request?.[FIGURE_PROVIDER_DISPATCH_COLLECTOR];
             const dispatchDigest = await figureProviderDispatchDigest(
               request, figureProviderAttemptBudget
             );
             let retryFrom = null;
             while (true) {
-            // Consent and the original route policy must still hold before reservation.
-            const dispatchSettings = await shared.loadSettings(storageArea);
-            requireLlmReady(dispatchSettings);
-            await assertFigureReusePolicyAdmission(dispatchSettings, {
-              figureReusePolicySignature: await figureReusePolicySignature(settings, resolvedRoute, taskId)
-            }, taskId);
-            const dispatch = await claimFigureProviderAttempt(
-              figureProviderAttemptBudget,
-              figureProviderAttemptBinding,
-              {
-                onProgress: reportTaskProgress,
-                assertTrustedOwnerCurrent: context.assertTrustedOwnerCurrent
-              },
-              dispatchDigest, request.maxOutputTokens, request, retryFrom
-            );
-            if (figureProviderAttemptBudget.abortSignal?.aborted) {
-              await persistFigureProviderAttemptTerminal(
-                figureProviderAttemptBudget, 'CANCELLED'
-              );
-              throw shared.operationError();
-            }
-            figureProviderAttemptBudget.inFlight += 1;
-            try {
-              let response;
-              let providerInvoked = false;
-              let onTerminationReceipt = null;
+              const signal = request.signal || figureProviderAttemptBudget.abortSignal;
+              await waitForOperation(context.figureTerminationOperation);
+              await waitForFigureVisionDecision(figureProviderAttemptBudget.operationId);
+              const release = await figureDispatchScheduler.acquire(route, signal);
+              const finishTransport = outcome => {
+                const sample = release(outcome);
+                if (sample) context.onFigureCapacitySample?.(sample);
+              };
               try {
-                onTerminationReceipt = route.providerId === 'codex-local'
-                  ? await prepareFigureTerminationObserver(context, figureProviderAttemptBudget, dispatch) : null;
-                // Observer capture is asynchronous. Consent and the exact original
-                // route/task policy must still admit this already reserved dispatch.
-                const settingsAdmission = settingsMutationBarrier.snapshot();
-                if (settingsAdmission.pending) throw figureContractError('FIGURE_REUSE_POLICY_CHANGED');
-                const finalDispatchSettings = await shared.loadSettings(storageArea);
-                requireLlmReady(finalDispatchSettings);
-                await assertFigureReusePolicyAdmission(finalDispatchSettings, {
+                if (context.figureTerminationOperation?.paused || figureVisionBarriers.has(figureProviderAttemptBudget.operationId)) continue;
+                if (signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) throw shared.operationError();
+                await context.validatePdfFigureDispatch?.(request);
+                // Consent and the original route policy must still hold before reservation.
+                const dispatchSettings = await shared.loadSettings(storageArea);
+                requireLlmReady(dispatchSettings);
+                await assertFigureReusePolicyAdmission(dispatchSettings, {
                   figureReusePolicySignature: await figureReusePolicySignature(settings, resolvedRoute, taskId)
                 }, taskId);
-                // Diagnostic capture yields after admission. Its failure is not
-                // authorization to dispatch under a retired owner or operation.
-                await assertFigureOwnerCurrent(context);
-                if (context.figureTerminationOperation) {
-                  operationRegistry.assertActive(context.figureTerminationOperation);
-                }
-                if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) {
+                const dispatch = await claimFigureProviderAttempt(
+                  figureProviderAttemptBudget,
+                  figureProviderAttemptBinding,
+                  {
+                    onProgress: reportTaskProgress,
+                    assertTrustedOwnerCurrent: context.assertTrustedOwnerCurrent
+                  },
+                  dispatchDigest, request.maxOutputTokens, request, retryFrom
+                );
+                if (figureProviderAttemptBudget.abortSignal?.aborted) {
+                  await persistFigureProviderAttemptTerminal(
+                    figureProviderAttemptBudget, 'CANCELLED'
+                  );
                   throw shared.operationError();
                 }
-                if (figureProviderAttemptBinding?.executionWindow) {
-                  const claims = figureProviderAttemptBudget.logicalClaims?.get(dispatch.attemptNumber) || [];
-                  const reservation = claims[0]?.executionWindowReservation;
-                  await durableFigureLogicalRequestLedger.inspectWindow(figureProviderAttemptBinding.executionWindow, reservation);
-                  await assertFigureOwnerCurrent(context);
-                  if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) throw shared.operationError();
-                }
-                // No await may separate this settings fence from the transport call.
-                const settingsAtDispatch = settingsMutationBarrier.snapshot();
-                if (settingsAtDispatch.pending || settingsAtDispatch.revision !== settingsAdmission.revision) {
-                  throw figureContractError('FIGURE_REUSE_POLICY_CHANGED');
-                }
-                providerInvoked = true;
-                response = await providerRawAdapter.generateJson({ ...request,
-                  onTerminationReceipt,
-                  onNativeRequestState: onTerminationReceipt?.onNativeRequestState,
-                  onProviderTelemetry: event => {
-                    dispatch.telemetry = event;
-                    request.onProviderTelemetry?.(event);
+                figureProviderAttemptBudget.inFlight += 1;
+                try {
+                  let response;
+                  let providerInvoked = false;
+                  let onTerminationReceipt = null;
+                  try {
+                    onTerminationReceipt = route.providerId === 'codex-local'
+                      ? await prepareFigureTerminationObserver(context, figureProviderAttemptBudget, dispatch) : null;
+                    // Observer capture is asynchronous. Consent and the exact original
+                    // route/task policy must still admit this already reserved dispatch.
+                    const settingsAdmission = settingsMutationBarrier.snapshot();
+                    if (settingsAdmission.pending) throw figureContractError('FIGURE_REUSE_POLICY_CHANGED');
+                    const finalDispatchSettings = await shared.loadSettings(storageArea);
+                    requireLlmReady(finalDispatchSettings);
+                    await assertFigureReusePolicyAdmission(finalDispatchSettings, {
+                      figureReusePolicySignature: await figureReusePolicySignature(settings, resolvedRoute, taskId)
+                    }, taskId);
+                    // Diagnostic capture yields after admission. Its failure is not
+                    // authorization to dispatch under a retired owner or operation.
+                    await assertFigureOwnerCurrent(context);
+                    if (context.figureTerminationOperation) {
+                      operationRegistry.assertActive(context.figureTerminationOperation);
+                    }
+                    if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) {
+                      throw shared.operationError();
+                    }
+                    if (figureProviderAttemptBinding?.executionWindow) {
+                      const claims = figureProviderAttemptBudget.logicalClaims?.get(dispatch.attemptNumber) || [];
+                      const reservation = claims[0]?.executionWindowReservation;
+                      await durableFigureLogicalRequestLedger.inspectWindow(figureProviderAttemptBinding.executionWindow, reservation);
+                      await assertFigureOwnerCurrent(context);
+                      if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) throw shared.operationError();
+                    }
+                    // No await may separate this settings fence from the transport call.
+                    const settingsAtDispatch = settingsMutationBarrier.snapshot();
+                    if (settingsAtDispatch.pending || settingsAtDispatch.revision !== settingsAdmission.revision) {
+                      throw figureContractError('FIGURE_REUSE_POLICY_CHANGED');
+                    }
+                    providerInvoked = true;
+                    response = await providerRawAdapter.generateJson({ ...request,
+                      onTerminationReceipt,
+                      onNativeRequestState: onTerminationReceipt?.onNativeRequestState,
+                      onProviderTelemetry: event => {
+                        dispatch.telemetry = event;
+                        request.onProviderTelemetry?.(event);
+                      }
+                    });
+                    finishTransport(true);
+                  } catch (error) {
+                    finishTransport(providerInvoked ? error : undefined);
+                    if (providerInvoked) onTerminationReceipt?.onNativeRequestFailure?.(error);
+                    if (!providerInvoked) {
+                      // No adapter/transport call occurred. Seal the reservation
+                      // with known zero usage; retain monotonic attempt accounting.
+                      // Do not create a response proof, unknown, or success event.
+                      dispatch.telemetry = { inputTokensProvided: true, outputTokensProvided: true,
+                        inputTokens: 0, outputTokens: 0 };
+                      await settleFigureProviderDispatch(
+                        figureProviderAttemptBudget, figureProviderAttemptBinding, dispatch, 'sealed'
+                      );
+                      throw error;
+                    }
+                    if (!ambiguousFigureTransportFailure(error)) {
+                      const settledStatus = conclusiveFigureHttpRejection(error) ||
+                        conclusiveFigureProviderRejection(error) ||
+                        ['VISION_UNSUPPORTED','HARNESS_IMAGE_UNSUPPORTED'].includes(error?.code)
+                        ? 'sealed' : 'responded';
+                      await settleFigureProviderDispatch(
+                        figureProviderAttemptBudget,
+                        figureProviderAttemptBinding,
+                        dispatch,
+                        settledStatus
+                      );
+                      if (settledStatus === 'responded' && dispatchCollector instanceof Map) {
+                        dispatchCollector.set(dispatch.attemptNumber, {
+                          attemptNumber: dispatch.attemptNumber,
+                          dispatchDigest: dispatch.dispatchDigest
+                        });
+                      }
+                      throw error;
+                    }
+                    const claims = figureProviderAttemptBudget.logicalClaims?.get(dispatch.attemptNumber) || [];
+                    const transportFailure = retryableFigureTransportFailure(error);
+                    try {
+                      if (claims.length) {
+                        await durableFigureLogicalRequestLedger.recordUsage(claims, dispatch.telemetry);
+                        await durableFigureLogicalRequestLedger.settle(claims, 'unknown', '', '', transportFailure);
+                      }
+                      if (transportFailure && claims.length === 1 && figureProviderAttemptBinding) {
+                        await durableFigureProviderAttemptLedger.markTransportUnknown(figureProviderAttemptBinding,
+                          dispatch.attemptNumber, dispatch.dispatchDigest, transportFailure);
+                        if (request[FIGURE_SINGLE_DISPATCH] !== true && !figureProviderAttemptBinding?.userResumed && !retryFrom && !request.signal?.aborted && !figureProviderAttemptBudget.abortSignal?.aborted) {
+                          await assertFigureOwnerCurrent(context);
+                          retryFrom = { claims, dispatch };
+                          const signal = request.signal || figureProviderAttemptBudget.abortSignal;
+                          let onAbort;
+                          try {
+                            reportTaskProgress({ phase: 'figure_transport_retry', retry: 1, maxRetries: 1, waitMs: 800 });
+                            await Promise.race([sleepImpl(800), new Promise((_, reject) => {
+                              onAbort = () => reject(shared.operationError());
+                              if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
+                            })]);
+                          } finally { signal?.removeEventListener('abort', onAbort); }
+                          await assertFigureOwnerCurrent(context);
+                          if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) throw shared.operationError();
+                          continue;
+                        }
+                      }
+                      await persistFigureProviderAttemptTerminal(
+                        figureProviderAttemptBudget, 'FIGURE_REQUEST_REPLAY_AMBIGUOUS'
+                      );
+                    } catch (cleanupError) {
+                      if (cleanupError?.code === 'CANCELLED' || cleanupError?.figureOwnerGuardFailure) throw cleanupError;
+                      stopFigureProviderAttemptBudget(figureProviderAttemptBudget, 'FIGURE_REQUEST_REPLAY_AMBIGUOUS');
+                      const ambiguous = figureAttemptLimitError(
+                        figureProviderAttemptBudget
+                      );
+                      ambiguous.causeCode = error?.code;
+                      for (const field of ['diagnosticStage', 'diagnosticType', 'status', 'requestBytes', 'elapsedMs', 'finishReason'])
+                        if (error?.[field] !== undefined) ambiguous[field] = error[field];
+                      ambiguous.cleanupPending = true;
+                      ambiguous.cleanupCode = cleanupError?.code ===
+                        'FIGURE_PROVIDER_ATTEMPT_LEDGER_UNAVAILABLE'
+                        ? cleanupError.code : 'FIGURE_PROVIDER_ATTEMPT_LEDGER_UNAVAILABLE';
+                      throw ambiguous;
+                    }
+                    const ambiguous = figureAttemptLimitError(figureProviderAttemptBudget);
+                    ambiguous.causeCode = error?.code;
+                    ambiguous.canContinueIndependentTargets = Boolean(figureProviderAttemptBinding?.logicalTargets?.length);
+                    for (const field of ['diagnosticStage', 'diagnosticType', 'status', 'requestBytes', 'elapsedMs', 'finishReason'])
+                      if (error?.[field] !== undefined) ambiguous[field] = error[field];
+                    throw ambiguous;
                   }
-                });
-              } catch (error) {
-                if (providerInvoked) onTerminationReceipt?.onNativeRequestFailure?.(error);
-                if (!providerInvoked) {
-                  // No adapter/transport call occurred. Seal the reservation
-                  // with known zero usage; retain monotonic attempt accounting.
-                  // Do not create a response proof, unknown, or success event.
-                  dispatch.telemetry = { inputTokensProvided: true, outputTokensProvided: true,
-                    inputTokens: 0, outputTokens: 0 };
-                  await settleFigureProviderDispatch(
-                    figureProviderAttemptBudget, figureProviderAttemptBinding, dispatch, 'sealed'
-                  );
-                  throw error;
-                }
-                if (!ambiguousFigureTransportFailure(error)) {
-                  const settledStatus = conclusiveFigureHttpRejection(error) ||
-                    conclusiveFigureProviderRejection(error) ||
-                    ['VISION_UNSUPPORTED','HARNESS_IMAGE_UNSUPPORTED'].includes(error?.code)
-                    ? 'sealed' : 'responded';
-                  await settleFigureProviderDispatch(
-                    figureProviderAttemptBudget,
-                    figureProviderAttemptBinding,
-                    dispatch,
-                    settledStatus
-                  );
-                  if (settledStatus === 'responded' && dispatchCollector instanceof Map) {
+                  try {
+                    await settleFigureProviderDispatch(
+                      figureProviderAttemptBudget,
+                      figureProviderAttemptBinding,
+                      dispatch,
+                      'responded'
+                    );
+                  } catch (error) {
+                    // Navigation may retire the ledger while the provider is in
+                    // flight. Preserve the owner's cancellation instead of
+                    // reporting a storage/replay failure for a retired document.
+                    // The successful path keeps its existing post-write guard.
+                    await assertFigureOwnerCurrent(context);
+                    throw error;
+                  }
+                  if (dispatchCollector instanceof Map) {
                     dispatchCollector.set(dispatch.attemptNumber, {
                       attemptNumber: dispatch.attemptNumber,
                       dispatchDigest: dispatch.dispatchDigest
                     });
                   }
-                  throw error;
+                  await assertFigureOwnerCurrent(context);
+                  return response;
+                } finally {
+                  figureProviderAttemptBudget.inFlight -= 1;
+                  figureProviderAttemptBudget.lastTouchedAt = Number(nowImpl());
                 }
-                const claims = figureProviderAttemptBudget.logicalClaims?.get(dispatch.attemptNumber) || [];
-                const transportFailure = retryableFigureTransportFailure(error);
-                try {
-                  if (claims.length) {
-                    await durableFigureLogicalRequestLedger.recordUsage(claims, dispatch.telemetry);
-                    await durableFigureLogicalRequestLedger.settle(claims, 'unknown', '', '', transportFailure);
-                  }
-                  if (transportFailure && claims.length === 1 && figureProviderAttemptBinding) {
-                    await durableFigureProviderAttemptLedger.markTransportUnknown(figureProviderAttemptBinding,
-                      dispatch.attemptNumber, dispatch.dispatchDigest, transportFailure);
-                    if (request[FIGURE_SINGLE_DISPATCH] !== true && !figureProviderAttemptBinding?.userResumed && !retryFrom && !request.signal?.aborted && !figureProviderAttemptBudget.abortSignal?.aborted) {
-                      await assertFigureOwnerCurrent(context);
-                      retryFrom = { claims, dispatch };
-                      const signal = request.signal || figureProviderAttemptBudget.abortSignal;
-                      let onAbort;
-                      try {
-                        reportTaskProgress({ phase: 'figure_transport_retry', retry: 1, maxRetries: 1, waitMs: 800 });
-                        await Promise.race([sleepImpl(800), new Promise((_, reject) => {
-                          onAbort = () => reject(shared.operationError());
-                          if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
-                        })]);
-                      } finally { signal?.removeEventListener('abort', onAbort); }
-                      await assertFigureOwnerCurrent(context);
-                      if (request.signal?.aborted || figureProviderAttemptBudget.abortSignal?.aborted) throw shared.operationError();
-                      continue;
-                    }
-                  }
-                  await persistFigureProviderAttemptTerminal(
-                    figureProviderAttemptBudget, 'FIGURE_REQUEST_REPLAY_AMBIGUOUS'
-                  );
-                } catch (cleanupError) {
-                  if (cleanupError?.code === 'CANCELLED' || cleanupError?.figureOwnerGuardFailure) throw cleanupError;
-                  stopFigureProviderAttemptBudget(figureProviderAttemptBudget, 'FIGURE_REQUEST_REPLAY_AMBIGUOUS');
-                  const ambiguous = figureAttemptLimitError(
-                    figureProviderAttemptBudget
-                  );
-                  ambiguous.causeCode = error?.code;
-                  for (const field of ['diagnosticStage', 'diagnosticType', 'status', 'requestBytes', 'elapsedMs', 'finishReason'])
-                    if (error?.[field] !== undefined) ambiguous[field] = error[field];
-                  ambiguous.cleanupPending = true;
-                  ambiguous.cleanupCode = cleanupError?.code ===
-                    'FIGURE_PROVIDER_ATTEMPT_LEDGER_UNAVAILABLE'
-                    ? cleanupError.code : 'FIGURE_PROVIDER_ATTEMPT_LEDGER_UNAVAILABLE';
-                  throw ambiguous;
-                }
-                const ambiguous = figureAttemptLimitError(figureProviderAttemptBudget);
-                ambiguous.causeCode = error?.code;
-                ambiguous.canContinueIndependentTargets = Boolean(figureProviderAttemptBinding?.logicalTargets?.length);
-                for (const field of ['diagnosticStage', 'diagnosticType', 'status', 'requestBytes', 'elapsedMs', 'finishReason'])
-                  if (error?.[field] !== undefined) ambiguous[field] = error[field];
-                throw ambiguous;
+              } finally {
+                release();
               }
-              try {
-                await settleFigureProviderDispatch(
-                  figureProviderAttemptBudget,
-                  figureProviderAttemptBinding,
-                  dispatch,
-                  'responded'
-                );
-              } catch (error) {
-                // Navigation may retire the ledger while the provider is in
-                // flight. Preserve the owner's cancellation instead of
-                // reporting a storage/replay failure for a retired document.
-                // The successful path keeps its existing post-write guard.
-                await assertFigureOwnerCurrent(context);
-                throw error;
-              }
-              if (dispatchCollector instanceof Map) {
-                dispatchCollector.set(dispatch.attemptNumber, {
-                  attemptNumber: dispatch.attemptNumber,
-                  dispatchDigest: dispatch.dispatchDigest
-                });
-              }
-              await assertFigureOwnerCurrent(context);
-              return response;
-            } finally {
-              figureProviderAttemptBudget.inFlight -= 1;
-              figureProviderAttemptBudget.lastTouchedAt = Number(nowImpl());
-            }
             }
           }
         })
@@ -6782,24 +6829,46 @@
             ['entryId','attachmentId','documentHash','generation'].some(key => hint[key] !== htmlIdentity[key])) throw invalidSettings(['libraryHtmlIdentity']);
         document = { ...document, title: htmlIdentity.title, doi: htmlIdentity.doi, canonicalUrl: htmlIdentity.canonicalUrl || '', url: '' };
       }
-      const documentHash = htmlIdentity?.documentHash || nativeIdentity?.documentHash || paragraphDocumentHash;
+      let savedIdentity = null;
+      if (document?.savedWorkspaceIdentity !== undefined || context.verifySavedReaderIdentity) {
+        if (typeof context.verifySavedReaderIdentity !== 'function') throw invalidSettings(['savedWorkspaceIdentity']);
+        savedIdentity = await context.verifySavedReaderIdentity();
+        const hint = document.savedWorkspaceIdentity;
+        if (hint && ['workspaceId','workspaceGeneration','documentHash'].some(key => hint[key] !== savedIdentity[key])) throw invalidSettings(['savedWorkspaceIdentity']);
+        document = { ...document, title: savedIdentity.title, canonicalUrl: savedIdentity.canonicalUrl, doi: savedIdentity.doi };
+      }
+      let annotationSourceUrl = '';
+      if (!savedIdentity && !htmlIdentity && !nativeIdentity && document?.annotationSourceUrl) {
+        const ownerUrl = shared.normalizeAnnotationSourceUrl(context.senderUrl);
+        if (context.trustedExtensionSender !== true || !ownerUrl ||
+            shared.normalizeAnnotationSourceUrl(document.annotationSourceUrl) !== ownerUrl ||
+            typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings(['annotationSourceUrl']);
+        await context.assertTrustedOwnerCurrent();
+        annotationSourceUrl = ownerUrl;
+      }
+      const documentHash = savedIdentity?.documentHash || htmlIdentity?.documentHash || nativeIdentity?.documentHash || paragraphDocumentHash;
       const computedDocumentId = await shared.createDocumentId({
         title: document?.title,
         canonicalUrl: document?.canonicalUrl || document?.url,
         doi: document?.doi,
+        ...(annotationSourceUrl ? { annotationSourceUrl } : {}),
         paragraphs
       });
       const requestedDocumentId = String(document?.documentId || '').trim();
       const previousDocumentHash = String(document?.previousDocumentHash || '').toLowerCase();
-      let documentId = htmlIdentity?.documentId || nativeIdentity?.documentId || computedDocumentId;
-      if (!htmlIdentity && !nativeIdentity && requestedDocumentId && /^[a-f0-9]{64}$/.test(previousDocumentHash)) {
+      let documentId = savedIdentity?.documentId || htmlIdentity?.documentId || nativeIdentity?.documentId || computedDocumentId;
+      if (!savedIdentity && !htmlIdentity && !nativeIdentity && requestedDocumentId && /^[a-f0-9]{64}$/.test(previousDocumentHash)) {
         try {
           const existing = await documentStore.getDocument(requestedDocumentId);
           const knownHashes = new Set([
             existing?.documentHash,
             ...(Array.isArray(existing?.documentHashes) ? existing.documentHashes : [])
           ].filter(Boolean));
-          if (existing && knownHashes.has(previousDocumentHash)) {
+          const sameSource = !annotationSourceUrl || (existing?.annotationSourceUrl
+            ? shared.normalizeAnnotationSourceUrl(existing.annotationSourceUrl) === annotationSourceUrl
+            : !new URL(annotationSourceUrl).search && !new URL(annotationSourceUrl).hash &&
+              shared.normalizeAnnotationSourceUrl(existing?.canonicalUrl) === annotationSourceUrl);
+          if (existing && sameSource && knownHashes.has(previousDocumentHash)) {
             documentId = requestedDocumentId;
           }
         } catch (_) {
@@ -6812,6 +6881,7 @@
         schemaVersion: 1,
         documentId,
         title: document?.title || '',
+        ...(annotationSourceUrl ? { annotationSourceUrl } : {}),
         canonicalUrl: document?.canonicalUrl || document?.url || '',
         studyType: shared.isStudyType(legacyStudyType) ? legacyStudyType : null,
         annotations: [],
@@ -6945,9 +7015,9 @@
       }
     }
 
-    async function prepareDocument(settings, document) {
+    async function prepareDocument(settings, document, context = {}) {
       requireLlmReady(settings);
-      const stored = await prepareStoredDocument(settings, document);
+      const stored = await prepareStoredDocument(settings, document, context);
       const { documentId, documentHash, record, profile, paragraphs } = stored;
       const composition = await composeCategories(settings, profile);
       return {
@@ -8860,7 +8930,20 @@
           recoveryBatchCount: batches.length,
           recognizedPanelCount: recovered.panels.length
         });
-        if (recovered.panels.length) {
+        if (initialResult && !resumeRecoveryProposal && recovered.panels.length) {
+          // This exact checkpoint has already passed source, policy and receipt validation.
+          // Writing its normalized form again can conflict at the same coverage rank.
+          durableSavedPanelCount = recovered.panels.length;
+          for (const panel of recovered.panels) {
+            acknowledgedFactPanels.set(panel.panel, JSON.stringify([visualInput, panel]));
+          }
+          await progress({
+            phase: 'figure_panel_recovery_checkpoint', ...progressDetails,
+            ...figureCheckpointFields(recovered, recoveryInputMode(visualInput), checkpointPanels),
+            recognizedPanelCount: recovered.panels.length, savedPanelCount: durableSavedPanelCount,
+            checkpointStatus: 'saved'
+          });
+        } else if (recovered.panels.length) {
           await persistValidatedFigureCheckpoint({
             // Recovered Panels still need a fresh Figure-level synthesis. An
             // overview inherited from the incomplete whole response must not
@@ -10096,8 +10179,10 @@
       const analysisDepth = message.analysisDepth;
       const operationId = operationIdentity.publicOperationId;
       const figureProgressState = { active: null };
+      let validatedCapacitySample = null;
       const figureProgressContext = {
         ...context,
+        onFigureCapacitySample: sample => { validatedCapacitySample = sample; },
         figureTerminationOperation: operation,
         figureTerminationIdentity: operationIdentity,
         onProgress: event => context.onProgress?.({
@@ -10464,12 +10549,15 @@
         // passed validation. Cache-proof recovery below is deliberately later.
         if (!recoverCacheProof) {
           await boundFigureProviderAttemptBudget.confirmResumeProof();
-          if(figureResumeCheckpoint.visionFallback===true && resumeRecord.figure.images.length &&
-              (!isPdfSender || await historicalPdfTextContinuation(figureResumeCheckpoint.figureResult?.pdfTextContinuation,pdfValidated[0]))) {
-            // Restore exact saved Panel bytes only after both scientific shape
-            // validation and the durable ledger's exact checkpoint proof.
-            const value=prevalidatedResume.complete || prevalidatedResume.partial;
-            value.panels=value.panels.map(panel=>figureResumeCheckpoint.figureResult.panels.find(saved=>saved.panel===panel.panel) || panel);
+          const historicalText = figureResumeCheckpoint.visionFallback === true && resumeRecord.figure.images.length;
+          if ((prevalidatedResume.partial || historicalText) && (!historicalText || !isPdfSender ||
+              await historicalPdfTextContinuation(figureResumeCheckpoint.figureResult?.pdfTextContinuation, pdfValidated[0]))) {
+            // Source and scientific shape, followed by the ledger proof, have been checked.
+            // Keep signed Panel records byte-for-byte when the next checkpoint adds other Panels.
+            const value = prevalidatedResume.complete || prevalidatedResume.partial;
+            const savedPanels = figureResumeCheckpoint.figureResult.panels;
+            value.panels = value.panels.map(panel => savedPanels.find(saved =>
+              saved.panel === panel.panel && (!prevalidatedResume.partial || saved.status !== 'not_identifiable')) || panel);
           }
         }
       }
@@ -10581,6 +10669,7 @@
 
       for (let index = 0; index < records.length; index += 1) {
         const record = records[index];
+        validatedCapacitySample = null;
         if (boundFigureProviderAttemptBudget.durableBinding) {
           boundFigureProviderAttemptBudget.durableBinding.activeLogicalTargets =
             boundFigureProviderAttemptBudget.durableBinding.logicalTargets.filter(entry => entry.figureId === record.figure.figureId);
@@ -10650,7 +10739,7 @@
               {...rawFigures.find(value=>value.figureId===record.figure.figureId),panelHints:record.figure.panelHints},reason),
             // Keep automatic vision-to-text fallback on its existing ordered
             // path. Prefetch must not introduce mixed-modality provenance.
-            panelConcurrency: message?.parallelBatch === true ||
+            panelConcurrency: Boolean(message.figureUserResumeIntent) || message.figureExecutionWindow !== undefined ||
               (route.capabilityMode === 'vision' && record.figure.images.length > 0 &&
                 task.taskPolicy?.allowTextFallback === true) ? 1
               : ['deepseek', 'codex-local'].includes(route.providerId) ? 2 : TASK_CONCURRENCY.figure
@@ -10712,6 +10801,9 @@
           pdfEvidenceBinding: record.figure.pdfEvidenceBinding
         };
         figureResults.push(result);
+        const intendedInputMode = explicitTextOnly ? 'caption_context' : record.requestedInputMode;
+        if (!result.cacheHit && result.inputMode === intendedInputMode && !result.unresolvedPanels?.length &&
+            !result.panelCoverage?.missingPanels?.length) validatedCapacitySample?.();
         progress({
           phase: 'figure',
           ...progressBase,
@@ -10737,6 +10829,7 @@
         totalFigures: figureResults.length,
         cacheHits,
         visionFallbacks,
+        figureBatchConcurrency: figureDispatchScheduler.limit(route),
         analysisDepth,
         operationId,
         providerId: route.providerId,
@@ -16006,6 +16099,7 @@
         if (command === 'request-vision-text-confirmation') return requestInitialFigureTextConfirmation(message, context);
         if (command === 'figure-vision-decision') return decideFigureVisionConfirmation(message, context);
         if (command === 'authorize-user-resume') return issueFigureUserResumeIntent(message, context);
+        if (command === 'check-user-resume-source') return checkFigureResumeSource(message, context);
         const explicitMechanismScope = message?.operationScope === 'mechanism';
         const baseControlCommand = [
           'pause', 'resume', 'cancel', 'release', 'status'
@@ -18694,6 +18788,108 @@
         return testCategoryRegex(category, message.testText);
       }
 
+      if (message.type === 'LLM_QUICK_SETUP_SAVE') {
+        const requireRisk = async () => {
+          const risk = (await storageGetOne('brevessAiPrivacyAcknowledgementV1'))?.brevessAiPrivacyAcknowledgementV1;
+          if (message.consentGranted !== true || risk?.version !== 1 || risk.acknowledged !== true ||
+              !Number.isSafeInteger(risk.updatedAt) || risk.updatedAt <= 0) {
+            throw Object.assign(new Error('请确认隐私风险。'), { code: 'AI_PRIVACY_ACK_REQUIRED' });
+          }
+        };
+        const requireDirectory = async () => {
+          requireDirectorySync('status');
+          if ((await directorySync.status()).permission !== 'granted') {
+            throw Object.assign(new Error('请授权保存文件夹。'), { code: 'QUICK_SETUP_DIRECTORY_REQUIRED' });
+          }
+        };
+        await requireRisk();
+        await requireDirectory();
+        const original = await shared.loadSettings(storageArea);
+        const previous = cloneJsonLike(original.profiles?.[message.profile?.id] || null);
+        if (previous && !String(message.profile?.config?.apiKey || '').trim() &&
+            (message.profile?.providerId !== previous.providerId ||
+              String(message.profile?.config?.baseUrl ?? previous.config?.baseUrl ?? '').trim() !== String(previous.config?.baseUrl || '').trim())) {
+          throw invalidSettings(['apiKey']);
+        }
+        const { profileId, profile } = upsertProfile(original, message);
+        if (!['openai', 'anthropic', 'gemini', 'deepseek', 'openai-compatible'].includes(profile.providerId)) {
+          throw invalidSettings(['providerId']);
+        }
+        const baseUrl = String(profile.config.baseUrl || '').trim();
+        if (baseUrl) {
+          let url; try { url = new URL(baseUrl); } catch (_) {}
+          if (!url || url.username || url.password || url.search || url.hash ||
+              !(url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) {
+            throw invalidSettings(['baseUrl']);
+          }
+        }
+        // Probe a private draft. A bad key or unreachable service must not replace
+        // a working global profile, opt into AI, or leave a half-created profile.
+        const tested = await runConnectionTest(profileId, profile, null, ['connectivity']);
+        return serializeSettingsMutation(async () => {
+          await requireRisk(); await requireDirectory();
+          if (context.assertQuickSetupCurrent) await context.assertQuickSetupCurrent();
+          const latest = await shared.loadSettings(storageArea);
+          if (!jsonLikeEqual(latest.profiles?.[profileId] || null, previous)) {
+            throw Object.assign(new Error('此连接已在另一窗口修改。'), { code: 'QUICK_SETUP_CHANGED' });
+          }
+          upsertProfile(latest, { profile: { ...profile, id: profileId } });
+          latest.globalProfileId = profileId;
+          latest.consentGranted = true;
+          latest.mode = 'llm';
+          // Keep existing task-specific routes, voice settings and analysis preferences.
+          const saved = await saveRouterSettings(latest);
+          return { ...(await publicState(saved)), connected: tested.connected };
+        });
+      }
+
+      if (message.type === 'LLM_CONNECT_AGENT') {
+        const providerId = message.providerId;
+        if (!['codex-local', 'deepseek-harness'].includes(providerId)) throw invalidSettings(['providerId']);
+        const requireRisk = async () => {
+          const risk = (await storageGetOne('brevessAiPrivacyAcknowledgementV1'))?.brevessAiPrivacyAcknowledgementV1;
+          if (risk?.version !== 1 || risk.acknowledged !== true || !Number.isSafeInteger(risk.updatedAt) || risk.updatedAt <= 0) {
+            throw Object.assign(new Error('请确认隐私风险。'), { code: 'AI_PRIVACY_ACK_REQUIRED' });
+          }
+        };
+        await requireRisk();
+        const original = await shared.loadSettings(storageArea);
+        const existingId = orderedProfileIds(original).find(id => original.profiles[id]?.providerId === providerId && shared.isConfiguredProfile(original.profiles[id]));
+        let profileId = existingId || (providerId === 'deepseek-harness' ? 'profile_agent_dsh' : 'profile_agent_codex');
+        if (!existingId && original.profiles[profileId]) profileId = duplicateProfileId(original, profileId);
+        let model = original.profiles[existingId]?.config?.model || 'auto';
+        if (providerId === 'deepseek-harness') {
+          if (!harnessClient?.listModels) throw Object.assign(new Error('Harness bridge unavailable'), { code: 'HARNESS_START_FAILED' });
+          const catalog = await harnessClient.listModels({ timeoutMs: 20000 });
+          const models = (catalog.models || []).filter(item => typeof item?.id === 'string' && item.id.trim());
+          if (existingId ? !models.some(item => item.id === model) : !models.length) {
+            throw Object.assign(new Error('Harness model unavailable'), { code: 'HARNESS_MODEL_UNAVAILABLE' });
+          }
+          if (!existingId) model = models.find(item => item.id === 'deepseek-flash')?.id || models[0].id;
+        }
+        const profile = existingId ? cloneJsonLike(original.profiles[existingId]) : shared.normalizeProfile(profileId, {
+          name: providerId === 'deepseek-harness' ? 'DeepSeek Harness · Agent' : 'Codex · Agent',
+          providerId, config: { model, reasoningEffort: 'auto' }
+        });
+        // A reachable MCP service does not prove this account can answer questions.
+        // Test a synthetic text request before publishing a selectable model.
+        const tested = await runConnectionTest(profileId, profile, undefined, ['connectivity']);
+        return serializeSettingsMutation(async () => {
+          await requireRisk();
+          const latest = await shared.loadSettings(storageArea);
+          const previous = original.profiles[profileId] || null;
+          if (!jsonLikeEqual(latest.profiles[profileId] || null, previous)) {
+            throw Object.assign(new Error('Agent profile changed during connection'), { code: 'AGENT_PROFILE_CHANGED' });
+          }
+          // Concurrent connection clicks must not create duplicate profiles.
+          const concurrentId = !existingId && orderedProfileIds(latest).find(id => latest.profiles[id]?.providerId === providerId && shared.isConfiguredProfile(latest.profiles[id]));
+          if (concurrentId) throw Object.assign(new Error('Agent profile changed during connection'), { code: 'AGENT_PROFILE_CHANGED' });
+          if (!existingId) upsertProfile(latest, { profile: { ...profile, id: profileId } });
+          const saved = existingId ? latest : await saveRouterSettings(latest);
+          return { ...(await publicState(saved)), profile: publicProfileResult(profileId, saved.profiles[profileId]), connected: tested.connected };
+        });
+      }
+
       if (message.type === 'LLM_SAVE_PROFILE') {
         return serializeSettingsMutation(async () => {
           const settings = await shared.loadSettings(storageArea);
@@ -19192,6 +19388,20 @@
         };
       }
 
+      if (message.type === 'DOCUMENT_FIND_ANNOTATED_SOURCE') {
+        // The browser sender owns the URL; a web page cannot request another
+        // conversation's annotations by putting its URL into a message.
+        if (context.trustedExtensionSender !== true || typeof context.assertTrustedOwnerCurrent !== 'function')
+          throw invalidSettings(['owner']);
+        const source = new URL(String(context.senderUrl || ''));
+        if (!['http:', 'https:', 'file:'].includes(source.protocol)) throw invalidSettings(['sourceUrl']);
+        if (shared.normalizeAnnotationSourceUrl(message.sourceUrl) !== shared.normalizeAnnotationSourceUrl(source.href)) throw invalidSettings(['sourceUrl']);
+        await context.assertTrustedOwnerCurrent();
+        const record = await documentStore.findAnnotatedSource(source.href);
+        await context.assertTrustedOwnerCurrent();
+        return { record };
+      }
+
       if (message.type === 'DOCUMENT_GET') {
         const documentId = String(message.documentId || '').trim();
         if (!documentId) throw invalidSettings(['documentId']);
@@ -19279,7 +19489,7 @@
 
       if (message.type === 'LLM_PREPARE_DOCUMENT') {
         const settings = await shared.loadSettings(storageArea);
-        const prepared = await prepareDocument(settings, message.document);
+        const prepared = await prepareDocument(settings, message.document, context);
         return {
           documentId: prepared.documentId,
           documentHash: prepared.documentHash,
@@ -19396,7 +19606,7 @@
           archiveIdentity = { documentId: proof.documentId, documentHash: proof.documentHash, canonicalUrl };
         }
         const prepared = await prepareDocument(settings, archiveIdentity
-          ? { ...message.document, canonicalUrl: archiveIdentity.canonicalUrl } : message.document);
+          ? { ...message.document, canonicalUrl: archiveIdentity.canonicalUrl } : message.document, context);
         if (archiveIdentity && prepared.documentId !== archiveIdentity.documentId) {
           throw shared.operationError('Archive document identity changed','TASK_COMMIT_UNCONFIRMED');
         }
@@ -19862,7 +20072,7 @@
             settings, message, requestedParagraphIds
           )
           : await prepareDocument(settings, archiveIdentity
-            ? { ...message.document, canonicalUrl: archiveIdentity.canonicalUrl } : message.document);
+            ? { ...message.document, canonicalUrl: archiveIdentity.canonicalUrl } : message.document, context);
         if (archiveIdentity && prepared.documentId !== archiveIdentity.documentId) {
           throw shared.operationError('Navigation archive identity changed', 'TASK_COMMIT_UNCONFIRMED');
         }

@@ -15,7 +15,8 @@
     'invoke_action', 'import_project', 'export_project', 'import_asset',
     'read_asset', 'locate_source', 'clipboard', 'local_data', 'data_directory',
     'radar_list', 'radar_get', 'radar_save', 'radar_check',
-    'radar_backfill_abstracts', 'radar_mark_read'
+    'radar_backfill_abstracts', 'radar_mark_read',
+    'reading_list_tabs', 'reading_inspect', 'reading_status', 'reading_open', 'reading_start', 'reading_cancel', 'reading_bundle'
   ]);
 
   if (!root?.chrome?.runtime?.id) return;

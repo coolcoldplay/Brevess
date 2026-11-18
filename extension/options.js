@@ -275,10 +275,12 @@ const USER_DATA_ACTION_IDS = [
 ];
 
 document.addEventListener('DOMContentLoaded', async () => {
+  if (globalThis.BrevessQuickSetup?.isRoute()) return;
   initializeTtsSettings();
   initializeLiteratureUrlSettings();
   organizeSettingsContent();
   globalThis.BrevessSettingsUI?.mount({ navigate: activateSettingsPage, savePreferences: () => persistForm(false) });
+  void globalThis.BrevessQuickSetup?.maybeOpen().catch(() => {});
   if (location.hash === '#onboarding') enterOnboardingLayout();
   bindEvents();
   activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
@@ -1170,7 +1172,7 @@ function activateSettingsPage(page, { updateHash = true, animate = true } = {}) 
 }
 
 async function callBackground(message) {
-  if (["LLM_SAVE_PROFILE","LLM_DUPLICATE_PROFILE","LLM_DELETE_PROFILE","LLM_TEST_PROFILE","CODEX_LOCAL_LOGIN_START"].includes(message?.type)) await globalThis.BrevessRiskGate.requireAcknowledgement();
+  if (["LLM_SAVE_PROFILE","LLM_CONNECT_AGENT","LLM_DUPLICATE_PROFILE","LLM_DELETE_PROFILE","LLM_TEST_PROFILE","CODEX_LOCAL_LOGIN_START"].includes(message?.type)) await globalThis.BrevessRiskGate.requireAcknowledgement();
   const response = await chrome.runtime.sendMessage(message);
   if (!response?.success) {
     const error = new Error(response?.error?.message || '操作失败');
@@ -1618,23 +1620,8 @@ async function initializeOnboarding() {
 }
 
 async function reopenOnboarding() {
-  if (onboardingUi.pending) return;
-  onboardingUi.pending = true;
-  onboardingUi.finishPrepared = false;
-  try {
-    onboardingUi.state = await callBackground({ type: 'ONBOARDING_RESTART' });
-    onboardingUi.step = 'storage';
-    enterOnboardingLayout();
-    await reconcileOnboardingConfiguration();
-    renderOnboarding();
-    activateSettingsPage('overview');
-    document.getElementById('onboardingGuide').scrollIntoView({ block: 'start' });
-  } catch (error) {
-    showStatus(`无法重新打开新手引导：${friendlyError(error)}`, 'error');
-  } finally {
-    onboardingUi.pending = false;
-    renderOnboarding();
-  }
+  try { await globalThis.BrevessQuickSetup.open(); }
+  catch (_) { showStatus('无法打开快速配置，请稍后重试。', 'error'); }
 }
 
 async function skipOnboardingStep() {

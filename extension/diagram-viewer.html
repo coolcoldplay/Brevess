@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>示意图阅读 · BREVESS</title>
+  <link rel="stylesheet" href="core/chat-diagram-viewer.css">
+  <link rel="stylesheet" href="diagram-viewer.css">
+</head>
+<body>
+  <header>
+    <div class="heading"><small>BREVESS · 示意图阅读</small><h1 id="title">正在打开示意图…</h1></div>
+    <div class="tools"><button id="fullscreen" title="全屏查看">全屏</button><button id="close" aria-label="关闭示意图阅读" title="关闭 · Esc">✕</button></div>
+  </header>
+  <main id="diagram" aria-label="完整示意图"></main>
+  <p id="status" role="status">正在渲染…</p>
+  <script src="vendor/mermaid/mermaid.min.js"></script>
+  <script src="core/mechanism-pending-preview.js"></script>
+  <script src="core/chat-diagram-viewer.js"></script>
+  <script src="diagram-viewer.js"></script>
+</body>
+</html>

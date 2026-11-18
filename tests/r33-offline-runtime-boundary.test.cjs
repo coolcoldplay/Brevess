@@ -1,22 +1,23 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const api=require('../extension/core/offline-article-workspace.js'),publicApi=require('../extension/core/background-router.js');
+const api=require('../extension/core/offline-article-workspace.js'),publicApi=require('../extension/core/background-router.js'),savedApi=require('../extension/core/saved-reader-runtime.js');
+Object.assign(globalThis.SciLLM ||= {},api);
 const source=fs.readFileSync(require.resolve('../extension/background.js'),'utf8'),id='a'.repeat(32),W='workspace:'+'a'.repeat(64),base=`chrome-extension://${id}/`,reader=base+'offline-reader.html?workspaceId='+encodeURIComponent(W)+'&generation=2';
 function fn(name){const start=source.indexOf('function '+name+'('),asyncStart=source.lastIndexOf('async ',start);const end=source.indexOf('\n}',start);assert.ok(start>=0&&end>start);return source.slice(asyncStart===start-6?asyncStart:start,end+2);}
 function fixture({changedTab=false,readGeneration=2,currentTabUrl=null,tabUnavailable=false}={}){
  let tabReads=0,assetReads=0,mutations=0,routerCalls=0;
  const workspace={workspaceId:W,workspaceGeneration:readGeneration,title:'saved',canonicalUrl:'https://paper.test/a'},tab={id:7,windowId:3,url:reader};
  const assets=[{workspaceId:W,workspaceGeneration:2,relativePath:'article/offline-snapshot.html',content:'<html>legacy source</html>',revision:1,contentHash:'saved'},{workspaceId:W,workspaceGeneration:2,relativePath:'article/structure.json',content:{documentId:'saved-doc',documentHash:'hash'}}];
- const store={getWorkspace:async()=>structuredClone(workspace),readPublicAssetCandidates:async()=>{assetReads++;return structuredClone(assets);},pageTurns:async()=>({items:[],hasMore:false})};
+ const store={getWorkspace:async()=>structuredClone(workspace),getAsset:async(id,path)=>structuredClone(assets.find(a=>a.relativePath===path)),readPublicAssetCandidates:async()=>{assetReads++;return structuredClone(assets);},pageTurns:async()=>({items:[],hasMore:false})};
  const box={URL,Promise,Number,String,Error,Object,Set,Date,Math,setTimeout,clearTimeout,
- SciLLM:{...api,...publicApi},articleWorkspaceStore:store,
- chrome:{runtime:{id,getURL:path=>base+path},tabs:{get:async()=>{tabReads++;return tabUnavailable?null:currentTabUrl?{...tab,url:currentTabUrl}:changedTab&&tabReads>1?{...tab,url:'https://other.test/'}:tab;},query:async()=>tabUnavailable?[]:[currentTabUrl?{...tab,url:currentTabUrl}:tab]}},
+ SciLLM:{...api,...publicApi,...savedApi,...require('../extension/core/credential-boundary.js')},articleWorkspaceStore:store,credentialStorageReady:Promise.resolve(),
+ chrome:{runtime:{id,getURL:path=>base+path},tabs:{sendMessage:async()=>({success:true,navigationIdentity:reader,binding:{workspaceId:W,workspaceGeneration:2,documentHash:'hash'}}),get:async()=>{tabReads++;return tabUnavailable?null:currentTabUrl?{...tab,url:currentTabUrl}:changedTab&&tabReads>1?{...tab,url:'https://other.test/'}:tab;},query:async()=>tabUnavailable?[]:[currentTabUrl?{...tab,url:currentTabUrl}:tab]}},
  createFigureTerminationTransport:()=>({}),BrevessRadar:{createRadarOwnerGuard:()=>()=>{}},
  aggregateNotificationTokenUsage:()=>null,resolveTokenUsageFeature:()=>null,publishCodexReverseEvent:async()=>{},
  llmRouter:{async handle(){routerCalls++;return{success:true,data:{syntheticBoundary:true}};}},beginToolbarSidePanelOpen(){mutations++;throw Error('NO_PANEL_OPEN_EXPECTED');}};
  vm.createContext(box);const start=source.indexOf("  if (message?.type === 'OFFLINE_ARTICLE_GET_SNAPSHOT'");const end=source.indexOf('  if (independentPageTools.handles(',start);
  vm.runInContext(fn('normalizedWarmUrl')+'\n'+fn('readOfflineArticleForTab')+'\nfunction handler(message,sender,sendResponse){'+source.slice(start,end)+'}\n'+fn('handleRoutedMessage'),box);
- return{box,tab,sender:{id,url:reader,frameId:0,tab},stats:()=>({tabReads,assetReads,mutations,routerCalls}),handle:(message,sender)=>new Promise(resolve=>box.handler(message,sender,resolve))};
+ return{box,tab,sender:{id,url:reader,frameId:0,documentId:'browser-doc',tab},stats:()=>({tabReads,assetReads,mutations,routerCalls}),handle:(message,sender)=>new Promise(resolve=>box.handler(message,sender,resolve))};
 }
 test('actual runtime saved-reader handler accepts only the exact owned top-level reader or popup binding',async()=>{
  const f=fixture(),result=await f.handle({type:'OFFLINE_ARTICLE_GET_SNAPSHOT',readerUrl:reader},f.sender);
@@ -35,15 +36,17 @@ test('exact reader URL, workspace generation and tab navigation are rechecked be
  const f=fixture(),result=await f.handle({type:'OFFLINE_ARTICLE_GET_SNAPSHOT',tabId:7,readerUrl:reader.replace('generation=2','generation=3')},{id,url:base+'popup.html'});
  assert.equal(result.success,false);assert.equal(result.error.code,'OFFLINE_READER_CHANGED');assert.equal(f.stats().assetReads,0);
 });
-test('actual central router rejects offline model and store mutations before provider or writer execution',async()=>{
- for(const type of ['LLM_ANALYZE_FIGURES','LLM_SEMANTIC_FIND','LLM_CONTROL_OPERATION','ARTICLE_WORKSPACE_SAVE_ASSET','LITERATURE_NOTE_COMMIT']){
-  const f=fixture(),result=await f.box.handleRoutedMessage({type},f.sender,()=>{});assert.equal(result.success,false);assert.equal(result.error.code,'OFFLINE_ARTICLE_READ_ONLY');assert.equal(f.stats().routerCalls,0);assert.equal(f.stats().mutations,0);
+test('saved reader can use ordinary model and storage routes after exact identity proof',async()=>{
+ for(const type of ['LLM_ANALYZE_FIGURES','LLM_SEMANTIC_FIND','ARTICLE_WORKSPACE_SAVE_ASSET','LITERATURE_NOTE_COMMIT']){
+  const f=fixture(),result=await f.box.handleRoutedMessage({type},f.sender,()=>{});
+  assert.equal(result.success,true);assert.equal(f.stats().routerCalls,1);
  }
- const f=fixture(),result=await f.box.handleRoutedMessage({type:'LLM_ANALYZE_FIGURES'},{id,url:base+'popup.html'},()=>{});assert.equal(result.error.code,'OFFLINE_ARTICLE_READ_ONLY');assert.equal(f.stats().routerCalls,0);
 });
-
-for(const options of [{currentTabUrl:'https://other.test/new-paper'},{tabUnavailable:true}])test(`a message sent by the owned reader stays readonly after its tab ${options.tabUnavailable?'closes':'navigates'}`,async()=>{
+for(const options of [{currentTabUrl:'https://other.test/new-paper'},{tabUnavailable:true},{readGeneration:3}])test('saved reader rejects changed owner '+JSON.stringify(options),async()=>{
  const f=fixture(options),result=await f.box.handleRoutedMessage({type:'LLM_SEMANTIC_FIND'},f.sender,()=>{});
- assert.equal(result.success,false);assert.equal(result.error.code,'OFFLINE_ARTICLE_READ_ONLY');
- assert.equal(f.stats().routerCalls,0);assert.equal(f.stats().mutations,0);
+ assert.equal(result.success,false);assert.equal(result.error.code,'SAVED_READER_CONTEXT_CHANGED');assert.equal(f.stats().routerCalls,0);
+});
+test('saved reader cannot mutate another workspace',async()=>{
+ const f=fixture(),result=await f.box.handleRoutedMessage({type:'ARTICLE_WORKSPACE_SAVE_ASSET',workspaceId:'another'},f.sender,()=>{});
+ assert.equal(result.error.code,'SAVED_READER_CONTEXT_CHANGED');assert.equal(f.stats().routerCalls,0);
 });

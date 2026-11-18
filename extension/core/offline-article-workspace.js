@@ -75,7 +75,7 @@
    literatureNote:clone(saved('annotations/literature-note.json',legacy.literatureNote||null)),
    llmTask:idle(field(analysis,'task',analysisFallback.navigation?.llmTask)),localWorkspace:{...clone(workspace)},uiState:clone(saved('ui/state.json',legacy.uiState||{})),readOnly:true,offlineMode:true};
  }
- async function readOfflineArticleWorkspace({store,readerUrl,runtimeBaseUrl}){
+ async function readOfflineArticleWorkspace({store,readerUrl,runtimeBaseUrl,includeAssets=false}){
   const parsed=parseOfflineArticleReaderUrl(readerUrl,runtimeBaseUrl);if(!parsed)fail('OFFLINE_READER_BINDING_INVALID');
   if(typeof store?.getWorkspace!=='function'||typeof store?.readPublicAssetCandidates!=='function')fail('OFFLINE_STORE_UNAVAILABLE');
   const workspace=await store.getWorkspace(parsed.workspaceId);
@@ -111,7 +111,7 @@
   const snapshot=projectOfflineArticleWorkspace(workspace,publicAssets,turns);
   if(metadata?.documentHash&&snapshot.documentHash&&metadata.documentHash!==snapshot.documentHash)fail('OFFLINE_SOURCE_CHANGED');
   const binding={workspaceId:parsed.workspaceId,workspaceGeneration:generation,readerUrl:parsed.readerUrl,documentHash:snapshot.documentHash||metadata?.documentHash||''};
-  return{binding,snapshot,legacySnapshot:!metadata,metadata:clone(metadata),assetReceipt:{revision:html.revision,contentHash:html.contentHash},assetCount:publicAssets.length};
+  return{binding,snapshot,legacySnapshot:!metadata,metadata:clone(metadata),assetReceipt:{revision:html.revision,contentHash:html.contentHash},assetCount:publicAssets.length,...(includeAssets?{assets:publicAssets.filter(asset=>asset.relativePath!=='article/offline-snapshot.html'&&(!asset.relativePath.startsWith('figures/originals/')||asset.relativePath==='figures/originals/index.json')),turns}: {})};
  }
  return{parseOfflineArticleReaderUrl,isOfflineArticleMutationType,readOfflineArticleWorkspace,projectOfflineArticleWorkspace};
 });
