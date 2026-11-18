@@ -992,5 +992,5 @@
       "bytes": 7740
     }
   ],
-  "note": "UI source copies are unchanged. The HTML entry points only add an isolated website demo transport and data adapter."
+  "note": "UI source copies are unchanged. The HTML entry points only add isolated website demo adapters and ordered deferred loading."
 }

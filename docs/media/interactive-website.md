@@ -4,7 +4,7 @@
 
 ## 代码与数据
 
-- `docs/assets/demo/native/`：插件原界面文件；`source-manifest.json` 记录版本、文件尺寸和 SHA-256。原 JavaScript、CSS 不作改写；HTML 入口仅注入隔离适配器与网络策略。
+- `docs/assets/demo/native/`：插件原界面文件；`source-manifest.json` 记录版本、文件尺寸和 SHA-256。原 JavaScript、CSS 不作改写；HTML 入口仅注入隔离适配器、网络策略与 defer 标记，使原脚本并行下载、按文档顺序执行。
 - `native-*.js`：用内存存储替代扩展通信和本机服务，仍调用原有渲染器、文献资源投影、画布模型、编辑与拖动逻辑。表格放大使用原表格阅读器。
 - `paper-data.js`：公开论文节选、人工整理的示例解读和翻译。不读取本机阅读记录、浏览器配置或 API Key。
 - AI 按钮揭示预置内容，不发起模型请求，过渡时间不表示模型生成速度。账号、后台追踪和本机文件接入在安装后的插件中使用。

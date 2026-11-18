@@ -30,7 +30,8 @@ for(const [entry,adapter] of [['popup.html','native-sidebar.js'],['workbench/ind
   if(entry==='workbench/index.html')html=html.replace('<script src="app.js">',`<script src="${prefix}native-workbench-store.js"></script><script src="app.js">`);
   if(entry==='literature-radar/index.html')html=html.replace(/(<script[^>]*src="(?:app|radar)\.js")/,`<script src="${prefix}native-workbench-store.js"></script>$1`);
   if(adapter)html=html.replace('</body>',`<script src="${prefix}${adapter}"></script></body>`);
+  html=html.replace(/<script(?![^>]*\bdefer\b)(?=[^>]*\bsrc=)/g,'<script defer data-bv-defer');
   await fs.writeFile(path.join(out,entry),html);
 }
-await fs.writeFile(path.join(out,'source-manifest.json'),JSON.stringify({version:JSON.parse(await fs.readFile(path.join(source,'manifest.json'),'utf8')).version_name,entries:[...files].map(([file,bytes])=>({file,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length})),note:'UI source copies are unchanged. The HTML entry points only add an isolated website demo transport and data adapter.'},null,2)+'\n');
+await fs.writeFile(path.join(out,'source-manifest.json'),JSON.stringify({version:JSON.parse(await fs.readFile(path.join(source,'manifest.json'),'utf8')).version_name,entries:[...files].map(([file,bytes])=>({file,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length})),note:'UI source copies are unchanged. The HTML entry points only add isolated website demo adapters and ordered deferred loading.'},null,2)+'\n');
 console.log(`Exported ${files.size} production UI assets (${[...files.values()].reduce((sum,b)=>sum+b.length,0)} bytes).`);
