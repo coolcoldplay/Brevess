@@ -8,13 +8,16 @@
    const send=(type,data)=>demo.send(type,data), byId=id=>document.getElementById(id);
    pollSidebarRuntimeTasks=async()=>{};
    refreshArticleWorkspace=async()=>currentWorkspaceSnapshot;
+   // The website has no extension receiver handshake. Keep the native controls,
+   // and route their content-script commands to this isolated in-memory adapter.
+   sendTabMessage=async(tabId,message)=>chrome.tabs.sendMessage(tabId,message);
    llmSettingsState=demo.profile;
    activePanelTabContext={...activePanelTabContext,tabId:1,url:d.source,title:d.title,activated:true,key:d.source};
    demo.draft=SciLLM.createFigureWorkspaceDraft(demo.figures());
    demo.snapshot=()=>currentWorkspaceSnapshot;
    currentWorkspaceSnapshot={...demo.structure(),publisher:'springer-nature',figures:{figures:demo.figures(),inventoryReady:true,workspaceLifecycle:1,draft:demo.draft},chat:{turns:[]}};
    manualAnnotationState={documentId:'alphafold-example',annotationCount:0,unresolvedCount:0};
-   focusWorkspaceSource=async target=>target.kind==='highlight'?send('annotation',{id:target.highlightId}):send('jump',{id:target.evidence?.paragraphId||target.sectionId||target.paragraphId||'abstract'});
+   focusWorkspaceSource=async target=>{target.kind==='highlight'?send('annotation',{id:target.highlightId}):send('jump',{id:target.evidence?.paragraphId||target.sectionId||target.paragraphId||'abstract'});return true;};
    handleFigureWorkspaceJump=async figure=>send('jump',{id:'figure-'+String(figure.figureId).replace(/\D/g,'')});
    async function generate(module=mode, specific){
      if(busy)return;busy=true;send('generation',{module});
@@ -36,7 +39,7 @@
          d.paragraphs.forEach(p=>outlineExpansionState.set(outlineExpansionKey('html',p.id),true));
          renderArticleNavigationTree(currentWorkspaceSnapshot);
          document.querySelectorAll('#articleNavigationTree details.workspace-tree-node').forEach(n=>{n.open=true;});
-       } else if(module==='highlights') {send('ai-highlights');}
+       } else if(module==='highlights') {highlights.run();}
        else if(module==='notes'||module==='note'){
          const fields={research_background:'蛋白质序列数量远多于已解析结构，结构预测可以帮助缩小这一差距。',scientific_questions:'如何在没有已知相似结构时，从氨基酸序列预测可靠的三维结构？',experimental_design:'CASP14 盲测；训练时间之后的 PDB 测试集；组件消融；MSA 深度分析。',important_methods:'MSA 与残基对表示；Evoformer；Invariant Point Attention；recycling。',main_findings:'在多数 CASP14 目标上取得很高精度。低 MSA 深度仍是重要的适用边界（Fig 5a）。',innovations:'将共进化信息与几何推理整合到端到端网络。',limitations:'高局部置信度不等于已验证生物学功能；浅 MSA 和链间接触仍需谨慎。',open_questions:'哪些低置信区域值得优先实验验证？',transferable_ideas:'先用结构与置信度提出可检验的问题，再结合实验对照验证。'};
          literatureNoteDocumentState={schemaVersion:3,templateId:'basic_research',valuesByTemplate:{basic_research:{...fields,...demo.reading.notes}},fieldStatusByTemplate:{basic_research:Object.fromEntries(Object.keys(fields).map(k=>[k,'supported']))},fieldEvidenceByTemplate:{},fieldUpdatedAtByTemplate:{},updatedAt:Date.now()};
@@ -67,11 +70,13 @@
      send('generated',{module:'chat',reading:demo.reading});
    }
    submitArticleChat=async event=>{event?.preventDefault();const q=byId('articleChatQuestion').value.trim();if(q)await answer(q);};
+   const highlights=BVSetupHighlights({d,demo,send});
    byId('sidePanelPaperTitle').textContent=d.title;
    byId('articleNavigationStatus').textContent='springer-nature · 5 个标题 · 论文节选';
    byId('sidePanelDocumentStatusText').textContent='已激活 · springer-nature · 网页滤镜';
    renderArticleNavigationTree(currentWorkspaceSnapshot);renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot,{coordinated:true});renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);renderManualAnnotationSummary();renderLiteratureNoteDrawer();
-   byId('highlightControls').open=false;
+   highlights.sync();
+   const readerTools=BVSetupSidebarTools({d,demo,send});
    setupSidebarBatchActions();setupOutlineLevelControl();setupFigurePanelHeaderFieldsMenu();setupFigureKeyboardNavigation();
    byId('collapseAllFigureLevels').addEventListener('click',()=>setAllFigureLevelsExpanded(false));
    byId('toggleLiteratureNoteMarkdown').addEventListener('click',()=>setLiteratureNotePreview(!literatureNotePreviewing,{userInitiated:true}));
@@ -111,10 +116,18 @@
    addEventListener('message',e=>{if(e.source!==parent||e.origin!==location.origin||e.data?.source!=='brevess-website')return;
      const m=e.data;if(m.type==='module')switchMode(m.module);if(m.type==='generate')generate(m.module||mode);if(m.type==='ask'){switchMode('chat');void answer(m.question);}
      if(m.type==='language')SciLLM.setInterfaceLanguage(m.language,document);
-     if(m.type==='annotations'){
-       demo.reading.annotations=m.items;manualAnnotationState.annotationCount=m.items.length;
-       currentWorkspaceSnapshot.highlightDistribution={sourceCounts:{manual:m.items.filter(a=>a.source!=='llm').length,llm:m.items.filter(a=>a.source==='llm').length},categories:[{categoryId:'manual',name:'阅读摘句',color:'#b9a1d1'}],rows:d.paragraphs.map(p=>({sectionId:p.id,title:p.heading,cells:{manual:{count:m.items.filter(a=>a.p===p.id).length,items:m.items.filter(a=>a.p===p.id).map(a=>({source:a.source||'manual',quote:a.text,note:a.note,highlightId:String(a.id)}))}}})),totalHighlights:m.items.length};
-       renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);renderManualAnnotationSummary();
+     if(m.type==='highlight-complete')highlights.complete();
+     if(m.type==='annotations')highlights.receive(m);
+     if(m.type==='abbreviation-add')readerTools.add(m.entry);
+     if(m.type==='image-note'){
+       demo.draft=SciLLM.applyFigureWorkspaceMutation(demo.draft,{type:'set_figure_field',figureId:m.figureId,field:'note',value:m.value,expectedRevision:demo.draft.revision});
+       demo.reading.draft=structuredClone(demo.draft);currentWorkspaceSnapshot.figures.draft=demo.draft;
+       renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot,{coordinated:true});
+     }
+     if(m.type==='image-viewer'){
+       const previous=figureOriginalViewerState.captionVisible;figureOriginalViewerState={...figureOriginalViewerState,...m.state};
+       if(m.state.open&&m.state.captionVisible){switchMode('figures');showFigureCaptionSidebar(m.state.figureId);}
+       else if(previous)hideFigureCaptionSidebar(m.state.figureId);
      }
    });
    switchMode('navigation');demo.ready=true;demo.generate=generate;demo.send('ready',{surface:'sidebar'});

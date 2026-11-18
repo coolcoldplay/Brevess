@@ -990,7 +990,284 @@
       "file": "THIRD_PARTY_NOTICES.md",
       "sha256": "7872512f8559fdfab438a3a80d45024f525d6bf55ae374cbc33b9f6dcc0d7dfd",
       "bytes": 7740
+    },
+    {
+      "file": "action-popup.html",
+      "sha256": "65bf818046a80417ec370e2f7856310975613f441b363622468c3f0990f5c249",
+      "bytes": 4669
+    },
+    {
+      "file": "action-popup.css",
+      "sha256": "df14298949b67eecf357ff7f3d66080e3404851eeeda4c6e928be82c4bde03de",
+      "bytes": 8598
+    },
+    {
+      "file": "icons/icon48.png",
+      "sha256": "c048404c4e67d41d22c8018d7acbcda7b94d4fbe7ee6d4399215b90442911acf",
+      "bytes": 1431
+    },
+    {
+      "file": "action-popup.js",
+      "sha256": "1d10d061b45b4e9e58312550f77d73bbb36b5e2b3aec9840dfa24cc794ae3988",
+      "bytes": 9108
+    },
+    {
+      "file": "content.css",
+      "sha256": "1735073c252f2734612415994677a6755aa7f0029e83fd76dae8edfd2e8fca67",
+      "bytes": 73201
+    },
+    {
+      "file": "core/sentence-boundary.js",
+      "sha256": "613959e3172d44bdc290351900ef67e5d746718d182c2682b2ea763b4962b33f",
+      "bytes": 2242
+    },
+    {
+      "file": "core/highlight-distribution.js",
+      "sha256": "92d0455b806fd3127b91c411183db878144175fce19d41b1cdd4d5181ae55f31",
+      "bytes": 4883
+    },
+    {
+      "file": "semantic-find-controller.js",
+      "sha256": "0b1bd537d05a1521ae24e6ededb9a6f45c4d64ff7f25970e825f47b71af04c07",
+      "bytes": 38111
+    },
+    {
+      "file": "core/semantic-find.js",
+      "sha256": "332f3b86308f638e0af9375e2a1c8fc3eb9788aec220909dd31692858578aa3a",
+      "bytes": 13470
+    },
+    {
+      "file": "semantic-find.css",
+      "sha256": "31bdd59503b79be48aa4bdc21c25e4a31622706d09792135eda8a5056347c27e",
+      "bytes": 3865
+    },
+    {
+      "file": "bilingual-translation.css",
+      "sha256": "53eeed92b6ed2dd2617bf707369d120fa672f565df8dd2a794d342006d432d74",
+      "bytes": 3364
+    },
+    {
+      "file": "core/figure-magnifier.js",
+      "sha256": "354e1ecf1a6c14036aa5048619bceb0c37e6e70050d6f320bb67eaafe8e57d26",
+      "bytes": 31002
+    },
+    {
+      "file": "core/figure-viewer.js",
+      "sha256": "14e69811aa680b1e5caed66eaf48e34ffb98e97724d366a3f27b0fc83836713f",
+      "bytes": 44666
+    },
+    {
+      "file": "core/figure-annotations.js",
+      "sha256": "647442fb966a176d51708631adf8659544264b40730ddc513143baa0243d58e1",
+      "bytes": 9525
+    },
+    {
+      "file": "core/figure-annotation-ui.js",
+      "sha256": "658ff3b223518d52b0a50265900de010529c03b009385f07c40aa210ec39f3f6",
+      "bytes": 18070
     }
   ],
-  "note": "UI source copies are unchanged. The HTML entry points only add isolated website demo adapters and ordered deferred loading."
+  "selection": {
+    "file": "selection-component.js",
+    "sha256": "fbae3fda5c9bdee8be28434030ae8659129805c03c167efefa7162292d7de6cf",
+    "functions": [
+      {
+        "name": "showManualSelectionToolbar",
+        "method": false,
+        "sha256": "fd8591884f056656bfedf93590f00ca5e2bc7752d9af3083086a78bc11ddee03",
+        "bytes": 39879
+      },
+      {
+        "name": "closeManualSelectionToolbar",
+        "method": false,
+        "sha256": "11bb5e2824bb7d3090ab2270e0b7b0b772497555b4fe57b0ab997f5664d1bb99",
+        "bytes": 273
+      },
+      {
+        "name": "clampManualFloating",
+        "method": false,
+        "sha256": "e6ce8e93ca694f270e1826629f3ad7a6de79583b312a8c2c97fef14bad118b0f",
+        "bytes": 424
+      },
+      {
+        "name": "bindManualFloatingDrag",
+        "method": false,
+        "sha256": "cbcf1475d9a54c811d1fa23d004d82010b81f943826c3202820a617d78d9e813",
+        "bytes": 2167
+      },
+      {
+        "name": "positionManualFloating",
+        "method": false,
+        "sha256": "16f8e159e2bda72488d78e9baf26a387caef8d14e42dd0f50d21396d226e2fa8",
+        "bytes": 1124
+      },
+      {
+        "name": "makeManualButton",
+        "method": false,
+        "sha256": "56f24fb1299c8894145975c02c79ede717329d9e8a526d50f0ddb65930a7543f",
+        "bytes": 224
+      },
+      {
+        "name": "scheduleManualAfterPaint",
+        "method": false,
+        "sha256": "16b66f5bfaf8359183f877060fd642b4a04f797a51d46759080ca6b69c11700f",
+        "bytes": 493
+      },
+      {
+        "name": "manualAnnotationDraftKey",
+        "method": false,
+        "sha256": "bd45e66ac442c373a6e316644588973a796a1c055c69ef5553cdd3eb716f2533",
+        "bytes": 114
+      },
+      {
+        "name": "manualAnnotationSourceIdentity",
+        "method": false,
+        "sha256": "0955474f5dad6d9e6972a2d9419c4aa3c8f285bc13720c3d5686eb0d159e3f11",
+        "bytes": 298
+      },
+      {
+        "name": "selectionSurfaceExistingAnnotationCurrent",
+        "method": false,
+        "sha256": "4350ffb8cd2f559a394cb8f0395f83b6658fa9eeaedce3b79856a979486787c0",
+        "bytes": 628
+      },
+      {
+        "name": "manualAnnotationById",
+        "method": false,
+        "sha256": "cc88c9faa08f152d9e4ecc8463807bf0f53fa1ae644a0962b422bb9fafe48cb2",
+        "bytes": 190
+      },
+      {
+        "name": "manualCategoryById",
+        "method": false,
+        "sha256": "729e579b06702cec57728120e100097e69af3cb3c29900ae8fa8adc7937eb66b",
+        "bytes": 142
+      },
+      {
+        "name": "manualCategoriesForAnalysisMode",
+        "method": false,
+        "sha256": "9059b3cc03e70ee3efd3fdacd11057df3c1032aeaf2590dd8ce2c2c745495895",
+        "bytes": 501
+      },
+      {
+        "name": "pastelManualColor",
+        "method": false,
+        "sha256": "8c777d412b44ba195998dc2343235fc7bb53cd51b27258416575cd2b1f55c6b5",
+        "bytes": 346
+      },
+      {
+        "name": "automaticAnnotationId",
+        "method": false,
+        "sha256": "540778b9a19c687ce80e15b8cc97df1b3e106f9dbcc1259d04592b9781766428",
+        "bytes": 193
+      },
+      {
+        "name": "appendManualAbbreviationEditor",
+        "method": false,
+        "sha256": "923a994f9bf583dfdf70f98325f0bdf6bb9329882606abc12adfc094aec65ffc",
+        "bytes": 4027
+      },
+      {
+        "name": "appendManualNoteSharingControls",
+        "method": false,
+        "sha256": "269ccf87da1dd784db4f3e3d5bff1a4740848fc65d646f4d5dd4e74ff9711a26",
+        "bytes": 3805
+      },
+      {
+        "name": "buildRegexes",
+        "method": true,
+        "sha256": "217ba343c5a1ec46fcb4606ba4d3ff5bf0b960c30aaf741001a253c562ed3f4f",
+        "bytes": 1956
+      },
+      {
+        "name": "findMatches",
+        "method": true,
+        "sha256": "28e701942b00ff7d205a68aa2263538fa2580ac546414d48df930d23d75aa613",
+        "bytes": 3003
+      },
+      {
+        "name": "mergeOverlappingMatches",
+        "method": true,
+        "sha256": "6f173b41299948fab85f3dc74b382b4d393e31cf3e6c2236559b97be17227f46",
+        "bytes": 718
+      },
+      {
+        "name": "createHighlightSpan",
+        "method": true,
+        "sha256": "88f975adeea69ea133300a7b1cad485a50d2bd062b19be7b7512c7fd75ae57c2",
+        "bytes": 2703
+      },
+      {
+        "name": "showTooltip",
+        "method": true,
+        "sha256": "6a935eea20d324cf91b2f17c07ebbd36e793f252cc03cdcc85d24cfa0c0782cb",
+        "bytes": 2218
+      },
+      {
+        "name": "createTooltipContent",
+        "method": true,
+        "sha256": "58da210b0c12123c750c04a7d589e789ca595707d9bcb71acb9bd4bfb6ee5e63",
+        "bytes": 2273
+      },
+      {
+        "name": "hideTooltip",
+        "method": true,
+        "sha256": "e82a6565e0873491716c324fc353efde326374786e2211857cd6f280224083db",
+        "bytes": 167
+      }
+    ]
+  },
+  "translation": {
+    "file": "translation-component.js",
+    "sha256": "e0af217af0f5a2499662f66cacefa788a2ae42897e1772326dafbe28ec43fca8",
+    "functions": [
+      {
+        "name": "paintTranslation",
+        "sha256": "8fa87c1c59dc699c6854d5eaa0c62c2462b7294f4dae3e1762089d2e2b116a70",
+        "bytes": 1770
+      }
+    ]
+  },
+  "figureViewer": {
+    "file": "figure-viewer-component.js",
+    "sha256": "2597e9319d84fc4c6f29b2310a1efa19711cb7e7d26afb4e5bf6ed4526305498",
+    "functions": [
+      {
+        "name": "showFigureImageViewer",
+        "sha256": "341b1c653fe3d958d599ccb5a498259bb3c98b9d049768da6defbe0cc605434c",
+        "bytes": 11600
+      },
+      {
+        "name": "closeFigureImageViewer",
+        "sha256": "9561a631ca50e84517b1cf1c01c4cad84b57e734b0165dff31df51a752205449",
+        "bytes": 1227
+      },
+      {
+        "name": "getFigureImageViewerState",
+        "sha256": "22b7305d2db1da8d11c74f2cfccc52bacc672863d9d60ab962713bc60955b6b1",
+        "bytes": 371
+      },
+      {
+        "name": "adjacentFigureViewerId",
+        "sha256": "20523e1a75472b985ccaf3af096fa5647d64efa5e6fd7b50bddf5df0cc9610ca",
+        "bytes": 549
+      },
+      {
+        "name": "navigateFigureImageViewer",
+        "sha256": "01044092e50b925b065d89fd29e89fdf45a6ec10675101eb900460805a43d9d9",
+        "bytes": 1454
+      },
+      {
+        "name": "bindFigureViewerPointerControls",
+        "sha256": "e7a97b5849791f19fd9533cebc6d4c3e7cbdf16d6ecae62c019319439fc85c6e",
+        "bytes": 3285
+      },
+      {
+        "name": "bindFigureViewerMagnifier",
+        "sha256": "73de03c3caee35a6186994e02d3349cbc6f5501029a3714aabc8895d240a0942",
+        "bytes": 1108
+      }
+    ]
+  },
+  "note": "UI source copies are unchanged. HTML only adds isolated adapters and deferred loading. Selection, regex and translation functions are exact production excerpts in environment factories."
 }

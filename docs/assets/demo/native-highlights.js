@@ -1,0 +1,37 @@
+/* Wire the production highlight controls and renderer to public example data. */
+window.BVSetupHighlights = ({d,demo,send}) => {
+ const example=BVHighlightExamples(SciLLM,d),byId=id=>document.getElementById(id);
+ let last={items:[],groups:[]};
+ llmSettingsState.availableCategories=Object.entries(example.catalog).map(([categoryId,c])=>({...c,categoryId}));
+ llmSettingsState.readingViews=structuredClone(example.views);llmSettingsState.effectiveMode='llm';
+ llmSettingsState.settings.analysisMode='regex';readingViewId='paper_terms';analysisMode='regex';
+ selectedCategories=new Set(example.views.paper_terms.categoryIds);llmSelectedCategories=new Set(example.views.quick_story.categoryIds);
+ preparedDocumentState={documentHash:'a'.repeat(64),activeCategories:[],categorySources:[]};
+ const config=()=>({engine:analysisMode,viewId:readingViewId,ids:[...getConfiguredViewSelection()],confidence:confidenceThreshold,mode:highlightMode});
+ const render=()=>{matchCounts={};for(const a of last.items.filter(a=>a.source===analysisMode))matchCounts[a.categoryId]=(matchCounts[a.categoryId]||0)+1;
+  confidenceDistributionState={key:confidenceDistributionContextKey(),status:'ready',data:last.llmRan?{groups:last.groups}:null};
+  renderCategories();updateAnalysisModeUi();renderManualAnnotationSummary();
+  byId('llmDiagnostics').textContent=last.llmRan?'语义结果与匹配分数为预置示例；此页面不调用模型。':'双击底部高亮图标，展示预置语义识别结果。';
+ };
+ const sync=()=>{render();send('highlight-engine',{engine:analysisMode});send('highlight-config',{config:config()});};
+ const run=()=>send('highlight-run',{engine:analysisMode,config:config()});
+ queueCategorySelectionMutation=async(id,enabled)=>{const view=llmSettingsState.readingViews[readingViewId];view.categoryIds=enabled?[...new Set([...view.categoryIds,id])]:view.categoryIds.filter(x=>x!==id);selectedCategories=new Set(view.categoryIds);llmSelectedCategories=new Set(view.categoryIds);sync();};
+ saveSettings=async()=>{};
+ refreshConfidenceDistribution=async()=>{confidenceDistributionState={key:confidenceDistributionContextKey(),status:'ready',data:last.llmRan?{groups:last.groups}:null};renderConfidenceDistribution();};
+ openCategoryRuleEditor=id=>{send('toast',{message:'此处展示插件原生规则入口。完整规则编辑可在安装后的设置中使用；官网可切换情境、类别与匹配模式。'});return Promise.resolve();};
+ byId('toggleAnalysisEngine').addEventListener('click',()=>{analysisMode=analysisMode==='regex'?'llm':'regex';readingViewId=analysisMode==='llm'?'quick_story':'paper_terms';sync();});
+ byId('readingViewOptions').addEventListener('change',e=>{readingViewId=e.target.value;sync();});
+ byId('confidenceThreshold').addEventListener('input',e=>{confidenceThreshold=Number(e.target.value);sync();});
+ document.querySelectorAll('[name=highlightMode]').forEach(r=>r.addEventListener('change',e=>{highlightMode=e.target.value;if(last.regexRan)run();else sync();}));
+ byId('moreCategories').addEventListener('click',()=>{const panel=byId('moreCategoriesPanel');panel.hidden=!panel.hidden;byId('moreCategories').setAttribute('aria-expanded',String(!panel.hidden));renderCategories();});
+ byId('categorySearch').addEventListener('input',()=>renderCategories());
+ byId('clearAutomaticHighlights').addEventListener('click',()=>send('highlight-clear',{target:'automatic'}));
+ byId('clearManualAnnotations').addEventListener('click',()=>send('highlight-clear',{target:'manual'}));
+ byId('applyHighlight').addEventListener('click',run);
+ byId('editReadingScenarios').addEventListener('click',()=>{send('toast',{message:'示例已准备“快速主线”和“论文术语”两种情境。安装后可自由编辑情境与规则。'});});
+ byId('highlightControls').open=true;
+ return{run,sync,complete(){byId('highlightControls').open=false;byId('workspace-highlights').scrollTop=0;},receive(state){last=state;demo.reading.annotations=state.items;manualAnnotationState.annotationCount=new Set(state.items.filter(a=>a.source==='manual').map(a=>a.id)).size;
+  currentWorkspaceSnapshot.highlightDistribution=SciLLM.buildHighlightDistribution(currentWorkspaceSnapshot,state.items);
+  render();renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);
+ },engine:()=>analysisMode};
+};

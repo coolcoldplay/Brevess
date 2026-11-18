@@ -18,6 +18,18 @@
   ].map(a=>({...a,revision:a.relativePath==='figures/workspace-draft.json'?Math.max(1,Number(a.content.revision)||1):1,contentHash:'a'.repeat(64)}));
   demo.handleMessage=async m=>{
     const ok=data=>({success:true,data});
+    if(m.type==='ACTION_POPUP_GET_STATE')return ok({tabId:1,pageDocumentId:'public-alphafold-demo',pageUrl:d.source,title:d.title,nonce:'public-demo',readable:true,setupPending:false,pageTools:structuredClone(parent.__bvPageTools)});
+    if(m.type==='PAGE_TOOLS_APPLY')return ok(structuredClone(parent.__bvPageTools));
+    if(m.type==='PAGE_TOOLS_SET'){
+      const state=parent.__bvPageTools;state.preferences[m.tool]=m.enabled===true;
+      demo.send('page-tools-change',{tool:m.tool,enabled:m.enabled});return ok(structuredClone(state));
+    }
+    if(m.type==='PAGE_TOOLS_OPEN_SEARCH'){demo.send('semantic-open');return ok({});}
+    if(m.type==='PAGE_TOOLS_TRANSLATE'){
+      const state=parent.__bvPageTools;state.translation={enabled:m.enabled===true,phase:m.enabled?'completed':'stopped'};
+      demo.send('body-translation',{enabled:m.enabled});return ok(structuredClone(state));
+    }
+    if(m.type==='ACTION_POPUP_START_READING'){demo.send('show-sidebar');return ok({});}
     if(m.type==='LLM_GET_SETTINGS')return ok(demo.profile);
     if(m.type==='WFG_UX'){
       const state={tabId:1,navigationUrl:d.source,url:d.source,documentKey:'alphafold-example',title:d.title,sourceIds:[1],referenceIds:[],targets:[],turns:[],adjusting:false,adjustmentMode:'display',busy:false,plan:null,notice:''};
