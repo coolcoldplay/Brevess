@@ -106,7 +106,7 @@
    if(m.type==='escape'){if(isTools){closeTools();return;}document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';hideSelection();tour(-1);}
    if(m.type==='install'){document.querySelectorAll('.bv-expanded').forEach(x=>x.classList.remove('bv-expanded'));document.body.style.overflow='';document.getElementById('install').scrollIntoView({behavior:'smooth'});toast(t('账号、模型与本机文件配置请在安装后的插件中使用','Configure accounts, models and local folders in the installed extension.'));}
  });
- function loadFrame(frame){if(frame&&!frame.getAttribute('src'))frame.src=frame.dataset.src;}
+ function loadFrame(frame){if(!frame)return;frame.loading='eager';if(!frame.getAttribute('src'))frame.src=frame.dataset.src;}
  window.BV_DEMO_API={root,wb,paper:paper(),sidebar:sidebar(),workbench:workbench(),send,loadFrame,sample,jump,setView,hideSelection,readerTools,imageTools,toast,
    get module(){return module;},get engine(){return highlightEngine;},
    snapshot:()=>structuredClone({...reading,...sidebar()?.contentWindow?.__websiteDemo?.reading,annotations:reading.annotations}),

@@ -90,11 +90,11 @@
     window.scrollTo({top:scrollBefore,behavior:'instant'});focusBefore?.focus({preventScroll:true});
   }
   async function save(){
-    hideHint();const b=actions.querySelector('[data-mobile=save]');b.disabled=true;
+    hideHint();const b=actions.querySelector('[data-mobile=save]');b.disabled=true;b.textContent=t('正在保存…','Saving…');b.setAttribute('aria-busy','true');
     try{if(!await ready(api.workbench,'workbench'))return;const reading=api.snapshot();await api.workbench.contentWindow.__websiteDemo.receiveReading(reading);saved=true;
       updateCount(reading);setRoute('workbench');api.send(api.workbench,'module',{module:'library'});
       showHint('saved',t('阅读记录已带到文献总库。点“使用阅读材料”即可加入假说或组图。','Reading saved. Use Materials to attach it to a hypothesis or figure plan.'));
-    }catch(error){api.toast(error.message);}finally{b.disabled=false;}
+    }catch(error){api.toast(error.message);}finally{b.disabled=false;b.textContent=t('保存到课题','Save to project');b.removeAttribute('aria-busy');}
   }
   function updateCount(reading){const annotations=reading.annotations||[];const count=new Set(annotations.map(a=>a.id)).size;const notes=annotations.filter(a=>a.note).length;wbSource.querySelector('[data-mobile-count]').textContent=t(`${count} 条高亮 · ${notes} 条备注 · ${(reading.figures||[]).length} 张已解读图`,`${count} highlights · ${notes} notes · ${(reading.figures||[]).length} analysed figures`);}
   function paperTools(){
