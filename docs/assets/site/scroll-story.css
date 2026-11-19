@@ -1,4 +1,4 @@
-.scroll-story{--story-ink:#f6f7f9;--story-muted:#989ca5;--story-hold-distance:4.7;height:calc((4.4 + var(--story-hold-distance))*100svh);position:relative;color:var(--story-ink);background:#090a0c;isolation:isolate}
+.scroll-story{--story-ink:#f6f7f9;--story-muted:#989ca5;--story-hold-distance:4.35;height:calc((4.4 + var(--story-hold-distance))*100svh);position:relative;color:var(--story-ink);background:#090a0c;isolation:isolate}
 .story-sticky{position:sticky;top:0;height:100svh;min-height:540px;overflow:hidden}
 .story-canvas{position:absolute;inset:0;overflow:hidden}
 .story-scene{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;pointer-events:none;opacity:0;will-change:opacity,transform}

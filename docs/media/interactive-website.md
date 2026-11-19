@@ -29,6 +29,7 @@ Jumper, J. et al. [Highly accurate protein structure prediction with AlphaFold](
 
 ```sh
 node scripts/build-website-demo.mjs
+node scripts/build-website-runtime.mjs
 node scripts/verify-website-demo.mjs
 python3 -m http.server 8764 --directory docs
 ```
@@ -40,6 +41,8 @@ node scripts/build-website-demo.mjs --source /path/to/current-extension
 ```
 
 打开 `http://localhost:8764/#features`。校验器检查原组件逐文件一致性、划句组件逐函数一致性、入口引用、适配器语法、遗留视频链接、意外导出的测试文件、本机路径、常见密钥格式和图片元数据。它不是完整插件回归，也不证明第三方模型回答质量。
+
+`build-website-runtime.mjs` 从上述原文件生成 `assets/demo/fast/` 入口：按原顺序合并专用经典脚本，较大的公共依赖保留独立引用，供宿主页与各模块复用缓存；原作用域和界面不变，Mermaid 在首次绘图时加载。内容哈希用于缓存；清单记录每个输入与输出的 SHA-256。修改适配器或重新导出原组件后运行此构建，校验器会拒绝过期产物。官网在首个侧栏就绪后利用空闲时间依次准备工作台和网页体验；省流量或 2G 连接仅在进入模块时加载。
 
 ## 浏览器验收
 
@@ -112,5 +115,7 @@ node scripts/build-website-demo.mjs --source /path/to/current-extension
 - 已在 Chromium 桌面和 390 × 844 视口检查上述交互；手机划句与搜索弹窗在视口内，未出现横向溢出。
 
 三个演示模块位于同一个视口容器，通过标签或下方箭头整体切换。内部原文和侧栏独立滚动，工作台与精读材料状态保留。移动端继续使用竖屏适配。
+
+滚到演示区时对齐到导航栏下方的完整视口；外层滚轮按手势整体切换模块，惯性输入不连跳。原文、侧栏和文献列表优先内部滚动，到边界后重新滚动才换页；画布保留缩放手势。拖动滚动条或触屏浏览停在演示区中间时也会对齐，展开体验和弹窗不参与自动换页。
 
 新增回归：`node --test tests/website-web-demo.test.cjs`，检查论文、GitHub、ChatGPT 三种数据的标签页、滤镜和文档身份一致性。

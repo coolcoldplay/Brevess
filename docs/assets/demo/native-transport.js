@@ -10,7 +10,8 @@
   const values={sciLlmSettingsV2:{language:document.documentElement.lang},...(tablePage&&parent!==window?{[tableKey]:parent.__bvTableSnapshots?.[tableKey]}:{})};
   if(tablePage){delete parent.__bvTableSnapshots?.[tableKey];window.close=()=>parent.postMessage({source:'brevess-native-demo',type:'close-table'},location.origin);}
   const store={get:async keys=>keys==null?{...values}:typeof keys==='string'?{[keys]:values[keys]}:Array.isArray(keys)?Object.fromEntries(keys.map(k=>[k,values[k]])):{...keys,...values},set:async x=>{Object.assign(values,x);},remove:async keys=>{for(const k of [].concat(keys))delete values[k];}};
-  const base=new URL(location.pathname.includes('/workbench/')||location.pathname.includes('/literature-radar/')?'../':'./',location.href);
+  const sourceURL=new URL(document.baseURI);
+  const base=new URL(sourceURL.pathname.includes('/workbench/')||sourceURL.pathname.includes('/literature-radar/')?'../':'./',sourceURL);
   const endpoint={onMessage:events(),onDisconnect:events(),postMessage(){},disconnect(){}};
   window.__websiteDemo={errors:[],messages:[],base,send:(type,data={})=>parent.postMessage({source:'brevess-native-demo',type,...data},location.origin)};
   if(actionPage)window.close=()=>__websiteDemo.send('close-tools');

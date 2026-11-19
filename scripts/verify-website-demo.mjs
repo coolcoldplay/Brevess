@@ -3,10 +3,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import {verifyRuntime} from './build-website-runtime.mjs';
 const root=path.resolve(import.meta.dirname,'..'),dir=path.join(root,'docs/assets/demo');
 const manifest=JSON.parse(await fs.readFile(path.join(dir,'native/source-manifest.json'),'utf8'));
 const failures=[];let scripts=0,bytes=0;
 const check=(ok,message)=>{if(!ok)failures.push(message);};
+await verifyRuntime();
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 for(const entry of manifest.entries){
  const file=path.join(dir,'native',entry.file),buf=await fs.readFile(file);let content=buf;
@@ -40,8 +42,10 @@ async function visit(current){for(const e of await fs.readdir(current,{withFileT
    check(!/(?:\/Users\/user\/|\/var\/folders\/|[A-Z]:\\Users\\)/.test(s),`Personal computer path: ${rel}`);
    check(!/(?:sk-[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/.test(s),`Possible credential: ${rel}`);
    if(/\.(?:html|css)$/.test(e.name)){
+     const baseHref=e.name.endsWith('.html')?s.match(/<base\b[^>]*href="([^"]+)"/)?.[1]:null;
+     const resourceDir=baseHref?path.dirname(path.resolve(path.dirname(p),baseHref)):path.dirname(p);
      const refs=e.name.endsWith('.html')?[...s.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map(m=>m[1]).filter(v=>/\.(?:css|js|png|svg|woff2?)(?:[?#]|$)/.test(v)):[...s.matchAll(/url\(["']?([^\s)'";]+)["']?\)/g)].map(m=>m[1]);
-     for(const ref of refs){if(/^(?:[a-z-]+:|#|\/\/)/i.test(ref))continue;try{await fs.access(path.resolve(path.dirname(p),ref.split(/[?#]/)[0]));}catch{failures.push(`Missing asset: ${rel} -> ${ref}`);}}
+     for(const ref of refs){if(/^(?:[a-z-]+:|#|\/\/)/i.test(ref))continue;try{await fs.access(path.resolve(resourceDir,ref.split(/[?#]/)[0]));}catch{failures.push(`Missing asset: ${rel} -> ${ref}`);}}
    }
    if(e.name.endsWith('.js')&&!rel.startsWith('native/')){const r=spawnSync(process.execPath,['--check',p],{encoding:'utf8'});check(r.status===0,`Syntax error: ${rel}\n${r.stderr}`);scripts++;}
  }

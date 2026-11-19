@@ -1,0 +1,95 @@
+<!doctype html>
+<html data-bv-fast lang="zh-CN">
+<head><base href="../../native/literature-radar/index.html"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>文献雷达 · Brevess</title>
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="../workbench/focus.css">
+</head>
+<body>
+  <header class="masthead">
+    <div><h1>文献雷达</h1></div>
+    <button class="primary" id="new-radar" type="button" aria-label="新建追踪任务" title="新建追踪任务"><span aria-hidden="true">＋</span></button>
+  </header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <div class="layout">
+    <aside class="trackers" aria-label="文献追踪任务">
+      <div class="section-label"><span>追踪任务</span><span id="radar-count">00</span></div>
+      <div class="batch-actions"><button id="check-all" type="button">检查全部任务</button><button id="cancel-check-all" type="button" hidden>停止检查</button></div>
+      <p id="batch-status" class="hint" role="status" aria-live="polite"></p>
+      <details id="batch-results" class="hint" hidden><summary>检查失败的任务</summary><ul id="batch-failures"></ul></details>
+      <div id="radar-list"></div>
+      <div class="side-note"><button id="connections" type="button">来源连接</button><details><summary>运行条件</summary><p id="schedule-mode">正在读取运行状态…</p></details></div>
+    </aside>
+    <main id="feed" aria-label="文献时间流">
+      <div id="empty" class="empty"><span class="empty-mark" aria-hidden="true">⌁</span><h2>从一个研究问题开始</h2><p>新建文献追踪任务，保存对应来源的检索式。首次检索建立基线，后续新增按时间汇集在这里。</p><p class="muted">每个来源使用自己的检索语法；需要授权的来源请先配置连接。</p></div>
+      <section id="radar-detail" hidden>
+        <div class="detail-heading"><div><p class="eyebrow" id="source-label"></p><h2 id="radar-name"></h2></div><div class="actions"><button id="edit-radar" type="button">编辑检索式</button><button id="check-radar" class="primary" type="button">立即检查</button></div></div>
+        <p id="query-preview" class="query"></p>
+        <ul id="source-status" aria-label="各来源检查状态"></ul><div class="scan-status"><span id="scan-state" role="status" aria-live="polite"></span><button id="toggle-radar" class="text-button" type="button">暂停自动检查</button></div>
+        <dl class="scan-times"><div><dt>最近成功检查</dt><dd id="last-success">尚未检查</dd></div><div><dt>最近尝试</dt><dd id="last-attempt">尚未检查</dd></div><div><dt>监测间隔</dt><dd id="interval"></dd></div></dl>
+        <p id="scan-window" class="muted"></p><div class="history-actions"><button id="history-baseline" type="button" hidden>补充历史基线</button><p id="baseline-history" class="hint" hidden></p></div>
+        <div id="scan-error" class="error-box" role="status" hidden></div>
+        <details class="method"><summary>检索口径与运行说明</summary><p id="source-method"></p><div id="pubmed-method"><p>按 PubMed 记录创建日期 CRDT 检索，向前重叠 7 天，以 PMID 去重。首次结果属于基线；“新增”是后续检查首次发现的匹配记录。晚到索引和历史修订超过重叠范围可能漏检。按入库日期由新到旧排列；日期缺失时用本机首次发现时间。</p><p>检索时间按 UTC 日界覆盖；七天重叠避免同日漏检。浏览器关闭时不运行，休眠恢复后补查到期任务。每次完整检查成功才更新进度。最多每次处理 5,000 篇，超限会明确失败并保留进度。</p><p>检索式会发送给 NCBI；任务与结果保存在本机扩展数据库。没有邮件、外部推送或自动 AI 分析。</p><a href="https://pubmed.ncbi.nlm.nih.gov/help/#crdt" target="_blank" rel="noopener noreferrer">PubMed 日期与检索说明 ↗</a></div><p>检索式发送给所选来源；任务和结果保存在本机。首次结果为基线，后续首次发现的匹配记录计为新增。每次向前重叠 7 天去重检查；超出 5,000 篇或分页不完整时保留原进度。</p><p id="query-translation"></p><p id="query-warnings"></p></details>
+        <div class="feed-controls"><div class="filters" role="group" aria-label="文献类型"><button data-filter="new" aria-pressed="true">新增 <span id="count-new">0</span></button><button data-filter="baseline" aria-pressed="false">基线 <span id="count-baseline">0</span></button><button data-filter="all" aria-pressed="false">全部 <span id="count-all">0</span></button></div><label class="revision-label">检索版本<select id="revision" aria-label="检索版本"></select></label></div>
+        <section class="radar-trend" aria-labelledby="trend-title"><div class="trend-heading"><h3 id="trend-title">文献发现趋势</h3><div class="filters" role="group" aria-label="趋势统计方式"><button type="button" data-trend-mode="cumulative" aria-pressed="true">累计文献</button><button type="button" data-trend-mode="new" aria-pressed="false">新增文献</button></div></div><div id="radar-trend-chart"></div></section>
+        <details class="ai-panel" id="relevance-panel"><summary>AI 相关性评分</summary>
+          <p class="hint">使用“语义查找”配置的模型，依据标题和摘要逐篇评分。仅点击开始后调用模型；扫描、展开和排序不调用 AI。</p>
+          <label for="score-description">相关性描述</label><textarea id="score-description" rows="2" maxlength="4000" placeholder="例如：胶质母细胞瘤免疫治疗中，肿瘤微环境对治疗响应的影响"></textarea>
+          <div class="form-grid"><div><label for="score-start">来源记录日期 · 从</label><input id="score-start" type="date"></div><div><label for="score-end">至（含当日）</label><input id="score-end" type="date"></div></div>
+          <p id="score-count" class="hint"></p><div class="ai-actions"><button id="score-papers" type="button">开始 / 继续评分</button><button id="stop-scoring" type="button" disabled>停止</button></div>
+          <p id="score-status" role="status"></p><p id="score-model" class="hint"></p><label for="score-history">已保存的评分任务</label><select id="score-history"><option value="">选择已保存的评分任务</option></select>
+        </details>
+        <div class="feed-meta"><span id="feed-description"></span><label><input type="checkbox" id="unread-only"> 仅未读</label></div>
+        <div class="enrichment-controls"><button id="backfill-abstracts" type="button">补齐摘要</button><label for="paper-sort">排序</label><select id="paper-sort"><option value="time">时间从新到旧</option><option value="relevance">相关性从高到低</option></select><span class="hint">指向标题或摘要，按 Alt 查看中文对照</span></div>
+        <div id="paper-list" class="waterfall"></div>
+        <button id="load-more" class="load-more" type="button" hidden>加载更多</button>
+      </section>
+    </main>
+  </div>
+  <dialog id="history-dialog" aria-labelledby="history-title"><form id="history-form">
+    <div class="editor-heading"><h2 id="history-title">补充历史基线</h2><button id="close-history" type="button" aria-label="关闭">×</button></div>
+    <p id="history-query" class="query" translate="no"></p><p id="history-date-basis" class="hint"></p>
+    <p class="hint">只追加所选日期内的基线文献，不计为新增。已有文献、已读状态和当前增量检查进度保持不变。</p>
+    <div class="form-grid"><div><label for="history-start">从（含当日）</label><input id="history-start" type="date" min="1900-01-01" required></div><div><label for="history-end">至（含当日）</label><input id="history-end" type="date" required></div></div>
+    <p class="hint">完整检索成功后才保存；超过5,000篇、超时或分页失败均不保存本次结果。可缩小日期范围分次补充。</p>
+    <p id="history-error" role="status" aria-live="polite"></p><div class="form-actions"><button id="cancel-history" type="button">取消</button><button id="confirm-history" class="primary" type="submit">确认检索并追加</button></div>
+  </form></dialog>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form id="radar-form">
+      <div class="editor-heading"><div><p class="eyebrow">SAVED SEARCH</p><h2 id="editor-title">新建文献追踪任务</h2></div><button id="close-editor" type="button" aria-label="关闭编辑">×</button></div>
+      <label for="name">雷达名称</label><input id="name" name="name" maxlength="120" required placeholder="例如：胶质母细胞瘤免疫治疗">
+      <label for="source">文献来源</label><select id="source" name="source"></select><p id="source-hint" class="hint"></p><label for="query">检索式</label><textarea id="query" name="query" rows="5" maxlength="4000" required spellcheck="false" placeholder="glioblastoma[tiab] AND immunotherapy[tiab]"></textarea>
+      <details class="ai-panel" id="query-ai-panel"><summary>AI 生成检索式</summary>
+        <p class="hint">使用全局默认模型为所选来源分别生成候选，填写到对应检索框；可继续编辑，再手动保存。生成期间的人工修改优先保留。</p>
+        <label for="query-need">研究需求或已有检索式</label><textarea id="query-need" rows="3" maxlength="4000" placeholder="用中文或英文描述希望追踪的研究"></textarea>
+        <div class="ai-actions"><button id="generate-query" type="button">AI 为所选来源生成</button><button id="cancel-query-ai" type="button">停止生成</button></div><p id="query-ai-status" role="status"></p>
+        <div id="query-candidate-area" hidden><label for="query-candidate">候选检索式（可编辑）</label><textarea id="query-candidate" rows="4" maxlength="4000"></textarea><div class="ai-actions"><button id="validate-query" type="button">验证 PubMed 解析</button><button id="apply-query" type="button">应用候选</button></div><p id="query-validation" class="hint" role="status"></p></div>
+      </details>
+      <p class="hint">使用所选来源的原生语法，监测日期由雷达添加。<a id="preview-query" href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank" rel="noopener noreferrer">打开来源检索 ↗</a></p>
+      <div class="form-grid"><div><label for="frequency">监测间隔（小时）</label><input id="frequency" name="frequency" type="number" min="0" max="720" step="1" value="24" required><p class="hint">1–720 小时；0 表示仅手动检查。</p></div><div><label for="baseline">首次回溯</label><select id="baseline" name="baseline"><option value="1">今天入库</option><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option></select><p class="hint">首次结果单列为基线，不计为新增。</p></div></div>
+      <label class="checkbox-label"><input id="enabled" name="enabled" type="checkbox" checked> 启用自动检查</label>
+      <p id="edit-note" class="hint">启用后，在运行条件允许时检查到期任务。</p><p id="form-error" role="alert"></p>
+      <div class="form-actions"><button id="cancel-editor" type="button">取消</button><button class="primary" type="submit">保存雷达</button></div>
+    </form>
+  </dialog>
+  <dialog id="connections-dialog" aria-labelledby="connections-title"><form id="connection-form">
+    <div class="editor-heading"><h2 id="connections-title">来源连接</h2><button id="close-connections" type="button" aria-label="关闭">×</button></div>
+    <p class="hint">API Key 仅保存在本机，不包含在雷达分享文件中。网页版的机构登录不会自动开通 API 权限。</p>
+    <label for="connection-source">文献来源</label><select id="connection-source"><option value="asta">Asta</option><option value="wos">Web of Science</option><option value="scopus">Scopus</option></select>
+    <p id="connection-state" role="status"></p><a id="connection-help" target="_blank" rel="noopener noreferrer">申请 API Key ↗</a>
+    <label for="connection-key">API Key</label><input id="connection-key" type="password" autocomplete="off" maxlength="2000" required>
+    <div id="institution-token"><label for="connection-token">机构 Token（可选）</label><input id="connection-token" type="password" autocomplete="off" maxlength="2000"><p class="hint">Scopus 可使用机构网络或服务商提供的机构 Token。</p></div>
+    <p id="connection-message" role="status"></p><div class="form-actions"><button id="remove-connection" type="button">移除本机凭据</button><button class="primary" type="submit">保存连接</button></div>
+  </form></dialog>
+  
+
+
+
+
+
+
+
+
+<script defer src="../../fast/bundles/runtime-304f32fbb0d7e306.js"></script><script defer src="../core/i18n.js"></script><script defer src="../../fast/bundles/runtime-d1c80e0ae0c78a99.js"></script><script defer src="../core/i18n-reader.js"></script><script defer src="../core/i18n-reader-extra.js"></script><script defer src="../core/i18n-system.js"></script><script defer src="../core/i18n-tools.js"></script><script defer src="../core/i18n-workbench.js"></script><script defer src="../../fast/bundles/runtime-7fc5dc0607ae5edb.js"></script><script defer src="../core/local-translator.js"></script><script defer src="../../fast/bundles/runtime-d5625eb4aded797f.js"></script></body>
+</html>

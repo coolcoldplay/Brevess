@@ -5,6 +5,7 @@
  const start=async()=>{
   const r=window.__workbenchRuntime;if(!r){setTimeout(start,50);return;}
   try{
+   if(document.documentElement.hasAttribute('data-bv-fast'))document.getElementById('literature-radar-frame').src=new URL('../fast/literature-radar/index.html',demo.base).href;
    const M=window.Workbench,p=M.project(t('AlphaFold · 可靠性与验证'),t('如何依据结构预测的置信度安排实验验证？'));
    const h=M.hypothesis(t('从结构预测到实验验证'));
    h.nodes=[[t('序列与 MSA'),'输入',50,80],[t('预测结构与置信度'),'模型',350,80],[t('实验验证优先级'),'待检验假说',650,80]].map(([label,kind,x,y])=>({id:M.uid('node'),label,kind:'bio',x,y,w:210,h:90}));

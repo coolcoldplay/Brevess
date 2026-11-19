@@ -5,11 +5,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const directory = path.join(__dirname, '../docs/assets/demo');
-function loadDemo(web) {
-  const location = new URL('https://demo.invalid/assets/demo/native/popup.html' + (web ? '?web=' + web : ''));
+function loadDemo(web, fast=false) {
+  const original = new URL('https://demo.invalid/assets/demo/native/popup.html' + (web ? '?web=' + web : ''));
+  const location = new URL(fast?original.href.replace('/native/','/fast/'):original.href);
   const context = vm.createContext({
     location, URL, URLSearchParams, structuredClone,
-    document: {documentElement: {lang: 'zh-CN'}, addEventListener() {}},
+    document: {baseURI: original.href, documentElement: {lang: 'zh-CN'}, addEventListener() {}},
     addEventListener() {}, parent: {postMessage() {}}
   });
   context.window = context;
@@ -45,3 +46,10 @@ for (const web of ['', 'github', 'chatgpt']) {
 }
 
 test('web sidebar consumes the complete parent corpus and its heading hierarchy',()=>{const c=loadDemo('chatgpt');assert.equal(c.BV_DEMO_DATA,c.parent.BV_DEMO_DATA);assert.equal(c.__websiteDemo.structure().nodes,c.BV_DEMO_DATA.outline);assert.equal(c.__websiteDemo.structure().paragraphs[0].sectionId,'intro');});
+
+test('packed website entries still resolve original UI and diagram assets',()=>{
+  const c=loadDemo('github',true);
+  assert.equal(c.chrome.runtime.getURL('table-viewer.html'),'https://demo.invalid/assets/demo/native/table-viewer.html');
+  assert.equal(c.chrome.runtime.getURL('vendor/mermaid/mermaid.min.js'),'https://demo.invalid/assets/demo/native/vendor/mermaid/mermaid.min.js');
+  assert.equal(c.__websiteDemo.paper().sourceDocuments[0].sourceKind,'webpage');
+});

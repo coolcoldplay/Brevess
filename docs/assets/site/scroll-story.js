@@ -8,7 +8,7 @@
   const tiles=[...story.querySelectorAll('.story-capability')];
   // Extra distance is a scroll-controlled pause, never an autoplay delay.
   // Repeated endpoints hold the completed scene before its crossfade begins.
-  const score=[[.26,0],[.26,.75],[.35,0],[.35,.35],[.38,0],[.44,.6],[.45,.6],[.71,0],[.71,.6],[.76,0],[.926,.75],[.94,1.05],[1,0]];
+  const score=[[.26,0],[.26,.75],[.35,0],[.35,.35],[.38,0],[.44,.6],[.45,.6],[.71,0],[.71,.6],[.76,0],[.926,.75],[.94,.7],[1,0]];
   const extraDistance=score.reduce((sum,[,extra])=>sum+extra,0);
   story.style.setProperty('--story-hold-distance',extraDistance);
   function navigation(){const visible=story.getBoundingClientRect().bottom<=0;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html data-bv-fast lang="zh-CN">
+<head><base href="../../native/workbench/index.html"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BREVESS · 课题工作台</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23252525'/%3E%3Ctext x='3' y='13' fill='%23f2d24b' font-size='12' font-family='Arial' font-weight='bold'%3EB%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="../core/chat-message-ui.css"><link rel="stylesheet" href="agent-panel.css"><link rel="stylesheet" href="library-catalog.css"><link rel="stylesheet" href="focus.css">
+
+
+</head>
+<body>
+  <header class="brandbar">
+    <a class="brand" href="../options.html" target="_blank">BREVESS</a>
+    <div class="workspacebar">
+      <select id="project-select" aria-label="当前课题"></select>
+      <details class="menu file-menu"><summary>文件</summary><div>
+        <button data-action="new-project" data-action-icon="none">新建课题</button>
+        <button data-action="manage-project" data-action-icon="none">管理当前课题</button>
+        <hr>
+        <button data-action="import" data-action-icon="none">导入…</button>
+        <button data-action="export-dialog" data-action-icon="none">导出…</button>
+        <hr>
+        <button data-action="recycle" data-action-icon="none">回收站</button>
+      </div></details>
+      <nav class="mode-switch" aria-label="工作台模块"><button data-action="mode-radar">文献雷达</button><button data-action="mode-library">文献总库</button><button data-action="mode-hypothesis">假说梳理</button><button data-action="mode-figure">组图规划</button></nav>
+      <div class="history"><button data-action="undo" aria-label="撤销" title="撤销 Ctrl+Z">↶</button><button data-action="redo" aria-label="重做" title="重做 Ctrl+Shift+Z">↷</button></div>
+    </div>
+    <button id="save-status" data-action="sync" data-action-icon="none" aria-live="polite" title="查看保存与目录同步状态">正在读取…</button>
+    <details class="menu menu-end workbench-more"><summary aria-label="更多工作台操作" title="更多工作台操作"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></summary><div>
+      <a id="workbench-open-tab" href="../workbench/index.html" target="_blank" hidden>在标签页打开</a>
+      <button data-action="external-agent" data-action-icon="none">Agent 连接</button>
+      <button data-action="help" data-action-icon="none">使用帮助</button>
+      <button data-action="demo" data-action-icon="none">体验演示课题</button>
+    </div></details>
+  </header>
+  <div id="conflict" hidden></div>
+  <main id="workbench"><aside id="directory"><div class="pane-title"><strong>课题目录</strong><button data-action="collapse-left" title="收起 / 展开目录">«</button></div><div id="tree"></div></aside><div id="left-split" class="split" role="separator" aria-label="调整目录宽度"></div>
+    <section id="center"><section id="shared-project-view" hidden aria-label="只读共享课题"></section><div id="contextbar"></div><section id="radar-view" hidden><iframe id="literature-radar-frame" title="文献雷达"></iframe></section><section id="library-view" hidden><div class="library-view-tools"><label class="searchbox"><input id="library-view-query" type="search" placeholder="输入检索词" aria-label="搜索文献总库"><button data-action="library-view-search">搜索</button></label><div class="library-view-filters"><select id="library-query-field" aria-label="检索字段"><option value="all">全部字段</option><option value="title">标题</option><option value="authors">作者</option><option value="journal">期刊</option><option value="doi">DOI</option><option value="pmid">PMID</option><option value="publicationDate">发表日期</option><option value="addedAt">添加日期</option><option value="tags">标签</option><option value="abstract">摘要</option><option value="notes">笔记</option><option value="fulltext">全文</option><option value="method">方法</option><option value="caption">图注</option></select><select id="library-query-group" aria-label="检索标签组" hidden><option value="">全部标签组</option></select><select id="library-query-operator" aria-label="匹配方式"><option value="contains">包含</option><option value="exact">精确匹配</option></select><select id="library-view-scope" aria-label="文献范围"><option value="all">全部资料</option><option value="literature">仅文献</option><option value="web">仅非文献网页</option><option value="radar">雷达已读</option><option value="local">有本地条目</option><option value="metadata-only">仅元数据</option><option value="partial">部分离线</option><option value="missing">无本地全文</option></select><select id="library-view-sort" aria-label="排序"><option value="saved">添加日期</option><option value="title">标题</option><option value="year">发表年份</option></select></div></div><div class="catalog-toolbar"><button data-catalog-action="new">新增文献</button><button data-catalog-action="groups">标签组与标签</button><button data-catalog-action="columns">显示列</button><button data-catalog-action="removed">含已移除 / 正常条目</button></div><div id="library-view-list" class="library-view-list"></div></section><section id="canvas-shell"><nav id="tool-rail" aria-label="画布工具"></nav><div id="stage" tabindex="0" aria-label="工作台画布"></div><div id="viewport-controls"><button data-action="zoom-out" title="缩小">−</button><span id="zoom-label">100%</span><button data-action="zoom-in" title="放大">＋</button><button data-action="fit">适应</button></div><div id="presentation-controls" hidden><button data-action="exit-presentation">退出演示 · Esc</button></div><div id="drop-hint" hidden></div><div id="gesture-hint" hidden></div></section></section>
+    <div id="right-split" class="split" role="separator" aria-label="调整资源区宽度"></div><aside id="right"><button class="r20-right-toggle" data-action="collapse-right" title="收起 / 展开右侧栏" aria-label="收起 / 展开右侧栏">»</button><section id="library-detail" hidden></section><section id="library"><div class="pane-title"><button type="button" class="pane-toggle" data-action="collapse-library" aria-expanded="true" aria-controls="library-content" title="收起文献与素材"><svg class="pane-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 9 5 5 5-5"/></svg><strong>材料库</strong></button><button data-action="upload">＋ 自有图片</button></div><div id="library-content" class="pane-content"><div class="library-tools"><select id="material-source" aria-label="材料来源"><option value="library">来源一 · 全局文献总库</option><option value="plan">来源二 · 组图规划证据</option></select><select id="library-mode" aria-label="资源范围"><option value="library">已保存文库</option><option value="used">本课题来源</option><option value="assets">自有素材</option></select><input id="library-search" type="search" placeholder="搜索材料" aria-label="搜索文献与素材"><button data-action="search">搜索</button></div><div id="source-tabs"></div><details class="material-help"><summary>材料使用帮助</summary><p>按论文 → Figure → Panel 下钻；拖到左侧节点或联系</p></details><div id="resource-list"></div></div></section><div id="property-split" class="split horizontal" role="separator" aria-label="调整素材与属性高度"></div><section id="inspector"><div class="pane-title"><button type="button" class="pane-toggle" data-action="collapse-inspector" aria-expanded="true" aria-controls="properties" title="收起属性"><svg class="pane-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 9 5 5 5-5"/></svg><strong>属性</strong></button><span id="selection-count"></span></div><div id="properties"></div></section></aside>
+  </main>
+  <footer><span id="context-status">本机课题 · 初始为空</span><button type="button" id="agent-status" data-action="agent">任务 Agent 尚未连接</button></footer><div id="toast" role="status" aria-live="polite"></div><dialog id="modal"></dialog><section id="agent-panel" class="agent-panel" hidden aria-label="本地 Agent"></section><input id="import-input" type="file" accept="application/json,.json" hidden><input id="share-import-input" type="file" accept="application/json,.json" hidden><input id="library-transfer-input" type="file" accept="application/json,.json" hidden><input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden>
+  
+
+  
+  
+  
+  
+  
+  
+  
+  
+<script defer src="../../fast/bundles/runtime-d048d57669b7a7eb.js"></script><script defer src="../core/local-translator.js"></script><script defer src="../../fast/bundles/runtime-54f0f3b1eca6b9de.js"></script><script defer src="../core/i18n.js"></script><script defer src="../core/i18n-workbench.js"></script><script defer src="../../fast/bundles/runtime-b9c0a5f8d53fab62.js"></script><script defer src="../core/pdf-workspace.js"></script><script defer src="../../fast/bundles/runtime-cfc748701f382165.js"></script><script defer src="../core/evidence-first-mechanism.js"></script><script defer src="../../fast/bundles/runtime-52b6183309a3e78f.js"></script><script defer src="../core/mechanism-canvas-model.js"></script><script defer src="../core/figure-workspace.js"></script><script defer src="../../fast/bundles/runtime-158143d215884b1f.js"></script></body></html>
