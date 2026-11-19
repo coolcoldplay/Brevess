@@ -1,12 +1,13 @@
 /* Public, curated reading data. The UI is the production BREVESS UI. */
 (() => {
   const d=window.BV_DEMO_DATA, demo=window.__websiteDemo;
+  const en=()=>document.documentElement.lang==='en',t=value=>window.BV_I18N?.text(value)||value;
   demo.workspaceId='workspace:'+'a'.repeat(64);
   demo.reading={figures:[],annotations:[],notes:{},chat:[]};
-  demo.profile={settings:{consentGranted:true,globalProfileId:'example',profileOrder:['example'],profiles:{example:{name:'预置 AI 示例',providerId:'deepseek',config:{model:'prepared-example',hasApiKey:true}}},taskPolicies:{}}};
-  demo.figureResult=f=>({figureId:'Fig'+f.id,figureQuestion:f.title,coreConclusion:f.takeaway[0],claimBoundary:'预置阅读示例；依据公开论文和图注整理。请结合原文核对。',panels:f.panels.flatMap(g=>{
+  demo.profile={settings:{language:'zh-CN',consentGranted:true,globalProfileId:'example',profileOrder:['example'],profiles:{example:{name:en()?'Prepared AI example':'预置 AI 示例',providerId:'deepseek',config:{model:'prepared-example',hasApiKey:true}}},taskPolicies:{}}};
+  demo.figureResult=f=>({figureId:'Fig'+f.id,figureQuestion:f.title,coreConclusion:f.takeaway[en()?1:0],claimBoundary:t('预置阅读示例；依据公开论文和图注整理。请结合原文核对。'),panels:f.panels.flatMap(g=>{
     const parts=g[0].split('–'),letters=parts.length===2?Array.from({length:parts[1].charCodeAt(0)-parts[0].charCodeAt(0)+1},(_,i)=>String.fromCharCode(parts[0].charCodeAt(0)+i)):[parts[0]];
-    return letters.map(panelId=>({panelId,panel:panelId,purpose:g[1],evidenceType:'论文图示',directObservation:g[2],observationSource:'caption_statement',localInference:f.takeaway[0],design:letters.length>1?'此段合并说明 panels '+g[0]:'',methods:[],statisticalMethods:[]}));
+    return letters.map(panelId=>({panelId,panel:panelId,purpose:g[en()?3:1],evidenceType:t('论文图示'),directObservation:g[en()?4:2],observationSource:'caption_statement',localInference:f.takeaway[en()?1:0],design:letters.length>1?(en()?'Combined explanation of panels ':'此段合并说明 panels ')+g[0]:'',methods:[],statisticalMethods:[]}));
   })});
   demo.figures=()=>d.figures.map(f=>({figureId:'Fig'+f.id,figureLabel:'Fig'+f.id,label:'Fig'+f.id,title:f.title,caption:'Fig. '+f.id+': '+f.title,imageUrl:new URL('../figure-'+f.id+'.png',demo.base).href,activeDepth:'standard',...(demo.reading.figures.includes(f.id)?{standard:demo.figureResult(f),analysis:demo.figureResult(f)}:{}),panelDirectoryTrusted:true,panelHints:demo.figureResult(f).panels.map(p=>p.panelId)}));
   demo.structure=()=>({title:d.title,url:d.source,localWorkspace:{workspaceId:demo.workspaceId,workspaceGeneration:1,canonicalUrl:d.source,contentHash:'a'.repeat(64)},documentId:d.documentId||'alphafold-example',documentHash:'a'.repeat(64),revision:1,paragraphs:d.paragraphs.map(p=>({paragraphId:p.id,sectionId:p.sectionId||p.id,text:p.text})),nodes:d.outline||d.paragraphs.map((p,i)=>({sectionId:p.id,title:p.heading,level:p.level||2,order:i,children:[],paragraphCount:1,analysisSectionIds:[p.id],analysisSelected:true}))});

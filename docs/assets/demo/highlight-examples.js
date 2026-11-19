@@ -20,5 +20,8 @@ window.BVHighlightExamples = (api,d) => {
   const quote=text.slice(start,end).trimEnd();
   return{id:'llm-'+i,source:'llm',categoryId,confidence,note,segments:[{p,start,end:start+quote.length}],text:quote};
  });
+ const labelSources=new Map([...Object.values(catalog),...Object.values(views)].map(item=>[item,item.name]));
+ const localize=()=>{for(const [item,name] of labelSources)item.name=window.BV_I18N?.text(name)||name;};
+ localize();document.addEventListener('brevess-demo-languagechange',localize);
  return{catalog,views,llm};
 };

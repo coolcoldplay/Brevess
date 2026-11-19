@@ -1,18 +1,20 @@
 /* Isolated website adapter. Does not connect to the installed extension. */
 (() => {
   'use strict';
+  try{document.documentElement.lang=parent.document.documentElement.lang||'zh-CN';}catch{}
   if(document.documentElement.style)document.documentElement.style.overscrollBehaviorY='contain';
   const events=()=>({addListener(){},removeListener(){},hasListener(){return false;}});
   const tablePage=location.pathname.endsWith('/table-viewer.html');
   const actionPage=location.pathname.endsWith('/action-popup.html');
   const tableKey='brevess.tableView.'+location.hash.slice(1);
-  const values=tablePage&&parent!==window?{[tableKey]:parent.__bvTableSnapshots?.[tableKey]}:{};
+  const values={sciLlmSettingsV2:{language:document.documentElement.lang},...(tablePage&&parent!==window?{[tableKey]:parent.__bvTableSnapshots?.[tableKey]}:{})};
   if(tablePage){delete parent.__bvTableSnapshots?.[tableKey];window.close=()=>parent.postMessage({source:'brevess-native-demo',type:'close-table'},location.origin);}
   const store={get:async keys=>keys==null?{...values}:typeof keys==='string'?{[keys]:values[keys]}:Array.isArray(keys)?Object.fromEntries(keys.map(k=>[k,values[k]])):{...keys,...values},set:async x=>{Object.assign(values,x);},remove:async keys=>{for(const k of [].concat(keys))delete values[k];}};
   const base=new URL(location.pathname.includes('/workbench/')||location.pathname.includes('/literature-radar/')?'../':'./',location.href);
   const endpoint={onMessage:events(),onDisconnect:events(),postMessage(){},disconnect(){}};
   window.__websiteDemo={errors:[],messages:[],base,send:(type,data={})=>parent.postMessage({source:'brevess-native-demo',type,...data},location.origin)};
   if(actionPage)window.close=()=>__websiteDemo.send('close-tools');
+  document.addEventListener('pointerdown',()=>{let view=parent;while(view!==window){try{view.postMessage({source:'brevess-native-demo',type:'pointerdown'},location.origin);if(view===view.parent)break;view=view.parent;}catch{break;}}},true);
   addEventListener('error',e=>__websiteDemo.errors.push(e.message));addEventListener('unhandledrejection',e=>__websiteDemo.errors.push(String(e.reason?.stack||e.reason)));
   const call=async m=>{
     __websiteDemo.messages.push(m.type||m.action);

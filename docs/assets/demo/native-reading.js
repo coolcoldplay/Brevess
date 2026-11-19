@@ -1,10 +1,12 @@
 /* Adapts the exact shipping selection component to a public paper in memory. */
 window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviation}) => {
+ const t=value=>window.BV_I18N?.text(value)||value;
  const example=BVHighlightExamples(SciLLM,d),record={annotations:[]},manualDocument={documentId:d.documentId||'alphafold-example',record};
  const paragraphs=[...root.querySelectorAll('[data-paragraph]')];
  const originals=new Map(paragraphs.map(p=>[p,[...p.childNodes].map(n=>n.cloneNode(true))]));
  const blocks=paragraphs.map(element=>({blockId:element.dataset.paragraph,element}));
  const categories=Object.entries(example.catalog).map(([categoryId,c])=>({...c,categoryId}));
+ document.addEventListener('brevess-demo-languagechange',()=>categories.forEach(c=>c.name=example.catalog[c.categoryId].name));
  let annotations=[],visibleSources=['regex','llm','manual'],threshold=.8,selectionUI;
  let activeMode='quick_story',spanMode='word',llmRan=false,regexRan=false;
  let currentEngine='regex',regexIds=new Set(example.views.paper_terms.categoryIds),llmIds=new Set(example.views.quick_story.categoryIds);
@@ -70,7 +72,7 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
  window.__brevessBilingualTranslation={async translateSelection(text,{signal}){
   await new Promise(r=>setTimeout(r,180));if(signal.aborted)throw Object.assign(Error('已取消'),{code:'ABORTED'});
   const normalized=text.trim(),exact=sentences.find(([en])=>en===normalized)||d.paragraphs.map(p=>[p.text,p.zh]).find(([en,zh])=>en===normalized&&zh);
-  return exact?exact[1]+'\n\n预置译文示例':dictionary[normalized.toLowerCase()]||'所选片段暂无预置译文。可点击“试试划句”体验完整句子的翻译；安装插件后由浏览器翻译实际选区。';
+  return exact?exact[1]+'\n\n'+t('预置译文示例'):dictionary[normalized.toLowerCase()]||'所选片段暂无预置译文。可点击“试试划句”体验完整句子的翻译；安装插件后由浏览器翻译实际选区。';
  }};
  const sci={...SciLLM,getInterfaceLanguage:()=>document.documentElement.lang||'zh-CN',createSelectionTtsController({onState}){
   let status='idle',speech;const state=()=>({status});
@@ -80,7 +82,7 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
  const sendManualMessage=async m=>{
   if(m.type==='LLM_ASK_SELECTION'){
    const a=example.llm.find(a=>a.text.includes(m.selectedText)||m.selectedText.includes(a.text));
-   return{operationId:m.operationId,message:{status:'completed',answerBlocks:[{markdown:(a?a.note:d.selectionExplanation||'作者把蛋白质结构预测的性能、方法和适用边界分开验证。请结合上下文和原图核对。')+'\n\n预置 AI 解读示例；未调用在线模型。'}]}};
+   return{operationId:m.operationId,message:{status:'completed',answerBlocks:[{markdown:t(a?a.note:d.selectionExplanation||'作者把蛋白质结构预测的性能、方法和适用边界分开验证。请结合上下文和原图核对。')+'\n\n'+t('预置 AI 解读示例；未调用在线模型。')}]}};
   }
   if(m.type==='ANNOTATION_DELETE'){annotations=annotations.filter(a=>String(a.id)!==m.annotationId);publish();return{record};}
   throw Error('此操作请在安装后的插件中使用');
@@ -92,6 +94,20 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
   restoreManualAnnotations:refresh,updateCurrentManualRecord:()=>{},
   ensureAutomaticHighlightAnnotation:async mark=>mark,showHighlightContextPopover:mark=>openAnnotation(mark.dataset.demoAnnotation,mark)
  });
+ // A popup lives at this document's root, outside the paper. Dismiss on
+ // outside presses here, in the surrounding website, or inside native frames.
+ const outside=event=>{
+  const toolbar=document.getElementById('sci-manual-toolbar');
+  if(toolbar&&!event.composedPath().includes(toolbar)&&!event.target.closest?.('[data-demo-annotation]'))selectionUI.close();
+ };
+ const dismissFromFrame=event=>{
+  if(event.source!==window&&event.origin===location.origin&&event.data?.source==='brevess-native-demo'&&event.data.type==='pointerdown')selectionUI.close();
+ };
+ const contexts=[];let context=window;
+ while(context){
+  try{context.document.addEventListener('pointerdown',outside,true);context.addEventListener('message',dismissFromFrame);contexts.push(context);if(context===context.parent)break;context=context.parent;}catch{break;}
+ }
+ addEventListener('pagehide',()=>{for(const view of contexts){view.document.removeEventListener('pointerdown',outside,true);view.removeEventListener('message',dismissFromFrame);}}, {once:true});
  function open(segments,rect,existing){
   const text=segments.map(s=>para(s.p).text.slice(s.start,s.end)).join('\n');
   selectionUI.open({documentId:manualDocument.documentId,blockId:segments[0].p,text,rect,validation:{valid:true},demoSegments:segments,demoId:existing?.id,manualAnalysisModeId:activeMode,anchor:{quote:para(segments[0].p).text.slice(segments[0].start,segments[0].end),startOffset:segments[0].start,endOffset:segments[0].end},anchorSegments:segments.map(s=>({blockId:s.p,anchor:{quote:para(s.p).text.slice(s.start,s.end),startOffset:s.start,endOffset:s.end}})),...(existing?{existingAnnotation:annotationObject(existing),openNote:true}:{})});

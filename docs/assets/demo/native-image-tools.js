@@ -42,7 +42,7 @@ window.BVCreateImageTools=({root,data:d,onToast,onViewerState,onNote,onOpen})=>{
     bindAnnotations:async(viewer,image,canvas,controls,figure,resource)=>{const session=await sessionFor(figure,resource);if(generation!==epoch||frame!==created||!viewer.isConnected)return;return SciLLM.createFigureAnnotationEditor({image,canvas,controls,session});},
     publishFigureImageViewerState:state=>{onViewerState(state);if(!state.open)queueMicrotask(()=>{if(frame===created)removeViewer();});}
    });viewer=api;void api.open('Fig'+id).catch(error=>{onToast(error.message);api.close();});
-  },{once:true});created.src='assets/demo/image-viewer-frame.html?v=20261118-native4';
+  },{once:true});created.src='assets/demo/image-viewer-frame.html?v=20261119-ui9';
  }
  function note(image){const figure=figureFor(image);SciLLM.openFigureNoteEditor({document,title:figure.figureLabel+' · 图片笔记',value:notes.get(figure.figureId)||'',onSave:async value=>{notes.set(figure.figureId,value);onNote({figureId:figure.figureId,value});onToast('图片笔记已保留在本次体验中，可重新打开查看。');}});}
  const magnifier=SciLLM.createFigureMagnifier({document,isActive:()=>!frame,acceptImage:image=>images.includes(image)&&!disabled.has(image),getDisplaySource:image=>promoted.get(image)});

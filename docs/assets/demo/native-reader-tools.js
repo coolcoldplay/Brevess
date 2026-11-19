@@ -1,5 +1,6 @@
 /* Production search controller and translation renderer with public data adapters. */
 window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
+ const t=value=>window.BV_I18N?.text(value)||value;
  const examples=d.readerExamples||BV_READER_EXAMPLES,paper=root.querySelector('.bv-paper'),translationUI=BVCreateTranslationUI();
  const translated=new Map();let epoch=0,searchHits=[],hovered=null,altSource=null;
  const names=Array.from({length:101},(_,i)=>'sci-semantic-search-'+i),currentName='sci-semantic-search-current';
@@ -23,8 +24,8 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
   },
   sendMessage:async message=>{
    if(message.type==='LLM_SEMANTIC_FIND_CANCEL')return {success:true};
-   const example=examples.semanticQueries.find(q=>q.query===message.query||q.aliases.test(message.query));
-   if(!example)return {success:false,error:{message:'可尝试：'+examples.semanticQueries.map(q=>q.query).join('；')+'。安装插件后可自由描述任意语义。'}};
+   const example=examples.semanticQueries.find(q=>q.query===message.query||t(q.query)===message.query||q.aliases.test(message.query));
+   if(!example)return {success:false,error:{message:(document.documentElement.lang==='en'?'Try: ':'可尝试：')+examples.semanticQueries.map(q=>t(q.query)).join('; ')+(document.documentElement.lang==='en'?'. Install BREVESS to search any meaning.':'。安装插件后可自由描述任意语义。')}};
    const sentences=SciLLM.createSemanticFindSentences(message.paragraphs);
    return {success:true,data:{operationId:message.operationId,sourceKey:message.sourceKey,scores:sentences.map(s=>({id:s.id,score:example.score(s)})),processed:sentences.length,total:sentences.length,skipped:0,done:true}};
   }
@@ -43,7 +44,7 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
  const editing=event=>event.target.closest?.('input,textarea,select,button,a,[contenteditable],dialog')||document.activeElement?.closest('input,textarea,select,button,a,[contenteditable],dialog');
  addEventListener('keydown',event=>{if(event.key!=='Alt'){altSource=null;return;}if(!event.repeat)altSource=window.__bvPageTools.preferences.pageTranslation&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!editing(event)?hovered:null;});
  addEventListener('keyup',event=>{if(event.key!=='Alt')return;const source=altSource;altSource=null;if(!source||source!==hovered||editing(event)||event.ctrlKey||event.metaKey||event.shiftKey||!window.__bvPageTools.preferences.pageTranslation)return;const entry=translationEntries().find(([el])=>el===source);if(!entry?.[1])return;event.preventDefault();const record=translated.get(source);if(record?.translation?.isConnected)record.translation.hidden=!record.translation.hidden;else paintTranslation(...entry);});
- function openSearch(){reading.close();onView('paper');controller.open();const query=document.querySelector('[data-semantic-find-role="query"]');if(!query.value)query.value=examples.semanticQueries[0].query;onToast('试试：'+examples.semanticQueries.map(q=>q.query).join(' · '));}
+ function openSearch(){reading.close();onView('paper');controller.open();const query=document.querySelector('[data-semantic-find-role="query"]');if(!query.value)query.value=t(examples.semanticQueries[0].query);onToast((document.documentElement.lang==='en'?'Try: ':'试试：')+examples.semanticQueries.map(q=>t(q.query)).join(' · '));}
  function keydown(event){if(controller.handleKeydown(event))return true;if(event.defaultPrevented||event.ctrlKey||event.metaKey||event.altKey||event.target.closest?.('input,textarea,select,[contenteditable],dialog'))return false;const bounds=root.getBoundingClientRect();if(event.key.toLowerCase()==='j'&&bounds.bottom>0&&bounds.top<innerHeight&&window.__bvPageTools.preferences.semantic){event.preventDefault();openSearch();return true;}return false;}
  return {openSearch,translate,keydown,refresh:()=>controller.refreshSourceHits(),isSearchOpen:controller.isOpen,
   reset(){epoch++;controller.close();hovered=altSource=null;for(const r of translated.values())r.translation?.remove();translated.clear();},

@@ -5,6 +5,7 @@
   const sticky = story.querySelector('.story-sticky');
   const nav=document.querySelector('.staged-nav'), browser=story.querySelector('.story-browser'), extension=story.querySelector('.story-extension'), frame=story.querySelector('.story-sidebar iframe');
   let manualPanel=null;
+  const tiles=[...story.querySelectorAll('.story-capability')];
   function navigation(){const visible=story.getBoundingClientRect().bottom<=0;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}
   function browserScene(p,visible){
     const opened=manualPanel===null?phase(p,.384,.435):Number(manualPanel);
@@ -13,6 +14,9 @@
     browser.style.setProperty('--pointer-travel',phase(p,.346,.382));browser.style.setProperty('--pointer-visible',manualPanel===null?phase(p,.34,.35)*(1-phase(p,.405,.425)):0);
     extension.style.setProperty('--icon-press',phase(p,.378,.384)*(1-phase(p,.39,.4)));
     extension.setAttribute('aria-expanded',String(opened>.5));extension.setAttribute('aria-label',opened>.5?'收起 BREVESS 侧栏演示':'展开 BREVESS 侧栏演示');
+    const tileReveal=manualPanel===false?0:phase(p,.394,.416);
+    browser.style.setProperty('--capabilities-show',tileReveal);
+    tiles.forEach((tile,i)=>tile.style.setProperty('--tile-in',manualPanel===false?0:phase(p,.39+i*.003,.413+i*.003)));
     browser.inert=!visible;browser.style.pointerEvents=visible?'auto':'none';
     const prepare=reduced.matches?visible:p>.18&&p<.51;
     if(prepare&&!frame.getAttribute('src')){browser.classList.remove('is-sidebar-ready');frame.loading='eager';frame.src=frame.dataset.src;}
@@ -24,13 +28,13 @@
   const equation=story.querySelector('.story-equation'),glyphs=[...story.querySelectorAll('.equation-glyph')];
   // A seeded scroll score: every letter has its own flip cadence. No autoplay timer.
   let equationFrame='';
-  function renderEquation(p,still=false){
-    const key=still?'static':clamp((p-.48)/.26).toFixed(5);if(equationFrame===key)return;equationFrame=key;
-    const progress=still?1:clamp((p-.515)/.145),alphabet=['能','工','智','人'];
-    equation.style.setProperty('--equation-reveal',still?1:phase(p,.505,.55));
-    equation.style.setProperty('--equation-settled',still?1:phase(p,.645,.676));
+  function renderEquation(p,still=false,orbitProgress=clamp((p-.73)/.27)){
+    const key=still?'static':p.toFixed(5)+':'+orbitProgress.toFixed(5);if(equationFrame===key)return;equationFrame=key;
+    const progress=still?1:clamp((p-.765)/.145),alphabet=['能','工','智','人'];
+    equation.style.setProperty('--equation-reveal',still?1:phase(p,.755,.8));
+    equation.style.setProperty('--equation-settled',still?1:phase(p,.895,.926));
     equation.dataset.settled=String(progress>=1);
-    const orbitTurn=still?.2:clamp((p-.48)/.26)*Math.PI*3.5;
+    const orbitTurn=still?.2:orbitProgress*Math.PI*3.5;
     orbitLogos.forEach((logo,i)=>{
       const angle=orbitTurn+i*Math.PI*2/orbitLogos.length,depth=Math.sin(angle);
       logo.style.setProperty('--orbit-x',Math.cos(angle).toFixed(4));logo.style.setProperty('--orbit-y',depth.toFixed(4));
@@ -88,7 +92,19 @@
     if(!geometry) measure();
     const g=geometry;
     const range=story.offsetHeight-sticky.offsetHeight;
-    const p=clamp(-story.getBoundingClientRect().top/Math.max(1,range));
+    // Add scroll space only to the capability cards and equation. The other
+    // scenes keep their pace; both extra holds reverse naturally with the wheel.
+    const unit=story.offsetHeight/(geometry.mobile?7.2:7.4);
+    const baseRange=Math.max(1,range-unit*3);
+    const distance=Math.max(0,-story.getBoundingClientRect().top);
+    const score=[[.38,0],[.44,.6],[.45,.6],[.76,0],[.926,.75],[.94,1.05],[1,0]];
+    let cursor=0,previous=0,p=1;
+    for(const [end,extra] of score){
+      const length=(end-previous)*baseRange+extra*unit;
+      if(distance<=cursor+length){p=previous+clamp((distance-cursor)/length)*(end-previous);break;}
+      cursor+=length;previous=end;
+    }
+    const orbitProgress=clamp((distance-baseRange*.73-unit*1.2)/(baseRange*.27+unit*1.8));
     story.style.setProperty('--story-progress',p.toFixed(5));
     story.dataset.progress=p.toFixed(4);
     const browserVisible=p>.29&&p<.51;
@@ -108,11 +124,11 @@
     });
     shared.style.opacity=phase(p,.035,.10);
     caption.style.opacity=phase(p,.21,.26);
-    const opacities=[1-phase(p,.26,.32),phase(p,.29,.35)*(1-phase(p,.45,.51)),phase(p,.48,.55)*(1-phase(p,.68,.74)),phase(p,.71,.79)];
+    const opacities=[1-phase(p,.26,.32),phase(p,.29,.35)*(1-phase(p,.45,.51)),phase(p,.48,.55)*(1-phase(p,.71,.79)),phase(p,.73,.8)];
     scenes.forEach((scene,i)=>{scene.style.opacity=opacities[i];scene.setAttribute('aria-hidden',opacities[i]<.5?'true':'false');if(i)scene.style.transform=`translateY(${(1-opacities[i])*24}px)`;});
-    renderEquation(p);
-    story.style.setProperty('--dual-progress',phase(p,.54,.67));
-    const progress=phase(p,.79,.97);flow.style.setProperty('--flow-progress',progress);
+    renderEquation(p,false,orbitProgress);
+    story.style.setProperty('--dual-progress',phase(p,.79,.92));
+    const progress=phase(p,.55,.7);flow.style.setProperty('--flow-progress',progress);
     [...flow.children].forEach((li,i)=>li.classList.toggle('is-active',progress>=i/4));
   }
   function schedule(){if(!pending){pending=true;requestAnimationFrame(render);}}
