@@ -132,6 +132,32 @@
        else if(previous)hideFigureCaptionSidebar(m.state.figureId);
      }
    });
+   // Feature links reveal prepared examples through the same native renderers.
+   // Reopening an example keeps annotations, generated results and note edits.
+   let featureRequest=0;
+   demo.openFeature=async feature=>{
+     const view={outline:'navigation',evidence:'chat',search:'navigation',highlights:'highlights',figures:'figures',chat:'chat',notes:'notes',translate:'navigation'}[feature];
+     if(!view)return;
+     const request=++featureRequest;
+     while(busy){await new Promise(resolve=>setTimeout(resolve,40));if(request!==featureRequest)return;}
+     switchMode(view);
+     if(feature==='outline'&&!currentWorkspaceSnapshot.paragraphSummaries?.length)await generate('navigation');
+     if(feature==='figures'){
+       if(!demo.reading.figures.length)await generate('figures','Fig1');
+       else{figureExpansionState.set('Fig'+demo.reading.figures[0],true);renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot,{coordinated:true});}
+     }
+     if(feature==='notes'&&!Object.keys(demo.reading.notes).length)await generate('notes');
+     if(feature==='chat'&&!currentWorkspaceSnapshot.chat.turns.length)await answer(pick(d.questions[0].q));
+     if(feature==='evidence'){
+       let turn=currentWorkspaceSnapshot.chat.turns.find(turn=>turn.answerBlocks?.some(block=>block.evidence?.some(source=>source.paragraphId==='msa')));
+       if(!turn){await answer(pick(d.questions[0].q));turn=currentWorkspaceSnapshot.chat.turns.at(-1);}
+       else renderArticleChatSnapshot(currentWorkspaceSnapshot);
+       const log=byId('articleChatMessages'),citation=log.querySelector('[data-turn-id="'+turn.turnId+'"] .article-chat-inline-citation[data-paragraph-id="msa"]');
+       if(citation)log.scrollTop+=citation.getBoundingClientRect().top-log.getBoundingClientRect().top-log.clientHeight/2;
+     }
+     if(request===featureRequest)document.querySelector('[data-workspace-target="'+view+'"]')?.focus({preventScroll:true});
+     return view;
+   };
    switchMode('navigation');demo.ready=true;BV_I18N.activate();demo.generate=generate;demo.send('ready',{surface:'sidebar'});
   }catch(e){__websiteDemo.errors.push(e.stack);console.error(e);}
  };

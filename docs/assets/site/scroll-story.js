@@ -6,6 +6,11 @@
   const nav=document.querySelector('.staged-nav'), browser=story.querySelector('.story-browser'), extension=story.querySelector('.story-extension'), frame=story.querySelector('.story-sidebar iframe');
   let manualPanel=null;
   const tiles=[...story.querySelectorAll('.story-capability')];
+  // Extra distance is a scroll-controlled pause, never an autoplay delay.
+  // Repeated endpoints hold the completed scene before its crossfade begins.
+  const score=[[.26,0],[.26,.75],[.35,0],[.35,.35],[.38,0],[.44,.6],[.45,.6],[.71,0],[.71,.6],[.76,0],[.926,.75],[.94,1.05],[1,0]];
+  const extraDistance=score.reduce((sum,[,extra])=>sum+extra,0);
+  story.style.setProperty('--story-hold-distance',extraDistance);
   function navigation(){const visible=story.getBoundingClientRect().bottom<=0;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}
   function browserScene(p,visible){
     const opened=manualPanel===null?phase(p,.384,.435):Number(manualPanel);
@@ -16,7 +21,11 @@
     extension.setAttribute('aria-expanded',String(opened>.5));extension.setAttribute('aria-label',opened>.5?'收起 BREVESS 侧栏演示':'展开 BREVESS 侧栏演示');
     const tileReveal=manualPanel===false?0:phase(p,.394,.416);
     browser.style.setProperty('--capabilities-show',tileReveal);
-    tiles.forEach((tile,i)=>tile.style.setProperty('--tile-in',manualPanel===false?0:phase(p,.39+i*.003,.413+i*.003)));
+    tiles.forEach((tile,i)=>{
+      const reveal=manualPanel===false?0:phase(p,.39+i*.003,.413+i*.003);
+      tile.style.setProperty('--tile-in',reveal);
+      tile.inert=!visible||tileReveal<.9||reveal<.9;
+    });
     browser.inert=!visible;browser.style.pointerEvents=visible?'auto':'none';
     const prepare=reduced.matches?visible:p>.18&&p<.51;
     if(prepare&&!frame.getAttribute('src')){browser.classList.remove('is-sidebar-ready');frame.loading='eager';frame.src=frame.dataset.src;}
@@ -92,19 +101,17 @@
     if(!geometry) measure();
     const g=geometry;
     const range=story.offsetHeight-sticky.offsetHeight;
-    // Add scroll space only to the capability cards and equation. The other
-    // scenes keep their pace; both extra holds reverse naturally with the wheel.
-    const unit=story.offsetHeight/(geometry.mobile?7.2:7.4);
-    const baseRange=Math.max(1,range-unit*3);
+    const unit=story.offsetHeight/((geometry.mobile?4.2:4.4)+extraDistance);
+    const baseRange=Math.max(1,range-unit*extraDistance);
     const distance=Math.max(0,-story.getBoundingClientRect().top);
-    const score=[[.38,0],[.44,.6],[.45,.6],[.76,0],[.926,.75],[.94,1.05],[1,0]];
     let cursor=0,previous=0,p=1;
     for(const [end,extra] of score){
       const length=(end-previous)*baseRange+extra*unit;
       if(distance<=cursor+length){p=previous+clamp((distance-cursor)/length)*(end-previous);break;}
       cursor+=length;previous=end;
     }
-    const orbitProgress=clamp((distance-baseRange*.73-unit*1.2)/(baseRange*.27+unit*1.8));
+    const beforeOrbit=score.filter(([end])=>end<=.73).reduce((sum,[,extra])=>sum+extra,0);
+    const orbitProgress=clamp((distance-baseRange*.73-unit*beforeOrbit)/(baseRange*.27+unit*(extraDistance-beforeOrbit)));
     story.style.setProperty('--story-progress',p.toFixed(5));
     story.dataset.progress=p.toFixed(4);
     const browserVisible=p>.29&&p<.51;
