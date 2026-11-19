@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { releaseInventory } from './release-inventory.mjs';
+import { auditReleaseHygiene } from './release-hygiene.mjs';
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const forbidden = /(^|\/)(?:\.git|node_modules|tests?|scripts?|outputs?|dist|tmp|e2e|native-host)(\/|$)|\.(?:exe|zip|crx|log|map|pem|key|ps1|cmd)$|(^|\/)\.env(?:\.|$)/i;
@@ -100,7 +101,7 @@ export function readZip(zip) {
 }
 
 export function auditPackage(files) {
-  const errors = [], review = [];
+  const errors = auditReleaseHygiene(files).map(f => `Package hygiene: ${f.path}: ${f.rule}`), review = [];
   const requireFile = (name, owner) => { if (!files.has(name)) errors.push(`${owner}: missing ${name}`); };
   const manifest = JSON.parse(files.get('manifest.json') || '{}');
   if (manifest.manifest_version !== 3 || manifest.key || manifest.update_url) errors.push('Invalid store manifest');

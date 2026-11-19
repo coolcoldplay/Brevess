@@ -48,7 +48,11 @@
       if (message.type === 'PAGE_TOOLS_BOOTSTRAP') {
         if (sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id) || !pageToolsSupportedUrl(sender.url))
           fail('PAGE_TOOLS_UNSUPPORTED', '此页面不支持网页工具。');
-        const frame = await frameFor(sender.tab.id, sender.documentId, sender.url);
+        // History navigation keeps the document but can leave MessageSender.url
+        // at its initial address. Pin the browser's current frame identity.
+        const current = await chromeApi.webNavigation.getFrame({ tabId: sender.tab.id, frameId: 0 });
+        if (!pageToolsSupportedUrl(current?.url)) fail('PAGE_TOOLS_UNSUPPORTED', '此页面不支持网页工具。');
+        const frame = await frameFor(sender.tab.id, sender.documentId, current.url);
         return { tabId: sender.tab.id, frame };
       }
       if (String(sender.url || '').split(/[?#]/)[0] !== chromeApi.runtime.getURL('action-popup.html'))
@@ -117,7 +121,7 @@
           // activeTab also admits ordinary HTTP pages when the user opens the
           // toolbar popup. Restore saved tools without adding broad HTTP hosts.
           await chromeApi.scripting.executeScript({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] },
-            files: ['core/page-tools.js', 'semantic-find-launcher.js'] });
+            files: ['core/credential-boundary.js', 'core/page-tools.js', 'semantic-find-launcher.js'] });
           if (preferences.pageTranslation) await ensureTranslation(target);
           await ensureReader(target, preferences);
         } else if (message.type === 'PAGE_TOOLS_BOOTSTRAP') {

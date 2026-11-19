@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { auditReleaseFile } from './release-hygiene.mjs';
 import { sourceRelative } from './project-paths.cjs';
 
 const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -60,6 +61,8 @@ export function releaseInventory(rootDir = DEFAULT_ROOT, profile = 'full', spec 
   return [...new Set(files)].sort().map(source => {
     const absolute = verify(source), stat = fs.statSync(absolute);
     if (!stat.isFile()) throw new Error(`RELEASE_FILE_REQUIRED:${source}`);
+    const findings = auditReleaseFile(source, fs.readFileSync(absolute));
+    if (findings.length) throw new Error(`RELEASE_HYGIENE_FAILED:${source}:${findings.map(f => f.rule).join(',')}`);
     const destination = profile === 'companion' ? source.replace(/^native-host\//, '') : source;
     return {source:sourceRelative(source, spec.sourceLayout || {}), path:destination, bytes:stat.size};
   });

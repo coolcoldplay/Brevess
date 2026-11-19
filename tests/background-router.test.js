@@ -23170,7 +23170,7 @@ test('saved page annotation lookup uses the trusted sender URL and rechecks navi
   }}});
   const owner={trustedExtensionSender:true,senderUrl:url,assertTrustedOwnerCurrent:async()=>{checks++;}};
   assert.equal((await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:url},owner)).data.record.documentId,'test');
-  assert.equal(checks,2);
+  assert.ok(checks >= 2);
   const result=await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:'https://chatgpt.com/c/other'},owner);
   assert.equal(result.success,false);assert.equal(lookups,1);
   const untrusted=await router.handle({type:'DOCUMENT_FIND_ANNOTATED_SOURCE',sourceUrl:url},{});
@@ -23194,4 +23194,51 @@ test('annotation source preparation separates URL queries and preserves annotati
  assert.equal(remounted.success,true,JSON.stringify(remounted.error));
  assert.equal(remounted.data.documentId,first.data.documentId);assert.equal(remounted.data.record.annotations[0].note,'Keep this note');
  const wrong=await router.handle({type:'DOCUMENT_PREPARE',document:input(firstUrl)},owner(otherUrl));assert.equal(wrong.success,false);
+});
+
+test('SPA annotations use the browser-verified live frame URL when MessageSender retains the landing URL', async () => {
+  const store = SciLLM.createMemoryDocumentStore();
+  const router = createBackgroundRouter({ storageArea: createMemoryStorage(), documentStore: store });
+  const sourceUrl = 'https://chatgpt.com/c/demo-conversation';
+  let liveUrl = sourceUrl;
+  const owner = { trustedExtensionSender: true, senderUrl: 'https://chatgpt.com/',
+    assertTrustedOwnerCurrent: async () => {}, readTrustedFrameUrl: async () => liveUrl };
+  const document = { title: 'Reading evidence', canonicalUrl: 'https://chatgpt.com/',
+    annotationSourceUrl: sourceUrl, paragraphs: [{ paragraphId: 'p1', text: 'Check the source before drawing a conclusion.' }] };
+  const prepared = await router.handle({ type: 'DOCUMENT_PREPARE', document }, owner);
+  assert.equal(prepared.success, true, JSON.stringify(prepared.error));
+  assert.equal(prepared.data.record.annotationSourceUrl, sourceUrl);
+  await store.upsertAnnotation(prepared.data.documentId, { annotationId: 'spa-note', categoryId: 'result',
+    categorySnapshot: { name: 'Result', color: '#FFE66D' }, quote: 'Check the source', prefix: '',
+    suffix: ' before drawing a conclusion.', blockFingerprint: 'p1', startOffset: 0, endOffset: 16, note: 'Verify evidence' });
+  const found = await router.handle({ type: 'DOCUMENT_FIND_ANNOTATED_SOURCE', sourceUrl }, owner);
+  assert.equal(found.success, true, JSON.stringify(found.error));
+  assert.equal(found.data.record.annotations[0].note, 'Verify evidence');
+  liveUrl = 'https://chatgpt.com/c/another-conversation';
+  assert.equal((await router.handle({ type: 'DOCUMENT_PREPARE', document }, owner)).success, false);
+  assert.equal((await router.handle({ type: 'DOCUMENT_FIND_ANNOTATED_SOURCE', sourceUrl }, owner)).success, false);
+  assert.equal((await router.handle({ type: 'DOCUMENT_PREPARE', document }, { ...owner, readTrustedFrameUrl: undefined })).success, false);
+});
+
+test('SPA annotation preparation and restore reject navigation during asynchronous work', async () => {
+  const sourceUrl = 'https://example.org/#/chat/one';
+  let reads = 0, writes = 0, lookups = 0;
+  const owner = { trustedExtensionSender: true, senderUrl: 'https://example.org/',
+    assertTrustedOwnerCurrent: async () => {},
+    readTrustedFrameUrl: async () => ++reads === 1 ? sourceUrl : 'https://example.org/#/chat/two' };
+  const router = createBackgroundRouter({ storageArea: createMemoryStorage(), documentStore: {
+    prepareDocument: async () => { writes++; throw Error('Should not persist stale input'); },
+    findAnnotatedSource: async () => { lookups++; return { documentId: 'old', annotations: [{ note: 'private' }] }; }
+  } });
+  const prepared = await router.handle({ type: 'DOCUMENT_PREPARE', document: { title: 'Source', annotationSourceUrl: sourceUrl,
+    paragraphs: [{ paragraphId: 'p', text: 'Original conversation content.' }] } }, owner);
+  assert.equal(prepared.success, false); assert.equal(writes, 0);
+  reads = 0;
+  const restored = await router.handle({ type: 'DOCUMENT_FIND_ANNOTATED_SOURCE', sourceUrl }, owner);
+  assert.equal(lookups, 1); assert.equal(restored.success, false); assert.equal(restored.data, undefined);
+  const unverified = await router.handle({ type: 'DOCUMENT_PREPARE', document: { annotationSourceUrl: sourceUrl,
+    paragraphs: [{ paragraphId: 'p', text: 'Original conversation content.' }] } }, {
+    ...owner, readTrustedFrameUrl: async () => { throw Object.assign(Error('CANCELLED'), { code: 'CANCELLED' }); }
+  });
+  assert.equal(unverified.success, false); assert.equal(writes, 0);
 });

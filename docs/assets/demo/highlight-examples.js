@@ -1,10 +1,10 @@
 /* Public examples. Category definitions come from the shipping catalog. */
 window.BVHighlightExamples = (api,d) => {
  const catalog=api.createUnifiedCategoryCatalog();
- const terms=[['term_msa','序列比对','#4ECDC4','\\b(?:MSAs?|multi-sequence alignments)\\b'],['term_model','模型与评估','#FFB6C1','\\b(?:AlphaFold|CASP14|PDB)\\b'],['term_metric','精度指标','#87CEEB','\\b(?:GDT|lDDT-Cα|atomic accuracy)\\b']];
+ const terms=d.highlightTerms||[['term_msa','序列比对','#4ECDC4','\\b(?:MSAs?|multi-sequence alignments)\\b'],['term_model','模型与评估','#FFB6C1','\\b(?:AlphaFold|CASP14|PDB)\\b'],['term_metric','精度指标','#87CEEB','\\b(?:GDT|lDDT-Cα|atomic accuracy)\\b']];
  terms.forEach(([categoryId,name,color,expression])=>catalog[categoryId]=api.toUnifiedCategory({categoryId,name,color,builtIn:false,enabledEngines:['regex','llm'],regex:{phrases:[],expressions:[expression],excludePhrases:[],caseSensitive:false,wholeWord:false},prompt:{definition:'标记原文中的'+name}}));
- const views={quick_story:{name:'快速主线',categoryIds:['known_background','method','result','comparison','limitation','significance_novelty']},paper_terms:{name:'论文术语（示例情境）',categoryIds:terms.map(x=>x[0])}};
- const slices=[
+ const views={quick_story:{name:'快速主线',categoryIds:['known_background','method','result','comparison','limitation','significance_novelty']},paper_terms:{name:d.web?'网页术语（示例情境）':'论文术语（示例情境）',categoryIds:terms.map(x=>x[0])}};
+ const slices=d.highlightSlices||[
   ['abstract','known_background',0,'Through an',.94,'说明结构知识与序列数量之间的背景差距。'],
   ['accuracy','significance_novelty',0,'We validated',.91,'作者声明的方法创新，需与后续验证结果分开阅读。'],
   ['accuracy','result','We validated',null,.95,'CASP14 验证结果；多数情况并不代表每一个目标。'],

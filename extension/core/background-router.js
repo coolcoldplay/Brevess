@@ -6815,6 +6815,23 @@
       }
       return {version:1,doi,documentHash,format:nativeIdentity?'pdf':'html',evidence};
     }
+    async function verifiedAnnotationSourceUrl(context, expectedUrl, field = 'annotationSourceUrl') {
+      if (context.trustedExtensionSender !== true ||
+          typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings([field]);
+      await context.assertTrustedOwnerCurrent();
+      // MessageSender.url can retain the initial URL after a same-document
+      // history navigation (for example ChatGPT / -> /c/...). The browser's
+      // frame lookup also verifies documentId, so use that authority rather
+      // than trusting a URL supplied by the content script.
+      const liveUrl = typeof context.readTrustedFrameUrl === 'function'
+        ? await context.readTrustedFrameUrl() : context.senderUrl;
+      const sourceUrl = shared.normalizeAnnotationSourceUrl(liveUrl);
+      if (!sourceUrl || shared.normalizeAnnotationSourceUrl(expectedUrl) !== sourceUrl)
+        throw invalidSettings([field]);
+      await context.assertTrustedOwnerCurrent();
+      return sourceUrl;
+    }
+
     async function prepareStoredDocumentUnsafe(settings, document, context = {}, captureCreation = false) {
       const paragraphs = Array.isArray(document?.paragraphs) ? document.paragraphs : [];
       if (!paragraphs.length) throw invalidSettings(['paragraphs']);
@@ -6839,12 +6856,7 @@
       }
       let annotationSourceUrl = '';
       if (!savedIdentity && !htmlIdentity && !nativeIdentity && document?.annotationSourceUrl) {
-        const ownerUrl = shared.normalizeAnnotationSourceUrl(context.senderUrl);
-        if (context.trustedExtensionSender !== true || !ownerUrl ||
-            shared.normalizeAnnotationSourceUrl(document.annotationSourceUrl) !== ownerUrl ||
-            typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings(['annotationSourceUrl']);
-        await context.assertTrustedOwnerCurrent();
-        annotationSourceUrl = ownerUrl;
+        annotationSourceUrl = await verifiedAnnotationSourceUrl(context, document.annotationSourceUrl);
       }
       const documentHash = savedIdentity?.documentHash || htmlIdentity?.documentHash || nativeIdentity?.documentHash || paragraphDocumentHash;
       const computedDocumentId = await shared.createDocumentId({
@@ -6897,6 +6909,7 @@
         legacyStudyTypeMigrated: true
       };
       if (htmlIdentity) await context.assertLibraryHtmlCurrent();
+      if (annotationSourceUrl) await verifiedAnnotationSourceUrl(context, annotationSourceUrl);
       const documentCreationInfo = captureCreation &&
         typeof documentStore.prepareDocumentWithCreationInfo === 'function'
         ? await documentStore.prepareDocumentWithCreationInfo(input) : null;
@@ -19391,14 +19404,9 @@
       if (message.type === 'DOCUMENT_FIND_ANNOTATED_SOURCE') {
         // The browser sender owns the URL; a web page cannot request another
         // conversation's annotations by putting its URL into a message.
-        if (context.trustedExtensionSender !== true || typeof context.assertTrustedOwnerCurrent !== 'function')
-          throw invalidSettings(['owner']);
-        const source = new URL(String(context.senderUrl || ''));
-        if (!['http:', 'https:', 'file:'].includes(source.protocol)) throw invalidSettings(['sourceUrl']);
-        if (shared.normalizeAnnotationSourceUrl(message.sourceUrl) !== shared.normalizeAnnotationSourceUrl(source.href)) throw invalidSettings(['sourceUrl']);
-        await context.assertTrustedOwnerCurrent();
-        const record = await documentStore.findAnnotatedSource(source.href);
-        await context.assertTrustedOwnerCurrent();
+        const sourceUrl = await verifiedAnnotationSourceUrl(context, message.sourceUrl, 'sourceUrl');
+        const record = await documentStore.findAnnotatedSource(sourceUrl);
+        await verifiedAnnotationSourceUrl(context, sourceUrl, 'sourceUrl');
         return { record };
       }
 

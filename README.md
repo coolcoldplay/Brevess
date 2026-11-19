@@ -3,7 +3,7 @@
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r10"><strong>1.0.2 r27 · 自适应解图 r10</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r11"><strong>1.0.2 r27 · r11</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -75,15 +75,21 @@
 
 以上工作台截图为**早期版本实录**。点击模块标题可进入使用最新版真实界面组件的[官网工作台](https://coolcoldplay.github.io/Brevess/#workbench)，体验材料引用、画布编辑和撤销。
 
+## 不止论文
+
+网页与 AI 对话也是阅读材料。用 BREVESS 的真实组件体验划句翻译、高亮备注、大纲跳转、语义检索和网页问答。
+
+[体验 GitHub 与 ChatGPT 场景](https://coolcoldplay.github.io/Brevess/#beyond-papers) · 公开仓库节选与专门编写的对话，AI 为预置示例。
+
 ## 安装预览版
 
-1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-adaptive-r10/Brevess-v1.0.2-r27-adaptive-r10-Chrome.zip)，解压到独立文件夹。
+1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-adaptive-r11/Brevess-v1.0.2-r27-adaptive-r11-Chrome.zip)，解压到独立文件夹。
 2. 打开 `chrome://extensions/`（Edge 使用 `edge://extensions/`）→ 开发者模式 → 加载已解压的扩展程序，选择包含 `manifest.json` 的文件夹。
 3. 固定 BREVESS 图标，在论文全文页打开侧栏。首次打开设置时，可在快速配置中选择保存目录、确认隐私提示并连接默认模型。
 
 大纲导航、离线规则、手动高亮、笔记编辑和工作台无需 API Key。部分增强功能需要可选本机伴侣，当前浏览器 ZIP 不包含本机二进制。
 
-**这是预览版。**此版更新自适应并发、断点续跑与补充 PDF 原图解读。完整回归及附件覆盖情况见[发布记录](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r10)。
+**这是预览版。**此版修复 ChatGPT 等动态网页切换后的读取与标注恢复，并加强安装包隐私检查。验证范围与限制见[发布记录](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-adaptive-r11)。
 
 ## 源码与构建
 

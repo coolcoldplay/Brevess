@@ -1,6 +1,6 @@
 /* Production search controller and translation renderer with public data adapters. */
 window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
- const examples=BV_READER_EXAMPLES,paper=root.querySelector('.bv-paper'),translationUI=BVCreateTranslationUI();
+ const examples=d.readerExamples||BV_READER_EXAMPLES,paper=root.querySelector('.bv-paper'),translationUI=BVCreateTranslationUI();
  const translated=new Map();let epoch=0,searchHits=[],hovered=null,altSource=null;
  const names=Array.from({length:101},(_,i)=>'sci-semantic-search-'+i),currentName='sci-semantic-search-current';
  const style=document.createElement('style');style.textContent=names.map((name,i)=>`::highlight(${name}){background-color:rgba(255,187,35,${SciLLM.semanticFindScoreAlpha(i/100)});color:inherit;}`).join('\n')+`::highlight(${currentName}){text-decoration:underline;text-decoration-color:#915600;text-decoration-thickness:2px;}`;document.head.append(style);
@@ -13,7 +13,7 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
  const controller=SciLLM.createSemanticFindController({document,window,
   openSettings:()=>onToast('官网使用预置匹配分数；安装插件后可配置语义检索模型。'),
   adapter:{
-   buildCorpus:async()=>{const paragraphs=d.paragraphs.map(p=>({paragraphId:p.id,text:p.text,sectionTitle:p.heading}));return {identity:{kind:'html'},sourceKey:'public-alphafold-'+epoch,epoch,paragraphs,sentences:SciLLM.createSemanticFindSentences(paragraphs),coverage:'full',coverageMessage:'范围为本页的 5 段公开论文节选。',sourceNotice:'预置语义检索示例；分数由演示预设，未调用在线模型。'};},
+   buildCorpus:async()=>{const paragraphs=d.paragraphs.map(p=>({paragraphId:p.id,text:p.text,sectionTitle:p.heading}));return {identity:{kind:'html'},sourceKey:(d.documentId||'public-alphafold')+'-'+epoch,epoch,paragraphs,sentences:SciLLM.createSemanticFindSentences(paragraphs),coverage:'full',coverageMessage:'范围为本页展示的 '+d.paragraphs.length+' 段内容。',sourceNotice:'预置语义检索示例；分数由演示预设，未调用在线模型。'};},
    isCurrent:corpus=>corpus.epoch===epoch,
    isHitCurrent:(corpus,hit)=>d.paragraphs.find(p=>p.id===hit.paragraphId)?.text.slice(hit.start,hit.end)===hit.text,
    paint(corpus,hits,id){clear();searchHits=hits;for(const hit of hits){const range=rangeFor(hit);if(!range)continue;const name=names[Math.round(hit.score*100)];let group=CSS.highlights.get(name);if(!group){group=new Highlight();CSS.highlights.set(name,group);}group.add(range);if(hit.id===id)CSS.highlights.set(currentName,new Highlight(range));}},
@@ -24,7 +24,7 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
   sendMessage:async message=>{
    if(message.type==='LLM_SEMANTIC_FIND_CANCEL')return {success:true};
    const example=examples.semanticQueries.find(q=>q.query===message.query||q.aliases.test(message.query));
-   if(!example)return {success:false,error:{message:'此体验准备了三类检索：比对序列不足、精度验证、生物学知识如何融入网络。安装插件后可自由描述任意语义。'}};
+   if(!example)return {success:false,error:{message:'可尝试：'+examples.semanticQueries.map(q=>q.query).join('；')+'。安装插件后可自由描述任意语义。'}};
    const sentences=SciLLM.createSemanticFindSentences(message.paragraphs);
    return {success:true,data:{operationId:message.operationId,sourceKey:message.sourceKey,scores:sentences.map(s=>({id:s.id,score:example.score(s)})),processed:sentences.length,total:sentences.length,skipped:0,done:true}};
   }
@@ -35,7 +35,7 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
  function translate(enabled=true){
   reading.close();onView('paper');
   if(!enabled){onToast('已停止整页翻译；保留已有译文。');return;}
-  for(const [element,text] of translationEntries())if(element)paintTranslation(element,text);
+  for(const [element,text] of translationEntries())if(element&&text&&text!==element.textContent)paintTranslation(element,text);
   onToast('已显示预置双语译文，英文原文与高亮保留。');
  }
  paper.addEventListener('pointerover',event=>{hovered=event.target.closest('h1,h2,[data-paragraph],figcaption');});
@@ -43,7 +43,7 @@ window.BVCreateReaderTools=({root,data:d,reading,onToast,onView})=>{
  const editing=event=>event.target.closest?.('input,textarea,select,button,a,[contenteditable],dialog')||document.activeElement?.closest('input,textarea,select,button,a,[contenteditable],dialog');
  addEventListener('keydown',event=>{if(event.key!=='Alt'){altSource=null;return;}if(!event.repeat)altSource=window.__bvPageTools.preferences.pageTranslation&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!editing(event)?hovered:null;});
  addEventListener('keyup',event=>{if(event.key!=='Alt')return;const source=altSource;altSource=null;if(!source||source!==hovered||editing(event)||event.ctrlKey||event.metaKey||event.shiftKey||!window.__bvPageTools.preferences.pageTranslation)return;const entry=translationEntries().find(([el])=>el===source);if(!entry)return;event.preventDefault();const record=translated.get(source);if(record?.translation?.isConnected)record.translation.hidden=!record.translation.hidden;else paintTranslation(...entry);});
- function openSearch(){reading.close();onView('paper');controller.open();const query=document.querySelector('[data-semantic-find-role="query"]');if(!query.value)query.value=examples.semanticQueries[0].query;onToast('试试：比对序列不足、精度验证，或生物学知识如何融入网络。');}
+ function openSearch(){reading.close();onView('paper');controller.open();const query=document.querySelector('[data-semantic-find-role="query"]');if(!query.value)query.value=examples.semanticQueries[0].query;onToast('试试：'+examples.semanticQueries.map(q=>q.query).join(' · '));}
  function keydown(event){if(controller.handleKeydown(event))return true;if(event.defaultPrevented||event.ctrlKey||event.metaKey||event.altKey||event.target.closest?.('input,textarea,select,[contenteditable],dialog'))return false;const bounds=root.getBoundingClientRect();if(event.key.toLowerCase()==='j'&&bounds.bottom>0&&bounds.top<innerHeight&&window.__bvPageTools.preferences.semantic){event.preventDefault();openSearch();return true;}return false;}
  return {openSearch,translate,keydown,refresh:()=>controller.refreshSourceHits(),isSearchOpen:controller.isOpen,
   reset(){epoch++;controller.close();hovered=altSource=null;for(const r of translated.values())r.translation?.remove();translated.clear();},

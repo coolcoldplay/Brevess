@@ -15,8 +15,8 @@
    activePanelTabContext={...activePanelTabContext,tabId:1,url:d.source,title:d.title,activated:true,key:d.source};
    demo.draft=SciLLM.createFigureWorkspaceDraft(demo.figures());
    demo.snapshot=()=>currentWorkspaceSnapshot;
-   currentWorkspaceSnapshot={...demo.structure(),publisher:'springer-nature',figures:{figures:demo.figures(),inventoryReady:true,workspaceLifecycle:1,draft:demo.draft},chat:{turns:[]}};
-   manualAnnotationState={documentId:'alphafold-example',annotationCount:0,unresolvedCount:0};
+   currentWorkspaceSnapshot={...demo.structure(),publisher:d.publisher||'springer-nature',figures:{figures:demo.figures(),inventoryReady:true,workspaceLifecycle:1,draft:demo.draft},chat:{turns:[]}};
+   manualAnnotationState={documentId:d.documentId||'alphafold-example',annotationCount:0,unresolvedCount:0};
    focusWorkspaceSource=async target=>{target.kind==='highlight'?send('annotation',{id:target.highlightId}):send('jump',{id:target.evidence?.paragraphId||target.sectionId||target.paragraphId||'abstract'});return true;};
    handleFigureWorkspaceJump=async figure=>send('jump',{id:'figure-'+String(figure.figureId).replace(/\D/g,'')});
    async function generate(module=mode, specific){
@@ -41,7 +41,7 @@
          document.querySelectorAll('#articleNavigationTree details.workspace-tree-node').forEach(n=>{n.open=true;});
        } else if(module==='highlights') {highlights.run();}
        else if(module==='notes'||module==='note'){
-         const fields={research_background:'蛋白质序列数量远多于已解析结构，结构预测可以帮助缩小这一差距。',scientific_questions:'如何在没有已知相似结构时，从氨基酸序列预测可靠的三维结构？',experimental_design:'CASP14 盲测；训练时间之后的 PDB 测试集；组件消融；MSA 深度分析。',important_methods:'MSA 与残基对表示；Evoformer；Invariant Point Attention；recycling。',main_findings:'在多数 CASP14 目标上取得很高精度。低 MSA 深度仍是重要的适用边界（Fig 5a）。',innovations:'将共进化信息与几何推理整合到端到端网络。',limitations:'高局部置信度不等于已验证生物学功能；浅 MSA 和链间接触仍需谨慎。',open_questions:'哪些低置信区域值得优先实验验证？',transferable_ideas:'先用结构与置信度提出可检验的问题，再结合实验对照验证。'};
+         const fields=d.notes||{research_background:'蛋白质序列数量远多于已解析结构，结构预测可以帮助缩小这一差距。',scientific_questions:'如何在没有已知相似结构时，从氨基酸序列预测可靠的三维结构？',experimental_design:'CASP14 盲测；训练时间之后的 PDB 测试集；组件消融；MSA 深度分析。',important_methods:'MSA 与残基对表示；Evoformer；Invariant Point Attention；recycling。',main_findings:'在多数 CASP14 目标上取得很高精度。低 MSA 深度仍是重要的适用边界（Fig 5a）。',innovations:'将共进化信息与几何推理整合到端到端网络。',limitations:'高局部置信度不等于已验证生物学功能；浅 MSA 和链间接触仍需谨慎。',open_questions:'哪些低置信区域值得优先实验验证？',transferable_ideas:'先用结构与置信度提出可检验的问题，再结合实验对照验证。'};
          literatureNoteDocumentState={schemaVersion:3,templateId:'basic_research',valuesByTemplate:{basic_research:{...fields,...demo.reading.notes}},fieldStatusByTemplate:{basic_research:Object.fromEntries(Object.keys(fields).map(k=>[k,'supported']))},fieldEvidenceByTemplate:{},fieldUpdatedAtByTemplate:{},updatedAt:Date.now()};
          demo.reading.notes=literatureNoteDocumentState.valuesByTemplate.basic_research;renderLiteratureNoteDrawer();
        } else if(module==='chat') await answer(d.questions[0].q[0]);
@@ -55,13 +55,13 @@
    runSingleFigurePanelAnalysis=async id=>generate('figures',id);
    persistLiteratureNote=async()=>{};
    async function answer(question){
-     const q=d.questions.find(x=>x.q.includes(question))||(/msa|比对|序列/i.test(question)?d.questions[0]:/evoformer|recycl|结构模块|架构|流程/i.test(question)?d.questions[1]:/局限|验证|置信|可靠|不足/i.test(question)?d.questions[2]:null);
-     const turn={turnId:'example-'+Date.now(),question,status:'completed',answer:q?`${q.answer[0]}\n\n${q.details[0]}\n\n**回到原图核对：** ${q.refs.map(i=>`Fig ${i}`).join(' · ')}\n\n*预置示例，未调用在线模型。*`:'这是官网预置体验，目前准备了 MSA、模型架构和实验验证三个问题。你可以输入“AlphaFold 为什么需要 MSA？”继续体验；安装插件后可向已配置的模型自由提问。',createdAt:Date.now(),profileName:'预置 AI 示例'};
+     const q=d.questions.find(x=>x.q.includes(question)||x.match?.test(question))||(d.web?null:(/msa|比对|序列/i.test(question)?d.questions[0]:/evoformer|recycl|结构模块|架构|流程/i.test(question)?d.questions[1]:/局限|验证|置信|可靠|不足/i.test(question)?d.questions[2]:null));
+     const turn={turnId:'example-'+Date.now(),question,status:'completed',answer:q?`${q.answer[0]}\n\n${q.details[0]}\n\n${d.web?'**依据当前网页内容整理。**':'**回到原图核对：** '+q.refs.map(i=>`Fig ${i}`).join(' · ')}\n\n*预置示例，未调用在线模型。*`:'这是官网预置体验。试问：'+d.questions.map(x=>x.q[0]).join('；')+'。安装插件后可向已配置的模型自由提问。',createdAt:Date.now(),profileName:'预置 AI 示例'};
      if(q){
-       const evidenceIds=q===d.questions[0]?['msa']:[];
-       if(evidenceIds.length)turn.answer=turn.answer.replace(q.details[0],q.details[0]+' [[1]]');
+       const evidenceIds=q.evidenceIds||(q===d.questions[0]?['msa']:[]);
+       if(evidenceIds.length)turn.answer=turn.answer.replace(q.details[0],q.details[0]+' '+evidenceIds.map((_,i)=>'[['+(i+1)+']]').join(' '));
        const evidence=evidenceIds.map((id,index)=>{const p=d.paragraphs.find(p=>p.id===id);return {marker:String(index+1),paragraphId:id,sectionTitle:p.heading,quote:p.text,documentRevision:1};});
-       if(q===d.questions[1])turn.answer+='\n\n| 组件 | 作用 |\n| --- | --- |\n| Evoformer | 让 MSA 与残基对表示交换信息 |\n| 结构模块 | 将表示转成三维坐标 |\n| Recycling | 把预测反馈给网络继续精炼 |';
+       if(!d.web&&q===d.questions[1])turn.answer+='\n\n| 组件 | 作用 |\n| --- | --- |\n| Evoformer | 让 MSA 与残基对表示交换信息 |\n| 结构模块 | 将表示转成三维坐标 |\n| Recycling | 把预测反馈给网络继续精炼 |';
        turn.answerBlocks=[{blockId:turn.turnId+'-answer',markdown:turn.answer,evidence}];
      }
      currentWorkspaceSnapshot.chat.turns.push(turn);demo.reading.chat=currentWorkspaceSnapshot.chat.turns;
@@ -72,8 +72,8 @@
    submitArticleChat=async event=>{event?.preventDefault();const q=byId('articleChatQuestion').value.trim();if(q)await answer(q);};
    const highlights=BVSetupHighlights({d,demo,send});
    byId('sidePanelPaperTitle').textContent=d.title;
-   byId('articleNavigationStatus').textContent='springer-nature · 5 个标题 · 论文节选';
-   byId('sidePanelDocumentStatusText').textContent='已激活 · springer-nature · 网页滤镜';
+   byId('articleNavigationStatus').textContent=d.web?d.publisher+' · '+d.paragraphs.length+' 个标题 · 网页节选':'springer-nature · 5 个标题 · 论文节选';
+   byId('sidePanelDocumentStatusText').textContent='已激活 · '+(d.publisher||'springer-nature')+' · 网页滤镜';
    renderArticleNavigationTree(currentWorkspaceSnapshot);renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot,{coordinated:true});renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);renderManualAnnotationSummary();renderLiteratureNoteDrawer();
    highlights.sync();
    const readerTools=BVSetupSidebarTools({d,demo,send});

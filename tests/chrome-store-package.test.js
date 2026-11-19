@@ -33,3 +33,15 @@ test('Chrome staging keeps source manifest untouched and includes every runtime 
   files.delete('core/credential-boundary.js');
   assert.ok(api.auditPackage(files).errors.some(e => e.includes('missing core/credential-boundary.js')));
 });
+
+test('final archive audit rejects extra test data and embedded user paths after ZIP decoding', () => {
+  const root = path.join(__dirname, '..');
+  const files = new Map(api.chromeFiles(root).map(f => [f.path, fs.readFileSync(path.join(root, f.source))]));
+  files.set('manifest.json', Buffer.from(JSON.stringify(api.storeManifest(JSON.parse(files.get('manifest.json'))))));
+  files.set('core/fixtures/private-paper.json', Buffer.from('{}'));
+  files.set('core/contaminated.js', Buffer.from('const path = "/Users/private-person/research";'));
+  const decoded = api.readZip(api.createZip([...files].map(([name, bytes]) => ({name, bytes}))));
+  const errors = api.auditPackage(decoded).errors;
+  assert.ok(errors.some(e => e.includes('NON_RUNTIME_OR_PRIVATE_FILE')));
+  assert.ok(errors.some(e => e.includes('LOCAL_USER_PATH')));
+});

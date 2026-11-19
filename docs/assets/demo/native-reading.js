@@ -1,6 +1,6 @@
 /* Adapts the exact shipping selection component to a public paper in memory. */
 window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviation}) => {
- const example=BVHighlightExamples(SciLLM,d),record={annotations:[]},manualDocument={documentId:'alphafold-example',record};
+ const example=BVHighlightExamples(SciLLM,d),record={annotations:[]},manualDocument={documentId:d.documentId||'alphafold-example',record};
  const paragraphs=[...root.querySelectorAll('[data-paragraph]')];
  const blocks=paragraphs.map(element=>({blockId:element.dataset.paragraph,element}));
  const categories=Object.entries(example.catalog).map(([categoryId,c])=>({...c,categoryId}));
@@ -74,13 +74,13 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
  const sendManualMessage=async m=>{
   if(m.type==='LLM_ASK_SELECTION'){
    const a=example.llm.find(a=>a.text.includes(m.selectedText)||m.selectedText.includes(a.text));
-   return{operationId:m.operationId,message:{status:'completed',answerBlocks:[{markdown:(a?a.note:'作者把蛋白质结构预测的性能、方法和适用边界分开验证。请结合上下文和原图核对。')+'\n\n预置 AI 解读示例；未调用在线模型。'}]}};
+   return{operationId:m.operationId,message:{status:'completed',answerBlocks:[{markdown:(a?a.note:d.selectionExplanation||'作者把蛋白质结构预测的性能、方法和适用边界分开验证。请结合上下文和原图核对。')+'\n\n预置 AI 解读示例；未调用在线模型。'}]}};
   }
   if(m.type==='ANNOTATION_DELETE'){annotations=annotations.filter(a=>String(a.id)!==m.annotationId);publish();return{record};}
   throw Error('此操作请在安装后的插件中使用');
  };
  selectionUI=BVCreateSelectionUI({SciLLM:sci,source:d.source,chrome:{runtime:{sendMessage:async()=>({success:true})}},currentManualDocument:manualDocument,currentManualBlocks:blocks,currentManualCategories:categories,currentManualAnalysisModes:Object.entries(example.views).map(([id,v])=>({id,...v})),
-  actions:[{id:'explain',name:'解释选中内容',enabled:true,prompt:'解释这段论文中的关键概念与证据边界。'}],saveSelectionSurfaceAnnotations:saveSurface,sendManualMessage,
+  actions:[{id:'explain',name:'解释选中内容',enabled:true,prompt:'解释所选内容中的关键概念与证据边界。'}],saveSelectionSurfaceAnnotations:saveSurface,sendManualMessage,
   appendManualFixedPhrase:async(id,type,descriptor)=>{const c=category(id),list=type==='include'?'phrases':'excludePhrases';c.regex[list]||=[];if(!c.regex[list].includes(descriptor.text))c.regex[list].push(descriptor.text);onToast(type==='include'?'已加入本页示例白名单':'已加入本页示例黑名单');if(regexRan)runRegex();},
   addCurrentArticleAbbreviation:async entry=>{onAbbreviation?.(entry);onToast('已加入本页缩略词表：'+entry.abbreviation+' — '+entry.fullName);},showManualStatus:onToast,
   restoreManualAnnotations:refresh,updateCurrentManualRecord:()=>{},

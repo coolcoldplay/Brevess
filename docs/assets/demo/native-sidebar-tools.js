@@ -1,6 +1,6 @@
 /* Production outline and abbreviation controls; only the data boundary is adapted. */
 window.BVSetupSidebarTools=({d,demo,send})=>{
- const examples=BV_READER_EXAMPLES,byId=id=>document.getElementById(id);
+ const examples=d.readerExamples||BV_READER_EXAMPLES,byId=id=>document.getElementById(id);
  const extracted=SciLLM.extractArticleAbbreviations(d.paragraphs.map(p=>({paragraphId:p.id,text:p.text})));
  let entries=examples.abbreviations.map(entry=>({...entry,meaningZh:'',definitionZh:'',sourceType:extracted.some(a=>a.abbreviation.toUpperCase()===entry.abbreviation.toUpperCase())?'automatic':'manual'})).sort((a,b)=>a.abbreviation.localeCompare(b.abbreviation));
  let memory=SciLLM.normalizeGlobalAbbreviationMemory({entries:[]});
@@ -30,7 +30,7 @@ window.BVSetupSidebarTools=({d,demo,send})=>{
   send('toast',{message:'已补齐空白项；保留手动填写内容。释义为预置示例，未调用在线模型。'});
  };
  setupAbbreviationDialogs();
- byId('showArticleAbbreviations').addEventListener('click',()=>{void showArticleAbbreviationTable();send('toast',{message:'5 项论文缩略词示例；可编辑，或点击一键获取补齐空白释义。'});});
+ byId('showArticleAbbreviations').addEventListener('click',()=>{void showArticleAbbreviationTable();send('toast',{message:entries.length+' 项缩略词示例；可编辑或补齐空白释义。'});});
  byId('translateArticleAbbreviations').addEventListener('click',()=>void enrichArticleAbbreviations());
  byId('importArticleAbbreviationsToGlobal').addEventListener('click',()=>void importCurrentArticleAbbreviationsToGlobal());
  byId('exportGlobalAbbreviationMemory').addEventListener('click',()=>void exportGlobalAbbreviationMemoryFile());
