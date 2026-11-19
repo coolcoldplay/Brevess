@@ -109,7 +109,12 @@ html{scroll-padding-top:88px}
 .story-sidebar{position:absolute;top:44px;bottom:0;right:0;width:38%;background:white;display:flex;flex-direction:column;transform:translateX(calc((1 - var(--panel-open))*101%));border-left:1px solid #ddd;color:#222;text-align:left;pointer-events:none}
 .story-sidebar>div{font:600 17px/1.4 system-ui;height:42px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px}
 .story-sidebar iframe{border:0;width:100%;min-height:0;flex:1;background:white}
+.story-sidebar iframe{opacity:0;transition:opacity .2s ease}
+.story-sidebar-status{position:absolute;inset:42px 0 0;display:flex;align-items:center;justify-content:center;gap:9px;font:13px/1.5 system-ui;color:#777}
+.story-sidebar-status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;animation:story-loading 1.1s ease-in-out infinite alternate}
+.is-sidebar-ready .story-sidebar iframe{opacity:1}.is-sidebar-ready .story-sidebar-status{display:none}
+@keyframes story-loading{to{opacity:.25}}
 .story-browser.is-manual .story-sidebar{transition:transform .45s cubic-bezier(.22,1,.36,1)}
 .story-browser.is-manual .story-paper-preview{transition:width .45s cubic-bezier(.22,1,.36,1),opacity .3s}
 @media(max-width:640px){.story-browser{height:65svh;min-height:380px;width:92%}.story-browser h1{font-size:28px}.story-position-copy{padding:18px}.story-position-copy p{font-size:23px}.story-paper-preview{width:calc(100% - var(--panel-open)*88%);padding:18px 20px;min-width:0}.story-paper-preview h2{font-size:23px}.story-sidebar{width:88%}.story-address{left:46%}.nav.staged-nav{padding-inline:20px}.nav.staged-nav .brand-meaning{font-size:10px}}
-@media(prefers-reduced-motion:reduce){.nav.staged-nav,.story-browser.is-manual .story-sidebar,.story-browser.is-manual .story-paper-preview{transition:none}}
+@media(prefers-reduced-motion:reduce){.nav.staged-nav,.story-browser.is-manual .story-sidebar,.story-browser.is-manual .story-paper-preview,.story-sidebar iframe{transition:none}.story-sidebar-status::before{animation:none}}

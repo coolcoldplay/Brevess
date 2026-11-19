@@ -14,9 +14,11 @@
     extension.style.setProperty('--icon-press',phase(p,.378,.384)*(1-phase(p,.39,.4)));
     extension.setAttribute('aria-expanded',String(opened>.5));extension.setAttribute('aria-label',opened>.5?'收起 BREVESS 侧栏演示':'展开 BREVESS 侧栏演示');
     browser.inert=!visible;browser.style.pointerEvents=visible?'auto':'none';
-    if(visible&&p>.32&&!frame.getAttribute('src'))frame.src=frame.dataset.src;
-    if(!visible&&frame.getAttribute('src'))frame.removeAttribute('src');
+    const prepare=reduced.matches?visible:p>.18&&p<.51;
+    if(prepare&&!frame.getAttribute('src')){browser.classList.remove('is-sidebar-ready');frame.loading='eager';frame.src=frame.dataset.src;}
+    if(!prepare&&frame.getAttribute('src')){frame.removeAttribute('src');browser.classList.remove('is-sidebar-ready');}
   }
+  addEventListener('message',event=>{if(event.origin===location.origin&&event.source===frame.contentWindow&&event.data?.source==='brevess-native-demo'&&event.data.type==='ready')browser.classList.add('is-sidebar-ready');});
   extension?.addEventListener('click',()=>{manualPanel=extension.getAttribute('aria-expanded')!=='true';browser.classList.add('is-manual');browserScene(Number(story.dataset.progress)||.4,true);});
   const scenes = [...story.querySelectorAll('.story-scene')];
   const seeds = [...story.querySelectorAll('.story-seed')];
