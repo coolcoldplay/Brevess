@@ -1,5 +1,5 @@
 <p align="center"><img src="extension/icons/Brevess-logo.svg" alt="BREVESS logo" width="72"></p>
-<h1 align="center">BREVESS</h1>
+<h1 align="center">BREVESS · 布理维思</h1>
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
@@ -79,7 +79,7 @@
 
 网页与 AI 对话也是阅读材料。用 BREVESS 的真实组件体验划句翻译、高亮备注、大纲跳转、语义检索和网页问答。
 
-[体验 GitHub 与 ChatGPT 场景](https://coolcoldplay.github.io/Brevess/#beyond-papers) · 公开仓库节选与专门编写的对话，AI 为预置示例。
+[体验 GitHub 与 ChatGPT 场景](https://coolcoldplay.github.io/Brevess/#beyond-papers) · 还原 GitHub 仓库界面与完整 README，并呈现经授权的完整 ChatGPT 对话。三个场景整屏切换，AI 辅助为预置交互示例。
 
 ## 安装预览版
 

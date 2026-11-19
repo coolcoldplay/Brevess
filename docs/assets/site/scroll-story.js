@@ -20,6 +20,36 @@
   }
   addEventListener('message',event=>{if(event.origin===location.origin&&event.source===frame.contentWindow&&event.data?.source==='brevess-native-demo'&&event.data.type==='ready')browser.classList.add('is-sidebar-ready');});
   extension?.addEventListener('click',()=>{manualPanel=extension.getAttribute('aria-expanded')!=='true';browser.classList.add('is-manual');browserScene(Number(story.dataset.progress)||.4,true);});
+  const orbitLogos=[...story.querySelectorAll('.orbit-logo')];
+  const equation=story.querySelector('.story-equation'),glyphs=[...story.querySelectorAll('.equation-glyph')];
+  // A seeded scroll score: every letter has its own flip cadence. No autoplay timer.
+  let equationFrame='';
+  function renderEquation(p,still=false){
+    const key=still?'static':clamp((p-.48)/.26).toFixed(5);if(equationFrame===key)return;equationFrame=key;
+    const progress=still?1:clamp((p-.515)/.145),alphabet=['能','工','智','人'];
+    equation.style.setProperty('--equation-reveal',still?1:phase(p,.505,.55));
+    equation.style.setProperty('--equation-settled',still?1:phase(p,.645,.676));
+    equation.dataset.settled=String(progress>=1);
+    const orbitTurn=still?.2:clamp((p-.48)/.26)*Math.PI*3.5;
+    orbitLogos.forEach((logo,i)=>{
+      const angle=orbitTurn+i*Math.PI*2/orbitLogos.length,depth=Math.sin(angle);
+      logo.style.setProperty('--orbit-x',Math.cos(angle).toFixed(4));logo.style.setProperty('--orbit-y',depth.toFixed(4));
+      logo.style.opacity=(.5+(depth+1)*.25).toFixed(3);logo.style.zIndex=depth>0?'4':'1';logo.style.setProperty('--orbit-scale',(.76+(depth+1)*.15).toFixed(3));
+    });
+    glyphs.forEach((glyph,i)=>{
+      const delay=((i*7+3)%12)/100,local=still?1:clamp((progress-delay)/(1-delay));
+      const count=3+(i*5+1)%4,position=local*count,step=Math.floor(position),fraction=position-step;
+      const angle=local===1?0:(fraction<.5?fraction*180:fraction*180-180);
+      const frame=step+(fraction>=.5?1:0),final=local===1||frame>=count;
+      const letter=final?glyph.dataset.final:alphabet[(frame*3+i*7+(frame*i)%3)%4];
+      if(glyph.textContent!==letter)glyph.textContent=letter;
+      const drift=(1-smooth(local)),x=((i*13)%7-3)*12*drift,z=((i*11)%5-2)*32*drift;
+      glyph.style.transform='translate3d('+x.toFixed(2)+'px,'+((i%3-1)*10*drift).toFixed(2)+'px,'+z.toFixed(2)+'px) rotateX('+angle.toFixed(2)+'deg)';
+      glyph.style.opacity=(.42+.58*smooth(local)).toFixed(3);
+      glyph.style.setProperty('--glyph-echo',(Math.sin(Math.PI*local)*.12).toFixed(3));
+      glyph.dataset.ghost=alphabet[(frame+i+2)%4];
+    });
+  }
   const scenes = [...story.querySelectorAll('.story-scene')];
   const seeds = [...story.querySelectorAll('.story-seed')];
   const extras = [...story.querySelectorAll('.story-extra')];
@@ -54,7 +84,7 @@
   function render() {
     pending=false;
     navigation();
-    if(reduced.matches){const r=browser.getBoundingClientRect();browserScene(.44,r.bottom>0&&r.top<innerHeight);return;}
+    if(reduced.matches){renderEquation(1,true);const r=browser.getBoundingClientRect();browserScene(.44,r.bottom>0&&r.top<innerHeight);return;}
     if(!geometry) measure();
     const g=geometry;
     const range=story.offsetHeight-sticky.offsetHeight;
@@ -80,6 +110,7 @@
     caption.style.opacity=phase(p,.21,.26);
     const opacities=[1-phase(p,.26,.32),phase(p,.29,.35)*(1-phase(p,.45,.51)),phase(p,.48,.55)*(1-phase(p,.68,.74)),phase(p,.71,.79)];
     scenes.forEach((scene,i)=>{scene.style.opacity=opacities[i];scene.setAttribute('aria-hidden',opacities[i]<.5?'true':'false');if(i)scene.style.transform=`translateY(${(1-opacities[i])*24}px)`;});
+    renderEquation(p);
     story.style.setProperty('--dual-progress',phase(p,.54,.67));
     const progress=phase(p,.79,.97);flow.style.setProperty('--flow-progress',progress);
     [...flow.children].forEach((li,i)=>li.classList.toggle('is-active',progress>=i/4));

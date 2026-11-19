@@ -16,6 +16,7 @@
    demo.draft=SciLLM.createFigureWorkspaceDraft(demo.figures());
    demo.snapshot=()=>currentWorkspaceSnapshot;
    currentWorkspaceSnapshot={...demo.structure(),publisher:d.publisher||'springer-nature',figures:{figures:demo.figures(),inventoryReady:true,workspaceLifecycle:1,draft:demo.draft},chat:{turns:[]}};
+   if(d.web)for(const node of d.outline||[])outlineExpansionState.set(outlineExpansionKey('html',node.sectionId),true);
    manualAnnotationState={documentId:d.documentId||'alphafold-example',annotationCount:0,unresolvedCount:0};
    focusWorkspaceSource=async target=>{target.kind==='highlight'?send('annotation',{id:target.highlightId}):send('jump',{id:target.evidence?.paragraphId||target.sectionId||target.paragraphId||'abstract'});return true;};
    handleFigureWorkspaceJump=async figure=>send('jump',{id:'figure-'+String(figure.figureId).replace(/\D/g,'')});
@@ -72,7 +73,7 @@
    submitArticleChat=async event=>{event?.preventDefault();const q=byId('articleChatQuestion').value.trim();if(q)await answer(q);};
    const highlights=BVSetupHighlights({d,demo,send});
    byId('sidePanelPaperTitle').textContent=d.title;
-   byId('articleNavigationStatus').textContent=d.web?d.publisher+' · '+d.paragraphs.length+' 个标题 · 网页节选':'springer-nature · 5 个标题 · 论文节选';
+   byId('articleNavigationStatus').textContent=d.web?d.publisher+' · 完整正文':'springer-nature · 5 个标题 · 论文节选';
    byId('sidePanelDocumentStatusText').textContent='已激活 · '+(d.publisher||'springer-nature')+' · 网页滤镜';
    renderArticleNavigationTree(currentWorkspaceSnapshot);renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot,{coordinated:true});renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);renderManualAnnotationSummary();renderLiteratureNoteDrawer();
    highlights.sync();

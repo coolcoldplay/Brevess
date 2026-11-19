@@ -2,6 +2,7 @@
 window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviation}) => {
  const example=BVHighlightExamples(SciLLM,d),record={annotations:[]},manualDocument={documentId:d.documentId||'alphafold-example',record};
  const paragraphs=[...root.querySelectorAll('[data-paragraph]')];
+ const originals=new Map(paragraphs.map(p=>[p,[...p.childNodes].map(n=>n.cloneNode(true))]));
  const blocks=paragraphs.map(element=>({blockId:element.dataset.paragraph,element}));
  const categories=Object.entries(example.catalog).map(([categoryId,c])=>({...c,categoryId}));
  let annotations=[],visibleSources=['regex','llm','manual'],threshold=.8,selectionUI;
@@ -21,7 +22,11 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
   for(const p of paragraphs){
    const text=para(p.dataset.paragraph).text;
    const marks=all().filter(a=>visibleSources.includes(a.source==='semantic'?'manual':a.source)).flatMap(a=>a.segments.filter(s=>s.p===p.dataset.paragraph).map(s=>({...s,a})));
-   const edges=[...new Set([0,text.length,...marks.flatMap(s=>[s.start,s.end])])].sort((a,b)=>a-b),frag=document.createDocumentFragment();
+   p.replaceChildren(...originals.get(p).map(n=>n.cloneNode(true)));
+   const walker=document.createTreeWalker(p,NodeFilter.SHOW_TEXT),runs=[];let cursor=0,leaf;
+   while(leaf=walker.nextNode()){runs.push({leaf,start:cursor,end:cursor+leaf.length});cursor+=leaf.length;}
+   for(const run of runs){
+   const edges=[...new Set([run.start,run.end,...marks.flatMap(s=>[s.start,s.end]).filter(n=>n>run.start&&n<run.end)])].sort((a,b)=>a-b),frag=document.createDocumentFragment();
    for(let i=0;i<edges.length-1;i++){
     const start=edges[i],end=edges[i+1],cover=marks.filter(s=>s.start<=start&&s.end>=end).sort((x,y)=>(x.a.source==='manual')-(y.a.source==='manual'));
     let node=document.createTextNode(text.slice(start,end));
@@ -44,7 +49,8 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
     }
     frag.append(node);
    }
-   p.replaceChildren(frag);
+   run.leaf.replaceWith(frag);
+   }
   }
   onPaint?.();
  }
@@ -55,7 +61,7 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
   if(!a){a={id:crypto.randomUUID(),source:'manual',segments:descriptor.demoSegments.map(s=>({...s})),text:descriptor.text};annotations.push(a);descriptor.demoId=a.id;}
   a.categoryId=c.categoryId;a.note=note;surface.annotations=[annotationObject(a)];refresh();
  };
- const sentences=d.paragraphs.flatMap(p=>{
+ const sentences=d.paragraphs.filter(p=>p.zh).flatMap(p=>{
   const en=[...new Intl.Segmenter('en',{granularity:'sentence'}).segment(p.text)].map(x=>x.segment.trim());
   const zh=[...new Intl.Segmenter('zh',{granularity:'sentence'}).segment(p.zh)].map(x=>x.segment.trim());
   return en.length===zh.length?en.map((text,i)=>[text,zh[i]]):[[p.text,p.zh]];
@@ -63,7 +69,7 @@ window.BVCreateReadingDemo = ({root,data:d,onChange,onToast,onPaint,onAbbreviati
  const dictionary={'msa':'多序列比对','msas':'多序列比对','alphafold':'AlphaFold','protein':'蛋白质','proteins':'蛋白质','atomic accuracy':'原子级精度'};
  window.__brevessBilingualTranslation={async translateSelection(text,{signal}){
   await new Promise(r=>setTimeout(r,180));if(signal.aborted)throw Object.assign(Error('已取消'),{code:'ABORTED'});
-  const normalized=text.trim(),exact=sentences.find(([en])=>en===normalized)||d.paragraphs.map(p=>[p.text,p.zh]).find(([en])=>en===normalized);
+  const normalized=text.trim(),exact=sentences.find(([en])=>en===normalized)||d.paragraphs.map(p=>[p.text,p.zh]).find(([en,zh])=>en===normalized&&zh);
   return exact?exact[1]+'\n\n预置译文示例':dictionary[normalized.toLowerCase()]||'所选片段暂无预置译文。可点击“试试划句”体验完整句子的翻译；安装插件后由浏览器翻译实际选区。';
  }};
  const sci={...SciLLM,getInterfaceLanguage:()=>document.documentElement.lang||'zh-CN',createSelectionTtsController({onState}){

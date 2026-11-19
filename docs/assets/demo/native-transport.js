@@ -1,6 +1,7 @@
 /* Isolated website adapter. Does not connect to the installed extension. */
 (() => {
   'use strict';
+  if(document.documentElement.style)document.documentElement.style.overscrollBehaviorY='contain';
   const events=()=>({addListener(){},removeListener(){},hasListener(){return false;}});
   const tablePage=location.pathname.endsWith('/table-viewer.html');
   const actionPage=location.pathname.endsWith('/action-popup.html');

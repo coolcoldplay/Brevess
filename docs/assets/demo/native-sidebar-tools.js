@@ -37,10 +37,10 @@ window.BVSetupSidebarTools=({d,demo,send})=>{
  byId('translateNavigationTitles').disabled=false;
  byId('translateNavigationTitles').title='翻译大纲标题';
  byId('translateNavigationTitles').addEventListener('click',()=>{
-  for(const p of d.paragraphs)outlineTitleTranslations.set(outlineExpansionKey('html',p.id),['html',p.id,p.heading,examples.headings[p.id],'public-prepared-translation']);
+  for(const p of d.paragraphs)if(examples.headings[p.id])outlineTitleTranslations.set(outlineExpansionKey('html',p.id),['html',p.id,p.heading,examples.headings[p.id],'public-prepared-translation']);
   renderArticleNavigationTree(currentWorkspaceSnapshot);
   byId('translateNavigationTitles').disabled=false;
-  send('toast',{message:'大纲已显示中英对照，可点击标题定位原文。译文为预置示例。'});
+  send('toast',{message:Object.keys(examples.headings).length?'大纲已显示中英对照，可点击标题定位原文。译文为预置示例。':'此完整网页暂未准备大纲译文；安装插件后可翻译当前网页标题。'});
  });
  return {add(entry){
   const existing=entries.find(e=>abbreviationPairKey(e)===abbreviationPairKey(entry));

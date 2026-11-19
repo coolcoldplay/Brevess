@@ -62,7 +62,7 @@
     actions.querySelector('[data-mobile=generate]').disabled=root.dataset.nativeReady!=='true';
   }
   function setRoute(next){
-    route=next;api.closeOverlays();closeImageNote();api.setView('sidebar');hideHint();
+    route=next;window.BV_DECK?.show(next==='reading'?'features':'workbench',{historyUpdate:false});api.closeOverlays();closeImageNote();api.setView('sidebar');hideHint();
     root.classList.toggle('bv-touch-active',active&&route==='reading');wb.classList.toggle('bv-touch-active',active&&route==='workbench');
     root.setAttribute('role',active?'dialog':'region');wb.setAttribute('role',active?'dialog':'region');
     for(const target of [root,wb]){target.setAttribute('aria-label',target===root?t('论文精读体验','Reading demo'):t('课题工作台体验','Workbench demo'));if(active&&target.classList.contains('bv-touch-active'))target.setAttribute('aria-modal','true');else target.removeAttribute('aria-modal');}

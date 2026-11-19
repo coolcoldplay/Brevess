@@ -13,6 +13,7 @@ function loadDemo(web) {
     addEventListener() {}, parent: {postMessage() {}}
   });
   context.window = context;
+  if(web)context.parent.BV_DEMO_DATA={web,documentId:'public-web-'+web,title:'Public source',publisher:web,source:web==='github'?'https://github.com/coolcoldplay/Brevess':'https://chatgpt.com/',figures:[],paragraphs:[{id:'intro',sectionId:'intro',text:'Research evidence',heading:'Introduction'}],outline:[{sectionId:'intro',title:'Introduction',level:1,children:[],analysisSectionIds:['intro']}]};
   for (const name of ['native-transport.js', 'paper-data.js', 'web-data.js', 'native-data.js']) {
     vm.runInContext(fs.readFileSync(path.join(directory, name), 'utf8'), context, {filename: name});
   }
@@ -42,3 +43,5 @@ for (const web of ['', 'github', 'chatgpt']) {
     }
   });
 }
+
+test('web sidebar consumes the complete parent corpus and its heading hierarchy',()=>{const c=loadDemo('chatgpt');assert.equal(c.BV_DEMO_DATA,c.parent.BV_DEMO_DATA);assert.equal(c.__websiteDemo.structure().nodes,c.BV_DEMO_DATA.outline);assert.equal(c.__websiteDemo.structure().paragraphs[0].sectionId,'intro');});

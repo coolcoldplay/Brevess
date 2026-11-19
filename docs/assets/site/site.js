@@ -9,7 +9,7 @@
     translated.forEach(el => { el.textContent = el.dataset[en ? 'en' : 'zh']; });
     toggle.textContent = en ? '中' : 'EN';
     toggle.setAttribute('aria-label', en ? '切换到中文' : 'Switch to English');
-    document.title = en ? 'BREVESS — Paper reading & research planning' : 'BREVESS — 论文阅读与课题工作台';
+    document.title = en ? 'BREVESS — Paper reading & research planning' : 'BREVESS 布理维思 — 论文阅读与课题工作台';
     document.querySelector('.nav .brand').setAttribute('aria-label', en ? 'BREVESS home' : 'BREVESS 首页');
     document.querySelector('.nav nav').setAttribute('aria-label', en ? 'Main navigation' : '主导航');
     document.querySelector('.footer nav').setAttribute('aria-label', en ? 'More information' : '更多信息');
