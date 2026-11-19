@@ -33,6 +33,10 @@
      if(id!==request||(mobile&&!window.BV_MOBILE.active))return;
      api.closeOverlays();
      if(feature==='evidence')api.jump('msa');
+     else if(feature==='figures'){
+       if(!mobile)api.jump('figure-'+demo.reading.figures[0]);
+       api.setView('sidebar');
+     }
      else if(feature==='search')api.readerTools.openSearch();
      else if(feature==='highlights')api.sample();
      else if(feature==='translate'){
