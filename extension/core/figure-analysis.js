@@ -1477,7 +1477,7 @@
           '可以准确复述图注和正文明确描述的视觉或定量结果，但必须标记 caption_statement、body_statement 或 multi_source。',
           '不得把未提供的信息当作观察结果；不得编造颜色、曲线、亮暗、空间分布、形态或数值。',
           '文本模式不得使用 image_observation；同时受图注和正文明确支持时才使用 multi_source，否则选择单一文本来源或 inference。',
-          'In text-only mode, bind every concrete fact to the caption or body that supplies it; never use image_observation and do not infer image-only labels or details.'
+          'In text-only mode, bind every concrete fact to the caption or body that supplies it; never use image_observation and do not infer image-only labels or details. An unverified plotted P value is not evidence that the paper did not report it.'
         ].join(' '));
     if (analysisDepth === 'deep') {
       common.push(
@@ -1504,7 +1504,7 @@
       ...(visualInput ? figureImageSpatialBindingRules() : []),
       visualInput
         ? 'Figure pixels are supplied. Use only details that are actually legible in the requested Panel region. Keep image-only facts bound to the image and image_observation even when caption or body context is also supplied.'
-        : 'No Figure pixels are supplied. Use only the target caption slice and referenced body text; bind every concrete fact to the caption or body that supplies it, never use image_observation or image as a source, and do not infer image-only labels or details.',
+        : 'No Figure pixels are supplied. Use only the target caption slice and referenced body text; bind every concrete fact to the caption or body that supplies it, never use image_observation or image as a source, and do not infer image-only labels or details. An unverified plotted P value is not evidence that the paper did not report it.',
       'Return exactly one Panel record for every requested label, in request order, and no record for any other label.',
       'For each Panel, keep role, phenotype_name_zh, and methods separate: role is the evidence function, phenotype_name_zh is the concrete measured phenotype, and methods are named assays or analyses.',
       'evidence_type_zh must state only a concrete supported evidence type, such as schematic/model, phenotype measurement, expression/localization, perturbation/causality, or validation/replication; never invent it. When unsupported or unknown, set evidence_type_zh to an empty string.',
@@ -1512,7 +1512,7 @@
       'statistical_methods may be named only when directly present in pixels, captions, or supplied article context. Do not infer paired t-test or ANOVA from plot appearance or generic significance markers. Unknown must remain an empty array.',
       ...figureSourceFidelityRules(),
       'When role is "phenotype", phenotype_name_zh must be a concrete phenotype supported by the input; use "未明确" when it is not stated. Other roles may also name an explicitly measured phenotype/readout; otherwise use an empty string. Never infer a phenotype from role or method alone.',
-      'PANEL_EIGHT_FIELD_CONTRACT: Keep purpose_zh, evidence_type_zh, phenotype_name_zh, experimental_methods, group design (design_zh plus comparison_zh), statistical_methods, direct_observation_zh, and local_inference_zh distinct. Missing statistics stay []; the interface reports not reported. Keep contribution_zh and source provenance as compatibility context.',
+      'PANEL_EIGHT_FIELD_CONTRACT: Keep purpose_zh, evidence_type_zh, phenotype_name_zh, experimental_methods, group design (design_zh plus comparison_zh), statistical_methods, direct_observation_zh, and local_inference_zh distinct. Missing statistics stay []; the interface indicates missing from supplied evidence. Keep contribution_zh and source provenance as compatibility context.',
       'Read statistical significance for the exact compared pair, tissue, phase and outcome in this Panel. Do not transfer a star from another bracket or Panel; retain ns and numerical p values without upgrading them. A general body-text summary does not override a nonsignificant comparison visible here.',
       'Read doses, times and numerical endpoints only when clearly legible or explicitly stated for this Panel in the supplied caption/body. Do not infer a new dose from bar color, or guess small printed values to fit the narrative; state that the value cannot be confirmed when illegible or conflicting.',
       'Identify comparison groups from their legend or explicitly named caption first. Axis ticks, stage labels, statistical letters and time abbreviations are not extra treatments. If a group name is truncated or unreadable, describe only the supported comparison and say its exact label cannot be confirmed; never invent an intervention to complete it.',

@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="vendor/pdfjs/web/pdf_viewer.css">
   <link rel="stylesheet" href="pdf-reader.css">
   <link rel="stylesheet" href="ui-swiss.css">
+  <link rel="stylesheet" href="pdf-reader-chrome.css">
 <script src="core/translation-checkpoint.js"></script>
 <script src="core/local-translator.js"></script>
 <script src="core/credential-boundary.js"></script>
@@ -17,71 +18,73 @@
 <script src="core/web-media.js"></script>
 </head>
 <body class="brevess-pdf-reader" data-ui-surface="pdf">
-  <header class="pdf-reader-toolbar">
+  <button id="pdfReaderToolbarReveal" class="pdf-reader-toolbar-reveal" type="button"
+    aria-label="显示 PDF 阅读工具栏" aria-controls="pdfReaderToolbar" hidden data-sci-plugin-ui data-action-icon="none"></button>
+  <header id="pdfReaderToolbar" class="pdf-reader-toolbar" aria-label="PDF 阅读工具栏">
     <div class="pdf-reader-brand">
       <img class="pdf-reader-mark" src="icons/icon48.png" width="32" height="32" alt="">
       <div>
-        <strong>Brevess PDF</strong>
+        <strong>BREVESS <span class="pdf-reader-format">PDF</span></strong>
         <span id="pdfReaderSubtitle">正在准备文献 PDF…</span>
       </div>
     </div>
     <nav class="pdf-reader-navigation" aria-label="PDF 页码与查找" data-sci-plugin-ui>
       <div class="pdf-reader-page-controls" role="group" aria-label="翻页">
-        <button id="pdfReaderPreviousPage" type="button" aria-label="上一页">‹</button>
+        <button id="pdfReaderPreviousPage" type="button" aria-label="上一页" title="上一页" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
         <label><span class="pdf-reader-page-label">页</span>
           <input id="pdfReaderPageNumber" type="number" min="1" value="1" aria-label="页码"></label>
         <span id="pdfReaderPageCount">/ —</span>
-        <button id="pdfReaderNextPage" type="button" aria-label="下一页">›</button>
+        <button id="pdfReaderNextPage" type="button" aria-label="下一页" title="下一页" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button>
       </div>
       <div class="pdf-reader-search-controls" role="search">
+        <svg class="pdf-reader-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
         <input id="pdfReaderFind" type="search" placeholder="在 PDF 中查找" aria-label="在 PDF 中查找">
-        <button id="pdfReaderFindPrevious" type="button" aria-label="上一处">↑</button>
-        <button id="pdfReaderFindNext" type="button" aria-label="下一处">↓</button>
+        <button id="pdfReaderFindPrevious" type="button" aria-label="上一处" title="上一处" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg></button>
+        <button id="pdfReaderFindNext" type="button" aria-label="下一处" title="下一处" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 10 6 6 6-6"/></svg></button>
         <output id="pdfReaderFindStatus" aria-live="polite"></output>
       </div>
     </nav>
     <div class="pdf-reader-toolbar-actions" data-sci-plugin-ui>
-      <button id="pdfReaderStudy" class="pdf-reader-button is-primary" type="button">研读侧栏</button>
-      <button id="pdfReaderAnnotations" class="pdf-reader-button" type="button" aria-pressed="false">图像标注</button>
-      <button id="pdfReaderReviewFigurePages" class="pdf-reader-button" type="button" aria-pressed="false" aria-controls="pdfFigurePageReview">核对图像</button>
       <div class="pdf-reader-zoom" role="group" aria-label="阅读缩放">
         <button id="pdfReaderZoomOut" class="pdf-reader-icon-button" type="button"
-          aria-label="缩小">−</button>
+          aria-label="缩小" title="缩小" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
         <output id="pdfReaderZoomValue" aria-live="polite">100%</output>
         <button id="pdfReaderZoomIn" class="pdf-reader-icon-button" type="button"
-          aria-label="放大">＋</button>
+          aria-label="放大" title="放大" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg></button>
         <button id="pdfReaderZoomReset" class="pdf-reader-icon-button is-wide" type="button"
-          aria-label="适合阅读宽度">适宽</button>
+          aria-label="适合阅读宽度" title="适合阅读宽度" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M20 5v14M7 12h10m-7-3-3 3 3 3m4-6 3 3-3 3"/></svg></button>
       </div>
+      <button id="pdfReaderStudy" class="pdf-reader-button pdf-reader-study" type="button" title="研读侧栏" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16M18 8v8"/></svg><span>研读侧栏</span></button>
       <div class="pdf-reader-more">
         <button id="pdfReaderMoreToggle" class="pdf-reader-icon-button pdf-reader-more-toggle"
           type="button" aria-expanded="false" aria-controls="pdfReaderMoreMenu"
-          aria-haspopup="menu"><span aria-hidden="true">•••</span><span class="pdf-reader-more-label">更多</span></button>
+          aria-haspopup="menu" aria-label="更多阅读工具" title="更多阅读工具" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h.01M12 12h.01M20 12h.01" stroke-width="3"/></svg></button>
         <div id="pdfReaderMoreMenu" class="pdf-reader-more-menu" role="menu" hidden>
-
+          <button id="pdfReaderAnnotations" class="pdf-reader-button" type="button" role="menuitem" aria-pressed="false" data-action-icon="none">图像标注</button>
+          <button id="pdfReaderReviewFigurePages" class="pdf-reader-button" type="button" role="menuitem" aria-pressed="false" aria-controls="pdfFigurePageReview" data-action-icon="none">核对图像</button>
           <button id="pdfReaderCheckFigures" class="pdf-reader-button" type="button"
-            role="menuitem" aria-controls="pdfFigurePreflight">检查全部图 / 补充图注</button>
-          <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" role="menuitem" hidden>返回上处</button>
+            role="menuitem" aria-controls="pdfFigurePreflight" data-action-icon="none">检查全部图 / 补充图注</button>
+          <button id="pdfReaderJumpBack" class="pdf-reader-button" type="button" role="menuitem" hidden data-action-icon="none">返回上处</button>
           <button id="pdfReaderReturnToArticle" class="pdf-reader-button" type="button"
-            role="menuitem" aria-label="返回原论文正文" hidden>← 返回原论文正文</button>
+            role="menuitem" aria-label="返回原论文正文" hidden data-action-icon="none">← 返回原论文正文</button>
           <button id="pdfReaderViewToggle" class="pdf-reader-button is-primary" type="button"
-            role="menuitem" aria-pressed="false" hidden>查看原始 PDF</button>
+            role="menuitem" aria-pressed="false" hidden data-action-icon="none">查看原始 PDF</button>
           <button id="pdfReaderStartParse" class="pdf-reader-button is-primary" type="button"
-            role="menuitem" hidden>增强文本识别</button>
+            role="menuitem" hidden data-action-icon="none">增强文本识别</button>
           <button id="pdfReaderReparse" class="pdf-reader-button" type="button"
-            role="menuitem" hidden>重新解析</button>
+            role="menuitem" hidden data-action-icon="none">重新解析</button>
           <button id="pdfReaderSaveAnnotated" class="pdf-reader-button is-primary" type="button"
-            role="menuitem" hidden>保存带批注副本</button>
+            role="menuitem" hidden data-action-icon="none">保存带批注副本</button>
           <button id="pdfReaderOverwriteAnnotated" class="pdf-reader-button is-danger" type="button"
-            role="menuitem" hidden>覆盖原 PDF</button>
+            role="menuitem" hidden data-action-icon="none">覆盖原 PDF</button>
           <a id="pdfReaderOpenOriginalTab" class="pdf-reader-link" href="#" target="_blank"
-            role="menuitem" rel="noreferrer">新标签打开 PDF</a>
+            role="menuitem" rel="noreferrer" data-action-icon="none">新标签打开 PDF</a>
           <button id="pdfReaderSettingsToggle" class="pdf-reader-button" type="button"
-            role="menuitem">识别设置</button>
+            role="menuitem" data-action-icon="none">识别设置</button>
           <button id="pdfReaderRetry" class="pdf-reader-button is-primary" type="button"
-            role="menuitem" hidden>重新解析</button>
+            role="menuitem" hidden data-action-icon="none">重新解析</button>
           <button id="pdfReaderOpenSettings" class="pdf-reader-button" type="button"
-            role="menuitem" hidden>打开 MinerU 设置</button>
+            role="menuitem" hidden data-action-icon="none">打开 MinerU 设置</button>
         </div>
       </div>
     </div>
@@ -255,6 +258,7 @@
   <script src="core/operation-control.js"></script>
   <script src="core/paragraph-note-markers.js"></script>
   <script src="content.js"></script>
+  <script src="web-filters-general/pdf-research-source.js"></script>
   <script src="semantic-find-content.js"></script>
   <script src="pdf-reader.js"></script>
   <script src="pdf-reader-ui.js"></script>

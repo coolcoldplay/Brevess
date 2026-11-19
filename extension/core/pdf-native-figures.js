@@ -10,7 +10,7 @@
   const MAX_PAGES = 10000;
   const MAX_LINES_PER_CAPTION = 80;
   const MAX_CAPTION_CHARS = 12000;
-  const HEADER_PATTERN = /^\s*(extended\s+data\s+fig(?:ure)?|supplement(?:ary|al)\s+fig(?:ure)?|fig(?:ure)?)\.?\s*(S\s*)?(\d{1,3})(?!\d)(\s*(?:[.:|\u2010-\u2015\u2212-])\s*|\s*$)(.*)$/iu;
+  const HEADER_PATTERN = /^\s*(extended\s+data\s+fig(?:ure)?|supplement(?:ary|al)\s+fig(?:ure)?|fig(?:ure)?)\.?\s*(S\s*)?(\d{1,3})(?!\d)(\s*(?:[.:|\u2010-\u2015\u2212-])\s*|\s+(?=\p{Lu})|\s*$)(.*)$/iu;
   const CAPTION_BOUNDARY_PATTERN = /^(?:abstract|introduction|results?|discussion|methods?|materials\s+and\s+methods|references?|acknowledg(?:e)?ments?|author\s+contributions?|supplementary\s+information|table\s+\d+)\s*$/iu;
   const BODY_REFERENCE_START = /^(?:shows?|showing|illustrates?|depicts?|demonstrates?|presents?|summari[sz]es?|compares?|indicates?|reveals?|provides?|is|was|were|has|contains?)\b/iu;
   const TERMINAL_CAPTION = /[.!?](?:[)\]}\u201d\u2019'"]+)?\s*$/u;
@@ -167,7 +167,7 @@
     const figureSeries = extended ? 'extended-data'
       : explicitSupplemental ? 'supplemental' : 'main';
     const figureCode = extended ? `ED${number}` : `${explicitSupplemental ? 'S' : ''}${number}`;
-    const body = normalizedInlineText(match[5]);
+    const body = normalizedInlineText(match[5]).replace(/^[|:]\s*/u, '');
     // Supplement/video references are not a second caption for the main Figure.
     if (/^(?:figure\s+supplements?|source\s+data|videos?|animations?)\b/iu.test(body)) return null;
     const hasDelimiter = normalizedInlineText(match[4]) !== '';
@@ -224,7 +224,8 @@
     for (const match of text.matchAll(/\(\s*([a-z](?:\s*(?:,|and|&|[-\u2010-\u2015\u2212])\s*[a-z])*)\s*\)/giu)) {
       const before = text.slice(0, match.index);
       if (/[\p{L}\p{N}]$/u.test(before)) continue;
-      if (/\b(?:fig(?:ure)?s?\.?|图)\s*(?:s\s*)?\d+[a-z]?\s*$/iu.test(before)) continue;
+      if (/\b(?:number|size|dimension|samples?|sequences?|residues?|proteins?|observations?)\s*$/iu.test(before)) continue;
+      if (/\b(?:fig(?:ure)?s?\.?|图)\s*(?:s\s*)?\d+[a-z]?\s*$/iu.test(before) && !/^\s*\([A-Z]\)\s+\p{Lu}/u.test(String(caption).slice(match.index))) continue;
       const value = match[1].toUpperCase();
       if (/^[A-Z]$/u.test(value) && /(?:voltage|current|distance|length|height|width|diameter|power|temperature|time|duration|latency|mass|weight|volume|frequency|pressure|energy|charge|resistance|concentration|seconds?)\s*$/iu.test(before)) continue;
       // A bare time unit is not a panel label. A true S in an A-S series is
@@ -250,7 +251,7 @@
         // Recover only a clause-opening caption label followed by a normal
         // capitalized description. A newline alone can be a wrapped formula;
         // inline variables and references to another figure are not labels.
-        if (!/[.!?]$/u.test(before) || !/^\p{Lu}/u.test(after) ||
+        if (before && !/[.!?]$/u.test(before) || !/^\p{Lu}/u.test(after) ||
             /\b(?:fig(?:ure)?|eq(?:uation)?|formula|variable)s?\.?\s*(?:\d+[a-z]?\s*)?$/iu.test(before)) return rawText;
         const from = first.toUpperCase().charCodeAt(0);
         const to = last.toUpperCase().charCodeAt(0);
@@ -364,7 +365,7 @@
     const rightLabels = captionPanelHints(rightText).panelHints;
     const openContinuation = !TERMINAL_CAPTION.test(leftText) &&
       /^[\p{Ll}(]/u.test(right.line.text);
-    if (!leftLabels.length || !(rightLabels.some(label => !leftLabels.includes(label)) || openContinuation)) return null;
+    if (!(openContinuation || leftLabels.length && rightLabels.some(label => !leftLabels.includes(label)))) return null;
     const leftBottom = page.lines[left.at(-1)].y, rightBottom = page.lines[rightLines.at(-1)].y;
     const overlap = anchor.y - Math.max(leftBottom, rightBottom);
     if (overlap < anchor.height || Math.min(leftBottom,rightBottom) < 0) return null;
@@ -385,7 +386,7 @@
     const lastLabel = labels.at(-1);
     if (!(width > 0 && height > 0 && previousHeight > 0) ||
         previousLine.orientation !== 0 || previousLine.y > previousHeight * 0.25 ||
-        anchor.xMax - anchor.xMin < width * 0.65 || !/^[A-Y]$/u.test(lastLabel || '')) return -1;
+        Math.max(anchor.xMax - anchor.xMin, previousLine.xMax - previousLine.xMin) < width * 0.65 || !/^[A-Y]$/u.test(lastLabel || '')) return -1;
     const expected = String.fromCharCode(lastLabel.charCodeAt(0) + 1);
     const candidates = [];
     let band = [], previous = null, owner = '';
@@ -522,8 +523,11 @@
         positioned.orientation !== undefined && previousLine?.orientation !== undefined &&
         positioned.orientation !== previousLine.orientation;
       const followingBody = captionEnded && previousLine?.y !== null && positioned.y !== null &&
-        previousLine?.height > 0 && positioned.height >= previousLine.height * 1.08 &&
-        previousLine.y - positioned.y >= Math.max(previousLine.height, positioned.height) * 1.7;
+        previousLine?.height > 0 && (positioned.height >= previousLine.height * 1.08 &&
+        previousLine.y - positioned.y >= Math.max(previousLine.height, positioned.height) * 1.7 ||
+        pieces.join(' ').length < 500 && positioned.height >= previousLine.height * 0.98 &&
+        previousLine.y - positioned.y >= previousLine.height * 2.5 &&
+        !/^\(?[A-Za-z]\)\s/u.test(line));
       const detachedSmallText = captionEnded && previousLine?.y != null && positioned.y != null &&
         previousLine.height > 0 && positioned.height < previousLine.height * 0.85 &&
         previousLine.y - positioned.y > previousLine.height * 2.8;
@@ -606,7 +610,7 @@
           trace('anonymous-incoming-clause', next, anonymousAnchor, 'continuation');
         }
       }
-      if (marker < 0 && anonymousAnchor < 0 && !explicitContinuation && endedAtPage) {
+      if (marker < 0 && anonymousAnchor < 0 && (anonymousContinuation || !explicitContinuation && endedAtPage)) {
         anonymousAnchor = unmarkedCaptionRegion(next, pages[continuationPageIndex],
           lastCaptionLine, page.lines[lineIndex], rawCaption, identity);
         unmarkedRegion = anonymousAnchor >= 0;
@@ -1053,7 +1057,7 @@
     }
     const result = { version: 'pdf-effective-figure-inventory-v1', documentHash, sourceRevision,
       scope: expectedScope, figureId: figure.figureId,
-      provenance: { extractorVersion: 'native-caption-v3',
+      provenance: { extractorVersion: 'native-caption-v4',
         captionDigest: await digest({ caption: figure.caption, evidence }),
         semanticContextDigest: coverage?.provenance.semanticContextDigest || '',
         imageContentHash: coverage?.provenance.imageContentHash || '',

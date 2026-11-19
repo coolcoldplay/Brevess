@@ -1,8 +1,8 @@
 (function attach(root, factory) {
-  const api = factory();
+  const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function factory() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   function defineTask(
     id,
     group,
@@ -97,9 +97,12 @@
   // every service/model offers a general web-search API.
   function supportsTaskWebSearch(providerId, config = {}, taskId) {
     if (!['article_chat', 'selection_chat'].includes(taskId)) return false;
+    if (shared.getDeclaredModelCapabilities?.(providerId, config)?.webSearch === false) return false;
     if (providerId === 'deepseek-harness') return ['deepseek-flash', 'deepseek-v4-pro'].includes(config.model);
     if (!['openai', 'deepseek'].includes(providerId)) return false;
     if (providerId === 'deepseek' && config.model !== 'deepseek-flash') return false;
+    if (providerId === 'openai' && !/^(?:gpt-4\.1(?:[-.]|$)|gpt-4o(?:[-.]|$)|gpt-5(?:[-.]|$)|o[34](?:[-.]|$))/.test(String(config.model || '')) && shared.getDeclaredModelCapabilities?.(providerId, config)?.webSearch !== true) return false;
+    if (providerId === 'openai' && /(?:nano|chat-latest|codex)/.test(String(config.model || ''))) return false;
     if (!String(config.baseUrl || '').trim()) return true;
     try {
       const url = new URL(config.baseUrl);
@@ -111,7 +114,14 @@
     } catch { return false; }
   }
 
+  function getTaskWebSearchCapabilities(providerId, config = {}, taskId = 'article_chat') {
+    const supported = supportsTaskWebSearch(providerId, config, taskId);
+    return { supported, modes: !supported ? [] : providerId === 'deepseek' && config.model === 'deepseek-flash'
+      ? ['off', 'on', 'deep', 'auto'] : ['off', 'on', 'auto'] };
+  }
+
   return Object.freeze({
+    getTaskWebSearchCapabilities,
     supportsTaskWebSearch,
     taskModelForProfile,
     LLM_TASK_IDS,

@@ -180,7 +180,7 @@
   }
   function createFigureQuickControls({ document: doc = globalThis.document, isActive = () => false,
     onHighResolution, onToggleMagnifier, onToggleAnnotations, onOpenAnnotations, onOpenNotes, acceptImage,
-    isHighResolution = () => false, isMagnifierEnabled = () => true, isAnnotationsVisible = () => false } = {}) {
+    isHighResolution = () => false, isMagnifierEnabled = () => false, isAnnotationsVisible = () => false } = {}) {
     const win = doc.defaultView, host = doc.createElement('div');
     host.dataset.sciPluginUi = ''; host.dataset.brevessFigureTools = '';
     host.style.cssText = 'all:initial!important;position:fixed!important;z-index:2147483000!important;display:none!important;';

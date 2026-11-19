@@ -1,4 +1,5 @@
 (function attach(root, factory) {
+  if (typeof module === 'object' && module.exports) require('./article-chat-attachments.js');
   const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
@@ -205,6 +206,7 @@
     const scientificPhrases = quotedPhrases(query, normalizeScientificPhrase);
     const eligible = index.chunks.filter(chunk =>
       referencesIntent || chunk.recordType !== 'reference');
+    const requestedFigures = shared.articleChatFigureNumbers(normalizedQuery);
     const scored = eligible.map(chunk => {
       const normalizedText = normalize(chunk.text);
       const bm25 = bm25Score(index, chunk, queryTokens);
@@ -215,11 +217,8 @@
       const scientificPhraseBoost = scientificPhrases.reduce((sum, phrase) =>
         sum + (scientificDisplays.some(display => display.includes(phrase)) ? 5 : 0), 0);
       const headingBoost = sectionBoost(chunk, normalizedQuery);
-      const figureNumbers = value => [...value.matchAll(/(?:\bfig(?:ure)?[\s:._-]*|图\s*)(s?\d+)(?!\d)/giu)]
-        .map(match => match[1].toLowerCase());
-      const requestedFigures = figureNumbers(normalizedQuery);
       const captionFigures = chunk.recordType === 'figure-caption'
-        ? figureNumbers(`${chunk.sectionTitle} ${normalizedText.slice(0, 500)}`) : [];
+        ? shared.articleChatFigureNumbers(chunk.text || chunk.sectionTitle).slice(0,1) : [];
       const figureBoost = requestedFigures.some(number => captionFigures.includes(number)) ? 12 : 0;
       return {
         ...chunk,

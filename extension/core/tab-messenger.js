@@ -98,10 +98,10 @@
     'core/adaptive-catalog.js',
     'core/settings-store.js',
     'core/i18n-builtins.js',
-
-
-
-
+    
+    
+    
+    
 
 
     'content.js',
@@ -110,8 +110,12 @@
   ];
   const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.2-adaptive-figures-r10';
+    '1.0.2-workbench-evidence-r15';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.2-workbench-evidence-r14',
+    '1.0.2-workbench-evidence-r13',
+    '1.0.2-workbench-evidence-r12',
+    '1.0.2-adaptive-figures-r10',
     '1.0.2-adaptive-figures-r9',
     '1.0.2-adaptive-figures-r8',
     '1.0.2-adaptive-figures-r7',

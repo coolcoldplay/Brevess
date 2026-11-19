@@ -2711,7 +2711,7 @@
     'confidenceThreshold', 'readingViewId', 'viewCategoryOverrides',
     'analysisModes', 'figurePanelHeaderFields',
     'figurePanelFollowupPrompts', 'figurePanelFollowupPresets',
-    'articleChatQuickPrompts', 'literatureNoteTemplates',
+    'articleChatQuickPrompts', 'displayQuickPrompts', 'literatureNoteTemplates',
     'lastLiteratureNoteTemplateId', 'selectionLlmActions',
     'keyboardShortcuts'
   ]);
@@ -4627,6 +4627,9 @@
     }
     async function figureConfirmationBinding(message, context, settings, taskId, figure) {
       const identity = await figureOperationIdentity(message, context, { requireModern: true });
+      if (!identity.scope || !identity.internalOperationId) {
+        throw figureContractError('FIGURE_SOURCE_OWNER_INVALID');
+      }
       const route = shared.resolveTaskProfile(settings, taskId);
       return { identity, route, sourceDigest: await strongSha256(figureConfirmationSource(figure), cryptoImpl),
         policy: await figureReusePolicySignature(settings, route, taskId),
@@ -19281,16 +19284,20 @@
         if (!String(incomingConfig.apiKey || '').trim() && currentConfig.apiKey) {
           config.apiKey = currentConfig.apiKey;
         }
-        if (providerId === 'deepseek-harness') {
-          if (!harnessClient?.listModels) throw Object.assign(new Error('Harness bridge unavailable'), { code: 'HARNESS_START_FAILED' });
-          const result = await harnessClient.listModels({ timeoutMs: 20000 });
-          return { ...result, fetchedAt: nowImpl() };
-        }
-        return shared.discoverProviderModels({
-          providerId,
-          config,
-          fetchImpl,
-          timeoutMs: 20000
+        let result;
+        if (providerId === 'deepseek-harness' || providerId === 'codex-local') {
+          const client = providerId === 'deepseek-harness' ? harnessClient : nativeClient;
+          if (!client?.listModels) throw Object.assign(new Error('Agent model catalog unavailable'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+          result = { ...(await client.listModels({ timeoutMs: 20000 })), fetchedAt: nowImpl() };
+        } else result = await shared.discoverProviderModels({ providerId, config, fetchImpl, timeoutMs: 20000 });
+        if (message.cacheCapabilities !== true || message.config || message.providerId) return result;
+        const catalog = shared.buildModelCapabilityCatalog(providerId, config, result.models, Date.now());
+        return serializeSettingsMutation(async () => {
+          const latest = await shared.loadSettings(storageArea);
+          if (!jsonLikeEqual(latest.profiles?.[profileId], profile)) return { ...result, stale: true };
+          latest.profiles[profileId].config.modelCapabilityCatalog = catalog;
+          await saveRouterSettings(latest);
+          return { models: [], modelCapabilityCatalog: catalog };
         });
       }
 
@@ -20303,7 +20310,11 @@
           (requiresModernFigureContract(message) ||
           message?.type === 'LLM_ANALYZE_CROSS_FIGURE_LOGIC' ||
           ['figure', 'mechanism'].includes(message?.operationScope));
-        if (ownerGuardRequired) {
+        // Article chat has its own cancellable operationId, including on a saved
+        // article. Keep sender checks while isolating it from Figure quota recovery.
+        const articleChatOperation = ['LLM_ASK_ARTICLE','LLM_ASK_SELECTION'].includes(message?.type) &&
+          !['figure','mechanism'].includes(message?.operationScope);
+        if (ownerGuardRequired && !articleChatOperation) {
           await reconcileFigureBrowserSession();
           await ensureTrustedTabRetirementsRecovered();
         }

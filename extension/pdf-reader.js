@@ -543,12 +543,8 @@
       searchMatches = []; searchIndex = -1;
       document.querySelectorAll('.pdf-native-search-layer').forEach(layer => layer.remove());
       if (query) for (const paragraph of globalThis.__brevessNativePdfDocument?.structure?.paragraphs || []) {
-        const value = paragraph.text.toLowerCase();
-        let start = value.indexOf(query);
-        while (start >= 0 && searchMatches.length < 10000) {
-          searchMatches.push({ pageNumber: paragraph.pageNumber, start, end: start + query.length,
-            quote: paragraph.text.slice(start, start + query.length) });
-          start = value.indexOf(query, start + Math.max(1, query.length));
+        for (const hit of SciLLM.findPdfTextMatches(paragraph.text, query, 10000-searchMatches.length)) {
+          searchMatches.push({pageNumber:paragraph.pageNumber,...hit});
         }
       }
       element('pdfReaderFindStatus').textContent = query && !searchMatches.length ? '无匹配' : '';
@@ -906,6 +902,9 @@
 
   function normalizePdfReaderDocumentTitle(value) {
     if (typeof value !== 'string') return '';
+    if (/[ÃÎÏ]/u.test(value)) {
+      try { const repaired = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(value, c => c.charCodeAt(0))); if (!repaired.includes('�')) value = repaired; } catch (_) {}
+    }
     return value.normalize('NFKC')
       .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
       .replace(/\s+/gu, ' ').trim().slice(0, 500);
@@ -2588,7 +2587,7 @@
     } catch (error) {
       document.documentElement.dataset.pdfWorkspaceIndexError = String(error?.message || 'PDF_CACHE_RESTORE_FAILED');
       element('pdfReaderControl').dataset.state = 'error';
-      setProgress(6, '解析缓存未能恢复，原始 PDF 可继续阅读。可重试增强识别。', '缓存恢复未完成');
+      setProgress(6, '解析缓存未能恢复。若原页未显示，请检查文件或密码后重新加载；也可重试增强识别。', '缓存恢复未完成');
       showReaderActions({ retry: true, settings: true });
       return true;
     }
@@ -3432,7 +3431,7 @@
         figure.artworkPageCandidates = [...figure.artworkPageRecommendation];
       }
       const sourceRevision = await sha256PdfBytes(new TextEncoder().encode(JSON.stringify({
-        documentHash, extractorVersion: 'native-caption-v3',
+        documentHash, extractorVersion: 'native-caption-v4',
         figures: figures.map(({ figureId, caption, captionLineEvidence }) =>
           ({ figureId, caption, captionLineEvidence }))
       })));
@@ -3503,6 +3502,10 @@
     if (detail.sourceUrl && detail.sourceUrl !== workspaceSourceUrl()) return;
     if (detail.documentGeneration && current?.documentGeneration &&
         detail.documentGeneration !== current.documentGeneration) return;
+    element('pdfReaderControl').dataset.state = 'error';
+    element('pdfReaderStatusTitle').textContent = 'PDF 未能打开';
+    element('pdfReaderStatus').textContent = String(detail.message || '请重新加载 PDF；若文件已加密，请输入正确密码。');
+    showReaderActions({ start: false, settings: true });
     state.nativeReaderFailure = { ...detail, sourceUrl: workspaceSourceUrl(),
       message: String(detail.message || 'PDF_NATIVE_READER_FAILED') };
   });

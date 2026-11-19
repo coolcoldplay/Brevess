@@ -6,7 +6,7 @@
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(dependency = {}) {
   const SCHEMA_VERSION = 3;
-  const PDF_SEMANTIC_INDEX_ALGORITHM_VERSION = 8;
+  const PDF_SEMANTIC_INDEX_ALGORITHM_VERSION = 9;
   function pdfWrapFragment(text, includeDigits = false) {
     const value = String(text);
     if (!value.endsWith('-')) return '';

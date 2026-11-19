@@ -43,6 +43,8 @@
       await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=chrome.runtime.getURL(file);
         script.onload=resolve;script.onerror=()=>reject(Error('研读模块加载失败：'+file));document.body.append(script);});
     }
+    publication.structure.typedRecords = [...publication.structure.paragraphs,
+      ...SciLLM.restoreSavedCaptionRecords(document, snapshot, SciLLM)];
     await globalThis.initializeSavedArticleWorkspace(saved.data);
     if(!publication.active)return;
     chrome.runtime.sendMessage({type:'SAVED_ARTICLE_READY',binding}).catch(()=>{});

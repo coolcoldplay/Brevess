@@ -4,6 +4,8 @@
   const byId = id => document.getElementById(id);
   const body = document.body;
   const documentRoot = document.documentElement;
+  const toolbar = byId('pdfReaderToolbar');
+  const toolbarReveal = byId('pdfReaderToolbarReveal');
   const focusToggle = byId('pdfReaderFocusToggle');
   const moreToggle = byId('pdfReaderMoreToggle');
   const moreMenu = byId('pdfReaderMoreMenu');
@@ -26,6 +28,29 @@
 
   let scheduled = false;
   let lastSevereSignature = '';
+  let toolbarPointerInside = false;
+  let toolbarKeyboardFocus = false;
+  let toolbarHideTimer = 0;
+
+  function setToolbarVisible(visible) {
+    clearTimeout(toolbarHideTimer);
+    body.toggleAttribute('data-pdf-toolbar-visible', Boolean(visible));
+  }
+
+  function keepToolbarVisible() {
+    const active = document.activeElement;
+    const editing = toolbar?.contains(active) && active.matches('input, textarea, select, [contenteditable="true"]');
+    return toolbarPointerInside || editing || (toolbarKeyboardFocus &&
+      (toolbar?.contains(active) || active === toolbarReveal)) || !moreMenu.hidden;
+  }
+
+  function settleToolbar() {
+    clearTimeout(toolbarHideTimer);
+    if (keepToolbarVisible()) return setToolbarVisible(true);
+    toolbarHideTimer = setTimeout(() => {
+      if (!keepToolbarVisible()) setToolbarVisible(false);
+    }, 220);
+  }
 
   function visible(node) {
     return Boolean(node && !node.hidden);
@@ -44,6 +69,7 @@
     body.toggleAttribute('data-pdf-more-open', next);
     if (next) menuItems()[0]?.focus();
     else if (restoreFocus) moreToggle.focus();
+    settleToolbar();
   }
 
   function setFocusMode(active, { restoreFocus = false } = {}) {
@@ -99,7 +125,7 @@
     const severeTitle = severeSignature && controlVisible
       ? String(readerStatusTitle?.textContent || '').trim() : '';
     // Producers retain these DOM nodes; messages are displayed by the side panel.
-    noticeStack.hidden = true;
+    noticeStack.hidden = !severeSignature && !/需文字识别/.test(readerStatusTitle?.textContent || '');
     noticesSummary.textContent = count
       ? (severeTitle ? `${severeTitle} · 共 ${count} 条阅读状态` : `${count} 条阅读状态`)
       : '';
@@ -167,8 +193,45 @@
   });
 
   document.addEventListener('pointerdown', event => {
+    toolbarKeyboardFocus = false;
+    if (!toolbar?.contains(event.target) && event.target !== toolbarReveal) {
+      toolbarPointerInside = false;
+      if (toolbar?.contains(document.activeElement)) document.activeElement.blur();
+    }
     if (!moreMenu.hidden && !event.target.closest('.pdf-reader-more')) setMoreMenu(false);
+    settleToolbar();
   });
+
+  if (toolbar && toolbarReveal) {
+    for (const surface of [toolbar, toolbarReveal]) {
+      surface.addEventListener('pointerenter', () => {
+        toolbarPointerInside = true;
+        setToolbarVisible(true);
+      });
+      surface.addEventListener('pointerleave', () => {
+        toolbarPointerInside = false;
+        settleToolbar();
+      });
+      surface.addEventListener('focusin', () => setToolbarVisible(true));
+      surface.addEventListener('focusout', settleToolbar);
+    }
+    toolbarReveal.addEventListener('click', () => {
+      setToolbarVisible(true);
+      byId('pdfReaderPageNumber')?.focus();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Tab') toolbarKeyboardFocus = true;
+    }, true);
+    window.addEventListener('blur', () => {
+      toolbarPointerInside = false;
+      toolbarKeyboardFocus = false;
+      if (toolbar.contains(document.activeElement)) document.activeElement.blur();
+      setMoreMenu(false);
+      setToolbarVisible(false);
+    });
+    toolbarReveal.hidden = false;
+    body.setAttribute('data-pdf-toolbar-autohide', '');
+  }
 
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.defaultPrevented || event.repeat) return;
@@ -177,7 +240,15 @@
       setMoreMenu(false, { restoreFocus: true });
       return;
     }
-    if (!body.hasAttribute('data-reading-focus')) return;
+    if (!body.hasAttribute('data-reading-focus')) {
+      if (body.hasAttribute('data-pdf-toolbar-visible')) {
+        if (toolbar?.contains(document.activeElement)) document.activeElement.blur();
+        toolbarPointerInside = false;
+        toolbarKeyboardFocus = false;
+        setToolbarVisible(false);
+      }
+      return;
+    }
     if (event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
     event.preventDefault();
     setFocusMode(false, { restoreFocus: true });

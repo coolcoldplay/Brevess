@@ -2,7 +2,16 @@
   'use strict';
   const ERROR_CODES=new Set(['AUTH_INVALID','AUTH_MISSING','AUTH_FAILED','RATE_LIMITED','PROVIDER_UNAVAILABLE','NETWORK_ERROR','OUTPUT_TRUNCATED','REQUEST_TIMEOUT','TIMEOUT','CANCELLED','CONTENT_FILTERED','MODEL_NOT_FOUND','INVALID_REQUEST','CONTEXT_LENGTH_EXCEEDED','EMPTY_RESPONSE','INVALID_RESPONSE','STREAM_PARSE_ERROR']);
   function providerError(error){const raw=String(error?.code||'');const code=ERROR_CODES.has(raw)?raw:'PROVIDER_ERROR';const e=Error('MODEL_'+code);e.code=code;return e;}
-  function parseReply(raw){let text=String(raw||'').trim();const fence=String.fromCharCode(96).repeat(3);if(text.startsWith(fence)){const lines=text.split('\n');if(!['','json'].includes(lines[0].slice(3).trim().toLowerCase())||lines.at(-1).trim()!==fence)throw Error('MODEL_JSON_INVALID');text=lines.slice(1,-1).join('\n').trim();}let reply;try{reply=JSON.parse(text);}catch{throw Error('MODEL_JSON_INVALID');}if(!reply||typeof reply!=='object'||Array.isArray(reply))throw Error('MODEL_REPLY_INVALID');return reply;}
+  function parseReply(raw){
+    let text=String(raw||'').trim();
+    // Some providers add a brief introduction to a single fenced JSON response.
+    // Ambiguous candidates still go through the normal correction path.
+    const wrapped=/^[^{}`\[\]]*?```(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)\r?\n```[^{}`\[\]]*$/i.exec(text);
+    if(wrapped&&!wrapped[1].includes('```'))text=wrapped[1];
+    let reply;try{reply=JSON.parse(text);}catch{throw Error('MODEL_JSON_INVALID');}
+    if(!reply||typeof reply!=='object'||Array.isArray(reply))throw Error('MODEL_REPLY_INVALID');
+    return reply;
+  }
 
   // Read only a top-level JSON string value, including a safely decoded unfinished
   // value. Never eval model output or mistake a nested evidence quote for an answer.
@@ -61,6 +70,9 @@
   function planReply(reply,{previous,scope,sidebar=false}){
     if(Object.keys(reply).some(k=>!['kind','name','operations','removePrevious'].includes(k)))throw Error('MODEL_PLAN_FIELDS');
     const removal=reply.removePrevious===undefined?[]:reply.removePrevious;if(!Array.isArray(removal)||removal.some(i=>!Number.isInteger(i)||i<0||i>=(previous?.operations.length||0))||new Set(removal).size!==removal.length)throw Error('MODEL_REMOVAL_INVALID');
+    if(previous&&removal.length&&Array.isArray(reply.operations)&&reply.operations.length===0){
+      return S.validate({...previous,name:reply.name,scope,operations:previous.operations.filter((_,i)=>!removal.includes(i)).map(S.clone)});
+    }
     const next=S.validate({schemaVersion:2,id:previous?.id||crypto.randomUUID(),revision:previous?.revision||0,name:reply.name,scope,operations:reply.operations?.map(op=>sidebar&&op?.type==='outline'&&op.placement===undefined?{...op,placement:'sidebar'}:op)});
     // A follow-up cannot accidentally erase earlier operations. The model explicitly
     // identifies indices to remove; schema/storage format stays version 2.

@@ -1363,7 +1363,34 @@
     });
   }
 
+  function findPdfTextMatches(text, query, limit = 10000) {
+    query = String(query || '').normalize('NFKC').trim().toLowerCase();
+    if (!query) return [];
+    const raw = String(text || '');
+        const chars = [], offsets = [];
+        let offset = 0;
+        for (const character of raw) {
+          for (const normalized of character.normalize('NFKC').toLowerCase()) { chars.push(normalized); offsets.push({start:offset,end:offset+character.length}); }
+          offset += character.length;
+        }
+        const joined = chars.join('');
+        const omitted = new Set();
+        for (const match of joined.matchAll(/(?<=[a-z])\s+(?=f[il]\s*[a-z])|(?<=[a-z]\s*f[il])\s+(?=[a-z])/gu)) {
+          for (let i=match.index;i<match.index+match[0].length;i++) omitted.add(i);
+        }
+        const map = offsets.filter((_,i)=>!omitted.has(i));
+        const value = chars.filter((_,i)=>!omitted.has(i)).join('');
+
+    const hits = [];
+    for (let start=value.indexOf(query);start>=0 && hits.length<limit;start=value.indexOf(query,start+query.length)) {
+      const from=map[start].start, end=map[start+query.length-1].end;
+      hits.push({start:from,end,quote:raw.slice(from,end)});
+    }
+    return hits;
+  }
+
   return {
+    findPdfTextMatches,
     createPdfTextSelectionController,
     classifyPdfPageFurnitureSegments,
     createPdfTextProjection,

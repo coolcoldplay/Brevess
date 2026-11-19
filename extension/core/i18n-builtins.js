@@ -200,6 +200,15 @@
     limitations: ['Limitations', 'Using evidence from the article, summarize its main limitations, unresolved questions and conditions that may constrain generalization of its conclusions.'],
     section_compare: ['Compare sections', 'Compare the arguments, evidence and conclusions in the selected sections, identifying agreement, differences and potential contradictions.']
   };
+  const DISPLAY_EN = {
+    publisher_clean: ["Clean publisher article", "Identify the article column, center it, and limit it to 82ch with natural wrapping on narrow screens. Hide ads, site navigation, peripheral recommendations and the site footer. Preserve the title, authors, text, figures, captions, citation links and supplementary material links. Check the visible text and its actual width in the preview."],
+    text_width: ["Set text width", "Set the article text width to 720px."],
+    large_type: ["Larger body text", "Set article paragraphs to 20px with a line height of 1.75. Preserve superscripts, subscripts, inline equations and citation numbers, and keep headings distinct."],
+    hd_figure: ["Load a full-resolution figure", "Load the full-resolution image for Figure 1."],
+    captions: ["Read figures with captions", "Keep captions close to their figures, at 16px with a line height of 1.6. Preserve panel letters, legends, scale bars, original image links and each figure’s aspect ratio."],
+    wide_table: ["Scroll wide tables", "Let tables wider than the text scroll horizontally within their own area. Preserve every row, column and table note, and keep the surrounding article at its existing width."],
+    section_headings: ["Clarify section headings", "Distinguish the first three article heading levels with type size, weight and spacing. Preserve their wording, numbering and anchor links."]
+  };
   const ACTION_EN = {
     translate: ['Translate', 'Translate the selected passage accurately into the current interface language. Preserve technical terms, gene/protein names, numerical values, statistics and uncertainty; retain the original technical term in parentheses when helpful.'],
     explain: ['Explain', 'Explain the selected passage clearly without distorting it: first state what the authors directly mean, then explain key concepts, logical relationships and the limits of the conclusion. Do not invent mechanisms absent from the original text.']
@@ -265,6 +274,7 @@
       figurePanelFollowupPrompts: clone(api.DEFAULT_PANEL_FOLLOWUP_PROMPTS || Object.fromEntries(
         (api.DEFAULT_PANEL_FOLLOWUP_PRESETS || []).map(row => [row.topic, row.prompt]))),
       figurePanelFollowupPresets: clone(api.DEFAULT_PANEL_FOLLOWUP_PRESETS || []),
+      displayQuickPrompts: clone(api.DEFAULT_DISPLAY_QUICK_PROMPTS || []),
       articleChatQuickPrompts: clone(api.DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS || []),
       literatureNoteTemplates: clone(api.DEFAULT_LITERATURE_NOTE_TEMPLATES || []),
       selectionLlmActions: clone(api.DEFAULT_SELECTION_ACTIONS || [])
@@ -287,6 +297,7 @@
     output.settings.figurePanelFollowupPrompts = Object.fromEntries(Object.entries(base.settings.figurePanelFollowupPrompts)
       .map(([topic, value]) => [topic, PANEL_EN[topic]?.[1] || value]));
     output.settings.articleChatQuickPrompts = promptRows(base.settings.articleChatQuickPrompts, CHAT_EN);
+    output.settings.displayQuickPrompts = promptRows(base.settings.displayQuickPrompts, DISPLAY_EN);
     output.settings.selectionLlmActions = promptRows(base.settings.selectionLlmActions, ACTION_EN);
     output.settings.literatureNoteTemplates = base.settings.literatureNoteTemplates.map(template => ({
       ...template, name: TEMPLATE_EN[template.id] || template.name,

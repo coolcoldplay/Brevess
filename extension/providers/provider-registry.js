@@ -177,7 +177,80 @@
     };
   }
 
+  // Model catalogs carry capabilities, not credentials or page content. Bind
+  // them to the service endpoint so a different gateway cannot inherit them.
+  function modelCapabilityScope(providerId, config = {}) {
+    return JSON.stringify([providerId, String(config.baseUrl || '').trim().replace(/\/+$/, ''), String(config.presetId || '')]);
+  }
+
+  function modelReasoningMetadata(item, providerId) {
+    let raw = item?.reasoningEfforts ?? item?.supportedReasoningEfforts ?? item?.supported_reasoning_efforts;
+    const thinking = item?.capabilities?.thinking;
+    const effort = item?.capabilities?.effort;
+    if (providerId === 'anthropic' && effort && typeof effort.supported === 'boolean') {
+      raw = effort.supported ? Object.keys(effort).filter(key => key !== 'supported' && effort[key]?.supported === true) : [];
+    }
+    if (!Array.isArray(raw)) return thinking?.supported === false ? noReasoningCapability() : null;
+    const levels = [...new Set(raw.map(value => typeof value === 'string' ? value : value?.reasoningEffort ?? value?.effort ?? value?.id)
+      .filter(value => typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(value)))].slice(0, 32);
+    if (!levels.length) return noReasoningCapability();
+    const advertisedDefault = item.defaultReasoningEffort ?? item.default_reasoning_effort;
+    const offLevel = levels.find(level => ['off', 'none', 'disabled'].includes(level));
+    return { supported: true, mode: 'effort', levels: ['auto', ...levels.filter(level => level !== 'auto')],
+      defaultLevel: levels.includes(advertisedDefault) ? advertisedDefault : 'auto',
+      canDisable: Boolean(offLevel) || thinking?.types?.disabled?.supported === true,
+      offLevel: offLevel || 'auto',
+      ...(thinking?.types?.adaptive?.supported === true ? { thinkingType: 'adaptive' } : {}) };
+  }
+
+  function buildModelCapabilityCatalog(providerId, config, models, fetchedAt = Date.now()) {
+    const entries = [];
+    for (const item of (Array.isArray(models) ? models : []).slice(0, 500)) {
+      const id = String(item?.id || item?.model || '').trim();
+      if (!id || id.length > 256) continue;
+      const reasoning = modelReasoningMetadata(item, providerId);
+      const web = item?.capabilities?.server_tools?.web_search?.supported ?? item?.webSearchSupported;
+      if (!reasoning && typeof web !== 'boolean') continue;
+      entries.push({ id, ...(reasoning ? { reasoning } : {}), ...(typeof web === 'boolean' ? { webSearch: web } : {}) });
+      if (providerId === 'codex-local' && item.isDefault === true) entries.push({ ...entries[entries.length - 1], id: 'auto' });
+    }
+    return { scope: modelCapabilityScope(providerId, config), fetchedAt, models: entries };
+  }
+
+  function getDeclaredModelCapabilities(providerId, config = {}) {
+    const catalog = config.modelCapabilityCatalog;
+    if (!catalog || catalog.scope !== modelCapabilityScope(providerId, config)) return null;
+    if (!Array.isArray(catalog.models)) return null;
+    const item = catalog.models.find(item => item?.id === String(config.model || '').trim());
+    if (!item) return null;
+    const raw = item.reasoning;
+    const levels = Array.isArray(raw?.levels) ? [...new Set(raw.levels.filter(value =>
+      typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(value)))].slice(0, 32) : [];
+    const reasoning = raw?.supported === false ? noReasoningCapability() :
+      raw?.supported === true && levels.length ? {
+        supported: true, mode: raw.mode === 'toggle' ? 'toggle' : 'effort', levels,
+        defaultLevel: levels.includes(raw.defaultLevel) ? raw.defaultLevel : levels.includes('auto') ? 'auto' : levels[0],
+        ...(typeof raw.canDisable === 'boolean' ? { canDisable: raw.canDisable } : {}),
+        ...(levels.includes(raw.offLevel) ? { offLevel: raw.offLevel } : {}),
+        ...(raw.thinkingType === 'adaptive' ? { thinkingType: 'adaptive' } : {})
+      } : null;
+    return { ...(reasoning ? { reasoning } : {}), ...(typeof item.webSearch === 'boolean' ? { webSearch: item.webSearch } : {}) };
+  }
+
+  function reasoningCanDisable(providerId, config, capability = getProviderReasoningCapabilities(providerId, config)) {
+    if (!capability?.supported) return false;
+    if (typeof capability.canDisable === 'boolean') return capability.canDisable;
+    return capability.mode === 'toggle' || ['deepseek', 'deepseek-harness'].includes(providerId) ||
+      capability.levels.some(level => ['none', 'off', 'disabled'].includes(level));
+  }
+
   function getProviderReasoningCapabilities(providerId, config = {}) {
+    const declared = getDeclaredModelCapabilities(providerId, config)?.reasoning;
+    if (declared && ['openai', 'anthropic', 'gemini', 'deepseek', 'codex-local', 'deepseek-harness', 'openai-compatible'].includes(providerId)) {
+      // A catalog cannot enable a parameter on a protocol the adapter lacks.
+      if (providerId === 'openai' && /\/chat\/completions(?:[/?#]|$)/i.test(String(config.baseUrl || ''))) return noReasoningCapability();
+      return { ...declared, levels: [...declared.levels] };
+    }
     const model = normalizedModelName(config);
     if (providerId === 'openai') {
       if (/\/chat\/completions(?:[/?#]|$)/i.test(String(config.baseUrl || ''))) {
@@ -279,8 +352,11 @@
 
   function normalizeReasoningForProvider(providerId, config = {}, requested = {}) {
     const requestedEnabled = requested?.enabled === true;
-    if (!requestedEnabled) return { enabled: false, effort: 'auto' };
     const capability = getProviderReasoningCapabilities(providerId, config);
+    if (!requestedEnabled) {
+      const offLevel = capability.offLevel || capability.levels.find(level => ['none', 'off', 'disabled'].includes(level));
+      return { enabled: false, effort: offLevel || 'auto' };
+    }
     if (capability.supported !== true || !Array.isArray(capability.levels)) {
       return { enabled: false, effort: 'auto' };
     }
@@ -291,7 +367,7 @@
     }
 
     let effort = String(requested?.effort || 'auto').trim().toLowerCase() || 'auto';
-    if (providerId === 'deepseek') {
+    if (providerId === 'deepseek' && !getDeclaredModelCapabilities(providerId, config)?.reasoning) {
       if (effort === 'disabled' || effort === 'none') {
         return { enabled: false, effort: 'auto' };
       }
@@ -299,8 +375,8 @@
       else if (effort === 'minimal') effort = 'low';
       else if (effort === 'medium' || effort === 'xhigh') effort = 'high';
     }
-    if (effort === 'none' || effort === 'disabled') {
-      return { enabled: false, effort: 'auto' };
+    if (['none', 'disabled', 'off'].includes(effort)) {
+      return normalizeReasoningForProvider(providerId, config, { enabled: false });
     }
     if (effort === 'auto' || capability.levels.includes(effort)) {
       return { enabled: true, effort };
@@ -438,14 +514,14 @@
     if (providerId === 'codex-local') {
       if (!String(config?.model || '').trim()) errors.push('model');
       const effort = String(config?.reasoningEffort || 'auto');
-      if (!['auto', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
+      if (!getProviderReasoningCapabilities(providerId, config).levels.includes(effort)) {
         errors.push('reasoningEffort');
       }
       return errors;
     }
     if (providerId === 'deepseek-harness') {
       if (!String(config?.model || '').trim() || String(config.model).trim() === 'auto') errors.push('model');
-      if (!['auto', 'off', 'low', 'high', 'max'].includes(String(config?.reasoningEffort || 'auto'))) errors.push('reasoningEffort');
+      if (!['auto', 'off', ...getProviderReasoningCapabilities(providerId, config).levels].includes(String(config?.reasoningEffort || 'auto'))) errors.push('reasoningEffort');
       return errors;
     }
     if (!String(config?.apiKey || '').trim()) errors.push('apiKey');
@@ -478,9 +554,9 @@
       __reasoningCapabilities: getProviderReasoningCapabilities(providerId, config)
     };
     const adapter = providerId === 'deepseek-harness'
-      ? factory(config, harnessClient)
+      ? factory(adapterConfig, harnessClient)
       : providerId === 'codex-local'
-      ? factory(config, nativeClient)
+      ? factory(adapterConfig, nativeClient)
       : factory(adapterConfig, fetchImpl || fetch);
     adapter.maxOutputTokens = getProviderMaxOutputTokens(providerId, config);
     adapter.contextWindowTokens = getProviderContextWindowTokens(providerId, config);
@@ -492,6 +568,11 @@
     getCompatibleProviderPresets,
     getProviderCapabilities,
     providerSupportsTask,
+    modelCapabilityScope,
+    modelReasoningMetadata,
+    buildModelCapabilityCatalog,
+    getDeclaredModelCapabilities,
+    reasoningCanDisable,
     getProviderReasoningCapabilities,
     normalizeReasoningForProvider,
     getProviderContextWindowTokens,

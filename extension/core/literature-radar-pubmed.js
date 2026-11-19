@@ -176,6 +176,7 @@
           const createdDay = /^\d{4}-\d{2}-\d{2}$/.test(created) && Number.isFinite(Date.parse(created)) && m.radarDay(Date.parse(created)) === created ? created : null;
           articles.push({ id, title: row.title.slice(0, 4000), journal: String(row.fulljournalname || row.source || '').slice(0, 500),
             createdDay,
+            preprint:(Array.isArray(row.pubtype) ? row.pubtype : []).some(type=>/^preprint$/i.test(type)),
             publicationDate: String(row.pubdate || '').slice(0, 100), authors: (Array.isArray(row.authors) ? row.authors : []).slice(0, 30).map(a => String(a.name || '').slice(0, 200)),
             doi: String((Array.isArray(row.articleids) ? row.articleids : []).find(a => a.idtype === 'doi')?.value || '').slice(0, 500) });
         }

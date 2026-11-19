@@ -1526,3 +1526,6 @@ body.brevess-pdf-reader[data-pdf-view="original"] .pdf-original-viewer.pdf-figur
 #pdfPageAnnotationControls input[type=number] { width:64px; }
 #pdfPageAnnotationControls input[type=color] { width:34px;padding:1px; }
 #pdfPageAnnotationControls output { font-size:12px; }
+
+/* Fit the PDF page to the available reading surface, without a side gutter. */
+.pdf-native-viewer[data-fit-width="true"] { padding-inline: 0; }

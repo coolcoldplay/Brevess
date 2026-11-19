@@ -240,7 +240,7 @@ async function configureSidePanelAction() {
 }
 
 function r20WorkbenchTab(tab){try{const u=new URL(tab?.url||''),base=new URL(chrome.runtime.getURL('/'));return u.protocol===base.protocol&&u.host===base.host&&u.pathname==='/workbench/index.html';}catch{return false;}}
-async function r20PanelPath(){const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});return r20WorkbenchTab(tab)?'workbench/agent-sidebar.html':'popup.html';}
+async function r20PanelPath(){const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});return r20WorkbenchTab(tab)?'workbench/agent-sidebar.html?windowId='+tab.windowId:'popup.html';}
 async function r20WorkbenchContext(tabId){const rows=await chrome.runtime.getContexts({contextTypes:['TAB']});const own=rows.filter(c=>c.tabId===tabId&&c.frameId===0&&r20WorkbenchTab({url:c.documentUrl}));return own.length===1?own[0]:null;}
 async function setGlobalSidePanelAvailability(enabled) {
   if (!chrome.sidePanel?.setOptions) return;
@@ -268,7 +268,7 @@ async function repairLegacyTabSidePanelOptions(tabOrId) {
   const current = chrome.sidePanel?.getOptions
     ? await chrome.sidePanel.getOptions({ tabId }).catch(() => null)
     : null;
-  const r20Path=typeof tabOrId==='object'&&r20WorkbenchTab(tabOrId)?'workbench/agent-sidebar.html':'popup.html';
+  const r20Path=typeof tabOrId==='object'&&r20WorkbenchTab(tabOrId)?'workbench/agent-sidebar.html?windowId='+tabOrId.windowId:'popup.html';
   if (current?.enabled === true && current?.path === r20Path) return false;
   // Builds before 2.4.10 wrote disabled tab-specific options. Those overrides
   // survive an unpacked-extension update and take precedence over the new
@@ -662,7 +662,9 @@ async function handleToolbarAction(tab, panelOpen, expectedDocumentId) {
   await activateTabAndOpenSidePanel(tab, panelOpen);
 }
 
-chrome.tabs.onActivated.addListener(({ tabId }) => {
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  // A restored native side panel can miss its own tabs.onActivated notification.
+  void chrome.runtime.sendMessage({ type: 'BREVESS_PANEL_ACTIVE_TAB', tabId, windowId }).catch(() => {});
   // The global panel stays open across tab changes. Only update which article
   // is active; popup.html will refresh against the newly selected tab.
   chrome.tabs.get(tabId).then(syncTabSidePanelAvailability).catch(() => {});
@@ -3629,7 +3631,7 @@ const BrevessExperimentSharedStore=BrevessWebReading.createStore({store:articleW
 const BrevessWebReadingController=BrevessWebReading.createWebController({browser:chrome,core:BrevessWebReading,focus:BrevessReadingFocusController,persistence:BrevessExperimentSharedStore,createTask:()=>llmRouter.createWebReadingTask(),deletePaper:(m,tab)=>BrevessWorkspaceStorage.deletePaper({browser:chrome,store:articleWorkspaceStore,directory:directorySync,documentStore,api:SciLLM,coordinate:coordinateOpenArticleWorkspaceTabs},m,tab)});
 BrevessWebReadingController.register();
 
-importScripts('web-filters-general/schema.js','web-filters-general/model.js','web-filters-general/background.js','web-filters-general/research.js','web-filters-general/multitab.js','web-filters-general/ux-context.js','web-filters-general/ux-background.js','web-filters-general/reading-modules.js','web-filters-general/reading-pubmed.js','web-filters-general/reading-background.js','web-filters-general/generalization.js');
+importScripts('web-filters-general/schema.js','web-filters-general/model.js','web-filters-general/background.js','web-filters-general/research.js','web-filters-general/pdf-research-source.js','web-filters-general/multitab.js','web-filters-general/ux-context.js','web-filters-general/ux-background.js','web-filters-general/reading-modules.js','web-filters-general/reading-pubmed.js','web-filters-general/reading-background.js','web-filters-general/generalization.js');
 globalThis.WFGUX_CONTENT_FILES=['schema.js','engine.js','reading-modules.js','reading-pubmed.js','reading-page.js','ux-page.js','ux-entry.js'].map(f=>'web-filters-general/'+f);
 const BrevessGeneralBroker=WFGBackground.install({browser:chrome,createTask:()=>llmRouter.createWebReadingTask()});
 const BrevessMultiController=WFGMulti.install({browser:chrome,broker:BrevessGeneralBroker,persistence:BrevessExperimentSharedStore,core:BrevessWebReading,store:articleWorkspaceStore,classify:async tab=>(await BrevessReadingFocusController.preview(tab)).type,createTask:options=>llmRouter.createWebReadingTask(options)});

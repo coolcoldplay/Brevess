@@ -2255,7 +2255,7 @@ function applyScale(scale, options = {}) {
   return scale;
 }
 
-function setScale(value, options = {}) { return applyScale(stateController.setScale(value), options); }
+function setScale(value, options = {}) { delete viewer.dataset.fitWidth; return applyScale(stateController.setScale(value), options); }
 function zoomBy(delta) {
   let requested = 0;
   try { requested = Number(delta); } catch (_) {}
@@ -2265,6 +2265,7 @@ function fitWidth(options = {}) {
   const record = currentPageRecord();
   if (!record) return stateController.getScale();
   const previousScale = stateController.getScale();
+  viewer.dataset.fitWidth = 'true';
   const style = globalThis.getComputedStyle(viewer);
   const scale = stateController.fitWidth({
     pageWidth: globalThis.SciLLM.pdfNativeUnscaledPageWidth(record.page),
@@ -2273,7 +2274,7 @@ function fitWidth(options = {}) {
       paddingLeft: style.paddingLeft, paddingRight: style.paddingRight
     }), padding: 0
   });
-  if (Math.abs(scale - previousScale) < 0.005) return previousScale;
+  if (Math.abs(scale - previousScale) < 0.00001) return previousScale;
   return applyScale(scale, {
     preservePage: record.pageNumber,
     preserveSemanticText: options.preserveSemanticText === true
@@ -3062,6 +3063,12 @@ async function initializeNativePdf() {
       await globalThis.SciLLM.destroyPdfNativeDocumentResources({ loadingTask: sourceLoadingTask });
       return { complete: false };
     }
+    sourceLoadingTask.onPassword = (updatePassword, reason) => {
+      if (!initialization.canCommit()) { void sourceLoadingTask.destroy(); return; }
+      const password = window.prompt(reason === 2 ? '密码不正确，请重新输入 PDF 密码' : '此 PDF 已加密，请输入密码（不保存密码）');
+      if (password === null) { void sourceLoadingTask.destroy(); return; }
+      updatePassword(password);
+    };
     loadedDocumentHash = documentHash;
     loadedSourceHash = documentHash;
     loadingTask = sourceLoadingTask;

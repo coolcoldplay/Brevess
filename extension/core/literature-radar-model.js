@@ -20,6 +20,11 @@
     wos:{name:'Web of Science',example:'TS=(glioma AND immunotherapy)',date:'Web of Science modifiedTimeSpan',credential:true,help:'https://developer.clarivate.com/apis/wos-starter'},
     scopus:{name:'Scopus',example:'TITLE-ABS-KEY(glioma AND immunotherapy)',date:'Scopus LOAD-DATE',credential:true,help:'https://dev.elsevier.com/'}
   });
+  function isRadarPreprint(paper, source) {
+    return paper?.preprint === true || RADAR_SOURCES[source]?.preprint === true ||
+      (paper?.publicationTypes || []).some(type => /^preprint$/i.test(type)) ||
+      /^(?:bioRxiv|medRxiv|arXiv)(?:$|[ .:–—-])/i.test(String(paper?.journal || '').trim());
+  }
   function validRadarPaperId(source,id){
     if(typeof id!=='string'||id.length>600)return false;
     if(source==='asta')return /^asta:[a-f0-9]{40}$/.test(id);
@@ -118,6 +123,6 @@
     return value;
   }
   function emptyRadarState() { return { schema: 1, radars: [], active: null }; }
-  return { radarSourceQueries, validateRadarSourceQueries, radarDoi, radarPmid, radarIdentityKeys, mergeRadarArticles, DAY, RADAR_DATABASE, RADAR_SOURCES, validRadarPaperId, radarPaperUrl, radarError, radarClone: clone, radarDay: day, validateRadarConfig,
+  return { isRadarPreprint, radarSourceQueries, validateRadarSourceQueries, radarDoi, radarPmid, radarIdentityKeys, mergeRadarArticles, DAY, RADAR_DATABASE, RADAR_SOURCES, validRadarPaperId, radarPaperUrl, radarError, radarClone: clone, radarDay: day, validateRadarConfig,
     radarScanWindow, radarRevision, radarUnreadCount, radarPaperTime, validateRadarState, emptyRadarState };
 });

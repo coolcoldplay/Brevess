@@ -22,12 +22,12 @@
       const rows = [];
       for (const panel of Object.values(figure.panels || {})) {
         const panelId = clean(panel.panelId, 30);
-        const observation = clean(panel.directObservation, 320);
-        const inference = clean(panel.localInference, 240) || clean(panel.contribution, 240);
+        const observation = clean(panel.directObservation, Infinity);
+        const inference = clean(panel.localInference, Infinity) || clean(panel.contribution, Infinity);
         if (!panelId || (!observation && !inference)) continue;
         rows.push({ key: figureId + '::' + panelId, figureId, panelId, observation, inference,
-          method: clean((panel.experimentalMethods || []).map(x => clean(x, 100)).join('; '), 180),
-          limits: clean(figure.overview?.claimBoundary, 180) });
+          method: clean((panel.experimentalMethods || []).map(x => clean(x, Infinity)).join('; '), Infinity),
+          limits: clean(Array.isArray(figure.overview) ? figure.overview.map(row => clean(row?.key === 'claimBoundary' ? row.value : row?.claimBoundary, Infinity)).filter(Boolean).join('; ') : figure.overview?.claimBoundary, Infinity) });
       }
       if (rows.length) groups.push(rows);
     }
@@ -41,13 +41,13 @@
         selected.push(row);
       }
     }
-    return { documentHash: hash, sourceDigest: digest([hash, selected]), rows: selected };
+    return { documentHash: hash, sourceDigest: digest([hash, selected]), rows: selected, coverage: { figures: groups.length, panels: groups.reduce((n, rows) => n + rows.length, 0), included: selected.length, omitted: groups.reduce((n, rows) => n + rows.length, 0) - selected.length, summarized: false } };
   }
   function normalize(value, documentHash) {
     if (!value || value.documentHash !== documentHash || !Array.isArray(value.rows) || value.rows.length > 32) return null;
     const rows = value.rows.map(row => ({ key: clean(row?.key, 120), figureId: clean(row?.figureId, 80),
-      panelId: clean(row?.panelId, 30), observation: clean(row?.observation, 320), inference: clean(row?.inference, 240),
-      method: clean(row?.method, 180), limits: clean(row?.limits, 180) }));
+      panelId: clean(row?.panelId, 30), observation: clean(row?.observation, 14001), inference: clean(row?.inference, 14001),
+      method: clean(row?.method, 14001), limits: clean(row?.limits, 14001) }));
     if (!rows.length || rows.some(x => !x.figureId || !x.panelId || x.key !== x.figureId + '::' + x.panelId || (!x.observation && !x.inference)) ||
         new Set(rows.map(x => x.key)).size !== rows.length || JSON.stringify(rows).length > 14000 || value.sourceDigest !== digest([documentHash, rows])) return null;
     return { documentHash, sourceDigest: value.sourceDigest, rows };
@@ -989,6 +989,7 @@ function r16FigureMapContextForProof(context, supplied) {
         images: input.visualContext.metadata,
         omitted_image_count: input.visualContext.omittedImageCount,
         requested_figures: input.visualContext.requestedFigures,
+        figure_evidence_coverage: input.visualContext.coverage,
         unavailable_figures: input.visualContext.unavailableFigures
       } } : {}),
       ...(input.webSearch?.decision ? { external_search_plan: input.webSearch.decision } : {}),
@@ -1388,6 +1389,7 @@ function r16FigureMapContextForProof(context, supplied) {
       imageStatus: prepared.visualContext.status,
       images: prepared.visualContext.metadata,
       omittedImageCount: prepared.visualContext.omittedImageCount,
+      figureCoverage: prepared.visualContext.coverage,
       unavailableFigures: prepared.visualContext.unavailableFigures
     };
   }

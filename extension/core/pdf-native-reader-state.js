@@ -110,7 +110,7 @@
           ? suppliedPadding : 32;
         if (pageWidth === null || pageWidth <= 0 ||
             containerWidth === null || containerWidth <= padding) return scale;
-        scale = normalizeScale((containerWidth - padding) / pageWidth, scale);
+        scale = Math.min(maxScale, Math.max(minScale, (containerWidth - padding) / pageWidth));
         fitWidthMode = true;
         return scale;
       },

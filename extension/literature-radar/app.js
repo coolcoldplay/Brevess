@@ -71,6 +71,12 @@
     $('radar-name').setAttribute('translate', 'no'); $('query-preview').setAttribute('translate', 'no');
     const history=Array.isArray(revision.baselineHistory)?revision.baselineHistory:[],lastHistory=history.at(-1);
     text('scan-state', mine ? '正在检查来源…' : latest.error ? (latest.error.code==='RADAR_PARTIAL_FAILURE'?'部分来源失败 · 已成功的结果保留':'最近检查失败 · 原进度已保留') : !latest.baselineAt ? '待建立首次基线' : !latest.articles.length ? T('检索完成 · 本窗口无匹配文献') : '已建立基线 · 持续追踪新增');
+    const pubmedQuery=sourceRows.find(row=>row.source==='pubmed')?.query;
+    const historyLink=$('pubmed-history-link');historyLink.hidden=!pubmedQuery;
+    if(pubmedQuery){
+      const href='https://pubmed.ncbi.nlm.nih.gov/?term='+encodeURIComponent(pubmedQuery);
+      if(historyLink.href!==href){const next=historyLink.cloneNode(true);next.href=href;historyLink.replaceWith(next);}
+    }
     $('history-baseline').hidden=!!revision.sourceQueries||!['biorxiv','medrxiv','europepmc'].includes(radar.source)||revision!==latest;
     $('history-baseline').disabled=!!active||!!batch||!latest.baselineAt;
     $('baseline-history').hidden=!lastHistory;
@@ -107,7 +113,7 @@
       const title = element('h3'), link = element('a', '', paper.title || '未提供标题');
       if (paper.title) title.setAttribute('translate', 'no');
       link.href = R.radarPaperUrl((paper.source||radar.source),paper); link.target = '_blank'; link.rel = 'noopener noreferrer'; title.append(link);
-      if(paper.preprint||R.RADAR_SOURCES[(paper.source||radar.source)].preprint)label.append(element('span','badge preprint','预印本 · 请核对评审状态'));
+      if(R.isRadarPreprint(paper,paper.source||radar.source))label.append(element('span','badge preprint','预印本 · 请核对评审状态'));
       const heading = element('div', 'paper-heading'), publication = element('div', 'paper-publication');
       publication.setAttribute('translate', 'no');
       if (paper.journal) publication.append(element('strong', '', paper.journal));
@@ -122,6 +128,16 @@
       if (paper.doi) { const doi = element('a', '', 'DOI ↗'); doi.href = 'https://doi.org/' + encodeURIComponent(paper.doi); doi.target = '_blank'; doi.rel = 'noopener noreferrer'; links.append(doi); }
       const read = element('button', '', paper.read ? '标为未读' : '标为已读'); read.type = 'button';
       read.addEventListener('click', () => safe(async () => { await store.markRead(radar.id, revision.number, [paper.id], !paper.read); await refresh(true); }));
+      if(window.parent!==window && typeof window.parent.BrevessProjectReadingQueue?.add==='function'){
+        const add=element('button','','加入课题待读');add.type='button';
+        add.addEventListener('click',()=>safe(async()=>{
+          add.disabled=true;
+          try{const name=await window.parent.BrevessProjectReadingQueue.add(radar.id,revision.number,paper.id,enrichment.scoreFor(paper)?.score);
+            notice('已加入「'+name+'」的课题待读');add.textContent='已加入课题';}
+          finally{add.disabled=false;}
+        }));
+        links.append(add);
+      }
       footer.append(links, read); article.append(footer); enrichment.decorate(article, paper); feed.append(article);
     }
     $('load-more').hidden = articles.length <= limit;
@@ -138,7 +154,24 @@
   }
   function sourceHint(id){const def=R.RADAR_SOURCES[id];return T(id==='asta'?'Asta 官方文献检索：输入关键词，按发表日期追踪。不是网页 Deep search；可能含预印本，晚到索引可能漏检。API Key 可在来源连接中配置。':['biorxiv','medrxiv'].includes(id)?'通过 Europe PMC 预印本索引检索。':id==='crossref'?'输入关键词；不使用 PubMed 字段标签或布尔语法。':def.credential?'需要 API Key；可用范围由服务商和机构授权决定。':'使用该来源原生检索语法。')+' '+T('日期口径：')+def.date;}
   function updateSource(){const id=$('source').value,def=R.RADAR_SOURCES[id];$('query').placeholder=def.example;text('source-hint',sourceHint(id));$('validate-query').hidden=id!=='pubmed';$('baseline').options[0].textContent=T(id==='asta'?'今天发表':'今天入库');preview();}
-  function preview(){const id=$('source').value,q=encodeURIComponent($('query').value),urls={asta:'https://asta.allen.ai/',pubmed:'https://pubmed.ncbi.nlm.nih.gov/?term='+q,europepmc:'https://europepmc.org/search?query='+q,biorxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:bioRxiv'),medrxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:medRxiv'),arxiv:'https://arxiv.org/search/?query='+q+'&searchtype=all',crossref:'https://search.crossref.org/?q='+q,wos:'https://www.webofscience.com/wos/woscc/advanced-search',scopus:'https://www.scopus.com/search/form.uri?display=advanced'};$('preview-query').href=urls[id];text('preview-query',id==='asta'?'打开 Asta 网页 ↗':'打开来源检索 ↗');}
+  function previewPubmed(){
+    const query=$('query').value.trim(),isPubmed=$('source').value==='pubmed';
+    $('pubmed-check').hidden=!isPubmed;if(!isPubmed)return;
+    // Keep the publisher's actual precedence. Only split a top-level operation.
+    let depth=0,quoted=false;
+    $('boolean-preview').textContent=query.replace(/"|\(|\)|\b(?:AND|OR|NOT)\b/gi,token=>{
+      if(token==='"')quoted=!quoted;
+      else if(!quoted){if(token==='(')depth++;else if(token===')')depth--;else if(depth===0)return '\n'+token+' ';}
+      return token;
+    });
+    const raw=$('seed-pmids').value.trim(),ids=raw?raw.split(/[\s,，、;；]+/):[];
+    const valid=ids.length>0&&ids.length<=20&&ids.every(value=>/^[1-9]\d{0,8}$/.test(value));
+    const link=$('seed-preview');link.hidden=!query||!valid;link.removeAttribute('href');
+    if(query&&valid)link.href='https://pubmed.ncbi.nlm.nih.gov/?term='+encodeURIComponent('('+query+') AND ('+ids.map(id=>id+'[PMID]').join(' OR ')+')');
+    $('seed-error').textContent=raw&&!valid?'请输入最多 20 个数字 PMID。':'';
+  }
+  $('seed-pmids').addEventListener('input',previewPubmed);
+  function preview(){previewPubmed();const id=$('source').value,q=encodeURIComponent($('query').value),urls={asta:'https://asta.allen.ai/',pubmed:'https://pubmed.ncbi.nlm.nih.gov/?term='+q,europepmc:'https://europepmc.org/search?query='+q,biorxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:bioRxiv'),medrxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:medRxiv'),arxiv:'https://arxiv.org/search/?query='+q+'&searchtype=all',crossref:'https://search.crossref.org/?q='+q,wos:'https://www.webofscience.com/wos/woscc/advanced-search',scopus:'https://www.scopus.com/search/form.uri?display=advanced'};$('preview-query').href=urls[id];text('preview-query',id==='asta'?'打开 Asta 网页 ↗':'打开来源检索 ↗');}
   $('source').addEventListener('change',updateSource);
   async function connectionState(){const id=$('connection-source').value,connection=await R.loadRadarConnection(id);if(id!==$('connection-source').value)return;text('connection-state',connection.apiKey?'本机已配置；填写新值可替换。':id==='asta'?'尚未配置 Asta Key；将尝试匿名访问，访问范围和限流由来源决定。':'尚未配置');$('connection-help').href=R.RADAR_SOURCES[id].help;$('institution-token').hidden=id!=='scopus';$('connection-key').value='';$('connection-token').value='';text('connection-message','');}
   $('connections').addEventListener('click',()=>safe(async()=>{await connectionState();$('connections-dialog').showModal();}));

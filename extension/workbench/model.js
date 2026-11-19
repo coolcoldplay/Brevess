@@ -52,6 +52,21 @@
     return {zoom,x:width/2-(left/2+right/2)*scaled,y:height/2-(top/2+bottom/2)*scaled,selection:[]};
   }
   function zoomAt(view,point,factor){const minimum=Math.min(.08,view.zoom),zoom=Math.max(minimum,Math.min(4,view.zoom*factor)),ratio=zoom/view.zoom;return {...view,zoom,x:point.x-(point.x-view.x)*ratio,y:point.y-(point.y-view.y)*ratio};}
+  function insertionPoint(objects, size, center, viewport) {
+    const gap = 24, origin = {x:center.x-size.w/2, y:center.y-size.h/2};
+    const occupied = objects.map(rect);
+    const candidates = [origin];
+    for (const box of occupied) {
+      candidates.push({x:box.x+box.w+gap,y:box.y},{x:box.x-size.w-gap,y:box.y},
+        {x:box.x,y:box.y+box.h+gap},{x:box.x,y:box.y-size.h-gap});
+    }
+    const visible = point => Math.max(0, Math.min(viewport.right,point.x+size.w)-Math.max(viewport.left,point.x)) *
+      Math.max(0, Math.min(viewport.bottom,point.y+size.h)-Math.max(viewport.top,point.y));
+    const distance = point => Math.hypot(point.x-origin.x,point.y-origin.y);
+    return candidates.filter(point => occupied.every(box => point.x >= box.x+box.w+gap ||
+      box.x >= point.x+size.w+gap || point.y >= box.y+box.h+gap || box.y >= point.y+size.h+gap))
+      .sort((a,b) => visible(b)-visible(a) || distance(a)-distance(b))[0] || origin;
+  }
   function world(view,point){return {x:(point.x-view.x)/view.zoom,y:(point.y-view.y)/view.zoom};}
   function project(name,question=''){return {id:uid('project'),name,question,hypotheses:[],plans:[],assets:[],resources:[],materialLinks:[]};}
   function hypothesis(name){return {id:uid('hypothesis'),name,nodes:[],edges:[],papers:[],revision:0};}
@@ -145,6 +160,9 @@
   function sourceLabel(row){const d=row.data||{};return row.title??d.title??d.label??d.name??d.question??d.summary??row.panelId??row.blockId??row.figureId??row.source?.resourceId??'未命名来源';}
   function normalizeResource(row,paperTitle=''){const r=clone(row);r.title=String(sourceLabel(r));r.subtitle=paperTitle||r.subtitle||'';r.detail=String(r.detail??r.data?.description??r.data?.summary??r.data?.text??'');if(r.type==='paragraph')r.type='fragment';r.availability ||= r.sourceMismatch?'review':'local';return r;}
   function versionedResources(rows,paperTitle=''){const keys=new Map(rows.map(r=>[r.id,r.source?r.id+':v'+r.source.revision+':'+r.source.contentHash+':'+(r.source.bindings||[]).map(b=>b.revision+'-'+b.contentHash).join('_'):r.id]));return rows.map(row=>{const r=normalizeResource(row,paperTitle);r.id=keys.get(row.id);if(r.parentResourceId)r.parentResourceId=keys.get(r.parentResourceId)||r.parentResourceId;return r;});}
-  function locator(resource,resources){if(!resource?.source)return null;const parent=resource.parentResourceId?resources.find(r=>r.id===resource.parentResourceId):null;const figure=resource.type==='figure'?resource:parent?.type==='figure'?parent:resources.find(r=>r.type==='figure'&&r.figureId===resource.figureId&&r.source?.workspaceId===resource.source.workspaceId&&r.source?.workspaceGeneration===resource.source.workspaceGeneration&&r.source?.contentHash===resource.source.contentHash);if(resource.figureId&&figure?.source)return {source:clone(figure.source),target:{kind:'figure',figureId:figure.figureId}};if(resource.type==='fragment'&&resource.source.resourceId!=='mechanism-canvas')return {source:clone(resource.source),target:{kind:'paragraph',paragraphId:resource.data?.paragraphId||resource.data?.id||resource.source.resourceId}};return null;}
-  return {clone,uid,finite,PANEL_STATUS_OPTIONS,panelStatus,updatePanelStatus,panelTimeline,TABLE_LIMITS,createGroupTable,validateGroupTable,editGroupTable,ARRANGE_OPERATIONS,rect,portForPoint,bounds,fit,zoomAt,world,project,hypothesis,plan,figure,figureLabel,panelLetter,createPanelOrder,panel,materialLink,evidenceBlock,selection,arrange,layout,duplicatePanels,duplicateGraph,branch,designPanels,normalizeResource,versionedResources,locator};
+  function locator(resource,resources){if(!resource?.source||resource.sourceMismatch)return null;
+    if(resource.type==='panel'&&resource.panelId&&resource.figureId&&resource.source.resourceId===resource.figureId+'::panel:'+resource.panelId)
+      return {source:clone(resource.source),target:{kind:'panel',figureId:resource.figureId,panelId:resource.panelId}};
+    const parent=resource.parentResourceId?resources.find(r=>r.id===resource.parentResourceId):null;const figure=resource.type==='figure'?resource:parent?.type==='figure'?parent:resources.find(r=>r.type==='figure'&&r.figureId===resource.figureId&&r.source?.workspaceId===resource.source.workspaceId&&r.source?.workspaceGeneration===resource.source.workspaceGeneration&&r.source?.contentHash===resource.source.contentHash);if(resource.figureId&&figure?.source)return {source:clone(figure.source),target:{kind:'figure',figureId:figure.figureId}};if(resource.type==='fragment'&&resource.source.resourceId!=='mechanism-canvas')return {source:clone(resource.source),target:{kind:'paragraph',paragraphId:resource.data?.paragraphId||resource.data?.id||resource.source.resourceId}};return null;}
+  return {clone,uid,finite,PANEL_STATUS_OPTIONS,panelStatus,updatePanelStatus,panelTimeline,TABLE_LIMITS,createGroupTable,validateGroupTable,editGroupTable,ARRANGE_OPERATIONS,rect,portForPoint,bounds,fit,zoomAt,world,project,hypothesis,plan,figure,figureLabel,panelLetter,createPanelOrder,panel,materialLink,evidenceBlock,selection,arrange,layout,insertionPoint,duplicatePanels,duplicateGraph,branch,designPanels,normalizeResource,versionedResources,locator};
 });

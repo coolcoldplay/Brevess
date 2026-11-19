@@ -252,7 +252,7 @@ Panel 追问	Panel follow-ups
     // Voice and prompts no longer share a very long PDF settings page.
     const voice = page('voice'); move('ttsSettings', voice);
     const notes = page('notes');
-    for (const [id, label] of [['articleChatPromptSettings', '问答快捷提示词'], ['literatureNoteTemplateSettings', '文献笔记模板'], ['selectionLlmActionSettings', '选区动作'], ['panelFollowupSettings', 'Panel 追问提示词']]) {
+    for (const [id, label] of [['articleChatPromptSettings', '问答快捷提示词'], ['displayPromptSettings', '调整显示快捷指令'], ['literatureNoteTemplateSettings', '文献笔记模板'], ['selectionLlmActionSettings', '选区动作'], ['panelFollowupSettings', 'Panel 追问提示词']]) {
       const section = move(id, notes); disclosure(section, label, id === 'literatureNoteTemplateSettings');
     }
     const noteActions = element('div', 'focus-sticky-actions'); move('saveReadingSettings', noteActions); move('readingSettingsStatus', noteActions); notes.append(noteActions);
@@ -283,11 +283,11 @@ Panel 追问	Panel follow-ups
     });
     $('aiPrivacyAcknowledged')?.addEventListener('change', updatePrivacyHint);
     observer = new MutationObserver(compactEditors);
-    for (const id of ['articleChatQuickPromptList', 'literatureNoteTemplateList', 'selectionLlmActionList', 'panelFollowupPresetList']) if ($(id)) observer.observe($(id), { childList: true, subtree: true });
+    for (const id of ['articleChatQuickPromptList', 'displayQuickPromptList', 'literatureNoteTemplateList', 'selectionLlmActionList', 'panelFollowupPresetList']) if ($(id)) observer.observe($(id), { childList: true, subtree: true });
     compactEditors(); updateChrome();
   }
   function compactEditors() {
-    const selectors = '.literature-note-field-row, #articleChatQuickPromptList .named-prompt-row, #selectionLlmActionList .named-prompt-row, #panelFollowupPresetList .named-prompt-row';
+    const selectors = '.literature-note-field-row, #articleChatQuickPromptList .named-prompt-row, #displayQuickPromptList .named-prompt-row, #selectionLlmActionList .named-prompt-row, #panelFollowupPresetList .named-prompt-row';
     document.querySelectorAll(selectors).forEach(row => {
       if (row.querySelector(':scope > .focus-editor-details')) return;
       const name = row.querySelector('input[type="text"]');
@@ -345,6 +345,7 @@ Panel 追问	Panel follow-ups
       ['PDF 解析', 'MinerU OCR Token 增强识别', 'reading', 'pdfMineruSettings'],
       ['论文网址白名单', '域名 站点', 'reading', 'literatureUrlSettings'],
       ['文献笔记模板', '模板 字段 提示词', 'notes', 'literatureNoteTemplateSettings'],
+      ['调整显示快捷指令', '网页滤镜 / 纯净阅读', 'notes', 'displayPromptSettings'],
       ['问答快捷提示词', '问题', 'notes', 'articleChatPromptSettings'],
       ['选区动作', '翻译 文段', 'notes', 'selectionLlmActionSettings'],
       ['Panel 追问', '解图', 'notes', 'panelFollowupSettings'],

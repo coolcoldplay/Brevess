@@ -214,6 +214,7 @@
                 { role: 'user', content: userContent(request) }
               ],
               ...thinking,
+              ...(request.jsonObject === true ? { response_format: { type: 'json_object' } } : {}),
               max_tokens: shared.normalizeOutputTokenLimit(request.maxOutputTokens),
               stream: true,
               stream_options: { include_usage: true }

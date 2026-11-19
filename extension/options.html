@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
   <link rel="stylesheet" href="options.css">
   <link rel="stylesheet" href="options-local-library.css">
-
+  
   <link rel="stylesheet" href="ui-swiss.css">
 <link rel="stylesheet" href="web-filters-general/reading-options.css">
 <script src="core/translation-checkpoint.js"></script>
@@ -51,7 +51,7 @@
       <div class="settings-nav-group">
         <span class="settings-nav-label">开始使用</span>
         <button type="button" data-settings-nav="overview" aria-selected="true"><span class="settings-nav-number" aria-hidden="true">01</span><i class="ph ph-compass" aria-hidden="true"></i><span class="settings-nav-title">设置概览</span></button>
-
+        
         <button type="button" data-settings-nav="storage" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">03</span><i class="ph ph-folder-open" aria-hidden="true"></i><span class="settings-nav-title">本地保存</span><small id="settingsNavStorageState">可选</small></button>
         <button type="button" data-settings-nav="models" aria-selected="false"><span class="settings-nav-number" aria-hidden="true">04</span><i class="ph ph-chats-circle" aria-hidden="true"></i><span class="settings-nav-title">模型与连接</span><small id="settingsNavModelState">待配置</small></button>
       </div>
@@ -76,7 +76,7 @@
         <span>设置页面</span>
         <select id="settingsMobilePage">
           <option value="overview">设置概览</option>
-
+          
           <option value="storage">本地保存</option>
           <option value="models">模型与连接</option>
           <option value="workbench">课题工作台</option>
@@ -89,7 +89,7 @@
         </select>
       </label>
   <main class="settings-shell">
-
+    
     <section id="researchWorkbenchSettings" class="settings-panel workbench-settings" data-settings-page="workbench" aria-labelledby="workbenchSettingsHeading" hidden>
       <div class="workbench-settings__header">
         <div><h2 id="workbenchSettingsHeading">课题工作台</h2><p>假说梳理 · 组图规划</p></div>
@@ -127,7 +127,7 @@
         <div>
           <p class="section-kicker">设置概览</p>
           <h1 id="settingsOverviewHeading">确认阅读、保存与模型状态</h1>
-
+          
         </div>
         <button id="reopenOnboarding" class="button quiet compact-button" type="button">重新检查设置</button>
       </header>
@@ -159,7 +159,7 @@
             <div>
               <p class="section-kicker">开始使用</p>
               <h2 id="setupChecklistHeading">按需开启更多能力</h2>
-
+              
             </div>
             <div id="onboardingProgress" class="overview-progress" aria-label="阅读就绪状态">可直接阅读</div>
           </header>
@@ -769,6 +769,21 @@
         </div>
         <div id="articleChatQuickPromptList" class="named-prompt-list"></div>
       </div>
+      <div id="displayPromptSettings" class="settings-section chat-quick-prompt-settings">
+        <div class="section-heading">
+          <div>
+            <h3>调整显示快捷指令</h3>
+            <p>在调整显示时输入 / 选择指令，插入后可以继续编辑。</p>
+          </div>
+          <div class="section-heading-actions">
+            <button id="addDisplayQuickPrompt" class="button secondary compact-button"
+              type="button">新增提示词</button>
+            <button id="resetDisplayQuickPrompts" class="button quiet compact-button"
+              type="button">恢复默认</button>
+          </div>
+        </div>
+        <div id="displayQuickPromptList" class="named-prompt-list"></div>
+      </div>
       <div id="literatureNoteTemplateSettings" class="settings-section literature-note-template-settings">
         <div class="section-heading">
           <div>
@@ -1269,10 +1284,10 @@
   <script src="core/category-store.js"></script>
     <script src="core/adaptive-catalog.js"></script>
     <script src="core/settings-store.js"></script>
-
-
-
-
+    
+    
+    
+    
     <script src="core/i18n-builtins.js"></script>
     <script src="core/i18n-export.js"></script>
     <script src="core/agent-setup-prompt.js"></script>
@@ -1284,8 +1299,8 @@
     <script src="core/agent-settings-ui.js"></script>
   <script src="core/local-library-tags.js"></script>
   <script src="options-local-library.js"></script>
-
-
+  
+  
 <script src="web-filters-general/reading-options.js"></script>
 </body>
 </html>

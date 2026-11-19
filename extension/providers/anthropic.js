@@ -11,6 +11,8 @@
         effort !== 'auto' && capability.levels.includes(effort)) {
       result.output_config = { effort };
     }
+    if (capability?.thinkingType === 'adaptive' && (request.reasoningEnabled ?? config.reasoningEnabled) === true) result.thinking = { type: 'adaptive' };
+    if (capability?.canDisable === true && (request.reasoningEnabled ?? config.reasoningEnabled) === false) result.thinking = { type: 'disabled' };
     const endpoint = String(config.baseUrl || '').trim();
     const officialEndpoint = !endpoint ||
       /^https:\/\/api\.anthropic\.com(?:[/:]|$)/i.test(endpoint);

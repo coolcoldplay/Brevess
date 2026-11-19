@@ -9,9 +9,9 @@ const COMPATIBLE_PROVIDER_VALUE_PREFIX = 'compatible:';
 const MODEL_DISCOVERY_CACHE_MS = 5 * 60 * 1000;
 const MISSING_PROFILE_DRAFT_MESSAGE =
   '当前配置已被其他窗口删除；未保存草稿已保留。请选择其他配置或放弃草稿后继续。';
-const TASK_REASONING_EFFORTS = Object.freeze([
-  'auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'
-]);
+function validReasoningEffort(value) {
+  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
 const TASK_REASONING_LABELS = Object.freeze({
   auto: '自动', minimal: '最小', low: '低', medium: '中', high: '高',
   xhigh: '极高', max: '最高'
@@ -87,10 +87,16 @@ function displayBuiltinAnalysisMode(mode) {
   return SciLLM.localizeBuiltinSettings?.({ analysisModes: [mode] }, builtinEditorLanguage())?.analysisModes[0] || mode;
 }
 
+const quickPromptEditors = [
+  { key: 'articleChatQuickPrompts', list: 'articleChatQuickPromptList', action: 'ArticleChatQuickPrompt' },
+  { key: 'displayQuickPrompts', list: 'displayQuickPromptList', action: 'DisplayQuickPrompt' }
+];
+
 function relocalizeBuiltinEditors(language) {
   const groups = [
     ['figurePanelFollowupPresets', collectPanelFollowupPresets, renderPanelFollowupPresets],
-    ['articleChatQuickPrompts', collectArticleChatQuickPrompts, renderArticleChatQuickPrompts],
+    ...quickPromptEditors.map(editor => [editor.key, all => collectArticleChatQuickPrompts(all, editor),
+      rows => renderArticleChatQuickPrompts(rows, editor)]),
     ['literatureNoteTemplates', collectLiteratureNoteTemplates, renderLiteratureNoteTemplates],
     ['selectionLlmActions', collectSelectionLlmActions, renderSelectionLlmActions]
   ];
@@ -480,22 +486,23 @@ function bindEvents() {
     renderPanelFollowupPresetEmptyState();
     markProfileEditorDirty('panelFollowupPresetList');
   });
-  document.getElementById('addArticleChatQuickPrompt')
-    .addEventListener('click', addArticleChatQuickPrompt);
-  document.getElementById('resetArticleChatQuickPrompts').addEventListener('click', () => {
-    renderArticleChatQuickPrompts(state?.articleChatQuickPromptDefaults || []);
-    markProfileEditorDirty('articleChatQuickPromptList');
-  });
-  document.getElementById('articleChatQuickPromptList').addEventListener('input', () => {
-    markProfileEditorDirty('articleChatQuickPromptList');
-  });
-  document.getElementById('articleChatQuickPromptList').addEventListener('click', event => {
-    const button = event.target.closest('[data-delete-quick-prompt]');
-    if (!button) return;
-    button.closest('.named-prompt-row')?.remove();
-    renderArticleChatQuickPromptEmptyState();
-    markProfileEditorDirty('articleChatQuickPromptList');
-  });
+  for (const editor of quickPromptEditors) {
+    const list = document.getElementById(editor.list);
+    document.getElementById('add' + editor.action).addEventListener('click', () => addArticleChatQuickPrompt(editor));
+    document.getElementById('reset' + editor.action + 's').addEventListener('click', () => {
+      const defaults = editor.key === 'displayQuickPrompts' ? SciLLM.DEFAULT_DISPLAY_QUICK_PROMPTS : state?.articleChatQuickPromptDefaults;
+      renderArticleChatQuickPrompts(defaults || [], editor);
+      markProfileEditorDirty(editor.list);
+    });
+    list.addEventListener('input', () => markProfileEditorDirty(editor.list));
+    list.addEventListener('click', event => {
+      const remove = event.target.closest('[data-delete-quick-prompt]');
+      if (!remove) return;
+      remove.closest('.named-prompt-row')?.remove();
+      renderArticleChatQuickPromptEmptyState(editor);
+      markProfileEditorDirty(editor.list);
+    });
+  }
   document.getElementById('addLiteratureNoteTemplate')
     .addEventListener('click', addLiteratureNoteTemplate);
   document.getElementById('addGeneralWebNoteTemplate').addEventListener('click', () => {
@@ -776,6 +783,7 @@ function organizeSettingsContent() {
   [
     'pdfMineruSettings',
     'articleChatPromptSettings',
+    'displayPromptSettings',
     'literatureNoteTemplateSettings',
     'selectionLlmActionSettings',
     'panelFollowupSettings'
@@ -790,7 +798,16 @@ async function saveScopedPreferences(statusId, successMessage) {
   try {
     if (statusId === 'readingSettingsStatus' && ttsEditorDirty) await saveTtsPreferences();
     if (statusId === 'readingSettingsStatus' && literatureUrlDirty) await saveLiteratureUrlPreferences();
-    await persistForm(false);
+    const snapshot = snapshotSettingsDrafts();
+    const editedPrompts = quickPromptEditors.filter(editor => snapshot.fields.has(editor.list));
+    if (statusId === 'readingSettingsStatus' && editedPrompts.length && editedPrompts.length === snapshot.fields.size) {
+      const preferences = Object.fromEntries(editedPrompts.map(editor => [editor.key, collectArticleChatQuickPrompts(false, editor)]));
+      const updated = await callBackground({ type: 'LLM_UPDATE_PREFERENCES', preferences });
+      acknowledgeSettingsDrafts(snapshot);
+      applyState(updated);
+    } else if (!await persistForm(false)) {
+      throw new Error(document.getElementById('status')?.textContent || '设置尚未保存');
+    }
     status.dataset.state = 'success';
     status.textContent = successMessage;
     if (statusId === 'readingSettingsStatus') {
@@ -4174,8 +4191,8 @@ function applyState(nextState, { replaceTaskPolicyDrafts = false, replaceDrafts 
   if (!settingsDraftIsDirty('panelFollowupPresetList')) {
     renderPanelFollowupPresets(state.settings?.figurePanelFollowupPresets || []);
   }
-  if (!settingsDraftIsDirty('articleChatQuickPromptList')) {
-    renderArticleChatQuickPrompts(state.settings?.articleChatQuickPrompts || []);
+  for (const editor of quickPromptEditors) {
+    if (!settingsDraftIsDirty(editor.list)) renderArticleChatQuickPrompts(state.settings?.[editor.key] || [], editor);
   }
   if (!settingsDraftIsDirty('literatureNoteTemplateList')) {
     renderLiteratureNoteTemplates(state.settings?.literatureNoteTemplates || []);
@@ -4439,7 +4456,7 @@ function panelFollowupPromptMap(presets) {
   return prompts;
 }
 
-function createArticleChatQuickPromptRow(prompt = {}) {
+function createArticleChatQuickPromptRow(prompt, editor) {
   const row = document.createElement('div');
   row.className = 'named-prompt-row';
   row.dataset.quickPromptId = String(prompt.id || `prompt_${Date.now().toString(36)}`);
@@ -4452,7 +4469,7 @@ function createArticleChatQuickPromptRow(prompt = {}) {
   nameInput.type = 'text';
   nameInput.maxLength = 80;
   nameInput.dataset.quickPromptName = '';
-  nameInput.placeholder = '例如：核心结论';
+  nameInput.placeholder = editor.key === 'displayQuickPrompts' ? '例如：调整正文宽度' : '例如：核心结论';
   nameInput.value = String(prompt.name || '');
   nameField.append(nameLabel, nameInput);
 
@@ -4479,8 +4496,8 @@ function createArticleChatQuickPromptRow(prompt = {}) {
   return row;
 }
 
-function renderArticleChatQuickPromptEmptyState() {
-  const list = document.getElementById('articleChatQuickPromptList');
+function renderArticleChatQuickPromptEmptyState(editor) {
+  const list = document.getElementById(editor.list);
   if (!list || list.querySelector('.named-prompt-row')) return;
   const empty = document.createElement('p');
   empty.className = 'named-prompt-empty';
@@ -4488,40 +4505,40 @@ function renderArticleChatQuickPromptEmptyState() {
   list.replaceChildren(empty);
 }
 
-function renderArticleChatQuickPrompts(prompts) {
-  const list = document.getElementById('articleChatQuickPromptList');
+function renderArticleChatQuickPrompts(prompts, editor = quickPromptEditors[0]) {
+  const list = document.getElementById(editor.list);
   if (!list) return;
-  prompts = builtinEditorRows('articleChatQuickPrompts', prompts);
+  prompts = builtinEditorRows(editor.key, prompts);
   list.replaceChildren();
   (Array.isArray(prompts) ? prompts : []).forEach(prompt => {
-    list.appendChild(createArticleChatQuickPromptRow(prompt));
+    list.appendChild(createArticleChatQuickPromptRow(prompt, editor));
   });
-  renderArticleChatQuickPromptEmptyState();
+  renderArticleChatQuickPromptEmptyState(editor);
 }
 
-function addArticleChatQuickPrompt() {
-  const list = document.getElementById('articleChatQuickPromptList');
+function addArticleChatQuickPrompt(editor) {
+  const list = document.getElementById(editor.list);
   if (!list) return;
   list.querySelector('.named-prompt-empty')?.remove();
   const row = createArticleChatQuickPromptRow({
     id: `prompt_${Date.now().toString(36)}`,
     name: '',
     prompt: ''
-  });
+  }, editor);
   list.appendChild(row);
   row.querySelector('[data-quick-prompt-name]')?.focus();
-  markProfileEditorDirty('articleChatQuickPromptList');
+  markProfileEditorDirty(editor.list);
 }
 
-function collectArticleChatQuickPrompts(includeIncomplete = false) {
-  const rows = [...document.querySelectorAll('#articleChatQuickPromptList .named-prompt-row')]
+function collectArticleChatQuickPrompts(includeIncomplete = false, editor = quickPromptEditors[0]) {
+  const rows = [...document.getElementById(editor.list).querySelectorAll('.named-prompt-row')]
     .map((row, index) => ({
       id: String(row.dataset.quickPromptId || `prompt_${index + 1}`),
       name: row.querySelector('[data-quick-prompt-name]')?.value || '',
       prompt: row.querySelector('[data-quick-prompt-text]')?.value || ''
     }))
     .filter(item => includeIncomplete || (item.name.trim() && item.prompt.trim()));
-  return restoreBuiltinEditorRows('articleChatQuickPrompts', rows);
+  return restoreBuiltinEditorRows(editor.key, rows);
 }
 
 function nextLiteratureNoteFieldId(templateRow, requested = '') {
@@ -6169,7 +6186,7 @@ function updateProviderBindingsForState(nextState) {
 function settingsDraftScope(fieldId) {
   if (['analysisMode', 'autoAnalyze', 'consentGranted'].includes(fieldId)) return 'reading';
   if (['autoCacheFigureImages', 'saveArticleWebSnapshot'].includes(fieldId)) return 'storage';
-  if (['panelFollowupPresetList', 'articleChatQuickPromptList',
+  if (['panelFollowupPresetList', 'articleChatQuickPromptList', 'displayQuickPromptList',
     'literatureNoteTemplateList', 'selectionLlmActionList'].includes(fieldId)) return fieldId;
   if (['globalProfileId', 'taskPolicyModules', 'llmTaskPolicyTableBody', 'llmAdvancedTaskPolicyTableBody',
     'copyTaskTokenRule', 'taskTokenRuleDialog'].includes(fieldId)) return 'routing';
@@ -6476,7 +6493,7 @@ function syncTaskPolicyDraftsFromState() {
       mode: validProfile ? 'profile' : translation && saved.mode !== 'global' ? 'local' : 'global',
       profileId: validProfile ? saved.profileId : null,
       reasoningEnabled: saved.reasoningEnabled === true,
-      reasoningEffort: TASK_REASONING_EFFORTS.includes(saved.reasoningEffort)
+      reasoningEffort: validReasoningEffort(saved.reasoningEffort)
         ? saved.reasoningEffort : 'auto',
       tokenRule: cloneTaskTokenRule(
         SciLLM.normalizeTaskTokenRule(taskId, saved.tokenRule)
@@ -6538,11 +6555,19 @@ function profileForTaskPolicy(profileId) {
   return { ...profile, providerId: descriptor.providerId, config };
 }
 
-function effectiveTaskProfile(policy) {
+function compatibleSemanticProfile(definition,globalProfile){
+  if(definition?.id!=='semantic_find'||profileSupportsTaskDefinition(globalProfile,definition))return null;
+  return profileEntries().map(([id])=>({id,profile:profileForTaskPolicy(id)}))
+    .find(({profile})=>profileSupportsTaskDefinition(profile,definition)&&Boolean(profile?.config?.model?.trim())&&
+      (profile.config.hasApiKey===true||['codex-local','deepseek-harness'].includes(profile.providerId)))||null;
+}
+
+function effectiveTaskProfile(policy, definition) {
   if (policy.mode === 'local') return { profileId: null, profile: null };
   const globalId = document.getElementById('globalProfileId')?.value ||
     state?.settings?.globalProfileId || '';
-  const profileId = policy.mode === 'profile' ? policy.profileId : globalId;
+  const compatible=policy.mode==='global'?compatibleSemanticProfile(definition,profileForTaskPolicy(globalId)):null;
+  const profileId = policy.mode === 'profile' ? policy.profileId : compatible?.id || globalId;
   const original = profileForTaskPolicy(profileId);
   const taskModel = SciLLM.taskModelForProfile?.(policy, original, profileId);
   const profile = taskModel ? { ...original, config: { ...original.config, model: taskModel } } : original;
@@ -6569,7 +6594,7 @@ function profileSupportsTaskDefinition(profile, definition) {
 
 function taskPolicyStatus(definition, policy) {
   if (policy.mode === 'local') return { key: 'local', label: interfaceText('浏览器本地翻译（可用性在使用时检查）') };
-  const { profile } = effectiveTaskProfile(policy);
+  const { profile } = effectiveTaskProfile(policy,definition);
   if (!profile || !String(profile.config?.model || profile.model || '').trim()) {
     return { key: 'missing', label: interfaceText('缺少模型') };
   }
@@ -6613,7 +6638,7 @@ function createTaskReasoningControls(definition, policy, profile) {
     })
     : { enabled: false, effort: 'auto' };
   const supportedEfforts = new Set(['auto', ...(capability.levels || [])]
-    .filter(effort => TASK_REASONING_EFFORTS.includes(effort)));
+    .filter(effort => validReasoningEffort(effort) && !['none', 'off', 'disabled'].includes(effort)));
   const reasoningToggle = document.createElement('input');
   reasoningToggle.type = 'checkbox';
   reasoningToggle.dataset.taskPolicyReasoning = definition.id;
@@ -6624,14 +6649,14 @@ function createTaskReasoningControls(definition, policy, profile) {
   const effortSelect = document.createElement('select');
   effortSelect.dataset.taskPolicyEffort = definition.id;
   effortSelect.setAttribute('aria-label', copy.effortAria);
-  TASK_REASONING_EFFORTS.forEach(effort => {
+  supportedEfforts.forEach(effort => {
     const option = document.createElement('option');
     option.value = effort;
-    option.textContent = interfaceText(TASK_REASONING_LABELS[effort]);
+    option.textContent = interfaceText(TASK_REASONING_LABELS[effort] || effort);
     option.disabled = !supportedEfforts.has(effort);
     effortSelect.appendChild(option);
   });
-  const normalizedEffort = TASK_REASONING_EFFORTS.includes(normalized.effort)
+  const normalizedEffort = supportedEfforts.has(normalized.effort)
     ? normalized.effort : 'auto';
   effortSelect.value = supportedEfforts.has(normalizedEffort)
     ? normalizedEffort : 'auto';
@@ -6743,8 +6768,10 @@ function renderTaskPolicyTable() {
       profileSelect.appendChild(localOption);
     }
     const globalProfile = profileForTaskPolicy(globalSelect.value);
+    const automatic=compatibleSemanticProfile(definition,globalProfile);
     appendTaskProfileOption(
-      profileSelect, definition, '', globalProfile,
+      profileSelect, definition, '', automatic?.profile || globalProfile,
+      automatic ? '自动匹配 · '+profileOptionLabel(automatic.profile) :
       `${interfaceText('使用全局默认')} · ${globalProfile ? profileOptionLabel(globalProfile) : interfaceText('未配置')}`
     );
     entries.forEach(([profileId, profile]) => appendTaskProfileOption(
@@ -6758,7 +6785,7 @@ function renderTaskPolicyTable() {
     profileSelect.value = policy.mode === 'local' ? '__local_translation__' : policy.mode === 'profile' ? policy.profileId || '__missing_translation_profile__' : '';
     modelCell.appendChild(profileSelect);
 
-    const { profileId, profile } = effectiveTaskProfile(policy);
+    const { profileId, profile } = effectiveTaskProfile(policy,definition);
     const modelInput = document.createElement('input');
     modelInput.type = 'text'; modelInput.autocomplete = 'off'; modelInput.maxLength = 256;
     modelInput.dataset.taskPolicyModel = definition.id;
@@ -6890,7 +6917,7 @@ function handleTaskPolicyTableChange(event) {
     const rowEffort = target.closest('tr')?.querySelector('[data-task-policy-effort]');
     if (rowEffort?.value) policy.reasoningEffort = rowEffort.value;
   } else if (target.dataset.taskPolicyEffort) {
-    policy.reasoningEffort = TASK_REASONING_EFFORTS.includes(target.value)
+    policy.reasoningEffort = validReasoningEffort(target.value)
       ? target.value : 'auto';
   }
   markProfileEditorDirty(event);
@@ -7208,7 +7235,7 @@ function collectTaskPolicies() {
       mode: TRANSLATION_TASK_POLICY_IDS.has(taskId) && policy.mode === 'local' ? 'local' : policy.mode === 'profile' ? 'profile' : 'global',
       profileId: policy.mode === 'profile' ? policy.profileId : null,
       reasoningEnabled: normalizedReasoning.enabled === true,
-      reasoningEffort: TASK_REASONING_EFFORTS.includes(normalizedReasoning.effort)
+      reasoningEffort: validReasoningEffort(normalizedReasoning.effort)
         ? normalizedReasoning.effort : 'auto',
       tokenRule: cloneTaskTokenRule(policy.tokenRule),
       allowTextFallback: SciLLM.getLlmTaskDefinition(taskId).requirements?.vision === true &&
@@ -7338,6 +7365,7 @@ async function persistForm(silent) {
       figurePanelFollowupPrompts,
       figurePanelFollowupPresets,
       articleChatQuickPrompts,
+      displayQuickPrompts: collectArticleChatQuickPrompts(false, quickPromptEditors[1]),
       literatureNoteTemplates,
       selectionLlmActions
     };
@@ -7535,3 +7563,4 @@ async function testProvider() {
     renderOnboarding();
   }
 }
+

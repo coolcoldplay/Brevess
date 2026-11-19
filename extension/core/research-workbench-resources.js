@@ -101,15 +101,36 @@
         let bytes;if(data.bytes)bytes=await s.wbBytes(data.bytes);else {const match=/^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(data.dataUrl || '');if(!match)throw s.wbError('WORKBENCH_SOURCE_IMAGE_INVALID');bytes=Uint8Array.from(atob(match[1]),n=>n.charCodeAt(0));}
         if(data.sha256!==sha256||await s.wbSha256(bytes)!==sha256)throw s.wbError('WORKBENCH_SOURCE_IMAGE_HASH_MISMATCH');await validateReference(source);return {availability:'local',bytes,sha256,mimeType,source:s.wbClone(source)};
       },
+      async readSavedFigureOriginal(source,snapshot){
+        const figureId=source.resourceId.split('::')[0];
+        const view=snapshot||await readWorkspace(source);
+        const structure=view.assets.find(asset=>asset.relativePath==='article/structure.json')?.content;
+        const inventory=view.assets.find(asset=>asset.relativePath==='figures/inventory.json')?.content;
+        if(!structure?.documentHash||!inventory?.figures?.some(row=>row.figureId===figureId&&!row.sourceMismatch)||
+            view.workspaceId!==source.workspaceId||view.workspaceGeneration!==source.workspaceGeneration)return null;
+        const asset=async path=>{
+          const result=await invoke({type:'ARTICLE_WORKSPACE_GET_ASSET',...sourceIdentity(source),relativePath:path});
+          if(result.workspaceGeneration!==source.workspaceGeneration||result.asset?.relativePath!==path)return null;
+          return result.asset.content;
+        };
+        const index=await asset('figures/originals/index.json');
+        const entry=index?.entries?.find(item=>item.figureId===figureId&&item.imageIndex===0&&item.documentHash===structure.documentHash);
+        if(!entry||!/^figures\/originals\/[a-f0-9]{64}\.json$/.test(entry.assetPath))return null;
+        const record=await asset(entry.assetPath);
+        if(!record)return null;
+        const api=globalThis.SciLLM?.readFigureOriginalAsset?globalThis.SciLLM:require('./figure-viewer.js');
+        const original=await api.readFigureOriginalAsset(record,entry);
+        return {availability:'local',bytes:original.bytes,mimeType:original.contentType,sha256:entry.sha256};
+      },
       async readInlineImage({source,dataUrl,sha256}){
         const asset=await validateReference(source);if(typeof dataUrl!=='string'||!/^data:image\/(?:png|jpeg|webp|svg\+xml);/i.test(dataUrl))return {availability:'unavailable',reason:'LOCAL_IMAGE_UNAVAILABLE'};
         let bound=false;function find(value){if(value===dataUrl)bound=true;else if(value&&typeof value==='object')for(const child of Object.values(value))find(child);}for(const content of await ownedImageContents(source,asset))find(content);if(!bound)throw s.wbError('WORKBENCH_SOURCE_IMAGE_BINDING_MISMATCH');
         const match=/^data:([^;,]+)(?:;charset=[^;,]+)?(;base64)?,([\s\S]*)$/.exec(dataUrl);if(!match)throw s.wbError('WORKBENCH_SOURCE_IMAGE_INVALID');const bytes=match[2]?Uint8Array.from(atob(match[3]),n=>n.charCodeAt(0)):new TextEncoder().encode(decodeURIComponent(match[3]));const actual=await s.wbSha256(bytes);if(sha256&&actual!==sha256)throw s.wbError('WORKBENCH_SOURCE_IMAGE_HASH_MISMATCH');await validateReference(source);return {availability:'local',bytes,sha256:actual,mimeType:match[1],source:s.wbClone(source)};
       },
-      async locateSource({projectId,source,target,expectedNavigationIdentity,expectedDocumentIdentity}){
+      async locateSource({projectId,source,target,sourceTabId,expectedNavigationIdentity,expectedDocumentIdentity}){
         s.wbId(projectId);await validateReference(source);if(!expectedNavigationIdentity||!expectedDocumentIdentity||!target)throw s.wbError('WORKBENCH_LOCATE_IDENTITY_REQUIRED');
-        const receipt=await invoke({type:'RESEARCH_WORKBENCH_LOCATE_SOURCE',projectId,source,target,expectedNavigationIdentity,expectedDocumentIdentity});
-        if(receipt?.ready!==true||receipt.focused!==true||s.wbJson(receipt.target)!==s.wbJson(target)||s.wbJson(receipt.documentIdentity)!==s.wbJson(expectedDocumentIdentity)||s.wbJson(receipt.navigationIdentity)!==s.wbJson(expectedNavigationIdentity)||!['figure','page','paragraph','panel'].includes(receipt.precision))throw s.wbError('WORKBENCH_LOCATE_RECEIPT_MISMATCH');
+        const receipt=await invoke({type:'RESEARCH_WORKBENCH_LOCATE_SOURCE',projectId,source,target,...(Number.isSafeInteger(sourceTabId)?{sourceTabId}:{}),expectedNavigationIdentity,expectedDocumentIdentity});
+        if(receipt?.ready!==true||receipt.focused!==true||s.wbJson(receipt.target)!==s.wbJson(target)||s.wbJson(receipt.documentIdentity)!==s.wbJson(expectedDocumentIdentity)||s.wbJson(receipt.navigationIdentity)!==s.wbJson(expectedNavigationIdentity)||!['figure','page','paragraph','panel','panel-caption'].includes(receipt.precision))throw s.wbError('WORKBENCH_LOCATE_RECEIPT_MISMATCH');
         return s.wbClone(receipt);
       }
     };

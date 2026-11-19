@@ -198,6 +198,19 @@
       effectiveProfileId = String(settings?.globalProfileId || '');
       effectiveProfile = profileAt(settings, effectiveProfileId);
     }
+    if (taskId === 'semantic_find' && !wantsProfile) {
+      const supportsDecisions = profile => profileUsable(profile) &&
+        satisfiesTypedDecisionRequirements(definition, shared.getProviderCapabilities(profile.providerId, profile.config));
+      if (!supportsDecisions(effectiveProfile)) {
+        const compatibleId = [...(settings.profileOrder || []), ...Object.keys(settings.profiles || {})]
+          .find(id => supportsDecisions(profileAt(settings, id)));
+        if (compatibleId) {
+          effectiveProfileId = compatibleId;
+          effectiveProfile = profileAt(settings, compatibleId);
+          fallbackReason = 'COMPATIBLE_TYPED_PROFILE';
+        }
+      }
+    }
     if (!profileUsable(effectiveProfile)) {
       throw routeError('NO_USABLE_PROFILE');
     }

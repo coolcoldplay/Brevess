@@ -100,21 +100,21 @@ function executableContentFunction(name, dependencies = {}) {
 
 test('archive import can identify a loaded chat workspace before manual annotations initialize', () => {
   const identity = executablePopupFunction('currentArticleArchiveIdentity', {
-    manualAnnotationState: { documentId: '', documentHash: '', canonicalUrl: '', title: '' },
+    manualAnnotationState: { documentId: '', documentHash: '', canonicalUrl: '', sourceIdentity: '', title: '' },
     preparedDocumentState: null,
     currentWorkspaceSnapshot: { documentId: 'sha256:current', documentHash: 'hash-current',
       url: 'https://example.org/current', title: 'Current article' }
   });
   assert.deepEqual(identity(), { documentId: 'sha256:current', documentHash: 'hash-current',
-    canonicalUrl: 'https://example.org/current', title: 'Current article' });
+    canonicalUrl: 'https://example.org/current', sourceIdentity: '', title: 'Current article' });
 });
 
 test('archive identity remains unavailable after the panel context has been cleared', () => {
   const identity = executablePopupFunction('currentArticleArchiveIdentity', {
-    manualAnnotationState: { documentId: '', documentHash: '', canonicalUrl: '', title: '' },
+    manualAnnotationState: { documentId: '', documentHash: '', canonicalUrl: '', sourceIdentity: '', title: '' },
     preparedDocumentState: null, currentWorkspaceSnapshot: null
   });
-  assert.deepEqual(identity(), { documentId: '', documentHash: '', canonicalUrl: '', title: '' });
+  assert.deepEqual(identity(), { documentId: '', documentHash: '', canonicalUrl: '', sourceIdentity: '', title: '' });
 });
 
 test('committed archive restore failures report the exact post-commit stage without retry semantics', () => {
@@ -489,7 +489,7 @@ test('popup renders saved analysis modes and removes the paper-type chooser', ()
   assert.match(html, /id="readingViewOptions"/);
   assert.match(html, /<legend[^>]*>阅读情境<\/legend>/);
   assert.match(script, /Object\.entries\(views\)/);
-  assert.match(script, /radio\.name\s*=\s*'readingView'/);
+  assert.match(script, /select\.name\s*=\s*'readingView'/);
   assert.doesNotMatch(html, /studyTypeChooser|studyTypeOptions|name="studyType"/);
   assert.match(html, /id="restoreViewPreset"/);
   assert.match(script, /LLM_PREPARE_DOCUMENT/);
@@ -1183,7 +1183,7 @@ test('an inactive side panel activates the current tab from any click', () => {
   const popup = read('popup.js');
   assert.match(popup, /function setupInactiveTabClickActivation\(\)/);
   assert.match(popup, /SIDE_PANEL_ACTIVATE_CURRENT_TAB/);
-  assert.match(popup, /点击侧栏任意位置即可激活/);
+  assert.match(popup, /点击侧栏任意位置激活/);
   assert.match(
     popup,
     /setupActiveTabSynchronization\(\);\s*setupInactiveTabClickActivation\(\);/
@@ -1425,7 +1425,7 @@ test('reading assistant exposes a global local-workspace toolbar without the rem
   const css = read('popup.css');
   const background = read('background.js');
   const manifest = JSON.parse(read('manifest.json'));
-  assert.equal(manifest.name, '__MSG_extensionName__');
+  assert.equal(manifest.name, 'BREVESS');
   assert.equal(manifest.default_locale, 'zh_CN');
   assert.match(
     html,
@@ -1627,7 +1627,7 @@ test('navigation first render opens exact root Results and preserves explicit ma
   for (const title of ['Results', '2. Results:', '结果：', 'Results and Discussion']) {
     const node = { title, children: [{}] };
     assert.equal(context.outlineNodeExpanded('html', title, node, 0), true, title);
-    assert.equal(context.outlineNodeExpanded('html', title, node, 1), false, title);
+    assert.equal(context.outlineNodeExpanded('html', title, node, 1), true, title);
     assert.equal(context.outlineNodeExpanded('html', title, { ...node, children: [] }, 0), false, title);
   }
   const result = { title: 'Results', children: [{}] };
@@ -1702,7 +1702,8 @@ test('activation creates only a non-destructive article baseline after local res
   const baselineIndex = initializeSource.indexOf(
     "action: 'saveArticleWorkspaceBaseline'"
   );
-  assert.ok(restoreIndex >= 0 && baselineIndex > restoreIndex);
+  assert.ok(restoreIndex >= 0);
+  assert.equal(baselineIndex, -1, 'activation reads existing state; only explicit save creates a durable baseline');
 
   const contentSource = read('content.js');
   const baselineStart = contentSource.indexOf(
@@ -1763,7 +1764,8 @@ test('persistent analysis result overlays are not mounted into publisher pages',
 test('navigation uses one complete tree with global expand and collapse controls', () => {
   const html = read('popup.html');
   const script = read('popup.js');
-  assert.match(html, /id="expandAllOutlineLevels"/);
+  assert.match(script, /function setupOutlineLevelControl\(/);
+  assert.match(script, /展开全部层级/);
   assert.match(html, /id="collapseAllOutlineLevels"/);
   assert.doesNotMatch(html, /id="generateOutlineSummaries"/);
   assert.doesNotMatch(html, /data-outline-depth=/);
@@ -1954,7 +1956,7 @@ test('manual selection toolbar can add an abbreviation to the article workspace'
   assert.match(content, /addCurrentArticleAbbreviation/);
   assert.match(
     content,
-    /function handleManualSelectionChange\(\)[\s\S]*manualClosest\(document\.activeElement, MANUAL_UI_SELECTOR\)/
+    /function handleManualSelectionChange\(\)[\s\S]*isManualSelectionUiTarget\(document\.activeElement\)/
   );
   assert.match(content, /annotations\/abbreviations\.json/);
   assert.match(styles, /\.sci-manual-abbreviation-panel/);
@@ -3590,6 +3592,8 @@ test('paper-meta extraction requires a matching document hash before note writes
     sendTabMessage: async () => ({ success: true, result: {} }),
     isCurrentPanelContext: () => true,
     isCurrentLiteratureNoteContext: () => true,
+    capturePanelContext: () => ({tabId:1}), isCurrentPanelContext: () => true,
+    sendTabMessage: async () => ({success:true,workspace:{workspaceId:'workspace-test',workspaceGeneration:1}}),
     refreshArticleWorkspace: async () => { refreshed += 1; },
     applyCurrentPaperMetaToLiteratureNote: () => {
       applied += 1;
@@ -4520,6 +4524,9 @@ test('a cross-template literature-note save is one atomic local transaction', as
   let requests = 0;
   const durableFields = [];
   const commit = executablePopupFunction('commitLiteratureNoteDocumentDelta', {
+    isCurrentLiteratureNoteContext: () => true,
+    capturePanelContext: () => ({tabId:1}), isCurrentPanelContext: () => true,
+    sendTabMessage: async () => ({success:true,workspace:{workspaceId:'workspace-test',workspaceGeneration:1}}),
     createLiteratureNoteDeltaChunks: loadPopupUiHelpers().createLiteratureNoteDeltaChunks,
     chrome: { runtime: { async sendMessage(message) {
       requests += 1;
@@ -4544,7 +4551,7 @@ test('a cross-template literature-note save is one atomic local transaction', as
   await assert.rejects(() => commit({
     delta: { templateId: 'template_a', fields },
     dirtyFields: new Set(fields.map(field => field.key)),
-    context: { documentKey: 'paper-a', legacyKey: '', target: null }
+    context: { documentKey: 'paper-a', legacyKey: '', target: null, workspaceId:'workspace-test',workspaceGeneration:1 }
   }), error => error?.code === 'LITERATURE_NOTE_DOCUMENT_TOO_LARGE');
   assert.equal(requests, 1, 'one logical save must use one background transaction');
   assert.deepEqual(durableFields, [], 'a rejected transaction must not persist an early chunk');
@@ -4657,7 +4664,7 @@ test('literature notes remove the extra paper-meta section but retain compatibil
   const openStart = popup.indexOf('async function openLiteratureNoteDrawer');
   const openEnd = popup.indexOf('function closeLiteratureNoteDrawer', openStart);
   const openBody = popup.slice(openStart, openEnd);
-  assert.match(openBody, /applyCurrentPaperMetaToLiteratureNote/);
+  assert.doesNotMatch(openBody, /applyCurrentPaperMetaToLiteratureNote/, 'opening a stored note must not silently rewrite its contents');
   assert.match(openBody,
     /drawer\.hidden\s*=\s*false[\s\S]*resizeLiteratureNoteTextareas\(\)/);
   assert.doesNotMatch(figureWorkspaceRender, /renderFigureWorkspaceMetaSnapshot/);

@@ -158,6 +158,7 @@
     }
     return {
       id,
+      ...(['reasoningEfforts', 'supportedReasoningEfforts', 'supported_reasoning_efforts', 'defaultReasoningEffort', 'default_reasoning_effort', 'capabilities', 'webSearchSupported'].reduce((out, key) => { if (item[key] !== undefined) out[key] = item[key]; return out; }, {})),
       displayName: String(item.display_name || item.displayName || item.name || id)
         .replace(/^models\//, '').trim(),
       created: Number(item.created) || 0,

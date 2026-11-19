@@ -9,8 +9,12 @@
    if(!['r20-agent-host','r20-agent-sidebar'].includes(port.name))return;
    let dispatch=null,disconnected=false;const queue=[];port.onDisconnect.addListener(()=>disconnected=true);port.onMessage.addListener(message=>{if(dispatch)dispatch(message);else if(queue.length<16)queue.push(message);else port.disconnect();});const listen=fn=>{dispatch=fn;for(const message of queue.splice(0))fn(message);};
    if(port.name==='r20-agent-host'){
-    if(!await verifyHost(port.sender)||disconnected){send(port,{type:'error',error:error('WORKBENCH_AGENT_HOST_INVALID')});port.disconnect();return;}
-    const tab=port.sender.tab,previous=hosts.get(tab.id);if(previous?.side)drop(previous.side);const host={port,documentId:port.sender.documentId,tabId:tab.id,ready:false,side:null};hosts.set(tab.id,host);
+    const verifiedHost=await verifyHost(port.sender);
+    if(!verifiedHost||disconnected){send(port,{type:'error',error:error('WORKBENCH_AGENT_HOST_INVALID')});port.disconnect();return;}
+    // Extension documents need not carry sender.tab. Use the browser-verified context.
+    const tab=verifiedHost===true?port.sender.tab:{id:verifiedHost.tabId,windowId:verifiedHost.windowId};
+    if(!Number.isInteger(tab?.id)||tab.id<0){port.disconnect();return;}
+    const previous=hosts.get(tab.id);if(previous?.side)drop(previous.side);const host={port,documentId:verifiedHost.documentId||port.sender.documentId,tabId:tab.id,ready:false,side:null};hosts.set(tab.id,host);
     listen(message=>{if(hosts.get(tab.id)!==host)return;if(message.type==='ready'){host.ready=true;host.sourceSession=message.sourceSession;host.projectId=message.projectId;host.label=message.label;host.history=message.history||[];send(host.port,{type:'registered',sourceSession:host.sourceSession});}
      else if(message.type==='context'){host.projectId=message.projectId;host.label=message.label;host.history=message.history||[];if(host.side)drop(host.side,'WORKBENCH_AGENT_PROJECT_CHANGED');}
      else if(message.type==='history'&&message.projectId===host.projectId)host.history=message.history||[];
@@ -34,7 +38,8 @@
   return {attach};
  }
  function connectSource({connect,host,id=()=>crypto.randomUUID(),onDisconnect=()=>{}}){
-  const sourceSession=id(),port=connect(),send=m=>{try{port.postMessage(m)}catch{}},history=[];let bindingId=null,closed=false,lastSeq=0;
+  const sourceSession=id();
+  const port=connect(),send=m=>{try{port.postMessage(m)}catch{}},history=[];let bindingId=null,closed=false,lastSeq=0;
   const context=()=>({projectId:host.projectId,label:host.label||'课题工作台',history:host.allowHistory===false?[]:history});
   send({type:'ready',sourceSession,...context()});
   port.onMessage.addListener(message=>{void(async()=>{if(closed)return;

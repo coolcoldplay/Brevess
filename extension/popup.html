@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="core/chat-message-ui.css">
     <link rel="stylesheet" href="popup.css">
     <link rel="stylesheet" href="core/chat-diagram-viewer.css">
-
+    
     <link rel="stylesheet" href="ui-swiss.css">
     <link rel="stylesheet" href="manual-evidence-block-editor.css">
     <link rel="stylesheet" href="vendor/semantic-icons-r42/icons.css">
@@ -16,8 +16,8 @@
 <link rel="stylesheet" href="reading-focus.css">
 <link rel="stylesheet" href="web-reading.css">
 <link rel="stylesheet" href="web-filters-general/ux-panel.css">
-<link rel="stylesheet" href="workbench/agent-panel.css">
 <script src="core/input-tools.js"></script>
+<link rel="stylesheet" href="web-filters-general/compare-composer.css">
 </head>
 <body data-ui-surface="sidebar">
     <div id="sidePanelApp" class="side-panel-app">
@@ -46,7 +46,7 @@
             <ol id="sidePanelNotificationHistory" class="side-panel-notification-history"></ol>
           </section>
         </details>
-
+        
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
           aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
           <i class="ph ph-gear" aria-hidden="true"></i>
@@ -158,6 +158,7 @@
               <span class="side-panel-more-glyph" aria-hidden="true">•••</span>
             </summary>
             <div class="side-panel-more-tools-menu" role="menu" aria-label="更多论文工具">
+              <button id="sidePanelSavedScripts" class="side-panel-more-tool" type="button" role="menuitem"><i class="ph ph-code" aria-hidden="true"></i>我的脚本</button>
               <button id="scanArticleWorkspace" class="side-panel-more-tool" type="button" role="menuitem">
                 <i class="ph ph-folder-open" aria-hidden="true"></i><span>扫描并恢复本地工作区</span>
               </button>
@@ -276,7 +277,7 @@
             </div>
             <div id="llmDiagnostics" class="llm-diagnostics" hidden></div>
         </div>
-
+        
         <!-- 高亮模式选择 -->
         <div id="spanModeSection" class="section">
             <h3>高亮模式</h3>
@@ -394,7 +395,6 @@
         </div>
         <div class="workspace-mechanism-toolbar" role="toolbar" aria-label="图表梳理工具">
           <div class="workspace-mechanism-toolbar-actions">
-            <button id="documentAgentConnection" class="btn btn-secondary" type="button">Agent 连接</button>
             <button id="addMechanismChainNode" class="btn btn-primary" type="button">新增</button>
             <button id="focusMechanismPath" class="btn btn-secondary" type="button"
               aria-pressed="false">聚焦路径</button>
@@ -459,7 +459,7 @@
               <textarea id="articleChatQuestion" rows="3" maxlength="4000"
                 aria-controls="articleChatCommandMenu" aria-autocomplete="list"
                 aria-describedby="articleChatSearchOption"
-                placeholder="直接提问；输入 @ 限定章节，输入 / 插入快捷提示词"></textarea>
+                placeholder="直接提问或者试试输入 / 或者 @ 或者@@"></textarea>
               <div id="articleChatCommandMenu" class="article-chat-command-menu"
                 role="listbox" aria-label="问答输入建议"
                 data-sidebar-focus-escape-priority hidden></div>
@@ -472,7 +472,7 @@
                   aria-pressed="false" aria-label="为下一轮开启联网搜索"
                   aria-describedby="articleChatSearchOption"
                   title="联网搜索已关闭；点击后下一轮将检索网络">
-                  <i class="ph ph-magnifying-glass" aria-hidden="true"></i><span>联网</span>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/></svg>
                 </button>
                 <label class="article-chat-model-picker" for="articleChatProfile" title="本轮模型">
                   <span class="visually-hidden">本轮模型</span>
@@ -852,10 +852,6 @@
     <script src="core/document-agent-host.js"></script>
     <script src="core/codex-native-client.js"></script>
     <script src="core/harness-native-client.js"></script>
-    <script src="workbench/r20-agent-permissions.js"></script>
-    <script src="workbench/agent-panel.js"></script>
-    <script src="workbench/agent-runner.js"></script>
-    <script src="core/document-agent-chat.js"></script>
     <script src="core/document-agent-bridge.js"></script>
     <script src="core/agent-connection-ui.js"></script>
     <script src="core/manual-evidence-block-editor.js"></script>
@@ -863,29 +859,28 @@
     <script src="core/figure-workspace.js"></script>
     <script src="core/mechanism-pending-preview.js"></script>
     <script src="core/manual-annotations.js"></script>
-    <script src="vendor/mermaid/mermaid.min.js"></script>
     <script src="core/task-telemetry.js"></script>
     <script src="core/sidebar-interactions.js"></script>
     <script src="core/sidebar-sort.js"></script>
     <script src="vendor/semantic-icons-r42/resources.js"></script>
     <script src="vendor/semantic-icons-r42/icons.js"></script>
     <script src="sidebar-module-icons.js"></script>
-
-
-
+    
+    
+    
     <script src="core/llm-task-catalog.js"></script>
     <script src="core/token-budget.js"></script>
     <script src="core/tts-service.js"></script>
     <script src="core/category-store.js"></script>
     <script src="core/adaptive-catalog.js"></script>
     <script src="core/settings-store.js"></script>
-
-
-
-
+    
+    
+    
+    
     <script src="core/i18n-builtins.js"></script>
     <script src="core/i18n-export.js"></script>
-
+    
     <script src="core/chat-table-viewer.js"></script>
     <script src="core/chat-diagram-viewer.js"></script>
     <script src="core/chat-message-ui.js"></script>
@@ -901,6 +896,7 @@
 <script src="web-filters-general/ux-composer.js"></script>
 <script src="web-filters-general/ux-workflow.js"></script>
 <script src="web-filters-general/ux-panel.js"></script>
+<script src="web-filters-general/compare-composer.js"></script>
 <script src="core/sidebar-toolbar-icons.js"></script>
 </body>
 </html>

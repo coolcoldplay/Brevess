@@ -14,7 +14,7 @@
   const transferable = plan => !!plan?.operations.length && new Set(plan.operations.map(op => canonical(op.target))).size === 1;
   function samplePlan(plan) {
     S.validate(plan);
-    if (!plan.operations.length || plan.operations.length > 8 || plan.operations.some(op =>
+    if (!plan.operations.length || plan.operations.length > 16 || plan.operations.some(op =>
       !['style', 'hide', 'replaceColor'].includes(op.type) || op.target.frame !== 'top' || op.target.roots.length)) {
       throw Error('GENERALIZE_OPERATION_UNSUPPORTED');
     }
@@ -56,12 +56,27 @@
     if (samples.some(s => !M.matches(module, s.url))) throw Error('GENERALIZE_SCOPE_UNTESTED');
     return module;
   }
+  function sharedLayout(samples){
+    if(!samples.every(s=>s.wholePage))return null;
+    const first=samples[0],urls=samples.map(s=>new URL(s.url)),prefix=new URL('.',urls[0]).pathname;
+    const selectors=first.plan.operations.map(op=>op.target.selector);
+    const roots=first.readingStructure.roots.filter(root=>samples.every(s=>s.readingStructure.roots.includes(root)));
+    if(prefix==='/'||!roots.length||urls.some(url=>url.origin!==urls[0].origin||new URL('.',url).pathname!==prefix)||
+       samples.some(s=>canonical(s.plan.operations.map(op=>op.target.selector))!==canonical(selectors))||
+       [...roots,...selectors].some(s=>/:(?:nth-|first-|last-)/i.test(s)))return null;
+    const required=first.readingStructure.required.filter(s=>samples.every(p=>p.readingStructure.required.includes(s)));
+    if(!required.length)return null;
+    return {name:first.plan.name,selectors,roots,required,hosts:[urls[0].hostname],pathPrefixes:[prefix],excludePrefixes:[],
+      common:'各页使用相同的正文容器和显示规则，已逐页核对命中元素。',
+      differences:'文章内容各异，保留每一页自己的正文和图表。',scopeReason:'限于已验证的网站、栏目路径和正文结构。'};
+  }
   function assertGroups(expected, actual) {
     if (expected.length !== actual.length || expected.some((group, i) =>
       canonical([...group.ids].sort()) !== canonical([...(actual[i]?.ids || [])].sort()))) throw Error('GENERALIZE_TARGET_MISMATCH');
   }
   function scopeLabel(module) {
     const m = module.match, paths = m.pathPrefixes.length ? m.pathPrefixes.join('、') : '/';
+    if(m.pathMode==='pubmed-results')return 'PubMed 检索结果页（更换检索式、翻页）';
     return m.hosts.join('、') + ' · ' + (m.pathMode === 'exact' ? '相同路径 ' : '网址前缀 ') + paths +
       (m.queryEquals ? ' · 文献 id='+m.queryEquals.id : '') +
       (m.excludePrefixes.length ? '；排除 ' + m.excludePrefixes.join('、') : '') + '；仍须匹配已核验的页面结构';
@@ -82,7 +97,7 @@ Coverage may omit some repetitive records; the host independently checks every m
     function summary(windowId) {
       const d = draftFor(windowId); if (!d) return null;
       return { id: d.id, busy: runs.has(windowId), saved: !!d.saved, error: d.error || '',
-        canTransfer: !d.saved && d.samples.length > 0 && transferable(d.samples[0].plan), request: d.samples[0]?.request || '',
+        wholePage: !!d.samples[0]?.wholePage, canTransfer: !d.saved && d.samples.length > 0 && (d.samples[0].wholePage || transferable(d.samples[0].plan)), request: d.samples[0]?.request || '',
         samples: d.samples.map(s => ({ tabId: s.tabId, title: s.title, url: pageKey(s.url), stale: !!s.stale, count: s.groups.reduce((n, g) => n + g.ids.length, 0) })),
         candidate: d.candidate ? { token: d.candidate.token, scopeLabel: scopeLabel(d.candidate.module),
           common: d.candidate.common, differences: d.candidate.differences, scopeReason: d.candidate.scopeReason,
@@ -97,6 +112,15 @@ Coverage may omit some repetitive records; the host independently checks every m
       await broker.rpc(sample.tabId, 0, 'TOOL', { tool: 'verifyRecords', args: { session: sample.session,
         records: sample.groups.flatMap(group => group.items.map(record => ({ kind: 'inspect', record, selection: true }))) } });
     }
+    async function wholePagePlan(windowId,url){
+      const d=draftFor(windowId),first=d?.samples[0];
+      if(!first?.wholePage||d.saved||runs.has(windowId))throw Error('GENERALIZE_OPERATION_UNSUPPORTED');
+      if(new URL(first.url).origin!==new URL(url).origin||pageKey(first.url)===pageKey(url))throw Error('GENERALIZE_SCOPE_UNTESTED');
+      // Never replay a positional selector on a different paper.
+      if(first.plan.operations.some(op=>/:(?:nth-|first-|last-)/i.test(op.target.selector)))throw Error('GENERALIZE_SELECTOR_OVERFIT');
+      await live(first);
+      return {plan:S.validate({...S.clone(first.plan),id:crypto.randomUUID(),revision:0,scope:await S.scope(url)}),structure:S.clone(first.readingStructure)};
+    }
     async function effect(windowId) {
       const d=draftFor(windowId);if(runs.has(windowId))throw Error('GENERALIZE_BUSY');
       if(!d||d.saved||!transferable(d.samples[0]?.plan))throw Error('GENERALIZE_OPERATION_UNSUPPORTED');
@@ -107,7 +131,7 @@ Coverage may omit some repetitive records; the host independently checks every m
     async function add(st) {
       if (runs.has(st.windowId)) throw Error('GENERALIZE_BUSY');
       if (!st.preview || !st.plan || !st.feedback?.length || !st.feedback.every(f => f.verified)) throw Error('PREVIEW_NOT_VERIFIED');
-      if (!st.targets.length || st.targets.some(t => t.frameId !== 0)) throw Error('GENERALIZE_SELECT_REQUIRED');
+      if ((!st.targets.length && !st.sampleEvidence?.groups?.length) || st.targets.some(t => t.frameId !== 0)) throw Error('GENERALIZE_SELECT_REQUIRED');
       samplePlan(st.plan);
       const d = draftFor(st.windowId) || { id: crypto.randomUUID(), samples: [] };
       if (d.saved) throw Error('GENERALIZE_START_NEW');
@@ -122,8 +146,9 @@ Coverage may omit some repetitive records; the host independently checks every m
       }
       const proof = await broker.rpc(st.tabId, 0, 'TOOL', { tool: 'planTargets', args: { session: sample.session, targets: sample.plan.operations.map(op => op.target), selectedIds: st.targets.map(t => t.id) } });
       sample.groups = proof.groups;
+      sample.wholePage = !st.targets.length;
       if(st.sampleEvidence)assertGroups(st.sampleEvidence.groups,sample.groups);
-      if (sample.groups.some(group => !st.targets.some(t => group.ids.includes(t.id)) && group.selectionRelated !== true)) throw Error('GENERALIZE_SELECT_REQUIRED');
+      if (!sample.wholePage && sample.groups.some(group => !st.targets.some(t => group.ids.includes(t.id)) && group.selectionRelated !== true)) throw Error('GENERALIZE_SELECT_REQUIRED');
       await live(sample);
       const reading=await broker.rpc(st.tabId,0,'READING_VALIDATE_PLAN',{plan:sample.plan,reusable:false});
       sample.readingStructure={roots:reading.rules.roots,required:reading.rules.required};
@@ -159,15 +184,16 @@ Coverage may omit some repetitive records; the host independently checks every m
       const controller = new AbortController(); runs.set(windowId, controller); await changed();
       try {
         for (const sample of d.samples) await live(sample);
-        const task = await createTask({ profileId }), userPrompt = JSON.stringify({ samples: d.samples.map(modelSample) });
-        if (protocol.length + userPrompt.length > Math.min(task.maxCharacters || 24000, 90000)) throw Error('MULTI_CONTEXT_BUDGET_EXCEEDED');
+        const shared=sharedLayout(d.samples);
+        const task=shared?null:await createTask({profileId}),userPrompt=shared?'':JSON.stringify({samples:d.samples.map(modelSample)});
+        if (!shared && protocol.length + userPrompt.length > Math.min(task.maxCharacters || 24000, 90000)) throw Error('MULTI_CONTEXT_BUDGET_EXCEEDED');
         let module, checks, correction='';
         for(let attempt=0;attempt<2;attempt++){
-          const raw = await globalThis.WFGModel.collect({ adapter: task.adapter, input: { systemPrompt: protocol, userPrompt:correction?JSON.stringify({samples:d.samples.map(modelSample),correction}):userPrompt,
+          const raw = shared?null:await globalThis.WFGModel.collect({ adapter: task.adapter, input: { systemPrompt: protocol, userPrompt:correction?JSON.stringify({samples:d.samples.map(modelSample),correction}):userPrompt,
             maxOutputTokens: Math.min(task.maxOutputTokens || 3000, 4000), timeoutMs: 120000, signal: controller.signal,
             structuredOutput: false, conversationKey: 'display-generalization', conversationLabel: '相似网页显示规则' } });
           try {
-            const reply=globalThis.WFGModel.parseReply(raw);
+            const reply=shared||globalThis.WFGModel.parseReply(raw);
             if(reply.unsupported)throw Error('GENERALIZE_INSUFFICIENT_EVIDENCE');
             module=candidate(reply,d.samples);checks=await check(d,module);
             const store=await repository().read();
@@ -175,7 +201,7 @@ Coverage may omit some repetitive records; the host independently checks every m
             d.candidate={token:crypto.randomUUID(),module,generation:store.generation,competing,checks,common:reply.common,differences:reply.differences,scopeReason:reply.scopeReason};
             break;
           } catch(error) {
-            if(attempt||!['GENERALIZE_TARGET_MISMATCH','GENERALIZE_SELECTOR_OVERFIT','GENERALIZE_REPLY_INVALID'].includes(error.message))throw error;
+            if(shared||attempt||!['GENERALIZE_TARGET_MISMATCH','GENERALIZE_SELECTOR_OVERFIT','GENERALIZE_REPLY_INVALID'].includes(error.message))throw error;
             correction='\nThe previous candidate failed host validation. Correct it without changing approved effects or broadening the target. '+JSON.stringify({error:error.message,details:error.details,previous:raw.slice(0,8000)});
             if(protocol.length+userPrompt.length+correction.length>Math.min(task.maxCharacters||24000,90000))throw error;
           }
@@ -218,7 +244,7 @@ Coverage may omit some repetitive records; the host independently checks every m
       }
       if (dirty) await changed();
     }
-    return { ready, summary, effect, add, generate, save, remove, cancel, invalidate };
+    return { ready, summary, wholePagePlan, effect, add, generate, save, remove, cancel, invalidate };
   }
   return { create, candidate, assertGroups, distinct, pageKey, signature, scopeLabel };
 });

@@ -59,7 +59,7 @@
     for(const item of entries){item.textTruncated=!!item.textTruncated||item.fullText.length>=2400;item.fullText=item.fullText.slice(0,2400);chars+=item.fullText.length;if(entries.length>500||chars>100000)throw Error('OUTLINE_OUTPUT_LIMIT');item.quote=read(item.node,150);if(!item.quote)throw Error('OUTLINE_SOURCE_UNREAD');}
     if(!entries.length)throw Error('OUTLINE_NO_MATCHES');return entries;
   }
-  function create({document:doc,getURL=()=>doc.location.href,shadow=el=>el.shadowRoot,closedCapable=false,onChange=()=>{},limit=30000}){
+  function create({document:doc,getURL=()=>doc.location.href,shadow=el=>el.shadowRoot,closedCapable=false,abstractReceipt=null,onChange=()=>{},limit=30000}){
     const win=doc.defaultView; let session=crypto.randomUUID(),href=getURL(),serial=0,records=[],lookup=new Map(),ids=new WeakMap(),pinned=new Map(),active=null,version=0,timer=null,destroyed=false;
     let contentVersions=new WeakMap(),contentSerial=0;const observed=new WeakSet(),observers=[],outlineSnapshots=new Map(); let boundary={},indexTruncated=false,report=null,indexVersion=-1,selectorCache=new WeakMap(),siblingCache=new WeakMap();
     function own(el){for(let n=el;n; n=n.parentElement||n.getRootNode?.().host){if(n.nodeType===1&&(n.hasAttribute('data-wfg-owned')||n.hasAttribute('data-wfe-owned')||/^brevess-(?:panel|sidebar|semantic-find)/.test(n.id)))return true;}return false;}
@@ -158,6 +158,11 @@
     function colorChanges(op){if(indexTruncated)throw Error('COLOR_SCOPE_LIMIT');const roots=resolve(op.target);for(const n of roots)safeTarget(n,op);return collectColorChanges(roots,op,{window:win,exclude:el=>own(el)||el.matches(BLOCKED)||focusRecord(el).redacted});}
     function execute(tx){scan();const counts=[];
       tx.plan.operations.forEach((op,i)=>{let done=tx.done.get(i);if(!done){done=new WeakSet();tx.done.set(i,done);}let nodes=resolve(op.target);let changed=0;
+        if(op.type==='pubmedAbstracts'){
+          if(!abstractReceipt)throw Error('PUBMED_RESULTS_REQUIRED');
+          const receipt=abstractReceipt();
+          counts.push({operation:i,type:op.type,matches:receipt.total,changed:0,abstracts:receipt,unmatched:!receipt.total});return;
+        }
         if(op.type==='replaceColor'){
           tx.colorMatches??=new Map();let matched=tx.colorMatches.get(i);if(!matched){matched=new Set();tx.colorMatches.set(i,matched);}
           const result=colorChanges(op);for(const [el,key,value]of result.writes){const old=el.style.getPropertyValue(key);writeStyle(tx,el,key,value);matched.add(el);if(el.style.getPropertyValue(key)!==old)changed++;}
@@ -176,7 +181,7 @@
         }
         const observed=nodes.slice(0,12).map(el=>{const st=win.getComputedStyle(el),computed={};for(const k of op.type==='replaceColor'?op.properties:Object.keys(op.styles||{display:'',visibility:''}))computed[k]=st.getPropertyValue(k);return {selector:op.target.selector,connected:el.isConnected,computed};});counts.push({operation:i,type:op.type,matches:nodes.length,changed,unmatched:!nodes.length,observed,observationsTruncated:nodes.length>12});
       });
-      for(const [el,props]of tx.styles)for(const [key,r]of props)if(el.isConnected&&(el.style.getPropertyValue(key)!==r.written||el.style.getPropertyPriority(key)!==r.priority))tx.conflicts.push('PAGE_STYLE_CHANGED:'+key);tx.counts=counts;for(const ob of observers)ob.takeRecords();if(counts.some(c=>c.changed))version++;report={session,operations:counts,conflicts:[...new Set(tx.conflicts)],verified:counts.every(c=>c.matches>0)&&tx.conflicts.length===0,mode:report?.mode||'preview'};return report;
+      for(const [el,props]of tx.styles)for(const [key,r]of props)if(el.isConnected&&(el.style.getPropertyValue(key)!==r.written||el.style.getPropertyPriority(key)!==r.priority))tx.conflicts.push('PAGE_STYLE_CHANGED:'+key);tx.counts=counts;for(const ob of observers)ob.takeRecords();if(counts.some(c=>c.changed))version++;report={session,operations:counts,conflicts:[...new Set(tx.conflicts)],verified:counts.every(c=>c.matches>0&&(!c.abstracts||!c.abstracts.failed))&&tx.conflicts.length===0,mode:report?.mode||'preview'};return report;
     }
     function undo(){flushMutations();outlineSnapshots.clear();if(!active)return {restored:0,conflicts:[]};const tx=active;active=null;let restored=0;const conflicts=[];for(const el of tx.created)el.remove();for(const [parent,r] of [...tx.orders].reverse()){if(same([...parent.childNodes],r.written.filter(n=>!tx.created.includes(n)))){for(const n of r.before.filter(n=>!tx.created.includes(n)))parent.append(n);restored++;}else conflicts.push('PAGE_ORDER_CHANGED');}
       for(const [el,props]of tx.styles)for(const [key,r]of props){if(el.style.getPropertyValue(key)===r.written&&el.style.getPropertyPriority(key)===r.priority){if(r.before)el.style.setProperty(key,r.before,r.beforePriority);else el.style.removeProperty(key);restored++;}else conflicts.push('PAGE_STYLE_CHANGED:'+key);}for(const ob of observers)ob.takeRecords();if(restored||tx.created.length)version++;report=null;return {restored,conflicts:[...new Set(conflicts)]};}

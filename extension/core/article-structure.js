@@ -167,6 +167,13 @@
     }
 
     const flatNodes = flattenStructureNodes(nodes);
+    const nodeBySectionId = new Map();
+    for (const node of flatNodes) if (!nodeBySectionId.has(node.sectionId)) nodeBySectionId.set(node.sectionId, node);
+    // Preserve the last matching node in tree order even with explicit parents
+    // whose subtree order differs from source order. Paragraphs arrive sorted.
+    const orderedNodes = flatNodes.map((node, index) => ({ node, index }))
+      .sort((a, b) => a.node.order - b.node.order || a.index - b.index);
+    let headingCursor = 0, lastEligibleIndex = -1;
     const typedRecords = (Array.isArray(input.paragraphs) ? input.paragraphs : [])
       .map((item, index) => ({
         ...item,
@@ -190,17 +197,16 @@
       .flatMap(item => {
         let node = item.headingSourceKey
           ? nodeBySourceKey.get(item.headingSourceKey) : null;
-        if (!node) {
-          node = [...flatNodes].reverse().find(candidate =>
-            candidate.order <= item.order
-          ) || flatNodes[0];
+        while (headingCursor < orderedNodes.length && orderedNodes[headingCursor].node.order <= item.order) {
+          lastEligibleIndex = Math.max(lastEligibleIndex, orderedNodes[headingCursor++].index);
         }
+        if (!node) node = flatNodes[lastEligibleIndex] || flatNodes[0];
         const pathNodes = [];
         let current = node;
         while (current) {
           pathNodes.unshift(current);
           current = current.parentSectionId
-            ? flatNodes.find(candidate => candidate.sectionId === current.parentSectionId)
+            ? nodeBySectionId.get(current.parentSectionId)
             : null;
         }
         let headingPath = pathNodes.map(candidate => ({

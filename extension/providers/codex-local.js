@@ -237,7 +237,7 @@
   }
 
   function reasoningEffort(config, request) {
-    const allowed = new Set(['auto', 'low', 'medium', 'high', 'xhigh']);
+    const allowed = new Set(config.__reasoningCapabilities?.levels || ['auto', 'low', 'medium', 'high', 'xhigh']);
     const requested = String(request?.reasoningEffort || '').trim();
     if (allowed.has(requested)) return requested;
     const configured = String(config?.reasoningEffort || 'auto').trim();

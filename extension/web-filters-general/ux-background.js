@@ -2,20 +2,26 @@
 const files=['schema.js','engine.js','reading-modules.js','reading-pubmed.js','reading-page.js','ux-page.js','ux-entry.js'].map(f=>'web-filters-general/'+f);
 const generalization=g.WFGGeneralization.create({browser:b,broker,createTask,repository:()=>g.BrevessReadingModulesController.repo,notify:()=>g.BrevessReadingModulesController.notify(),onChange:()=>{for(const st of states.values())publish(st);}});
 async function panel(sender){if(sender.id!==b.runtime.id||sender.tab)throw Error('PANEL_REQUIRED');const cs=await b.runtime.getContexts({contextTypes:['SIDE_PANEL']});const c=cs.filter(c=>c.documentUrl===sender.url&&(!sender.documentId||sender.documentId===c.documentId));if(c.length!==1)throw Error('PANEL_REQUIRED');return c[0];}
-async function ensure(tab){for(const f of await b.webNavigation.getAllFrames({tabId:tab.id})||[])try{await broker.rpc(tab.id,f.frameId,'TOOL',{tool:'overview',args:{}});}catch{try{await b.scripting.executeScript({target:{tabId:tab.id,frameIds:[f.frameId]},files});}catch{}}}
+async function ensure(tab){
+ const frames=await b.webNavigation.getAllFrames({tabId:tab.id})||[];
+ await Promise.all(frames.map(async f=>{
+  try{await broker.rpc(tab.id,f.frameId,'OPEN');}
+  catch{try{await b.scripting.executeScript({target:{tabId:tab.id,frameIds:[f.frameId]},files});}catch{/* Inaccessible frame. */}}
+ }));
+}
 async function state(tab){
  if(!tab||!S.permitted(tab.url))throw Error('PAGE_NOT_PERMITTED');
  const frames=await b.webNavigation.getAllFrames({tabId:tab.id})||[],documentId=frames.find(f=>f.frameId===0)?.documentId||'';
  let st=states.get(tab.id);
  if(st&&(st.url!==tab.url||(documentId&&st.documentId&&documentId!==st.documentId))){st.epoch++;abandonPending(st);multi.cancel?.(st.runOwner,st.tabId);states.delete(tab.id);st=null;}
- if(!st){st={tabId:tab.id,windowId:tab.windowId,documentId,documentKey:crypto.randomUUID(),adjusting:false,url:tab.url,title:tab.title||S.safeURL(tab.url),sourceIds:[tab.id],targets:[],referenceIds:[],plan:null,preview:false,saved:false,feedback:null,undo:[],epoch:0,busy:false,turns:[]};states.set(tab.id,st);}return st;
+ if(!st){st={tabId:tab.id,windowId:tab.windowId,documentId,documentKey:crypto.randomUUID(),adjusting:false,url:tab.url,title:tab.title||S.safeURL(tab.url),sourceIds:[tab.id],targets:[],referenceIds:[],plan:null,preview:false,saved:false,feedback:null,undo:[],epoch:0,busy:false,turns:[]};states.set(tab.id,st);}else if(tab.title)st.title=tab.title;return st;
 }
 async function assertStateCurrent(st){
  const tab=await b.tabs.get(st.tabId);
  const frames=await b.webNavigation.getAllFrames({tabId:st.tabId})||[],documentId=frames.find(f=>f.frameId===0)?.documentId||'';
  if(states.get(st.tabId)!==st||tab.url!==st.url||(st.documentId&&documentId&&st.documentId!==documentId))throw Error('PAGE_CHANGED');
 }
-function view(st){const u=new URL(st.url),range='当前网页路径 '+u.pathname+(g.WFGReadingModules.pageQuery(st.url)?' · 文献 id='+g.WFGReadingModules.pageQuery(st.url).id:'（查询参数可变）')+'；相似网页须补充样例验证';return {generalization:generalization.summary(st.windowId),adjustmentMode:st.adjustmentMode||'display',hasAuxiliarySources:!!st.hasAuxiliarySources,adjusting:!!st.adjusting,saveScopeLabel:range,tabId:st.tabId,documentKey:st.documentKey,navigationUrl:st.url,url:S.safeURL(st.url),title:st.title,sourceIds:st.sourceIds,targets:st.targets,referenceIds:st.referenceIds,plan:st.plan,preview:st.preview,saved:st.saved,saveConfirmation:st.pendingSave?{token:st.pendingSave.token,scopeLabel:st.pendingSave.scopeLabel,scopeUrl:st.pendingSave.scopeUrl,replaces:st.pendingSave.competing.length}:null,feedback:st.feedback,busy:st.busy,turns:st.turns,canUndo:!!st.undo.length,scopeLabel:st.scopeLabel||'',notice:st.notice||st.readingNotice||''};}
+function view(st){const u=new URL(st.url),range='当前网页路径 '+u.pathname+(g.WFGReadingModules.pageQuery(st.url)?' · 文献 id='+g.WFGReadingModules.pageQuery(st.url).id:'（查询参数可变）')+'；相似网页须补充样例验证';return {generalization:generalization.summary(st.windowId),adjustmentMode:st.adjustmentMode||'display',hasAuxiliarySources:!!st.hasAuxiliarySources,adjusting:!!st.adjusting,saveScopeLabel:range,tabId:st.tabId,documentKey:st.documentKey,navigationUrl:st.url,url:S.safeURL(st.url),title:st.title,sourceIds:st.sourceIds,targets:st.targets,referenceIds:st.referenceIds,plan:st.plan,preview:st.preview,saved:st.saved,automaticModuleView:!!st.automaticModuleView,saveConfirmation:st.pendingSave?{token:st.pendingSave.token,scopeLabel:st.pendingSave.scopeLabel,scopeUrl:st.pendingSave.scopeUrl,replaces:st.pendingSave.competing.length}:null,layoutReview:st.preview&&!st.saved&&st.layoutReview?.plan===st.plan?st.layoutReview.label:'',sampleReady:!!st.sampleEvidence&&st.feedback?.every(f=>f.verified),feedback:st.feedback,busy:st.busy,turns:st.turns,canUndo:!!st.undo.length,scopeLabel:st.scopeLabel||'',notice:st.notice||st.readingNotice||''};}
 function abandonPending(st){st.busy=false;st.turns=st.turns.map(t=>t.status==='pending'?{...t,status:'cancelled',error:'QUESTION_CANCELLED'}:t);}
 function publish(st){if(states.get(st.tabId)!==st)return;void b.runtime.sendMessage({type:'WFG_UX_STATE',state:view(st)}).catch(()=>{});}
 async function snapshot(st){if((await b.tabs.get(st.tabId)).url!==st.url)throw Error('PAGE_CHANGED');await ensure(await b.tabs.get(st.tabId));const o=await broker.overview(st.tabId);if(!o.frames.some(f=>f.frameId===0&&f.ok))throw Error('PAGE_UNAVAILABLE');return o;}
@@ -43,14 +49,48 @@ async function capturePlanTargets(st){
 }
 async function captureSampleEvidence(st){
  st.sampleEvidence=null;
- if(!st.plan?.operations.length||st.plan.operations.length>8||st.plan.operations.some(op=>!['style','hide','replaceColor'].includes(op.type)||op.target.frame!=='top'||op.target.roots.length))return;
+ if(!st.plan?.operations.length||st.plan.operations.length>16||st.plan.operations.some(op=>!['style','hide','replaceColor'].includes(op.type)||op.target.frame!=='top'||op.target.roots.length))return;
  const frame=(await snapshot(st)).frames.find(f=>f.ok&&f.frameId===0);if(!frame)return;
  const proof=await broker.rpc(st.tabId,0,'TOOL',{tool:'planTargets',args:{session:frame.data.session,targets:st.plan.operations.map(op=>op.target)}});
  st.sampleEvidence={session:frame.data.session,groups:proof.groups};
 }
-async function guardFollowup(st){if(!st.plan?.operations.some(op=>op.type==='replaceColor'))return guard(st);const o=await snapshot(st);for(const old of st.binding||[]){const now=o.frames.find(f=>f.frameId===old.frameId&&f.ok);if(!now||now.data.session!==old.session)throw Error('PREVIEW_DOCUMENT_CHANGED');}if(st.plan&&!st.planTargets?.length)throw Error('SOURCE_TARGET_CHANGED');}
-function feedbackNotice(feedback){const missing=(feedback||[]).reduce((n,f)=>n+(f.operations||[]).filter(op=>op.matches===0).length,0),conflicts=(feedback||[]).reduce((n,f)=>n+(f.conflicts||[]).length,0);if(missing)return '有 '+missing+' 项目标未匹配，预览未全部完成且不能保存；请重新选择目标或调整要求。';if(conflicts||!(feedback||[]).every(f=>f.verified))return '页面发生变化，预览未全部完成且不能保存；请检查目标后重试。';return '已在原网页临时预览；继续在这里提出修改，满意后保存。';}
-async function preview(st,plan,history=true,requestBinding=null){st.automaticModuleView=false;st.pendingSave=null;const old=st.plan;if(history)st.undo.push(old);try{let sessions=await bind(st),guards=null;if(requestBinding){const source=requestBinding.sources.find(s=>s.tabId===st.tabId&&s.url===st.url);if(!source)throw Error('SOURCE_CLOSED_OR_NAVIGATED');for(const f of source.frames)if(sessions[f.frameId]!==f.session)throw Error('SOURCE_DOCUMENT_CHANGED');sessions=Object.fromEntries(source.frames.map(f=>[f.frameId,f.session]));guards=Object.fromEntries(source.frames.map(f=>[f.frameId,f.guard]));}st.feedback=await broker.action(st.tabId,st.url,S.validate(plan),sessions,'preview',guards);st.plan=plan;st.preview=true;st.saved=false;await bind(st);await capturePlanTargets(st);await captureSampleEvidence(st).catch(()=>{st.sampleEvidence=null;});st.selectionRebase=true;st.notice=feedbackNotice(st.feedback);publish(st);return view(st);}catch(e){if(history)st.undo.pop();if(/^(SOURCE_|DOCUMENT_CHANGED|SELECTION_STALE)/.test(e.message)){st.plan=st.saved?old:null;st.preview=false;st.feedback=null;st.undo=[];publish(st);}else if(old){await broker.action(st.tabId,st.url,old,await bind(st),'preview').then(async()=>{if(old.operations.some(op=>op.type==='outline'&&op.extraction))await bind(st);}).catch(()=>{});}throw e;}}
+async function guardFollowup(st){
+ if(st.automaticModuleView&&st.saved){
+  // Auto-applied modules belong to the reading renderer. A rotating ad can
+  // change its frame version without changing the article or the saved rule.
+  await assertStateCurrent(st);
+  const current=await broker.rpc(st.tabId,0,'READING_SNAPSHOT');
+  if(current.session!==st.readingViewSession||!current.reading?.moduleIds?.includes(st.readingModuleId))throw Error('PREVIEW_DOCUMENT_CHANGED');
+  await broker.rpc(st.tabId,0,'READING_VALIDATE_PLAN',{plan:st.plan,reusable:false});
+  return;
+ }
+ if(st.preview&&st.sampleEvidence?.groups?.length&&!st.plan?.operations.some(op=>op.type==='replaceColor')){
+  const frame=(await snapshot(st)).frames.find(f=>f.frameId===0&&f.ok),proof=st.sampleEvidence;
+  if(frame?.data.session!==proof.session)throw Error('PREVIEW_DOCUMENT_CHANGED');
+  const result=await broker.rpc(st.tabId,0,'TOOL',{tool:'verifyRecords',args:{session:proof.session,records:proof.groups.flatMap(group=>group.items.map(record=>({kind:'inspect',record,selection:true})))}});
+  if(!result?.verified)throw Error('SOURCE_TARGET_CHANGED');
+  return;
+ }
+ if(!st.plan?.operations.some(op=>op.type==='replaceColor'))return guard(st);const o=await snapshot(st);for(const old of st.binding||[]){const now=o.frames.find(f=>f.frameId===old.frameId&&f.ok);if(!now||now.data.session!==old.session)throw Error('PREVIEW_DOCUMENT_CHANGED');}if(st.plan&&!st.planTargets?.length)throw Error('SOURCE_TARGET_CHANGED');}
+function abstractReview(feedback){
+ const counts=(feedback||[]).flatMap(f=>f.operations||[]).find(op=>op.abstracts)?.abstracts;
+ if(!counts)return '';
+ const parts=['本页 '+counts.total+' 条','已显示完整摘要 '+counts.shown+' 条'];
+ if(counts.unavailable)parts.push('PubMed 未收录 '+counts.unavailable+' 条');
+ if(counts.failed)parts.push('未能核实 '+counts.failed+' 条');
+ return parts.join(' · ');
+}
+function feedbackNotice(feedback){const missing=(feedback||[]).reduce((n,f)=>n+(f.operations||[]).filter(op=>op.matches===0).length,0),conflicts=(feedback||[]).reduce((n,f)=>n+(f.conflicts||[]).length,0);if(missing)return '有 '+missing+' 项目标未匹配，预览未全部完成且不能保存；请重新选择目标或调整要求。';if(conflicts||!(feedback||[]).every(f=>f.verified))return '页面发生变化，预览未全部完成且不能保存；请检查目标后重试。';return abstractReview(feedback)||'已在原网页临时预览；继续在这里提出修改，满意后保存。';}
+async function preview(st,plan,history=true,requestBinding=null){st.pendingSave=null;const old=st.plan;if(history)st.undo.push(old);try{let sessions=await bind(st),guards=null;if(requestBinding){const source=requestBinding.sources.find(s=>s.tabId===st.tabId&&s.url===st.url);if(!source)throw Error('SOURCE_CLOSED_OR_NAVIGATED');for(const f of source.frames)if(sessions[f.frameId]!==f.session)throw Error('SOURCE_DOCUMENT_CHANGED');sessions=Object.fromEntries(source.frames.map(f=>[f.frameId,f.session]));guards=Object.fromEntries(source.frames.map(f=>[f.frameId,f.guard]));}st.feedback=await broker.action(st.tabId,st.url,S.validate(plan),sessions,'preview',guards);st.automaticModuleView=false;st.plan=plan;st.preview=true;st.saved=false;await bind(st);await capturePlanTargets(st);await captureSampleEvidence(st).catch(()=>{st.sampleEvidence=null;});st.layoutReview=null;
+ if(st.adjustmentMode==='display'&&st.feedback.every(f=>f.verified)){
+  const layout=await broker.rpc(st.tabId,0,'READING_LAYOUT').catch(()=>null);
+  const body=layout?.regions?.find(r=>r.role==='content'),figures=layout?.regions?.find(r=>r.role==='figures');
+  const width=st.feedback.find(f=>f.frameId===0)?.textWidth;
+  const text=width?(width.before===width.after?'正文宽度未变 · '+width.after+' px':'正文 '+width.before+' → '+width.after+' px'):body?.visible?'正文容器 '+body.width+' px':'';
+  if(text)st.layoutReview={plan,label:text+(figures?' · '+figures.visibleCount+' 张图可见':'')};
+ }
+ const abstracts=abstractReview(st.feedback);if(abstracts)st.layoutReview={plan,label:abstracts};
+ st.selectionRebase=true;st.notice=feedbackNotice(st.feedback);publish(st);return view(st);}catch(e){if(history)st.undo.pop();if(/^(SOURCE_|DOCUMENT_CHANGED|SELECTION_STALE)/.test(e.message)){st.plan=st.saved?old:null;st.preview=false;st.feedback=null;st.undo=[];publish(st);}else if(old){await broker.action(st.tabId,st.url,old,await bind(st),'preview').then(async()=>{if(old.operations.some(op=>op.type==='outline'&&op.extraction))await bind(st);}).catch(()=>{});}throw e;}}
 function merge(previous,operations){const ops=S.clone(previous?.operations||[]);for(const op of operations){const key=JSON.stringify(op.target),i=ops.findIndex(x=>x.type===op.type&&JSON.stringify(x.target)===key);if(i>=0)ops[i]=op.type==='style'?{...op,styles:{...ops[i].styles,...op.styles}}:op;else ops.push(op);}return ops;}
 
 async function syncCurrentReadingModule(st){
@@ -75,7 +115,7 @@ async function toggleAutomaticFilter(st){
  st.notice=st.preview?'':current.reading.originalView?'':(current.reading.notices||[]).map(n=>n.message).join('；');
  await bind(st);publish(st);return view(st);
 }
-async function prepareFilterSave(st, scopeUrl){
+async function prepareFilterSave(st, scopeUrl, similar=false){
  if(st.busy)throw Error('QUESTION_RUNNING');
  if(!st.plan||!st.preview)throw Error('PREVIEW_FIRST');
  await guard(st);
@@ -88,10 +128,33 @@ async function prepareFilterSave(st, scopeUrl){
   const M=g.WFGReadingModules,repository=g.BrevessReadingModulesController.repo,store=await repository.read();
   const module=await broker.rpc(st.tabId,0,'READING_VALIDATE_PLAN',{plan:st.plan,reusable:false});
   const old=store.entries.find(e=>e.module.id===st.readingModuleId);
-  if(old&&old.module.match.pathMode==='exact'&&old.module.match.pathPrefixes.includes(baseUrl.pathname)&&(!(module.rules.operations||[]).some(op=>op.extraction)||(old.module.rules.operations||[]).some(op=>op.extraction))){module.id=old.module.id;module.revision=old.module.revision;}
+  if(old&&['exact','pubmed-results'].includes(old.module.match.pathMode)&&old.module.match.pathPrefixes.includes(baseUrl.pathname)&&(!(module.rules.operations||[]).some(op=>op.extraction)||(old.module.rules.operations||[]).some(op=>op.extraction))){module.id=old.module.id;module.revision=old.module.revision;}
   const extraction=(module.rules.operations||[]).some(op=>op.type==='outline'&&op.extraction);
   if(extraction&&selectedUrl.pathname!==baseUrl.pathname)throw Error('SAVE_SCOPE_EXTRACTION');
-  module.match.hosts=[baseUrl.hostname];module.match.pathPrefixes=[selectedUrl.pathname];module.match.pathMode='exact';const identity=g.WFGReadingModules.pageQuery(st.url);if(identity)module.match.queryEquals=identity;else delete module.match.queryEquals;M.validate(module);
+  module.match.hosts=[baseUrl.hostname];module.match.pathPrefixes=[selectedUrl.pathname];module.match.pathMode=module.rules.operations.some(op=>op.type==='pubmedAbstracts')?'pubmed-results':'exact';const identity=g.WFGReadingModules.pageQuery(st.url);if(identity)module.match.queryEquals=identity;else delete module.match.queryEquals;M.validate(module);
+  if(similar){
+   const prefix=new URL('.',baseUrl).pathname;
+   if(extraction||prefix==='/'||!module.rules.required.length||!module.rules.roots.length||
+      module.rules.operations.some(op=>!['style','hide','replaceColor'].includes(op.type)||op.target.frame!=='top'||op.target.roots.length||/:(?:nth-|first-|last-)/i.test(op.target.selector)))throw Error('GENERALIZE_STRUCTURE_REQUIRED');
+   const candidates=(await b.tabs.query({windowId:st.windowId})).filter(t=>{
+    if(!S.permitted(t.url))return false;const u=new URL(t.url);
+    return u.origin===baseUrl.origin&&u.pathname!==baseUrl.pathname&&new URL('.',u).pathname===prefix;
+   });
+   module.match.pathPrefixes=[prefix];module.match.pathMode='any';delete module.match.queryEquals;
+   let peer=null;
+   for(const tab of candidates.slice(0,6)){
+    try{
+     await ensure(tab);
+     const check=await broker.rpc(tab.id,0,'READING_VALIDATE_MODULE',{module});
+     if(check?.verified&&(await b.tabs.get(tab.id)).url===tab.url){peer=tab;break;}
+    }catch{/* Try another open paper from the same section. */}
+   }
+   if(!peer)throw Error('未找到第二篇结构匹配的已打开论文。可先保存到当前网页。');
+   pending.peer={id:peer.id,url:peer.url};pending.scopeUrl=new URL(prefix,baseUrl).href;
+   const prior=store.entries.find(e=>!e.builtinId&&M.matchKey(e.module.match)===M.matchKey(module.match)&&e.module.name===module.name);
+   if(prior){module.id=prior.module.id;module.revision=prior.module.revision;}
+   else if(old?.module.id===module.id){module.id='reading-'+crypto.randomUUID();module.revision=0;}
+  }
   pending.kind='module';pending.value=module;pending.generation=store.generation;
   pending.competing=store.entries.filter(e=>e.enabled&&!e.builtinId&&e.module.id!==module.id&&e.module.rules.kind==='extract'&&e.module.rules.pageType===module.rules.pageType&&((module.rules.operations||[]).some(op=>op.extraction)?M.matches(e.module,st.url):M.matchKey(e.module.match)===M.matchKey(module.match))).map(e=>e.module.id);
   pending.scopeLabel=(module.rules.operations||[]).some(op=>op.type==='outline'&&op.extraction)?module.match.hosts.join(', ')+' · 路径 '+new URL(st.url).pathname+'（查询参数可变），匹配已核验条目结构':module.match.pathMode==='pubmed-results'?'PubMed 检索结果页（更换检索式、翻页）':module.match.hosts.join(', ')+' · 同类正文结构';
@@ -104,8 +167,8 @@ async function prepareFilterSave(st, scopeUrl){
  }
  await guard(st);
  if(st.epoch!==pending.epoch||st.url!==pending.url||(st.documentKey||'')!==pending.documentKey||JSON.stringify(st.plan)!==pending.planJSON||!st.preview)throw Error('SAVE_CONFIRMATION_EXPIRED');
- if(pending.kind==='recipe'){pending.value.scope=await S.scope(g.WFGReadingModules.pageQuery(st.url)?st.url:selectedUrl.href,g.WFGReadingModules.pageQuery(st.url)?'exact':'route',selectedUrl.pathname);S.validate(pending.value);}
- pending.scopeLabel=pending.value.match?g.WFGGeneralization.scopeLabel(pending.value):'当前网页路径 '+selectedUrl.pathname+'（查询参数可变，不包含其他路径）';
+ if(pending.kind==='recipe'&&pending.value.scope.mode!=='pubmed-results'){pending.value.scope=await S.scope(g.WFGReadingModules.pageQuery(st.url)?st.url:selectedUrl.href,g.WFGReadingModules.pageQuery(st.url)?'exact':'route',selectedUrl.pathname);S.validate(pending.value);}
+ pending.scopeLabel=pending.value.match?g.WFGGeneralization.scopeLabel(pending.value):pending.value.scope.mode==='pubmed-results'?pending.scopeLabel:'当前网页路径 '+selectedUrl.pathname+'（查询参数可变，不包含其他路径）';
  st.pendingSave=pending;publish(st);return view(st);
 }
 async function commitFilterSave(st,token){
@@ -115,6 +178,12 @@ async function commitFilterSave(st,token){
  await guard(st);
  if(!st.feedback?.length||!st.feedback.every(r=>r.verified))throw Error('PREVIEW_NOT_VERIFIED');
  if(st.pendingSave!==pending||pending.epoch!==st.epoch||pending.url!==st.url||pending.documentKey!==(st.documentKey||''))throw Error('SAVE_CONFIRMATION_EXPIRED');
+ if(pending.peer){
+  const peer=await b.tabs.get(pending.peer.id);
+  if(peer.url!==pending.peer.url||!(await broker.rpc(peer.id,0,'READING_VALIDATE_MODULE',{module:pending.value})).verified)throw Error('GENERALIZE_SAMPLE_CHANGED');
+  await assertStateCurrent(st);
+  if(st.pendingSave!==pending)throw Error('SAVE_CONFIRMATION_EXPIRED');
+ }
  st.pendingSave=null;
  if(pending.value.match){
   await g.BrevessReadingModulesController.repo.activate(pending.value,pending.generation,pending.competing);
@@ -124,7 +193,9 @@ async function commitFilterSave(st,token){
   st.plan=saved.entries.find(x=>x.plan.id===pending.value.id).plan;
  }
  st.saved=true;st.scopeLabel=pending.scopeLabel;st.notice='已保存到本地，将自动套用于'+pending.scopeLabel+'。';
- return leaveDisplay(st);
+ const result=await leaveDisplay(st);
+ if(pending.value.match)await refreshSavedScripts(url=>g.WFGReadingModules.matches(pending.value,url),false);
+ return result;
 }
 async function confirmPendingFilterSave(st,question){
  const explicit=String(question||'').trim().replace(/[。！!！]$/u,'');
@@ -148,14 +219,84 @@ async function leaveDisplay(st){
  }
  return view(st);
 }
+async function savedScripts(url){
+ const modules=await g.BrevessReadingModulesController.repo.read(),legacy=await repo.read();
+ const scripts=modules.entries.filter(e=>!e.builtinId).map(e=>({kind:'module',id:e.module.id,name:e.module.name,
+  version:e.module.revision,scope:g.WFGGeneralization.scopeLabel(e.module),enabled:e.enabled,matches:g.WFGReadingModules.matches(e.module,url),generation:modules.generation}));
+ for(const e of legacy.entries)scripts.push({kind:'recipe',id:e.plan.id,name:e.plan.name,version:e.plan.revision,
+  scope:e.plan.scope.origin+e.plan.scope.path,enabled:e.enabled&&e.autoApply,matches:await S.matches(e.plan.scope,url),generation:legacy.generation});
+ return scripts;
+}
+async function refreshSavedScripts(matches,replaceSavedPreview,refreshDraftConfig=false){
+ const tabs=await b.tabs.query({});
+ await Promise.all(tabs.map(async tab=>{
+  if(!S.permitted(tab.url)||!await matches(tab.url))return;
+  const current=states.get(tab.id);
+  try{
+   if(current?.busy||current?.plan&&!current.saved){
+    if(refreshDraftConfig)await broker.rpc(tab.id,0,'READING_REFRESH_CONFIG');
+    return;
+   }
+   if(current?.saved&&!replaceSavedPreview&&current.preview)return;
+   await broker.rpc(tab.id,0,'READING_RELOAD');
+  }catch{/* New or discarded documents read configuration on first load. */}
+ }));
+}
 async function handle(m,sender){await generalization.ready;const content=sender.id===b.runtime.id&&sender.tab&&Number.isInteger(sender.frameId);let st,ctx;
 if(content){if(!['AUTO','DIRECT','PAGE_CHANGED','OUTLINE_CHANGED'].includes(m.command))throw Error('PANEL_REQUIRED');const frame=(await b.webNavigation.getAllFrames({tabId:sender.tab.id})||[]).find(f=>f.frameId===sender.frameId);if(!frame||frame.url!==sender.url||(m.command==='AUTO'&&sender.frameId!==0))throw Error('PAGE_CHANGED');st=await state(await b.tabs.get(sender.tab.id));}
 else{ctx=await panel(sender);if(ctx.windowId<0){if(!Number.isInteger(m.windowId)||m.windowId<0)throw Error('PANEL_WINDOW_REQUIRED');await b.windows.get(m.windowId);ctx={...ctx,windowId:m.windowId};}const tabs=await b.tabs.query({active:true,windowId:ctx.windowId});st=await state(tabs[0]);}
 if(!content&&m.expectedContext){const expected=m.expectedContext;await assertStateCurrent(st);if(expected.tabId!==st.tabId||expected.navigationUrl!==st.url||expected.documentKey!==st.documentKey)throw Error('PAGE_CHANGED');}
+if(m.command==='APPLY_VERSION'){
+ if(st.busy)throw Error('QUESTION_RUNNING');
+ const history=await multi.handle({type:'WFG_RESEARCH',command:'HISTORY',tabIds:st.sourceIds},sender);
+ const turn=history.items.find(t=>t.turnId===m.turnId&&t.status==='complete'&&t.displayPlan);
+ if(!turn||!await S.matches(turn.displayPlan.scope,st.url))throw Error('PAGE_CHANGED');
+ await assertStateCurrent(st);if(st.busy||!(await b.tabs.get(st.tabId)).active)throw Error('PAGE_CHANGED');st.adjusting=true;st.adjustmentMode='display';
+ return preview(st,turn.displayPlan);
+}
+if(m.command==='SCRIPTS_LIST')return savedScripts(st.url);
+if(m.command==='SCRIPT_ENABLE'||m.command==='SCRIPT_DELETE'){
+ const deleting=m.command==='SCRIPT_DELETE';
+ if(!deleting&&typeof m.enabled!=='boolean')throw Error('MODULE_FLAGS');
+ const controller=g.BrevessReadingModulesController;
+ let matches,wasActive;
+ if(m.kind==='module'){
+  const entry=(await controller.repo.read()).entries.find(e=>e.module.id===m.id&&!e.builtinId);
+  if(!entry)throw Error('MODULE_NOT_FOUND');
+  wasActive=entry.enabled;
+  if(deleting)await controller.repo.remove(entry.module.id,m.generation);
+  else await controller.repo.setEnabled(entry.module.id,m.enabled,m.generation);
+  matches=url=>g.WFGReadingModules.matches(entry.module,url);
+ }else if(m.kind==='recipe'){
+  const entry=(await repo.read()).entries.find(e=>e.plan.id===m.id);
+  if(!entry)throw Error('TEMPLATE_NOT_FOUND');
+  wasActive=entry.enabled&&entry.autoApply;
+  if(deleting)await repo.remove(entry.plan.id,m.generation);
+  else if(m.enabled)await repo.activate(entry.plan,m.generation);
+  else await repo.disable(entry.plan.id,m.generation);
+  matches=url=>S.matches(entry.plan.scope,url);
+ }else throw Error('MODULE_NOT_FOUND');
+ if(!deleting||wasActive)await refreshSavedScripts(matches,true,deleting&&m.kind==='module');
+ return savedScripts(st.url);
+}
 if(m.command.startsWith('GENERALIZE_')){
  if(content)throw Error('PANEL_REQUIRED');
  if(m.command==='GENERALIZE_PREVIEW'){
- if(!st.adjusting||!st.targets.length||st.targets.some(t=>t.frameId!==0))throw Error('GENERALIZE_SELECT_REQUIRED');
+ if(!st.adjusting||st.targets.some(t=>t.frameId!==0))throw Error('GENERALIZE_SELECT_REQUIRED');
+ if(generalization.summary(st.windowId)?.wholePage){
+  if(st.busy)throw Error('QUESTION_RUNNING');
+  const initialPlan=st.plan;
+  if(initialPlan){if(!st.saved||!st.automaticModuleView)throw Error('GENERALIZE_REPLACE_PREVIEW');await guardFollowup(st);}
+  const epoch=st.epoch,{plan,structure}=await generalization.wholePagePlan(st.windowId,st.url);
+  const o=await snapshot(st),frame=o.frames.find(f=>f.frameId===0&&f.ok);
+  const proof=await broker.rpc(st.tabId,0,'TOOL',{tool:'planTargets',args:{session:frame.data.session,targets:plan.operations.map(op=>op.target)}});
+  const checked=await broker.rpc(st.tabId,0,'READING_VALIDATE_PLAN',{plan});
+  if(!checked?.rules||!structure.roots.some(s=>checked.rules.roots.includes(s))||proof.groups?.length!==plan.operations.length||proof.groups.some(g=>!g.ids.length))throw Error('GENERALIZE_TARGET_MISMATCH');
+  await assertStateCurrent(st);
+  if(st.epoch!==epoch||!st.adjusting||st.plan!==initialPlan||st.busy||(initialPlan&&(!st.saved||!st.automaticModuleView)))throw Error('PAGE_CHANGED');
+  return preview(st,plan,true,{sources:[{tabId:st.tabId,url:st.url,frames:[{frameId:0,session:frame.data.session,guard:{session:frame.data.session,version:proof.version,allowRefresh:true,records:proof.groups.flatMap(group=>group.items.map(record=>({kind:'inspect',record,selection:true})))}}]}]});
+ }
+ if(!st.targets.length)throw Error('GENERALIZE_SELECT_REQUIRED');
  if(st.busy)throw Error('QUESTION_RUNNING');
  const effect=await generalization.effect(st.windowId);
  if(st.plan)throw Error('GENERALIZE_REPLACE_PREVIEW');
@@ -218,12 +359,15 @@ if(m.command==='RUN'){const confirmed=await confirmPendingFilterSave(st,m.questi
       const turn={...progress.turn,status:'pending'};
       if(!st.turns.some(t=>t.turnId===turn.turnId)){st.turns.push(turn);st.turns=st.turns.slice(-20);publish(st);}
       void b.runtime.sendMessage({type:'WFG_UX_PROGRESS',tabId:st.tabId,url:S.safeURL(st.url),navigationUrl:st.url,documentKey:st.documentKey,turnId:turn.turnId,event:progress.event}).catch(()=>{});
-    });if(seq!==st.epoch)throw Error('QUESTION_CANCELLED');if(['display','outline'].includes(route.kind)){st.displayConversation=[...(st.displayConversation||[]),{question:String(m.question||'').slice(0,1000),answer:String(result.turn.answer||'').slice(0,1000)}].slice(-6);}st.turns=st.turns.filter(t=>t.turnId!==result.turn.turnId);st.turns.push(result.turn);st.turns=st.turns.slice(-20);if(result.plan){try{await preview(st,result.plan,true,result.binding);st.lastDisplayRequest=String(m.question||'').slice(0,2000);st.outlineFailure=null;}catch(error){
-  if(route.kind!=='outline'||!result.plan.operations.some(op=>op.type==='outline'&&op.extraction))throw error;
+    });if(seq!==st.epoch)throw Error('QUESTION_CANCELLED');if(['display','outline'].includes(route.kind)){st.displayConversation=[...(st.displayConversation||[]),{question:String(m.question||'').slice(0,1000),answer:String(result.turn.answer||'').slice(0,1000)}].slice(-6);}st.turns=st.turns.filter(t=>t.turnId!==result.turn.turnId);st.turns.push(result.turn);st.turns=st.turns.slice(-20);if(result.plan){try{await preview(st,result.plan,true,result.binding);const review=st.layoutReview?.label||feedbackNotice(st.feedback);
+    result.turn.displayReview=review;
+    await multi.recordDisplayReview?.(st.runOwner,result.turn,review).catch(()=>{});
+    st.lastDisplayRequest=String(m.question||'').slice(0,2000);st.outlineFailure=null;}catch(error){
+  const outline=route.kind==='outline'&&result.plan.operations.some(op=>op.type==='outline'&&op.extraction);
   if(!(seq===st.epoch&&states.get(st.tabId)===st))throw Error('QUESTION_CANCELLED');
-  const failed=await multi.recordPreviewFailure(st.runOwner,result.turn,error.message);
+  const failed=await multi.recordPreviewFailure(st.runOwner,result.turn,error.message,outline);
   if(!(seq===st.epoch&&states.get(st.tabId)===st))throw Error('QUESTION_CANCELLED');
-  st.outlineFailure={...failed.outcome,proposal:failed.turn.displayProposal};
+  st.outlineFailure=outline?{...failed.outcome,proposal:failed.turn.displayProposal}:null;
   st.displayConversation=st.displayConversation.slice(0,-1).concat({question:String(m.question||'').slice(0,1000),answer:failed.outcome.message});
   const failure=Error(failed.persisted?failed.outcome.code:'PREVIEW_OUTCOME_WRITE_FAILED');failure.previewFailureTurn=failed.turn;throw failure;
  }}st.notice=result.plan?feedbackNotice(st.feedback):'回答与引用已保存。';st.busy=false;if(result.saveRequested){await prepareFilterSave(st);}return view(st);}catch(e){if(seq===st.epoch&&states.get(st.tabId)===st){st.notice=e.message;try{const failed=await multi.handle({type:'WFG_RESEARCH',command:'HISTORY',tabIds:st.sourceIds},sender);if(seq===st.epoch&&states.get(st.tabId)===st)st.turns=failed.items.slice(-20);}catch{}if(e.previewFailureTurn&&seq===st.epoch&&states.get(st.tabId)===st){st.turns=st.turns.filter(t=>t.turnId!==e.previewFailureTurn.turnId).concat(e.previewFailureTurn).slice(-20);}}throw e;}finally{if(seq===st.epoch&&states.get(st.tabId)===st){st.busy=false;publish(st);}}}
@@ -231,8 +375,8 @@ if(m.command==='RESET_OUTLINE'){
  if(st.busy)throw Error('QUESTION_RUNNING');const remaining=(st.plan?.operations||[]).filter(op=>op.type!=='outline');
  if(remaining.length)return preview(st,{...st.plan,operations:remaining});
  const previous=st.plan;if(previous)st.undo.push(previous);await broker.allUndo(st.tabId);const reading=await broker.rpc(st.tabId,0,'READING_SNAPSHOT');if(reading?.session)await broker.rpc(st.tabId,0,'READING_OUTLINE_DEFAULT',{session:reading.session,active:true});st.plan=null;st.preview=false;st.saved=false;st.feedback=null;st.pendingSave=null;st.notice='已恢复当前页面的默认大纲；已保存规则仍保留，可在阅读偏好管理。';await bind(st);publish(st);return view(st);}
-if(m.command==='CANCEL'||m.command==='PAGE_CHANGED'){st.outlineFailure=null;st.pendingSave=null;st.displayConversation=[];st.epoch++;abandonPending(st);multi.cancel?.(st.runOwner,st.tabId);for(const f of (await snapshot(st)).frames.filter(f=>f.ok))await broker.rpc(st.tabId,f.frameId,'UX_CLEAR').catch(()=>{});if(st.plan&&(m.command==='PAGE_CHANGED'||!st.saved))await broker.allUndo(st.tabId);st.plan=null;st.preview=false;st.targets=[];st.selectionRebase=false;st.feedback=null;st.undo=[];st.notice='已取消临时改动并恢复原貌。';await bind(st);publish(st);return view(st);}
-if(m.command==='PREPARE_SAVE')return prepareFilterSave(st,m.scopeUrl);
+if(m.command==='CANCEL'||m.command==='PAGE_CHANGED'){st.outlineFailure=null;st.pendingSave=null;st.displayConversation=[];st.epoch++;abandonPending(st);multi.cancel?.(st.runOwner,st.tabId);for(const f of (await snapshot(st)).frames.filter(f=>f.ok))await broker.rpc(st.tabId,f.frameId,'UX_CLEAR').catch(()=>{});if(st.plan&&(m.command==='PAGE_CHANGED'||!st.saved))await broker.allUndo(st.tabId);st.plan=null;st.preview=false;st.saved=false;st.automaticModuleView=false;st.readingModuleId=null;st.readingViewSession=null;st.scopeLabel='';st.targets=[];st.selectionRebase=false;st.feedback=null;st.undo=[];st.notice='已取消临时改动并恢复原貌。';await bind(st);publish(st);return view(st);}
+if(m.command==='PREPARE_SAVE')return prepareFilterSave(st,m.scopeUrl,m.similar===true);
 if(m.command==='CANCEL_SAVE'){st.pendingSave=null;publish(st);return view(st);}
 if(m.command==='SAVE')return commitFilterSave(st,m.confirmationToken);
 if(m.command==='TOGGLE'){st.pendingSave=null;if(st.automaticModuleView)return toggleAutomaticFilter(st);if(!st.plan)throw Error('NO_PREVIEW');if(!st.preview){const current=await snapshot(st);for(const old of st.binding||[]){const frame=current.frames.find(f=>f.frameId===old.frameId&&f.ok);if(!frame||frame.data.session!==old.session)throw Error('PREVIEW_DOCUMENT_CHANGED');if(frame.data.version!==old.version&&!st.plan.operations.every(op=>op.type==='outline'&&op.placement==='sidebar'))throw Error('PREVIEW_DOCUMENT_CHANGED');}}if(st.preview){await broker.allUndo(st.tabId);if(st.readingViewSession)await broker.rpc(st.tabId,0,'READING_VIEW',{session:st.readingViewSession,original:true});st.preview=false;}else{st.feedback=await broker.action(st.tabId,st.url,st.plan,await bind(st),'preview');st.preview=true;}await bind(st);st.selectionRebase=true;publish(st);return view(st);}

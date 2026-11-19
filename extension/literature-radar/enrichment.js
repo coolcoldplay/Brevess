@@ -133,6 +133,12 @@
     $('score-history').addEventListener('change',()=>{activeRun=$('score-history').value||null;const run=currentRun();if(run){$('score-description').value=run.description;$('score-start').value=run.startDay;$('score-end').value=run.endDay;}void rememberView().then(()=>refresh(true));});
     function scoringControls(busy){for(const id of ['score-description','score-start','score-end','score-history'])$(id).disabled=busy;$('stop-scoring').disabled=!busy;updateCount();}
     function stopScoring(){if(!scoring)return;scoring.stopped=true;if(scoring.operationId)void client.request({type:'RADAR_AI_CANCEL',operationId:scoring.operationId}).catch(()=>{});status('score-status','已请求停止；正在收尾，已完成结果保留。');}
+    $('relevance-panel').addEventListener('toggle',async()=>{
+      if(!$('relevance-panel').open)return;
+      try{const result=await client.request({type:'RADAR_AI_ROUTE',kind:'relevance'});
+        status('live-score-route','评分模型 · '+(result.route?.model||result.route?.name||'已就绪'));
+      }catch(error){status('live-score-route',error.code==='NO_USABLE_PROFILE'?'需要支持语义判定的模型（TypeSafe JEV）':errorText(error));}
+    });
     $('stop-scoring').addEventListener('click',stopScoring);
     $('score-papers').addEventListener('click',async()=>{
       if(scoring||!selected||!revision)return;let spec;try{spec=currentSpec();}catch(e){status('score-status',errorText(e));return;}
@@ -151,6 +157,6 @@
       finally{if(scoring===job){scoring=null;scoringControls(false);}await refresh(true);}
     });
     window.addEventListener('pagehide',()=>{cancelQuery();stopScoring();for(const job of translationJobs.values())job.provider.destroy();});
-    return {prepare,decorate,compare,editorOpened,isRelevanceSort:()=>$('paper-sort').value==='relevance'};
+    return {prepare,decorate,compare,scoreFor,editorOpened,isRelevanceSort:()=>$('paper-sort').value==='relevance'};
   }};
 })(globalThis);

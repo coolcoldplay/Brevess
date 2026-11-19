@@ -1,0 +1,27 @@
+.brevess-compare-picker { position: fixed; z-index: 2147483646; box-sizing: border-box; padding: 14px; max-height: min(420px, 65vh); overflow: auto; background: #fff; color: #202020; border: 1px solid #e9e9ec; border-radius: 16px; box-shadow: 0 12px 40px #0002; font: 14px/1.45 system-ui; }
+.brevess-compare-picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.brevess-compare-picker button, .brevess-compare-meta button, .brevess-compare-status button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
+.brevess-compare-picker button:hover, .brevess-compare-meta button:hover { background: #f1f1f3; }
+.brevess-compare-picker input[type=search] { width: 100%; box-sizing: border-box; background: #f5f5f7; border: 0; padding: 10px 12px; border-radius: 10px; color: inherit; }
+.brevess-compare-rows { margin-block: 8px; }
+.brevess-compare-source { display: flex; gap: 10px; align-items: center; padding: 10px 6px; cursor: pointer; border-radius: 8px; }
+.brevess-compare-source:hover { background: #f5f5f7; }
+.brevess-compare-source input { accent-color: #222; flex: 0 0 auto; }
+.brevess-compare-source > span { min-width: 0; }
+.brevess-compare-source-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.brevess-compare-picker small { display: block; color: #777; font-size: 12px; }
+#articleChatForm .brevess-compare-chips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 2px 0; width: 100%; min-width: 0; }
+#articleChatForm .brevess-compare-chip { display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: 28px; min-width: 0; background: #f2f2f4; color: #444; border-radius: 7px; padding: 2px 4px 2px 8px; font: 12px/20px system-ui; }
+#articleChatForm .brevess-compare-chip > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#articleChatForm .brevess-compare-chip button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; min-width: 22px; height: 22px; min-height: 22px; margin: 0; border: 0; border-radius: 5px; padding: 0; background: transparent; color: #777; cursor: pointer; font: 16px/1 system-ui; box-shadow: none; }
+#articleChatForm .brevess-compare-chip button:hover { background: #e4e4e8; color: #222; }
+.brevess-compare-status, .brevess-compare-meta { color: #777; font-size: 12px; }
+#articleChatForm .brevess-compare-chips[hidden], .brevess-compare-status[hidden] { display: none; }
+.brevess-source-preview { position: fixed; z-index: 2147483647; box-sizing: border-box; padding: 16px; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid #e7e7ea; border-radius: 16px; background: #fff; color: #202020; box-shadow: 0 10px 40px #0003; font: 14px/1.55 system-ui; }
+.brevess-source-preview button { border: 0; background: none; color: inherit; padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.brevess-source-preview button:hover { background: #f1f1f3; }
+.brevess-source-title { font-weight: 600; }
+.brevess-source-preview small { color: #777; }
+.brevess-source-excerpt { margin: 14px 0; max-height: 34vh; overflow: auto; padding: 12px 14px; background: #f5f5f7; border: 0; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; color: #666; }
+.brevess-source-excerpt mark { color: #171717; background: #e0eaf4; border-radius: 2px; }
+.brevess-source-open { font-size: 12px; }

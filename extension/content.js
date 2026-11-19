@@ -12,7 +12,7 @@
 
 // 内容脚本 - 在网页上执行高亮
 document.documentElement.dataset.sciLlmContentRevision =
-    '1.0.2-adaptive-figures-r10';
+    '1.0.2-workbench-evidence-r15';
 
 function canonicalArticlePreindexUrl(value = globalThis.location?.href || '') {
     return String(value || '').replace(/#.*/, '');
@@ -439,7 +439,7 @@ class SciPaperHighlighter {
         // 仅替换当前分析模式的正则高亮，保留其他模式已生成的结果。
         this.clearHighlight(analysisModeId, true);
         this.activeAnalysisModeId = analysisModeId;
-
+        
         // 重置匹配计数
         this.matchCounts = {};
         this.lastNativePdfHighlightDiagnostics = {
@@ -576,7 +576,7 @@ class SciPaperHighlighter {
 
         console.log(`Brevess: 已高亮 ${this.highlightedElements.length} 个元素`);
         console.log('匹配计数:', this.matchCounts);
-
+        
         this.activeAnalysisModeId = '';
         return this.matchCounts;
     }
@@ -634,7 +634,7 @@ class SciPaperHighlighter {
     // 构建正则表达式
     buildRegexes(categories) {
         const regexes = [];
-
+        
         Object.entries(categories).forEach(([key, category]) => {
             const excludeRegexes = (Array.isArray(category.excludePatterns)
                 ? category.excludePatterns : [])
@@ -660,10 +660,10 @@ class SciPaperHighlighter {
                     // 转义特殊字符，但保留.*用于通配
                     let regexPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
                     regexPattern = regexPattern.replace(/\\\.\\\*/g, '.*?'); // 恢复.*的通配功能
-
+                    
                     // 添加单词边界（忽略大小写）
                     const regex = new RegExp(`\\b${regexPattern}\\b`, 'gi');
-
+                    
                     regexes.push({
                         regex: regex,
                         category: key,
@@ -676,14 +676,14 @@ class SciPaperHighlighter {
                 });
             }
         });
-
+        
         return regexes;
     }
 
     // 查找匹配
     findMatches(text, regexes, mode) {
         const matches = [];
-
+        
         regexes.forEach(({
             regex, category, color, name, originalPattern, excludeRegexes = []
         }) => {
@@ -706,17 +706,17 @@ class SciPaperHighlighter {
             });
             regex.lastIndex = 0; // 重置正则状态
             let match;
-
+            
             while ((match = regex.exec(text)) !== null) {
                 const matchedText = match[0];
                 if (!matchedText) { regex.lastIndex = match.index + 1; continue; }
                 const startIndex = match.index;
                 const endIndex = startIndex + matchedText.length;
-
+                
                 // 如果是句子模式，扩展到整个句子
                 let highlightStart = startIndex;
                 let highlightEnd = endIndex;
-
+                
                 if (mode === 'sentence') {
                     const bounds = SciLLM.findScientificSentenceBounds(text, startIndex, endIndex);
                     highlightStart = bounds.start;
@@ -727,7 +727,7 @@ class SciPaperHighlighter {
                 )) {
                     continue;
                 }
-
+                
                 matches.push({
                     start: highlightStart,
                     end: highlightEnd,
@@ -738,7 +738,7 @@ class SciPaperHighlighter {
                     matchedKeyword: matchedText, // 实际匹配到的关键词
                     originalPattern: originalPattern
                 });
-
+                
                 // 增加计数
                 if (!this.matchCounts[category]) {
                     this.matchCounts[category] = 0;
@@ -746,7 +746,7 @@ class SciPaperHighlighter {
                 this.matchCounts[category]++;
             }
         });
-
+        
         // 按位置排序并合并重叠区域
         matches.sort((a, b) => a.start - b.start);
         return this.mergeOverlappingMatches(matches).map(item => ({
@@ -758,13 +758,13 @@ class SciPaperHighlighter {
     // 合并重叠的匹配
     mergeOverlappingMatches(matches) {
         if (matches.length === 0) return matches;
-
+        
         const merged = [];
         let current = matches[0];
-
+        
         for (let i = 1; i < matches.length; i++) {
             const next = matches[i];
-
+            
             if (next.start <= current.end) {
                 // 重叠，扩展当前匹配（保留第一个匹配的颜色和信息）
                 if (next.end > current.end) {
@@ -776,7 +776,7 @@ class SciPaperHighlighter {
             }
         }
         merged.push(current);
-
+        
         return merged;
     }
 
@@ -914,37 +914,37 @@ class SciPaperHighlighter {
     highlightNode(node, matches, mode) {
         const parent = node.parentNode;
         if (!parent) return;
-
+        
         // 保存原始内容
         if (!this.originalContents.has(parent)) {
             this.originalContents.set(parent, parent.innerHTML);
         }
-
+        
         const text = node.textContent;
         const fragment = document.createDocumentFragment();
         let lastIndex = 0;
-
+        
         matches.forEach(match => {
             // 添加匹配之前的文本
             if (match.start > lastIndex) {
                 fragment.appendChild(document.createTextNode(text.substring(lastIndex, match.start)));
             }
-
+            
             // 创建高亮元素
             const span = this.createHighlightSpan(match, mode);
             span.textContent = text.substring(match.start, match.end);
-
+            
             fragment.appendChild(span);
             this.highlightedElements.push(span);
-
+            
             lastIndex = match.end;
         });
-
+        
         // 添加剩余文本
         if (lastIndex < text.length) {
             fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
         }
-
+        
         // 替换原节点
         parent.replaceChild(fragment, node);
     }
@@ -953,7 +953,7 @@ class SciPaperHighlighter {
     showTooltip(element, match) {
         // 移除已存在的tooltip
         this.hideTooltip();
-
+        
         const tooltip = document.createElement('div');
         tooltip.id = 'sci-highlight-tooltip';
         tooltip.style.cssText = `
@@ -969,7 +969,7 @@ class SciPaperHighlighter {
             max-width: 300px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         `;
-
+        
         // 设置内容
         const content = `
             <div style="font-weight: 600; margin-bottom: 4px; color: ${match.color};">
@@ -980,30 +980,30 @@ class SciPaperHighlighter {
             </div>
         `;
         tooltip.replaceChildren(...this.createTooltipContent(element, match));
-
+        
         document.body.appendChild(tooltip);
-
+        
         // 计算位置
         const rect = element.getBoundingClientRect();
         const tooltipRect = tooltip.getBoundingClientRect();
-
+        
         let top = rect.bottom + window.scrollY + 5;
         let left = rect.left + window.scrollX + (rect.width / 2) - (tooltipRect.width / 2);
-
+        
         // 确保不超出视口
         if (left < 0) left = 10;
         if (left + tooltipRect.width > window.innerWidth) {
             left = window.innerWidth - tooltipRect.width - 10;
         }
-
+        
         // 如果tooltip会超出底部，显示在上方
         if (top + tooltipRect.height > window.innerHeight + window.scrollY) {
             top = rect.top + window.scrollY - tooltipRect.height - 5;
         }
-
+        
         tooltip.style.top = top + 'px';
         tooltip.style.left = left + 'px';
-
+        
         // 添加淡入动画
         tooltip.style.opacity = '0';
         setTimeout(() => {
@@ -1155,15 +1155,15 @@ class SciPaperHighlighter {
         Object.keys(rules).forEach(key => {
             counts[key] = 0;
         });
-
+        
         const textNodes = this.getTextNodes(document.body);
         const categoryRegexes = this.buildRegexes(rules);
-
+        
         textNodes.forEach(node => {
             if (this.shouldSkipNode(node)) return;
-
+            
             const text = node.textContent;
-
+            
             categoryRegexes.forEach(({ regex, category, excludeRegexes = [] }) => {
                 const excludedRanges = [];
                 excludeRegexes.forEach(excludeRegex => {
@@ -1227,7 +1227,7 @@ class SciPaperHighlighter {
             element.remove();
             parent.normalize();
         });
-
+        
         this.highlightedElements = targetId
             ? this.highlightedElements.filter(
                 element => !targets.includes(element) && element?.isConnected
@@ -1235,7 +1235,7 @@ class SciPaperHighlighter {
             : [];
         if (!targetId) this.originalContents.clear();
         this.matchCounts = {};
-
+        
         console.log(targetId
             ? `Brevess: 已替换分析模式 ${targetId} 的高亮`
             : 'Brevess: 已清除所有高亮');
@@ -1261,12 +1261,12 @@ class SciPaperHighlighter {
                 }
             }
         );
-
+        
         let node;
         while (node = walker.nextNode()) {
             textNodes.push(node);
         }
-
+        
         return textNodes;
     }
 
@@ -1274,7 +1274,7 @@ class SciPaperHighlighter {
     shouldSkipNode(node) {
         if (!node || !node.parentNode) return true;
         if (node.parentElement?.closest?.('[data-sci-plugin-ui],[data-sci-translation],[data-wfg-reading-owned]')) return true;
-
+        
         const parent = node.parentNode;
         if (this.allowedParagraphIds instanceof Set) {
             const element = parent.nodeType === Node.ELEMENT_NODE
@@ -1284,11 +1284,11 @@ class SciPaperHighlighter {
             if (!paragraphId || !this.allowedParagraphIds.has(paragraphId)) return true;
         }
         const tagName = parent.tagName ? parent.tagName.toLowerCase() : '';
-
+        
         // 跳过的标签
         const skipTags = ['script', 'style', 'noscript', 'iframe', 'object', 'embed', 'textarea', 'code', 'pre'];
         if (skipTags.includes(tagName)) return true;
-
+        
         // 跳过已经高亮的元素
         if (parent.classList && parent.classList.contains('sci-highlight')) {
             const parentModeId = String(
@@ -1298,10 +1298,10 @@ class SciPaperHighlighter {
                 return true;
             }
         }
-
+        
         // 跳过输入框等
         if (parent.isContentEditable) return true;
-
+        
         return false;
     }
 }
@@ -6284,12 +6284,12 @@ function announceSidePanelDocumentReady() {
 }
 
 globalThis.__brevessFigureMagnifier?.destroy();
-const figureMagnifierDisabledImages = new WeakSet();
+const figureMagnifierEnabledImages = new WeakSet();
 globalThis.__brevessFigureMagnifier = SciLLM.createFigureMagnifier?.({
     document,
     isActive: () => /^https?:/i.test(location.protocol) && !activeNativePdfStructure() && !document.getElementById(FIGURE_IMAGE_VIEWER_ID),
     getDisplaySource: image => getSavedFigureOriginalDisplayAssets().get(image),
-    acceptImage: image => !figureMagnifierDisabledImages.has(image) && (isWebMediaPage() || Boolean(image.closest('figure,[role="figure"],.figure,.fig,.figure-wrap,.figure-container,.article-figure,.fig-inline-img-set,.c-article-section__figure')) || /^(?:figure|fig\.?|extended data fig|supplementary fig)\s*\d/i.test(image.alt || ''))
+    acceptImage: image => figureMagnifierEnabledImages.has(image) && (isWebMediaPage() || Boolean(image.closest('figure,[role="figure"],.figure,.fig,.figure-wrap,.figure-container,.article-figure,.fig-inline-img-set,.c-article-section__figure')) || /^(?:figure|fig\.?|extended data fig|supplementary fig)\s*\d/i.test(image.alt || ''))
 });
 globalThis.__brevessFigureQuickControls?.destroy();
 globalThis.__brevessFigureQuickControls = SciLLM.createFigureQuickControls?.({ document,
@@ -6297,8 +6297,8 @@ globalThis.__brevessFigureQuickControls = SciLLM.createFigureQuickControls?.({ d
     acceptImage: image => isWebMediaPage() || Boolean(image.closest('figure,[role="figure"],.figure,.fig,.figure-wrap,.figure-container,.article-figure,.fig-inline-img-set,.c-article-section__figure')) || /^(?:figure|fig\.?)\s*\d/i.test(image.alt || ''),
     onOpenNotes: image => { void openFigureQuickNote(image).catch(error=>showManualStatus(error.message,'error')); },
     isHighResolution: image => getSavedFigureOriginalDisplayAssets().has(image),
-    isMagnifierEnabled: image => !figureMagnifierDisabledImages.has(image),
-    onToggleMagnifier: image => { if (figureMagnifierDisabledImages.has(image)) figureMagnifierDisabledImages.delete(image); else figureMagnifierDisabledImages.add(image); globalThis.__brevessFigureMagnifier?.hide(); },
+    isMagnifierEnabled: image => figureMagnifierEnabledImages.has(image),
+    onToggleMagnifier: image => { if (figureMagnifierEnabledImages.has(image)) figureMagnifierEnabledImages.delete(image); else figureMagnifierEnabledImages.add(image); globalThis.__brevessFigureMagnifier?.hide(); },
     onHighResolution: enableFigureOriginalDisplayForImage,
     onToggleAnnotations: toggleBodyFigureAnnotations,
     isAnnotationsVisible: image => bodyFigureAnnotationLayers.has(image),
@@ -12628,7 +12628,7 @@ async function preparePersistedFigureImages(figure) {
     if (existing.images.length &&
         !shouldUpgradePersistedFigureImage(figure, existing.images)) return existing.images;
     const imageElement = Array.from(figure?.imageElements || [])[0];
-    if (!imageElement) return [];
+    if (!imageElement) return existing.images;
     try {
         const encoded = await prepareFigureImage(imageElement, deadline, null, figure);
         const admitted = await admitFigureProviderImages([encoded], 1, deadline);
@@ -13848,6 +13848,18 @@ function figureOriginalResourceScope(figure) {
     return { pageIdentity, figureId: figure.figureId, originalImages, current, key };
 }
 
+async function readStoredOriginalForFigure(figure,original) {
+    const index=await getWorkspaceAssetCheckpoint('figures/originals/index.json');
+    const imageIndex=Array.from(figure.imageElements||[]).indexOf(original.image);
+    const entry=index?.content?.entries?.find(item=>item.figureId===figure.figureId&&item.imageIndex===imageIndex);
+    if(!entry||!await SciLLM.matchFigureOriginalAsset(entry,{pageUrl:figureOriginalDisplaySourceUrl(),
+        documentHash:getCanonicalArticleSnapshot().documentHash,figureId:figure.figureId,imageIndex,
+        sourceIdentity:original.sourceIdentity,candidates:SciLLM.collectFigureImageCandidates(original.image,document.baseURI),
+        savedReader:!!activeSavedArticleDocument()}))return null;
+    const asset=await getWorkspaceAssetCheckpoint(entry.assetPath);
+    return SciLLM.readFigureOriginalAsset(asset?.content,entry);
+}
+
 async function loadSharedFigureOriginalResource(figure) {
     const scope = figureOriginalResourceScope(figure);
     if (!scope.current()) return { sources: [], resource: null, cacheMode: 'none', ...scope };
@@ -13871,16 +13883,7 @@ async function loadSharedFigureOriginalResource(figure) {
         let sources, resource;
         if (!saved?.dataUrl && scope.originalImages.length === 1 && !figure.sourceExternal) {
             try {
-                const index = await getWorkspaceAssetCheckpoint('figures/originals/index.json');
-                const original = scope.originalImages[0], imageIndex = Array.from(getFigureWorkspaceInventory().find(item => item.figureId === figure.figureId)?.imageElements || []).indexOf(original.image);
-                const record = index?.content?.entries?.find(item => item.figureId === figure.figureId && item.imageIndex === imageIndex);
-                if (record && await SciLLM.matchFigureOriginalAsset(record, {pageUrl: figureOriginalDisplaySourceUrl(),
-                    documentHash: getCanonicalArticleSnapshot().documentHash, figureId: figure.figureId, imageIndex,
-                    sourceIdentity: original.sourceIdentity, candidates: SciLLM.collectFigureImageCandidates(original.image, document.baseURI),
-                    savedReader: !!activeSavedArticleDocument()})) {
-                    const asset = await getWorkspaceAssetCheckpoint(record.assetPath);
-                    resource = await SciLLM.readFigureOriginalAsset(asset?.content, record);
-                }
+                resource=await readStoredOriginalForFigure(figure,scope.originalImages[0]);
             } catch (_) { /* Continue with the normal viewer acquisition when no verified local original exists. */ }
             if (!scope.current()) return { sources: [], resource: null, cacheMode, ...scope };
         }
@@ -13930,6 +13933,32 @@ async function loadSharedFigureOriginalResource(figure) {
         throw error;
     }
 }
+
+globalThis.BrevessReadingFigure = async function (number) {
+    if (!Number.isInteger(number) || number < 1 || number > 999) throw Error('图号无效');
+    const figure = getFigureViewerInventory().find(f => !f.isSupplemental && f.figureNumber == number);
+    const images = Array.from(figure?.imageElements || []);
+    if (images.length !== 1) throw Error(images.length ? '这张图有多个分图，请在目标图旁加载高清原图。' : '本页未找到对应的正文图。');
+    const image = images[0], identity = figureOriginalDisplayPageIdentity();
+    const wakeLazyImage = image.loading === 'lazy' && !image.naturalWidth;
+    if (wakeLazyImage) image.loading = 'eager';
+    let timer;
+    try {
+        await Promise.race([image.decode(), new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Error('原网页的图片尚未加载，请稍后重试。')), 15000);
+        })]);
+    } finally {
+        clearTimeout(timer);
+        if (wakeLazyImage && image.loading === 'eager') image.loading = 'lazy';
+    }
+    const before = [image.naturalWidth, image.naturalHeight];
+    await enableFigureOriginalDisplayForImage(image);
+    if (!image.isConnected || identity !== figureOriginalDisplayPageIdentity()) throw Error('PAGE_CHANGED');
+    const asset = getSavedFigureOriginalDisplayAssets().get(image);
+    const painted = getComputedStyle(image);
+    const applied = !!asset && painted.backgroundImage.includes(asset.objectUrl) && image.getClientRects().length > 0;
+    return { applied, before, after: applied ? [asset.pixelWidth, asset.pixelHeight] : [image.naturalWidth, image.naturalHeight] };
+};
 
 async function enableFigureOriginalDisplayForImage(image) {
     if (!savedFigureOriginalDisplayPageActive) return false;
@@ -18822,7 +18851,11 @@ async function refreshSupplementalFigureAssets(
         return supplementalFigureAssets;
     };
 
-    if (!fixedWorkspace.workspaceId) return commitStagedAssets([], '');
+    // Unsaved readers have an in-memory workspace identity, but no durable assets.
+    // Keep their figure draft available without querying the on-disk workspace.
+    if (!fixedWorkspace.workspaceId || fixedWorkspace.transient === true) {
+        return commitStagedAssets([], '');
+    }
     if (supplementalPdfBinding) {
         const parentWorkspace = supplementalParentWorkspaceTarget(
             supplementalPdfBinding
@@ -24432,21 +24465,45 @@ async function currentArticleChatDocumentInputs(turn, snapshot, scopedContext) {
             records.push(record); captionByFigure.set(identity.figureId, records);
         }
     }
-    const requested = new Set([...String(turn.question || '').matchAll(/(?:\bfig(?:ure)?\.?\s*|图\s*)(S?\d+)(?!\d)/gi)]
-        .map(match => `figure-${match[1].toLowerCase()}`));
+    const requested = new Set(SciLLM.articleChatFigureNumbers(turn.question).map(code => 'figure-' + code));
     const inventory = getFigureWorkspaceInventory();
-    const candidates = inventory.filter(figure => captionByFigure.get(figure.figureId)?.length === 1 &&
+    const candidates = inventory.filter(figure =>
+        (!scopedContext.resolution.requested || captionByFigure.has(figure.figureId)) &&
         (requested.size ? requested.has(figure.figureId) : figureWalkthroughState.get(figure.figureId)?.expanded === true));
     const images = [];
     const remaining = Math.max(0, 4 - (turn.attachments || []).filter(item => item.kind === 'image').length);
-    for (const figure of candidates.slice(0, remaining)) {
-        // Reuse bounded safe full-Figure encoding; chat service checks the selected route's capability.
-        const prepared = await preparePersistedFigureImages(figure).catch(() => []);
-        const image = prepared[0];
+    // Offline snapshots embed the owned publisher resource directly. Keep its
+    // exact bytes when it fits the model's transport limit.
+    const savedImages = activeSavedArticleDocument()
+        ? [...document.querySelectorAll('img[data-brevess-figure-id][data-brevess-image-index]')] : [];
+
+    for (const figure of candidates) {
+        if (images.length >= remaining) break;
+        let image=null;
+        const owned = savedImages.filter(el => el.dataset.brevessFigureId === figure.figureId);
+        if (!figure.sourceExternal && owned.length === 1 && owned[0].dataset.brevessImageIndex === '0') {
+            const url = owned[0].getAttribute('src') || '';
+            const mime = /^data:(image\/(?:png|jpeg|webp));base64,/.exec(url);
+            if (mime && Math.ceil((url.length - mime[0].length) / 4) * 3 <= SciLLM.ARTICLE_CHAT_ATTACHMENT_LIMITS.maxImageBytes) {
+                image = {dataUrl:url,mediaType:mime[1]};
+            }
+        }
+        if(!image&&!figure.sourceExternal&&figure.imageElements?.length===1){
+            const element=figure.imageElements[0];
+            try{
+                const saved=await readStoredOriginalForFigure(figure,{image:element,sourceIdentity:SciLLM.figureOriginalDisplaySourceIdentity(element)});
+                if(saved?.dataUrl && ['image/png','image/jpeg','image/webp'].includes(saved.contentType) &&
+                    Math.ceil(saved.bytes.length/3)*3<=SciLLM.ARTICLE_CHAT_ATTACHMENT_LIMITS.maxImageBytes){
+                    image={dataUrl:saved.dataUrl,mediaType:saved.contentType};
+                }
+            }catch(_){/* Use the live, validated image when no matching saved original can be read. */}
+        }
+        if(!image) image=(await preparePersistedFigureImages(figure).catch(()=>[]))[0];
         if (!image?.dataUrl) continue;
-        const record = captionByFigure.get(figure.figureId)[0];
+        const captions = captionByFigure.get(figure.figureId) || [];
+        const record = captions.find(item=>item.text===figure.caption) || (captions.length===1 ? captions[0] : null);
         images.push({ imageId: `chat-${figure.figureId}`, figureId: figure.figureId, label: figure.figureLabel,
-            captionSourceKey: record.sourceKey, documentHash: snapshot.documentHash,
+            captionSourceKey: record?.sourceKey || '', documentHash: snapshot.documentHash,
             dataUrl: image.dataUrl, mediaType: image.mediaType || image.mimeType || image.dataUrl.slice(5, image.dataUrl.indexOf(';')) });
     }
     let figureEvidenceContext = null;
@@ -28382,6 +28439,15 @@ async function prepareNativePdfWorkspace() {
     };
     nativePdfWorkspacePreparation = preparation;
     preparation.promise = (async () => {
+        // Indexing can finish before the virtualized visible text layer mounts.
+        // The page-rendered event resumes this exact document; this is not a
+        // failed write and must not poison the reader with an index error.
+        const waitForTextLayer = () => {
+            if (getManualDocumentInputAndBlocks().blocks.length) return false;
+            if (current()) nativePdfWorkspacePreparation = null;
+            return true;
+        };
+        if (waitForTextLayer()) return { status: 'waiting-text-layer' };
         initializeManualAnnotationUi();
         let prepared = null;
         for (let attempt = 0; attempt < 2 && current(); attempt += 1) {
@@ -28390,6 +28456,7 @@ async function prepareNativePdfWorkspace() {
         }
         if (!current()) return;
         if (!prepared || !nativePdfManualDocumentProof(structure, native)) {
+            if (waitForTextLayer()) return { status: 'waiting-text-layer' };
             const error = new Error('PDF_MANUAL_DOCUMENT_PREPARE_INCOMPLETE');
             error.code = 'PDF_MANUAL_DOCUMENT_PREPARE_INCOMPLETE';
             throw error;
@@ -29718,7 +29785,7 @@ async function readArticleWorkspaceSnapshot(request = {}) {
             (supplementalRefreshError ? 'SUPPLEMENTAL_FIGURE_REFRESH_FAILED' :
                 'FIGURE_WORKSPACE_INVENTORY_SEED_FAILED');
         const message = supplementalRefreshError
-            ? '正文已读取；图目录未完整刷新，可刷新重试。'
+            ? '正文与已识别图可用；补充附件检查未完成，可刷新重试。'
             : '正文已读取；图目录暂未保存，可刷新重试。';
         snapshot.figures = { ...snapshot.figures, draft: null, inventoryReady: false,
             inventoryError: { code, message } };
@@ -34315,7 +34382,8 @@ function buildArticleWorkspaceAssets() {
         }],
         ['article/paragraphs.json', {
             revision: snapshot.revision,
-            paragraphs: snapshot.paragraphs
+            paragraphs: snapshot.paragraphs,
+            captionRecords: snapshot.chatCitationRecords || []
         }],
         ['annotations/highlights.json', {
             activeEngine,
@@ -34433,7 +34501,8 @@ function buildArticleWorkspaceBaselineAssets() {
         }],
         ['article/paragraphs.json', {
             revision: snapshot.revision,
-            paragraphs: snapshot.paragraphs
+            paragraphs: snapshot.paragraphs,
+            captionRecords: snapshot.chatCitationRecords || []
         }]
     ]);
     const bibliography = typeof SciLLM.extractArticleBibliography === 'function'
@@ -38077,6 +38146,33 @@ function focusLiteratureNoteCaptionSource(target) {
     return true;
 }
 
+// A composite image may only identify a panel in the publisher's legend.
+function focusOwnedPanelCaption(figure, panelId) {
+    const id=String(panelId).toUpperCase();
+    if(!figure || !/^[A-Z]$/.test(id))return false;
+    const container=figure.element?.closest('figure')||figure.element;
+    const caption=container?.querySelector?.('figcaption,.fig-caption,.caption')||figure.captionElement;
+    if(!isFigureSourceElementVisible(caption))return false;
+    const walker=document.createTreeWalker(caption,NodeFilter.SHOW_TEXT);
+    let best=null;
+    for(let node=walker.nextNode();node;node=walker.nextNode()){
+        for(const match of node.data.matchAll(/\(\s*([A-Za-z])(?:\s*[-–—]\s*([A-Za-z]))?\s*\)/g)){
+            const left=match[1].toUpperCase(),right=(match[2]||left).toUpperCase(),span=right.charCodeAt(0)-left.charCodeAt(0);
+            if(id<left || id>right || best&&best.span<=span)continue;
+            best={node,index:match.index,length:match[0].length,span};
+        }
+    }
+    if(!best)return false;
+    const range=document.createRange();range.setStart(best.node,best.index);range.setEnd(best.node,best.index+best.length);
+    best.node.parentElement.scrollIntoView({behavior:'instant',block:'center'});
+    const marks=globalThis.CSS?.highlights;
+    if(marks&&typeof Highlight==='function'){
+        const mark=new Highlight(range);marks.set('brevess-source-panel',mark);
+        setTimeout(()=>{if(marks.get('brevess-source-panel')===mark)marks.delete('brevess-source-panel');},4500);
+    }
+    return true;
+}
+
 function isFigureSourceElementVisible(element) {
     if (element?.isConnected !== true || typeof element.scrollIntoView !== 'function') return false;
     for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
@@ -38319,7 +38415,8 @@ async function handleWorkbenchSource(request, sender) {
     if (sender?.id !== chrome.runtime.id) failure('WORKBENCH_SENDER_INVALID');
     const lifecycle = articleWorkspaceLifecycleGeneration;
     const native = globalThis.__brevessNativePdfDocument;
-    const workspace = currentArticleWorkspace;
+    if(document.readyState==='loading')return {success:true,ready:false};
+    const workspace = currentArticleWorkspace || await ensureCurrentArticleWorkspace({persist:false});
     const source = request.source;
     const navigationIdentity = contentNavigationIdentity();
     const documentIdentity = contentDocumentIdentity;
@@ -38334,7 +38431,7 @@ async function handleWorkbenchSource(request, sender) {
     const ready = document.readyState !== 'loading' && (!native || document.documentElement.dataset.pdfWorkspaceReady === 'true');
     if (!ready) return { success: true, ready: false };
     const read = async () => {
-        const asset = await getWorkspaceAssetCheckpoint(source.relativePath);
+        const asset = await getWorkspaceAssetCheckpoint(source.relativePath,{workspace});
         assertCurrent();
         if (!asset || asset.revision !== source.revision || asset.contentHash !== source.contentHash) failure('WORKBENCH_SOURCE_VERSION_CHANGED');
         return asset;
@@ -38348,7 +38445,7 @@ async function handleWorkbenchSource(request, sender) {
     const assets = new Map([[source.relativePath,asset]]);
     for (const binding of source.bindings || []) {
         if (binding.workspaceId !== source.workspaceId || binding.workspaceGeneration !== source.workspaceGeneration) failure('WORKBENCH_SOURCE_VERSION_CHANGED');
-        const bound = binding.relativePath===source.relativePath ? asset : await getWorkspaceAssetCheckpoint(binding.relativePath);
+        const bound = binding.relativePath===source.relativePath ? asset : await getWorkspaceAssetCheckpoint(binding.relativePath,{workspace});
         assertCurrent();
         if (!bound || bound.revision!==binding.revision || bound.contentHash!==binding.contentHash) failure('WORKBENCH_SOURCE_VERSION_CHANGED');
         assets.set(binding.relativePath,bound);
@@ -38378,16 +38475,44 @@ async function handleWorkbenchSource(request, sender) {
     }
     if (!resourceFound) failure('WORKBENCH_SOURCE_REFERENCE_REQUIRED');
     assertCurrent();
-    const focusedTarget = target.kind === 'panel' ? { kind: 'figure', figureId: target.figureId } : target;
-    const result = await focusArticleWorkspaceSource(focusedTarget, { requireConfirmedFocus: true });
+    let precisePanel = null, captionFocus = false;
+    if(target.kind==='panel'&&!native&&/^[a-z0-9]{1,4}$/i.test(target.panelId)){
+        const figure=findFigureAnalysisTarget(target.figureId);
+        if(figure)precisePanel=findDedicatedPanelImageElement(figure,target.panelId);
+        if(!isFigureSourceElementVisible(precisePanel)){
+            const markers=Array.from(figure?.captionElement?.querySelectorAll('b,strong,[data-panel]')||[])
+                .filter(el=>el.textContent.trim().replace(/^[([]|[.)\]]$/g,'').toUpperCase()===target.panelId.toUpperCase()&&isFigureSourceElementVisible(el));
+            precisePanel=markers.length===1?markers[0]:null;
+            if(!precisePanel)captionFocus=focusOwnedPanelCaption(figure,target.panelId);
+        }
+    }
+    const focusedTarget = target.kind === 'panel' ? {kind:'figure',figureId:target.figureId} : target;
+    if(precisePanel){
+        precisePanel.scrollIntoView({behavior:'instant',block:'center'});
+        precisePanel.classList.add('sci-article-source-focus');
+        setTimeout(()=>precisePanel.classList.remove('sci-article-source-focus'),1800);
+    }
+    const result=precisePanel||captionFocus?true:
+        await focusArticleWorkspaceSource(focusedTarget,{requireConfirmedFocus:true});
     assertCurrent();await read();
     for(const binding of source.bindings || []) {
-        const current=await getWorkspaceAssetCheckpoint(binding.relativePath);assertCurrent();
+        const current=await getWorkspaceAssetCheckpoint(binding.relativePath,{workspace});assertCurrent();
         if(current?.revision!==binding.revision || current?.contentHash!==binding.contentHash)failure('WORKBENCH_SOURCE_VERSION_CHANGED');
     }
     const focused = result && typeof result === 'object' ? result.focused === true : result === true;
-    const precision = ['figure','panel'].includes(target.kind) ? (native ? 'page' : 'figure')
+    const precision = ['figure','panel'].includes(target.kind) ? (precisePanel ? 'panel' : captionFocus ? 'panel-caption' : native ? 'page' : 'figure')
         : result?.focusedGranularity === 'page' ? 'page' : 'paragraph';
+    if (focused && target.kind === 'panel' && !native) {
+        const notice = document.createElement('div');
+        notice.className = 'sci-workbench-source-notice';
+        notice.setAttribute('data-sci-plugin-ui','');
+        notice.setAttribute('role','status');
+        const label = (findFigureAnalysisTarget(target.figureId)?.figureLabel || target.figureId) + target.panelId;
+        notice.textContent = label + ' · ' + ({panel:'已定位到独立 Panel','panel-caption':'已定位到原图图注标记',figure:'已定位到整图，原文缺少独立 Panel 锚点'})[precision];
+        document.querySelector('.sci-workbench-source-notice[data-sci-plugin-ui]')?.remove();
+        document.body.append(notice);
+        setTimeout(() => notice.remove(), 4500);
+    }
     return { ...base, target, focused, precision: focused ? precision : 'none' };
 }
 
@@ -43007,7 +43132,7 @@ chrome.runtime.onMessage.addListener(function handleArticleMessage(request, send
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
     }
-
+    
     return true; // 保持消息通道开放
 });
 

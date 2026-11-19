@@ -142,9 +142,29 @@
     });
   }
 
-  function figureNumbers(value) {
-    return [...String(value || '').normalize('NFKC').matchAll(/(?:\bfig(?:ure)?[\s:._-]*|图\s*)(s?\d+)(?!\d)/giu)]
-      .map(match => match[1].toLowerCase());
+  function articleChatFigureNumbers(value) {
+    const text = String(value || '').normalize('NFKC');
+    const numbers = new Set();
+    const mention = /(?:(extended\s+data\s+|supplement(?:ary|al)?\s+)?\bfig(?:ure)?s?[.\s:_-]*|图\s*)(ed|s)?(\d{1,3})(?!\d)/giu;
+    for (const match of text.matchAll(mention)) {
+      const prefix = (match[2] || (match[1]?.toLowerCase().startsWith('extended') ? 'ed' : match[1] ? 's' : '')).toLowerCase();
+      const first = Number(match[3]);
+      if (!first) continue;
+      numbers.add(prefix + first);
+      let tail = text.slice(match.index + match[0].length), previous = first;
+      // The figure prefix carries through coordinated numbers, including a range within a list.
+      const continuation = /^\s*(?:[a-z](?=\s*[,、，]))?\s*(?:(?<range>[-–—−~～]|至|到|to\b)|[,、，]\s*(?:and\s+)?|and\b|和|及|与)\s*(ed|s)?(\d{1,3})(?!\d|\.\d|[％%])/iu;
+      for (let next; (next = continuation.exec(tail)); tail = tail.slice(next[0].length)) {
+        const group = (next[2] || prefix).toLowerCase(), end = Number(next[3]);
+        if (!end) break;
+        if (next.groups.range) {
+          if (group !== prefix || end < previous || end - previous > 99) break;
+          for (let n = previous + 1; n <= end; n++) numbers.add(group + n);
+        } else numbers.add(group + end);
+        previous = end;
+      }
+    }
+    return [...numbers];
   }
 
   function selectArticleChatImages(input, plan, options = {}) {
@@ -152,13 +172,13 @@
     if (attachments.length && options.supportsVision !== true) {
       throw invalid('attachments', 'The selected model cannot read image attachments', 'VISION_UNSUPPORTED');
     }
-    const requestedFigures = new Set(figureNumbers(input.question));
+    const requestedFigures = new Set(articleChatFigureNumbers(input.question));
     const captionKeys = new Set((plan.chunks || []).filter(chunk => chunk.recordType === 'figure-caption')
       .flatMap(chunk => chunk.sourceKeys || []));
     const candidates = (input.document.images || []).map((image, index) => {
       const caption = (input.document.typedRecords || []).find(record =>
         record.recordType === 'figure-caption' && record.sourceKey === image.captionSourceKey);
-      const numbers = figureNumbers(`${image.label} ${image.figureId} ${caption?.text?.slice(0, 300) || ''}`);
+      const numbers = articleChatFigureNumbers(image.figureId || image.label || caption?.text?.slice(0, 80)).slice(0, 1);
       const explicit = numbers.some(number => requestedFigures.has(number));
       const related = captionKeys.has(image.captionSourceKey);
       return { image, index, numbers, explicit, related, score: (explicit ? 100 : 0) + (related ? 10 : 0) };
@@ -175,8 +195,15 @@
       documentHash: item.documentHash || input.document.documentHash,
       captionSourceKey: item.captionSourceKey, contentHash: item.contentHash }))]
       .map((item, index) => ({ imageNumber: index + 1, ...item }));
+    const coverage = [...requestedFigures].map(figure => {
+      const caption = (plan.chunks || []).some(chunk => chunk.recordType === 'figure-caption' &&
+        articleChatFigureNumbers(chunk.text || chunk.sectionTitle)[0] === figure);
+      const body = (plan.chunks || []).some(chunk => chunk.recordType !== 'figure-caption' && chunk.recordType !== 'reference' &&
+        articleChatFigureNumbers(chunk.text).includes(figure));
+      return {figure, image:sentFigures.has(figure), caption, body};
+    });
     return {
-      images, metadata,
+      images, metadata, coverage,
       status: images.length ? unavailableFigures.length ? 'partially_sent' : 'sent' : options.supportsVision !== true && candidates.length
         ? 'vision_unsupported' : requestedFigures.size ? 'requested_image_unavailable' : 'not_requested',
       omittedImageCount: candidates.length - chosen.length,
@@ -184,6 +211,6 @@
     };
   }
 
-  return { ARTICLE_CHAT_ATTACHMENT_LIMITS, normalizeArticleChatAttachments,
+  return { ARTICLE_CHAT_ATTACHMENT_LIMITS, articleChatFigureNumbers, normalizeArticleChatAttachments,
     articleChatAttachmentMetadata, normalizeArticleChatDocumentImages, selectArticleChatImages };
 });

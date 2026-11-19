@@ -240,7 +240,7 @@
 
   function isNegativeHeading(text, maximumLength = 76) {
     const value = canonical(text);
-    if (!value) return true;
+    if (!value || /^\d+(?:[.\s]\d+)*[.]?$/u.test(value)) return true;
     if (/^(?:fig(?:ure)?|table|supplementary\s+(?:fig(?:ure)?|table)|图|表)\s*[\dA-Z一二三四五六七八九十]*[.:：]?/iu
       .test(value)) return true;
     if (/^\[\d+\]\s+/u.test(value)) return true;
@@ -534,12 +534,16 @@
       const fontSizes = lines.map(line => Number(line.fontSize)).filter(value => value > 0)
         .sort((left, right) => left - right);
       const bodySize = fontSizes.length ? fontSizes[Math.floor((fontSizes.length - 1) / 2)] : 10;
+      const abstractIndex = lines.findIndex(row => /^abstract$/iu.test(canonical(row.text)));
+      const largestFont = Math.max(...fontSizes, bodySize);
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index];
         const value = canonical(line.text);
         const sectionFont = sectionFonts.has(String(line.fontName || ''));
         if (captionMembers.has(line) || isFurniture(line, page, repeatedFurniture) ||
             isNegativeHeading(line.text, sectionFont && line.memberCount > 1 ? 180 : 76)) continue;
+        if (page.pageNumber === 1 && abstractIndex > index && abstractIndex >= 0 &&
+            Number(line.fontSize) < largestFont * 0.95 && !isKnownSectionHeading(value)) continue;
         const numbered = /^(?:\d+(?:\.\d+)*|[IVXLC]+)[.)]?\s+\p{L}/iu.test(value) &&
           !isBareNumberBodyContinuation(line, lines[index - 1]);
         const known = isKnownSectionHeading(value);

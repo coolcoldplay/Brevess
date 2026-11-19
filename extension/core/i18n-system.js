@@ -1,6 +1,68 @@
 (function(root) {
   const api=root.SciLLM || (typeof module==='object'?require('./i18n.js'):{});
   const entries=Object.fromEntries(`
+显示 PDF 阅读工具栏	Show PDF reading toolbar
+PDF 阅读工具栏	PDF reading toolbar
+更多阅读工具	More reading tools
+侧栏打开工作台	Open workbench in sidebar
+完成首次配置 →	Complete initial setup →
+删除本地资料…	Delete local data…
+网页滤镜	Web filters
+AI 风险知情与模型接入请在	Review AI risks and model connections in
+查看并设置。	and configure them there.
+DeepSeek 云端语音	DeepSeek cloud speech
+使用 DeepSeek 官方语音服务，支持中英文。语速在本机播放时调整；首次使用可直接沿用已配置的 DeepSeek 密钥。本地 Kokoro 配置会保留。	Use the official DeepSeek speech service in Chinese or English. Playback speed is adjusted locally. You can reuse your configured DeepSeek key. Your local Kokoro settings are retained.
+隐私风险提醒	Privacy risks
+请勿在含有敏感数据的网页或课题工作台调用 AI 功能。调用时，相关数据将上传至所选大模型服务提供商，存在隐私泄露风险。	Avoid using AI on pages or research workspaces containing sensitive data. Related content is sent to the selected model provider and may expose private information.
+API Key 保存在本机扩展存储中；调用模型、测试连接或获取模型列表时，会作为鉴权凭据发送给你选择或配置的服务（包括自定义代理）。插件不另行向作者服务器上传模型密钥。迁移导出文件可能包含敏感凭据，请勿公开分享。	API keys are stored locally in the extension. Model calls, connection tests and model discovery send them to your selected service, including custom proxies, for authentication. The extension does not additionally upload keys to the author’s server. Migration exports may contain sensitive credentials and should not be shared publicly.
+我已了解上述风险，并承诺不提交敏感数据；因本人提交敏感数据而导致的信息泄露及相关后果由本人自行承担，与作者无关。	I understand these risks and agree to avoid submitting sensitive data. I accept responsibility for disclosure and related consequences caused by my submission of sensitive data, without liability to the author.
+正在读取风险知情记录…	Loading risk acknowledgement…
+外部 Agent · MCP	External Agent · MCP
+让已配对客户端读取活动模块。写入权限仍由各目标分别确认；模型调用与此连接独立。	Allow paired clients to read the active module. Each target separately confirms write access. Model calls are configured independently.
+正在读取状态…	Loading status…
+管理配对与连接	Manage pairing and connections
+内部模型 · 任务调用	Internal models · Task calls
+macOS / Windows：在模型与连接页复制接入提示词，让 Agent 自动配置。	macOS / Windows — Copy the connection prompt from Models and connections and let your Agent configure it.
+Token 预算根据任务与模型容量自动分配。	Token budgets are allocated automatically for each task and model capacity.
+API Key 不放入论文页面、浏览器同步存储或普通语料导出；含凭据的迁移导出会先弹窗确认。	API keys are excluded from paper pages, browser sync storage and ordinary corpus exports. Exports containing credentials require confirmation.
+添加通用网页模板	Add a general webpage template
+工作区管理、目录镜像、数据备份与反馈语料	Workspaces, folder mirrors, backups and feedback corpus
+旧版配置与标注迁移	Legacy settings and annotation migration
+浏览器数据备份与恢复 →	Browser data backup and restore →
+导出模型配置、API Key、自定义请求头、阅读场景、分类提示词/正则、手动标注与反馈语料；此文件不含全部工作台、附件及本地目录；完整保留历史数据请同时备份这些资料。	Export model settings, API keys, custom headers, reading scenarios, category prompts and patterns, annotations and feedback. This file excludes some workbench data, attachments and local folders. Back up those separately to preserve your complete history.
+导出旧版配置迁移文件	Export legacy settings migration file
+导入旧版配置迁移文件	Import legacy settings migration file
+把网页调成习惯的样子	Make webpages comfortable to read
+在支持的页面自动应用。修改排版与大纲，保留原文和原来的阅读工具。	Apply automatically on supported pages. Adjust layout and outlines while preserving the source text and reading tools.
+导入模块	Import module
+正在读取偏好…	Loading preferences…
+仅保存在本机 · 文件分享	Stored locally · Share as a file
+内置模块也可以编辑或删除。删除后不会自动恢复，批注、笔记和归档会保留。	Built-in modules can be edited or deleted. Deleted modules stay removed. Annotations, notes and archives are retained.
+添加内置模块副本	Add a copy of a built-in module
+此前保存的滤镜	Previously saved filters
+保留原来的匹配范围。可加载、停用、导出或删除。	Keep the original matching scope. Load, disable, export or delete filters.
+编辑阅读模块	Edit reading module
+正文排版	Body text layout
+字号（px）	Font size (px)
+行距（倍）	Line height (multiple)
+正文宽度（字符）	Body width (characters)
+留空表示保留网页排版。此模块的复杂样式仍可在高级规则中调整。	Leave blank to keep the page layout. Complex module styles can be edited in advanced rules.
+自动展开当前页完整摘要	Automatically expand the full abstract on this page
+想调整大纲或隐藏某个区域？回到原侧栏，点击“调整显示”，描述需求并预览保存。	To adjust the outline or hide an area, open Adjust display in the sidebar, describe your changes, preview and save.
+高级：网站与规则 JSON	Advanced website and JSON rules
+仅支持可校验的排版、隐藏和大纲规则。模块文件不包含网页原文、浏览记录或模型密钥。	Only validated layout, hiding and outline rules are supported. Module files exclude page text, browsing history and model keys.
+规则 JSON	Rules JSON
+保存修改	Save changes
+图像标注	Image annotations
+核对图像	Verify images
+检查全部图 / 补充图注	Check all figures / Add captions
+本机文献 · BREVESS	Local article · BREVESS
+正在恢复本机文献…	Restoring local article…
+打开页面语义检索	Open page semantic search
+选择大纲展开层级；双击全部收起	Choose outline depth; double-click to collapse all
+单击选择层级 · 双击收至最高层级	Click to choose depth · Double-click to collapse to the top level
+关闭编辑器	Close editor
+跟随网页	Follow page
 就绪	Ready
 正在应用…	Applying…
 填写中文全称	Enter the full name in Chinese
@@ -146,7 +208,7 @@ AI 运行中	AI is running
 请在普通网页使用；浏览器内部页面及 PDF 请使用对应阅读入口。	Use this on a regular web page. For browser pages and PDFs, use their dedicated reading entry.
 从本文缩略词表移除 {0}？	Remove {0} from this article's abbreviation list?
 **问题：**	**Question:**
-注释：	Annotation:\x20
+注释：	Annotation: 
 离线文献已切换，请重新打开	The offline article changed. Please reopen it.
 请从当前文献重新打开侧栏	Please reopen the sidebar from the current article.
 任务已取消	Task cancelled

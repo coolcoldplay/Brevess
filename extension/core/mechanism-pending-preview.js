@@ -272,9 +272,37 @@
     return invalid ? original : result;
   }
 
+  let bundledMermaidPromise = null;
+  function ensureBundledMermaid() {
+    if (typeof host.mermaid?.run === 'function') return Promise.resolve(host.mermaid);
+    if (bundledMermaidPromise) return bundledMermaidPromise;
+    const doc = host.document;
+    if (!doc?.head || !host.chrome?.runtime?.getURL) return Promise.reject(new Error('MERMAID_UNAVAILABLE'));
+    bundledMermaidPromise = new Promise((resolve, reject) => {
+      const script = doc.createElement('script');
+      script.src = host.chrome.runtime.getURL('vendor/mermaid/mermaid.min.js');
+      script.async = true;
+      let settled = false;
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        script.onload = script.onerror = null;
+        if (error) { script.remove(); bundledMermaidPromise = null; reject(error); }
+        else resolve(host.mermaid);
+      };
+      const timer = setTimeout(() => finish(new Error('MERMAID_LOAD_TIMEOUT')), 10000);
+      script.onload = () => finish(typeof host.mermaid?.run === 'function' ? null : new Error('MERMAID_UNAVAILABLE'));
+      script.onerror = () => finish(new Error('MERMAID_LOAD_FAILED'));
+      doc.head.append(script);
+    });
+    return bundledMermaidPromise;
+  }
+
   async function renderMechanismDiagramInMeasurableHost(diagram, options = {}) {
-    const mermaid = options.mermaid || host.mermaid;
-    if (!diagram || typeof mermaid?.run !== 'function' || !host.document?.body) return false;
+    if (!diagram || !host.document?.body) return false;
+    const mermaid = options.mermaid || host.mermaid || await ensureBundledMermaid();
+    if (typeof mermaid?.run !== 'function' || diagram.isConnected === false) return false;
     // Display adaptation only. Callers keep the original definition separately.
     const definition = String(diagram.textContent || '');
     const displayDefinition = normalizeMermaidLabelLineBreaks(definition);
@@ -491,7 +519,7 @@
     }
     const diagram = section.querySelector('[data-pending-preview-diagram]');
     const mermaid = options.mermaid || host.mermaid;
-    if (!diagram?.classList.contains('mermaid') || typeof mermaid?.run !== 'function') {
+    if (!diagram?.classList.contains('mermaid')) {
       return section;
     }
     try {
@@ -506,6 +534,7 @@
   }
 
   return {
+    ensureBundledMermaid,
     normalizeMermaidLabelLineBreaks,
     createMechanismPendingPreviewModel,
     createMechanismPendingPreviewSection,

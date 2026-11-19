@@ -175,7 +175,7 @@
     function handleMessage(message = {}) {
       const requestId = String(message.requestId || '');
       observeTerminationReceipt(message, requestId);
-      if (message.type === 'health.result' || message.type === 'reader.event.ack') {
+      if (message.type === 'health.result' || message.type === 'models.result' || message.type === 'reader.event.ack') {
         if (message.type === 'health.result' && controls.get(requestId)?.connection === port) {
           const value = message.jsonResponseCapabilities;
           jsonCapabilities = value && typeof value === 'object' ? {
@@ -565,6 +565,7 @@
 
     return {
       health,
+      listModels: options => controlRequest('models.list', {}, options),
       startLogin,
       logout,
       publishReaderEvent,

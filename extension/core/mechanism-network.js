@@ -2109,10 +2109,10 @@
     chain.edges.forEach(edge => {
       const routed = edgeLayout.get(edge.id);
       if (!routed) invalidImport();
-      const dash = edge.polarity === 'negative' ? ' stroke-dasharray="7 5"' : '';
+      const dash = edge.polarity === 'neutral' ? ' stroke-dasharray="7 5"' : '';
+      const marker = edge.polarity === 'neutral' ? '' : ` marker-end="url(#mechanism-arrow-${edge.polarity})"`;
       body.push(`<path d="${escapeXml(routed.path)}" transform="translate(0 ${offset})" ` +
-        `stroke="${colors[edge.polarity]}"${dash} marker-end="url(#${edge.polarity === 'neutral'
-          ? 'mechanism-arrow' : `mechanism-arrow-${edge.polarity}`})" ` +
+        `stroke="${colors[edge.polarity]}"${dash}${marker} ` +
         `aria-label="${escapeXml(`${edge.polarity} ${edge.from} to ${edge.to}`)}"/>`);
       const label = edge.label.value || (edge.polarity === 'positive' ? '正向' :
         edge.polarity === 'negative' ? '负向' : '联系');
@@ -2135,9 +2135,9 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
       `viewBox="0 0 ${width} ${height}" role="img">` +
       `<style>text{font-family:Arial,"Noto Sans SC",sans-serif}.title{font-size:18px;font-weight:700;fill:#173c52}.node{fill:#fff;stroke:#c6d9e4;stroke-width:1}.node-label{font-size:12px;font-weight:700;fill:#173c52;text-anchor:middle}.edge-label{font-size:10px;font-weight:700;fill:#365d72;text-anchor:middle}.polarity-label{font-size:9px;fill:#526b79;text-anchor:middle}path{fill:none;stroke-width:1.5;stroke-linecap:round}</style>` +
-      `<defs>` + Object.entries(colors).map(([polarity, color]) =>
-        `<marker id="mechanism-arrow-${polarity}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="${color}"/></marker>`
-      ).join('').replace('id="mechanism-arrow-neutral"', 'id="mechanism-arrow"') +
+      `<defs>` + Object.entries(colors).filter(([polarity]) => polarity !== 'neutral').map(([polarity, color]) =>
+        `<marker id="mechanism-arrow-${polarity}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="${polarity === 'negative' ? 'M8 0V10' : 'M0 0L9 5L0 10'}" style="fill:none;stroke:${color};stroke-width:1.6"/></marker>`
+      ).join('') +
       `</defs>${body.join('')}</svg>`;
   }
 

@@ -370,6 +370,16 @@
           })) return null;
       parts = [labels[0], element]; focusElement = elifeOwner;
       sourceIdentity = elifeOwner.id; panelScope = element;
+    } else if (figcaption && element.parentElement?.matches?.('figure.fig[id]')) {
+      // PMC JATS puts the figure number and title before the image, outside the legend.
+      const owner = element.parentElement;
+      const titles = queryAllSafely(owner, ':scope > h4.obj_head');
+      const label = titles.length === 1 && /^(?:Fig(?:ure)?\.?\s*)([1-9]\d{0,2})\b/i.exec(canonicalContentText(titles[0]));
+      if (label && new RegExp('^F' + Number(label[1]) + '$', 'i').test(owner.id) &&
+          queryAllSafely(owner, ':scope > figcaption').length === 1 && canonicalContentText(element)) {
+        parts = [titles[0], element]; focusElement = owner;
+        sourceIdentity = owner.id; panelScope = element;
+      }
     } else if (jciLegend) {
       const container = element.parentElement;
       const labels = queryAllSafely(container, ':scope > a.figure_number');

@@ -90,6 +90,30 @@
     document.head.append(responsive);
     return parsed.title;
   }
+  function restoreSavedCaptionRecords(document, snapshot, api) {
+    const captions = (Array.isArray(snapshot.captionRecords) ? snapshot.captionRecords : [])
+      .filter(record => ['figure-caption','table-caption'].includes(record?.recordType) && record.paragraphId && record.text);
+    const known = new Set((snapshot.figures?.figures || []).map(figure => figure.figureId));
+    const numberOf = text => {
+      const label = /^(?:(?:Extended Data|Supplementary)\s+)?Fig(?:ure)?\.?\s*(?:S\s*)?\d+\b/i.exec(text);
+      return label && api.parseFigureLabel(label[0])?.figureId;
+    };
+    const covered = new Set(captions.filter(record => record.recordType === 'figure-caption').map(record => numberOf(record.text)));
+    const sources = new Map();
+    for (const source of api.collectArticleCaptionSources(document)) {
+      const id = numberOf(source.text);
+      if (id && known.has(id) && !covered.has(id)) sources.set(id, sources.has(id) ? null : source);
+    }
+    for (const [id, source] of sources) {
+      if (!source) continue;
+      const key = 'saved-caption-' + id;
+      captions.push({recordType:'figure-caption',kind:'figure-caption',paragraphId:key,sourceKey:key,
+        sectionTitle:source.titleElement?.textContent || id, text:source.text,
+        displayText:source.displayText || source.text, sourceIdentity:source.sourceIdentity || key,
+        textHash:api.hashNormalizedText(source.text),anchor:{domId:source.element.id || '',paragraphId:key}});
+    }
+    return captions;
+  }
   function bindSavedArticleDom(document,snapshot){
     const normalize=value=>String(value||'').normalize('NFKC').replace(/\s+/gu,' ').trim();
     const candidates=new Map();
@@ -112,5 +136,5 @@
       publisherFamily:snapshot.publisherFamily,diagnostics:snapshot.diagnostics,paragraphs,nodes:nodes(snapshot.nodes),revision:Math.max(1,Number(snapshot.revision)||1),
       adapterId:'saved-article',typedRecords:paragraphs};
   }
-  return{createSavedReaderOwnerGuard,assertSavedReaderMessage,mountSavedArticleHtml,bindSavedArticleDom};
+  return{createSavedReaderOwnerGuard,assertSavedReaderMessage,mountSavedArticleHtml,bindSavedArticleDom,restoreSavedCaptionRecords};
 });

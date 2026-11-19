@@ -1,5 +1,5 @@
 (function(){'use strict';if(globalThis.__wfgUXEntry)return;globalThis.__wfgUXEntry=true;const b=chrome;let page,reading,readingSession=null,readingSourcesSignature=null;
-const engine=WFGEngine.create({document,shadow:el=>b.dom?.openOrClosedShadowRoot?.(el)||el.shadowRoot,closedCapable:typeof b.dom?.openOrClosedShadowRoot==='function',onChange:e=>{if(e.type==='dynamic'||e.type==='failed')void b.runtime.sendMessage({type:'WFG_UX',command:'OUTLINE_CHANGED'}).catch(()=>{});if(e.type==='navigation'){page?.clear();void b.runtime.sendMessage({type:'WFG_UX',command:'PAGE_CHANGED'}).catch(()=>{});}}});
+const engine=WFGEngine.create({document,abstractReceipt:()=>{if(!reading)throw Error('PUBMED_RESULTS_REQUIRED');return reading.abstractReceipt();},shadow:el=>b.dom?.openOrClosedShadowRoot?.(el)||el.shadowRoot,closedCapable:typeof b.dom?.openOrClosedShadowRoot==='function',onChange:e=>{if(e.type==='dynamic'||e.type==='failed')void b.runtime.sendMessage({type:'WFG_UX',command:'OUTLINE_CHANGED'}).catch(()=>{});if(e.type==='navigation'){page?.clear();void b.runtime.sendMessage({type:'WFG_UX',command:'PAGE_CHANGED'}).catch(()=>{});}}});
 async function send(command,data={}){const r=await b.runtime.sendMessage({type:'WFG_UX',command,...data});if(!r?.ok)throw Error(r?.error||'REQUEST_FAILED');return r.data;}
 async function readingCall(command,data={}){const r=await b.runtime.sendMessage({type:'WFG_READING',command,...data});if(!r?.ok)throw Error(r?.error||'READING_FAILED');return r.data;}
 // Abstract results update individually; publish one current view per short tick.
@@ -22,7 +22,14 @@ window.addEventListener('pageshow',()=>{readingNotificationsSuspended=false;sche
 async function reloadReading(){if(!reading)return;const session=reading.snapshot().session;readingSession=session;try{const config=await readingCall('CONFIG',{session});if(reading.snapshot().session===session)reading.setConfig(config);}catch(error){if(reading.snapshot().session===session)reading.configurationError();throw error;}}
 if(window===window.top&&globalThis.WFGReadingPage){reading=WFGReadingPage.create({document,loadAbstract:async(pmid,session)=>(await readingCall('ABSTRACT',{pmid,session})).xml,cancelAbstract:session=>void readingCall('CANCEL_ABSTRACTS',{session}).catch(()=>{}),onChange:scheduleReadingChange});globalThis.BrevessReadingSources={listBlocks:()=>reading.blocks(),get:ref=>reading.block({...ref,session:reading.snapshot().session})};void reloadReading().catch(()=>{});}
 page=WFGUXPage.create({document,engine,onDirect:data=>send('DIRECT',data)});
-b.runtime.onMessage.addListener((m,s,reply)=>{if(m?.type!=='WFG_FRAME'||s.id!==b.runtime.id||s.tab)return false;Promise.resolve().then(()=>{
+b.runtime.onMessage.addListener((m,s,reply)=>{if(m?.type!=='WFG_FRAME'||s.id!==b.runtime.id||s.tab)return false;Promise.resolve().then(async()=>{
+if(m.command==='READING_FIGURE_HD'){
+ if(m.session!==engine.session()||window!==window.top)throw Error('DOCUMENT_CHANGED');
+ if(typeof globalThis.BrevessReadingFigure!=='function')throw Error('请先在当前论文激活 BREVESS，再加载高清图。');
+ return globalThis.BrevessReadingFigure(m.number);
+}
+if(m.command==='READING_LAYOUT')return reading?.readingLayout(m.capabilitiesOnly===true)||null;
+if(m.command==='READING_REFRESH_CONFIG')return reloadReading();
 if(m.command==='READING_OUTLINE_DEFAULT'){if(!reading)throw Error('READING_UNAVAILABLE');return reading.setOutlineDefault(m.active,m.session);}
 if(m.command==='READING_VIEW'){if(!reading)throw Error('READING_UNAVAILABLE');return reading.setOriginalView(m.original,m.session);}
 if(m.command==='READING_LOCATE_SOURCE')return reading.locateSource(m.ref,m.quote);if(m.command==='READING_SELECTION')return reading?.selection()||null;if(m.command==='READING_VALIDATE_PLAN')return reading.validatePlan(m.plan,{reusable:m.reusable!==false});if(m.command==='READING_VALIDATE_MODULE')return reading.validateModule(m.module);if(m.command==='GENERALIZATION_STATUS')return {session:engine.session(),plan:engine.previewPlan(),verified:engine.status()?.verified===true};if(m.command==='READING_SNAPSHOT')return reading?.snapshot()||{groups:[]};if(m.command==='READING_SOURCE')return reading.source(m.ref);if(m.command==='READING_LOCATE')return reading.locate(m.ref);if(m.command==='READING_RELOAD'){engine.undo();reading?.setPreview(false);page.clear();return send('PAGE_CHANGED').then(()=>reloadReading()).then(()=>send('AUTO'));}
@@ -38,7 +45,19 @@ if(m.command==='UX_LOCATE'){const nodes=engine.resolve(m.target);if(nodes.length
 if(m.command==='UNDO'){const result=engine.undo();reading?.setPreview(false);return result;}
 if(m.command==='COMMIT')return engine.commit();
 if(m.command==='ANALYSE'){if(m.session!==engine.session())throw Error('DOCUMENT_CHANGED');return engine.analyse(m.plan);}
-if(m.command==='APPLY'){if(m.plan?.operations.some(op=>op.type==='outline'&&op.extraction)&&reading?.snapshot().reading.outlineDefault)reading.setOutlineDefault(false,reading.snapshot().session);reading?.setPreview(true);try{return engine.apply(m.plan,m.session,m.mode,m.guard);}catch(e){reading?.setPreview(false);throw e;}}
+if(m.command==='APPLY'){if(m.plan?.operations.some(op=>op.type==='outline'&&op.extraction)&&reading?.snapshot().reading.outlineDefault)reading.setOutlineDefault(false,reading.snapshot().session);reading?.setPreview(true);try{
+ const paragraphs=reading?.sampleParagraphs()||[],before=reading?.measureParagraphs(paragraphs)||0;
+ let result=engine.apply(m.plan,m.session,m.mode,m.guard);
+ if(m.plan.operations.some(op=>op.type==='pubmedAbstracts')){
+  await reading.previewFullAbstracts();
+  engine.refresh();
+  result=engine.status();
+  if(!result||result.session!==m.session)throw Error('DOCUMENT_CHANGED');
+ }else reading?.endAbstractPreview();
+ const after=reading?.measureParagraphs(paragraphs)||0;
+ if(before&&!after){engine.undo();throw Error('READING_BODY_HIDDEN');}
+ return before?{...result,textWidth:{before,after}}:result;
+}catch(e){reading?.setPreview(false);throw e;}}
 throw Error('FRAME_COMMAND_INVALID');
 }).then(data=>reply({ok:true,data}),e=>reply({ok:false,error:e.message}));return true;});
 if(window===window.top)setTimeout(()=>send('AUTO').catch(()=>{}),500);

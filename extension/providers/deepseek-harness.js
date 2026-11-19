@@ -30,7 +30,10 @@
       const model = String(request.model || config.model || '').trim();
       if (!model || model === 'auto') throw harnessError('HARNESS_MODEL_REQUIRED', 'Choose a Harness model from its official model list');
       const enabled = request.reasoningEnabled ?? config.reasoningEnabled;
-      const effort = enabled === false ? 'off' : (request.reasoningEffort || config.reasoningEffort);
+      const capability = config.__reasoningCapabilities;
+      const effort = capability?.supported === false ? undefined : enabled === false
+        ? capability?.canDisable === false ? undefined : capability?.offLevel || 'off'
+        : (request.reasoningEffort || config.reasoningEffort);
       const schema = request.responseSchema ? '\nReturn only one JSON object that validates against this JSON Schema:\n' + JSON.stringify(request.responseSchema) : '';
       return { model, reasoningEffort: effort === 'auto' ? undefined : effort,
         systemPrompt: String(request.systemPrompt || '') + schema, userPrompt: String(request.userPrompt || ''),

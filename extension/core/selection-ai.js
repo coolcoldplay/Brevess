@@ -185,7 +185,6 @@
       maximumBufferChars: MAX_RESPONSE_CHARACTERS
     });
     let phase = 'started';
-    let searchProgressSeen = false;
     let responseText = '';
     let grounding = null;
     let usage = null;
@@ -244,11 +243,18 @@
           if (event.visibility !== 'public' || typeof event.text !== 'string') throw invalidSequence();
           continue;
         }
-        if (webEnabled && phase === 'text' && !responseText && !searchProgressSeen &&
+        if (webEnabled && phase === 'text' && !responseText &&
             event?.type === 'search_progress' && event.verification === 'provider_verified' &&
-            event.stage === 'completed') {
-          searchProgressSeen = true;
+            ['searching', 'completed'].includes(event.stage)) {
           report({ phase: 'selection_ai_search_progress', stage: event.stage });
+          continue;
+        }
+        // Drafts may be replaced during citation repair. Never feed these
+        // unverified previews into the committed answer or its source receipt.
+        if (webEnabled && phase === 'text' && !responseText && event?.type === 'answer_preview') {
+          if (typeof event.text !== 'string' || event.text.length > MAX_RESPONSE_CHARACTERS) {
+            throw invalidSequence();
+          }
           continue;
         }
         if (phase === 'text' && event?.type === 'text_delta') {

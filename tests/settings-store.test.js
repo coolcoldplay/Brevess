@@ -109,7 +109,8 @@ test('defaults to version 6 task policies and regex mode until any profile is co
   assert.equal(settings.autoAnalyze, false);
   assert.equal(settings.autoCacheFigureImages, true);
   assert.equal(settings.saveArticleWebSnapshot, true);
-  assert.equal(settings.literatureNoteTemplates.length, 7);
+  assert.equal(settings.literatureNoteTemplates.length, 8);
+  assert.equal(new Set(settings.literatureNoteTemplates.map(template => template.id)).size, 8);
   assert.equal(settings.lastLiteratureNoteTemplateId, 'basic_research');
   assert.deepEqual(settings.selectionLlmActions.map(item => item.id), [
     'translate', 'explain'
@@ -779,6 +780,23 @@ test('normalizes language, analysis modes, chat prompts, and Panel preset CRUD',
   assert.deepEqual(merged.analysisModes[0].categoryIds, ['objective', 'result']);
   assert.equal(merged.articleChatQuickPrompts[0].prompt, 'Explain why.');
   assert.equal(merged.figurePanelFollowupPresets[0].topic, '');
+});
+
+test('display shortcuts migrate independently and preserve edits and an intentionally empty menu', () => {
+  const ordinary = [{ id: 'only', name: 'Original question', prompt: 'Trace this claim.' }];
+  const migrated = mergeSettings({ articleChatQuickPrompts: ordinary });
+  assert.ok(migrated.displayQuickPrompts.some(row => row.id === 'publisher_clean' && row.prompt.includes('82ch')));
+  assert.deepEqual(migrated.articleChatQuickPrompts, ordinary);
+  const duplicate = 'x'.repeat(80);
+  const edited = mergeSettings({ ...migrated, displayQuickPrompts: [
+    { id: duplicate, name: 'My width', prompt: 'Use 67ch.' },
+    { id: duplicate, name: 'My figures', prompt: 'Center the legends.' }
+  ] });
+  assert.notEqual(edited.displayQuickPrompts[0].id, edited.displayQuickPrompts[1].id);
+  assert.deepEqual(mergeSettings(edited).displayQuickPrompts, edited.displayQuickPrompts);
+  const empty = mergeSettings({ ...edited, displayQuickPrompts: [] });
+  assert.deepEqual(toPublicSettings(empty).displayQuickPrompts, []);
+  assert.deepEqual(empty.articleChatQuickPrompts, ordinary);
 });
 
 test('preserves an explicitly empty v5 profile collection', () => {

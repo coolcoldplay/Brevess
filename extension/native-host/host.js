@@ -1963,7 +1963,7 @@ function validateHarnessTurn(message) {
   }
   const reasoningEffort = message.reasoningEffort && message.reasoningEffort !== 'auto'
     ? String(message.reasoningEffort) : undefined;
-  if (reasoningEffort && !['off', 'low', 'high', 'max'].includes(reasoningEffort)) {
+  if (reasoningEffort && !/^[a-z][a-z0-9_-]{0,63}$/.test(reasoningEffort)) {
     throw codedError('INVALID_SETTINGS', 'Invalid Harness reasoning effort');
   }
   const images = message.images === undefined ? [] : message.images;
@@ -2345,6 +2345,7 @@ class HarnessBridgeService {
         const health = await context.child.request('brevess.health', {});
         throw codedError(health.accountStatus === 'signed-out' ? 'HARNESS_NOT_AUTHENTICATED' : 'HARNESS_MODEL_UNAVAILABLE', 'Selected Harness model is not available');
       }
+      if (input.reasoningEffort && Array.isArray(model.reasoningEfforts) && !model.reasoningEfforts.includes(input.reasoningEffort)) throw codedError('INVALID_SETTINGS', 'Selected Harness model does not support this reasoning effort');
       if (input.contentBlocks.some(b => b.type === 'image') && !model.inputModalities?.includes('image')) throw codedError('HARNESS_IMAGE_UNSUPPORTED', 'Selected Harness model does not accept images');
       await context.child.request('brevess.configure', { systemPrompt: input.systemPrompt, webSearch: input.webSearch });
       if (context.terminal) return;
@@ -2540,6 +2541,24 @@ class CodexBridgeHost {
     } catch (error) {
       this.send({ type: 'host.error', requestId, error: publicError(error) });
     }
+  }
+
+  async listModels(requestId) {
+    try {
+      await this.server.start();
+      const models = []; let cursor;
+      do {
+        const result = await this.server.request('model/list', { limit: 100, ...(cursor ? { cursor } : {}) });
+        models.push(...(result?.data || []).map(item => ({ id: item.model || item.id,
+          displayName: item.displayName, isDefault: item.isDefault,
+          supportedReasoningEfforts: item.supportedReasoningEfforts,
+          defaultReasoningEffort: item.defaultReasoningEffort })));
+        const next = result?.nextCursor;
+        if (!next || next === cursor || models.length >= 500) break;
+        cursor = next;
+      } while (true);
+      this.send({ type: 'models.result', requestId, models: models.slice(0, 500) });
+    } catch (error) { this.send({ type: 'host.error', requestId, error: publicError(error) }); }
   }
 
   async startLogin(requestId, force = false) {
@@ -3123,6 +3142,7 @@ class CodexBridgeHost {
     if (type.startsWith('pdf.figure.')) return this.handlePdfFigure(message);
     if (type.startsWith('pdf.translation.')) return this.handlePdfTranslation(message);
     if (type === 'health.check') return this.health(String(message.requestId || ''));
+    if (type === 'models.list') return this.listModels(String(message.requestId || ''));
     if (type === 'auth.login.start') {
       return this.startLogin(
         String(message.requestId || ''),

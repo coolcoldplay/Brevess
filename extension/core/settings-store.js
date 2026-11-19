@@ -105,18 +105,38 @@
     })
   ]);
 
-  function normalizeArticleChatQuickPrompts(value) {
-    const source = Array.isArray(value) ? value : DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS;
+  const DEFAULT_DISPLAY_QUICK_PROMPTS = Object.freeze([
+    { id: "publisher_clean", name: "出版社论文纯净阅读",
+      prompt: "识别当前出版社的论文正文栏，将其居中，最大行宽调到 82ch，窄窗口自动换行。隐藏广告、站点导航、侧栏推荐和页脚。保留标题、作者、正文、图表、图注、引用链接及补充材料入口。预览后检查正文可见性与实际宽度。" },
+    { id: "text_width", name: "调整正文宽度",
+      prompt: "将正文宽度设为 720px" },
+    { id: "large_type", name: "大字阅读",
+      prompt: "将正文段落字号调到 20px、行高调到 1.75。保留上下标、行内公式和引用序号，让标题与正文容易区分。" },
+    { id: "hd_figure", name: "加载高清原图",
+      prompt: "加载图 1 的高清原图" },
+    { id: "captions", name: "图注对读",
+      prompt: "让图注紧随对应图片，字号调到 16px、行高调到 1.6。保留 Panel 字母、图例、比例尺和原图链接，整张图按原比例显示。" },
+    { id: "wide_table", name: "宽表横向滚动",
+      prompt: "让超出正文宽度的表格在自己的区域内横向滚动，保留每一行、每一列和表注，正文宽度保持不变。" },
+    { id: "section_headings", name: "突出章节层级",
+      prompt: "用字号、字重和段前留白区分正文中的一级、二级和三级标题，保留标题文字、编号和跳转锚点。" }
+  ].map(row => Object.freeze(row)));
+
+  function normalizeArticleChatQuickPrompts(value, defaults = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS) {
+    const source = Array.isArray(value) ? value : defaults;
     const seen = new Set();
     return source.slice(0, 30).map((item, index) => {
       const raw = item && typeof item === 'object' ? item : {};
-      const fallback = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS[index] || {};
+      const fallback = defaults[index] || {};
       let id = String(raw.id || fallback.id || `prompt_${index + 1}`)
         .normalize('NFKC').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')
         .replace(/^_+|_+$/g, '').slice(0, 80) || `prompt_${index + 1}`;
       let suffix = 2;
       const baseId = id;
-      while (seen.has(id)) id = `${baseId}_${suffix++}`.slice(0, 80);
+      while (seen.has(id)) {
+        const tail = `_${suffix++}`;
+        id = baseId.slice(0, 80 - tail.length) + tail;
+      }
       seen.add(id);
       const name = String(raw.name || fallback.name || `快捷提示 ${index + 1}`)
         .normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -520,7 +540,11 @@
       ? input.mode : 'local';
     const catalogReasoning = REASONING_EFFORTS.has(definition.defaultReasoning)
       ? definition.defaultReasoning : 'auto';
-    const reasoningEffort = REASONING_EFFORTS.has(input.reasoningEffort)
+    const reasoningEffort = REASONING_EFFORTS.has(input.reasoningEffort) ||
+      typeof input.reasoningEffort === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(input.reasoningEffort) &&
+      Object.entries(availableProfiles).some(([id, profile]) => shared.getProviderReasoningCapabilities?.(profile.providerId, {
+        ...profile.config, ...(input.modelProfileId === id && input.model ? { model: input.model } : {})
+      })?.levels.includes(input.reasoningEffort))
       ? input.reasoningEffort : catalogReasoning;
     const reasoningEnabled = typeof input.reasoningEnabled === 'boolean'
       ? input.reasoningEnabled
@@ -789,6 +813,7 @@
       figurePanelFollowupPrompts: normalizeStoredPanelFollowupPrompts({}),
       figurePanelFollowupPresets: normalizePanelFollowupPresets(),
       articleChatQuickPrompts: normalizeArticleChatQuickPrompts(),
+      displayQuickPrompts: normalizeArticleChatQuickPrompts(undefined, DEFAULT_DISPLAY_QUICK_PROMPTS),
       literatureNoteTemplates: shared.normalizeLiteratureNoteTemplates
         ? shared.normalizeLiteratureNoteTemplates() : [],
       lastLiteratureNoteTemplateId: 'basic_research',
@@ -923,6 +948,7 @@
     merged.articleChatQuickPrompts = normalizeArticleChatQuickPrompts(
       saved.articleChatQuickPrompts
     );
+    merged.displayQuickPrompts = normalizeArticleChatQuickPrompts(saved.displayQuickPrompts, DEFAULT_DISPLAY_QUICK_PROMPTS);
     merged.literatureNoteTemplates = shared.normalizeLiteratureNoteTemplates
       ? shared.normalizeLiteratureNoteTemplates(saved.literatureNoteTemplates)
       : defaults.literatureNoteTemplates;
@@ -1121,6 +1147,7 @@
     DEFAULT_FIGURE_PANEL_HEADER_FIELDS,
     normalizeFigurePanelHeaderFields,
     DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS,
+    DEFAULT_DISPLAY_QUICK_PROMPTS,
     normalizeArticleChatQuickPrompts,
     DEFAULT_PANEL_FOLLOWUP_PRESETS,
     normalizePanelFollowupPresets,
