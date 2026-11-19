@@ -11,7 +11,7 @@
   const score=[[.26,0],[.26,.75],[.35,0],[.35,.35],[.38,0],[.44,.6],[.45,.6],[.71,0],[.71,.6],[.76,0],[.926,.75],[.94,.7],[1,0]];
   const extraDistance=score.reduce((sum,[,extra])=>sum+extra,0);
   story.style.setProperty('--story-hold-distance',extraDistance);
-  function navigation(){const visible=story.getBoundingClientRect().bottom<=0;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}
+  function navigation(){const visible=story.getBoundingClientRect().bottom<=(nav?.getBoundingClientRect().height||0)+2;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}
   function browserScene(p,visible){
     const opened=manualPanel===null?phase(p,.384,.435):Number(manualPanel);
     const reveal=manualPanel===null?phase(p,.35,.39):1;
@@ -70,7 +70,6 @@
   const shared = story.querySelector('.story-shared-letter');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const flow = story.querySelector('.story-flow');
-  const caption = story.querySelector('.story-brand-caption');
   let pending = false;
   let geometry;
   const clamp = v => Math.max(0, Math.min(1, v));
@@ -130,7 +129,6 @@
       meanings[i].style.opacity=phase(p,.18,.25);
     });
     shared.style.opacity=phase(p,.035,.10);
-    caption.style.opacity=phase(p,.21,.26);
     const opacities=[1-phase(p,.26,.32),phase(p,.29,.35)*(1-phase(p,.45,.51)),phase(p,.48,.55)*(1-phase(p,.71,.79)),phase(p,.73,.8)];
     scenes.forEach((scene,i)=>{scene.style.opacity=opacities[i];scene.setAttribute('aria-hidden',opacities[i]<.5?'true':'false');if(i)scene.style.transform=`translateY(${(1-opacities[i])*24}px)`;});
     renderEquation(p,false,orbitProgress);

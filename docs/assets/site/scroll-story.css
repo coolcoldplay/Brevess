@@ -9,7 +9,6 @@
 .story-extra{opacity:0}
 .story-meaning{position:absolute;left:0;top:0;color:var(--story-muted);font-size:clamp(18px,2.3vw,34px);letter-spacing:.05em;opacity:0;will-change:transform,opacity}
 .story-shared-letter{display:inline}
-.story-brand-caption{position:absolute;bottom:20%;left:5%;width:90%;font-size:clamp(17px,2vw,26px);color:var(--story-muted);opacity:0}
 .story-browser{width:min(1060px,85%);border:1px solid #3a3d44;border-radius:18px;padding:112px 36px 88px;position:relative}
 .story-browser::before{content:"";position:absolute;top:43px;left:0;right:0;height:1px;background:#30333a}
 .story-browser-dots{position:absolute;top:19px;left:24px;display:flex;gap:8px}
@@ -65,9 +64,6 @@ html:lang(en) .equation-cn{display:none}html:lang(en) .equation-en{display:block
 .story-scroll-track{position:absolute;bottom:0;left:0;right:0;height:2px;background:#202329}
 .story-scroll-track::after{content:"";position:absolute;inset:0;background:#e1e3e7;transform-origin:left;transform:scaleX(var(--story-progress,0))}
 .story-a11y{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.hero.story-intro{padding-block:70px 54px;text-align:center}
-.hero.story-intro h2{font-size:clamp(30px,5vw,58px)}
-.hero.story-intro .hero-actions{justify-content:center}
 @media(max-width:640px){
  .scroll-story{height:calc((4.2 + var(--story-hold-distance))*100svh)}
  .story-sticky{min-height:480px}
@@ -91,7 +87,6 @@ html:lang(en) .equation-cn{display:none}html:lang(en) .equation-en{display:block
  .story-workflow>p{font-size:17px;margin-top:36px}
  .story-footer{bottom:24px;gap:22px}
  .story-footer a{font-size:13px}
- .hero.story-intro{padding-block:54px 38px}
 }
 /* No scroll lock, autoplay clock, video, or canvas. Static reading is the fallback. */
 .scroll-story.is-static{height:auto}
@@ -103,7 +98,6 @@ html:lang(en) .equation-cn{display:none}html:lang(en) .equation-en{display:block
 .is-static .story-extra{position:static;opacity:1!important;font-size:inherit!important}
 .is-static .story-meaning{position:static;display:block;transform:none!important;opacity:1!important;margin-top:18px;font-size:20px}
 .is-static .story-shared-letter{opacity:1!important}
-.is-static .story-brand-caption{position:static;opacity:1!important;margin-top:36px}
 .is-static .story-footer{position:relative;bottom:auto;padding-bottom:32px}
 .is-static .story-scroll-track{display:none}
 .is-static .story-dual-line{--dual-progress:1}
