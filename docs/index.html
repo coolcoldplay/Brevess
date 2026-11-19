@@ -14,9 +14,9 @@
   <link rel="icon" href="assets/site/favicon.png">
   <link rel="stylesheet" href="assets/site/homepage.css?v=20261117-brand1">
   <script defer src="assets/site/site.js?v=20261117-mono1"></script>
-  <link rel="stylesheet" href="assets/site/scroll-story.css?v=20261117-scroll1">
-  <script defer src="assets/site/scroll-story.js?v=20261117-scroll1"></script>
-  <link rel="stylesheet" href="assets/demo/interactive-demo.css?v=20261118-native4">
+  <link rel="stylesheet" href="assets/site/scroll-story.css?v=20261119-scroll2">
+  <script defer src="assets/site/scroll-story.js?v=20261119-scroll2"></script>
+  <link rel="stylesheet" href="assets/demo/interactive-demo.css?v=20261119-touch2">
   <script defer src="assets/demo/paper-data.js?v=20261118-native4"></script>
   <link rel="stylesheet" href="assets/demo/native/content.css?v=20261118-native4">
   <script defer src="assets/demo/native/core/category-store.js"></script>
@@ -39,8 +39,12 @@
   <script defer src="assets/demo/native/core/figure-annotation-ui.js"></script>
   <script defer src="assets/demo/native/core/web-media.js"></script>
   <script defer src="assets/demo/native/figure-viewer-component.js?v=20261118-native4"></script>
-  <script defer src="assets/demo/native-image-tools.js?v=20261118-native4"></script>
-  <script defer src="assets/demo/interactive-demo.js?v=20261118-native4"></script>
+  <script defer src="assets/demo/native-image-tools.js?v=20261119-touch2"></script>
+  <script defer src="assets/demo/interactive-demo.js?v=20261119-touch2"></script>
+  <link rel="stylesheet" href="assets/demo/nature-demo.css?v=20261119-nature1">
+  <script defer src="assets/demo/filter-demo.js?v=20261119-nature1"></script>
+  <link rel="stylesheet" href="assets/demo/mobile-demo.css?v=20261119-touch2">
+  <script defer src="assets/demo/mobile-demo.js?v=20261119-touch2"></script>
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
@@ -51,7 +55,7 @@
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
 </defs></svg>
 <a class="skip" href="#main" data-en="Skip to content">跳到正文</a>
-<header class="shell nav">
+<header class="shell nav staged-nav" inert aria-hidden="true">
   <a class="brand" href="#" aria-label="BREVESS 首页"><img src="assets/site/logo.svg" width="40" height="40" alt=""><span class="brand-copy"><span>BREVESS</span><span class="brand-meaning">Brevity · Evidence · Essence</span></span></a>
   <nav aria-label="主导航">
     <a href="#features" data-en="Try it">交互体验</a>
@@ -75,7 +79,15 @@
           <p class="story-brand-caption" data-en="Distill knowledge. Advance research.">凝练信息，推动研究。</p>
         </div>
         <div class="story-scene story-position">
-          <div class="story-browser"><div class="story-browser-dots" aria-hidden="true"><i></i><i></i><i></i></div><h1 data-en="A browser extension.">一个浏览器插件。</h1><p data-en="Turn reading into research.">让阅读，推进研究。</p><small>Chrome / Edge</small></div>
+          <div class="story-browser">
+            <div class="story-browser-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span class="story-address" aria-hidden="true">nature.com</span>
+            <button class="story-extension" type="button" aria-label="展开 BREVESS 侧栏演示" aria-expanded="false" aria-controls="story-sidebar"><img src="assets/site/logo.svg" alt="BREVESS" width="24" height="28"></button>
+            <svg class="story-pointer" viewBox="0 0 28 36" aria-hidden="true"><path d="M3 2v27l7-8 6 12 5-3-6-11h11Z" fill="white" stroke="#090a0c" stroke-width="2"/></svg>
+            <div class="story-position-copy"><h1 data-en="A browser extension.">一个浏览器插件。</h1><p data-en="Turn reading into research.">让阅读，推进研究。</p><small>Chrome / Edge</small></div>
+            <div class="story-paper-preview" aria-hidden="true"><div>nature</div><span>Article · Open access</span><h2>Highly accurate protein structure prediction with AlphaFold</h2><p>John Jumper, Richard Evans, Alexander Pritzel et al.</p><h3>Abstract</h3><p>Proteins are essential to life, and understanding their structure can facilitate a mechanistic understanding of their function.</p><img src="assets/demo/figure-1.png" alt="" loading="lazy" width="1200" height="818"></div>
+            <aside id="story-sidebar" class="story-sidebar" aria-hidden="true" inert><div><img src="assets/site/logo.svg" alt="" width="19" height="23">BREVESS</div><iframe title="BREVESS 真实侧栏预览" tabindex="-1" loading="lazy" data-src="assets/demo/native/popup.html?v=20261119-story1"></iframe></aside>
+          </div>
         </div>
         <div class="story-scene story-dual">
           <div class="story-dual-grid"><div><h2 data-en="You">人工</h2><p data-en="Your judgment">你来判断</p><small data-en="Select · Verify · Refine">选择 · 核对 · 修改</small></div><span class="story-times" aria-hidden="true">×</span><div><h2>AI</h2><p data-en="AI acceleration">帮你加速</p><small data-en="Search · Organize · Generate">检索 · 整理 · 生成</small></div></div>

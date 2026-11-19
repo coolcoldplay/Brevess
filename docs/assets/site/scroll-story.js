@@ -3,6 +3,21 @@
   const story = document.querySelector('.scroll-story');
   if (!story) return;
   const sticky = story.querySelector('.story-sticky');
+  const nav=document.querySelector('.staged-nav'), browser=story.querySelector('.story-browser'), extension=story.querySelector('.story-extension'), frame=story.querySelector('.story-sidebar iframe');
+  let manualPanel=null;
+  function navigation(){const visible=story.getBoundingClientRect().bottom<=0;nav?.classList.toggle('is-visible',visible);if(nav){nav.inert=!visible;nav.setAttribute('aria-hidden',String(!visible));}}
+  function browserScene(p,visible){
+    const opened=manualPanel===null?phase(p,.384,.435):Number(manualPanel);
+    const reveal=manualPanel===null?phase(p,.35,.39):1;
+    browser.style.setProperty('--panel-open',opened);browser.style.setProperty('--paper-show',reveal);
+    browser.style.setProperty('--pointer-travel',phase(p,.346,.382));browser.style.setProperty('--pointer-visible',manualPanel===null?phase(p,.34,.35)*(1-phase(p,.405,.425)):0);
+    extension.style.setProperty('--icon-press',phase(p,.378,.384)*(1-phase(p,.39,.4)));
+    extension.setAttribute('aria-expanded',String(opened>.5));extension.setAttribute('aria-label',opened>.5?'收起 BREVESS 侧栏演示':'展开 BREVESS 侧栏演示');
+    browser.inert=!visible;browser.style.pointerEvents=visible?'auto':'none';
+    if(visible&&p>.32&&!frame.getAttribute('src'))frame.src=frame.dataset.src;
+    if(!visible&&frame.getAttribute('src'))frame.removeAttribute('src');
+  }
+  extension?.addEventListener('click',()=>{manualPanel=extension.getAttribute('aria-expanded')!=='true';browser.classList.add('is-manual');browserScene(Number(story.dataset.progress)||.4,true);});
   const scenes = [...story.querySelectorAll('.story-scene')];
   const seeds = [...story.querySelectorAll('.story-seed')];
   const extras = [...story.querySelectorAll('.story-extra')];
@@ -36,13 +51,17 @@
   }
   function render() {
     pending=false;
-    if(reduced.matches) return;
+    navigation();
+    if(reduced.matches){const r=browser.getBoundingClientRect();browserScene(.44,r.bottom>0&&r.top<innerHeight);return;}
     if(!geometry) measure();
     const g=geometry;
     const range=story.offsetHeight-sticky.offsetHeight;
     const p=clamp(-story.getBoundingClientRect().top/Math.max(1,range));
     story.style.setProperty('--story-progress',p.toFixed(5));
     story.dataset.progress=p.toFixed(4);
+    const browserVisible=p>.29&&p<.51;
+    if(!browserVisible){manualPanel=null;browser.classList.remove('is-manual');}
+    browserScene(p,browserVisible);
     const spread=phase(p,.025,.18),reveal=phase(p,.14,.235);
     const size=mix(g.start,g.end,spread),scale=size/g.end;
     seeds.forEach((seed,i)=>{
@@ -64,7 +83,7 @@
     [...flow.children].forEach((li,i)=>li.classList.toggle('is-active',progress>=i/4));
   }
   function schedule(){if(!pending){pending=true;requestAnimationFrame(render);}}
-  function mode(){story.classList.toggle('is-static',reduced.matches);scenes.forEach(s=>s.setAttribute('aria-hidden','false'));if(!reduced.matches){geometry=null;schedule();}}
+  function mode(){story.classList.toggle('is-static',reduced.matches);scenes.forEach(s=>s.setAttribute('aria-hidden','false'));geometry=null;schedule();}
   addEventListener('scroll',schedule,{passive:true});
   addEventListener('resize',()=>{geometry=null;schedule();},{passive:true});
   document.addEventListener('brevess-languagechange',()=>{geometry=null;schedule();});

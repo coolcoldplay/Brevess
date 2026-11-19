@@ -90,3 +90,26 @@
 @media(prefers-reduced-motion:reduce){.story-scene,.story-seed,.story-extra,.story-meaning{will-change:auto}}
 
 @media(max-width:640px){.is-static .story-brand-layout{grid-template-columns:1fr;gap:16px}.is-static .story-seed:nth-of-type(1){order:1}.is-static .story-meaning:nth-of-type(4){order:2;margin-bottom:20px}.is-static .story-seed:nth-of-type(2){order:3}.is-static .story-meaning:nth-of-type(5){order:4;margin-bottom:20px}.is-static .story-seed:nth-of-type(3){order:5}.is-static .story-meaning:nth-of-type(6){order:6}.is-static .story-meaning{margin-top:0}}
+
+/* The navigation belongs to the content below the full-bleed introduction. */
+.nav.staged-nav{position:fixed;z-index:90;top:0;left:0;right:0;width:100%;max-width:none;margin:0;padding-inline:max(24px,calc((100% - 1280px)/2));background:#fffffff5;backdrop-filter:blur(16px);visibility:hidden;opacity:0;transform:translateY(-100%);transition:transform .24s ease,opacity .24s ease,visibility .24s}
+.nav.staged-nav.is-visible{visibility:visible;opacity:1;transform:translateY(0)}
+html{scroll-padding-top:88px}
+.story-browser{--panel-open:0;--paper-show:0;--pointer-travel:0;--pointer-visible:0;height:min(540px,72svh);min-height:360px;padding:0;overflow:hidden}
+.story-address{position:absolute;top:13px;left:50%;transform:translateX(-50%);font-size:12px;color:#989ca5}
+.story-extension{position:absolute;right:16px;top:6px;display:grid;place-items:center;width:34px;height:32px;z-index:8;border-radius:6px;background:white;transform:scale(calc(1 - var(--icon-press,0)*.14));box-shadow:0 0 0 calc(var(--icon-press,0)*10px) #ffffff22}
+.story-extension img{width:20px;height:24px}
+.story-extension:focus-visible{outline:2px solid white;outline-offset:5px}
+.story-pointer{position:absolute;right:29px;top:27px;width:23px;height:30px;z-index:9;opacity:var(--pointer-visible);transform:translate(calc((1 - var(--pointer-travel))*-130px),calc((1 - var(--pointer-travel))*130px));pointer-events:none}
+.story-position-copy{position:absolute;inset:44px 0 0;display:flex;align-items:center;justify-content:center;flex-direction:column;opacity:calc(1 - var(--paper-show));padding:28px}
+.story-position-copy h1{margin:0}.story-position-copy p{margin-top:20px}.story-position-copy small{margin-top:36px}
+.story-paper-preview{position:absolute;inset:44px 0 0;text-align:left;background:white;color:#222;padding:24px 32px;overflow:hidden;opacity:var(--paper-show);width:calc(100% - var(--panel-open)*38%);font-family:Georgia,serif}
+.story-paper-preview>div{font:bold 32px/1 Georgia,serif;border-bottom:3px solid #222;padding-bottom:10px;margin-bottom:18px}
+.story-paper-preview>span{font:12px/1.4 system-ui;color:#666}.story-paper-preview h2{font:bold clamp(21px,2.4vw,32px)/1.2 Georgia,serif;margin:10px 0 14px}.story-paper-preview p{font:14px/1.55 Georgia,serif;letter-spacing:0;margin:8px 0}.story-paper-preview h3{font:bold 21px Georgia,serif;border-bottom:1px solid #ddd;margin-top:22px;padding-bottom:9px}.story-paper-preview img{width:100%;max-width:350px;display:block;margin:20px auto}
+.story-sidebar{position:absolute;top:44px;bottom:0;right:0;width:38%;background:white;display:flex;flex-direction:column;transform:translateX(calc((1 - var(--panel-open))*101%));border-left:1px solid #ddd;color:#222;text-align:left;pointer-events:none}
+.story-sidebar>div{font:600 17px/1.4 system-ui;height:42px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px}
+.story-sidebar iframe{border:0;width:100%;min-height:0;flex:1;background:white}
+.story-browser.is-manual .story-sidebar{transition:transform .45s cubic-bezier(.22,1,.36,1)}
+.story-browser.is-manual .story-paper-preview{transition:width .45s cubic-bezier(.22,1,.36,1),opacity .3s}
+@media(max-width:640px){.story-browser{height:65svh;min-height:380px;width:92%}.story-browser h1{font-size:28px}.story-position-copy{padding:18px}.story-position-copy p{font-size:23px}.story-paper-preview{width:calc(100% - var(--panel-open)*88%);padding:18px 20px;min-width:0}.story-paper-preview h2{font-size:23px}.story-sidebar{width:88%}.story-address{left:46%}.nav.staged-nav{padding-inline:20px}.nav.staged-nav .brand-meaning{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.nav.staged-nav,.story-browser.is-manual .story-sidebar,.story-browser.is-manual .story-paper-preview{transition:none}}

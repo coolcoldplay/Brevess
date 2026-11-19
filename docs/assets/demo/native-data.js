@@ -32,10 +32,10 @@
     if(m.type==='ACTION_POPUP_START_READING'){demo.send('show-sidebar');return ok({});}
     if(m.type==='LLM_GET_SETTINGS')return ok(demo.profile);
     if(m.type==='WFG_UX'){
+      if(parent.BV_FILTER_DEMO)return parent.BV_FILTER_DEMO.handle(m,demo);
       const state={tabId:1,navigationUrl:d.source,url:d.source,documentKey:'alphafold-example',title:d.title,sourceIds:[1],referenceIds:[],targets:[],turns:[],adjusting:false,adjustmentMode:'display',busy:false,plan:null,notice:''};
       if(m.command==='LIST')return {ok:true,data:[{id:1,url:d.source,title:d.title}]};
       if(m.command==='OUTLINE')return {ok:true,data:{tabId:1,nodes:[]}};
-      if(!['STATE','HISTORY'].includes(m.command))demo.send('toast',{message:'官网主要演示阅读与材料联动；完整网页滤镜请安装插件体验。'});
       return {ok:true,data:state};
     }
     if(m.type==='LOCAL_READING_LIBRARY_QUERY'){

@@ -51,7 +51,7 @@ window.BVCreateImageTools=({root,data:d,onToast,onViewerState,onNote,onOpen})=>{
  // The real extension uses the browser viewport; this page embeds that viewport
  // inside a scrollable paper. Keep the unchanged rail within that visible area.
  document.addEventListener('pointermove',()=>{if(positionFrame)return;positionFrame=requestAnimationFrame(()=>{positionFrame=0;const host=document.querySelector('[data-brevess-figure-tools]');if(!host||host.style.display==='none')return;const p=paper.getBoundingClientRect(),top=Math.max(p.top+4,parseFloat(host.style.top)||0);host.style.setProperty('top',top+'px','important');const bar=host.shadowRoot?.querySelector('.tools');if(bar)bar.style.maxHeight=Math.max(36,p.bottom-top-4)+'px';});},{passive:true});
- return {open,close(){viewer?.close();removeViewer();},state:()=>({magnifier:magnifier.getState(),notes:Object.fromEntries(notes),annotations:[...sessions].map(([figureId,s])=>({figureId,...s.getState()}))}),
+ return {open,highResolution:id=>highResolution(figures().find(f=>f.id===id).imageElements[0]),note:id=>note(figures().find(f=>f.id===id).imageElements[0]),close(){viewer?.close();removeViewer();},state:()=>({magnifier:magnifier.getState(),notes:Object.fromEntries(notes),annotations:[...sessions].map(([figureId,s])=>({figureId,...s.getState()}))}),
   reset(){epoch++;controls.destroy();viewer?.close();removeViewer();magnifier.hide();for(const layer of layers.values())layer.destroy();layers.clear();notes.clear();sessions.clear();promoted.clear();document.querySelectorAll('[data-brevess-figure-note]').forEach(n=>n.remove());for(const image of images){disabled.delete(image);image.removeAttribute('style');image.src=previews.get(image)||sources.get(image);}controls=createControls();}
  };
 };

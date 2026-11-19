@@ -33,7 +33,7 @@ for(const [entry,adapter] of [['popup.html','native-sidebar.js'],['action-popup.
   if(entry==='literature-radar/index.html')html=html.replace(/(<script[^>]*src="(?:app|radar)\.js")/,`<script src="${prefix}native-workbench-store.js"></script>$1`);
   if(entry==='popup.html')html=html.replace('</body>',`<script data-bv-adapter src="core/highlight-distribution.js"></script><script src="../highlight-examples.js"></script><script src="../native-highlights.js"></script><script src="../reading-tools-data.js"></script><script src="../native-sidebar-tools.js"></script></body>`);
   if(adapter)html=html.replace('</body>',`<script src="${prefix}${adapter}"></script></body>`);
-  html=html.replace(/(<script[^>]*src="[^"\n]*\/(?:native-(?:transport|data|workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|paper-data|highlight-examples|reading-tools-data)\.js)(")/g,'$1?v=20261118-native4$2');
+  html=html.replace(/(<script[^>]*src="[^"\n]*\/(?:native-(?:transport|data|workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|paper-data|highlight-examples|reading-tools-data)\.js)(")/g,(_,src,quote)=>src+'?v='+(/\/native-(?:data|sidebar)\.js$/.test(src)?'20261119-touch2':'20261118-native4')+quote);
   html=html.replace(/<script(?![^>]*\bdefer\b)(?=[^>]*\bsrc=)/g,'<script defer data-bv-defer');
   await fs.writeFile(path.join(out,entry),html);
 }

@@ -102,8 +102,8 @@
      b.addEventListener('click',()=>switchMode(b.dataset.workspaceTarget));
      if(['notes','chat'].includes(b.dataset.workspaceTarget))b.addEventListener('dblclick',()=>generate(b.dataset.workspaceTarget));
    });
-   document.addEventListener('submit',e=>{if(e.target.id==='articleChatForm'){e.preventDefault();e.stopImmediatePropagation();void submitArticleChat(e);}},true);
-   byId('articleChatQuestion').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void submitArticleChat(e);}});
+   document.addEventListener('submit',e=>{if(e.target.id==='articleChatForm'&&!window.BrevessUnifiedComposer?.isEditing()){e.preventDefault();e.stopImmediatePropagation();void submitArticleChat(e);}},true);
+   byId('articleChatQuestion').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!window.BrevessUnifiedComposer?.isEditing()){e.preventDefault();void submitArticleChat(e);}});
    byId('saveCurrentArticleWorkspace').addEventListener('click',()=>send('save',{reading:demo.reading}));
    byId('refreshArticleNavigation').addEventListener('click',()=>{renderArticleNavigationTree(currentWorkspaceSnapshot);send('toast',{message:'大纲已刷新'});});
    document.querySelector('[aria-label="打开识别规则与模型设置"]')?.addEventListener('click',()=>send('install'));
