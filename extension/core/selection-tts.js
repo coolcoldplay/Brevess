@@ -16,12 +16,19 @@
     TTS_TIMEOUT: '这一段的朗读请求超时，请检查服务后重试。',
     TTS_HTTP: '朗读服务拒绝了这一段请求，请检查服务状态和设置。',
     TTS_NETWORK: '无法连接朗读服务，请确认服务已启动及地址可访问。',
+    TTS_NOT_CONFIGURED: '朗读服务尚未配置完成，请检查朗读设置。',
+    TTS_INVALID_VOICE: '朗读服务不支持所选音色，请在设置中重新选择。',
     TTS_RESPONSE_TYPE: '这一段未返回有效音频，请检查朗读服务。',
     TTS_RESPONSE_SIZE: '这一段音频为空或超过大小限制。',
     TTS_PLAY_FAILED: '音频播放失败，请检查浏览器的音频权限。',
     TTS_BROWSER_UNAVAILABLE: '此浏览器暂不支持内置朗读，请更换浏览器或在设置中选择其他朗读方式。',
     TTS_BROWSER_NO_VOICES: '浏览器未提供可用音色，请安装系统语音包后重试，或在设置中选择其他朗读方式。',
     TTS_BROWSER_VOICE_UNAVAILABLE: '所选浏览器音色当前不可用，请在朗读设置中重新选择音色或选择自动。',
+    TTS_BROWSER_LANGUAGE: '没有适合这段文字的朗读音色，请在系统中添加对应语言的语音，或在朗读设置中指定音色。',
+    TTS_BROWSER_ENGINE: '系统语音引擎未能播放，请在朗读设置中试用其他音色。',
+    TTS_BROWSER_DEVICE: '浏览器无法使用音频输出设备，请检查系统声音输出后重试。',
+    TTS_BROWSER_INTERRUPTED: '朗读被中断，请点击朗读重试。',
+    TTS_BROWSER_NETWORK: '联网音色无法连接，请选择本机音色或检查网络。',
     TTS_BROWSER_BUSY: '浏览器正在播放其他朗读，请等待或停止该朗读后重试。',
     TTS_BROWSER_TIMEOUT: '浏览器朗读未正常响应，请点击朗读重试或检查系统语音设置。'
   };
@@ -49,6 +56,39 @@
     }).map(voice => ({ id: voice.voiceURI, name: String(voice.name || voice.voiceURI), lang: String(voice.lang || ''),
       localService: voice.localService === true, default: voice.default === true }));
   }
+  // macOS mixes character and sound-effect voices into the ordinary voice list.
+  // Voice names can include a localized language or quality suffix in parentheses.
+  const characterVoices = new Set(['Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles',
+    'Cellos', 'Fred', 'Good News', 'Hysterical', 'Jester', 'Junior', 'Kathy', 'Organ',
+    'Princess', 'Ralph', 'Superstar', 'Trinoids', 'Whisper', 'Wobble', 'Zarvox']);
+  function readingVoices(voices, language) {
+    const suitable = voices.filter(voice => {
+      const lang = voice.lang.toLowerCase().replace(/_/gu, '-').split('-')[0];
+      const name = voice.name.split(/\s*[(（]/u)[0];
+      return lang === language && !characterVoices.has(name) && !/\.novelty\./iu.test(voice.id);
+    });
+    function priority(voice) {
+      const locale = voice.lang.replace(/_/gu, '-').toLowerCase();
+      const preferredLocale = language === 'zh' ? /^zh-(cn|hans)(-|$)/u : /^en-us$/u;
+      const standard = /^(Samantha|Daniel|Karen|Moira|Tessa|Tingting|婷婷|美嘉)(?:$|\s*[(（])/iu.test(voice.name);
+      return Number(voice.localService) * 32 + Number(voice.default) * 16 +
+        Number(/enhanced|premium|natural|siri|neural|增强|优质/iu.test(voice.name)) * 8 +
+        Number(standard) * 4 + Number(preferredLocale.test(locale)) * 2;
+    }
+    return suitable.sort((a, b) => priority(b) - priority(a));
+  }
+  const nativeSpeechErrors = new Map([
+    ['voice-unavailable', 'TTS_BROWSER_VOICE_UNAVAILABLE'], ['language-unavailable', 'TTS_BROWSER_LANGUAGE'],
+    ['synthesis-unavailable', 'TTS_BROWSER_ENGINE'], ['synthesis-failed', 'TTS_BROWSER_ENGINE'],
+    ['audio-busy', 'TTS_BROWSER_BUSY'], ['audio-hardware', 'TTS_BROWSER_DEVICE'],
+    ['interrupted', 'TTS_BROWSER_INTERRUPTED'], ['canceled', 'TTS_BROWSER_INTERRUPTED'], ['network', 'TTS_BROWSER_NETWORK']
+  ]);
+  const serviceStatusMessages = new Map([
+    [401, '朗读服务未通过身份验证，请检查朗读连接。'],
+    [403, '当前连接没有使用此朗读服务的权限。'],
+    [402, '朗读服务提示余额或额度不足。'],
+    [429, '朗读服务当前限流，请稍后重试。']
+  ]);
   async function listBrowserTtsVoices({ signal, timeoutMs = 1500, speechSynthesis = root.speechSynthesis } = {}) {
     if (signal?.aborted) throw failure('TTS_CANCELLED', '朗读已停止。');
     if (!speechSynthesis || typeof speechSynthesis.getVoices !== 'function' || typeof speechSynthesis.speak !== 'function') {
@@ -169,27 +209,21 @@
       if (!UtteranceCtor) throw failure('TTS_BROWSER_UNAVAILABLE', safeMessages.TTS_BROWSER_UNAVAILABLE, { phase: 'discovery' });
       operation.phase = 'discovery'; progress(operation, 'loading');
       const voices = await listBrowserTtsVoices({ speechSynthesis: synth, signal: operation.controller.signal,
-        timeoutMs: options.browserVoiceTimeoutMs ?? 1500 });
+        timeoutMs: options.browserVoiceTimeoutMs ?? 3000 });
       if (!current(operation)) throw failure('TTS_CANCELLED', '朗读已停止。');
       if (!voices.length) throw failure('TTS_BROWSER_NO_VOICES', safeMessages.TTS_BROWSER_NO_VOICES, { phase: 'discovery' });
       const id = settings?.browser?.[operation.language === 'zh' ? 'voiceZh' : 'voiceEn'];
-      let selected;
+      let candidates;
       if (id) {
-        selected = validVoiceId(id) ? voices.find(voice => voice.id === id) : null;
-        if (!selected) throw failure('TTS_BROWSER_VOICE_UNAVAILABLE', safeMessages.TTS_BROWSER_VOICE_UNAVAILABLE, { phase: 'discovery' });
+        candidates = validVoiceId(id) ? voices.filter(voice => voice.id === id) : [];
       } else {
-        const matching = voices.filter(voice => voice.lang.toLowerCase().replace(/_/gu, '-').split('-')[0] === operation.language);
-        selected = matching.find(voice => voice.localService && voice.default) || matching.find(voice => voice.localService) ||
-          matching.find(voice => voice.default) || matching[0] || voices.find(voice => voice.localService && voice.default) ||
-          voices.find(voice => voice.localService) || voices.find(voice => voice.default) || voices[0];
-        if (!matching.length) {
-          operation.noticeCode = 'TTS_BROWSER_LANGUAGE_FALLBACK';
-          operation.noticeMessage = '未找到对应语言的音色，正在使用浏览器可用音色。';
-        }
+        const ranked = readingVoices(operation.localOnly ? voices.filter(voice => voice.localService) : voices, operation.language);
+        if (!ranked.length) throw failure('TTS_BROWSER_LANGUAGE', safeMessages.TTS_BROWSER_LANGUAGE, { phase: 'discovery' });
+        candidates = ranked.filter(voice => voice.localService === ranked[0].localService).slice(0, 3);
       }
-      operation.voice = Array.from(synth.getVoices() || []).find(voice => voice.voiceURI === selected.id);
-      if (!operation.voice) throw failure('TTS_BROWSER_VOICE_UNAVAILABLE', safeMessages.TTS_BROWSER_VOICE_UNAVAILABLE, { phase: 'discovery' });
-      operation.browserVoice = selected;
+      const available = new Map(Array.from(synth.getVoices() || [], voice => [voice.voiceURI, voice]));
+      operation.voiceChoices = candidates.filter(row => available.has(row.id)).map(row => ({ row, voice: available.get(row.id) }));
+      if (!operation.voiceChoices.length) throw failure('TTS_BROWSER_VOICE_UNAVAILABLE', safeMessages.TTS_BROWSER_VOICE_UNAVAILABLE, { phase: 'discovery' });
       operation.rate = Number.isFinite(settings?.speed) && settings.speed >= 0.25 && settings.speed <= 4 ? settings.speed : 1;
     }
     function playBrowser(operation) {
@@ -202,7 +236,9 @@
       if (!current(operation)) return Promise.resolve(false);
       disposeSpeech(operation);
       const utterance = new UtteranceCtor(operation.chunks[operation.index]);
-      utterance.voice = operation.voice; utterance.lang = operation.voice.lang || (operation.language === 'zh' ? 'zh-CN' : 'en-US');
+      const choice = operation.voiceChoices[0];
+      operation.browserVoice = choice.row;
+      utterance.voice = choice.voice; utterance.lang = choice.voice.lang || (operation.language === 'zh' ? 'zh-CN' : 'en-US');
       utterance.rate = operation.rate;
       operation.utterance = utterance; operation.phase = 'playback';
       browserOwners.set(synth, { operation, stop });
@@ -228,7 +264,7 @@
       };
       utterance.onend = () => {
         if (!isLive()) return;
-        if (!started) { failOperation(operation, failure('TTS_PLAY_FAILED', safeMessages.TTS_PLAY_FAILED, { phase: 'playback' })); return; }
+        if (!started) { utterance.onerror({ error: 'synthesis-failed' }); return; }
         disposeSpeech(operation, false); operation.completed += 1;
         if (operation.completed === operation.chunks.length) { active = null; progress(operation, 'idle'); return; }
         operation.index += 1; progress(operation, 'loading');
@@ -239,7 +275,25 @@
         if (event?.error === 'not-allowed') {
           disposeSpeech(operation);
           progress(operation, 'awaiting_play', { errorCode: 'TTS_PLAY_GESTURE_REQUIRED' });
-        } else failOperation(operation, failure('TTS_PLAY_FAILED', safeMessages.TTS_PLAY_FAILED, { phase: 'playback' }));
+          return;
+        }
+        const code = nativeSpeechErrors.get(event?.error) || 'TTS_PLAY_FAILED';
+        if (!started && operation.completed === 0 && operation.voiceChoices.length > 1 &&
+            ['TTS_BROWSER_VOICE_UNAVAILABLE', 'TTS_BROWSER_ENGINE', 'TTS_BROWSER_LANGUAGE'].includes(code)) {
+          operation.voiceChoices.shift();
+          const resolveAttempt = operation.speechResolve;
+          operation.speechResolve = null;
+          disposeSpeech(operation, false);
+          browserOwners.set(synth, { operation, stop });
+          // Let the native engine finish releasing its failed utterance.
+          setTimeout(() => {
+            if (!current(operation)) { resolveAttempt(false); return; }
+            try { resolveAttempt(playBrowser(operation)); }
+            catch (error) { resolveAttempt(failOperation(operation, error)); }
+          }, 0);
+          return;
+        }
+        failOperation(operation, failure(code, safeMessages[code], { phase: 'playback' }));
       };
       operation.speechTimer = setTimeout(timeout, options.browserStartTimeoutMs ?? 8000);
       progress(operation, 'loading');
@@ -267,8 +321,12 @@
       }
       const errorCode = /^TTS_[A-Z_]+$/u.test(error?.code || '') ? error.code : 'TTS_FAILED';
       const details = safeDetails(error?.ttsDetails, operation.phase);
+      const httpMessage = errorCode === 'TTS_HTTP' && (serviceStatusMessages.get(details.httpStatus) ||
+        (details.httpStatus >= 500 && '朗读服务暂时不可用，请稍后重试。'));
       stop();
-      progress(operation, 'error', { errorCode, errorMessage: safeMessages[errorCode] || '朗读失败，请检查设置。', errorDetails: details });
+      const serviceFailure = ['deepseek', 'online', 'local'].includes(operation.mode);
+      progress(operation, 'error', { errorCode, errorMessage: httpMessage || safeMessages[errorCode] || '朗读失败，请检查设置。',
+        errorDetails: details, canReadLocally: serviceFailure && operation.completed === 0 && Boolean(synth && UtteranceCtor) });
       return false;
     }
     async function send(message, operation) {
@@ -384,9 +442,12 @@
         return failOperation(operation, failure('TTS_PLAY_FAILED', '音频播放失败。', { phase: 'playback' }));
       }
     }
-    async function speak({ text, event, automatic = false, language } = {}) {
-      if (destroyed) return false;
-      if (!trusted(event)) { notify({ status: 'error', errorCode: 'TTS_GESTURE_REQUIRED' }); return false; }
+    async function speak({ text, event, automatic = false, language, localOnly = false } = {}) {
+      if (destroyed || (automatic && active && !active.automatic)) return false;
+      if (!trusted(event)) {
+        if (!automatic) notify({ status: 'error', errorCode: 'TTS_GESTURE_REQUIRED' });
+        return false;
+      }
       stop();
       const selection = typeof text === 'string' ? text.trim() : '';
       if (!selection || Array.from(selection).length > MAX_SELECTION_CHARACTERS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(selection)) {
@@ -395,7 +456,7 @@
       const id = `tts-${root.crypto?.randomUUID?.() || `${Date.now()}-${++sequence}-${Math.random().toString(36).slice(2)}`}`;
       const operation = { id, lease: null, leaseReady: false, requestId: `${id}-0`, controller: new AbortController(), dispatched: false,
         audio: null, url: '', context: null, chunks: splitTtsText(selection), index: 0, completed: 0, next: null,
-        phase: 'settings', automatic: automatic === true,
+        phase: 'settings', automatic: automatic === true, localOnly: localOnly === true,
         language: language === 'zh' || (language !== 'en' && /\p{Script=Han}/u.test(selection)) ? 'zh' : 'en' };
       active = operation;
       try {
@@ -407,15 +468,17 @@
           try { operation.context = new AudioContextCtor(); Promise.resolve(operation.context.resume()).catch(() => {}); }
           catch (error) { operation.primeError = error; }
         } };
-        if (!automatic) prime();
-        progress(operation, 'loading');
+        if (!automatic && !operation.localOnly) prime();
+        // A manual click must still mean "read" while the deferred selection
+        // handler is only finding out whether automatic playback is enabled.
+        if (!automatic) progress(operation, 'loading');
         const settings = await send({ type: 'TTS_GET_PUBLIC_SETTINGS' }, operation);
         if (!currentOperation(operation)) return false;
         if (automatic && settings?.autoPlay !== true) { stop(); return false; }
         if (!current(operation)) { stop(); return false; }
-        operation.mode = settings?.mode || 'browser';
+        operation.mode = operation.localOnly ? 'browser' : settings?.mode || 'browser';
         if (operation.mode === 'browser') {
-          await prepareBrowser(operation, settings);
+          await prepareBrowser(operation, operation.localOnly ? { speed: settings?.speed } : settings);
           return await playBrowser(operation);
         }
         if (!['local', 'online', 'deepseek'].includes(operation.mode)) throw failure('TTS_BROWSER_UNAVAILABLE', safeMessages.TTS_BROWSER_UNAVAILABLE);

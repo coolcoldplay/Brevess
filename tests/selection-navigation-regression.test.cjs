@@ -142,3 +142,31 @@ test('pending navigation deduplicates requests without disabling double-click in
   resolve({ success: true, focused: true }); await first;
   assert.equal(button.dataset.figureJumpPending, undefined);
 });
+
+test('a rejected local language pair does not repeat creation after an unavailable probe and can recover', async () => {
+  const translator = require('../extension/core/local-translator.js');
+  let availability = 'unavailable', attempts = 0;
+  const api = {
+    availability:async () => availability,
+    create:async () => {
+      attempts++;
+      if (availability === 'unavailable') throw new DOMException('Pair unavailable', 'NotSupportedError');
+      return {translate:async () => '两组存在差异。', destroy() {}};
+    }
+  };
+  const oldActivation = Object.getOwnPropertyDescriptor(navigator, 'userActivation');
+  Object.defineProperty(navigator, 'userActivation', {configurable:true,value:{isActive:true}});
+  const provider = translator.createProvider({Translator:api, initializationRetryDelays:[0,0]});
+  try {
+    assert.equal(await provider.availability(), 'unavailable');
+    await assert.rejects(provider.initialize(), {code:'NATIVE_UNAVAILABLE'});
+    assert.equal(attempts, 1);
+    availability = 'available';
+    await provider.initialize();
+    assert.equal(await provider.translate('The groups differ.'), '两组存在差异。');
+  } finally {
+    provider.destroy();
+    if (oldActivation) Object.defineProperty(navigator,'userActivation',oldActivation);
+    else delete navigator.userActivation;
+  }
+});

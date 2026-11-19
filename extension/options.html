@@ -514,7 +514,7 @@
             <div class="field"><label for="ttsVoiceZh">中文音色</label><select id="ttsVoiceZh"><option value="zf_xiaoxiao">zf_xiaoxiao</option></select><input id="ttsVoiceZhCustom" type="text" maxlength="80" autocomplete="off" aria-label="自定义中文音色 ID" placeholder="手动输入音色 ID" hidden></div>
           </div>
           <p id="ttsDeepSeekHint" class="tts-note" hidden>使用 DeepSeek 官方语音服务，支持中英文。语速在本机播放时调整；首次使用可直接沿用已配置的 DeepSeek 密钥。本地 Kokoro 配置会保留。</p>
-          <p id="ttsBrowserHint" class="tts-note">使用浏览器和系统提供的音色，无需部署模型。自动选择优先匹配语种，缺少时使用系统可用音色；标为“联网”的音色可能需要网络。</p>
+          <p id="ttsBrowserHint" class="tts-note">自动选择优先使用对应语言的本机朗读音色。标为“联网”的音色可能需要网络。</p>
           <label class="tts-auto-play"><input id="ttsAutoPlay" type="checkbox"><span>选中文字后自动朗读（默认关闭）</span></label>
           <p class="tts-note">音色可选择或手动填写。含中文的选区使用中文音色；中英混排及专业缩写的读音以服务支持为准。</p>
           <p id="ttsVoicesStatus" class="tts-note" role="status" aria-live="polite">正在准备音色列表…</p>

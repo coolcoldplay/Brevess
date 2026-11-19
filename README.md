@@ -3,7 +3,7 @@
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-workbench-r16"><strong>1.0.2 r27 · r16</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-workbench-r17"><strong>1.0.2 r27 · r17</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -83,13 +83,13 @@
 
 ## 安装预览版
 
-1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-workbench-r16/Brevess-v1.0.2-r27-workbench-r16-Chrome.zip)，解压到独立文件夹。
+1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-workbench-r17/Brevess-v1.0.2-r27-workbench-r17-Chrome.zip)，解压到独立文件夹。
 2. 打开 `chrome://extensions/`（Edge 使用 `edge://extensions/`）→ 开发者模式 → 加载已解压的扩展程序，选择包含 `manifest.json` 的文件夹。
 3. 固定 BREVESS 图标，在论文全文页打开侧栏。首次打开设置时，可在快速配置中选择保存目录、确认隐私提示并连接默认模型。
 
 大纲导航、离线规则、手动高亮、笔记编辑和工作台无需 API Key。部分增强功能需要可选本机伴侣，当前浏览器 ZIP 不包含本机二进制。
 
-**这是预览版。**此版可在 PubMed 检索结果中展开完整摘要、调整字号并将规则复用于下一页。打开「问答 → 网页滤镜 → 我的脚本」，即可查看、开关或删除内置和自建滤镜，也能撤销当前页的临时预览。验证范围与限制见[发布记录](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-workbench-r16)。
+**这是预览版。**r17 改进了 Chrome 和 Edge 的划句朗读。朗读可以和划句翻译同时进行，浏览器自动选声会避开特效音色。详见[发布记录](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-workbench-r17)。
 
 ## 源码与构建
 

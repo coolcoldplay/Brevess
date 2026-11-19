@@ -246,6 +246,9 @@
         try { result = api.create(createOptions); } catch (error) { result = Promise.reject(error); }
         return Promise.resolve(result).catch(async error => {
           const classified = classify(error, 'initialize');
+          // A real click still gets one create() attempt after a negative probe.
+          // Retrying the same unsupported pair cannot start a model download.
+          if (error?.name === 'NotSupportedError' && state.availability === 'unavailable') throw classified;
           const recoverable = ['MODEL_NOT_READY', 'NATIVE_UNAVAILABLE'].includes(classified.code) ||
             (classified.code === 'INITIALIZATION_FAILED' && ['InvalidStateError', 'NotReadableError', 'OperationError', 'UnknownError'].includes(error?.name));
           if (!recoverable || retries >= initializationRetryDelays.length || createOptions.signal.aborted) throw classified;

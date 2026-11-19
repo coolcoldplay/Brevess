@@ -8687,10 +8687,10 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
                 return block?.element?.isConnected && anchor &&
                     manualReadableText(block.element).slice(anchor.startOffset, anchor.endOffset) === anchor.quote;
             })),
-        cancelTasks: () => {
+        cancelTasks: ({ stopSpeech = true } = {}) => {
             epoch += 1;
             translationController?.abort(); translationController = null;
-            speechController?.stop();
+            if (stopSpeech) speechController?.stop();
             if (operationId) {
                 void chrome.runtime.sendMessage({ type: 'LLM_CONTROL_OPERATION', operationId, command: 'cancel' }).catch(() => {});
                 operationId = '';
@@ -8805,14 +8805,19 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
             speech.setAttribute('aria-busy', String(state.status === 'loading'));
             speechStatus.textContent = state.status === 'awaiting_play'
                 ? translateUi('朗读：浏览器需要再次点击才能播放。') : state.status === 'error'
-                ? translateUi('朗读：' + (state.errorMessage || '未完成，请检查设置中的朗读服务。'))
+                ? translateUi(state.errorMessage || '朗读失败，请检查设置。')
                 : state.noticeMessage ? translateUi(state.noticeMessage) : '';
+            if (state.status === 'error' && state.canReadLocally) speechStatus.append(' ', localSpeech);
             speechStatus.classList.toggle('is-error', state.status === 'error');
             positionManualFloating(toolbar, toolbarDescriptor.rect);
         }
     }) || null;
     speech.disabled = !speechController;
-    const speechText = () => toolbarDescriptor.translationText ?? toolbarDescriptor.text;
+    const speechText = () => toolbarDescriptor.translationText || toolbarDescriptor.text;
+    const localSpeech = button('用本机音色朗读', 'sci-selection-speech-retry');
+    localSpeech.addEventListener('click', event => {
+        if (surface.validSource()) void speechController.speak({ text: speechText(), event, localOnly: true });
+    });
     speech.addEventListener('click', event => {
         if (!surface.validSource() || !speechController) return;
         const state = speechController.getState();
@@ -8863,7 +8868,15 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
     const translate = button('开启本地翻译', 'sci-selection-translate');
     translate.hidden = true;
     const translateHint = node('p', 'sci-selection-hint', '首次使用或资源缺失时，浏览器可能需要下载翻译资源。');
-    panes.translation.append(translationResult, translateHint, translate);
+    const chooseAiTranslation = button('切换到 AI 翻译', 'sci-selection-choose-ai-translation');
+    chooseAiTranslation.hidden = true;
+    chooseAiTranslation.addEventListener('click', () => {
+        if (!surface.validSource() || !actions.some(action => action.id === 'translate')) return;
+        switchMode('ai');
+        actionSelect.value = 'translate'; selectPrompt(); web.checked = false;
+        runAi.focus({ preventScroll: true });
+    });
+    panes.translation.append(translationResult, translateHint, translate, chooseAiTranslation);
     if (toolbarDescriptor.translationSelection) {
         translationResult.textContent = toolbarDescriptor.text;
         translateHint.textContent = translateUi('已选中译文，可朗读；保存高亮或备注请选中对应原文。');
@@ -8878,9 +8891,9 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
             translate.hidden = false;
             announce('当前浏览器的本地翻译接口不可用，未启用云端翻译。', true, 'translation'); return;
         }
-        surface.cancelTasks(); const ticket = epoch;
+        surface.cancelTasks({ stopSpeech: false }); const ticket = epoch;
         const controller = new AbortController(); translationController = controller;
-        translate.hidden = true; translateHint.hidden = true;
+        translate.hidden = true; translateHint.hidden = true; chooseAiTranslation.hidden = true;
         translate.disabled = true; translate.setAttribute('aria-busy', 'true');
         translationResult.textContent = translateUi('正在准备本地翻译…');
         const translationStartedAt = Date.now();
@@ -8908,9 +8921,17 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
                 translationOutcome = 'failed';
                 translate.hidden = false; translateHint.hidden = false;
                 translate.textContent = translateUi(error.code === 'USER_ACTIVATION_REQUIRED' ? '开启本地翻译' : '重试翻译');
+                const unavailable = ['API_UNAVAILABLE', 'LANGUAGE_UNAVAILABLE', 'NATIVE_UNAVAILABLE'].includes(error.code);
+                const message = unavailable ? '当前浏览器无法启动本机英译中模型。'
+                    : error.code === 'USER_ACTIVATION_REQUIRED' ? '浏览器需要一次点击才能启动本地翻译，请点击“开启本地翻译”。'
+                    : globalThis.BrevessBilingualTranslationContent?.localTranslationErrorMessage(error) || '本地翻译失败';
                 translationResult.textContent = (error.partialTranslation?.translatedText
-                    ? error.partialTranslation.translatedText + '\n' + translateUi('其余内容未完成，可重试。') + '\n' : '') + translateUi(error.code === 'USER_ACTIVATION_REQUIRED'
-                    ? '浏览器需要一次点击才能启动本地翻译，请点击“开启本地翻译”。' : '本地翻译失败：' + error.message);
+                    ? error.partialTranslation.translatedText + '\n' + translateUi('其余内容未完成，可重试。') + '\n' : '') + translateUi(message);
+                translateHint.textContent = translateUi(unavailable
+                    ? '可在浏览器右键菜单中翻译选区，或稍后重试本地翻译。'
+                    : '首次使用或资源缺失时，浏览器可能需要下载翻译资源。');
+                chooseAiTranslation.hidden = !unavailable || toolbarDescriptor.readOnly || !currentManualSelectionProfileId ||
+                    !actions.some(action => action.id === 'translate');
             }
         } finally {
             if (surface.current() && ticket === epoch) void chrome.runtime.sendMessage({
