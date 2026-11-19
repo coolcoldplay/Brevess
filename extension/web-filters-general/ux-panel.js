@@ -68,12 +68,16 @@ async function showSavedScripts(){
   list.replaceChildren();
   if(!items.length){list.textContent='还没有保存的脚本';return;}
   for(const relevant of [true,false]){
-   const group=items.filter(s=>s.matches===relevant);if(!group.length)continue;
+   const group=items.filter(s=>s.matches===relevant).sort((a,b)=>Number(!!a.builtin)-Number(!!b.builtin));if(!group.length)continue;
    const label=document.createElement('h3');label.textContent=relevant?'当前网页':'其他网页';list.append(label);
    for(const item of group){
     const row=document.createElement('div'),label=document.createElement('label'),info=document.createElement('span'),name=document.createElement('b'),scope=document.createElement('small'),toggle=document.createElement('input');
     row.className='wfg-script-row';
     name.textContent=item.name+' · V'+Math.max(1,item.version);scope.textContent=item.scope;
+    if(item.builtin||item.kind==='preview'){
+     const origin=document.createElement('span');origin.textContent=item.builtin?'内置脚本':'临时预览';
+     scope.prepend(origin,document.createTextNode(' · '));
+    }
     toggle.type='checkbox';toggle.checked=item.enabled;toggle.setAttribute('role','switch');toggle.setAttribute('aria-label','启用 '+item.name);
     async function update(command,data,message){
      if(list.inert)return;
@@ -99,7 +103,12 @@ async function showSavedScripts(){
     remove.type='button';remove.className='wfg-delete-script';remove.title='删除脚本';
     remove.setAttribute('aria-label','删除 '+item.name);remove.append(icon('trash'));
     remove.onclick=()=>update('SCRIPT_DELETE',{},'已删除「'+item.name+'」');
-    info.append(name,scope);label.append(info,toggle);row.append(label,remove);list.append(row);
+    info.append(name,scope);label.append(info);
+    if(item.kind==='preview'){
+     remove.textContent='撤销预览';remove.title='撤销预览';remove.setAttribute('aria-label','撤销预览');
+     remove.onclick=()=>update('SCRIPT_DISMISS_PREVIEW',{version:item.version,documentKey:item.documentKey},'已撤销预览');
+    }else label.append(toggle);
+    row.append(label,remove);list.append(row);
    }
   }
  }

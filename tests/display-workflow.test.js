@@ -1,10 +1,10 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const S=require('../extension/web-filters-general/schema.js'),M=require('../extension/web-filters-general/reading-modules.js'),G=require('../extension/web-filters-general/generalization.js');
-function harness(){
+function harness(controllers={}){
  const tabs=new Map([1,2,3].map(id=>[id,{id,windowId:id===3?8:7,title:'Paper '+id,url:'https://papers.example/articles/'+id}]));let active=1,documentVersion=1;const events={},rpcCalls=[];
  const event=name=>({addListener:f=>events[name]=f});
  const browser={runtime:{id:'extension',getContexts:async()=>[{documentUrl:'chrome-extension://extension/popup.html',windowId:7}],onMessage:event('message'),sendMessage:async()=>{}},storage:{local:{get:async()=>({}),set:async()=>{}},session:{get:async()=>({}),set:async()=>{}}},webNavigation:{getAllFrames:async({tabId})=>[{frameId:0,documentId:'doc-'+tabId+'-'+documentVersion}]},tabs:{get:async id=>{if(!tabs.has(id))throw Error('Closed');return tabs.get(id);},query:async()=>[tabs.get(active)],update:async id=>{active=id;await events.activated({tabId:id,windowId:7});},onRemoved:event('removed'),onActivated:event('activated'),onUpdated:event('updated')}};
- const context={WFGSchema:S,WFGReadingModules:M,WFGGeneralization:G,crypto,URL,console};vm.runInNewContext(fs.readFileSync(require.resolve('../extension/web-filters-general/ux-background.js'),'utf8'),context);
+ const context={WFGSchema:S,WFGReadingModules:M,WFGGeneralization:G,crypto,URL,console,...controllers};vm.runInNewContext(fs.readFileSync(require.resolve('../extension/web-filters-general/ux-background.js'),'utf8'),context);
  const broker={allUndo:async id=>{rpcCalls.push({id,command:'UNDO_ALL'});},overview:async id=>({frames:[{frameId:0,ok:true,data:{session:'s-'+id,version:0}}]}),rpc:async(id,frame,command,data)=>{rpcCalls.push({id,command,data});return {};}};
  const c=context.WFGUX.install({browser,broker,multi:{cancel(){}}}),sender={id:'extension',url:'chrome-extension://extension/popup.html'};
  const call=(command,data={})=>c.handle({command,...data},sender);
@@ -58,4 +58,26 @@ test('return to ordinary Q&A also clears the other tabs in the same filter task'
  await h.call('SWITCH_TAB',{tabId:2});const second=h.c.states.get(2);Object.assign(second,{plan:{name:'preview B'},preview:true,targets:[{id:'b'}]});
  await h.call('MODE',{active:false});for(const st of [first,second]){assert.equal(st.adjusting,false);assert.equal(st.plan,null);assert.equal(st.targets.length,0);}
  assert.equal(h.rpcCalls.filter(x=>x.command==='UNDO_ALL').length,2);
+});
+
+test('My scripts exposes built-ins, saved copies and an active preview with persistent enable/delete controls', async () => {
+  let raw;
+  const repo = M.repository({readRaw:async () => raw, writeRaw:async next => {raw = next;}});
+  const first = await repo.read();
+  const original = first.entries[0].module.id;
+  await repo.copy(original, first.generation);
+  const h = harness({BrevessReadingModulesController:{repo}});
+  await h.call('STATE');
+  const state = h.c.states.get(1);
+  Object.assign(state, {preview:true, saved:false, plan:{id:'draft',name:'Layout',revision:1}});
+  const list = await h.call('SCRIPTS_LIST');
+  assert.equal(list.filter(item => item.builtin).length, first.entries.length);
+  assert.equal(list.filter(item => item.kind==='module' && !item.builtin).length, 1);
+  assert.ok(list.some(item => item.kind==='preview' && item.documentKey===state.documentKey));
+  const item = list.find(item => item.id===original);
+  const disabled = await h.call('SCRIPT_ENABLE', {...item, enabled:false});
+  assert.equal(disabled.find(entry => entry.id===original).enabled, false);
+  const removed = await h.call('SCRIPT_DELETE', disabled.find(entry => entry.id===original));
+  assert.ok(!removed.some(entry => entry.id===original));
+  assert.ok((await repo.read()).deletedBuiltins.includes(first.entries[0].builtinId));
 });

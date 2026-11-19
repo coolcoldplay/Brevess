@@ -60,3 +60,11 @@ test('the inventory stops staging for contaminated source but ignores unrelated 
   fs.writeFileSync(path.join(root, 'core', 'main.js'), 'const source = "/Users/private-person/paper";');
   assert.throws(() => inventory.releaseInventory(root, 'store', spec), /RELEASE_HYGIENE_FAILED.*LOCAL_USER_PATH/);
 });
+
+test('developer recoloring examples in shipped filters block the build, generic color tools remain usable', () => {
+  for (const file of ['web-filters-general/schema.js', 'extension/web-filters-general/reading-modules.js']) {
+    const sample = JSON.stringify({from:[32,85,138,1],to:[255,192,203,1]});
+    assert.ok(api.auditReleaseFile(file, Buffer.from(sample)).some(hit => hit.rule === 'PERSONAL_DISPLAY_EXAMPLE'));
+    assert.deepEqual(api.auditReleaseFile(file, Buffer.from('replaceColor(operation.from, operation.to)')), []);
+  }
+});

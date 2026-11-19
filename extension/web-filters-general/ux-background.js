@@ -219,12 +219,17 @@ async function leaveDisplay(st){
  }
  return view(st);
 }
-async function savedScripts(url){
+async function savedScripts(st){
+ const url=st.url;
  const modules=await g.BrevessReadingModulesController.repo.read(),legacy=await repo.read();
- const scripts=modules.entries.filter(e=>!e.builtinId).map(e=>({kind:'module',id:e.module.id,name:e.module.name,
+ const scripts=modules.entries.map(e=>({kind:'module',builtin:Boolean(e.builtinId),id:e.module.id,name:e.module.name,
   version:e.module.revision,scope:g.WFGGeneralization.scopeLabel(e.module),enabled:e.enabled,matches:g.WFGReadingModules.matches(e.module,url),generation:modules.generation}));
  for(const e of legacy.entries)scripts.push({kind:'recipe',id:e.plan.id,name:e.plan.name,version:e.plan.revision,
   scope:e.plan.scope.origin+e.plan.scope.path,enabled:e.enabled&&e.autoApply,matches:await S.matches(e.plan.scope,url),generation:legacy.generation});
+ if(st.preview && !st.saved && st.plan){
+  scripts.unshift({kind:'preview',id:st.plan.id,name:st.plan.name,version:st.plan.revision,
+   matches:true,enabled:true,documentKey:st.documentKey,scope:S.safeURL(url)});
+ }
  return scripts;
 }
 async function refreshSavedScripts(matches,replaceSavedPreview,refreshDraftConfig=false){
@@ -254,14 +259,20 @@ if(m.command==='APPLY_VERSION'){
  await assertStateCurrent(st);if(st.busy||!(await b.tabs.get(st.tabId)).active)throw Error('PAGE_CHANGED');st.adjusting=true;st.adjustmentMode='display';
  return preview(st,turn.displayPlan);
 }
-if(m.command==='SCRIPTS_LIST')return savedScripts(st.url);
+if(m.command==='SCRIPTS_LIST')return savedScripts(st);
+if(m.command==='SCRIPT_DISMISS_PREVIEW'){
+ const plan=st.plan;
+ if(st.busy||!st.preview||st.saved||!plan||m.id!==plan.id||m.version!==plan.revision||m.documentKey!==st.documentKey)throw Error('PAGE_CHANGED');
+ await handle({command:'CANCEL',windowId:st.windowId,expectedContext:{tabId:st.tabId,navigationUrl:st.url,documentKey:st.documentKey}},sender);
+ return savedScripts(st);
+}
 if(m.command==='SCRIPT_ENABLE'||m.command==='SCRIPT_DELETE'){
  const deleting=m.command==='SCRIPT_DELETE';
  if(!deleting&&typeof m.enabled!=='boolean')throw Error('MODULE_FLAGS');
  const controller=g.BrevessReadingModulesController;
  let matches,wasActive;
  if(m.kind==='module'){
-  const entry=(await controller.repo.read()).entries.find(e=>e.module.id===m.id&&!e.builtinId);
+  const entry=(await controller.repo.read()).entries.find(e=>e.module.id===m.id);
   if(!entry)throw Error('MODULE_NOT_FOUND');
   wasActive=entry.enabled;
   if(deleting)await controller.repo.remove(entry.module.id,m.generation);
@@ -277,7 +288,7 @@ if(m.command==='SCRIPT_ENABLE'||m.command==='SCRIPT_DELETE'){
   matches=url=>S.matches(entry.plan.scope,url);
  }else throw Error('MODULE_NOT_FOUND');
  if(!deleting||wasActive)await refreshSavedScripts(matches,true,deleting&&m.kind==='module');
- return savedScripts(st.url);
+ return savedScripts(st);
 }
 if(m.command.startsWith('GENERALIZE_')){
  if(content)throw Error('PANEL_REQUIRED');

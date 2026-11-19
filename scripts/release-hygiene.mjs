@@ -20,6 +20,14 @@ export function auditReleaseFile(name, bytes) {
   for (const [rule, pattern] of contentRules) {
     if (pattern.test(source)) findings.push({ path: name, rule });
   }
+  // Keep the developer's personal PubMed recoloring example out of shipped filters and prompts.
+  if (/(?:^|\/)web-filters-general\//.test(name)) {
+    const pubmedBlue = /#20558a\b|\b32\s*,\s*85\s*,\s*138\b/i;
+    const testPink = /#ffc0cb\b|\b255\s*,\s*192\s*,\s*203\b|\bpink\b|粉[红色]/i;
+    if (testPink.test(source) && (pubmedBlue.test(source) || /PubMed[^\n]{0,90}(?:变粉|改成粉|to pink)/i.test(source))) {
+      findings.push({ path: name, rule: 'PERSONAL_DISPLAY_EXAMPLE' });
+    }
+  }
   const legalAttribution = /^(?:vendor\/|licenses\/|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(name);
   if (!legalAttribution && [...source.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)]
     .some(match => !publicContacts.has(match[0].toLowerCase()))) {
