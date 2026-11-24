@@ -82,7 +82,7 @@
       };
     }).filter(item => item.name && item.prompt);
   }
-  const DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS = Object.freeze([
+  const LEGACY_ARTICLE_CHAT_QUICK_PROMPTS = Object.freeze([
     Object.freeze({
       id: 'core_claim',
       name: '核心结论',
@@ -105,6 +105,65 @@
     })
   ]);
 
+  const DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS = Object.freeze([
+    { id: 'team_prior_work', name: '团队前作时间线',
+      prompt: '这篇论文接的是团队哪项前作的下一棒？核实作者身份，选最多三篇直接相关的前作，按年份列出当时的发现、留下的问题，以及本文承接它的实验。附已核实的 DOI 或 PMID，标明本文是否直接引用。无法联网时仅用当前可见资料，标注待核验项。' },
+    { id: 'changed_judgment', name: '读完后，哪个判断该变？',
+      prompt: '写出读本文前后，一位谨慎的同行会如何表述同一个科学判断。标出发生变化的关键词、让你改口的那项结果，以及为什么证据只够你改到这个程度。若只能从引言重建当时的认识，请注明。' },
+    { id: 'read_each_panel', name: '逐 Panel 读图',
+      prompt: '从我选中的图开始，未指定时先读第一张主图。每个 Panel 讲清楚比较谁、先看哪里、观察到了什么、最多能得出什么结论。标明哪些信息来自原图，哪些仅来自图注。原图不可见时请说明。' },
+    { id: 'distinguishing_figure', name: '哪张图区分了两种解释？',
+      prompt: '在揭示结果前，先列出两种合理解释，以及它们对同一实验的预测。再指出哪个 Panel 最能区分两者。若两种解释都能产生图中的结果，说明实验回答了什么、什么问题仍然开放。' },
+    { id: 'shared_evidence', name: '哪些证据可能一起出错？',
+      prompt: '选一项由多张图支持的核心结论。检查这些图是否共享样本、测量方法或分析假设。指出哪些证据可能一起出错，以及哪一项独立证据最能让你放心。原文未交代的地方标为未知。' },
+    { id: 'transferable_decision', name: '学走作者最聪明的一步',
+      prompt: '只挑一个最值得借鉴的研究决策。还原作者面对的困难、一个直觉上会尝试的做法，以及作者实际怎么做。解释这一步多获得了什么信息，并提炼出一条能迁移到其他课题的原则。' },
+    { id: 'pi_guided_reading', name: 'PI 带我精读',
+      prompt: '一次只问我一个问题，等我回答再继续。先让我预测关键实验，再让我解释真实结果，最后让我判断结论边界。反馈时指出我用对了哪条证据、哪一步推断走远了，以及值得回看的 Panel。现在只提出第一个问题。' },
+    { id: 'journal_club_outline', name: '10 分钟组会大纲',
+      prompt: '为没读过本文的组员设计一场 10 分钟、最多 8 页的汇报。逐页给出一句可直接使用的标题、建议展示的原图或材料、过渡句和用时。把最多时间留给决定结论的实验。' },
+    { id: 'three_panels', name: '只讲三个 Panel',
+      prompt: '如果汇报临时缩到 5 分钟，只能展示三个 Panel，你会留哪三个？按听众能跟上的顺序排列，说明每个 Panel 必须指给大家看的对照，以及删掉它会让哪一步论证断掉。另留一张答疑备用图。' },
+    { id: 'agent_journal_club_ppt', name: '让 Agent 制作组会 PPT',
+      prompt: '请让已连接的 Agent 为当前论文制作并下载可编辑的组会 PPT（.pptx）。默认 10 分钟，讲给尚未读过本文的同事。先用一句话讲清背景中的知识缺口和研究问题，再按“问题 → 实验与对照 → 观察 → 判断”组织证据，最后交代结论边界和可讨论的问题。以证据块为最小排图单位：为每个判断列出所需的比较对象、对照和原始 Figure/Panel。同一证据块的实验设计、代表图和定量 Panel 尽量同页；图太密、投影时标签难以辨认才拆页，续页沿用证据块编号并保留关键对照。每个结果页用一句可验证的判断作标题，标注 Figure、Panel 和来源页码或原文位置。原图按比例完整适应图框，允许留白，保留坐标轴、图例、比例尺和 Panel 字母。图与文字可分别编辑。缺图或数据不明时标记待核对，不补画实验数据。只结合我为本次制作授权的本篇问答、高亮、备注、笔记和解图；清楚区分原文观察、作者解释和我的推断。逐页写讲者备注，指出先看哪个 Panel、如何读对照、怎样过渡到下一页。交付前逐页对照每张原图的四边，核查引用、图文对应和投影可读性。' },
+    { id: 'builtin_figure_map_v1', name: '图表梳理草图', prompt: `依据当前论文正文及已解读的 Figure/Panel 摘要，生成图表梳理草图。
+先用不超过三句话说明核心发现、适用条件和证据范围，再输出可导入的草图。
+节点写清具体分子、细胞、过程或结果。每个节点的 label 必须独立带上所属物种、细胞或样本体系；不能把这些条件仅放在单独的分组标题节点或说明段中。不同物种、细胞类型、处理条件不要合并。若不同干预并未联合施加，不得合成为联合条件；共用结果节点只保留各实验共同满足的条件，干预名称写在各自起点。优先保留主要机制，不凑节点数，证据少时只需两个节点，最多 24 个节点、36 条联系。优先画观察到的“干预 → 观测结果”：只有阻断/抑制实验时，使用阻断/抑制处理节点，不自动倒推一个未直接观察的激活机制。允许几组独立的干预—结果，不必拼成一条完整机制链。
+每条联系必须引用提供的 figure_analysis_context 中真实存在的 Panel key。促进用 positive，抑制用 negative，仅相关时用 neutral；不要把相关性画成已证实的因果。联系方向必须与起点含义一致：若证据是阻断 R 降低 K，应画“R 阻断 → K”负联系，不能画“R 激活 → K”负联系。无差异或未增加不等于抑制，应写在局限段，不强行画负联系。不同物种、细胞或条件之间不得为凑连通图而连线；观察性关联应使用该观察体系自身的两个节点。可以有多组相互独立的子图。联系文字可为空。不凭常识补缺失机制。
+在普通回答中给出一个完整的 brevess-map 代码块。JSON只含 schema、documentHash、sourceDigest、nodes、edges；schema固定为 brevess.chat-figure-map.v1，两个来源字段逐字复制上下文。节点为 {"id":"n1","label":"实体与条件"}；联系为 {"id":"e1","from":"n1","to":"n2","label":"关系或空字符串","polarity":"positive|negative|neutral","evidenceKeys":["上下文中的真实key"]}。节点ID唯一，每个端点都必须存在，每个节点至少参与一条联系。不要在JSON内放解释、引文标记、URL或操作指令。
+遵守问答模块外层 NDJSON 协议：每行是一个合法 JSON 记录。markdown 的换行只转义一次为 \u005cn，内嵌图谱 JSON 的引号只转义一次为 \u005c"；不要二次转义整个 markdown，不要在普通说明中使用未转义的英文双引号。图谱代码块单独放在一个 answer_block，evidence为空数组，图谱内容不另加引文标记。
+输出前检查：先确定有证据的 edges，再只保留这些 edges 端点实际使用的 nodes，删除没有连线的节点。无差异、未增加或未观察到效应的结果全部只放在局限段，既不画 negative，也不画 neutral，相关节点不得加入 nodes。neutral 仅用于明确观察到的关联，其两个端点必须各自在 label 写明观察样本体系。节点与联系 label 使用纯文字，不用 HTML 标签。
+代码块后逐条简述证据与局限，按问答模块的规则引用原文；解图摘要仅作辅助，不是独立证明。不输出“已保存/已应用”：这里只生成待核对草图。最后输出 turn_summary 和 final 记录。
+若没有已解读图表的辅助上下文，或它不足以支撑一条有证据的联系，明确指出需要先解读哪些图，不编造 key、来源字段或草图。` },
+    { id: 'audit_talk', name: '汇报前核查',
+      prompt: '逐句核对我提供的讲稿或 PPT 结论。用表格列出原句、对应原文或 Panel、证据是否支持、建议改写。优先找数字或方向说反、研究对象被偷换、把相关性讲成因果的问题。若还没有草稿，请先让我贴入。' }
+  ].map(Object.freeze));
+
+  const LEGACY_PPT_PROMPT_V3 = '请让已连接的 Agent 为当前论文制作并下载可编辑的组会 PPT（.pptx）。默认 10 分钟，讲给尚未读过本文的同事。先用一句话讲清背景中的知识缺口和研究问题，再按“问题 → 实验与对照 → 观察 → 判断”组织证据，最后交代结论边界和可讨论的问题。以证据块为最小排图单位：为每个判断列出所需的比较对象、对照和原始 Figure/Panel。同一证据块的实验设计、代表图和定量 Panel 尽量同页；图太密、投影时标签难以辨认才拆页，续页沿用证据块编号并保留关键对照。每个结果页用一句可验证的判断作标题，标注 Figure、Panel 和来源页码或原文位置。使用可核对的原图，保留比例、轴、图例、比例尺和字母，图与文字可分别编辑。缺图或数据不明时标记待核对，不补画实验数据。只结合我为本次制作授权的本篇问答、高亮、备注、笔记和解图；清楚区分原文观察、作者解释和我的推断。逐页写讲者备注，指出先看哪个 Panel、如何读对照、怎样过渡到下一页。交付前检查引用、图文对应和投影可读性。';
+
+  function migrateArticleChatQuickPrompts(settings) {
+    const rows = settings.articleChatQuickPrompts;
+    if (!Array.isArray(rows) || !rows.length || settings.articleChatPromptCatalogVersion >= 5) return rows;
+    const draft = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS.find(row => row.id === 'builtin_figure_map_v1');
+    const withDraft = items => items.some(row => row?.id === draft.id) ? items : [...items, draft];
+    if (settings.articleChatPromptCatalogVersion === 4) return withDraft(rows);
+    if (settings.articleChatPromptCatalogVersion === 3) {
+      const next = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS.find(row => row.id === 'agent_journal_club_ppt');
+      const previous = LEGACY_PPT_PROMPT_V3.normalize('NFKC');
+      return withDraft(rows.map(row => row?.id === next.id && typeof row.prompt === 'string' &&
+        row.prompt.normalize('NFKC') === previous ? {...row, prompt: next.prompt} : row));
+    }
+    if (settings.articleChatPromptCatalogVersion === 2) {
+      const ppt = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS.find(row => row.id === 'agent_journal_club_ppt');
+      return withDraft(rows.some(row => row?.id === ppt.id) ? rows : [...rows, ppt]);
+    }
+    const canonical = text => String(text || '').normalize('NFKC').trim();
+    const custom = rows.filter(row => !LEGACY_ARTICLE_CHAT_QUICK_PROMPTS.some(old =>
+      old.id === row?.id && canonical(old.name) === canonical(row.name) && canonical(old.prompt) === canonical(row.prompt)));
+    const ids = new Set(custom.map(row => row?.id));
+    return [...custom, ...DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS.filter(row => !ids.has(row.id))];
+  }
+
   const DEFAULT_DISPLAY_QUICK_PROMPTS = Object.freeze([
     { id: "publisher_clean", name: "出版社论文纯净阅读",
       prompt: "识别当前出版社的论文正文栏，将其居中，最大行宽调到 82ch，窄窗口自动换行。隐藏广告、站点导航、侧栏推荐和页脚。保留标题、作者、正文、图表、图注、引用链接及补充材料入口。预览后检查正文可见性与实际宽度。" },
@@ -125,7 +184,8 @@
   function normalizeArticleChatQuickPrompts(value, defaults = DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS) {
     const source = Array.isArray(value) ? value : defaults;
     const seen = new Set();
-    return source.slice(0, 30).map((item, index) => {
+    const limit = defaults === DEFAULT_DISPLAY_QUICK_PROMPTS ? 30 : 30 + DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS.length;
+    return source.slice(0, limit).map((item, index) => {
       const raw = item && typeof item === 'object' ? item : {};
       const fallback = defaults[index] || {};
       let id = String(raw.id || fallback.id || `prompt_${index + 1}`)
@@ -812,6 +872,7 @@
       figurePanelHeaderFields: normalizeFigurePanelHeaderFields(),
       figurePanelFollowupPrompts: normalizeStoredPanelFollowupPrompts({}),
       figurePanelFollowupPresets: normalizePanelFollowupPresets(),
+      articleChatPromptCatalogVersion: 5,
       articleChatQuickPrompts: normalizeArticleChatQuickPrompts(),
       displayQuickPrompts: normalizeArticleChatQuickPrompts(undefined, DEFAULT_DISPLAY_QUICK_PROMPTS),
       literatureNoteTemplates: shared.normalizeLiteratureNoteTemplates
@@ -945,9 +1006,8 @@
     merged.figurePanelFollowupPresets.forEach(preset => {
       if (preset.topic) merged.figurePanelFollowupPrompts[preset.topic] = preset.prompt;
     });
-    merged.articleChatQuickPrompts = normalizeArticleChatQuickPrompts(
-      saved.articleChatQuickPrompts
-    );
+    merged.articleChatQuickPrompts = normalizeArticleChatQuickPrompts(migrateArticleChatQuickPrompts(saved));
+    merged.articleChatPromptCatalogVersion = 5;
     merged.displayQuickPrompts = normalizeArticleChatQuickPrompts(saved.displayQuickPrompts, DEFAULT_DISPLAY_QUICK_PROMPTS);
     merged.literatureNoteTemplates = shared.normalizeLiteratureNoteTemplates
       ? shared.normalizeLiteratureNoteTemplates(saved.literatureNoteTemplates)

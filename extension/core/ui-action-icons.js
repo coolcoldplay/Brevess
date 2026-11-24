@@ -1,5 +1,5 @@
 (function(root,factory){
-  if(root.SciLLM?.ACTION_ICONS_REVISION==='r17'&&!(typeof module==='object'&&module.exports))return;
+  if(root.SciLLM?.ACTION_ICONS_REVISION==='r18'&&!(typeof module==='object'&&module.exports))return;
   const api=factory(root);if(typeof module==='object'&&module.exports)module.exports=api;
   Object.assign(root.SciLLM ||= {},api);
 })(globalThis,function(root){
@@ -107,10 +107,10 @@
     }
     button[${marker}]:focus-visible {outline:2px solid currentColor;outline-offset:3px}
     button[${marker}]:not(.btn-primary,.primary,.is-primary,.active,.is-active,.danger,.btn-danger,.is-danger,.md-danger,[aria-pressed="true"],[aria-busy="true"]) {
-      color:var(--swiss-ink,#202020);border-color:var(--swiss-line,#d5d5d5);background:#fff;
+      color:var(--bv-text,var(--swiss-ink,#202020));border-color:var(--bv-line,var(--swiss-line,#d5d5d5));background:var(--bv-surface,#fff);
     }
-    button[${marker}]:hover:not(:disabled) {border-color:var(--swiss-ink,#202020);background:#ededed;color:var(--swiss-ink,#202020)}
-    button[${marker}]:active:not(:disabled) {background:var(--swiss-ink,#202020);color:#fff}
+    button[${marker}]:hover:not(:disabled) {border-color:var(--bv-text,var(--swiss-ink,#202020));background:var(--bv-hover,#ededed);color:var(--bv-text,var(--swiss-ink,#202020))}
+    button[${marker}]:active:not(:disabled) {background:var(--bv-selected,var(--swiss-ink,#202020));color:var(--bv-on-selected,#fff)}
     [data-brevess-action-row] {align-items:center!important;column-gap:8px!important;row-gap:8px!important}
     [data-brevess-action-row] > button:not([hidden]) {
       box-sizing:border-box!important;min-height:32px!important;height:32px!important;
@@ -118,6 +118,31 @@
       border-radius:0!important;align-self:center;
     }
     button[${marker}="busy"]::after {animation:brevess-action-spin .9s linear infinite}
+    [data-brevess-dialog] { --brevess-dialog-edge:12px }
+    [data-brevess-dialog] :is(h2,h3):first-of-type { padding-inline-end:28px }
+    [data-brevess-dialog] [data-brevess-dialog-close],button[data-brevess-dialog-close][data-brevess-dialog-close] {
+      position:absolute!important;inset:var(--brevess-dialog-edge,12px) var(--brevess-dialog-edge,12px) auto auto!important;
+      display:grid!important;place-items:center!important;width:26px!important;height:26px!important;min-width:0!important;min-height:0!important;
+      padding:3px!important;margin:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;
+      color:var(--bv-text,#202020)!important;background:transparent!important;font-size:0!important;line-height:1!important;z-index:2;
+    }
+    button[data-brevess-dialog-close] > * {display:none!important}
+    button[data-brevess-dialog-close][data-brevess-dialog-close]::after {
+      content:""!important;display:block!important;position:static!important;width:16px!important;height:16px!important;
+      background:currentColor!important;mask:var(--brevess-close-mask) center/contain no-repeat!important;
+      -webkit-mask:var(--brevess-close-mask) center/contain no-repeat!important;pointer-events:none;
+    }
+    button[data-brevess-dialog-close][data-brevess-dialog-close]:hover {color:var(--bv-red,#bd2927)!important}
+    [data-brevess-dialog-footer] {display:flex;align-items:center;justify-content:flex-end;gap:8px}
+    [data-brevess-dialog-save] {order:5;margin-inline-start:auto!important}
+    @supports (anchor-name:--brevess-save) and (anchor-scope:--brevess-save) {
+      [data-brevess-dialog]{anchor-scope:--brevess-save}
+      [data-brevess-dialog-save]{anchor-name:--brevess-save}
+      [data-brevess-dialog]:has([data-brevess-dialog-save]) [data-brevess-dialog-close] {
+        right:anchor(--brevess-save right,var(--brevess-dialog-edge,12px))!important;
+      }
+    }
+    [data-brevess-dialog] [data-brevess-extra-cancel] {display:none!important}
     @keyframes brevess-action-spin {to{rotate:360deg}}
     @media(prefers-reduced-motion:reduce){button[${marker}="busy"]::after{animation:none}}
   `;
@@ -130,7 +155,7 @@
     // and extension surfaces retain the scoped runtime stylesheet.
     const external=parent.querySelector?.('link[rel="stylesheet"][data-brevess-action-icons]');
     if(external){styles.set(parent,external);return;}
-    const style=doc.createElement('style');style.dataset.brevessActionIcons='r17';style.textContent=css;parent.appendChild(style);styles.set(parent,style);
+    const style=doc.createElement('style');style.dataset.brevessActionIcons='r18';style.textContent=css;parent.appendChild(style);styles.set(parent,style);
   }
   function setOwnedAttribute(button,state,name,value){
     const current=button.getAttribute(name);
@@ -170,6 +195,65 @@
       button.setAttribute(marker,icon);
     }
   }
+  const dialogSelector='dialog,[role="dialog"],[role="alertdialog"],#focusControls';
+  const boundEscape=new WeakSet(),dismissals=new WeakSet();
+  function registerEscape(scope){
+    if(boundEscape.has(scope))return;
+    boundEscape.add(scope);
+    scope.addEventListener('keydown',event=>{
+      if(event.key!=='Escape'||event.isComposing||event.defaultPrevented)return;
+      const native=scope.querySelector('dialog:modal');
+      const buttons=[...scope.querySelectorAll('[data-brevess-dialog-close]')].reverse();
+      const close=buttons.find(button=>{
+        const owner=button.closest(dialogSelector);
+        return dismissals.has(button)&&owner&&owner.localName!=='dialog'&&(!native||native.contains(owner))&&button.getClientRects().length;
+      });
+      if(close){event.preventDefault();event.stopPropagation();close.click();}
+    });
+  }
+  function prepareDialog(dialog){
+    const doc=dialog.ownerDocument,scope=dialog.getRootNode();
+    const ownedPage=/^(?:chrome|moz)-extension:$/.test(doc.location?.protocol)||doc.body?.hasAttribute('data-ui-surface');
+    if(!ownedPage&&!dialog.closest('[data-sci-plugin-ui],[data-brevess-ui]')&&!scope.host?.matches('[data-sci-plugin-ui]'))return;
+    if(!dialog.childElementCount||dialog.closest('[data-i18n-user-content]'))return;
+    const controls=[...dialog.querySelectorAll('button')].filter(b=>b.closest(dialogSelector)===dialog);
+    const label=b=>(b.textContent||'').trim();
+    const cancel=b=>/^(取消|Cancel)$/i.test(label(b));
+    const close=controls.find(b=>!b.hasAttribute('data-brevess-auto-close')&&
+      (b.matches('[data-close],[data-dialog-dismiss],#focusCollapse')||/^(?:[×✕✖]|关闭|Close)$/iu.test(label(b))||/^(关闭|Close\b)/i.test(b.getAttribute('aria-label')||'')))||
+      controls.find(cancel)||controls.find(b=>b.hasAttribute('data-brevess-auto-close'));
+    let dismiss=close;
+    if(!dismiss&&dialog.localName==='dialog'){
+      dismiss=doc.createElement('button');dismiss.type='button';dismiss.textContent='×';
+      dismiss.setAttribute('aria-label',root.SciLLM?.translateInterfaceText?.('关闭')||'关闭');
+      dismiss.dataset.brevessAutoClose='';
+      dismiss.addEventListener('click',()=>{
+        if(typeof dialog.requestClose==='function')dialog.requestClose('cancel');
+        else if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close('cancel');
+      });
+      dialog.append(dismiss);
+    }
+    if(!dismiss)return;
+    if(!dialog.hasAttribute('data-brevess-dialog'))dialog.dataset.brevessDialog='';
+    for(const old of controls.filter(b=>b!==dismiss&&b.hasAttribute('data-brevess-dialog-close'))){
+      if(old.hasAttribute('data-brevess-auto-close'))old.remove();else old.removeAttribute('data-brevess-dialog-close');
+    }
+    if(!dismiss.hasAttribute('data-brevess-dialog-close')){
+      dismiss.dataset.brevessDialogClose='';dismissals.add(dismiss);
+      const cross='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><path d="'+paths.close+'"/></svg>';
+      dismiss.style.setProperty('--brevess-close-mask','url("data:image/svg+xml,'+encodeURIComponent(cross)+'")');
+      ensureStyle(dismiss);registerEscape(scope);
+    }
+    for(const b of controls){
+      const footer=b.closest('footer,.form-actions,.modal-actions,.dialog-actions,[class$="-footer"],.confirmation-dialog-actions,.batch-foot,.form-foot');
+      if(!footer||footer.closest(dialogSelector)!==dialog)continue;
+      // Some forms have an independent cancel for an edit inside the dialog.
+      if(cancel(b)&&b!==dismiss&&/^cancel-(?:editor|history)$/.test(b.id))b.dataset.brevessExtraCancel='';
+      if((b.getAttribute(marker)==='save'||/^(保存|Save\b)/i.test(label(b)))&&!b.hasAttribute('data-brevess-dialog-save')){
+        b.dataset.brevessDialogSave='';footer.dataset.brevessDialogFooter='';
+      }
+    }
+  }
   function decorateActionIcons(scope){
     if(!scope)return;
     // Called only by the existing interface-root localization lifecycle. Never
@@ -177,6 +261,14 @@
     const element=scope.nodeType===3?scope.parentElement:scope;
     const button=element?.closest?.('button');if(button)decorateButton(button);
     element?.querySelectorAll?.('button').forEach(decorateButton);
+    const parent=element?.closest?.(dialogSelector);if(parent)prepareDialog(parent);
+    element?.querySelectorAll?.(dialogSelector).forEach(prepareDialog);
   }
-  return{ACTION_ICONS_REVISION:'r17',actionIconForLabel,decorateActionIcons,invalidateActionIconTranslations};
+  // Standalone extension pages can open native dialogs without the localization observer.
+  if(/^(?:chrome|moz)-extension:$/.test(root.location?.protocol)){
+    root.document?.addEventListener('toggle',event=>{
+      if(event.target?.matches?.('dialog[open]'))prepareDialog(event.target);
+    },true);
+  }
+  return{ACTION_ICONS_REVISION:'r18',actionIconForLabel,decorateActionIcons,invalidateActionIconTranslations};
 });

@@ -67,7 +67,7 @@
       }catch(error){if(signal?.aborted)throw signal.reason;if(typeof error.code==='string'&&error.code.startsWith('RADAR_'))throw error;throw m.radarError(controller.signal.aborted?'RADAR_TIMEOUT':'RADAR_SOURCE_NETWORK','来源网络请求失败或超时，原进度已保留。');}
       finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
     }
-    async function discover({query,startDay,endDay,signal}){
+    async function discover({query,startDay,endDay,signal,publication=false,countOnly=false}){
       if(!query?.trim()||!day(startDay)||!day(endDay)||startDay>endDay)throw m.radarError('RADAR_ARGUMENT');
       const articles=[],ids=new Set();let cursor='*',offset=0,page=1,total=null,expectedTotal=null;
       const append=rows=>{for(const row of rows){if(!m.radarPaperUrl(source,row)||!row.title)bad();if(!ids.has(row.id)){ids.add(row.id);articles.push(row);}}if(articles.length>5000)broad();};
@@ -75,26 +75,26 @@
         signal?.throwIfAborted();let rows,next;
         if(['europepmc','biorxiv','medrxiv'].includes(source)){
           const publisher=source==='europepmc'?'':` AND SRC:PPR AND PUBLISHER:"${source==='biorxiv'?'bioRxiv':'medRxiv'}"`;
-          const data=await request('https://www.ebi.ac.uk/europepmc/webservices/rest/search',{query:`(${query})${publisher} AND FIRST_IDATE:[${startDay} TO ${endDay}]`,format:'json',resultType:'core',pageSize:100,cursorMark:cursor},signal);
+          const data=await request('https://www.ebi.ac.uk/europepmc/webservices/rest/search',{query:`(${query})${publisher} AND ${publication?'FIRST_PDATE':'FIRST_IDATE'}:[${startDay} TO ${endDay}]`,format:'json',resultType:countOnly?'lite':'core',pageSize:countOnly?1:100,cursorMark:cursor},signal);
           if(!data||data.errCode!=null||data.errMsg||data.error||!['number','string'].includes(typeof data.hitCount)||!/^\d+$/.test(String(data.hitCount))||!Array.isArray(data.resultList?.result))bad();
-          total=Number(data.hitCount);if(expectedTotal!==null&&total!==expectedTotal)bad();expectedTotal=total;next=data.nextCursorMark;
+          total=Number(data.hitCount);if(countOnly)return total;if(expectedTotal!==null&&total!==expectedTotal)bad();expectedTotal=total;next=data.nextCursorMark;
           if(source!=='europepmc'&&data.resultList.result.some(r=>!r||r.source!=='PPR'||(r.bookOrReportDetails?.publisher&&String(r.bookOrReportDetails.publisher).toLowerCase()!==source)))bad();
           rows=data.resultList.result.map(r=>({id:source==='europepmc'?`epmc:${r.source}:${r.id}`:`${source}:${r.id}`,title:plain(r.title),doi:r.doi||'',url:r.doi?'https://doi.org/'+r.doi:`https://europepmc.org/article/${r.source}/${r.id}`,authors:(r.authorList?.author||[]).map(a=>a.fullName),journal:r.journalInfo?.journal?.title||r.bookOrReportDetails?.publisher||'Europe PMC',createdDay:day(r.firstIndexDate||r.dateOfCreation),publicationDate:r.firstPublicationDate||r.pubYear||'',source,preprint:r.source==='PPR',...(r.versionNumber?{version:String(r.versionNumber).slice(0,40)}:{}),relatedPublications:(r.commentCorrectionList?.commentCorrection||[]).filter(c=>c.source==='MED'&&/^\d+$/.test(String(c.id))&&['Preprint of','Preprint in','Update of','Update in','Erratum in','Retraction in'].includes(c.type)).slice(0,100).map(c=>({source:'pubmed',id:String(c.id),relation:c.type,url:'https://pubmed.ncbi.nlm.nih.gov/'+c.id+'/'})),...abstracts(r.abstractText,'europepmc')}));
         }else if(source==='arxiv'){
-          const data=parseRadarArxiv(await request('https://export.arxiv.org/api/query',{search_query:`(${query}) AND submittedDate:[${startDay.replaceAll('-','')}0000 TO ${endDay.replaceAll('-','')}2359]`,start:offset,max_results:100,sortBy:'submittedDate',sortOrder:'descending'},signal,true));
-          total=data.total;rows=data.articles;next=String(offset+rows.length);
+          const data=parseRadarArxiv(await request('https://export.arxiv.org/api/query',{search_query:`(${query}) AND submittedDate:[${startDay.replaceAll('-','')}0000 TO ${endDay.replaceAll('-','')}2359]`,start:offset,max_results:countOnly?1:100,sortBy:'submittedDate',sortOrder:'descending'},signal,true));
+          total=data.total;if(countOnly)return total;rows=data.articles;next=String(offset+rows.length);
         }else if(source==='crossref'){
-          const data=await request('https://api.crossref.org/works',{query,filter:`from-index-date:${startDay},until-index-date:${endDay}`,rows:100,cursor},signal);const body=data.message;
+          const data=await request('https://api.crossref.org/works',{query,filter:[...(startDay==='0001-01-01'?[]:[`from-${publication?'pub':'index'}-date:${startDay}`]),`until-${publication?'pub':'index'}-date:${endDay}`].join(','),rows:100,cursor},signal);const body=data.message;
           total=Number(body?.['total-results']);next=body?.['next-cursor'];if(!Array.isArray(body?.items))bad();
           rows=body.items.map(r=>({id:'crossref:'+String(r.DOI).toLowerCase(),title:plain(r.title?.[0]),doi:r.DOI,url:'https://doi.org/'+r.DOI,authors:(r.author||[]).map(a=>[a.given,a.family].filter(Boolean).join(' ')),journal:r['container-title']?.[0]||'',createdDay:day(r.indexed?.['date-time']),publicationDate:r.published?.['date-parts']?.[0]?.join('-')||'',source,preprint:r.type==='posted-content',...abstracts(r.abstract,'crossref')}));
         }else if(source==='wos'){
-          const data=await request('https://api.clarivate.com/apis/wos-starter/v1/documents',{q:query,db:'WOS',limit:50,page,sortField:'LD+D',modifiedTimeSpan:startDay+'+'+endDay},signal);
-          total=Number(data.metadata?.total);if(!Array.isArray(data.hits))bad();next=String(page+1);
+          const data=await request('https://api.clarivate.com/apis/wos-starter/v1/documents',{q:publication?`(${query}) AND PY=(${startDay.slice(0,4)}-${endDay.slice(0,4)})`:query,db:'WOS',limit:countOnly?1:50,page,sortField:'LD+D',...(!publication?{modifiedTimeSpan:startDay+'+'+endDay}:{})},signal);
+          if(!/^\d+$/.test(String(data.metadata?.total)))bad();total=Number(data.metadata.total);if(countOnly)return total;if(!Array.isArray(data.hits))bad();next=String(page+1);
           rows=data.hits.map(r=>({id:'wos:'+r.uid,title:plain(r.title),url:'https://www.webofscience.com/wos/woscc/full-record/'+r.uid,doi:r.identifiers?.doi||'',authors:(r.names?.authors||[]).map(a=>a.displayName||a.wosStandard),journal:r.source?.sourceTitle||'',createdDay:day(r.modifiedTime||r.loadDate),publicationDate:String(r.source?.publishYear||''),source,...abstracts(r.abstract,'wos-starter')}));
         }else if(source==='scopus'){
           const before=new Date(Date.parse(endDay)+m.DAY).toISOString().slice(0,10).replaceAll('-',''),after=new Date(Date.parse(startDay)-m.DAY).toISOString().slice(0,10).replaceAll('-','');
-          const data=await request('https://api.elsevier.com/content/search/scopus',{query:`(${query}) AND LOAD-DATE AFT ${after} AND LOAD-DATE BEF ${before}`,count:25,start:offset,view:'STANDARD'},signal);const body=data['search-results'];
-          total=Number(body?.['opensearch:totalResults']);if(!Array.isArray(body?.entry))bad();next=String(offset+25);
+          const data=await request('https://api.elsevier.com/content/search/scopus',{query:publication?query:`(${query}) AND LOAD-DATE AFT ${after} AND LOAD-DATE BEF ${before}`,...(publication?{date:startDay.slice(0,4)+'-'+endDay.slice(0,4)}:{}),count:countOnly?1:25,start:offset,view:'STANDARD'},signal);const body=data['search-results'];
+          if(!/^\d+$/.test(String(body?.['opensearch:totalResults'])))bad();total=Number(body['opensearch:totalResults']);if(countOnly)return total;if(!Array.isArray(body?.entry))bad();next=String(offset+25);
           rows=total===0?[]:body.entry.map(r=>({id:'scopus:'+r.eid,title:plain(r['dc:title']),url:'https://www.scopus.com/record/display.uri?eid='+r.eid,doi:r['prism:doi']||'',authors:r['dc:creator']?[r['dc:creator']]:[],journal:r['prism:publicationName']||'',createdDay:day(r['load-date']),publicationDate:r['prism:coverDate']||'',source,...abstracts(r['dc:description'],'scopus')}));
         }
         if(!Number.isSafeInteger(total)||total<0)bad();if(total>5000)broad();if(!rows.length&&offset<total)bad();append(rows);offset+=rows.length;
@@ -102,9 +102,19 @@
         if(!next||next===cursor||page>=200)bad();cursor=next;page++;
       }
       if(articles.length!==total)bad();
-      return {articles,warnings:[source==='biorxiv'||source==='medrxiv'?'预印本通过 Europe PMC 索引检索，可能晚于网站发布。':source==='arxiv'?'按首次提交日期检索，修订稿不会作为新增论文重复计数。':source==='wos'||source==='scopus'?'结果受当前 API 权限和额度限制；接口未提供摘要或日期时不编造内容。':source==='crossref'?'Crossref 使用相关性关键词检索，摘要由出版方提供，可能缺失。':'包含 Europe PMC 收录的期刊论文和预印本。'],queryTranslation:query};
+      const selected=publication&&source==='scopus'?articles.filter(p=>p.publicationDate>=startDay&&p.publicationDate<=endDay):articles;
+      return {articles:selected,warnings:[...(publication&&source==='wos'?['Web of Science Starter 仅提供发表年份，基线按整年纳入。']:[]),source==='biorxiv'||source==='medrxiv'?'预印本通过 Europe PMC 索引检索，可能晚于网站发布。':source==='arxiv'?'按首次提交日期检索，修订稿不会作为新增论文重复计数。':source==='wos'||source==='scopus'?'结果受当前 API 权限和额度限制；接口未提供摘要或日期时不编造内容。':source==='crossref'?'Crossref 使用相关性关键词检索，摘要由出版方提供，可能缺失。':'包含 Europe PMC 收录的期刊论文和预印本。'],queryTranslation:query};
     }
-    return {source,discover};
+    async function publicationYears(query,{signal}={}){
+      if(source==='crossref'){
+        const result=await request('https://api.crossref.org/works',{query,rows:0,facet:'published:*'},signal);
+        const values=result?.message?.facets?.published?.values;
+        if(!values||typeof values!=='object'||Array.isArray(values))bad();
+        return Object.entries(values).map(([year,count])=>[Number(year),Number(count)]);
+      }
+      return m.radarCountYears((a,b)=>discover({query,startDay:a+'-01-01',endDay:b+'-12-31',publication:true,countOnly:true,signal}),signal);
+    }
+    return {source,discover,publicationYears};
   }
   function createRadarAdapters(options={}){return Object.fromEntries(Object.keys(m.RADAR_SOURCES).map(source=>[source,source==='pubmed'?m.createPubMedRadarAdapter(options):source==='asta'?m.createAstaRadarAdapter({getConnection:loadRadarConnection,...options}):createAdditionalRadarAdapter(source,options)]));}
   return {createAdditionalRadarAdapter,createRadarAdapters,parseRadarArxiv,loadRadarConnection,saveRadarConnection,removeRadarConnection};

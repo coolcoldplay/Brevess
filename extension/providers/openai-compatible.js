@@ -96,7 +96,8 @@
         if (typeof text !== 'string') {
           throw new shared.ProviderRequestError('INVALID_RESPONSE', 'Compatible provider response did not contain text');
         }
-        return shared.parseJsonText(text);
+        return data.choices[0].finish_reason === 'stop'
+          ? shared.parseCompletedJsonText(text) : shared.parseJsonText(text);
       },
       async analyzeChunk(request) {
         return adapter.generateJson({

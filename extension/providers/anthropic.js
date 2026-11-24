@@ -107,7 +107,8 @@
         if (!textBlock) {
           throw new shared.ProviderRequestError('INVALID_RESPONSE', 'Anthropic response did not contain text');
         }
-        return shared.parseJsonText(textBlock.text);
+        return data.stop_reason === 'end_turn'
+          ? shared.parseCompletedJsonText(textBlock.text) : shared.parseJsonText(textBlock.text);
       },
       async analyzeChunk(request) {
         return adapter.generateJson({

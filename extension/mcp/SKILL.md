@@ -32,6 +32,14 @@ description: Read or edit BREVESS literature, hypotheses, Figure/Panel plans and
 
 使用 `mechanism.apply_commands` 一次最多32条、总量128KiB，携带精确 target、expectedRevision 和稳定 idempotencyKey。支持节点/联系、既有证据绑定、布局；绑定和修改证据类型须传 list_evidence 返回的精确指纹，不编造或省略 Panel。全批预检后一次CAS，禁止通用快照替换。冲突重新读取；超时先调用 `mechanism.read_receipt`。UNKNOWN_REQUIRES_READ 时检查当前图再决定，不能盲目重复创建。结束前读回，切换文献/关闭/到期/撤回立即停止旧写入。
 
+## 在 BREVESS 问答里与读者协作
+
+读者从论文问答委托任务后，用 `brevess_wait_for_task` 接单，再用 `brevess_claim_task` 取得本次任务的要求和已授权材料。沿用原任务 ID。长任务可用 `brevess_report_progress` 回传已经完成的步骤。
+
+需要读者决定时，用 `brevess_ask_user` 将问题、选项、选项说明及是否允许多选或补充文字发回问答。每一轮使用新的 requestId，重试同一问题时沿用原 requestId。用 `brevess_get_user_answer` 等待读者提交，仍在等待时继续轮询。跳过只表示读者跳过了这道题。客户端权限请求通过客户端的正式审批界面处理。
+
+完成普通问答后用 `brevess_complete_task` 回传正文。收到 PPT 委托时，按 brief.md 制作可编辑文件，再用 `brevess_deliver_ppt` 交回。读者可以在原问答里查看结果或下载。
+
 ## 从当前文献制作 PPT
 
 收到做PPT请求后，先沿用本轮已经提供的要求，不重复问卷。用 `mechanism.read_context` 确认当前文献 target；若未打开正确文献，说明需要在解图侧栏打开它，不改读全库或另一篇文献。

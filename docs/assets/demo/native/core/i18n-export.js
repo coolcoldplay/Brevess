@@ -122,6 +122,7 @@
     const c = customization, figures = Array.isArray(bundle.figures) ? bundle.figures : [];
     return [
       '# Formal Journal Club PowerPoint task (for Codex or another AI Agent)', '',
+      'Organize slides by evidence block. Map the research question, control and panels to one supported claim. Keep representative images and quantification for a block together. Split only if projection makes labels unreadable. Repeat the block ID and essential control on continuation slides. Fit source panels inside their frames at the original aspect ratio and allow whitespace. Compare all four edges with the source to keep the letters, axes and legends visible. Speaker notes for each slide should explain which panel to look at first, how to read its comparison and how it leads to the next slide.',
       `Article title: ${bundle.title || 'Not provided'}`, `Article URL: ${bundle.url || 'Not provided'}`, '',
       'This is a verifiable materials package exported by Brevess. Create an editable PowerPoint suitable for a formal Journal Club, using original paper Panels as the main visual evidence. Do not simply pack paper text into slides.',
       `Present in ${c.language}, designed for ${c.durationMinutes} minutes. Let evidence density determine the slide count, normally ${c.slideCount} slides. Explicit user requirements for duration, language, template or slide count take precedence.`, '',

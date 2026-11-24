@@ -3,12 +3,13 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.BrevessReadingFocus = Object.assign(root.BrevessReadingFocus || {}, api);
   if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.scripting) {
-    root.BrevessReadingFocusController = api.createFocusController(chrome, root.BrevessReadingFocus);
+    root.BrevessReadingFocusController = api.createFocusController(chrome, root.BrevessReadingFocus, Date.now,
+      id => typeof articleWorkspaceStore === 'undefined' ? null : articleWorkspaceStore.getWorkspace(id));
     root.BrevessReadingFocusController.register();
   }
 })(globalThis, function () {
   'use strict';
-  function createFocusController(browser, model, now = Date.now) {
+  function createFocusController(browser, model, now = Date.now, readSavedPaper = () => null) {
     const ALARM = 'brevess-reading-focus-deadline-v1', CHECKPOINT = 'brevess-reading-focus-checkpoint-v1';
     const PREFIX = browser.runtime.getURL('');
     let queue = Promise.resolve(), generation = 0;
@@ -37,12 +38,34 @@
         return result.state;
       });
     }
+    async function paperKey(tab, result) {
+      if (result.type!=='paper' || !tab?.url) return '';
+      let identity=result.doi;
+      if (!identity) {
+        const u=new URL(tab.url);
+        if (u.protocol==='chrome-extension:' && u.pathname==='/pdf-reader.html') identity=u.searchParams.get('source') || u.searchParams.get('hash') || u.searchParams.get('documentHash');
+        if (!identity && u.protocol==='chrome-extension:' && u.pathname==='/offline-reader.html') {
+          const id=u.searchParams.get('workspaceId'), saved=await Promise.resolve().then(()=>readSavedPaper(id)).catch(()=>null);
+          identity=saved?.aliases?.find(alias=>alias.type==='doi')?.value?.toLowerCase() || saved?.canonicalUrl || id;
+        }
+        if (!identity && u.protocol==='chrome-extension:') return '';
+        if (!identity) identity=u.href;
+      }
+      if (/^https?:/i.test(identity)) {
+        const original=new URL(identity);original.hash='';
+        for (const k of [...original.searchParams.keys()]) if (/^(utm_|ref$)/i.test(k)) original.searchParams.delete(k);
+        identity=original.href;
+      }
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity));
+      return [...new Uint8Array(digest).slice(0,16)].map(b=>b.toString(16).padStart(2,'0')).join('');
+    }
     async function preview(tab) {
       if (!tab?.id) return { type: 'unknown', reason: '没有可读取的标签页', outline: [] };
       // Extension PDF readers cannot be inspected through scripting.executeScript.
       // Their source type is authoritative; a missing HTML snapshot is not a web page.
       try {
         const url = new URL(tab.url || '');
+        if (url.protocol === 'chrome-extension:' && url.host === browser.runtime.id && url.pathname === '/offline-reader.html' && /^workspace:[a-f0-9]{64}$/.test(url.searchParams.get('workspaceId')||'')) return {type:'paper',reason:'已保存的文献',outline:[]};
         if (url.protocol === 'chrome-extension:' && url.host === browser.runtime.id && url.pathname === '/pdf-reader.html')
           return { type: 'paper', reason: 'PDF 文献', outline: [] };
       } catch (_) {}
@@ -57,24 +80,33 @@
         } catch (_) {}
       }
       const value = model.classify(snapshot);
+      const doi=String(snapshot.meta?.doi||'').trim().toLowerCase(); if (/^10\.\d{4,9}\//.test(doi)) value.doi=doi;
       // The preview is ephemeral. It contains heading text, never persisted browsing history.
       previews.set(tab.id, { key, at: now(), value });
       while (previews.size > 12) previews.delete(previews.keys().next().value);
       return value;
     }
+    async function resolveReaderTab(tab) {
+      if (!tab || tab.url || !browser.runtime.getContexts) return tab;
+      const contexts=await browser.runtime.getContexts({contextTypes:['TAB'],tabIds:[tab.id]});
+      const own=contexts.find(c=>c.frameId===0 && c.documentUrl?.startsWith(PREFIX));
+      return own ? {...tab,url:own.documentUrl} : tab;
+    }
     async function focusedTab() {
       const win = await browser.windows.getLastFocused();
       if (!win?.focused) return null;
-      return (await browser.tabs.query({ active: true, windowId: win.id }))[0] || null;
+      return resolveReaderTab((await browser.tabs.query({ active: true, windowId: win.id }))[0] || null);
     }
     async function sync() {
       const token = ++generation;
       const tab = await focusedTab();
-      if (!tab) { if ((await read()).active) await apply({ type: 'FOREGROUND', value: false }, () => token === generation); return; }
+      const recent=await read();
+      if (recent.reader && (!tab || tab.id!==recent.reader.tabId)) await apply({type:'READER'},()=>token===generation);
+      if (!tab) { if (recent.active) await apply({ type: 'FOREGROUND', value: false }, () => token === generation); return; }
       const result = await preview(tab);
       const current = await focusedTab();
       if (token !== generation || current?.id !== tab.id || current?.url !== tab.url) return;
-      if ((await read()).active) await apply({ type: 'PAGE', pageType: result.type, foreground: true }, () => token === generation);
+      if ((await read()).active) await apply({ type: 'PAGE', pageType: result.type, paperKey:await paperKey(tab,result), foreground: true }, () => token === generation);
       if (token !== generation) return;
       await send({ preview: result, tabId: tab.id, windowId: tab.windowId });
     }
@@ -87,18 +119,35 @@
       const command = message.command;
       if (command === 'READ' || command === 'CLASSIFY') {
         const tabs = await browser.tabs.query({ active: true, windowId: Number(message.windowId) });
-        const tab = tabs[0];
+        const tab = await resolveReaderTab(tabs[0]);
         if (command === 'CLASSIFY' && Number(message.tabId) !== tab?.id) throw Error('FOCUS_CONTEXT_CHANGED');
         const result = await preview(tab);
-        const current = (await browser.tabs.query({ active: true, windowId: Number(message.windowId) }))[0];
+        const current = await resolveReaderTab((await browser.tabs.query({ active: true, windowId: Number(message.windowId) }))[0]);
         if (current?.id !== tab?.id || current?.url !== tab?.url) throw Error('FOCUS_CONTEXT_CHANGED');
-        return { state: model.projected(await read(), now()), preview: result, tabId: tab?.id, notifications: await browser.permissions.contains({ permissions: ['notifications'] }) };
+        const key=await paperKey(tab,result);
+        let state=await read();
+        if (tab && (await focusedTab())?.id===tab.id && message.visible!==false) {
+          const previous=state.reader;
+          if (key && (previous?.key!==key || previous.tabId!==tab.id || previous.owner!==sender.documentId || previous.expires-now()<40000)) {
+            const updated=await apply({type:'READER',paperKey:key,tabId:tab.id,windowId:tab.windowId,owner:sender.documentId},
+              async()=>{const live=await focusedTab();return live?.id===tab.id && live.url===tab.url;});
+            if(updated)state=updated;
+          }
+          else if(!key && previous?.windowId===tab.windowId) state=await apply({type:'READER'});
+        }
+        return { state: model.projected(state, now()), preview: result, tabId: tab?.id, notifications: await browser.permissions.contains({ permissions: ['notifications'] }) };
+      }
+      if (command === 'READER_CLOSED') {
+        const state=await read();
+        const owns=reader=>reader?.windowId===message.windowId && reader.tabId===message.tabId && reader.owner===sender.documentId;
+        if (owns(state.reader)) return {state:await apply({type:'READER'},async()=>owns((await read()).reader)) || await read()};
+        return {state};
       }
       if (command === 'START') {
         const tab = await focusedTab(), p = await preview(tab);
         const current = await focusedTab();
         if (current?.id !== tab?.id || current?.url !== tab?.url) throw Error('FOCUS_CONTEXT_CHANGED');
-        return { state: await apply({ type: 'START', id: crypto.randomUUID(), pageType: p.type, mode: message.mode }) };
+        return { state: await apply({ type: 'START', id: crypto.randomUUID(), pageType: p.type, paperKey:await paperKey(tab,p), mode: message.mode }) };
       }
       if (command === 'SETTINGS') return { state: await apply({ type: 'SETTINGS', settings: message.settings }) };
       if (command === 'CLASSIFY_AS') {
@@ -109,7 +158,7 @@
         if (current?.id !== tab.id || current?.url !== tab.url) throw Error('FOCUS_CONTEXT_CHANGED');
         const value = { ...p, type: message.pageType, reason: '由你手动确认' };
         previews.set(tab.id, { key: tab.id + ':' + tab.url, at: now(), value, manual: true });
-        await apply({ type: 'PAGE', pageType: value.type, foreground: true });
+        await apply({ type: 'PAGE', pageType: value.type, paperKey:await paperKey(tab,value), foreground: true });
         await send({ preview: value, tabId: tab.id, windowId: tab.windowId });
         return { state: await read(), preview: value, tabId: tab.id };
       }
@@ -131,7 +180,7 @@
       browser.tabs.onUpdated.addListener((id, change, tab) => {
         if (change.url || change.status === 'complete') { previews.delete(id); if (tab.active) void sync().catch(() => {}); }
       });
-      browser.tabs.onRemoved.addListener(id => { previews.delete(id); });
+      browser.tabs.onRemoved.addListener(id => { previews.delete(id);void read().then(s=>s.reader?.tabId===id && apply({type:'READER'})).catch(()=>{}); });
       browser.windows.onFocusChanged.addListener(() => { void sync().catch(() => {}); });
       // storage.session survives worker suspension but not a browser restart.
       return enqueue(async () => {
@@ -139,7 +188,7 @@
         const seen = await browser.storage.session.get(marker);
         if (!seen[marker]) {
           const old = await read();
-          if (old.active) await browser.storage.local.set({ [model.STORAGE_KEY]: model.reduce(old, { type: 'RECOVER' }, now()).state });
+          if (old.active || old.reader) await browser.storage.local.set({ [model.STORAGE_KEY]: model.reduce(old, { type: 'RECOVER' }, now()).state });
           await browser.storage.session.set({ [marker]: true });
         }
       }).then(sync).catch(() => {});

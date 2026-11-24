@@ -118,7 +118,17 @@
       await search(startDay,endDay);
       return {articles:[...found.values()],queryTranslation:query,warnings:['Asta 按发表日期进行相关性检索；与网页 Deep search 不同，不保证穷尽收录。晚到索引超过 7 天重叠范围可能漏检。',...(missingDate?['部分文献缺少具体发表日期；来源按年份的 1 月 1 日筛选，列表保留年份，不补造日期。']:[])]};
     }
-    return {source:'asta',discover};
+    async function publicationYears(query,{signal}={}){
+      const {articles}=await discover({query,startDay:'0001-01-01',endDay:m.radarDay(Date.now()),signal});
+      const counts=new Map();
+      for(const p of articles){
+        const year=Number(p.publicationDate.slice(0,4));
+        if(!year)throw m.radarError('RADAR_RESULT_INVALID','Asta 部分命中缺少年份，无法统计完整的年度分布。');
+        counts.set(year,(counts.get(year)||0)+1);
+      }
+      return [...counts];
+    }
+    return {source:'asta',discover,publicationYears};
   }
   return {createAstaRadarAdapter};
 });

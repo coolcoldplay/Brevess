@@ -118,43 +118,43 @@
     dialog.setAttribute('data-action-icon', 'none');
     const style = doc.createElement('style');
     style.textContent = `
-      body dialog.brevess-agent-connection {box-sizing:border-box;width:min(500px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid #e7e7e9;border-radius:20px;background:#fff;color:#222;box-shadow:0 24px 90px #0002;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+      body dialog.brevess-agent-connection {box-sizing:border-box;width:min(500px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid var(--bv-line, #e7e7e9);border-radius:20px;background:var(--bv-surface, #fff);color:var(--bv-text, #222);box-shadow:0 24px 90px #0002;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
       .brevess-agent-connection::backdrop {background:#17171750;backdrop-filter:blur(3px)}
       .brevess-agent-connection [hidden] {display:none!important}
       .brevess-agent-connection .agent-head {display:flex;align-items:center;justify-content:space-between;margin:0 0 8px}
       .brevess-agent-connection h2 {font-size:22px;line-height:1.3;letter-spacing:-.5px;margin:0;font-weight:650}
       .brevess-agent-connection p {margin:0;overflow-wrap:anywhere}
-      .brevess-agent-connection .agent-subtitle {color:#787b80;font-size:13px;margin-bottom:24px}
-      .brevess-agent-connection .agent-label {display:block;font-size:12px;font-weight:600;color:#64686d;margin-bottom:8px}
-      dialog.brevess-agent-connection :is(select,input) {box-sizing:border-box;display:block;width:100%;height:44px;padding:9px 12px;border:1px solid #dddfe2;border-radius:10px;background:#fff;color:#222;font:inherit}
-      .brevess-agent-connection .agent-capability {font-size:12px;color:#777b81;margin-top:8px;min-height:18px}
+      .brevess-agent-connection .agent-subtitle {color:var(--bv-muted, #787b80);font-size:13px;margin-bottom:24px}
+      .brevess-agent-connection .agent-label {display:block;font-size:12px;font-weight:600;color:var(--bv-muted, #64686d);margin-bottom:8px}
+      dialog.brevess-agent-connection :is(select,input) {box-sizing:border-box;display:block;width:100%;height:44px;padding:9px 12px;border:1px solid var(--bv-line, #dddfe2);border-radius:10px;background:var(--bv-surface, #fff);color:var(--bv-text, #222);font:inherit}
+      .brevess-agent-connection .agent-capability {font-size:12px;color:var(--bv-muted, #777b81);margin-top:8px;min-height:18px}
       .brevess-agent-connection .agent-primary-actions {display:flex;gap:10px;margin-top:22px}
-      dialog.brevess-agent-connection button {box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:auto;height:auto;min-height:38px;margin:0;padding:9px 14px;gap:6px;border:1px solid #e2e3e5;border-radius:10px;background:#fff;color:#25272b;font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer;box-shadow:none}
+      dialog.brevess-agent-connection button {box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:auto;height:auto;min-height:38px;margin:0;padding:9px 14px;gap:6px;border:1px solid var(--bv-line, #e2e3e5);border-radius:10px;background:var(--bv-surface, #fff);color:var(--bv-text, #25272b);font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer;box-shadow:none}
       dialog.brevess-agent-connection .agent-primary-actions button {flex:1;min-height:42px;white-space:nowrap}
-      dialog.brevess-agent-connection .agent-primary {background:#222;color:#fff;border-color:#222}
-      dialog.brevess-agent-connection button:hover:not(:disabled) {background:#f4f4f5}
-      dialog.brevess-agent-connection .agent-primary:hover:not(:disabled) {background:#3a3a3a}
+      dialog.brevess-agent-connection .agent-primary {background:var(--bv-selected, #222);color:var(--bv-on-selected, #fff);border-color:var(--bv-line-strong, #222)}
+      dialog.brevess-agent-connection button:hover:not(:disabled) {background:var(--bv-hover, #f4f4f5)}
+      dialog.brevess-agent-connection .agent-primary:hover:not(:disabled) {background:var(--bv-selected-hover, #3a3a3a)}
       dialog.brevess-agent-connection button:disabled {opacity:.5;cursor:default}
-      dialog.brevess-agent-connection .agent-close {flex:none;padding:5px;min-height:28px;width:28px;height:28px;border:0;background:transparent;color:#777;font-size:24px;font-weight:300;line-height:1}
-      .brevess-agent-connection :is(button,select,input,summary):focus-visible {outline:2px solid #3866ba;outline-offset:3px}
-      .brevess-agent-connection .agent-result {display:flex;align-items:flex-start;gap:11px;margin:22px 0 18px;padding:15px 16px;border-radius:12px;background:#f6f6f7}
-      .brevess-agent-connection .agent-result-icon {width:18px;height:18px;flex:none;margin-top:2px;color:#92969c}
+      dialog.brevess-agent-connection .agent-close {flex:none;padding:5px;min-height:28px;width:28px;height:28px;border:0;background:transparent;color:var(--bv-muted, #777);font-size:24px;font-weight:300;line-height:1}
+      .brevess-agent-connection :is(button,select,input,summary):focus-visible {outline:2px solid var(--bv-focus, #3866ba);outline-offset:3px}
+      .brevess-agent-connection .agent-result {display:flex;align-items:flex-start;gap:11px;margin:22px 0 18px;padding:15px 16px;border-radius:12px;background:var(--bv-raised, #f6f6f7)}
+      .brevess-agent-connection .agent-result-icon {width:18px;height:18px;flex:none;margin-top:2px;color:var(--bv-subtle, #92969c)}
       .brevess-agent-connection .agent-result-icon svg {width:18px;height:18px;display:block}
-      .brevess-agent-connection .agent-result[data-state="success"] .agent-result-icon {color:#24815b}
-      .brevess-agent-connection .agent-result[data-state="warning"] .agent-result-icon,.brevess-agent-connection .agent-result[data-state="error"] .agent-result-icon {color:#a46b17}
+      .brevess-agent-connection .agent-result[data-state="success"] .agent-result-icon {color:var(--bv-teal, #24815b)}
+      .brevess-agent-connection .agent-result[data-state="warning"] .agent-result-icon,.brevess-agent-connection .agent-result[data-state="error"] .agent-result-icon {color:var(--bv-amber, #a46b17)}
       .brevess-agent-connection .agent-result[data-state="busy"] .agent-result-icon {animation:agent-connect-spin 1.2s linear infinite}
       .brevess-agent-connection .agent-result-title {font-size:13px;font-weight:600;line-height:1.5}
-      .brevess-agent-connection .agent-result-detail {color:#72767c;font-size:12px;line-height:1.6;margin-top:4px}
-      dialog.brevess-agent-connection .agent-text-action {padding:0;min-height:24px;border:0;background:none;color:#30343a;font-size:12px;text-decoration:underline;text-underline-offset:3px;margin-top:8px}
-      .brevess-agent-connection details {border-top:1px solid #ededee;padding-top:14px;margin-top:18px}
-      .brevess-agent-connection summary {font-size:12px;color:#7a7e83;cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
+      .brevess-agent-connection .agent-result-detail {color:var(--bv-muted, #72767c);font-size:12px;line-height:1.6;margin-top:4px}
+      dialog.brevess-agent-connection .agent-text-action {padding:0;min-height:24px;border:0;background:none;color:var(--bv-text, #30343a);font-size:12px;text-decoration:underline;text-underline-offset:3px;margin-top:8px}
+      .brevess-agent-connection details {border-top:1px solid var(--bv-line, #ededee);padding-top:14px;margin-top:18px}
+      .brevess-agent-connection summary {font-size:12px;color:var(--bv-muted, #7a7e83);cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
       .brevess-agent-connection summary::-webkit-details-marker {display:none}
       .brevess-agent-connection summary::after {content:'⌄';font-size:16px}
       .brevess-agent-connection details[open]>summary::after {content:'⌃'}
       .brevess-agent-connection .agent-advanced-body {padding-top:16px}
       .brevess-agent-connection .agent-advanced-actions {display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-      .brevess-agent-connection .agent-advanced-body p {font-size:12px;color:#777b81;margin:10px 0}
-      .brevess-agent-connection .agent-diagnostic {font-size:11px;color:#85898e;white-space:pre-wrap;overflow-wrap:anywhere}
+      .brevess-agent-connection .agent-advanced-body p {font-size:12px;color:var(--bv-muted, #777b81);margin:10px 0}
+      .brevess-agent-connection .agent-diagnostic {font-size:11px;color:var(--bv-muted, #85898e);white-space:pre-wrap;overflow-wrap:anywhere}
       .brevess-agent-connection .agent-manual {margin-top:18px}
       .brevess-agent-connection a {color:inherit;font-size:12px;text-underline-offset:3px}
       @keyframes agent-connect-spin {to {transform:rotate(360deg)}}
@@ -179,7 +179,7 @@
     const capability = add('p', '', dialog, 'agent-capability');
     const updateClient = () => {
       const client = clients.find(c => c.id === select.value);
-      capability.textContent = client?.modelAdapter ? '连接测试通过后，自动加入问答模型列表。' : '支持 Agent 读取与操作；暂不支持在插件内调用该 Agent。';
+      capability.textContent = client?.modelAdapter ? '连接测试通过后，自动加入问答模型列表。' : '连接后可在工作台侧栏选择该 Agent。可选模型和推理强度取决于本机客户端。';
       try { doc.defaultView.sessionStorage?.setItem('brevess-agent-setup-client', select.value); } catch {}
     };
     select.onchange = updateClient; updateClient();

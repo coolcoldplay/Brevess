@@ -15,7 +15,44 @@
     NOTE_COLOR_INVALID: '请选择列表中的文字颜色；原文已保留。'
   });
 
-  function attachLiteratureNoteEditor({ textarea, translate = value => value, initialPreview = false, showToggle = true } = {}) {
+  function createLiteratureNoteFormatIcon(doc, name) {
+      if (name === 'bold' || name === 'color') {
+        const glyph = doc.createElement('span');
+        glyph.className = `literature-note-format-glyph is-${name}`;
+        glyph.textContent = name === 'bold' ? 'B' : 'A';
+        glyph.setAttribute('aria-hidden', 'true');
+        return glyph;
+      }
+      const paths = {
+        bullet: 'M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1',
+        ordered: 'M10 6h11M10 12h11M10 18h11M3 3h1v5M2 8h4M2 12c0-2 4-2 4 0 0 1-4 3-4 5h4',
+        indent: 'M3 4h18M11 9h10M11 15h10M3 20h18M2 12h6M5 9l3 3-3 3',
+        outdent: 'M3 4h18M11 9h10M11 15h10M3 20h18M2 12h6M5 9l-3 3 3 3',
+        table: 'M3 4h18v16H3zM3 10h18M11 4v16',
+        image: 'M3 4h18v16H3zM4 16l5-6 4 4 3-3 5 5M16 8h.01',
+        citation: 'M9 6H3v6h5c0 3-2 5-5 6M20 6h-6v6h5c0 3-2 5-5 6',
+        remove: 'm6 6 12 12M18 6 6 18',
+        rowAbove: 'M3 13h18v7H3zM9 6h6M12 3v6',
+        rowBelow: 'M3 4h18v7H3zM9 18h6M12 15v6',
+        rowDelete: 'M3 4h18v6H3zM6 17h12',
+        columnLeft: 'M13 3h7v18h-7zM3 12h6M6 9v6',
+        columnRight: 'M4 3h7v18H4zM15 12h6M18 9v6',
+        columnDelete: 'M4 3h6v18H4zM14 12h7',
+        clear: 'M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7',
+        preview: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
+        edit: 'M14 5l5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 15v6Z'
+      };
+      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
+      svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+      const shape = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+      shape.setAttribute('d', paths[name]); shape.setAttribute('fill', 'none');
+      shape.setAttribute('stroke', 'currentColor'); shape.setAttribute('stroke-width', name === 'bullet' ? '2.4' : '1.8');
+      shape.setAttribute('stroke-linecap', 'round'); shape.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(shape); return svg;
+  }
+
+  function attachLiteratureNoteEditor({ textarea, translate = value => value, initialPreview = false, showToggle = true, fieldAction, renderMedia } = {}) {
     if (!textarea?.ownerDocument || String(textarea.tagName).toLowerCase() !== 'textarea') {
       throw new TypeError('attachLiteratureNoteEditor requires a textarea with ownerDocument');
     }
@@ -37,30 +74,7 @@
       if (text) node.textContent = t(text);
       return node;
     };
-    const icon = name => {
-      if (name === 'bold' || name === 'color') {
-        const glyph = make('span', `literature-note-format-glyph is-${name}`);
-        glyph.textContent = name === 'bold' ? 'B' : 'A';
-        glyph.setAttribute('aria-hidden', 'true');
-        return glyph;
-      }
-      const paths = {
-        bullet: 'M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1',
-        ordered: 'M10 6h11M10 12h11M10 18h11M3 3h1v5M2 8h4M2 12c0-2 4-2 4 0 0 1-4 3-4 5h4',
-        indent: 'M3 4h18M11 9h10M11 15h10M3 20h18M2 12h6M5 9l3 3-3 3',
-        outdent: 'M3 4h18M11 9h10M11 15h10M3 20h18M2 12h6M5 9l-3 3 3 3',
-        preview: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
-        edit: 'M14 5l5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 15v6Z'
-      };
-      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
-      svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
-      const shape = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-      shape.setAttribute('d', paths[name]); shape.setAttribute('fill', 'none');
-      shape.setAttribute('stroke', 'currentColor'); shape.setAttribute('stroke-width', name === 'bullet' ? '2.4' : '1.8');
-      shape.setAttribute('stroke-linecap', 'round'); shape.setAttribute('stroke-linejoin', 'round');
-      svg.appendChild(shape); return svg;
-    };
+    const icon = name => createLiteratureNoteFormatIcon(doc, name);
     const on = (target, type, handler, options) => {
       target.addEventListener(type, handler, options);
       listeners.push(() => target.removeEventListener(type, handler, options));
@@ -132,6 +146,17 @@
     on(toggle, 'mousedown', capture);
     on(toggle, 'click', () => setPreview(!previewing, { focus: true }));
     if (showToggle) toolbar.appendChild(toggle);
+    if (fieldAction) for (const [action, label] of [
+      ['citation','插入原文引文'], ['image','插入图片'], ['table','插入 Markdown 表格'], ['clear','清空此字段']
+    ]) {
+      const button = make('button','literature-note-editor-action');
+      button.type = 'button'; button.dataset.noteFormatAction = action;
+      button.title = t(label); button.setAttribute('aria-label', t(label));
+      button.appendChild(icon(action));
+      on(button,'mousedown',event => event.preventDefault());
+      on(button,'click',() => fieldAction(action));
+      toolbar.appendChild(button); formatButtons.push(button);
+    }
 
     function setPreview(next, { focus = false } = {}) {
       if (destroyed) return false;
@@ -171,6 +196,7 @@
             ? formatter.parseLiteratureNoteMarkdown(source) : null;
           const fragment = formatter.renderLiteratureNoteMarkdown(doc, source, tree ? { parse: () => tree } : {});
           preview.replaceChildren(fragment);
+          renderMedia?.(preview);
           announce(tree?.error ? (ERRORS[tree.error] || '预览无法解析格式，已保留原文。') : '');
         } catch (_) {
           preview.replaceChildren(doc.createTextNode(source));
@@ -275,5 +301,5 @@
       element.remove();
     } };
   }
-  return { attachLiteratureNoteEditor };
+  return { attachLiteratureNoteEditor, createLiteratureNoteFormatIcon };
 });

@@ -17,8 +17,34 @@ process.env.BREVESS_NATIVE_STATE_DIR = active.nativeStateDir;
 const send = message => process.stdout.write(encodeNativeMessage(message));
 const host = new CodexBridgeHost({ send });
 let closed = false;
+const agentJobs=new Set();
+const configuredClients=()=>{
+  const current=JSON.parse(fs.readFileSync(path.resolve(root,'..','..','active.json'),'utf8'));
+  return Array.isArray(current.configuredClients)?current.configuredClients:[];
+};
 const parse = createNativeMessageParser(message => {
   const type = String(message?.type || '');
+  if (['agent.sdk.models','agent.sdk.turn'].includes(type)) {
+    const abort=new AbortController();agentJobs.add(abort);
+    const timeout=setTimeout(()=>abort.abort(),type.endsWith('.models')?16000:290000);
+    Promise.resolve().then(()=>require('./workbench-agents.cjs').run(type.split('.').pop(),message.args,configuredClients(),abort.signal))
+      .then(data=>{if(!closed)send({requestId:message.requestId,success:true,data});},e=>{if(!closed)send({requestId:message.requestId,success:false,error:{code:/^[A-Z_]{3,80}$/.test(e.code)?e.code:'AGENT_CLIENT_UNAVAILABLE',message:/^[A-Z_]{3,80}$/.test(e.code)?e.message:'客户端暂时不可用。'}});})
+      .finally(()=>{clearTimeout(timeout);agentJobs.delete(abort);});return;
+  }
+  if (type.startsWith('presentation.')) {
+    const op = type.slice('presentation.'.length);
+    if (!['open','image','publish','status','read','cancel','setup','clients','respond'].includes(op)) return;
+    const respond = data => { if (!closed) send({type: type+'.result', requestId: message.requestId, ...data}); };
+    if(op==='clients'){respond({success:true,data:configuredClients().filter(id=>Object.hasOwn(require('../core/article-presentation.js').agents,id))});return;}
+    if (op === 'setup') {
+      const agent = Object.hasOwn(require('../core/article-presentation.js').agents,message.args?.agent) ? message.args.agent : 'workbuddy';
+      respond({success:true,data:{platform:process.platform,command:process.execPath,args:[path.join(root,'mcp','presentation-client.cjs'),agent]}});
+      return;
+    }
+    require('../mcp/lib/presentation-jobs.cjs').createStore().command(op,message.args || {})
+      .then(data => respond({success:true,data})).catch(e => respond({success:false,error:e.code || 'PPT_JOB_FAILED'}));
+    return;
+  }
   if (type.startsWith('agent.connection.')) {
     const action = type.slice('agent.connection.'.length);
     Promise.resolve().then(() => control({ action, extensionId: origin.hostname }, { payloadRoot: root }))
@@ -30,5 +56,5 @@ const parse = createNativeMessageParser(message => {
   Promise.resolve(host.handle(message)).catch(() => { if (!closed) send({ type: 'host.error', requestId: String(message.requestId || ''), error: { code: 'BRIDGE_FAILURE' } }); });
 });
 process.stdin.on('data', parse);
-process.stdin.on('end', () => { closed = true; host.close(); });
-process.stdin.on('error', () => { closed = true; host.close(); });
+process.stdin.on('end', () => { closed = true; for(const job of agentJobs)job.abort();host.close(); });
+process.stdin.on('error', () => { closed = true; for(const job of agentJobs)job.abort();host.close(); });

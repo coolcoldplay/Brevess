@@ -34,9 +34,9 @@
     mount.replaceChildren();
     for(const figure of figures){
       const card=doc.createElement('section');card.className='brevess-web-media-card';card.dataset.mediaId=figure.figureId;
-      card.style.cssText='border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0;background:#fff';
+      card.style.cssText='border:1px solid var(--bv-line,#ddd);border-radius:8px;padding:12px;margin:10px 0;background:var(--bv-surface,#fff)';
       const title=doc.createElement('strong');title.textContent=figure.figureLabel;
-      const preview=doc.createElement('div');preview.style.cssText='margin:8px 0;text-align:center;background:#f7f7f7';
+      const preview=doc.createElement('div');preview.style.cssText='margin:8px 0;text-align:center;background:var(--bv-raised,#f7f7f7)';
       if(figure.webMedia.thumbnail){const image=doc.createElement('img');image.src=figure.webMedia.thumbnail;image.alt=figure.webMedia.title;image.loading='lazy';image.style.cssText='max-width:100%;max-height:220px;object-fit:contain';preview.append(image);}else preview.textContent='▶ 视频缩略图暂不可用';
       const caption=doc.createElement('p');caption.textContent=figure.webMedia.title;caption.style.cssText='font-size:12px;overflow-wrap:anywhere';
       const actions=doc.createElement('div');actions.style.cssText='display:flex;gap:8px;flex-wrap:wrap';
@@ -55,10 +55,10 @@
   function openFigureNoteEditor({document:doc=globalThis.document,title='图片笔记',value='',onSave}){
     doc.querySelectorAll('[data-brevess-figure-note]').forEach(node=>node.remove());
     const host=doc.createElement('div');host.dataset.sciPluginUi='';host.dataset.brevessFigureNote='';
-    host.style.cssText='position:fixed;right:24px;top:20%;z-index:2147483647;width:min(360px,calc(100vw - 32px));background:white;color:#222;border:1px solid #aaa;border-radius:8px;padding:16px;box-shadow:0 4px 24px #0003;font:14px/1.5 sans-serif';
+    host.style.cssText='position:fixed;right:24px;top:20%;z-index:2147483647;width:min(360px,calc(100vw - 32px));background:var(--bv-surface,white);color:var(--bv-text,#222);border:1px solid var(--bv-line-strong,#aaa);border-radius:8px;padding:16px;box-shadow:0 4px 24px #0003;font:14px/1.5 sans-serif';
     const label=doc.createElement('strong');label.textContent=title;const input=doc.createElement('textarea');input.value=value;input.maxLength=12000;input.setAttribute('aria-label','图片笔记');input.style.cssText='display:block;width:100%;box-sizing:border-box;min-height:120px;margin:12px 0';
     const save=doc.createElement('button');save.type='button';save.setAttribute('aria-label','保存');save.title='保存';save.innerHTML='<svg width=22 height=22 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 3h13l3 3v15H4zM8 3v6h8V3M8 21v-8h8v8"/></svg>';const close=doc.createElement('button');close.type='button';close.setAttribute('aria-label','关闭');close.title='关闭';close.innerHTML='<svg width=22 height=22 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';close.style.marginLeft='8px';const status=doc.createElement('output');status.style.display='block';status.setAttribute('aria-live','polite');
-    for(const b of [save,close])b.style.cssText='display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:6px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#334155;cursor:pointer;margin-right:8px';
+    for(const b of [save,close])b.style.cssText='display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:6px;border:1px solid var(--bv-line,#cbd5e1);border-radius:6px;background:var(--bv-raised,#f8fafc);color:var(--bv-text,#334155);cursor:pointer;margin-right:8px';
     host.addEventListener('click',e=>e.stopPropagation());host.addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();host.remove();}});
     save.addEventListener('click',async()=>{save.disabled=true;const submitted=input.value;try{await onSave(submitted);status.textContent=input.value===submitted?'已保存':'先前内容已保存；还有未保存修改';}catch(e){status.textContent=e?.message||'保存失败，草稿已保留';}finally{save.disabled=false;}});close.addEventListener('click',()=>host.remove());host.append(label,input,save,close,status);doc.documentElement.append(host);input.focus();return host;
   }

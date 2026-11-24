@@ -152,6 +152,9 @@
         let mutationObserver = null, intersectionObserver = null;
         const records = new Map(), elements = new WeakMap(), anchors = new WeakMap(), scans = new Map();
         const selectedSources = new Set(), displaySources = new WeakMap();
+        const sentenceApi = view.BrevessTranslationSource || globalThis.BrevessTranslationSource;
+        const pairColor = 'brevess-bilingual-pair';
+        let readingPair = null;
         let wholePageScope = false;
         const standaloneTranslationAllowed = () => view.__brevessPageToolsReaderActivated === true ||
             view.__brevessPageToolsPreferences?.pageTranslation !== false;
@@ -451,6 +454,7 @@
                 LLM_NOT_READY: '请先保存可用模型配置并确认正文发送授权。',
                 TRANSLATION_BRIDGE_UNAVAILABLE: '翻译后台暂不可用，已保留译文和原文。',
                 TRANSLATION_ROUTE_INVALID: '翻译引擎配置身份无效，请检查已保存配置。',
+                TRANSLATION_ROUTE_CHANGED: '本地术语词库已更新。请继续翻译以读取新词库。',
                 TRANSLATION_ROUTE_STALE: '翻译模型配置已变化，请重新开启翻译。',
                 TRANSLATION_CONTEXT_STALE: '当前文献或原文已变化，本次译文未提交。',
                 TRANSLATION_OUTCOME_UNKNOWN: '本段请求完成状态未知，已阻止重复调用；等待原请求回执。',
@@ -725,6 +729,92 @@
             await provider?.confirmStopped?.();
             return getState();
         }
+        function clearSentencePair() {
+            if (!readingPair) return;
+            readingPair.observer?.disconnect();
+            view.CSS?.highlights?.delete(pairColor);
+            readingPair = null;
+        }
+        function indexSentencePair(record) {
+            const element = record.translation;
+            const source = readSourceProjection(record.element);
+            if (source.text !== record.text || !source.segments) return null;
+            const text = element.textContent, sourceEnd = record.partial ? record.checkpoint?.sourceEnd : source.text.length;
+            if (!text || !sourceEnd) return null;
+            // Manual edits may introduce inline elements. Index actual display nodes without replacing them.
+            const walker = document.createTreeWalker(element, 4);
+            const nodes = new Map();
+            let offset = 0, node;
+            while ((node = walker.nextNode())) {
+                nodes.set(node, offset); offset += node.length;
+            }
+            const citations = sentenceApi.citationPeriods(source);
+            let breaks = text === record.lastPaintedText ? record.sentenceBreaks || [] : [];
+            if (breaks.length) {
+                const ends = spans => new Set(spans.map(span => span.end));
+                const enEnds = ends(sentenceApi.sentenceRanges(source.text.slice(0, sourceEnd), citations));
+                const zhEnds = ends(sentenceApi.sentenceRanges(text));
+                breaks = breaks.filter(cut => enEnds.has(cut.en) && zhEnds.has(cut.zh));
+            }
+            let en = 0, zh = 0;
+            const matches = [];
+            for (const cut of [...breaks, {en: sourceEnd, zh: text.length}]) {
+                if (cut.en <= en || cut.zh <= zh || cut.en > sourceEnd || cut.zh > text.length) continue;
+                for (const match of sentenceApi.alignSentences(source.text.slice(en, cut.en), text.slice(zh, cut.zh), citations, en)) {
+                    matches.push({start: zh + match.start, end: zh + match.end,
+                        sourceStart: en + match.sourceStart, sourceEnd: en + match.sourceEnd,
+                        sourceSpans: match.sourceSpans?.map(span => ({start: en + span.start, end: en + span.end}))});
+                }
+                en = cut.en; zh = cut.zh;
+            }
+            const observer = view.MutationObserver && new view.MutationObserver(clearSentencePair);
+            const options = {subtree: true, childList: true, characterData: true};
+            observer?.observe(element, options); observer?.observe(record.element, options);
+            return {record, nodes, matches, segments: source.segments, observer, active: null};
+        }
+        function hoverTranslationSentence(record, event) {
+            if (event.pointerType === 'touch' || !view.CSS?.highlights || !view.Highlight || !sentenceApi?.alignSentences) return;
+            if (event.buttons || !record.element.isConnected || record.translation.hidden) { clearSentencePair(); return; }
+            if (readingPair?.record !== record) {
+                clearSentencePair();
+                readingPair = indexSentencePair(record);
+            }
+            const pair = readingPair;
+            if (!pair) return;
+            const x = event.clientX, y = event.clientY;
+            const caret = document.caretPositionFromPoint?.(x, y) || document.caretRangeFromPoint?.(x, y);
+            const node = caret?.offsetNode || caret?.startContainer;
+            const offset = caret?.offset ?? caret?.startOffset;
+            let match = null;
+            if (pair.nodes.has(node)) {
+                const base = pair.nodes.get(node), glyph = document.createRange();
+                // A caret is a boundary. Check both adjacent glyphs so the last character
+                // and punctuation on a wrapped line still belong to the sentence under the pointer.
+                for (const i of [offset, offset - 1]) {
+                    if (i < 0 || i >= node.length) continue;
+                    glyph.setStart(node, i); glyph.setEnd(node, i + 1);
+                    if (![...glyph.getClientRects()].some(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom)) continue;
+                    match = pair.matches.find(s => base + i >= s.start && base + i < s.end) || null;
+                    break;
+                }
+            }
+            if (match === pair.active) return;
+            view.CSS.highlights.delete(pairColor);
+            pair.active = match;
+            if (!match) return;
+            const ranges = (match.sourceSpans || [{start: match.sourceStart, end: match.sourceEnd}])
+                .flatMap(span => sentenceApi.sourceRanges(document, pair.segments, span.start, span.end));
+            if (!ranges.some(r => r.getClientRects().length)) return;
+            for (const [textNode, base] of pair.nodes) {
+                const left = Math.max(0, match.start - base), right = Math.min(textNode.length, match.end - base);
+                if (right <= left) continue;
+                const range = document.createRange();
+                range.setStart(textNode, left); range.setEnd(textNode, right); ranges.push(range);
+            }
+            const highlight = new view.Highlight();
+            for (const range of ranges) highlight.add(range);
+            view.CSS.highlights.set(pairColor, highlight);
+        }
         function paintTranslation(record, translatedText, { partial = false } = {}) {
             const confirmed = confirmedEntry(record);
             if (confirmed?.manuallyEdited && translatedText !== confirmed.translatedText) return;
@@ -743,15 +833,32 @@
                     const entry = confirmedEntry(record);
                     if (entry?.manuallyEdited) persistRecord(record, entry);
                 });
+                record.translation.addEventListener('pointermove', event => hoverTranslationSentence(record, event), {passive: true});
+                record.translation.addEventListener('pointerover', event => hoverTranslationSentence(record, event), {passive: true});
+                record.translation.addEventListener('pointerleave', clearSentencePair, {passive: true});
                 displaySources.set(record.translation, record.element);
             }
+            const sourceEnd = partial ? confirmed?.sourceEnd : record.text.length;
+            if (record.lastPaintedText && record.lastPaintedText !== translatedText) {
+                if (!confirmed?.manuallyEdited && translatedText.startsWith(record.lastPaintedText) && sourceEnd > record.paintedSourceEnd) {
+                    // A validated incremental result gives an exact alignment boundary between complete sentences.
+                    const endsSentence = /[.!?。！？][”’"')）\]]*\s*$/u;
+                    if (endsSentence.test(record.lastPaintedText) && endsSentence.test(record.text.slice(0, record.paintedSourceEnd))) {
+                        (record.sentenceBreaks ||= []).push({en: record.paintedSourceEnd, zh: record.lastPaintedText.length});
+                    }
+                } else record.sentenceBreaks = [];
+            }
+            record.paintedSourceEnd = sourceEnd;
             record.partial = partial;
             if (partial) record.translation.setAttribute('data-sci-translation-partial', '');
             else record.translation.removeAttribute('data-sci-translation-partial');
-            record.translation.textContent = translatedText;
+            if (record.translation.textContent !== translatedText) {
+                if (readingPair?.record === record) clearSentencePair();
+                record.translation.textContent = translatedText;
+            }
             record.lastPaintedText = translatedText;
             record.translation.hidden = translationsHidden;
-            record.anchor.after(record.translation);
+            if (record.anchor.nextSibling !== record.translation) record.anchor.after(record.translation);
         }
         function clearFailure(record) {
             if (!record.failure) return;
@@ -859,6 +966,7 @@
             maybeFinishPageTask();
         }
         function forget(record) {
+            if (readingPair?.record === record) clearSentencePair();
             finishParagraphTask(record.element, 'cancelled');
             clearPending(record);
             if (record.reused) reusedCount--;
@@ -1051,6 +1159,7 @@
         function dismissNotice() { noticeDismissed = true; removeNotice(); return getState(); }
         function hideTranslations(hidden = true) {
             translationsHidden = hidden === true;
+            if (translationsHidden) clearSentencePair();
             for (const record of records.values()) if (record.translation) record.translation.hidden = translationsHidden;
             update({ translationsHidden }); return getState();
         }
@@ -1105,8 +1214,9 @@
                 if (!standaloneTranslationAllowed()) stop({ preserveTranslations: true });
             }
             const change = changes?.sciLlmSettingsV2;
-            if (destroyed || areaName !== 'local' || !change) return;
-            try { if (translationSettingsIdentity(change.oldValue) === translationSettingsIdentity(change.newValue)) return; } catch { /* Invalidate unreadable changes conservatively. */ }
+            const termsChanged = changes?.sciGlobalAbbreviationMemoryV1 && provider?.getState?.().mode === 'local';
+            if (destroyed || areaName !== 'local' || (!change && !termsChanged)) return;
+            try { if (!termsChanged && translationSettingsIdentity(change.oldValue) === translationSettingsIdentity(change.newValue)) return; } catch { /* Invalidate unreadable changes conservatively. */ }
             lastEngineSignature = engineSignature();
             noticeDismissed = false;
             for (const record of records.values()) confirmedEntry(record);
@@ -1211,6 +1321,7 @@
                 translations: snapshot.translations.map(entry => ({ ...entry, confirmed: true })) };
         }
         function stop({ preserveTranslations = false } = {}) {
+            clearSentencePair();
             const retainedProgress = preserveTranslations && scope ? scopeProgress() : null;
             resuming = false;
             settingsPreparation?.abort(); settingsPreparation = null; settingsEpoch++;
@@ -1429,13 +1540,14 @@
         function refreshHoveredSource() {
             // The adapter may be injected while the pointer is already stationary.
             // Resolve the live hover chain instead of requiring a new pointerover.
+            const atPointer = hoverPoint && document.elementFromPoint?.(hoverPoint.x, hoverPoint.y);
+            if (atPointer) { hoveredSource = hoveredCandidate(atPointer); return; }
             const hovered = document.querySelectorAll?.(':hover');
-            if (hovered?.length) hoveredSource = hoveredCandidate(hovered[hovered.length - 1]);
-            else hoveredSource = hoverPoint ? hoveredCandidate(document.elementFromPoint(hoverPoint.x,hoverPoint.y)) : null;
+            hoveredSource = hovered?.length ? hoveredCandidate(hovered[hovered.length - 1]) : null;
         }
         function resetShortcut() { altSource = null; }
         function leaveDocument(event) {
-            if (event.type === 'blur' || !event.relatedTarget) { hoveredSource = null; hoverPoint = null; resetShortcut(); releaseSelectionPreparation(); }
+            if (event.type === 'blur' || !event.relatedTarget) { clearSentencePair(); hoveredSource = null; hoverPoint = null; resetShortcut(); releaseSelectionPreparation(); }
         }
         function editingEvent(event) {
             const interactive = target => editable(target) || Boolean(target?.closest?.(INTERACTIVE));
@@ -1548,6 +1660,10 @@
         }
         function onPageHide() { stop(); }
         view.chrome?.runtime?.onMessage?.addListener(onMessage);
+        const removeGlossaryListener = view.location?.protocol !== 'chrome-extension:'
+            ? view.SciLLM?.onPublicPreferencesChanged?.((changes, area) => {
+                if (changes.sciGlobalAbbreviationMemoryV1) onSettingsChanged({sciGlobalAbbreviationMemoryV1:{}}, area);
+              }) : null;
         view.chrome?.storage?.onChanged?.addListener(onSettingsChanged);
         view.addEventListener('popstate', onNavigation);
         view.addEventListener('hashchange', onNavigation);
@@ -1559,6 +1675,7 @@
         document.addEventListener?.('keydown', onKeyDown, true);
         document.addEventListener?.('keyup', onKeyUp, true);
         view.addEventListener('blur', leaveDocument);
+        document.addEventListener?.('visibilitychange', clearSentencePair);
         // SPA pushState has no DOM event; a cheap URL check also cancels quiet navigations.
         const navigationTimer = view.setInterval(() => { if (state.active || records.size || selectionTasks.size || selectionPreparation) checkNavigation(); }, 500);
         // A reopened document may display saved output without enabling translation.
@@ -1571,6 +1688,7 @@
             stop(); cachedResults = new WeakMap(); destroyed = true; controller?.destroy(); provider?.destroy();
             view.clearInterval(navigationTimer);
             view.chrome?.runtime?.onMessage?.removeListener(onMessage);
+            removeGlossaryListener?.();
             view.chrome?.storage?.onChanged?.removeListener(onSettingsChanged);
             view.removeEventListener('popstate', onNavigation);
             view.removeEventListener('hashchange', onNavigation);
@@ -1582,6 +1700,7 @@
             document.removeEventListener?.('keydown', onKeyDown, true);
             document.removeEventListener?.('keyup', onKeyUp, true);
             view.removeEventListener('blur', leaveDocument);
+            document.removeEventListener?.('visibilitychange', clearSentencePair);
         }
         return { setEnabled, getState, pause, resume, confirmStopped, hideTranslations, dismissNotice, captureExportSnapshot, captureSavedTranslations, restoreSavedTranslations,
             validateTranslationContext,

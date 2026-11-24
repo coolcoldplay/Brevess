@@ -24,6 +24,16 @@
       if (node.type === 'text') return documentRef.createTextNode(String(node.text ?? ''));
       let element;
       switch (node.type) {
+        case 'table': case 'thead': case 'tbody': case 'tr': case 'th': case 'td':
+          element = documentRef.createElement(node.type);
+          if (['th','td'].includes(node.type) && ['left','right','center'].includes(node.align)) element.style.textAlign = node.align;
+          if (node.type === 'th') element.scope = 'col';
+          break;
+        case 'image':
+          if (!/^[a-f0-9]{64}$/.test(node.id)) throw new Error('Invalid note image');
+          element = documentRef.createElement('img');
+          element.dataset.noteImage = node.id; element.alt = String(node.alt || '笔记图片'); element.loading = 'lazy';
+          return element;
         case 'paragraph':
           element = documentRef.createElement('p');
           element.style.whiteSpace = 'pre-wrap';

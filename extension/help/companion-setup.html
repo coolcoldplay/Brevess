@@ -1,13 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html data-brevess-ui lang="en">
 <head>
   <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local Codex setup · Brevess</title>
   <link rel="stylesheet" href="../ui-swiss.css">
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; background: #fff; font-size: 15px; line-height: 1.65; }
+    body { margin: 0; background: var(--bv-canvas, #fff); font-size: 15px; line-height: 1.65; }
     a { color: inherit; text-underline-offset: .2em; }
     .help-header { border-bottom: 1px solid var(--swiss-line); }
     .help-header-inner { max-width: 1180px; margin: auto; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
@@ -35,7 +36,7 @@
     code { font-family: "Cascadia Code", Consolas, monospace; font-size: .88em; overflow-wrap: anywhere; }
     pre { max-width: 100%; padding: 16px; background: var(--swiss-soft); border: 1px solid var(--swiss-line); overflow-x: auto; line-height: 1.6; }
     pre code { overflow-wrap: normal; }
-    .note { padding: 16px 18px; border-left: 3px solid var(--swiss-ink); background: var(--swiss-soft); }
+    .note { padding: 16px 18px; border-left: 3px solid var(--bv-line-strong, var(--swiss-ink)); background: var(--swiss-soft); }
     .note p:last-child { margin-bottom: 0; }
     dl { margin: 0 0 20px; }
     dt { font-weight: 700; margin-top: 16px; }
@@ -50,6 +51,9 @@
     }
     @media print { nav, .back { display: none; } .help-layout { display: block; padding: 20px 0; } main { max-width: none; } pre { white-space: pre-wrap; } }
   </style>
+<link rel="stylesheet" href="../ui-focus.css">
+<link rel="stylesheet" href="../ui-theme.css">
+<script src="../ui-focus.js" defer></script>
 </head>
 <body data-ui-surface="help">
   <header class="help-header">

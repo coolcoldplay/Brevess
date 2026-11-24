@@ -298,6 +298,7 @@
     reasoningEnabled = false,
     reasoningEffort = 'auto',
     requestTimeoutMs = null,
+    activeChatMaxMs = 0,
     progressHeartbeatMs = 0,
     setIntervalImpl = setInterval,
     clearIntervalImpl = clearInterval,
@@ -431,7 +432,7 @@
         ? Math.min(suppliedLimit, budget.ceiling)
         : budget.initial;
       const upstreamTelemetry = request.onProviderTelemetry;
-      yield* rawAdapter[method]({
+      const providerRequest = {
         ...request,
         maxOutputTokens,
         timeoutMs: request.timeoutMs || requestTimeoutMs || undefined,
@@ -439,7 +440,57 @@
           try { upstreamTelemetry?.(event); } catch { /* Keep provider stream intact. */ }
           report({ phase: 'provider_telemetry', maxOutputTokens, ...event });
         }
-      });
+      };
+      const idleMs = Number(providerRequest.timeoutMs);
+      if (!(activeChatMaxMs > idleMs && idleMs > 0)) {
+        yield* rawAdapter[method](providerRequest);
+        return;
+      }
+      // Only native paper Q&A opts in. Keep the normal timeout for silence,
+      // and give a turn that is actually producing output a bounded extension.
+      const controller = new AbortController();
+      let timedOut = false;
+      const expire = () => {
+        if (!controller.signal.aborted) {
+          timedOut = true;
+          controller.abort();
+        }
+      };
+      const hardTimer = setTimeout(expire, activeChatMaxMs);
+      let idleTimer = setTimeout(expire, idleMs);
+      const abort = () => controller.abort();
+      if (request.signal?.aborted) abort();
+      request.signal?.addEventListener('abort', abort, {once: true});
+      let lastNativeActivity = 0;
+      const active = () => {
+        if (controller.signal.aborted) return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(expire, idleMs);
+      };
+      const onNativeRequestState = state => {
+        if (Number(state?.lastActivityAt) > lastNativeActivity) {
+          lastNativeActivity = state.lastActivityAt;
+          active();
+        }
+        request.onNativeRequestState?.(state);
+      };
+      const timeoutError = () => Object.assign(new Error('Agent response timed out'), {code: 'REQUEST_TIMEOUT', retryable: true});
+      try {
+        for await (const event of rawAdapter[method]({...providerRequest, timeoutMs: activeChatMaxMs,
+          signal: controller.signal, onNativeRequestState})) {
+          if (timedOut) throw timeoutError();
+          if(event?.type==='reader_input' && event.job?.interaction?.state==='waiting')clearTimeout(idleTimer);
+          else if (event?.type === 'reader_input' || event?.type === 'started' || (event?.type === 'text_delta' && event.text)) active();
+          yield event;
+        }
+        if (timedOut) throw timeoutError();
+      } catch (error) {
+        throw timedOut ? timeoutError() : error;
+      } finally {
+        clearTimeout(idleTimer);
+        clearTimeout(hardTimer);
+        request.signal?.removeEventListener('abort', abort);
+      }
     }
 
     const managedAdapter = Object.assign({}, rawAdapter, {

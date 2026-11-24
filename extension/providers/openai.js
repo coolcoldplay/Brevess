@@ -216,7 +216,11 @@
         if (data?.choices?.[0]?.finish_reason === 'length') {
           throw new shared.ProviderRequestError('OUTPUT_TRUNCATED', 'Model output reached its token limit');
         }
-        return shared.parseJsonText(extractOutputText(data));
+        const text = extractOutputText(data);
+        const status = data?.status;
+        const finish = data?.choices?.[0]?.finish_reason;
+        return (!status || status === 'completed') && (!finish || finish === 'stop')
+          ? shared.parseCompletedJsonText(text) : shared.parseJsonText(text);
       },
       async analyzeChunk(request) {
         return adapter.generateJson({

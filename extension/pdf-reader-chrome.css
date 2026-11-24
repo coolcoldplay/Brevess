@@ -1,11 +1,11 @@
 /* Reading chrome only. Never style the PDF canvas, text layer or annotation geometry. */
 body.brevess-pdf-reader[data-ui-surface="pdf"] {
-  --pdf-ink: #202124;
-  --pdf-muted: #73767b;
-  --pdf-line: #e8e9eb;
-  --pdf-blue: #202124;
-  --pdf-blue-soft: #f1f2f4;
-  --pdf-canvas: #f1f2f4;
+  --pdf-ink: var(--bv-text, #202124);
+  --pdf-muted: var(--bv-muted, #73767b);
+  --pdf-line: var(--bv-line, #e8e9eb);
+  --pdf-blue: var(--bv-blue, #202124);
+  --pdf-blue-soft: var(--bv-blue-bg, #f1f2f4);
+  --pdf-canvas: var(--bv-canvas, #f1f2f4);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
 }
 
@@ -92,11 +92,11 @@ body[data-ui-surface="pdf"] .pdf-reader-toolbar button {
   line-height: 20px;
   transition: background-color 120ms ease, color 120ms ease;
 }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar button:hover:not(:disabled) { background: #eeeff1; color: #111; }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar button:active:not(:disabled) { background: #e3e4e7; }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar button[aria-pressed="true"] { background: #e8e9ec; color: #111; }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar button:hover:not(:disabled) { background: var(--bv-hover, #eeeff1); color: var(--bv-text, #111); }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar button:active:not(:disabled) { background: var(--bv-hover, #e3e4e7); }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar button[aria-pressed="true"] { background: var(--bv-raised, #e8e9ec); color: var(--bv-text, #111); }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar button:disabled { opacity: .35; cursor: default; }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar :is(button, input):focus-visible { outline: 2px solid #555; outline-offset: 2px; }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar :is(button, input):focus-visible { outline: 2px solid var(--bv-focus, #555); outline-offset: 2px; }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar [hidden] { display: none !important; }
 
 body[data-ui-surface="pdf"] .pdf-reader-toolbar :is(.pdf-reader-page-controls, .pdf-reader-zoom) { gap: 2px; padding: 0; }
@@ -107,14 +107,14 @@ body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderPageNumber {
   padding: 4px 2px;
   border: 0;
   border-radius: 5px;
-  background: #f3f4f5;
-  color: #202124;
+  background: var(--bv-raised, #f3f4f5);
+  color: var(--bv-text, #202124);
   font: 500 12px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-align: center;
   appearance: textfield;
 }
 body[data-ui-surface="pdf"] #pdfReaderPageNumber::-webkit-inner-spin-button { appearance: none; }
-body[data-ui-surface="pdf"] :is(#pdfReaderPageCount, #pdfReaderZoomValue) { font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; color: #65686d; }
+body[data-ui-surface="pdf"] :is(#pdfReaderPageCount, #pdfReaderZoomValue) { font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; color: var(--bv-muted, #65686d); }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderZoomValue { min-width: 39px; }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-zoom .is-wide { min-width: 30px; }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-navigation { gap: 12px; }
@@ -123,9 +123,9 @@ body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-search-controls {
   padding: 0 3px 0 9px;
   border: 0;
   border-radius: 8px;
-  background: #f3f4f5;
+  background: var(--bv-raised, #f3f4f5);
 }
-body[data-ui-surface="pdf"] .pdf-reader-search-icon { width: 15px; height: 15px; color: #7a7d82; }
+body[data-ui-surface="pdf"] .pdf-reader-search-icon { width: 15px; height: 15px; color: var(--bv-muted, #7a7d82); }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderFind {
   min-width: 50px;
   height: 32px;
@@ -133,14 +133,14 @@ body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderFind {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #202124;
+  color: var(--bv-text, #202124);
   font-size: 12px;
 }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderFind::placeholder { color: #898c91; }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderFind::placeholder { color: var(--bv-muted, #898c91); }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-search-controls button { min-width: 25px; width: 25px; padding: 4px; }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderFindStatus { font-size: 10px; margin-inline: 3px; white-space: nowrap; }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderStudy { padding-inline: 10px; background: #f0f1f3; white-space: nowrap; }
-body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderStudy:hover { background: #e5e6e9; }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderStudy { padding-inline: 10px; background: var(--bv-raised, #f0f1f3); white-space: nowrap; }
+body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderStudy:hover { background: var(--bv-hover, #e5e6e9); }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar #pdfReaderMoreToggle { width: 32px; min-width: 32px; }
 body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-toolbar-actions { gap: 10px; }
 
@@ -148,7 +148,7 @@ body[data-ui-surface="pdf"] .pdf-reader-more-menu {
   min-width: 210px;
   padding: 6px;
   gap: 2px;
-  border: 1px solid #e8e9eb;
+  border: 1px solid var(--bv-line, #e8e9eb);
   border-radius: 12px;
   box-shadow: 0 12px 36px #1018281a, 0 2px 6px #10182808;
 }
@@ -161,21 +161,21 @@ body[data-ui-surface="pdf"] .pdf-reader-toolbar .pdf-reader-more-menu :is(button
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #303238;
+  color: var(--bv-text, #303238);
   font-size: 12px;
   font-weight: 400;
 }
-body[data-ui-surface="pdf"] .pdf-reader-more-menu :is(button, a):hover { background: #f1f2f4; }
-body[data-ui-surface="pdf"] .pdf-reader-more-menu .is-danger { color: #a33c3c; }
+body[data-ui-surface="pdf"] .pdf-reader-more-menu :is(button, a):hover { background: var(--bv-hover, #f1f2f4); }
+body[data-ui-surface="pdf"] .pdf-reader-more-menu .is-danger { color: var(--bv-red, #a33c3c); }
 body[data-ui-surface="pdf"] .pdf-reader-more-menu [aria-pressed="true"]::after { content: "✓"; margin-left: auto; }
 
 body[data-ui-surface="pdf"] :is(.pdf-reader-local-fallback, .pdf-reader-control) { border: 0; border-radius: 14px; box-shadow: none; }
-body[data-ui-surface="pdf"] .pdf-reader-local-fallback :is(input[type="url"], input[type="file"]) { border: 0; border-radius: 8px; background: #f3f4f5; }
-body[data-ui-surface="pdf"] .pdf-reader-notice-stack { border: 0; background: #fff; }
+body[data-ui-surface="pdf"] .pdf-reader-local-fallback :is(input[type="url"], input[type="file"]) { border: 0; border-radius: 8px; background: var(--bv-raised, #f3f4f5); }
+body[data-ui-surface="pdf"] .pdf-reader-notice-stack { border: 0; background: var(--bv-surface, #fff); }
 body[data-ui-surface="pdf"] :is(#pdfPageAnnotationControls, .pdf-figure-sequential-review) { border: 0; border-radius: 12px; box-shadow: 0 5px 24px #151a2520; }
 body[data-ui-surface="pdf"] :is(#pdfPageAnnotationControls, .pdf-figure-sequential-review) button { border: 0; border-radius: 6px; }
-body[data-ui-surface="pdf"] .pdf-figure-page-review :is(button, .pdf-figure-page-review-select, .pdf-figure-page-review-input) { border: 0; border-radius: 6px; background: #f3f4f5; }
-body[data-ui-surface="pdf"] .pdf-figure-page-review button:hover { background: #e6e7e9; }
+body[data-ui-surface="pdf"] .pdf-figure-page-review :is(button, .pdf-figure-page-review-select, .pdf-figure-page-review-input) { border: 0; border-radius: 6px; background: var(--bv-raised, #f3f4f5); }
+body[data-ui-surface="pdf"] .pdf-figure-page-review button:hover { background: var(--bv-hover, #e6e7e9); }
 
 @media (max-width: 900px) {
   body.brevess-pdf-reader[data-ui-surface="pdf"] .pdf-reader-toolbar { grid-template-columns: 26px minmax(270px, 1fr) auto; gap: 12px; padding-inline: 12px; }
@@ -210,3 +210,4 @@ body.brevess-pdf-reader[data-ui-surface="pdf"] .pdf-reader-notice-stack:not([hid
   border-radius: 12px;
   box-shadow: 0 6px 28px #151a2526;
 }
+

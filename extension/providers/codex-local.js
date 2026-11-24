@@ -292,6 +292,7 @@
           overrides.conversationLabel ?? request.conversationLabel ?? ''
         ),
         profileId: String(request.selectedProfileId || config.profileId || ''),
+        readerInput:request.allowAgentQuestions===true && !overrides.responseMode,
         model,
         reasoningEffort: reasoningEffort(config, request),
         systemPrompt: String(request.systemPrompt || '') +

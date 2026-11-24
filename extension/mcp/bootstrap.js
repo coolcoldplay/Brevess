@@ -28,6 +28,8 @@ function runtimeFiles(root = path.join(__dirname, '..')) {
     }
   }
   visit('mcp/server.js');
+  visit('mcp/presentation-client.cjs');
+  visit('native-host/reader-input.cjs');
   visit('mcp/connection-service.js');
   return [...files].sort();
 }

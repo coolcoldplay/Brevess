@@ -7,6 +7,8 @@
   const PAIR = Object.freeze({ sourceLanguage: 'en', targetLanguage: 'zh' });
   const scientificApi = typeof module === 'object' && module.exports
     ? require('./translation-checkpoint.js') : globalThis.BrevessTranslationCheckpoint;
+  const glossary = typeof module === 'object' && module.exports
+    ? require('./translation-glossary.js') : globalThis.BrevessTranslationGlossary;
   function scientificChunks(source, context, start = 0) {
     const parts = [];
     while (start < source.length) {
@@ -246,6 +248,9 @@
         try { result = api.create(createOptions); } catch (error) { result = Promise.reject(error); }
         return Promise.resolve(result).catch(async error => {
           const classified = classify(error, 'initialize');
+          // A real click still gets one create() attempt after a negative probe.
+          // Retrying the same unsupported pair cannot start a model download.
+          if (error?.name === 'NotSupportedError' && state.availability === 'unavailable') throw classified;
           const recoverable = ['MODEL_NOT_READY', 'NATIVE_UNAVAILABLE'].includes(classified.code) ||
             (classified.code === 'INITIALIZATION_FAILED' && ['InvalidStateError', 'NotReadableError', 'OperationError', 'UnknownError'].includes(error?.name));
           if (!recoverable || retries >= initializationRetryDelays.length || createOptions.signal.aborted) throw classified;
@@ -528,7 +533,7 @@
         nativeQueue.push(entry); drainNative();
       });
     }
-    async function translate(text, { signal, priority = 0, getPriority, onProgress, onAttempt, foreground = false, resumeFrom, scientificContext: suppliedContext } = {}) {
+    async function translate(text, { signal, priority = 0, getPriority, onProgress, onAttempt, foreground = false, resumeFrom, expectedGlossarySignature, scientificContext: suppliedContext } = {}) {
       if (signal?.aborted) throw abortError();
       if (sessionFault || nativeRunning?.signal.aborted || (!session && initialization)) await initialize({ signal });
       const current = session, epoch = generation;
@@ -540,13 +545,25 @@
       }
       // Namespace both identities so a plain source containing literal JSON can
       // never collide with a scientific source. The cache remains memory-only.
+      const reverse = pair.sourceLanguage === 'zh';
+      let index = await (options.glossaryIndex || glossary.read(reverse));
+      let signature = await glossary.signature(index, pair.sourceLanguage, pair.targetLanguage);
+      if (expectedGlossarySignature && expectedGlossarySignature !== signature && !options.glossaryIndex) {
+        index = await glossary.read(reverse, undefined, true);
+        signature = await glossary.signature(index, pair.sourceLanguage, pair.targetLanguage);
+      }
+      if (expectedGlossarySignature && expectedGlossarySignature !== signature) {
+        throw failure('TRANSLATION_ROUTE_CHANGED', 'The terminology library changed; refresh the translation route.');
+      }
+      const terms = index.find(source, scientificContext);
+      const boundaries = terms.length ? [...scientificContext, ...terms].sort((a,b) => a.sourceStart-b.sourceStart) : scientificContext;
       const cacheKey = scientificContext.length ? JSON.stringify([source, scientificContext]) : source;
       const cacheNamespace = scientificContext.length ? 'scientific\u0000' : 'plain\u0000';
-      const key = cacheNamespace + cacheKey;
+      const key = signature + cacheNamespace + cacheKey;
       let saved = cached(key);
-      if ((!resumeFrom?.engineSignature || resumeFrom.engineSignature === `browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`) &&
+      if ((!resumeFrom?.engineSignature || resumeFrom.engineSignature === signature) &&
           !resumeFrom?.manuallyEdited && JSON.stringify(resumeFrom?.scientificContext || []) === JSON.stringify(scientificContext) &&
-          !scientificContext.some(item => item.sourceStart < resumeFrom?.sourceEnd && item.sourceEnd > resumeFrom?.sourceEnd) &&
+          !boundaries.some(item => item.sourceStart < resumeFrom?.sourceEnd && item.sourceEnd > resumeFrom?.sourceEnd) &&
           resumeFrom?.sourceText === source && resumeFrom.sourceStart === 0 &&
           Number.isInteger(resumeFrom.sourceEnd) && resumeFrom.sourceEnd > 0 && resumeFrom.sourceEnd <= source.length) {
         try {
@@ -566,14 +583,14 @@
       const valid = () => { if (job.signal.aborted || epoch !== generation) throw abortError(); };
       function progress(extra = {}) {
         const value = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: sourceEnd === source.length,
-          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}), ...extra };
+          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:signature} : {}), ...extra };
         try { onProgress?.({ ...value }); } catch { /* Display observers cannot break translation. */ }
         return value;
       }
       if (foreground) context.onStage = phase => {
         try { onProgress?.({ phase, translatedText: accepted.join(' '), sourceStart: 0, sourceEnd,
           totalLength: source.length, complete: false,
-          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}) }); } catch { /* Optional observer. */ }
+          ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:signature} : {}) }); } catch { /* Optional observer. */ }
       };
       function details(error, chunk, start, index, attempt, translated) {
         error.translationDetails = { reason: error.code === 'EMPTY_TRANSLATION' ? 'empty-output' : 'damaged-markers',
@@ -599,7 +616,7 @@
         if (recovery) stats.recoveryCalls++;
         try { return await nativeCall(modelText, context, Math.min(nativeTimeoutMs, remaining), recovery ? 'recovery-timeout' : 'native-timeout',
           recovery ? recoveryStarted + recoveryTimeoutMs : null, { sourceStart: start, sourceEnd: start + chunk.length,
-            recovery, engineSignature: `browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2` }); }
+            recovery, engineSignature: signature }); }
         catch (error) {
           error.translationDetails = { reason: 'native-error', ...error.translationDetails, attempt,
             chunkIndex: index, sourceStart: start, sourceEnd: start + chunk.length, outputLength: 0 };
@@ -609,7 +626,13 @@
       async function runChunk(chunk, level, start, index) {
         const attempt = ['initial', 'recovery', 'fine-recovery', 'fine-recovery'][level];
         const projected = nativeScientificText(source, scientificContext, start, start + chunk.length);
-        const translated = await call(chunk, level > 0, start, index, attempt, projected.text);
+        const projectedTerms = terms.filter(term => term.sourceStart >= start && term.sourceEnd <= start + chunk.length).map(term => {
+          const delta = projected.spans.filter(span => span.sourceEnd <= term.sourceStart)
+            .reduce((sum,span) => sum + span.displayText.length - span.text.length, 0);
+          return { ...term, sourceStart: term.sourceStart - start + delta, sourceEnd: term.sourceEnd - start + delta };
+        });
+        const translated = await glossary.apply(projected.text, projectedTerms, input =>
+          call(chunk, level > 0, start, index, attempt, input));
         valid();
         try {
           const value = validateTranslation(projected.text, translated);
@@ -621,7 +644,7 @@
           if (level >= 2 || chunk.length <= 80) {
             const numberMarkers = typeof translated === 'string' ? translated.match(/(?:<|&lt;)\/?(?:b\d{3,}|\d{3,}(?:>|&gt;))/giu) || [] : [];
             const leakedNumbers = error.code === 'INVALID_TRANSLATION' && numberMarkers.some(marker => !chunk.includes(marker));
-            const replacement = leakedNumbers && !projected.spans.length ? expressCountRanges(chunk) : chunk;
+            const replacement = leakedNumbers && !projected.spans.length && !projectedTerms.length ? expressCountRanges(chunk) : chunk;
             if (replacement !== chunk) {
               const retried = await call(chunk, true, start, index, 'numeric-range-recovery', replacement); valid();
               try {
@@ -639,7 +662,7 @@
           // smaller; all levels share one call and time budget for this entry.
           const limit = level === 0 ? (chunk.length > 600 ? 600 : 160) : level === 1 ? 160 : 80;
           const pieceLimit = level === 0 && chunk.length > 600 ? limit : Math.min(limit, Math.ceil(chunk.length / 2));
-          const pieces = scientificContext.length ? nativeScientificChunks(source, scientificContext, start, start + chunk.length, pieceLimit) : splitText(chunk, pieceLimit);
+          const pieces = boundaries.length ? nativeScientificChunks(source, boundaries, start, start + chunk.length, pieceLimit) : splitText(chunk, pieceLimit);
           if (pieces.length < 2) throw error;
           const recovered = [];
           let pieceStart = start;
@@ -658,7 +681,7 @@
           if (saved.complete) return saved.translatedText;
         }
         let sourceStart = sourceEnd;
-        const chunks = scientificContext.length ? nativeScientificChunks(source, scientificContext, sourceStart, source.length, foreground ? 600 : 1800) : splitText(source.slice(sourceStart), foreground ? 600 : 1800);
+        const chunks = boundaries.length ? nativeScientificChunks(source, boundaries, sourceStart, source.length, foreground ? 600 : 1800) : splitText(source.slice(sourceStart), foreground ? 600 : 1800);
         for (let index = 0; index < chunks.length; index += 1) {
           const chunk = chunks[index];
           result.push(await runChunk(chunk, 0, sourceStart, index));
@@ -673,7 +696,7 @@
           classified.translationDetails = { ...classified.translationDetails, nativeCalls: stats.nativeCalls, recoveryCalls: stats.recoveryCalls,
             elapsedMs: Math.max(0, clock() - startedAt), queueWaitMs: stats.queueWaitMs, failures: stats.failures.map(value => ({ ...value })) };
           if (sourceEnd > 0) classified.partialTranslation = { translatedText: accepted.join(' '), sourceStart: 0, sourceEnd, totalLength: source.length, complete: false,
-            ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:`browser-translator:${pair.sourceLanguage}:${pair.targetLanguage}:validated-prefix-v2`} : {}) };
+            ...(scientificContext.length ? {scientificContext, sourceText:source, engineSignature:signature} : {}) };
           if (sourceEnd > 0 && sourceEnd < source.length && epoch === generation && !job.signal.aborted) remember(key, accepted.join(' '), sourceEnd, source.length);
           errorDetails = { ...classified.translationDetails, failures: classified.translationDetails.failures.map(value => ({ ...value })) };
         }
@@ -720,7 +743,7 @@
       const saved = await abortable(bridge.getRoute(taskId, identity), signal);
       valid(epoch, identity, signal);
       if (saved?.taskId !== taskId || !['local', 'global', 'profile'].includes(saved.mode) ||
-          (saved.mode === 'local' ? saved.engineSignature !== LOCAL_SIGNATURE : !/^sha256:[a-f0-9]{64}$/u.test(saved.engineSignature || ''))) {
+          (saved.mode === 'local' ? (saved.engineSignature !== LOCAL_SIGNATURE && !/^sha256:[a-f0-9]{64}$/u.test(saved.engineSignature || '')) : !/^sha256:[a-f0-9]{64}$/u.test(saved.engineSignature || ''))) {
         throw failure('TRANSLATION_ROUTE_INVALID', 'Translation route identity is unavailable.');
       }
       if (route?.engineSignature !== saved.engineSignature) initialized = false;
@@ -746,7 +769,7 @@
       const source = String(text || ''), epoch = generation, identity = captureIdentity(), signature = route.engineSignature;
       const scientificContext = scientificApi.normalizeScientificContext(source, suppliedContext);
       if (scientificContext.length && taskId !== 'full_text_translation') throw failure('TRANSLATION_INVALID_REQUEST', 'Scientific spans require a paragraph source.');
-      if (route.mode === 'local') return localProvider.translate(text, { signal, onProgress, resumeFrom, scientificContext, ...options });
+      if (route.mode === 'local') return localProvider.translate(text, { signal, onProgress, resumeFrom, scientificContext, ...options, expectedGlossarySignature: signature });
       if (typeof sourceKey !== 'string' || !sourceKey) throw failure('TRANSLATION_SOURCE_KEY_REQUIRED', 'A stable paragraph or section anchor is required.');
       if (navigationBatch !== undefined && (navigationBatch !== true || taskId !== 'navigation_title_translation')) {
         throw failure('TRANSLATION_INVALID_REQUEST', 'Only navigation titles support batches.');
@@ -923,6 +946,6 @@
         documentBinding, engineSignature, translations, expectedRevision: options?.expectedRevision })
     };
   }
-  return { createProvider, createTaskProvider, createRuntimeBridge, splitText, validateTranslation,
+  return { glossary, createProvider, createTaskProvider, createRuntimeBridge, splitText, validateTranslation,
     navigationTitleBatchItems, parseNavigationTitleBatch, validateNavigationTitleTranslations, createNavigationTitleBatches };
 });

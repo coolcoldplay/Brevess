@@ -75,21 +75,47 @@
     return {added,newCount,merged};
   }
 
+  async function radarCountYears(count,signal,endYear=new Date().getUTCFullYear()){
+    const result=[];
+    async function visit(first,last){
+      signal?.throwIfAborted();
+      const n=await count(String(first).padStart(4,'0'),String(last).padStart(4,'0'));
+      if(!Number.isSafeInteger(n)||n<0)throw radarError('RADAR_RESULT_INVALID','来源返回的年度篇数无效。');
+      if(!n)return;
+      if(first===last){result.push([first,n]);return;}
+      const mid=Math.floor((first+last)/2);
+      // Query both branches independently: publication years may overlap (e.g. print and online).
+      await visit(first,mid);await visit(mid+1,last);
+    }
+    await visit(1,endYear);
+    return result;
+  }
+  function validBaseline(value) {
+    if (Object.hasOwn(value,'baselineStartDay')) {
+      const d=value.baselineStartDay;
+      return d==='' || (typeof d==='string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d>='0001-01-01' && Number.isFinite(Date.parse(d)) && day(Date.parse(d))===d);
+    }
+    return Number.isSafeInteger(value.baselineDays) && value.baselineDays>0;
+  }
+  function radarBaseline(value) {
+    return Object.hasOwn(value,'baselineStartDay') ? {baselineStartDay:value.baselineStartDay} : {baselineDays:value.baselineDays};
+  }
   function validateRadarConfig(value) {
     const fail = () => { throw radarError('RADAR_CONFIG', '请填写名称与所选来源的检索式，并选择有效的回溯范围和频率。'); };
     if (!value || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 120 ||
         typeof value.query !== 'string' || !value.query.trim() || value.query.length > 4000 ||
         /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value.query) ||
         !Object.hasOwn(RADAR_SOURCES,value.source) || !Number.isInteger(value.intervalHours) || value.intervalHours < 0 || value.intervalHours > 720 ||
-        ![1, 7, 30, 90].includes(value.baselineDays) || typeof value.enabled !== 'boolean') fail();
+        !validBaseline(value) || typeof value.enabled !== 'boolean') fail();
     return { ...(value.sourceQueries?{sourceQueries:validateRadarSourceQueries(value.sourceQueries)}:{}), name: value.name.trim(), query: value.query.trim(), source: value.source,
-      intervalHours: value.intervalHours, baselineDays: value.baselineDays, enabled: value.enabled };
+      intervalHours: value.intervalHours, ...radarBaseline(value), enabled: value.enabled };
   }
   function radarScanWindow(revision, at) {
     const endDay = day(at);
     const startDay = revision.lastSuccessAt
       ? day(revision.lastSuccessAt - 7 * DAY)
-      : day(at - (revision.baselineDays - 1) * DAY);
+      : Object.hasOwn(revision,'baselineStartDay') ? revision.baselineStartDay || '0001-01-01'
+      : day(Math.max(Date.parse('0001-01-01'),at - (revision.baselineDays - 1) * DAY));
     return { startDay: revision.windowStart && startDay < revision.windowStart ? revision.windowStart : startDay, endDay };
   }
   function radarRevision(radar) { return radar.revisions[radar.revisions.length - 1]; }
@@ -107,7 +133,7 @@
       radar.revisions.forEach((revision, i) => {
         if(revision.sourceQueries)try{validateRadarSourceQueries(revision.sourceQueries);}catch{fail();}
         if (revision.number !== i + 1 || typeof revision.query !== 'string' || !Array.isArray(revision.articles) ||
-            ![1, 7, 30, 90].includes(revision.baselineDays) || !Array.isArray(revision.warnings)) fail();
+            !validBaseline(revision) || !Array.isArray(revision.warnings)) fail();
         if(revision.baselineHistory!=null&&(!Array.isArray(revision.baselineHistory)||revision.baselineHistory.length>100||revision.baselineHistory.some(h=>!h||!/^\d{4}-\d{2}-\d{2}$/.test(h.startDay)||!/^\d{4}-\d{2}-\d{2}$/.test(h.endDay)||h.startDay>h.endDay||!Number.isFinite(h.checkedAt)||!Number.isSafeInteger(h.matched)||h.matched<0||!Number.isSafeInteger(h.added)||h.added<0||h.added>h.matched)))fail();
         const papers = new Set();
         for (const paper of revision.articles) {
@@ -124,5 +150,5 @@
   }
   function emptyRadarState() { return { schema: 1, radars: [], active: null }; }
   return { isRadarPreprint, radarSourceQueries, validateRadarSourceQueries, radarDoi, radarPmid, radarIdentityKeys, mergeRadarArticles, DAY, RADAR_DATABASE, RADAR_SOURCES, validRadarPaperId, radarPaperUrl, radarError, radarClone: clone, radarDay: day, validateRadarConfig,
-    radarScanWindow, radarRevision, radarUnreadCount, radarPaperTime, validateRadarState, emptyRadarState };
+    radarCountYears, radarBaseline, radarScanWindow, radarRevision, radarUnreadCount, radarPaperTime, validateRadarState, emptyRadarState };
 });

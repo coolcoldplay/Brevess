@@ -48,7 +48,11 @@
       if (message.type === 'PAGE_TOOLS_BOOTSTRAP') {
         if (sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id) || !pageToolsSupportedUrl(sender.url))
           fail('PAGE_TOOLS_UNSUPPORTED', '此页面不支持网页工具。');
-        const frame = await frameFor(sender.tab.id, sender.documentId, sender.url);
+        // History navigation keeps the document but can leave MessageSender.url
+        // at its initial address. Pin the browser's current frame identity.
+        const current = await chromeApi.webNavigation.getFrame({ tabId: sender.tab.id, frameId: 0 });
+        if (!pageToolsSupportedUrl(current?.url)) fail('PAGE_TOOLS_UNSUPPORTED', '此页面不支持网页工具。');
+        const frame = await frameFor(sender.tab.id, sender.documentId, current.url);
         return { tabId: sender.tab.id, frame };
       }
       if (String(sender.url || '').split(/[?#]/)[0] !== chromeApi.runtime.getURL('action-popup.html'))
@@ -72,7 +76,7 @@
       await frameFor(target.tabId, target.frame.documentId, target.frame.url);
       await ensureContent(target.tabId, { expectedUrl: target.frame.url, expectedDocumentId: target.frame.documentId,
         deferArticlePreindex: true, contextKey: 'page-tools:' + target.frame.documentId });
-      await send(target, { action: 'configurePageTools', preferences });
+      await send(target, { action: 'configurePageTools', preferences: await read() });
     }
     async function translationState(target) {
       return send(target, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null);
@@ -81,16 +85,22 @@
       if ((await translationState(target))?.success) return;
       await chromeApi.scripting.insertCSS({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] }, files: ['bilingual-translation.css'] });
       await chromeApi.scripting.executeScript({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] }, files: [
-        'core/translation-source.js', 'core/translation-checkpoint.js', 'core/local-translator.js',
+        'core/translation-source.js', 'core/translation-checkpoint.js', 'core/translation-glossary.js', 'core/local-translator.js',
         'core/bilingual-translation-controller.js', 'bilingual-translation-content.js'
       ] });
       await frameFor(target.tabId, target.frame.documentId, target.frame.url);
     }
     async function publicState(tab) {
       const supported = pageToolsSupportedUrl(tab?.url);
-      let translation = null;
-      if (supported) translation = await chromeApi.tabs.sendMessage(tab.id, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null);
-      return { supported, preferences: await read(), shortcut: await getShortcutKey(), translation: translation?.state || null };
+      const preferences = read(), shortcut = getShortcutKey();
+      let timer, translation;
+      try {
+        if (supported) translation = await Promise.race([
+          chromeApi.tabs.sendMessage(tab.id, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null),
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), 250); })
+        ]);
+      } finally { clearTimeout(timer); }
+      return { supported, preferences: await preferences, shortcut: await shortcut, translation: translation?.state || null };
     }
     async function handle(message, sender) {
       try {
@@ -117,7 +127,7 @@
           // activeTab also admits ordinary HTTP pages when the user opens the
           // toolbar popup. Restore saved tools without adding broad HTTP hosts.
           await chromeApi.scripting.executeScript({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] },
-            files: ['core/page-tools.js', 'semantic-find-launcher.js'] });
+            files: ['core/credential-boundary.js', 'core/page-tools.js', 'semantic-find-launcher.js'] });
           if (preferences.pageTranslation) await ensureTranslation(target);
           await ensureReader(target, preferences);
         } else if (message.type === 'PAGE_TOOLS_BOOTSTRAP') {

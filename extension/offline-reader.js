@@ -19,6 +19,9 @@
     if(response.data?.asset?.revision!==assetReceipt.revision||response.data.asset.contentHash!==assetReceipt.contentHash||
       (Number(response.data.workspaceGeneration)||1)!==binding.workspaceGeneration)throw Error('文献保存版本已变化，请重新打开。');
     const html=String(response.data.asset.content);
+    // Restore the publisher's original canvas while the compact toolbar keeps its own palette.
+    document.documentElement.removeAttribute('data-brevess-ui');
+    document.querySelector('meta[name="color-scheme"]')?.remove();
     SciLLM.mountSavedArticleHtml(document,html);document.title=snapshot.title||'本机文献 · BREVESS';
     const canonical=document.createElement('link');canonical.rel='canonical';canonical.href=snapshot.url;document.head.append(canonical);
     publication={active:true,binding:Object.freeze({...binding}),snapshot,metadata:saved.data.metadata,
@@ -31,7 +34,7 @@
     const host=document.createElement('div');host.setAttribute('data-sci-plugin-ui','');
     host.style.cssText='position:sticky!important;top:0!important;display:block!important;z-index:2147483646!important;margin:0!important;';
     const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
-    style.textContent=':host{all:initial}header{display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fffefc;border-bottom:1px solid #eee;font:13px/1.4 system-ui;color:#555}strong{font-size:14px;color:#161616}span{flex:1}button,a{font:inherit;color:#161616;text-decoration:none;background:none;border:0;padding:5px 10px;border-radius:6px;cursor:pointer}button{background:#181818;color:white}button:disabled{opacity:.4}';
+    style.textContent=':host{all:initial}header{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--bv-surface,#fffefc);border-bottom:1px solid var(--bv-line,#eee);font:13px/1.4 system-ui;color:var(--bv-muted,#555)}strong{font-size:14px;color:var(--bv-text,#161616)}span{flex:1}button,a{font:inherit;color:var(--bv-text,#161616);text-decoration:none;background:none;border:0;padding:5px 10px;border-radius:6px;cursor:pointer}button{background:var(--bv-selected,#181818);color:var(--bv-on-selected,white)}button:disabled{opacity:.4}';
     const bar=document.createElement('header'),brand=document.createElement('strong');brand.textContent='BREVESS';
     status=document.createElement('span');status.setAttribute('role','status');status.textContent='正在恢复阅读成果…';
     const original=document.createElement('a');original.textContent='在线原文';original.href=snapshot.url;original.target='_blank';original.rel='noopener noreferrer';

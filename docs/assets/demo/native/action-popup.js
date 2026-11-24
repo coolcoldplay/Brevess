@@ -19,19 +19,31 @@ const translatePageButton = document.getElementById('translatePage');
 const toolsStatus = document.getElementById('pageToolsStatus');
 function toolsNotice(message, tone = '') {
   if (!toolsStatus) return;
+  toolsStatus.hidden = !message;
   toolsStatus.textContent = message;
   toolsStatus.dataset.tone = tone;
+}
+function showTranslationStatus(state) {
+  if (!state?.enabled) return false;
+  const count = state.total > 0 ? ` ${state.completed || 0}/${state.total}` : '';
+  if (state.error) toolsNotice(state.error, 'error');
+  else if (state.phase === 'awaiting-user') toolsNotice('请到网页中确认启用本地翻译。');
+  else if (state.phase === 'complete' && state.total > 0) toolsNotice(`整页翻译完成${count} · 悬停译句可对照原文`);
+  else if (state.phase === 'partial') toolsNotice(`整页翻译部分完成${count}`, 'error');
+  else if (state.paused) toolsNotice(`整页翻译已暂停${count}`);
+  else toolsNotice(`整页翻译中${count}`);
+  return true;
 }
 function renderPageTools() {
   const state = currentState?.pageTools;
   for (const [key, input] of Object.entries(toolInputs)) {
     if (!input) continue;
     input.checked = state?.preferences?.[key] === true;
-    input.disabled = !state?.supported || pageToolsBusy;
+    input.disabled = !state?.supported || !currentState?.pageDocumentId || pageToolsBusy;
   }
-  if (searchPageButton) searchPageButton.disabled = !state?.supported || !state.preferences.semantic || pageToolsBusy;
+  if (searchPageButton) searchPageButton.disabled = !state?.supported || !currentState?.pageDocumentId || !state.preferences.semantic || pageToolsBusy;
   if (translatePageButton) {
-    translatePageButton.disabled = !state?.supported || !state.preferences.pageTranslation || pageToolsBusy;
+    translatePageButton.disabled = !state?.supported || !currentState?.pageDocumentId || !state.preferences.pageTranslation || pageToolsBusy;
     translatePageButton.title = state?.translation?.enabled ? '停止整页翻译' : '翻译当前页';
     translatePageButton.setAttribute('aria-label',translatePageButton.title);
     translatePageButton.setAttribute('aria-pressed',String(state?.translation?.enabled===true));
@@ -41,6 +53,7 @@ function renderPageTools() {
 }
 async function pageToolAction(type, fields = {}) {
   if (pageToolsBusy || !currentState?.pageTools?.supported) return;
+  actionsStarted++;
   pageToolsBusy = true;
   renderPageTools();
   toolsNotice('正在应用…');
@@ -54,9 +67,9 @@ async function pageToolAction(type, fields = {}) {
     currentState.pageTools = { ...fresh.pageTools, ...data };
     if (type === 'PAGE_TOOLS_OPEN_SEARCH') { window.close(); return; }
     if (type === 'PAGE_TOOLS_TRANSLATE') {
-      const translation = data.translation;
-      toolsNotice(translation?.error || (translation?.phase === 'awaiting-user' ? '请到网页中确认启用本地翻译。' :
-        fields.enabled ? '已启动整页翻译，可在网页中查看进度。' : '整页翻译已停止，已有译文保留。'), translation?.error ? 'error' : '');
+      if (!showTranslationStatus(data.translation)) {
+        toolsNotice(data.translation?.error || (fields.enabled ? '已启动整页翻译，可在网页中查看进度。' : '整页翻译已停止，已有译文保留。'), data.translation?.error ? 'error' : '');
+      }
     } else toolsNotice('设置已保存；点击工具按钮或划选文字即可使用。');
   } catch (error) {
     try {
@@ -76,6 +89,13 @@ searchPageButton?.addEventListener('click', () => void pageToolAction('PAGE_TOOL
 translatePageButton?.addEventListener('click', () => void pageToolAction('PAGE_TOOLS_TRANSLATE', {
   enabled: currentState?.pageTools?.translation?.enabled !== true
 }));
+
+chrome.runtime.onMessage?.addListener((message, sender) => {
+  if (message?.type !== 'BREVESS_TRANSLATION_STATE' || !currentState?.pageDocumentId ||
+      sender.tab?.id !== currentState.tabId || sender.documentId !== currentState.pageDocumentId || sender.frameId !== 0) return;
+  if (currentState.pageTools) currentState.pageTools.translation = message.state;
+  if (!pageToolsBusy) { renderPageTools(); showTranslationStatus(message.state); }
+});
 
 async function runtimeMessage(message) {
   if (message.type === 'ACTION_POPUP_GET_STATE') {
@@ -113,37 +133,65 @@ function updatePrimaryLabel(label) {
   if (strong) strong.textContent = label;
 }
 
+let retryStateTimer, stateAttempt = 0, loadingState = false;
+let actionsStarted = 0;
+const warmDocument = new Set();
+
+function refreshSoon() {
+  clearTimeout(retryStateTimer);
+  retryStateTimer = setTimeout(loadState, Math.min(200 * 2 ** Math.min(stateAttempt++, 4), 2500));
+}
+
 async function loadState() {
+  if (loadingState) return;
+  loadingState = true;
   try {
-    currentState = await runtimeMessage({ type: 'ACTION_POPUP_GET_STATE' });
-    pageTitle.textContent = currentState.title || '当前页面';
-    document.getElementById('resumeQuickSetup').hidden = !currentState.setupPending;
+    const next = await runtimeMessage({ type: 'ACTION_POPUP_GET_STATE' });
+    if (currentState && currentState.tabId !== next.tabId) { window.close(); return; }
+    currentState = next;
+    pageTitle.textContent = next.title || '当前页面';
+    document.getElementById('resumeQuickSetup').hidden = !next.setupPending;
     updatePrimaryLabel('侧栏打开工作台');
-    startButton.disabled = currentState.readable !== true;
-    if (currentState.pageTools?.supported) {
-      pageToolsBusy = true;
-      try {
-        await runtimeMessage({ type: 'PAGE_TOOLS_APPLY', tabId: currentState.tabId, nonce: currentState.nonce });
-      } catch (error) {
-        toolsNotice(String(error?.message || '工具未能加载，请刷新网页后重试。'), 'error');
-        pageToolsBusy = false;
-        renderPageTools();
-        return;
-      }
-      pageToolsBusy = false;
+    startButton.disabled = !next.readable;
+    if (next.pageTools?.supported && !next.pageDocumentId) {
+      renderPageTools();
+      setStatus('正在读取当前网页…');
+      refreshSoon();
+      return;
     }
+    stateAttempt = 0;
     renderPageTools();
-    toolsNotice(currentState.pageTools?.supported ? '开启开关后，按需检索、划句或翻译。' : '请在普通网页使用；浏览器内部页面及 PDF 请使用对应阅读入口。');
-    // The tools status already explains unsupported pages; avoid a duplicate footer.
-    setStatus(currentState.readable || currentState.pageTools
-      ? ''
-      : '当前页面暂不支持直接研读，仍可查看历史或设置。');
+    setStatus('');
+    if (!next.pageTools?.supported) {
+      toolsNotice('请在普通网页使用；浏览器内部页面及 PDF 请使用对应阅读入口。');
+      return;
+    }
+    if (!showTranslationStatus(next.pageTools.translation)) toolsNotice('');
+    // A confirmed document and its saved preferences are enough to edit a switch.
+    // Installing the content tools can continue while the popup remains interactive.
+    const key = next.pageDocumentId + '|' + next.pageUrl;
+    if (!warmDocument.has(key)) {
+      warmDocument.add(key);
+      const initialAction = actionsStarted;
+      void runtimeMessage({ type: 'PAGE_TOOLS_APPLY', tabId: next.tabId, nonce: next.nonce }).catch(error => {
+        warmDocument.delete(key);
+        if (currentState === next && initialAction === actionsStarted)
+          toolsNotice(String(error?.message || '网页工具未就绪。'), 'error');
+      });
+    }
   } catch (error) {
-    console.warn('Brevess action popup state unavailable', error);
-    startButton.disabled = true;
-    setStatus('暂时无法读取当前页面，请关闭后重试。', 'error');
+    if (!currentState) startButton.disabled = true;
+    setStatus('正在等待当前网页…');
+    refreshSoon();
+  } finally {
+    loadingState = false;
   }
 }
+
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (currentState?.tabId === id && change.status === 'complete' && !currentState.pageDocumentId) refreshSoon();
+});
+window.addEventListener('pagehide', () => clearTimeout(retryStateTimer), { once: true });
 
 startButton.addEventListener('click', () => {
   if (!currentState || startButton.disabled) return;
@@ -198,4 +246,6 @@ document.getElementById('resumeQuickSetup').addEventListener('click', () => {
   runtimeMessage({ type: 'QUICK_SETUP_OPEN' }).then(() => window.close()).catch(() => setStatus('无法打开快速配置，请稍后重试。', 'error'));
 });
 
+document.getElementById('dismissPopup').addEventListener('click', () => window.close());
+document.addEventListener('keydown', event => { if (event.key === 'Escape') window.close(); });
 void initializeActionPopup();

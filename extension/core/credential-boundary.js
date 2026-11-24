@@ -74,6 +74,7 @@
       if(area!=='local')return;const safe={};
       if(changes.sciPageToolsV1)safe.sciPageToolsV1={newValue:tools(changes.sciPageToolsV1.newValue)};
       if(changes.sciLlmSettingsV2)safe.sciLlmSettingsV2={newValue:{language:String(changes.sciLlmSettingsV2.newValue?.language||'zh-CN')}};
+      if(changes.sciGlobalAbbreviationMemoryV1)safe.sciGlobalAbbreviationMemoryV1={};
       if(!Object.keys(safe).length)return;
       void browser.tabs.query({}).then(tabs=>Promise.allSettled(tabs.filter(t=>Number.isInteger(t.id)&&/^(https?|file):/.test(t.url||'')).map(t=>browser.tabs.sendMessage(t.id,{type:'BREVESS_PUBLIC_PREFERENCES_CHANGED',changes:safe})))).catch(()=>{});
     });

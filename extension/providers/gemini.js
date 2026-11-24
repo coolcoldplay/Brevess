@@ -99,7 +99,8 @@
         const parts = data.candidates?.[0]?.content?.parts;
         const text = Array.isArray(parts) ? parts.map(item => item.text || '').join('') : '';
         if (!text) throw new shared.ProviderRequestError('INVALID_RESPONSE', 'Gemini response did not contain text');
-        return shared.parseJsonText(text);
+        return data.candidates[0].finishReason === 'STOP'
+          ? shared.parseCompletedJsonText(text) : shared.parseJsonText(text);
       },
       async analyzeChunk(request) {
         return adapter.generateJson({

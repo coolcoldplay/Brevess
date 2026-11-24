@@ -228,6 +228,18 @@
           threadId: String(message.threadId || ''),
           turnId: String(message.turnId || '')
         });
+      } else if (message.type === 'turn.readerInput') {
+        const job=globalThis.SciLLM?.articlePresentation?.receipt(message.job);
+        if(pending.readerDocument && job?.agent==='codex' && job.documentHash===pending.readerDocument && job.interaction){
+          pending.lastActivityAt=Date.now();reportNativeState(pending,'running');
+          pending.channel.push({type:'reader_input',job});
+        }
+      } else if (message.type === 'turn.readerStatus') {
+        if (pending.readerDocument && typeof message.text==='string' && message.text.trim()) {
+          pending.lastActivityAt=Date.now();
+          reportNativeState(pending,'running');
+          pending.channel.push({type:'public_summary',visibility:'public',text:message.text.slice(0,2000)});
+        }
       } else if (message.type === 'turn.delta') {
         if (pending.responseMode === 'json') {
           if (typeof message.text !== 'string' || typeof message.itemId !== 'string' || !message.itemId ||
@@ -257,6 +269,7 @@
               (pending.activityItems.has(message.itemId) || pending.activityItems.size < 128)) {
             pending.activityItems.set(message.itemId, signature);
             pending.lastActivityAt = Date.now();
+            if (pending.responseMode === 'text' && !pending.cancelReason) reportNativeState(pending, 'running');
           }
         }
         pending.channel.push({ type: 'metadata', itemId: message.itemId, phase: message.phase,
@@ -464,6 +477,7 @@
         requestId, stage: 'handshake', enteredAt: Date.now(), dispatchedAt: null,
         startedAt: null, lastActivityAt: null, cancelRequestedAt: null, terminalAt: null,
         threadId: '', turnId: '', activityItems: new Map(),
+        readerDocument:input.readerInput===true && !jsonMode ? input.conversationKey : '',
         onNativeRequestState: input.onNativeRequestState,
         onTerminationReceipt: input.onTerminationReceipt,
         connection: null,
@@ -482,6 +496,7 @@
           requestId,
           conversationKey: String(input.conversationKey || ''),
           conversationLabel: String(input.conversationLabel || ''),
+          ...(pending.readerDocument?{readerInput:true}:{}),
           profileId: String(input.profileId || ''),
           model: String(input.model || 'auto'),
           reasoningEffort: String(input.reasoningEffort || 'auto'),

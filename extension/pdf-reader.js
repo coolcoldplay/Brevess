@@ -288,6 +288,7 @@
   const nativeBridgeController = SciLLM.createPdfNativeBridgeController({
     onReady(api) {
       state.nativeReader = api;
+      document.dispatchEvent(new Event('brevess:pdf-panel-renderer-ready'));
       syncPdfSaveActions();
       if (state.view === 'original') state.nativeReader?.activate?.();
       else state.nativeReader?.deactivate?.();
@@ -1199,14 +1200,14 @@
     }
   }
 
-  function focusOriginalPdfPage(value) {
+  function focusOriginalPdfPage(value, targetTop) {
     const page = Math.max(1, Math.floor(Number(value) || 0));
     const originalUrl = originalPdfViewUrl();
     if (!originalUrl || !page) return false;
     setReaderView('original');
-    if (globalThis.__brevessNativePdfDocument?.focusPage?.(page)) return true;
+    if (globalThis.__brevessNativePdfDocument?.focusPage?.(page, { targetTop })) return true;
     document.dispatchEvent(new CustomEvent('brevess:focus-native-pdf-page', {
-      detail: { pageNumber: page }
+      detail: { pageNumber: page, targetTop }
     }));
     const frame = element('pdfOriginalFrame');
     if (element('pdfNativeViewer')?.dataset?.state === 'error') {
@@ -3372,6 +3373,7 @@
     onMetadata(metadata) {
       return applyPdfReaderDocumentTitle(metadata?.title);
     },
+    get panelCropReady() { return typeof state.nativeReader?.renderPanelCrop === 'function'; },
     get sourceUrl() { return workspaceSourceUrl(); },
     get title() { return state.documentTitle || resolvePdfReaderDocumentTitle({
       metadataTitle: state.pdfMetadataTitle,
@@ -3435,6 +3437,11 @@
         figures: figures.map(({ figureId, caption, captionLineEvidence }) =>
           ({ figureId, caption, captionLineEvidence }))
       })));
+      if (SciLLM.PdfPanelEvidence) {
+        const panels = await SciLLM.PdfPanelEvidence.read(documentHash).catch(() => null);
+        if (!current()) return [];
+        if (panels) SciLLM.PdfPanelEvidence.applyArtworkPages(figures,panels,documentHash);
+      }
       for (const figure of figures) {
         if (!current()) return [];
         figure.effectiveInventory = await SciLLM.createEffectivePdfFigureInventory({
@@ -3520,7 +3527,7 @@
     setPdfFigureEngineStatus();
   });
   document.addEventListener('brevess:pdf-focus-page', event => {
-    focusOriginalPdfPage(event?.detail?.page);
+    focusOriginalPdfPage(event?.detail?.page, event?.detail?.targetTop);
   });
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local' || !changes?.[SciLLM.PDF_MINERU_SETTINGS_KEY]) return;

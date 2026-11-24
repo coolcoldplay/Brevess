@@ -8,12 +8,12 @@ body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button {
   gap: 0;
   border: 0;
   border-radius: 0;
-  background: #fff;
-  color: #202020;
+  background: var(--bv-surface, #fff);
+  color: var(--bv-text, #202020);
   transition: background-color 160ms linear, color 160ms linear;
 }
-body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:hover { background: #ededed; }
-body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button[data-selected="true"] { background: #202020; color: #fff; }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:hover { background: var(--bv-hover, #ededed); }
+body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button[data-selected="true"] { background: var(--bv-selected, #202020); color: var(--bv-on-selected, #fff); }
 body[data-ui-surface="sidebar"] .workspace-nav-button.bvi-button:focus-visible { outline-offset: -4px; }
 body[data-ui-surface="sidebar"] .workspace-bottom-nav { flex-basis: 42px; }
 body[data-ui-surface="sidebar"] .bvi-button .workspace-nav-task-progress { display: none; }
@@ -26,13 +26,13 @@ body[data-ui-surface="sidebar"] .bvi-button .workspace-nav-task-progress { displ
   height: 2px;
   overflow: hidden;
   display: none;
-  background: rgba(255, 192, 0, .16);
+  background: color-mix(in srgb, var(--bv-amber-bg, #ffc000) 16%, transparent);
   pointer-events: none;
 }
 .bvi-progress > span {
   display: block;
   height: 100%;
-  background: rgb(255, 192, 0);
+  background: var(--bv-amber-bg, rgb(255, 192, 0));
   transform-origin: left;
   transform: scaleX(var(--bvi-progress, 0));
   transition: transform .2s linear;

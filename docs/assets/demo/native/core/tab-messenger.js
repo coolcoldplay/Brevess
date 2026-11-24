@@ -33,6 +33,9 @@
     'core/article-chat-citations.js',
     'core/article-chat-attachments.js',
     'core/article-chat.js',
+    'core/agent-setup-prompt.js',
+    'core/article-presentation.js',
+    'core/article-presentation-content.js',
     'core/article-chat-web-sources.js',
     'core/publisher-diagnostics.js',
     'core/highlight-distribution.js',
@@ -52,6 +55,10 @@
     'core/figure-image-tiles.js',
     'core/figure-concurrency.js',
     'core/figure-analysis.js',
+    'core/pdf-panel-evidence.js',
+    'core/web-panel-reader.js',
+    'vendor/panel-extract/viewport.js',
+    'core/article-figure-surface.js',
     'core/figure-result-binding.js',
     'core/figure-stage-diagnostics.js',
     'core/faithful-page-snapshot.js',
@@ -88,7 +95,7 @@
     'core/translation-source.js',
     'core/translation-checkpoint.js',
     'core/selection-tts.js',
-    'core/local-translator.js',
+    'core/translation-glossary.js', 'core/local-translator.js',
     'core/input-tools.js',
     'core/bilingual-translation-controller.js',
     'bilingual-translation-content.js',
@@ -108,10 +115,20 @@
     'semantic-find-content.js',
     'page-load-indicator-content.js'
   ];
-  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css'];
+  const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css', 'ui-theme.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.2-adaptive-figures-r10';
+    '1.0.2-reading-tools-r10';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.2-reading-tools-r9',
+    '1.0.2-reading-tools-r8',
+    '1.0.2-agent-input-r6',
+    '1.0.2-figure-hover-r5',
+    '1.0.2-web-panels-r4',
+    '1.0.2-workbench-evidence-r15',
+    '1.0.2-workbench-evidence-r14',
+    '1.0.2-workbench-evidence-r13',
+    '1.0.2-workbench-evidence-r12',
+    '1.0.2-adaptive-figures-r10',
     '1.0.2-adaptive-figures-r9',
     '1.0.2-adaptive-figures-r8',
     '1.0.2-adaptive-figures-r7',

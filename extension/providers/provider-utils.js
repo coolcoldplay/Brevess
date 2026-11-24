@@ -1851,6 +1851,15 @@
     throw error;
   }
 
+  function parseCompletedJsonText(text, formatFailureInput = null) {
+    try {
+      return parseJsonText(text, { captureFormatFailure: true, formatFailureInput });
+    } catch (error) {
+      if (error?.code === 'INVALID_RESPONSE') error.diagnosticStage = 'provider-completion';
+      throw error;
+    }
+  }
+
   function splitDataUrl(value) {
     const text = String(value || '').trim();
     const match = text.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/i);
@@ -2024,6 +2033,7 @@
     parseSseContent,
     readSseCompletionMetadata,
     parseJsonText,
+    parseCompletedJsonText,
     getJsonFormatFailureContext,
     recoverFigureGroupClosure,
     estimateJsonFormatRepairInputTokens,

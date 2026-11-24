@@ -26,6 +26,8 @@ BREVESS 设置	BREVESS settings
 管理 AI 提示词与离线正则规则。	Manage AI prompts and offline matching rules.
 查看阅读、保存与模型的当前状态。	Check reading, storage and model setup.
 已连接的服务	Connected services
+API 连接	API connections
+本机连接器已登记	Local connector registered
 添加连接	Add connection
 编辑连接	Edit connection
 保存正文发送许可	Save content-sharing permission
@@ -220,7 +222,7 @@ Panel 追问	Panel follow-ups
     if (!language.isConnected) $('keyboardShortcuts')?.prepend(language);
     // Models: keep the full original editor in a modal. It still owns save, validation and risk gating.
     const provider = $('providerSettings'); const summary = element('div', 'focus-model-summary'); provider.prepend(summary);
-    const services = group('已连接的服务', summary); const list = element('div', 'focus-connections'); list.id = 'focus-connections'; services.append(list);
+    const services = group('API 连接', summary); const list = element('div', 'focus-connections'); list.id = 'focus-connections'; services.append(list);
     const add = button('', () => { open(connectionDialog); $('addApiProfile').click(); }, 'focus-add-connection'); add.innerHTML = icon('plus'); add.append(element('span', '', '添加连接')); title.append(add);
     connectionDialog = modal('编辑连接', $('apiProfilesSettings'), 'focus-connection-dialog');
     connectionDialog.querySelector('h2').classList.add('focus-provider-heading');
@@ -243,6 +245,7 @@ Panel 追问	Panel follow-ups
     const agent = document.querySelector('.external-agent-settings');
     agent.hidden = true; summary.append(agent);
     const agentGroup = group('Agent', summary);
+    const agents = element('div','focus-connections'); agents.id='focus-agent-connections'; agentGroup.append(agents);
     const agentEntry = row('连接你的 Agent', '选择客户端、复制配置提示词、连接测试。', () => $('externalAgentManage').click());
     agentEntry.id = 'focus-agent-entry'; agentGroup.append(agentEntry);
     usage.before(agentGroup);
@@ -312,9 +315,10 @@ Panel 追问	Panel follow-ups
     const risk = $('focus-risk-status');
     if (risk) risk.textContent = $('aiPrivacyAcknowledged')?.checked ? '' : '配置模型前，请先在隐私与权限中确认数据隐私风险。';
   }
+  let agentDiscovery=0;
   function sync(data) {
     if (!mounted || !data?.settings) return;
-    const settings = data.settings; const list = $('focus-connections'); list.replaceChildren();
+    const settings = data.settings; const list = $('focus-connections'), agents=$('focus-agent-connections'); list.replaceChildren();agents.replaceChildren();
     const order = settings.profileOrder || Object.keys(settings.profiles || {});
     for (const id of order) {
       const profile = settings.profiles?.[id]; if (!profile) continue;
@@ -326,9 +330,11 @@ Panel 追问	Panel follow-ups
       const name = element('strong', '', profile.name || provider); name.dataset.i18nIgnore = '';
       text.append(name, element('small', '', provider + (profile.config?.hasApiKey ? ' · 密钥已设置' : '')));
       const state = element('span', 'focus-connection-state', profile.config?.hasApiKey ? '已配置' : '编辑');
-      const pencil = element('span'); pencil.innerHTML = icon('edit'); b.append(glyph, text, state, pencil); list.append(b);
+      const pencil = element('span'); pencil.innerHTML = icon('edit'); b.append(glyph, text, state, pencil); (['codex-local','deepseek-harness'].includes(profile.providerId)?agents:list).append(b);
     }
-    if (!list.childNodes.length) list.append(element('p', 'focus-empty', '还没有连接，点击右上角添加。'));
+    const stamp=String(++agentDiscovery);agents.dataset.discovery=stamp;
+    void chrome.runtime.sendMessage({type:'BREVESS_ARTICLE_PRESENTATION',op:'clients'}).then(r=>{if(agents.dataset.discovery!==stamp||!r?.success)return;for(const id of r.data||[]){const client=root.SciLLM?.getAgentSetupClients?.().find(c=>c.id===id);if(!client||client.modelAdapter&&order.some(key=>settings.profiles[key]?.providerId===client.modelAdapter))continue;agents.append(row(client.label,'本机连接器已登记',()=>$('externalAgentManage').click()));}}).catch(()=>{});
+    if (!list.childNodes.length) list.append(element('p', 'focus-empty', '尚未配置 API。'));
     const profile = settings.profiles?.[settings.globalProfileId];
     $('focus-default-model').querySelector('.focus-row-value').textContent = profile ? (profile.config?.model || profile.name) : '未配置';
     $('focus-consent-row').querySelector('.focus-row-value').textContent = settings.consentGranted ? '已允许' : '未允许';

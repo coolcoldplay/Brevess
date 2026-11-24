@@ -38,14 +38,15 @@ function networkState(settings,selectedProfileId,api,sourceCount=1){
 }
 function updateNetwork(v){const b=v.network;if(!b)return;
  const capability=networkState(settings(),v.profile?.value||'',g.SciLLM,v.state?.sourceIds?.length||1);
- b.hidden=!capability.supported||v.state?.adjusting===true;b.disabled=b.hidden;
+ b.hidden=v.state?.adjusting===true;b.disabled=!capability.supported||b.hidden;
  if(v.networkSlot)v.networkSlot.hidden=b.hidden;
- if(b.hidden&&v.open?.popup===v.networkMenu)close(v);
+ if(b.disabled&&v.open?.popup===v.networkMenu)close(v);
  if(typeof articleChatWebSearchMode==='undefined')return;
  if(!capability.modes.includes(articleChatWebSearchMode)){articleChatWebSearchMode='off';articleChatWebSearchEnabled=false;}
  const mode=articleChatWebSearchMode,on=mode!=='off',label={off:'关闭',on:'开启',deep:'深度检索',auto:'按需'}[mode]||'关闭';
- b.setAttribute('aria-pressed',String(on));b.setAttribute('aria-label','联网模式：'+label);b.dataset.searchMode=mode;
- b.title='联网：'+label+'；点击选择模式';
+ const description=capability.supported?'联网：'+label+'；点击选择模式':'联网已关闭；当前模型或问答范围不支持联网';
+ b.setAttribute('aria-pressed',String(on));b.setAttribute('aria-label',description);b.dataset.searchMode=mode;
+ b.title=description;
  if(!v.networkMenu)return;
  v.networkMenu.replaceChildren();
  for(const value of capability.modes){
@@ -94,6 +95,7 @@ function mount(form){if(form.id!=='articleChatForm'||views.has(form))return;cons
  network.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();if(network.disabled)return;updateNetwork(v);open(v,network,networkMenu);},true);network.addEventListener('keydown',e=>{if(e.key==='ArrowDown'&&!network.disabled){e.preventDefault();updateNetwork(v);open(v,network,networkMenu);}});
  const oldControls=form.querySelector('.article-chat-submit-controls');left.append(thinkingSlot,networkSlot,tools);right.append(picker,attachmentSlot,send);toolbar.append(left,right);oldControls?.remove();const help=form.querySelector('#articleChatSearchOption');if(help)help.classList.add('visually-hidden');const generalization=u.querySelector('[data-generalization]');u.replaceChildren(deck,box,preview,...(generalization?[generalization]:[]),inputRow,toolbar,status);box.setAttribute('data-sidebar-focus-escape-priority','');box.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();box.hidden=true;add.focus();}});
  form.addEventListener('change',e=>{if(e.target===profile){close(v);refreshReasoning(v);updateNetwork(v);refreshModelCapabilities(v);}});document.addEventListener('pointerdown',e=>{if(v.open&&!v.open.popup.contains(e.target)&&!v.open.button.contains(e.target))close(v);});form.addEventListener('submit',()=>close(v),true);
+ g.BrevessChatAgentControls?.mountComposer(right);
  decorateFiles(v);refreshReasoning(v);refreshModelCapabilities(v);if(nativeNetworkSync)nativeNetworkSync();updateNetwork(v);
  const initialSettings=settings();if(typeof sendLlmMessage==='function')void sendLlmMessage({type:'LLM_GET_SETTINGS'}).then(result=>{if(settings()!==initialSettings||v.saving)return;if(typeof llmSettingsState!=='undefined')llmSettingsState=result;refreshReasoning(v);if(nativeNetworkSync)nativeNetworkSync();updateNetwork(v);}).catch(()=>{});
 }

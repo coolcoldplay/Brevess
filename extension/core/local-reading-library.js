@@ -279,7 +279,7 @@
       for(const turn of web.turns||[])pushSource(sources,'notes',[turn.question,turn.answer].filter(Boolean).join('\n'),'网页问答');
       const snapshot=web.pageSnapshot||(web.snapshot?.blocks?web.snapshot:null);
       for(const b of snapshot?.blocks||[])pushSource(sources,'fulltext',b.text,'已保存网页内容');
-      return{workspaceId:workspace.workspaceId,workspaceGeneration:workspace.workspaceGeneration,title,url,sourceKind:'html',contentType:'web',webKind:web.contentType,doi:'',doiState:'unknown',authors:[],journal:'',publicationDate:'',createdAt:workspace.createdAt||'',updatedAt:workspace.updatedAt||'',savedAt:workspace.createdAt||'',hasSavedWebContent:!!snapshot,hasOfflineSnapshot:false,offlineSnapshotStatus:'missing',...tagsFromAsset(workspace,byPath.get(TAGS_PATH)),sources,coverage:{title:!!title,notes:sources.some(s=>s.scope==='notes'),fulltext:!!snapshot,abstract:false,method:false,caption:false}};
+      return{workspaceId:workspace.workspaceId,workspaceGeneration:workspace.workspaceGeneration,title,url,sourceKind:'html',contentType:'web',webKind:web.contentType,...(web.snapshot?.researchOwner?.kind==='multi-derived'||String(web.snapshot?.sourceUrl||'').startsWith('https://brevess.invalid/research-session/')?{crossPageSession:true}:{}),doi:'',doiState:'unknown',authors:[],journal:'',publicationDate:'',createdAt:workspace.createdAt||'',updatedAt:workspace.updatedAt||'',savedAt:workspace.createdAt||'',hasSavedWebContent:!!snapshot,hasOfflineSnapshot:false,offlineSnapshotStatus:'missing',...tagsFromAsset(workspace,byPath.get(TAGS_PATH)),sources,coverage:{title:!!title,notes:sources.some(s=>s.scope==='notes'),fulltext:!!snapshot,abstract:false,method:false,caption:false}};
     }
     const sources = [];
     const structure = byPath.get('article/structure.json')?.content || {};
@@ -547,6 +547,7 @@
       sourceKind: article.sourceKind,
       contentType: article.contentType||'literature',
       hasSavedWebContent: article.hasSavedWebContent===true,
+      ...(article.crossPageSession?{crossPageSession:true}:{}),
       doi: article.doi,
       doiState: article.doiState,
       createdAt: article.createdAt,

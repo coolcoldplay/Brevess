@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html data-brevess-ui lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Brevess PDF 阅读工作区</title>
   <link rel="stylesheet" href="content.css">
@@ -12,10 +13,13 @@
   <link rel="stylesheet" href="ui-swiss.css">
   <link rel="stylesheet" href="pdf-reader-chrome.css">
 <script src="core/translation-checkpoint.js"></script>
-<script src="core/local-translator.js"></script>
+<script src="core/translation-glossary.js"></script><script src="core/local-translator.js"></script>
 <script src="core/credential-boundary.js"></script>
 <script src="core/input-tools.js"></script>
 <script src="core/web-media.js"></script>
+<link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
+<script src="ui-focus.js" defer></script>
 </head>
 <body class="brevess-pdf-reader" data-ui-surface="pdf">
   <button id="pdfReaderToolbarReveal" class="pdf-reader-toolbar-reveal" type="button"
@@ -45,6 +49,7 @@
       </div>
     </nav>
     <div class="pdf-reader-toolbar-actions" data-sci-plugin-ui>
+      <button id="pdfReaderPanels" class="pdf-reader-button" type="button" title="从当前 PDF 提取 Figure 和 Panel" data-action-icon="none">提取 Panel</button>
       <div class="pdf-reader-zoom" role="group" aria-label="阅读缩放">
         <button id="pdfReaderZoomOut" class="pdf-reader-icon-button" type="button"
           aria-label="缩小" title="缩小" data-action-icon="none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
@@ -183,6 +188,9 @@
   <script src="core/article-chat-citations.js"></script>
   <script src="core/article-chat-attachments.js"></script>
   <script src="core/article-chat.js"></script>
+    <script src="core/agent-setup-prompt.js"></script>
+    <script src="core/article-presentation.js"></script>
+  <script src="core/article-presentation-content.js"></script>
   <script src="core/article-chat-web-sources.js"></script>
   <script src="core/publisher-diagnostics.js"></script>
   <script src="core/highlight-distribution.js"></script>
@@ -243,6 +251,9 @@
   <script src="core/pdf-bibliography.js"></script>
   <script src="core/pdf-article-metadata.js"></script>
   <script src="core/pdf-figure-panel-inventory.js"></script>
+  <div id="pdfPanelWorkerHost" hidden aria-hidden="true" data-sci-plugin-ui></div>
+  <script src="core/pdf-panel-evidence.js"></script>
+  <script src="core/pdf-panel-reader.js"></script>
   <script src="core/pdf-native-figures.js"></script>
   <script src="core/pdf-native-reader-state.js"></script>
   <script src="core/pdf-figure-engine.js"></script>
@@ -252,11 +263,13 @@
   <script src="core/translation-source.js"></script>
   <script src="core/translation-checkpoint.js"></script>
   <script src="core/selection-tts.js"></script>
-  <script src="core/local-translator.js"></script>
+  <script src="core/translation-glossary.js"></script><script src="core/local-translator.js"></script>
   <script src="core/bilingual-translation-controller.js"></script>
   <script src="bilingual-translation-content.js"></script>
   <script src="core/operation-control.js"></script>
   <script src="core/paragraph-note-markers.js"></script>
+  <script src="vendor/panel-extract/viewport.js"></script>
+  <script src="core/article-figure-surface.js"></script>
   <script src="content.js"></script>
   <script src="web-filters-general/pdf-research-source.js"></script>
   <script src="semantic-find-content.js"></script>

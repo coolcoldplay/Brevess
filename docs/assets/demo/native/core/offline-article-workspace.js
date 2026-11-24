@@ -63,7 +63,7 @@
   const abbreviations={...clone(abbreviationState),...(abbreviationApi?.composeArticleAbbreviations?.({paragraphs:readingParagraphs,articleState:abbreviationState})||{})};
   return{...structure,title:structure.title||workspace.title,url:workspace.canonicalUrl,documentId:structure.documentId||archive.documentId||'',
    documentHash:structure.documentHash||archive.documentHash||'',publisherFamily:structure.publisherFamily||'generic',
-   nodes:clone(structure.nodes||[]),paragraphs:clone(readingParagraphs),diagnostics:clone(structure.diagnostics||{paragraphCount:readingParagraphs.length}),
+   nodes:clone(structure.nodes||[]),paragraphs:clone(readingParagraphs),captionRecords:clone(paragraphs?.captionRecords||[]),diagnostics:clone(structure.diagnostics||{paragraphCount:readingParagraphs.length}),
    ledger:clone(field(analysis,'ledger',field(raw,'ledger',field(analysisFallback,'ledger',null)))),reviewOutline:clone(field(analysis,'reviewOutline',field(analysisFallback,'reviewOutline',null))),
    paragraphSummaries:clone(field(analysis,'paragraphSummaries',field(analysisFallback,'paragraphSummaries',[]))),
    sectionOutlines:clone(field(analysis,'sectionOutlines',field(legacy,'sectionOutlines',[]))),

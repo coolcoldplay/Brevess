@@ -68,6 +68,9 @@ API Key 不放入论文页面、浏览器同步存储或普通语料导出；含
 填写中文全称	Enter the full name in Chinese
 填写含义	Enter the meaning
 停止整页翻译	Stop full-page translation
+整页翻译中	Translating page
+整页翻译部分完成	Page partially translated
+整页翻译已暂停	Page translation paused
 当前网页已变化，请重新打开扩展菜单。	The page changed. Reopen the extension menu.
 请到网页中确认启用本地翻译。	Confirm local translation on the webpage.
 已启动整页翻译，可在网页中查看进度。	Full-page translation started. View its progress on the webpage.
@@ -413,6 +416,10 @@ AI 请求字段无效。	Invalid AI request fields.
   });
   entries['确定清除“{0}”的本地工作区吗？\n包含 {1} 轮问答、{2} 个 Figure 结果和{3} 段正文索引。此操作不可撤销。']='Delete the local workspace for “{0}”?\nThis includes {1} Q&A turns, {2} Figure results and {3} indexed paragraphs. This cannot be undone.';
   const templates=[
+    ['整页翻译完成 {0}/{1} · 悬停译句可对照原文','Page translated {0}/{1} · Hover over a translated sentence to see its source'],
+    ['整页翻译中 {0}/{1}','Translating page {0}/{1}'],
+    ['整页翻译部分完成 {0}/{1}','Page partially translated {0}/{1}'],
+    ['整页翻译已暂停 {0}/{1}','Page translation paused {0}/{1}'],
     ['{0}模型正在处理（已等待 {1} 秒{2}）…','{0}The model is processing (waited {1} seconds{2})…',[0,2]],
     ['，最长 {0} 秒',', up to {0} seconds'],
     ['缩写 {0}；查看完整含义并定位原文','Abbreviation {0}; view its full meaning and locate the source'],

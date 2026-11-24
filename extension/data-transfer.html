@@ -1,0 +1,16 @@
+<!doctype html><html data-brevess-ui lang="zh-CN"><head><meta charset="utf-8">
+<meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brevess · 浏览器数据备份</title><link rel="stylesheet" href="data-transfer.css"><link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
+<script src="ui-focus.js" defer></script>
+</head><body><main>
+<a href="options.html#page=data">← 返回数据设置</a><p class="eyebrow">BREVESS · LOCAL DATA</p><h1>浏览器数据备份</h1>
+<p>保存阅读记录、笔记、图表、工作台、原文附件、草稿和配置。研究资料以原身份和原字段备份，不重新编号。MCP 旧配对配置完整留档，恢复时不会自动启用，需重新配对。</p>
+<aside><strong>迁移前保留两份资料</strong><p>① 此页导出的加密文件；② 在文件管理器中复制完整的 Brevess（或旧 SCI-Highlighter）保存目录及自有原始资料。此文件不包含外部目录内容、本机伴侣登录或浏览器目录授权。导入后需重新选择保存目录并配对 MCP。</p><p>同一商店固定 ID 的正常版本更新沿用原存储。侧载转商店、跨 ID 或跨浏览器必须显式迁移；请保留原安装，验收完成前不要卸载或清理资料。</p></aside>
+<section aria-labelledby="export-title"><h2 id="export-title">1 · 创建加密备份</h2><p>先完成保存并关闭其他阅读、设置与工作台页面。文件包含 API Key 等敏感配置；口令至少 12 个字符，遗忘后无法解密。备份不会自动上传。</p><label>备份口令<input id="export-passphrase" type="password" minlength="12" autocomplete="new-password"></label><label>再次输入口令<input id="export-confirm" type="password" minlength="12" autocomplete="new-password"></label><button id="export">导出加密浏览器备份</button></section>
+<section aria-labelledby="import-title"><h2 id="import-title">2 · 检查与恢复</h2><p>恢复仅允许空白目标或与备份完全相同的记录。遇到不同内容会停止，不覆盖人工修改。跨库中断会留下恢复日志，重新选择同一备份可继续。开始后请保持此页打开。</p><label>选择加密备份<input id="import-file" type="file" accept=".brvlocal,application/json"></label><label>解密口令<input id="import-passphrase" type="password" autocomplete="off"></label><button id="inspect">仅检查文件</button><p id="summary"></p><label class="check"><input id="confirm-destination" type="checkbox">已保存原资料与外部目录副本，并关闭其他扩展页面；确认恢复到当前空白目标。</label><button id="restore" disabled>恢复到当前目标</button><button id="rollback" disabled>撤回尚未完成的数据库写入</button></section>
+<label class="check"><input id="allow-browser-sync" type="checkbox">若备份含浏览器 sync 设置，明确允许恢复该部分（浏览器账号可能将其同步上传）。默认不允许。</label>
+<p id="status" role="status" aria-live="polite">准备就绪。检查文件不会写入用户库。</p><details><summary>恢复范围和限制</summary><p>目录授权不跨浏览器复制；受保护的登录和临时会话需要重新建立。未知数据格式、损坏的附件、未支持的对象类型会阻止操作，不会静默丢弃。外部目录文件需单独完整复制并复核。恢复日志进入配置写入阶段后，须继续完成同一备份，不能撤回此前可能已修改的配置。</p><p>此页属于待验首发变体。真实扩展升级、跨浏览器重开和科研模型验收仍需完成；隔离夹具通过不代表真实用户库已验证。</p></details>
+</main><script src="core/local-snapshot.js"></script><script src="core/local-snapshot-browser.js"></script><script src="data-transfer.js"></script><script src="core/translation-checkpoint.js"></script>
+<script src="core/translation-glossary.js"></script><script src="core/local-translator.js"></script>
+<script src="core/input-tools.js"></script>
+</body></html>

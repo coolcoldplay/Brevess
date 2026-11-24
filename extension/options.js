@@ -486,6 +486,17 @@ function bindEvents() {
     renderPanelFollowupPresetEmptyState();
     markProfileEditorDirty('panelFollowupPresetList');
   });
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    const saved = changes.sciLlmSettingsV2?.newValue;
+    if (area !== 'local' || !saved || !state) return;
+    for (const editor of quickPromptEditors) {
+      const rows = saved[editor.key];
+      if (!Array.isArray(rows) || settingsDraftIsDirty(editor.list) || JSON.stringify(rows) === JSON.stringify(editor.base)) continue;
+      editor.base = rows;
+      state.settings[editor.key] = rows;
+      renderArticleChatQuickPrompts(rows, editor);
+    }
+  });
   for (const editor of quickPromptEditors) {
     const list = document.getElementById(editor.list);
     document.getElementById('add' + editor.action).addEventListener('click', () => addArticleChatQuickPrompt(editor));
@@ -802,7 +813,8 @@ async function saveScopedPreferences(statusId, successMessage) {
     const editedPrompts = quickPromptEditors.filter(editor => snapshot.fields.has(editor.list));
     if (statusId === 'readingSettingsStatus' && editedPrompts.length && editedPrompts.length === snapshot.fields.size) {
       const preferences = Object.fromEntries(editedPrompts.map(editor => [editor.key, collectArticleChatQuickPrompts(false, editor)]));
-      const updated = await callBackground({ type: 'LLM_UPDATE_PREFERENCES', preferences });
+      const quickPromptBases = Object.fromEntries(editedPrompts.map(editor => [editor.key, editor.base]));
+      const updated = await callBackground({ type: 'LLM_UPDATE_PREFERENCES', preferences, quickPromptBases });
       acknowledgeSettingsDrafts(snapshot);
       applyState(updated);
     } else if (!await persistForm(false)) {
@@ -4192,7 +4204,10 @@ function applyState(nextState, { replaceTaskPolicyDrafts = false, replaceDrafts 
     renderPanelFollowupPresets(state.settings?.figurePanelFollowupPresets || []);
   }
   for (const editor of quickPromptEditors) {
-    if (!settingsDraftIsDirty(editor.list)) renderArticleChatQuickPrompts(state.settings?.[editor.key] || [], editor);
+    if (!settingsDraftIsDirty(editor.list)) {
+      editor.base = state.settings?.[editor.key] || [];
+      renderArticleChatQuickPrompts(editor.base, editor);
+    }
   }
   if (!settingsDraftIsDirty('literatureNoteTemplateList')) {
     renderLiteratureNoteTemplates(state.settings?.literatureNoteTemplates || []);
@@ -4469,7 +4484,7 @@ function createArticleChatQuickPromptRow(prompt, editor) {
   nameInput.type = 'text';
   nameInput.maxLength = 80;
   nameInput.dataset.quickPromptName = '';
-  nameInput.placeholder = editor.key === 'displayQuickPrompts' ? '例如：调整正文宽度' : '例如：核心结论';
+  nameInput.placeholder = editor.key === 'displayQuickPrompts' ? '例如：调整正文宽度' : '例如：逐 Panel 读图';
   nameInput.value = String(prompt.name || '');
   nameField.append(nameLabel, nameInput);
 
@@ -7350,7 +7365,8 @@ async function persistForm(silent) {
     const figurePanelFollowupPresets = collectPanelFollowupPresets();
     const figurePanelFollowupPrompts =
       panelFollowupPromptMap(figurePanelFollowupPresets);
-    const articleChatQuickPrompts = collectArticleChatQuickPrompts();
+    const editedPrompts = quickPromptEditors.filter(editor => draftSnapshot.fields.has(editor.list));
+    const quickPromptBases = Object.fromEntries(editedPrompts.map(editor => [editor.key, editor.base]));
     const literatureNoteTemplates = collectLiteratureNoteTemplates();
     const selectionLlmActions = collectSelectionLlmActions();
     // Freeze every user-edited value before the first asynchronous save.
@@ -7364,8 +7380,7 @@ async function persistForm(silent) {
       consentGranted,
       figurePanelFollowupPrompts,
       figurePanelFollowupPresets,
-      articleChatQuickPrompts,
-      displayQuickPrompts: collectArticleChatQuickPrompts(false, quickPromptEditors[1]),
+      ...Object.fromEntries(editedPrompts.map(editor => [editor.key, collectArticleChatQuickPrompts(false, editor)])),
       literatureNoteTemplates,
       selectionLlmActions
     };
@@ -7385,6 +7400,7 @@ async function persistForm(silent) {
     applyState(routed);
     const updated = await callBackground({
       type: 'LLM_UPDATE_PREFERENCES',
+      quickPromptBases,
       preferences
     });
     const routingUnchanged = settingsDraftScopeUnchanged(draftSnapshot, 'routing');

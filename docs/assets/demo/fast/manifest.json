@@ -3,13 +3,13 @@
   "entries": [
     {
       "source": "native/popup.html",
-      "sha256": "d7edd65a01f70189f4a1b06170ba8a4710bbd4282e36bb0fdf7dc0c5e0db3240",
+      "sha256": "a9277babab8c98a4e174573896decf45906b0fa4b2d65bd924b9ced14e486185",
       "output": "popup.html",
       "scriptRequests": 27,
       "inputs": [
         {
           "file": "native-transport.js",
-          "sha256": "86f48a6edc0a4627853608f46635234df07c0907a17a0773ff9b5b2a15618b44"
+          "sha256": "dfbea9fb48e0c426be31645b4160f6de582fce713bbae343e707ddb19b9bc412"
         },
         {
           "file": "paper-data.js",
@@ -25,7 +25,11 @@
         },
         {
           "file": "native/core/input-tools.js",
-          "sha256": "bd7488d0fefa20ccf5e7307499bd06020d7ce68a5bef7b899586914f2c8d972b"
+          "sha256": "5ca848be620dd119253c9b991fa80363b7edcce7f9357239a7acefc5e6ed6cb2"
+        },
+        {
+          "file": "native/ui-focus.js",
+          "sha256": "05cdba57af7acccc969363747f98cd436344fc016e0f087a900f7bf0696391b7"
         },
         {
           "file": "native/core/cache-planner.js",
@@ -49,7 +53,7 @@
         },
         {
           "file": "native/core/article-chat-attachments.js",
-          "sha256": "550d43259105adee3803dd089e4b49465ad02347c8829be1e7478f80e44f7da1"
+          "sha256": "d67731ce36fce7a13f6a66219081a2c57ce57f00e9eb6592f2c10a36d0ce3abb"
         },
         {
           "file": "native/core/article-chat-research.js",
@@ -57,7 +61,27 @@
         },
         {
           "file": "native/core/article-chat.js",
-          "sha256": "db87e5e2fff1f8ffd4f22d51702e75425dd0c40f570b188d54d6ccbeb20f588c"
+          "sha256": "4c22e17aa2fcd5f06f04851c919eb47cbc16c7aa1cea897d7aab69fa5a873bc5"
+        },
+        {
+          "file": "native/core/agent-setup-prompt.js",
+          "sha256": "b2268808b4cec54c5383f25c62a7fe95cd85f3a804fd64925964b1c678d4b163"
+        },
+        {
+          "file": "native/core/article-presentation.js",
+          "sha256": "40aafafd883317b335ef572379ece736db7f2879b5b3971148e30357735dfb14"
+        },
+        {
+          "file": "native/core/article-presentation-ui.js",
+          "sha256": "87da9e609669fe86585779b65bb15269c3b491287e5c4daff9de5a95c78998df"
+        },
+        {
+          "file": "native/core/workbench-agent-connections.js",
+          "sha256": "e0e963d00579e9d1e71bdad192ace429352c6060acf87561a38a55a0f90c2918"
+        },
+        {
+          "file": "native/core/article-chat-agent-controls.js",
+          "sha256": "ecdd6cd115fdf4efdad3250e8a09c53fbb20a4a943e0076f16ce7a98aa22f87a"
         },
         {
           "file": "native/core/article-chat-web-sources.js",
@@ -84,8 +108,12 @@
           "sha256": "c0728a85555ed9abc2b756683cd67eee9b0e5b41d3626247cd686db23a6d48cf"
         },
         {
+          "file": "native/core/translation-glossary.js",
+          "sha256": "0580196e8fd27b4cd217d8131d9341999bb08023afa67ff2f8e169a96f4973be"
+        },
+        {
           "file": "native/core/local-translator.js",
-          "sha256": "483ecc57dabfdfe695b9a5540b52c66b6f82deac9b8e759c438356fb5f6159ec"
+          "sha256": "5364a0c0d604755559958dff64a439a0b8e8f6be70559d568bce0e61adbf55b5"
         },
         {
           "file": "native/core/research-logic-map.js",
@@ -113,11 +141,11 @@
         },
         {
           "file": "native/core/page-tools.js",
-          "sha256": "59de63bb239d57e36e6cafefcc061a4c4272520a69dd5670db317a195ca25ab4"
+          "sha256": "2a1995cf968dac45da4a52c60cbaa7cd32428b4e76a502cfe6b0ab3da06d23a9"
         },
         {
           "file": "native/core/offline-article-workspace.js",
-          "sha256": "54d86809caae03464f11f7ab9b6c6143538b3bfaa15a36d451ff910f94aa5028"
+          "sha256": "68b757ae5328f5e6644101e55a4db766de9fc32d14726f3beb3907d416cf7b2f"
         },
         {
           "file": "native/core/figure-source-lease.js",
@@ -161,7 +189,7 @@
         },
         {
           "file": "native/core/tab-messenger.js",
-          "sha256": "eca0d427554c8e218ae5917244925b7b8b16570cd506c5c49c22475473529294"
+          "sha256": "128f4aadbb11c780af72800b5a8cc7f984c65a87b2b4d3da74362b7ec5e5f8ff"
         },
         {
           "file": "native/core/highlight-presentation.js",
@@ -181,11 +209,11 @@
         },
         {
           "file": "native/core/literature-note-format.js",
-          "sha256": "edbdb08f463013d79cf05de72e510e631ec74580078fcddb773be3b2a25a9a3d"
+          "sha256": "d9a96727bee8c48d041b6a050aa051d1fc626a6387c4a7839a7c73b24174ea6a"
         },
         {
           "file": "native/core/literature-note-renderer.js",
-          "sha256": "636add7f994f7979a29cdd4e5fca4e6d86f4e742ab984616cf13a2cb95f24580"
+          "sha256": "e4bae9c0c8c34e554d5f87f5b46c28fed158641d90422b5c709ffc7a17f525e4"
         },
         {
           "file": "native/core/literature-note-sources.js",
@@ -197,7 +225,7 @@
         },
         {
           "file": "native/core/literature-note-source-editor.js",
-          "sha256": "abc5121a71ddb0024ff619b081faffec4914a04fd41b8a53c4a731f312dbaab3"
+          "sha256": "5fb9a491e6b1fd7c2611944573f60c12022b2a40c400b7d4d2cdc278e0427c21"
         },
         {
           "file": "native/core/literature-note-export.js",
@@ -205,7 +233,19 @@
         },
         {
           "file": "native/core/literature-note-editor.js",
-          "sha256": "318c612948de653c0f30191d19d8fbfa22fadccedd53195280334760a5ee708e"
+          "sha256": "45a8ef17d84e574b47bdc75b24a1991415f76cc05e0f96578ea3d08cb684f0ef"
+        },
+        {
+          "file": "native/core/literature-note-table-tools.js",
+          "sha256": "a88008fe85a4806b3cc3739ce6f9ba7181773ef0e6a5896ae44511f4a2d3d3b7"
+        },
+        {
+          "file": "native/core/literature-note-rich-editor.js",
+          "sha256": "adf22b21e2d35a922a1a53f3847a86ff86ff76c8d2ee3f27e53b2a997a13a44d"
+        },
+        {
+          "file": "native/core/literature-note-panel-mentions.js",
+          "sha256": "334f967b246384798b2b85bc0e22c8985a903ab2954227bee4674c6527d81b33"
         },
         {
           "file": "native/core/literature-note-field-selection.js",
@@ -213,11 +253,11 @@
         },
         {
           "file": "native/core/ui-action-icons.js",
-          "sha256": "243f3ce224c07c9a8cb03428e52c6e6141826508094ab5838a882ec17d4f6014"
+          "sha256": "9ebf17d069df812ad6a18f41ac39f17f4ab21e3c62b5187045f6d3c968752d5a"
         },
         {
           "file": "native/core/i18n.js",
-          "sha256": "f49c02125359f7a7dff2fd90557915ee8b0930d88e5bb9aebe2dec122a915773"
+          "sha256": "f4b75e67176e3d602039a8566c3b5269adeb22179919845e60f2a249ab3fe021"
         },
         {
           "file": "native/core/i18n-extension.js",
@@ -225,7 +265,7 @@
         },
         {
           "file": "native/core/i18n-reader.js",
-          "sha256": "5db61fcbc5ad1b4109097498c9c56b9a4a3fba0e47f9ba01e200c177ddcfc224"
+          "sha256": "031a6571a778a3b05dcd821f2d5e2957ebcf5197c4282aca7384fe9d7fb9f0ab"
         },
         {
           "file": "native/core/i18n-reader-extra.js",
@@ -233,7 +273,7 @@
         },
         {
           "file": "native/core/i18n-system.js",
-          "sha256": "d6a7b4e3d7301394962dd30a31c566d0a9f7483da59d208bffd4f54908741c3a"
+          "sha256": "1df15dace64d7a3eb919ba63fb82f0a563aec453ff42307efc3de15cadf8a07c"
         },
         {
           "file": "native/core/i18n-tools.js",
@@ -257,7 +297,7 @@
         },
         {
           "file": "native/core/figure-analysis.js",
-          "sha256": "fe08d16d563d9c1be42552c738514ad8993859e2c2c12811b0a74f8fdced3607"
+          "sha256": "154e12ab6fa86d8eea0fd6939771c7889d0ac53560eb5d61394a5387ca56d636"
         },
         {
           "file": "native/core/figure-result-binding.js",
@@ -273,7 +313,7 @@
         },
         {
           "file": "native/core/export-bundle.js",
-          "sha256": "fa252276e9abf7202a9e034743c3f55039891303df5f0f93f55dc80ca1a16e09"
+          "sha256": "57a1db6197ec732e5db95776c7fec4370ba75afe14ad4d53d735f4ae772b1b7e"
         },
         {
           "file": "native/core/ppt-agent-materials.js",
@@ -281,43 +321,27 @@
         },
         {
           "file": "native/core/mechanism-canvas-model.js",
-          "sha256": "5275510e7cda8d6ae3b18c547aca09982c13377cf91609d1b6d11dced9e3ff57"
+          "sha256": "421ebf9141e3362afc1eb31436b27f52507d97e86b0b98ceab0e450532eadcb4"
         },
         {
           "file": "native/core/mechanism-drawing-bridge.js",
-          "sha256": "3542812cfeb370d873b253892cca737ca43185a280f86ce21ea475100b086f79"
+          "sha256": "bdc544a6e206d94f1f86880888528fdc6f46e8fb3fa8142b4bc4bbe8113a9890"
         },
         {
           "file": "native/core/mechanism-drawing-panel.js",
-          "sha256": "bc4266607358aa2654923aa593bb4e75bf3cf39189a7cee5002f65a8230de65c"
+          "sha256": "7dac6df659a922ba3ff7d0e5c9464275a3131e03d3d1f5a133ab426122c92742"
         },
         {
           "file": "native/core/document-agent-host.js",
-          "sha256": "e92a7ac797becf5350f5785e1a9820f3a37b071542a2f7780435ca0d69c35419"
+          "sha256": "9fb4eace6d29965b7e8f5d10330c1d4ce3cdc67a94f4a5e934ae7600094ddbf3"
         },
         {
           "file": "native/core/codex-native-client.js",
-          "sha256": "6081b28b99107fcc3e1435f8aa1c0c3647ae77291a7f1ffa7f2e7d3e20d87476"
+          "sha256": "98d4ff18d3192fcc3de8e7fc200b7d76c862d5e99a5bdd72a6582a77b1a4eed0"
         },
         {
           "file": "native/core/harness-native-client.js",
           "sha256": "0c151c53926bcbcf82ecb75386ee5617c18bfff9210b3e8c919d1b616633590c"
-        },
-        {
-          "file": "native/workbench/r20-agent-permissions.js",
-          "sha256": "a8b412b45ee858bd5f3cc361e4e7484ae454bdc500bbcb5667e9109324970f2c"
-        },
-        {
-          "file": "native/workbench/agent-panel.js",
-          "sha256": "7ca1ea37b71fbab31b9f5bc6d27de56f920a6c88cc8aef540ce617a316b6728a"
-        },
-        {
-          "file": "native/workbench/agent-runner.js",
-          "sha256": "84fea8d10120992ff3317fd0d54624c4135d7b1f9351468e70c6b9d89937ae94"
-        },
-        {
-          "file": "native/core/document-agent-chat.js",
-          "sha256": "38dcf201c841a7e8ad829f953fe1ac19402787d540403ec1ab3fee6a608486da"
         },
         {
           "file": "native/core/document-agent-bridge.js",
@@ -325,43 +349,35 @@
         },
         {
           "file": "native/core/agent-connection-ui.js",
-          "sha256": "f10252a19e015ad9ac31ff38f9ecbc8bd42b95522d2e281bf533d69578cff25a"
+          "sha256": "b1105c49f4a4769cbf0814f7fef7bebd0c3b717f93baddbfea20ed048262ba7e"
         },
         {
           "file": "native/core/manual-evidence-block-editor.js",
-          "sha256": "44fc442266183f812008833f3da84877323d0c02bafef9b2f8857c1f8fd18e7f"
+          "sha256": "0a05582af5599cc292a2021eb1a1eb213cc0bc204d91436f25b2027098099e92"
         },
         {
           "file": "native/core/mechanism-network.js",
-          "sha256": "394f6c5da129a05a971ce308992c8d4b0d8f48c09db1f998ce2f7a454773d189"
+          "sha256": "ba187bcbb7b0470720d8fdff4a85b453e8ebff8fb55ae7a9d30bc4506274714a"
         },
         {
           "file": "native/core/figure-workspace.js",
-          "sha256": "d5666eb8168a45abdfb3cdd055510c0ee5f096a9239d2b7f1ad98139c3a7eff3"
+          "sha256": "4353d7a41f683aa8bad11157f6f14ecddecac61a670ddddb467b6870dae331e1"
         },
         {
           "file": "native/core/mechanism-pending-preview.js",
-          "sha256": "c236b6ea531d763f7893cbb56895a3124871e8060c4861cca0addcdf108d2081"
+          "sha256": "5a610e736cb4c375c82da8ca1d2495683875905c5d18d6c7d5567b483471e713"
         },
         {
           "file": "native/core/manual-annotations.js",
           "sha256": "ee8dbe62d85c266ce6a58d4f9cce0fde123466b06761504501a83ec145622909"
         },
         {
-          "file": "native/vendor/mermaid/mermaid.min.js",
-          "sha256": "d0830a6c05546e9edb8fe20a8f545f3e0dc7c4c3134d584bad9c13a99d7a71e0"
-        },
-        {
-          "file": "lazy-mermaid.js",
-          "sha256": "8a1f4f26f99ab0562f6017677b8ac2dd4a7fde4169d7e5a175f21ee180c0ca80"
-        },
-        {
           "file": "native/core/task-telemetry.js",
-          "sha256": "0f53ac538f59083f3c29dae3ee6fabdb0b987da4ee18248e257464e9cd3aad8a"
+          "sha256": "e9cb9d1887ba5285dd8669e95d35dc97cf2ef443bf3c3171ec9ccae2ce2e619a"
         },
         {
           "file": "native/core/sidebar-interactions.js",
-          "sha256": "0ea1876ce5b7f8119c64d89c7a1dfcc656009b1a110ef5f8f63e0be07306a260"
+          "sha256": "72a2e792ef1a4f5c8e381a79bb0500baa243709d2c401ec7089af2ac41871f4f"
         },
         {
           "file": "native/core/sidebar-sort.js",
@@ -381,11 +397,11 @@
         },
         {
           "file": "native/core/llm-task-catalog.js",
-          "sha256": "b9b55f697ce77296d786c3f1e81585a374724d325cc41a86459ae2c1e3aa3ef6"
+          "sha256": "e8e628e871e7ebb1426f3c1ef24e207328f26e17d68739754bc65548f21724c0"
         },
         {
           "file": "native/core/token-budget.js",
-          "sha256": "d824fdf74d2560729d57794f11cbd7aceab41e13ea9f33633ccb5c8a68eba6e3"
+          "sha256": "6f9dfc80eb13d627a8ce2c0700cdcfa0fea95a6b3bdb1441eede4ba7162af7c7"
         },
         {
           "file": "native/core/tts-service.js",
@@ -401,15 +417,15 @@
         },
         {
           "file": "native/core/settings-store.js",
-          "sha256": "91d4dcbe5c48c70253a0ed4083c0d337e975ea03aa2ff062ed832aeac232eeab"
+          "sha256": "7cd1c24a3e074ac12ba91dc4c3bf792ada338ba25afe2beb1ad13261c9c94b6d"
         },
         {
           "file": "native/core/i18n-builtins.js",
-          "sha256": "f76f6707250562087f46414f544fbc4e5f1171955af1be31854eb8b1c9ea2cc0"
+          "sha256": "ccbf90f23d8aa39467f920cbfd33e83c9ff85c90edf2e693aa2eef3aa8283e87"
         },
         {
           "file": "native/core/i18n-export.js",
-          "sha256": "12f8d25d23c7d67d5e0a9016be9e15067dcbe87e378c82a31fa5b49fa3ce67bd"
+          "sha256": "0fdc19a71ba167665bdc4dccc571c6c54cc0a9f9064b4f06bfbb1d008b7580a6"
         },
         {
           "file": "native/core/chat-table-viewer.js",
@@ -425,23 +441,27 @@
         },
         {
           "file": "native/core/web-media.js",
-          "sha256": "70ccf46f148a0ae5ee74cee295f6c1d5137f34557f5a3fa53da168213af1868f"
+          "sha256": "c896e1e756e7d40af0bf57c352d0c02a7d98ce2d22b1b30084070cfdf4fb8d04"
+        },
+        {
+          "file": "native/core/literature-note-inserts.js",
+          "sha256": "966f543528af0c92dc76b2d8c26e5ab98ed3d4c8ea2d2b35907e88b866377e8b"
         },
         {
           "file": "native/popup.js",
-          "sha256": "e77fdd8a0dd0e9597210e4d9b8abf7a9761893cbe47d02157f097a544d2a509c"
+          "sha256": "da463029260fcc2e3c939392b7c3c98ad3a93f9dd3146e16890af3b4a30498db"
         },
         {
           "file": "native/core/reading-focus-model.js",
-          "sha256": "d2f99ca9e0b8b44d6e75ba50277f781200d9dbdec6a257e4b44398ee71b94930"
+          "sha256": "3df89bc9e8f1a120867faa13d75464aab2a7a10a339b0b33ef175339abd14461"
         },
         {
           "file": "native/reading-focus-ui.js",
-          "sha256": "2b7f5ef77f7518f80ceb0e9bf1012163730bdc5898feef9b5b0fd9a1fd8ee432"
+          "sha256": "691ff2d79d622936c797166862a1f952b4d3d524c14254693b7a9ad072d0bbdc"
         },
         {
           "file": "native/unified-reading-ui.js",
-          "sha256": "6db7c5f8e67416dc0c6e63c30156fa50bc7dbb786740de765f15c1a75dfa1325"
+          "sha256": "bc5534b9aac073d659bde35064b75a182a21fd0ac1855adb18773c43d330994b"
         },
         {
           "file": "native/same-paper-sidebar.js",
@@ -449,31 +469,39 @@
         },
         {
           "file": "native/workspace-storage-choices.js",
-          "sha256": "314cf3ac0a69f98944cd34e72d35b3cf063e5b75987e70df548832cb70e2816d"
+          "sha256": "8f8bc1261b1db37d8e2033ae4cac5a47a396b50a2294fd578c7f5cb0d05b8ec0"
         },
         {
           "file": "native/web-filters-general/ux-context.js",
-          "sha256": "2e33ec4f80a4f365672e004dc7e11234d68fb90aee0ecb96d765854d85976aa3"
+          "sha256": "636b61fae43967074e4f6fd63c95c3381e0f212ee1d47d05f76ba901c3b7916f"
         },
         {
           "file": "native/providers/provider-registry.js",
-          "sha256": "8d94f8e68c6a2b04f2b26c61497cd91f9df4463b5ea17d88c5643fef8f98ab35"
+          "sha256": "36455953e78d96263f550c6d4514146fb2daa72bfa9c54cdf3a06c8509e257b2"
         },
         {
           "file": "native/web-filters-general/ux-composer.js",
-          "sha256": "70456362281cb2b3ff67569d0df8259487caac631be8a8d5fb9a8b010f4b3896"
+          "sha256": "4e37201882d4eb8c2262c484ffc75318f4179b82a2603854ff928d7a3468f1f5"
         },
         {
           "file": "native/web-filters-general/ux-workflow.js",
-          "sha256": "224fdb11f2187aabeb7edc58ad7279af2927c1916999a03b2aa6c39f403ee223"
+          "sha256": "91b433bc5bae2319b3f642b20527b43dc0407ce50f64cf9710e658694fea9394"
         },
         {
           "file": "native/web-filters-general/ux-panel.js",
-          "sha256": "83b92b25cc9b2bc9bbec069611548ea77fe674fa202addac1df6e6c60187fd50"
+          "sha256": "0f1ab46d4c7ddd2794fff9d44a398f1e46f2b220f263490a04329bd58cc514fa"
+        },
+        {
+          "file": "native/web-filters-general/compare-composer.js",
+          "sha256": "6a0447264bae04c039e73aea0ad0abe5490744cc863ba395e3d8d90dfd0c97b7"
         },
         {
           "file": "native/core/sidebar-toolbar-icons.js",
-          "sha256": "6dd8421f8bfc3ac72f6b37907f54ffe52e2c9a5488ae6abc0effdeed4e8e3fa8"
+          "sha256": "ba646ddaa1d119157fd0c21b795e63090c379e0cfb82b690cdaa8564ece5db25"
+        },
+        {
+          "file": "native/core/pdf-panel-sidebar.js",
+          "sha256": "f1b57b70e3ced2bf54be08ef2c77cf770a29435c3173d51522f8f318f7491182"
         },
         {
           "file": "native/core/highlight-distribution.js",
@@ -503,13 +531,13 @@
     },
     {
       "source": "native/workbench/index.html",
-      "sha256": "860cca5efecf365b8c563621e1cf3c9645794bfe5db2f10c177c9eab10443aca",
+      "sha256": "dd8014b0b92abf7856a4481828909a7eba80123aa81067e6784724c69f99bd04",
       "output": "workbench/index.html",
       "scriptRequests": 13,
       "inputs": [
         {
           "file": "native-transport.js",
-          "sha256": "86f48a6edc0a4627853608f46635234df07c0907a17a0773ff9b5b2a15618b44"
+          "sha256": "dfbea9fb48e0c426be31645b4160f6de582fce713bbae343e707ddb19b9bc412"
         },
         {
           "file": "paper-data.js",
@@ -524,24 +552,32 @@
           "sha256": "c0728a85555ed9abc2b756683cd67eee9b0e5b41d3626247cd686db23a6d48cf"
         },
         {
+          "file": "native/core/translation-glossary.js",
+          "sha256": "0580196e8fd27b4cd217d8131d9341999bb08023afa67ff2f8e169a96f4973be"
+        },
+        {
           "file": "native/core/local-translator.js",
-          "sha256": "483ecc57dabfdfe695b9a5540b52c66b6f82deac9b8e759c438356fb5f6159ec"
+          "sha256": "5364a0c0d604755559958dff64a439a0b8e8f6be70559d568bce0e61adbf55b5"
         },
         {
           "file": "native/core/input-tools.js",
-          "sha256": "bd7488d0fefa20ccf5e7307499bd06020d7ce68a5bef7b899586914f2c8d972b"
+          "sha256": "5ca848be620dd119253c9b991fa80363b7edcce7f9357239a7acefc5e6ed6cb2"
+        },
+        {
+          "file": "native/ui-focus.js",
+          "sha256": "05cdba57af7acccc969363747f98cd436344fc016e0f087a900f7bf0696391b7"
         },
         {
           "file": "native/core/ui-action-icons.js",
-          "sha256": "243f3ce224c07c9a8cb03428e52c6e6141826508094ab5838a882ec17d4f6014"
+          "sha256": "9ebf17d069df812ad6a18f41ac39f17f4ab21e3c62b5187045f6d3c968752d5a"
         },
         {
           "file": "native/core/i18n.js",
-          "sha256": "f49c02125359f7a7dff2fd90557915ee8b0930d88e5bb9aebe2dec122a915773"
+          "sha256": "f4b75e67176e3d602039a8566c3b5269adeb22179919845e60f2a249ab3fe021"
         },
         {
           "file": "native/core/i18n-workbench.js",
-          "sha256": "1713189f623b385a01d81db72e658e8c9944bf9f71feadb20af5b0ae65853602"
+          "sha256": "bff1e72bb4cead02bd9a9199abaaa0db8cdd10ccf0066e259fecdf51ddaf9cc2"
         },
         {
           "file": "demo-translations.js",
@@ -573,11 +609,11 @@
         },
         {
           "file": "native/workbench/operation-registry.js",
-          "sha256": "60ec456ba4d55f3c76e842191cbd5cf7fb81f31124b940909eb03ffbb252ad7b"
+          "sha256": "03a63f054d5cca76bef0971c3a41f16c904e3ee9b4919b26721bbf5f6c3a8a08"
         },
         {
           "file": "native/workbench/global-library.js",
-          "sha256": "6d83d2370a82749f91fedf3eb3c8ca46f7ca8b12fd64a68c2698e72aa02fce0a"
+          "sha256": "2a85edaec1e0bd45881eeaa149287895d2f2362a12f9c778e8909ce6d2ea5bb2"
         },
         {
           "file": "native/workbench/library-import-store.js",
@@ -585,7 +621,7 @@
         },
         {
           "file": "native/core/library-catalog-model.js",
-          "sha256": "abe0d49c02f8a7b3ad601a76e4fbed7762afa4ff4e7529386ab86f389e1593a3"
+          "sha256": "15bf06c2af0d78277c0c8754b404eed868e2dfa8b5f2e273fb8f49cadd702ee0"
         },
         {
           "file": "native/core/library-catalog-store.js",
@@ -600,8 +636,16 @@
           "sha256": "7bd96eb0e15992f139147ea5fc1a7c51dd903d32bddac3b2721c4e10fe2fa44a"
         },
         {
+          "file": "native/core/pdf-panel-evidence.js",
+          "sha256": "b12eb2f157f870a2aca3d1da8e54b20a9a6ca1256c5ad27a5ad39f99204d4fd1"
+        },
+        {
           "file": "native/core/pdf-source-store.js",
-          "sha256": "750a33ec0db8b4ed90841a51e72aaf033ac757065cf467133172f7bad630a2c8"
+          "sha256": "83254db89c68f9b05afd13ae627ecc0b3a245fd065ae794dda0b8d94db245afb"
+        },
+        {
+          "file": "native/workbench/pdf-panel-reference.js",
+          "sha256": "87bb79d6dd6ff7ad9ef4d17515079d54ad7a187de4b38e7d399b03868ac9e6b9"
         },
         {
           "file": "native/core/library-attachment-store.js",
@@ -617,11 +661,11 @@
         },
         {
           "file": "native/workbench/library-catalog-reader.js",
-          "sha256": "77eb76b0f5dfc18392095c06175592b0ad90f743496ee0bde2a7535363737e5c"
+          "sha256": "8389cea745cdf74af4637f00c6566f3770e833ea837f346b3fd472253a156b1f"
         },
         {
           "file": "native/workbench/library-catalog-ui.js",
-          "sha256": "4631cf8cb3ef1adda5228c05c5e2dc657c15a8f024e633ebeb5d1eb650c7324a"
+          "sha256": "49d7ea1d20f7acc6907d08fad1d0ca8fd9c1ff673940336dfd21a110a74fa058"
         },
         {
           "file": "native/workbench/library-source-controls.js",
@@ -637,15 +681,19 @@
         },
         {
           "file": "native/core/mechanism-canvas-model.js",
-          "sha256": "5275510e7cda8d6ae3b18c547aca09982c13377cf91609d1b6d11dced9e3ff57"
+          "sha256": "421ebf9141e3362afc1eb31436b27f52507d97e86b0b98ceab0e450532eadcb4"
         },
         {
           "file": "native/core/figure-workspace.js",
-          "sha256": "d5666eb8168a45abdfb3cdd055510c0ee5f096a9239d2b7f1ad98139c3a7eff3"
+          "sha256": "4353d7a41f683aa8bad11157f6f14ecddecac61a670ddddb467b6870dae331e1"
+        },
+        {
+          "file": "native/core/figure-viewer.js",
+          "sha256": "1fbf3ac1a186122cec881dc51a3128cfd4ad8db28d9012a867b0d2e57ed14383"
         },
         {
           "file": "native/core/research-workbench-resources.js",
-          "sha256": "00b52b8bc15f86d428c1e24014819ee1b494dc683b47b9043be7a0b868a17864"
+          "sha256": "3c11912f2cfbf7dbf32c6d48f4fcf6f6575bceb32fab472c2d6f3551056b9173"
         },
         {
           "file": "native/core/research-workbench-canvas-interaction.js",
@@ -657,7 +705,7 @@
         },
         {
           "file": "native/workbench/model.js",
-          "sha256": "ff1a22803eee103cff2165faaf0f2d2ce40e3d11ea444b6c6c6c8c9f10edf1cf"
+          "sha256": "0bb9cdafd5e73ac21584cad5836b0a26d299aaec513a46ef3db562f72d7a8a72"
         },
         {
           "file": "native/workbench/controls.js",
@@ -673,11 +721,11 @@
         },
         {
           "file": "native/core/runtime-workbench-bridge.js",
-          "sha256": "35eb0aa274fe79107e5741521348b2763fffe24bb1b5167773e07711481f5462"
+          "sha256": "f9f125c8a982808d90587c33f12ebfdd5518df698578463c60edd02c3a11b8e8"
         },
         {
           "file": "native/core/codex-native-client.js",
-          "sha256": "6081b28b99107fcc3e1435f8aa1c0c3647ae77291a7f1ffa7f2e7d3e20d87476"
+          "sha256": "98d4ff18d3192fcc3de8e7fc200b7d76c862d5e99a5bdd72a6582a77b1a4eed0"
         },
         {
           "file": "native/core/harness-native-client.js",
@@ -685,11 +733,11 @@
         },
         {
           "file": "native/core/r20-agent-bridge.js",
-          "sha256": "941262ee1aa64a088fa58c5a4871340d2c89d66b51e708e330f7861440f8193e"
+          "sha256": "2fad4397441e08bc1ae9cc86aa716d3f2bc755e1eb254da229f2edeb1cbf79cd"
         },
         {
           "file": "native/workbench/r20-agent-permissions.js",
-          "sha256": "a8b412b45ee858bd5f3cc361e4e7484ae454bdc500bbcb5667e9109324970f2c"
+          "sha256": "d45e1e26976c417d4681756425d087ca1ff7af3e66e2f29351dd8daaccdaa02d"
         },
         {
           "file": "native/workbench/r20-agent-lifetime.js",
@@ -697,7 +745,7 @@
         },
         {
           "file": "native/workbench/agent-tools.js",
-          "sha256": "540f742f3a63d242f71198f6f015cef2d60315fbf305c54400b53642e60da544"
+          "sha256": "00ccc1926afa7882c0b06fc1005e8ea23cb43ea73a8ec528a56b3f5efcbd4afe"
         },
         {
           "file": "native/core/local-library-tags.js",
@@ -709,47 +757,67 @@
         },
         {
           "file": "native/core/literature-radar-model.js",
-          "sha256": "0632532ae85f208e1d99cadf706b6c8aa6987e28d9c434d2f7e6d760a034aceb"
+          "sha256": "38498d74e19c4d532317af2748d1b1fa2e000d1e9365a109dd3b0c8e91b0d8c4"
         },
         {
           "file": "native/core/literature-radar-store.js",
-          "sha256": "b6a23c7ec2cf870a21725e7f9a5a4c40b4635901075daa4b3bd48ef3515b1d45"
+          "sha256": "e1a7a9cceaacded5c9b4bb1bdda03d153297e6e317d7f595d08faf620263f7c0"
         },
         {
           "file": "native/core/literature-radar-pubmed.js",
-          "sha256": "a52bf18f18483892b343f59efe0b9d19003d2280aa45ef945e9e940d0afcd49e"
+          "sha256": "feddf77985ce2c336b5953e754cc342684a75361cac66e25e97e887e59b04863"
         },
         {
           "file": "native/core/literature-radar-asta.js",
-          "sha256": "7fb57f3beb0e058e8800e19c52ae5f20868c5a4d09ad9670390c57ee913565e5"
+          "sha256": "eb511961250ee7153e8c569a0037e318f6643aabeed6bf50ec74718a08cd17d6"
         },
         {
           "file": "native/core/literature-radar-sources.js",
-          "sha256": "13f0c67bbbe7f2fbacc80d19d441e4af652693e20f9cabcf13d12f2dd20b2a52"
+          "sha256": "5eeefd3e7c913ed3fb0c20c7a196913b9fad054818e54eb7b9d8ad8678483545"
         },
         {
           "file": "native/core/literature-radar-service.js",
-          "sha256": "d312f23d7256134408f21e87934e1666c4ba7f9ee8488cab7f7b7f0d53db6525"
+          "sha256": "ee5ae5db7033fc6be27cc84a0dfd07f42cba93cae2b981ea44611730e3963665"
         },
         {
           "file": "native/core/literature-radar-agent-tools.js",
-          "sha256": "80ebaf3ec406f1bf78992a0917f45c276e76460a91352d60e1a79cb3b3e3a475"
+          "sha256": "ee4a5f2ff1aed0efe6b9e653020a21b0423c328f56ab6b9b72b39958918d4016"
         },
         {
           "file": "native/core/reading-agent-tools.js",
           "sha256": "6a8e1c9c7d91983ea7e823cda9a5c4493c217dfe581a5e2c9539855ccffec8d2"
         },
         {
+          "file": "native/workbench/agent-conversations.js",
+          "sha256": "0a6b2215fdf53180b8848e00f7530b975230d9ea54b06c9455cbc355d67c8d4d"
+        },
+        {
+          "file": "native/workbench/agent-library-types.js",
+          "sha256": "08122a6a539140c6556e1e6fb650614098eee1bee5c8dc0cbd73c6e4eeede7d1"
+        },
+        {
           "file": "native/workbench/agent-runner.js",
-          "sha256": "84fea8d10120992ff3317fd0d54624c4135d7b1f9351468e70c6b9d89937ae94"
+          "sha256": "7a0906950d4803e828d1a9c13eda1312fc738eacf2ce6fcfe81ce11f5369c51f"
         },
         {
           "file": "native/core/chat-message-ui.js",
           "sha256": "233c897e6f1b9694d7680d79c6b7cfd5b8da92f67a10133dc1a3458e664460a4"
         },
         {
+          "file": "native/providers/provider-registry.js",
+          "sha256": "36455953e78d96263f550c6d4514146fb2daa72bfa9c54cdf3a06c8509e257b2"
+        },
+        {
+          "file": "native/core/agent-setup-prompt.js",
+          "sha256": "b2268808b4cec54c5383f25c62a7fe95cd85f3a804fd64925964b1c678d4b163"
+        },
+        {
+          "file": "native/core/workbench-agent-connections.js",
+          "sha256": "e0e963d00579e9d1e71bdad192ace429352c6060acf87561a38a55a0f90c2918"
+        },
+        {
           "file": "native/workbench/agent-panel.js",
-          "sha256": "7ca1ea37b71fbab31b9f5bc6d27de56f920a6c88cc8aef540ce617a316b6728a"
+          "sha256": "050136a7352c16a74eb971667deb3d3f755b0b137834aabad8995e208a2e660b"
         },
         {
           "file": "native-workbench-store.js",
@@ -757,11 +825,11 @@
         },
         {
           "file": "native/workbench/app.js",
-          "sha256": "d0ca6f6f2353929535012889a9ce362c207ede26f3aef94f9de4e2dec2efcd1b"
+          "sha256": "a29f824c8088eab3607d031977c119349dcd4828a9e30e3223da4f24c86455f5"
         },
         {
           "file": "native/workbench/library-catalog-mcp.js",
-          "sha256": "fe967c925df5acfc40888dc13ba5442e49e80837cff518b475a03f8ca2a3150b"
+          "sha256": "dbe8096b795f8056e5621d25777e072a0ca4398446770947945bbe31790c7a28"
         },
         {
           "file": "native/workbench/mcp-host.js",
@@ -777,7 +845,7 @@
         },
         {
           "file": "native/core/agent-connection-ui.js",
-          "sha256": "f10252a19e015ad9ac31ff38f9ecbc8bd42b95522d2e281bf533d69578cff25a"
+          "sha256": "b1105c49f4a4769cbf0814f7fef7bebd0c3b717f93baddbfea20ed048262ba7e"
         },
         {
           "file": "native/core/agent-module-client.js",
@@ -789,7 +857,7 @@
         },
         {
           "file": "native/core/literature-radar-transfer.js",
-          "sha256": "3c0de62929221309576bb27d7f9e7c0170697f012b2ab2291f86530378fb22be"
+          "sha256": "7baab7785c144c112fb59aa080c739cecd4ab4d2d0a5f9b0713fcf9a2615f9c3"
         },
         {
           "file": "native/workbench/global-library-transfer.js",
@@ -811,13 +879,13 @@
     },
     {
       "source": "native/literature-radar/index.html",
-      "sha256": "7df625abeba1f79d7e288b101d8155bc1c331689b00622ae8a390c2d06ee2160",
+      "sha256": "046a591957de9485b2fd21532695af2b93fd6da64754c31e2b25365c1b7b79fb",
       "output": "literature-radar/index.html",
       "scriptRequests": 11,
       "inputs": [
         {
           "file": "native-transport.js",
-          "sha256": "86f48a6edc0a4627853608f46635234df07c0907a17a0773ff9b5b2a15618b44"
+          "sha256": "dfbea9fb48e0c426be31645b4160f6de582fce713bbae343e707ddb19b9bc412"
         },
         {
           "file": "paper-data.js",
@@ -828,12 +896,16 @@
           "sha256": "ab4a8177d41b946ec84fad0dea7f90e2e48d87d5aa4d62825754981bc7e58c09"
         },
         {
+          "file": "native/ui-focus.js",
+          "sha256": "05cdba57af7acccc969363747f98cd436344fc016e0f087a900f7bf0696391b7"
+        },
+        {
           "file": "native/core/ui-action-icons.js",
-          "sha256": "243f3ce224c07c9a8cb03428e52c6e6141826508094ab5838a882ec17d4f6014"
+          "sha256": "9ebf17d069df812ad6a18f41ac39f17f4ab21e3c62b5187045f6d3c968752d5a"
         },
         {
           "file": "native/core/i18n.js",
-          "sha256": "f49c02125359f7a7dff2fd90557915ee8b0930d88e5bb9aebe2dec122a915773"
+          "sha256": "f4b75e67176e3d602039a8566c3b5269adeb22179919845e60f2a249ab3fe021"
         },
         {
           "file": "native/core/i18n-extension.js",
@@ -841,7 +913,7 @@
         },
         {
           "file": "native/core/i18n-reader.js",
-          "sha256": "5db61fcbc5ad1b4109097498c9c56b9a4a3fba0e47f9ba01e200c177ddcfc224"
+          "sha256": "031a6571a778a3b05dcd821f2d5e2957ebcf5197c4282aca7384fe9d7fb9f0ab"
         },
         {
           "file": "native/core/i18n-reader-extra.js",
@@ -849,7 +921,7 @@
         },
         {
           "file": "native/core/i18n-system.js",
-          "sha256": "d6a7b4e3d7301394962dd30a31c566d0a9f7483da59d208bffd4f54908741c3a"
+          "sha256": "1df15dace64d7a3eb919ba63fb82f0a563aec453ff42307efc3de15cadf8a07c"
         },
         {
           "file": "native/core/i18n-tools.js",
@@ -857,7 +929,7 @@
         },
         {
           "file": "native/core/i18n-workbench.js",
-          "sha256": "1713189f623b385a01d81db72e658e8c9944bf9f71feadb20af5b0ae65853602"
+          "sha256": "bff1e72bb4cead02bd9a9199abaaa0db8cdd10ccf0066e259fecdf51ddaf9cc2"
         },
         {
           "file": "native/core/i18n-reader-patterns.js",
@@ -873,47 +945,51 @@
         },
         {
           "file": "native/core/literature-radar-model.js",
-          "sha256": "0632532ae85f208e1d99cadf706b6c8aa6987e28d9c434d2f7e6d760a034aceb"
+          "sha256": "38498d74e19c4d532317af2748d1b1fa2e000d1e9365a109dd3b0c8e91b0d8c4"
         },
         {
           "file": "native/core/literature-radar-store.js",
-          "sha256": "b6a23c7ec2cf870a21725e7f9a5a4c40b4635901075daa4b3bd48ef3515b1d45"
+          "sha256": "e1a7a9cceaacded5c9b4bb1bdda03d153297e6e317d7f595d08faf620263f7c0"
         },
         {
           "file": "native/core/literature-radar-pubmed.js",
-          "sha256": "a52bf18f18483892b343f59efe0b9d19003d2280aa45ef945e9e940d0afcd49e"
+          "sha256": "feddf77985ce2c336b5953e754cc342684a75361cac66e25e97e887e59b04863"
         },
         {
           "file": "native/core/literature-radar-asta.js",
-          "sha256": "7fb57f3beb0e058e8800e19c52ae5f20868c5a4d09ad9670390c57ee913565e5"
+          "sha256": "eb511961250ee7153e8c569a0037e318f6643aabeed6bf50ec74718a08cd17d6"
         },
         {
           "file": "native/core/literature-radar-sources.js",
-          "sha256": "13f0c67bbbe7f2fbacc80d19d441e4af652693e20f9cabcf13d12f2dd20b2a52"
+          "sha256": "5eeefd3e7c913ed3fb0c20c7a196913b9fad054818e54eb7b9d8ad8678483545"
         },
         {
           "file": "native/core/literature-radar-service.js",
-          "sha256": "d312f23d7256134408f21e87934e1666c4ba7f9ee8488cab7f7b7f0d53db6525"
+          "sha256": "ee5ae5db7033fc6be27cc84a0dfd07f42cba93cae2b981ea44611730e3963665"
         },
         {
           "file": "native/core/literature-radar-agent-tools.js",
-          "sha256": "80ebaf3ec406f1bf78992a0917f45c276e76460a91352d60e1a79cb3b3e3a475"
+          "sha256": "ee4a5f2ff1aed0efe6b9e653020a21b0423c328f56ab6b9b72b39958918d4016"
         },
         {
           "file": "native/core/literature-radar-ai.js",
-          "sha256": "242b6b19ac760f9864b01a584f850bd6b8a2169807852eb3ec4abc652a7e8afa"
+          "sha256": "66df5496a196ae6e1e8b7d3f5d3d3cb3d3096bcfed4b1848e9ea84f8e7ae6a92"
         },
         {
           "file": "native/core/translation-checkpoint.js",
           "sha256": "c0728a85555ed9abc2b756683cd67eee9b0e5b41d3626247cd686db23a6d48cf"
         },
         {
+          "file": "native/core/translation-glossary.js",
+          "sha256": "0580196e8fd27b4cd217d8131d9341999bb08023afa67ff2f8e169a96f4973be"
+        },
+        {
           "file": "native/core/local-translator.js",
-          "sha256": "483ecc57dabfdfe695b9a5540b52c66b6f82deac9b8e759c438356fb5f6159ec"
+          "sha256": "5364a0c0d604755559958dff64a439a0b8e8f6be70559d568bce0e61adbf55b5"
         },
         {
           "file": "native/literature-radar/enrichment.js",
-          "sha256": "19931b08c725093004a412674df4f9b5d3e818c40f5aba096bc75e6e53e4f522"
+          "sha256": "2e5266f8a1ae8dc3bbda2eba65a17a245650bfdb36cb45c01d65c9a134cd441a"
         },
         {
           "file": "native/core/literature-radar-trend.js",
@@ -925,7 +1001,7 @@
         },
         {
           "file": "native/literature-radar/source-queries.js",
-          "sha256": "8f117b8cc06045f439ca8b085c73982ecb520a52eb7335d5358fe33643fd2875"
+          "sha256": "ecb7f1c6a273bf3bbebb2d48d0900174b935c31b4573d8bc81dd373ed6b0a947"
         },
         {
           "file": "native-workbench-store.js",
@@ -933,11 +1009,11 @@
         },
         {
           "file": "native/literature-radar/app.js",
-          "sha256": "7763796bc6ccc4ab12b7626df0894ca46716adbd0427cf5343403581da08c2ac"
+          "sha256": "43a8f95aaeea969d474796bdc54316a74ef31ca9b752d06033ae620550cca0b1"
         },
         {
           "file": "native/core/input-tools.js",
-          "sha256": "bd7488d0fefa20ccf5e7307499bd06020d7ce68a5bef7b899586914f2c8d972b"
+          "sha256": "5ca848be620dd119253c9b991fa80363b7edcce7f9357239a7acefc5e6ed6cb2"
         },
         {
           "file": "native-radar.js",
@@ -985,7 +1061,7 @@
         },
         {
           "file": "native/selection-component.js",
-          "sha256": "fbae3fda5c9bdee8be28434030ae8659129805c03c167efefa7162292d7de6cf"
+          "sha256": "e7e6790dc9f279e2fd7dc3947ad84dfde474193c18504b8cd1174db77445386f"
         },
         {
           "file": "highlight-examples.js",
@@ -1001,11 +1077,11 @@
         },
         {
           "file": "native/semantic-find-controller.js",
-          "sha256": "0b1bd537d05a1521ae24e6ededb9a6f45c4d64ff7f25970e825f47b71af04c07"
+          "sha256": "067dcaa72ff4406d3ef4c6b57055ad73307a39b06ad2a452d5b512ccc816a14f"
         },
         {
           "file": "native/translation-component.js",
-          "sha256": "e0af217af0f5a2499662f66cacefa788a2ae42897e1772326dafbe28ec43fca8"
+          "sha256": "4b2984bd464cf37899d23604996a3604acdbb5dea33b54c6f4e6c45e281a3000"
         },
         {
           "file": "native-reader-tools.js",
@@ -1013,7 +1089,7 @@
         },
         {
           "file": "native/core/i18n.js",
-          "sha256": "f49c02125359f7a7dff2fd90557915ee8b0930d88e5bb9aebe2dec122a915773"
+          "sha256": "f4b75e67176e3d602039a8566c3b5269adeb22179919845e60f2a249ab3fe021"
         },
         {
           "file": "native/core/i18n-extension.js",
@@ -1021,7 +1097,7 @@
         },
         {
           "file": "native/core/i18n-reader.js",
-          "sha256": "5db61fcbc5ad1b4109097498c9c56b9a4a3fba0e47f9ba01e200c177ddcfc224"
+          "sha256": "031a6571a778a3b05dcd821f2d5e2957ebcf5197c4282aca7384fe9d7fb9f0ab"
         },
         {
           "file": "native/core/i18n-reader-extra.js",
@@ -1029,7 +1105,7 @@
         },
         {
           "file": "native/core/i18n-system.js",
-          "sha256": "d6a7b4e3d7301394962dd30a31c566d0a9f7483da59d208bffd4f54908741c3a"
+          "sha256": "1df15dace64d7a3eb919ba63fb82f0a563aec453ff42307efc3de15cadf8a07c"
         },
         {
           "file": "native/core/i18n-tools.js",
@@ -1041,7 +1117,7 @@
         },
         {
           "file": "native/core/i18n-builtins.js",
-          "sha256": "f76f6707250562087f46414f544fbc4e5f1171955af1be31854eb8b1c9ea2cc0"
+          "sha256": "ccbf90f23d8aa39467f920cbfd33e83c9ff85c90edf2e693aa2eef3aa8283e87"
         },
         {
           "file": "demo-translations.js",
@@ -1060,100 +1136,100 @@
   ],
   "outputs": [
     {
-      "file": "bundles/runtime-22874c50d05bcf2c.js",
-      "sha256": "22874c50d05bcf2c36ac086994d594b5d69bec4e7aac7f8cf7bc0157332171a0"
+      "file": "bundles/runtime-0b097d632aca823c.js",
+      "sha256": "0b097d632aca823ce4164546f4fd32d367bc2db9c2a73d6a8e820c5c02ed83d0"
     },
     {
-      "file": "bundles/runtime-33cd8599e3b4cde7.js",
-      "sha256": "33cd8599e3b4cde7f750a03ed775e5d9d5c8d6f9942afdb82e0a4bf3da719076"
+      "file": "bundles/runtime-f068d90164bfbbc5.js",
+      "sha256": "f068d90164bfbbc5a3a0969f7150e6c17d919b2c51270a0b4fa18ddc0d2c2187"
     },
     {
       "file": "bundles/runtime-9da2601345082160.js",
       "sha256": "9da2601345082160ce65951969d3b73ad3416e297c63e39d6702b2e6fc067813"
     },
     {
-      "file": "bundles/runtime-a962acd113211304.js",
-      "sha256": "a962acd11321130428f3b7ef1799836c4dd92e2b3205e56a050ccdb1a2c55b93"
+      "file": "bundles/runtime-fd0a82fd73f876df.js",
+      "sha256": "fd0a82fd73f876df79f3c4071512d268b176ae6958c97f28f1286e4a29204550"
     },
     {
-      "file": "bundles/runtime-362c08da339933a3.js",
-      "sha256": "362c08da339933a38d52e3d6c6275c765f725bec8014d409582c2d89242e3f2c"
+      "file": "bundles/runtime-ecc630967605d466.js",
+      "sha256": "ecc630967605d466371e22379286383322ea146b0a3acb4ab64eb6b0ceb1a5b5"
     },
     {
       "file": "bundles/runtime-d1c80e0ae0c78a99.js",
       "sha256": "d1c80e0ae0c78a99389e022de9f3c1c4fab371537ea7701bdf0c23a204324303"
     },
     {
-      "file": "bundles/runtime-cadb4efac83f9ba9.js",
-      "sha256": "cadb4efac83f9ba9928af2cc71582a9bc8b0f0c4510b19eeb1dd12f7610e5694"
+      "file": "bundles/runtime-3e9ceaa870645f6b.js",
+      "sha256": "3e9ceaa870645f6b276c768dc59e4de0aeb155fe62f179b5da68dae86965b4c9"
     },
     {
-      "file": "bundles/runtime-bcfceb2c25f91c71.js",
-      "sha256": "bcfceb2c25f91c71d51549777c63b83a595d6d8c1f42ce6a8e99837b1c1f961e"
+      "file": "bundles/runtime-d6343caa411e78a8.js",
+      "sha256": "d6343caa411e78a85bd0bb3eb4bf4006dcf7bde202d3ff2b620a0e309567d245"
     },
     {
-      "file": "bundles/runtime-4d9642e1fd9edcae.js",
-      "sha256": "4d9642e1fd9edcae347fe2b4c54e2da3373421c319a1edb9b4200284a1af6e74"
+      "file": "bundles/runtime-f7fa26a75f388205.js",
+      "sha256": "f7fa26a75f3882058a464fa3d96f65b20774905d60ccf56cfe7a385ead0c041f"
     },
     {
-      "file": "bundles/runtime-c66dfb1a6559cb73.js",
-      "sha256": "c66dfb1a6559cb73fb8bcf75ff3920e1b3682ab5cc20bbcbf730594ad0e71a03"
+      "file": "bundles/runtime-ca238f930cf04abc.js",
+      "sha256": "ca238f930cf04abc296fa2f5e983082b9b6673a3af5f5831e24c12dd58a5488e"
     },
     {
-      "file": "bundles/runtime-fb6b27d1356b2ce1.js",
-      "sha256": "fb6b27d1356b2ce14fba1dea4d8feab0b456027e8f668144ca1d6565e4644c06"
+      "file": "bundles/runtime-ce72a4d803b0f056.js",
+      "sha256": "ce72a4d803b0f0561818481d1535e701e9a8887912c84ec14b5502dd89eb86fd"
     },
     {
-      "file": "bundles/runtime-61957ef0d099993a.js",
-      "sha256": "61957ef0d099993a69aa3ee57ab87aefc905ebcd91608b6654bffe1c88b3ec98"
+      "file": "bundles/runtime-724242bf6632b9b6.js",
+      "sha256": "724242bf6632b9b621161fb483da3ebb0b1323b89d2d05cd496ad293643eb467"
     },
     {
       "file": "popup.html",
-      "sha256": "a38d5df35b61c71bb5c213f48650beb98da1edd1e10e0f6c4f653b39a7e4bc0b"
+      "sha256": "33d53c81a19dcc8b4fbb68046441b50949dd89f2cfd9279062d3905b55083c63"
     },
     {
-      "file": "bundles/runtime-d048d57669b7a7eb.js",
-      "sha256": "d048d57669b7a7ebbe5b1ca689a3a8ccee25dd1525b6b69ba327a56bfd956bdf"
+      "file": "bundles/runtime-6166b5120d2a9a24.js",
+      "sha256": "6166b5120d2a9a24f4a0ed8f9ac9ce2ad9872496789e581959f484c4955c03b7"
     },
     {
-      "file": "bundles/runtime-54f0f3b1eca6b9de.js",
-      "sha256": "54f0f3b1eca6b9de480ba947c171283828aacc2f893c4dff1ae5321e8241127d"
+      "file": "bundles/runtime-726a30387b88fee1.js",
+      "sha256": "726a30387b88fee17f89af1cba9d84d8f6d2114d5abc1dacbfafe1ec59f2d457"
     },
     {
-      "file": "bundles/runtime-b9c0a5f8d53fab62.js",
-      "sha256": "b9c0a5f8d53fab623db640fae570b6824c731f667ee9d13cea75ebe81b498dd9"
+      "file": "bundles/runtime-761f1d8eb13066b5.js",
+      "sha256": "761f1d8eb13066b5900661d0ed62ec8bd8930cb7b3e925d618423c0ac0fc7c9f"
     },
     {
-      "file": "bundles/runtime-cfc748701f382165.js",
-      "sha256": "cfc748701f382165ad51e07a27dd3f605ba78eb2606e135a5e9a55c6c38bc116"
+      "file": "bundles/runtime-7c666a198e979c87.js",
+      "sha256": "7c666a198e979c87260845859e92327661abc0a30a81b3f86e31c29a0a88da64"
     },
     {
       "file": "bundles/runtime-52b6183309a3e78f.js",
       "sha256": "52b6183309a3e78f4847b16151976e179beb09a7a139ab9e7028ff9dfc3e3ff6"
     },
     {
-      "file": "bundles/runtime-158143d215884b1f.js",
-      "sha256": "158143d215884b1fd05879855e50e09a13b66b4f1e52d1f8b3e5399c36dd1fa6"
+      "file": "bundles/runtime-0d357dd1214bc8c3.js",
+      "sha256": "0d357dd1214bc8c386948bc8ecfd6f75755e9a7a082c175a6885777780e0b354"
     },
     {
       "file": "workbench/index.html",
-      "sha256": "7177a2ab1765615f516e97f95e43afeed57f629e1bfd2376074fbd5af02d81bf"
+      "sha256": "7dc096770f9834414be4b24e9e8825e0a417339158069c50fe842d240d1d430f"
     },
     {
-      "file": "bundles/runtime-304f32fbb0d7e306.js",
-      "sha256": "304f32fbb0d7e306405a06f0c239242e40627329129a1f35e16f9e92ba7f4d50"
+      "file": "bundles/runtime-7d2ddc8e7f90bb1f.js",
+      "sha256": "7d2ddc8e7f90bb1f324db859f9419c571a9b89a86a3a0caefc671f9fd9301b30"
     },
     {
-      "file": "bundles/runtime-7fc5dc0607ae5edb.js",
-      "sha256": "7fc5dc0607ae5edbe42712c318c2466277cd7035907d5b0db6a04ae02d9798d2"
+      "file": "bundles/runtime-4456521a5a33342f.js",
+      "sha256": "4456521a5a33342f41e20cd12df859b8814c30ac6f7b0043874efafe3f8120a5"
     },
     {
-      "file": "bundles/runtime-d5625eb4aded797f.js",
-      "sha256": "d5625eb4aded797fef0f65175e97c1ff176095ae4eb0f14c96671bfe01918dd8"
+      "file": "bundles/runtime-46ace94da30212f1.js",
+      "sha256": "46ace94da30212f1b995ab86e71fe52e62c472cf621200011cdb26879f1cbda0"
     },
     {
       "file": "literature-radar/index.html",
-      "sha256": "2083e22d92c04b7693c3b58c44e6d2b4b71b2224a77f9704c68854506f40bf1c"
+      "sha256": "f412a36916ecea94ad3205f1e504cd1d4adfa4d6c96027ecc7b531d84b5d982a"
     },
     {
       "file": "bundles/runtime-ecf89fa1aca9a319.js",
@@ -1164,8 +1240,8 @@
       "sha256": "f638859058244fa103527285380f5ebd8ac6a39766e7be34c5159d6c882882cb"
     },
     {
-      "file": "bundles/runtime-057c6d679afd9653.js",
-      "sha256": "057c6d679afd965328b7f61319b40777e49570e061c8898c5647b0a5550a0ee1"
+      "file": "bundles/runtime-50ea7538e03a1239.js",
+      "sha256": "50ea7538e03a1239baa4b0739827287cbef1c20946b67a20100f4cc856e0c801"
     },
     {
       "file": "bundles/runtime-e5310aea2fc5baa3.js",
@@ -1177,7 +1253,7 @@
     },
     {
       "file": "web-demo.html",
-      "sha256": "e7a5f35cd68d38a823e90ee3886bcc29fbe40451ad7e3dfbf43ee636a625a6b6"
+      "sha256": "b789550418df4970d3d50f34f63cbd99765941c9c83eaee0d7add35fa525fd00"
     }
   ]
 }

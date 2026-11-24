@@ -19,17 +19,6 @@ user documents, and other credentials are not source and must not be committed.
 
 ## Build and verify
 
-For the public unpacked preview, use Node.js 20+:
-
-```sh
-node --test tests/public-release.test.js tests/chrome-store-package.test.js tests/release-inventory.test.js
-node scripts/build-public-test-release.mjs --name Brevess-Public-candidate
-```
-
-This browser-only ZIP retains the existing public manifest key so that unpacked
-updates keep the same extension identity. It includes no credentials or local
-data. Its source commit, per-file hashes and ZIP checksum are recorded beside it.
-
 For the browser-only Chrome Web Store package, use Node.js 20+:
 
 ```sh

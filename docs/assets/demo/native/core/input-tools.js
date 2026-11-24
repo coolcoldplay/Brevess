@@ -13,7 +13,7 @@
   const doc = root.document;
   if (!doc) return;
   const jobs = new WeakMap();
-  let field = null, status = null, count = 0, lastSpace = 0, provider = null;
+  let field = null, status = null, sequence = null, provider = null;
   function editable(node) {
     if (!node || node.disabled || node.readOnly) return null;
     if (node.tagName === 'TEXTAREA' || (node.tagName === 'INPUT' && ['text','search','url','tel',''].includes(node.type))) return node;
@@ -34,7 +34,9 @@
     if(status){status.textContent=message;status.hidden=!message;}
   }
   function focus(event) {
-    field = editable(event.composedPath?.()[0] || event.target); count = 0;
+    const next = editable(event.composedPath?.()[0] || event.target);
+    if (field !== next) { if (field) jobs.get(field)?.abort(); paint(); sequence = null; }
+    field = next;
   }
   function caretOffset(node) {
     if ('selectionStart' in node) return node.selectionStart === node.selectionEnd ? node.selectionStart : null;
@@ -44,11 +46,20 @@
     range.setEnd(selection.anchorNode, selection.anchorOffset); return range.toString().length;
   }
   function write(node, value) {
-    if ('value' in node) {
+    if (node.isContentEditable) {
+      const selection = doc.getSelection(), range = doc.createRange();
+      range.selectNodeContents(node);
+      selection.removeAllRanges(); selection.addRange(range);
+      if (doc.execCommand('insertText', false, value)) return;
+      range.deleteContents();
+      const text = doc.createTextNode(value);
+      range.insertNode(text); range.setStartAfter(text); range.collapse(true);
+      selection.removeAllRanges(); selection.addRange(range);
+    } else {
       const proto = node.tagName === 'TEXTAREA' ? root.HTMLTextAreaElement.prototype : root.HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(proto, 'value').set.call(node, value);
       node.setSelectionRange?.(value.length, value.length);
-    } else { node.textContent = value; const r = doc.createRange(); r.selectNodeContents(node); r.collapse(false); const s = doc.getSelection(); s.removeAllRanges(); s.addRange(r); }
+    }
     node.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
   }
   async function translate(node, snapshot, source) {
@@ -59,7 +70,7 @@
       provider ||= root.BrevessLocalTranslator.createProvider({ sourceLanguage: 'zh', targetLanguage: 'en' });
       await provider.initialize({ signal: controller.signal });
       const result = await provider.translate(source, { signal: controller.signal, foreground: true });
-      if (!controller.signal.aborted && node.isConnected && read(node) === snapshot && jobs.get(node) === controller) {
+      if (!controller.signal.aborted && field === node && node.isConnected && read(node) === snapshot && jobs.get(node) === controller) {
         jobs.delete(node); write(node, typeof result === 'string' ? result : result.translatedText);
       }
       if (field === node) paint();
@@ -69,16 +80,36 @@
   }
   doc.addEventListener('focusin', focus, true);
   doc.addEventListener('input', event => { const node = editable(event.composedPath?.()[0] || event.target); if (node) jobs.get(node)?.abort(); }, true);
+  doc.addEventListener('focusout', event => {
+    const current = editable(event.composedPath?.()[0] || event.target);
+    if (current && current === field && !current.contains(event.relatedTarget)) {
+      jobs.get(current)?.abort(); sequence = null; field = null; paint();
+    }
+  }, true);
+  doc.addEventListener('compositionstart', () => { sequence = null; }, true);
   doc.addEventListener('keydown', event => {
     const node = editable(event.composedPath?.()[0] || event.target);
-    if (!node || event.isComposing || event.keyCode === 229 || event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.key !== ' ') { count = 0; return; }
-    const now = Date.now(); count = node === field && now - lastSpace < 900 ? count + 1 : 1; lastSpace = now; field = node;
-    if (count !== 3) return;
-    count = 0; const snapshot = read(node), offset = caretOffset(node);
-    if (offset === null || snapshot.slice(offset - 2, offset) !== '  ') return;
-    const source = snapshot.slice(0, offset - 2) + snapshot.slice(offset);
-    if (!source.trim() || source.length > 12000) return;
-    event.preventDefault(); void translate(node, snapshot, source);
+    if (!node || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat ||
+        event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.key !== ' ') { sequence = null; return; }
+    const now = Date.now(), current = read(node), caret = caretOffset(node);
+    if (caret == null || !/\p{Script=Han}/u.test(current) || current.length > 12002) { sequence = null; return; }
+    field = node;
+    // Save the original before the browser inserts the first space. On macOS
+    // the second may become a period, and contenteditable often inserts NBSP.
+    const suffix = current.slice(caret);
+    const added = sequence ? current.slice(sequence.prefix.length, caret) : '';
+    if (!sequence || sequence.node !== node || now - sequence.time > 900 ||
+        !current.startsWith(sequence.prefix) || suffix !== sequence.suffix ||
+        !/^(?:[ \u00a0\u3000]{1,2}|[.。][ \u00a0\u3000]?)$/.test(added)) {
+      sequence = {node, time: now, count: 1, prefix: current.slice(0,caret), suffix,
+        source: node.isContentEditable ? node.innerText : current};
+      return;
+    }
+    sequence.time = now;
+    if (++sequence.count < 3) return;
+    const source = sequence.source; sequence = null;
+    event.preventDefault();
+    void translate(node, current, source);
   }, true);
   root.addEventListener('pagehide', () => { if (field) jobs.get(field)?.abort(); provider?.destroy(); status?.remove(); status=null; }, { once: true });
 })(globalThis);

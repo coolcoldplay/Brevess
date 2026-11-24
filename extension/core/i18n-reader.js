@@ -373,6 +373,24 @@ Panel 编号、证据类型等结构字段保持不变；可修订所有面向�
 名称已清空	Name cleared
 名称待补	Name missing
 Panel 名称	Panel name
+提取与校正 Panel	Extract and review panels
+原图与 Panel	Original figure and panels
+校正边界	Adjust bounds
+补选 Panel	Add a missing panel
+带图提问	Ask about this image
+保存框选	Save selection
+核对原图	Check original figure
+提取 Panel	Extract panels
+返回论文	Back to paper
+网页 Panel 原图与裁片	Original web figures and panel crops
+选择 Figure 原图	Choose an original figure
+Panel 裁片	Panel crop
+Panel 字母	Panel letter
+图像预览	Image preview
+从当前 PDF 提取 Figure 和 Panel	Extract figures and panels from this PDF
+下载 PPT	Download PPT
+复制给 Agent	Copy for agent
+取消制作	Cancel presentation
 最佳单张 Figure 图	Best single Figure image
 图注与相关正文（未发送图片）	Caption and related article text (no image sent)
 按容量规划的证据	Evidence selected within capacity limits
@@ -570,6 +588,7 @@ Figure 草稿版本无效	Invalid Figure draft version
 暂未识别到图；请刷新论文工作区后重试。	No figures identified yet. Refresh the article workspace and retry.
 Figure 名称	Figure name
 文字依据：图注与相关正文（未读取图片）。	Text sources: caption and related article text (image not read).
+文字依据：已读图注和正文。图内数值、显著性标记需核对原图。	Text sources: caption and article text. Check the original figure for numerical values and significance markers.
 图像范围待核对；图注所在页可能不包含完整 Figure。	Image range requires verification. The caption page may not contain the complete Figure.
 图注边界待复核，可核对原页后再解读。	Caption boundaries need review. Check the original pages before analysis.
 编辑手动图	Edit manual figure
@@ -774,6 +793,16 @@ PDF 正文	PDF article text
 位置待核验	Location needs verification
 来源已变化，请重新核对当前论文。	The source changed. Check the current article again.
 未附可定位来源	No locatable source attached
+AI 全文高亮	AI full-text highlighting
+表格操作	Table actions
+在上方插入行	Insert row above
+在下方插入行	Insert row below
+删除当前行	Delete row
+在左侧插入列	Insert column to the left
+在右侧插入列	Insert column to the right
+删除当前列	Delete column
+删除表格	Delete table
+删除整个表格	Delete entire table
 BREVESS-文献笔记.md	BREVESS-article-notes.md
 生成内容已保留；证据核对未完成，请核对原文中的模型、条件和例外。	Generated content is preserved. Evidence review is incomplete; check the original model, conditions, and exceptions.
 已发送，等待模型	Sent; waiting for the model

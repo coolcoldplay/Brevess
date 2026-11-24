@@ -52,6 +52,7 @@
         transaction.objectStore('sources').delete(hash);
       });
     } finally { db.close(); }
+    await globalThis.SciLLM?.PdfPanelEvidence?.remove(hash);
   }
   return { localPdfSourceHash, saveOriginalPdfSource, loadOriginalPdfSource, deleteOriginalPdfSource };
 });

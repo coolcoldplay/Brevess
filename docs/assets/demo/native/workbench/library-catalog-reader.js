@@ -18,7 +18,9 @@
     const hasLocalAttachment=localAttachments.length>0;
     let status=sources.local&&localDocuments.some(source=>source.hasOfflineSnapshot===true)?legacy.localStatus({sourceDocuments:localDocuments}):'missing';
     if(status==='missing'&&hasLocalAttachment)status=localAttachments.some(attachment=>attachment.kind==='pdf')?'complete':'unknown';
-    return {...row,contentType:localDocuments.some(d=>d.contentType==='web')?'web':'literature',id:row.viewId,stableId:row.aliases.find(alias=>alias.startsWith('doi:'))||row.aliases.find(alias=>alias.startsWith('pmid:'))||row.viewId,
+    const isSession=record=>record.crossPageSession===true||record.researchOwner?.kind==='multi-derived'||[record.url,record.canonicalUrl,record.sourceUrl].some(url=>/^https:\/\/brevess\.invalid\/research-session\//.test(url));
+    const derived=row.sourceRecords.some(isSession)||localDocuments.some(isSession)||/^跨页研读[（(]派生记录[）)]\s*[｜|]/.test(row.title||'');
+    return {...row,contentType:derived?'research-session':localDocuments.some(d=>d.contentType==='web')?'web':'literature',id:row.viewId,stableId:row.aliases.find(alias=>alias.startsWith('doi:'))||row.aliases.find(alias=>alias.startsWith('pmid:'))||row.viewId,
       tags:row.legacyTags,sources,radarRead:sources.radar,sourceKind:sources.local&&sources.radar?'mixed':sources.radar?'radar':'local',status,
       availability:sources.local||hasLocalAttachment?'local':'metadata-only',hasLocalAttachment,inventoryOnly:row.inventoryOnly&&!hasLocalAttachment,
       url:row.sourceRecords.find(source=>source.url)?.url||'',abstract:row.searchText.abstract.join('\n'),year:String(row.publicationDate||'').slice(0,4)};
@@ -27,7 +29,7 @@
     if(!scope||scope==='all')return true;
     const entry=decorateRow(row);
     if(scope==='local')return entry.availability==='local';if(scope==='radar')return entry.sources.radar;
-    if(scope==='literature'||scope==='web')return entry.contentType===scope;
+    if(scope==='literature'||scope==='web'||scope==='research-session')return entry.contentType===scope;
     if(scope==='metadata-only')return entry.availability==='metadata-only';
     if(['complete','partial','unknown','missing'].includes(scope))return entry.status===scope;
     throw fail('LIBRARY_CATALOG_SCOPE_INVALID');
@@ -52,7 +54,7 @@
       return {records,catalog,warnings};
     }
     async function query(options={}){
-      if(options.scope&&!['all','literature','web','local','radar','metadata-only','complete','partial','missing','unknown'].includes(options.scope))throw fail('LIBRARY_CATALOG_SCOPE_INVALID');
+      if(options.scope&&!['all','literature','web','research-session','local','radar','metadata-only','complete','partial','missing','unknown'].includes(options.scope))throw fail('LIBRARY_CATALOG_SCOPE_INVALID');
       if(options.tags!==undefined&&(!Array.isArray(options.tags)||options.tags.some(tag=>typeof tag!=='string'))||options.tagMode&&!['any','all'].includes(options.tagMode))throw fail('LIBRARY_CATALOG_QUERY_INVALID');
       const {records,catalog,warnings}=await snapshot(options),conditions=options.conditions?structuredClone(options.conditions):[];
       const queryText=String(options.query||'').trim(),field=options.field||'all',operator=options.operator||'contains';
@@ -80,7 +82,7 @@
         }});
       const allRows=catalogModel.buildLibraryCatalogRows(records,catalog).rows.filter(row=>options.includeRemoved===true||!row.removedAt);
       const legacyTagOptions=[...new Set(allRows.flatMap(row=>row.legacyTags))].sort((a,b)=>a.localeCompare(b));
-      const scopeCounts=Object.fromEntries(['all','literature','web','local','radar','metadata-only','partial','missing'].map(scope=>[scope,allRows.filter(row=>inScope(row,scope)).length]));
+      const scopeCounts=Object.fromEntries(['all','literature','web','research-session','local','radar','metadata-only','partial','missing'].map(scope=>[scope,allRows.filter(row=>inScope(row,scope)).length]));
       const sourceCoverage=new Map(records.filter(record=>record.sourceKind==='local'&&!record.inventoryOnly).map(record=>[record.sourceId,record.coverage||{}]));
       const items=result.items.map(row=>{
         const entry=decorateRow(row),hits=row.sourceRecords.map(source=>contentHits.get(source.sourceId)).filter(Boolean);

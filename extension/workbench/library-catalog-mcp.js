@@ -102,6 +102,7 @@
     if (runtime.signal?.aborted) cancel();
     const timer = setTimeout(cancel, Math.max(0, deadline - Date.now()));
     function guard() {
+      runtime.assertPermission?.();
       if (Date.now() >= deadline) fail('LIBRARY_CATALOG_TIMEOUT');
       if (controller.signal.aborted) fail('LIBRARY_CATALOG_CANCELLED');
       if ((runtime.ui?.agentApprovalEpoch || 0) !== epoch) fail('LIBRARY_CATALOG_APPROVAL_REVOKED');
@@ -123,7 +124,11 @@
       control.signal.addEventListener('abort', cancelled, { once: true });
       try {
         control.guard();
-        runtime.modal('外部 Agent 文献总库修改', `<p>确认本次全局目录修改。移除只标记关联，可恢复；不删除附件文件。</p><p>目录版本：${request.expectedRevision}；操作：<code>${escape(request.command.type)}</code></p><p>新增 ID 与默认时间为预览值，最终值以执行回执为准。</p><pre>${escape(JSON.stringify(changes, null, 2))}</pre><div class="modal-actions"><button data-catalog-deny>拒绝</button><button data-catalog-allow class="primary">确认本次修改</button></div>`, element => {
+        const rows = runtime.typePreview;
+        const summary = request.command.type === 'entry.types.fill' && Array.isArray(rows)
+          ? `<p>将填写 ${rows.length} 篇文献的空白类型。</p><ul>${rows.map(row => `<li>${escape(row.title)} <strong>${escape(row.type)}</strong></li>`).join('')}</ul>`
+          : `<p>确认本次全局目录修改。移除只标记关联，可恢复；不删除附件文件。</p><p>目录版本：${request.expectedRevision}；操作：<code>${escape(request.command.type)}</code></p><p>新增 ID 与默认时间为预览值，最终值以执行回执为准。</p><pre>${escape(JSON.stringify(changes, null, 2))}</pre>`;
+        runtime.modal('外部 Agent 文献总库修改', summary + `<div class="modal-actions"><button data-catalog-deny>拒绝</button><button data-catalog-allow class="primary">确认本次修改</button></div>`, element => {
           dialog = element;
           if (settled) { dialog?.close?.(); return; }
           const deny = dialog?.querySelector?.('[data-catalog-deny]'), allow = dialog?.querySelector?.('[data-catalog-allow]');

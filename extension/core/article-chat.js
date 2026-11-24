@@ -1,10 +1,11 @@
 (function attach(root, factory) {
-  if (typeof module === 'object' && module.exports) { require('./article-chat-attachments.js'); require('./article-chat-research.js'); }
+  if (typeof module === 'object' && module.exports) { require('./article-chat-attachments.js'); require('./article-chat-research.js'); require('./article-presentation.js'); }
   const api = factory(root.SciLLM || {});
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SciLLM = Object.assign(root.SciLLM || {}, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function factory(shared) {
   const MAX_ARTICLE_CHAT_SEGMENTS = 8;
+  const readerQuestionInstruction='When the reader explicitly asks to choose, or you need a real preference to continue, ask inside BREVESS. In place of answer_block, emit one typed record {"type":"ask_user","questions":[{"id":"focus","prompt":"Your specific question","options":[{"id":"a","label":"First choice"},{"id":"b","label":"Second choice"}],"multiple":false,"allowText":true}]} and then {"type":"final","status":"completed"}. Use the reader’s language. A question can allow multiple choices or text only. Never ask just to fill space, repeat an answered choice, request credentials or authorize a tool. On continuation, honor reader_choices and answer the ORIGINAL question.';
   const r16FigureMap = (function r16FigureMapTools() {
   const SCHEMA = 'brevess.chat-figure-map.v1';
   const clean = (v, n = 400) => String(v && typeof v === 'object' ? v.value || '' : v || '')
@@ -718,6 +719,7 @@ function r16FigureMapContextForProof(context, supplied) {
     return {
       question,
       profileId,
+      ...(Array.isArray(message.readerInteractions)?{readerChoices:shared.articlePresentation?.readerChoices(message.readerInteractions)||[]}:{}),
       turnId: normalizeText(message?.turnId, 160),
       operationId: normalizeText(message?.operationId, 100),
       webSearch: normalizeWebSearchDecision(message?.webSearch),
@@ -983,6 +985,7 @@ function r16FigureMapContextForProof(context, supplied) {
       conversation_history: includedHistory(input, plan),
       retrieved_old_turn_memory: plan.localMemory,
       current_question: input.question,
+      ...(input.readerChoices?.length ? {reader_choices:input.readerChoices} : {}),
       ...(input.attachments?.length ? { attachments: input.attachments.map(({ dataUrl, ...item }) => item) } : {}),
       ...(input.visualContext ? { image_context: {
         status: input.visualContext.status,
@@ -1038,6 +1041,7 @@ function r16FigureMapContextForProof(context, supplied) {
       stablePrefix,
       ...(webSystemPrompt ? { webSystemPrompt } : {}),
       systemPrompt: [
+        ...(input.allowAgentQuestions?[readerQuestionInstruction]:[]),
         input.webSearch?.enabled === true
           ? 'You are a rigorous biomedical paper assistant. Answer in Chinese using the supplied article context and provider web-search results. Keep article claims grounded in ARTICLE_CONTEXT and clearly distinguish external updates from the paper.'
           : 'You are a rigorous biomedical paper assistant. Answer in Chinese using only the supplied article context and conversation memory.',
@@ -1096,6 +1100,7 @@ function r16FigureMapContextForProof(context, supplied) {
       schemaName: 'article_chat_json_fallback',
       stablePrefix: base.stablePrefix,
       systemPrompt: [
+        ...(input.allowAgentQuestions?[readerQuestionInstruction+' For this JSON fallback put those two records in the records array.']:[]),
         MERMAID_LABEL_LINE_BREAK_INSTRUCTION,
         ...(plan.figureEvidenceContext ? [r16FigureMap.instruction] : []),
         'You are a rigorous biomedical paper assistant. Answer in Chinese using only the supplied article context.',
@@ -1129,7 +1134,7 @@ function r16FigureMapContextForProof(context, supplied) {
       responseSchema: {
         type: 'object', required: ['records'], additionalProperties: false,
         properties: {
-          records: { type: 'array', minItems: hasPreservedBlocks ? 2 : 3, items: { type: 'object' } }
+          records: { type: 'array', minItems: hasPreservedBlocks || input.allowAgentQuestions ? 2 : 3, items: { type: 'object' } }
         }
       }
     };
@@ -1736,6 +1741,7 @@ function r16FigureMapContextForProof(context, supplied) {
   async function runArticleChat(options = {}) {
     let input = options.input;
     const profile = options.profile || {};
+    if(input)input={...input,allowAgentQuestions:['codex-local','deepseek-harness'].includes(profile.providerId) && !input.selectionEvidence && !input.webSearch?.enabled && (input.readerChoices?.length||0)<36};
     const adapter = options.adapter;
     let processSequence = 0;
     const report = event => {
@@ -1789,6 +1795,7 @@ function r16FigureMapContextForProof(context, supplied) {
       plan: publicPlan(prepared.plan)
     });
     const createParser = () => shared.createArticleChatNdjsonParser({
+      normalizeQuestion:input.allowAgentQuestions && input.webSearch?.enabled!==true ? record=>shared.articlePresentation.questionSet({...record,requestId:'reader'}) : undefined,
       snapshot: prepared.snapshot,
       selectedCitationSources: selectedCitationSources(input.selectionEvidence),
       requireExactEvidence: Boolean(input.selectionEvidence) && input.webSearch?.enabled !== true,
@@ -1865,6 +1872,7 @@ function r16FigureMapContextForProof(context, supplied) {
         } : {});
         const request = {
           ...prompt,
+          allowAgentQuestions:input.allowAgentQuestions===true,
           structuredOutput: true,
           selectedProfileId: String(options.selectedProfileId || input.profileId || ''),
           conversationKey: input.document.documentHash,
@@ -1892,6 +1900,9 @@ function r16FigureMapContextForProof(context, supplied) {
               typeof event.threadId === 'string' && event.threadId.trim() &&
               typeof event.turnId === 'string' && event.turnId.trim()) {
             nativeStartSeen = true;
+          } else if(event?.type==='reader_input' && input.allowAgentQuestions && adapter.providerId==='codex-local' &&
+              event.job?.documentHash===input.document.documentHash && shared.articlePresentation.receipt(event.job)?.interaction){
+            report({phase:'chat_reader_input',readerJob:shared.articlePresentation.receipt(event.job)});
           } else if (['public_summary', 'public_reasoning_delta'].includes(event?.type)) {
             if (completed || !normalizeArticleChatProcess(event)) throw Object.assign(new Error('Invalid public process event'), { code: 'ARTICLE_CHAT_STREAM_EVENT_INVALID' });
             report({ phase: 'chat_public_process', publicProcessEvent: event });
@@ -1964,7 +1975,7 @@ function r16FigureMapContextForProof(context, supplied) {
           }
           throw terminalError;
         }
-        const validCompleteResponse = finalized && Boolean(after.final) && after.blocks.length > 0;
+        const validCompleteResponse = finalized && Boolean(after.final) && (after.blocks.length > 0 || !!after.agentQuestion);
         const emptyFormatFailure = completed && !terminalError &&
           !after.blocks.length && !validCompleteResponse;
         const danglingAnswerLeadIn = validCompleteResponse &&
@@ -2076,6 +2087,11 @@ function r16FigureMapContextForProof(context, supplied) {
         // alongside earlier blocks while retaining the incomplete status.
         state = parser.snapshot();
       }
+    }
+    if (!exhaustionReason && state.final?.status==='completed' && state.agentQuestion && !state.blocks.length) {
+      report({phase:'chat_completed',status:'waiting_agent',completedBlockCount:0,continuationCount});
+      return {message:{status:'waiting_agent',agentQuestion:state.agentQuestion,answerBlocks:[],summary:''},
+        inputContext:articleChatInputContext(input,prepared),usage,coverage,plan:publicPlan(prepared.plan)};
     }
     if (!state.blocks.length) {
       const error = new Error('Article chat did not produce a complete answer block');

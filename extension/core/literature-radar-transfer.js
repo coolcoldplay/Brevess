@@ -18,7 +18,7 @@
     'abstractAttemptAt'
   ];
   const REVISION_KEYS = [
-    'sourceQueries','sourceStates', 'number', 'query', 'baselineDays', 'createdAt', 'windowStart', 'baselineAt', 'lastSuccessAt',
+    'sourceQueries','sourceStates', 'number', 'query', 'baselineDays','baselineStartDay', 'createdAt', 'windowStart', 'baselineAt', 'lastSuccessAt',
     'lastAttemptAt', 'nextRetryAt', 'lastNewCount', 'warnings', 'queryTranslation', 'error', 'baselineHistory'
   ];
   function normalizeQuery(value) {
@@ -50,7 +50,7 @@
     const result = {};
     for (const key of REVISION_KEYS) if (revision[key] !== undefined) result[key] = clone(revision[key]);
     result.query = t.sanitizeString(revision.query, 4000);
-    result.baselineDays = revision.baselineDays;
+
     result.warnings = t.sanitizeStringArray(revision.warnings, 20, 1200);
     result.articles = includeArticles
       ? (Array.isArray(revision.articles) ? revision.articles : []).slice(0, 5000).map(sanitizeArticle)
@@ -65,7 +65,7 @@
       query: t.sanitizeString(radar.query, 4000),
       enabled: radar.enabled === true,
       intervalHours: radar.intervalHours,
-      baselineDays: radar.baselineDays,
+      ...m.radarBaseline(radar),
       editVersion: radar.editVersion,
       createdAt: radar.createdAt,
       updatedAt: radar.updatedAt,
@@ -121,7 +121,7 @@
   function radarMatch(state, incoming) {
     const query = normalizeQuery(incoming.query);
     return state.radars.find(radar => JSON.stringify(radar.sourceQueries||null)===JSON.stringify(incoming.sourceQueries||null)&&radar.source === incoming.source &&
-      normalizeQuery(radar.query) === query && radar.baselineDays === incoming.baselineDays);
+      normalizeQuery(radar.query) === query && radar.baselineDays === incoming.baselineDays && radar.baselineStartDay === incoming.baselineStartDay);
   }
   function mergeArticles(target, incoming, warnings) {
     const byId = new Map(target.map(article => [(article.source||'')+':'+article.id, article]));
@@ -169,7 +169,7 @@
             ...revision,
             number: index + 1,
             query: revision.query,
-            baselineDays: revision.baselineDays
+            ...m.radarBaseline(revision)
           }))
         };
         current.radars.push(target);
@@ -182,7 +182,7 @@
       }
       for (const revision of incoming.revisions) {
         let destination = target.revisions.find(row => row.number === revision.number);
-        if (destination && (normalizeQuery(destination.query) !== normalizeQuery(revision.query)||JSON.stringify(destination.sourceQueries||null)!==JSON.stringify(revision.sourceQueries||null))) {
+        if (destination && (destination.baselineStartDay!==revision.baselineStartDay||destination.baselineDays!==revision.baselineDays||normalizeQuery(destination.query) !== normalizeQuery(revision.query)||JSON.stringify(destination.sourceQueries||null)!==JSON.stringify(revision.sourceQueries||null))) {
           conflicts.push({ type: 'radar-revision-query-conflict', id: target.id, revision: revision.number });
           warnings.push(`RADAR_TRANSFER_REVISION_CONFLICT:${target.id}:${revision.number}`);
           continue;

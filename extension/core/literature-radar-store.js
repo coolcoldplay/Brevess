@@ -60,7 +60,7 @@
       if (!radar) throw m.radarError('RADAR_NOT_FOUND'); return radar;
     };
     function revision(config, number) {
-      return { ...(config.sourceQueries?{sourceQueries:m.radarClone(config.sourceQueries),sourceStates:{}}:{}), number, query: config.query, baselineDays: config.baselineDays, createdAt: now(), windowStart: null,
+      return { ...(config.sourceQueries?{sourceQueries:m.radarClone(config.sourceQueries),sourceStates:{}}:{}), number, query: config.query, ...m.radarBaseline(config), createdAt: now(), windowStart: null,
         baselineAt: null, lastSuccessAt: null, lastAttemptAt: null, nextRetryAt: null, lastNewCount: 0,
         articles: [], warnings: [], queryTranslation: '', error: null };
     }
@@ -69,6 +69,7 @@
         const config = m.validateRadarConfig(input);
         return transact(state => {
           if(config.sourceQueries?.length===1&&config.sourceQueries[0].source===config.source&&(!input.id||!find(state,input.id).sourceQueries))delete config.sourceQueries;
+          if (config.baselineStartDay && config.baselineStartDay>m.radarDay(now())) throw m.radarError('RADAR_CONFIG','基线起始日期不能晚于今天。');
           if (!input.id) {
             if (state.radars.length >= 50) throw m.radarError('RADAR_RULE_LIMIT', '最多保存 50 个雷达。');
             const radar = { ...config, id: 'radar-' + crypto.randomUUID(), editVersion: 1, createdAt: now(), updatedAt: now(), revisions: [revision(config, 1)] };
@@ -78,7 +79,8 @@
           if(radar.source!==config.source)throw m.radarError('RADAR_SOURCE_IMMUTABLE','更换来源请新建雷达；原任务和历史记录保留。');
           if (expectedVersion !== radar.editVersion) throw m.radarError('RADAR_EDIT_CONFLICT', '此检索式已被其他窗口或 Agent 修改。请重新打开后编辑。');
           if(radar.sourceQueries&&!config.sourceQueries)throw m.radarError('RADAR_MULTISOURCE_REQUIRED','编辑多来源策略须保留各来源检索式，请重新读取任务。');
-          if (JSON.stringify(radar.sourceQueries||null)!==JSON.stringify(config.sourceQueries||null)||radar.query !== config.query || radar.baselineDays !== config.baselineDays) radar.revisions.push(revision(config, radar.revisions.length + 1));
+          if (JSON.stringify(radar.sourceQueries||null)!==JSON.stringify(config.sourceQueries||null)||radar.query !== config.query || radar.baselineDays !== config.baselineDays || radar.baselineStartDay !== config.baselineStartDay) radar.revisions.push(revision(config, radar.revisions.length + 1));
+          delete radar.baselineStartDay; delete radar.baselineDays;
           Object.assign(radar, config, { editVersion: radar.editVersion + 1, updatedAt: now() }); return radar;
         });
       },

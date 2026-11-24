@@ -22,18 +22,32 @@ async function include(rel) {
   }
 }
 for(const entry of ['popup.html','workbench/index.html','literature-radar/index.html','table-viewer.html','icons/Brevess-logo.svg','vendor/semantic-icons-r42/vendor/lucide/LICENSE','vendor/semantic-icons-r42/vendor/mdi/LICENSE','vendor/semantic-icons-r42/vendor/mdi/LICENSE-Apache-2.0.txt','vendor/phosphor/LICENSE','LICENSE','THIRD_PARTY_NOTICES.md'])await include(entry);
-for(const entry of ['action-popup.html','content.css','core/sentence-boundary.js','core/abbreviation-extractor.js','core/highlight-distribution.js','semantic-find-controller.js','core/semantic-find.js','semantic-find.css','bilingual-translation.css','core/figure-magnifier.js','core/figure-viewer.js','core/figure-annotations.js','core/figure-annotation-ui.js','core/web-media.js'])await include(entry);
+for(const entry of ['action-popup.html','content.css','vendor/mermaid/mermaid.min.js','core/sentence-boundary.js','core/abbreviation-extractor.js','core/highlight-distribution.js','semantic-find-controller.js','core/semantic-find.js','semantic-find.css','bilingual-translation.css','core/figure-magnifier.js','core/figure-viewer.js','core/figure-annotations.js','core/figure-annotation-ui.js','core/web-media.js'])await include(entry);
 await fs.mkdir(out,{recursive:true});
 for(const [rel,bytes] of files){const dest=path.join(out,rel);await fs.mkdir(path.dirname(dest),{recursive:true});await fs.writeFile(dest,bytes);}
 for(const [entry,adapter] of [['popup.html','native-sidebar.js'],['action-popup.html',null],['workbench/index.html','native-workbench.js'],['literature-radar/index.html','native-radar.js'],['table-viewer.html',null]]) {
   const prefix=entry.includes('/')?'../../':'../';
   let html=files.get(entry).toString();
   html=html.replace('<head>',`<head><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'"><script src="${prefix}native-transport.js"></script><script src="${prefix}paper-data.js"></script><script src="${prefix}native-data.js"></script>`);
+  const adapterScript = src => `<script data-bv-adapter src="${prefix}${src}?v=20261124-r18"></script>`;
+  if (entry === 'popup.html') {
+    const paper = `<script src="${prefix}paper-data.js"></script>`;
+    html = html.replace(paper, paper + adapterScript('web-data.js'));
+  }
+  const translations = adapterScript('demo-translations.js') + adapterScript('demo-i18n.js');
+  if (entry === 'table-viewer.html') {
+    html = html.replace('</head>', '<script data-bv-adapter src="core/i18n.js"></script><script data-bv-adapter src="core/i18n-tools.js"></script>' + translations + '</head>');
+  } else {
+    const catalog = entry === 'workbench/index.html' ? 'i18n-workbench' : 'i18n-reader-patterns';
+    const catalogEnd = new RegExp('<script src="(?:\\.\\./)?core/' + catalog + '\\.js"></script>');
+    if (!catalogEnd.test(html)) throw new Error('Missing language catalog in ' + entry);
+    html = html.replace(catalogEnd, sourceScript => sourceScript + translations);
+  }
   if(entry==='workbench/index.html')html=html.replace('<script src="app.js">',`<script src="${prefix}native-workbench-store.js"></script><script src="app.js">`);
   if(entry==='literature-radar/index.html')html=html.replace(/(<script[^>]*src="(?:app|radar)\.js")/,`<script src="${prefix}native-workbench-store.js"></script>$1`);
   if(entry==='popup.html')html=html.replace('</body>',`<script data-bv-adapter src="core/highlight-distribution.js"></script><script src="../highlight-examples.js"></script><script src="../native-highlights.js"></script><script src="../reading-tools-data.js"></script><script src="../native-sidebar-tools.js"></script></body>`);
   if(adapter)html=html.replace('</body>',`<script src="${prefix}${adapter}"></script></body>`);
-  html=html.replace(/(<script[^>]*src="[^"\n]*\/(?:native-(?:transport|data|workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|paper-data|highlight-examples|reading-tools-data)\.js)(")/g,(_,src,quote)=>src+'?v='+(/\/native-(?:data|sidebar)\.js$/.test(src)?'20261119-touch2':'20261118-native4')+quote);
+  html=html.replace(/(<script[^>]*src="[^"\n]*\/(?:native-(?:transport|data|workbench-store|sidebar|sidebar-tools|workbench|radar|highlights)|paper-data|highlight-examples|reading-tools-data)\.js)(")/g,(_,src,quote)=>src+'?v=20261124-r18'+quote);
   html=html.replace(/<script(?![^>]*\bdefer\b)(?=[^>]*\bsrc=)/g,'<script defer data-bv-defer');
   await fs.writeFile(path.join(out,entry),html);
 }

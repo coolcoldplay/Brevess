@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html data-bv-fast lang="zh-CN">
+<html data-bv-fast data-brevess-ui lang="zh-CN">
 <head><base href="../native/popup.html"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'">
     <meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brevess</title>
     <link rel="stylesheet" href="vendor/phosphor/icons.css">
@@ -16,7 +17,11 @@
 <link rel="stylesheet" href="reading-focus.css">
 <link rel="stylesheet" href="web-reading.css">
 <link rel="stylesheet" href="web-filters-general/ux-panel.css">
-<link rel="stylesheet" href="workbench/agent-panel.css">
+
+<link rel="stylesheet" href="web-filters-general/compare-composer.css">
+<link rel="stylesheet" href="sidebar-reading-layout.css">
+<link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
 
 </head>
 <body data-ui-surface="sidebar">
@@ -31,9 +36,9 @@
             <time id="sidePanelNotificationTime" datetime="">--:--</time>
             <span id="sidePanelNotificationLatest">暂无通知</span>
           </summary>
-          <section class="side-panel-notification-popover" aria-label="通知历史">
+          <section class="side-panel-notification-popover" role="dialog" aria-label="通知历史">
             <div class="side-panel-notification-heading">
-              <strong>通知历史</strong>
+              <strong>通知历史</strong><button id="dismissNotificationHistory" type="button" aria-label="关闭">×</button>
               <div class="side-panel-notification-actions">
                 <span>仅保留最近 40 条</span>
                 <button id="exportAdapterDiagnosticBundle" class="side-panel-tool-button"
@@ -46,11 +51,48 @@
             <ol id="sidePanelNotificationHistory" class="side-panel-notification-history"></ol>
           </section>
         </details>
-        
+        <button id="showArticleAbbreviations" class="side-panel-tool-button" type="button"
+            aria-label="查看全文缩写表" title="查看全文缩写表">
+            <span class="side-panel-tool-letter" aria-hidden="true">A</span>
+          </button>
+        <button id="toggleBilingualTranslation" type="button" class="side-panel-tool-button" title="翻译全文" aria-label="翻译全文" ></button>
+        <button id="saveCurrentArticleWorkspace" class="side-panel-tool-button" type="button"
+            aria-label="保存到本地文件夹" title="保存到本地文件夹">
+            <i class="ph ph-floppy-disk" aria-hidden="true"></i>
+          </button>
         <button id="openSidePanelSettings" class="side-panel-icon-button" type="button"
           aria-label="打开识别规则与模型设置" title="打开识别规则与模型设置">
           <i class="ph ph-gear" aria-hidden="true"></i>
         </button>
+        <details id="sidePanelMoreTools" class="side-panel-more-tools"
+            data-sidebar-focus-escape-priority>
+            <summary id="sidePanelMoreToolsSummary" class="side-panel-tool-button"
+              aria-label="更多论文工具" title="更多论文工具">
+              <span class="side-panel-more-glyph" aria-hidden="true">•••</span>
+            </summary>
+            <div class="side-panel-more-tools-menu" role="menu" aria-label="更多论文工具">
+              
+              <button id="exportGlobalAbbreviationMemory" type="button" class="side-panel-more-tool" role="menuitem">导出本地词库</button>
+              <button id="scanArticleWorkspace" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-folder-open" aria-hidden="true"></i><span>扫描并恢复本地工作区</span>
+              </button>
+              <button id="importCurrentArticleArchiveButton" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-upload" aria-hidden="true"></i><span>导入 JSON</span>
+              </button>
+              <button id="exportCurrentArticleArchive" class="side-panel-more-tool" type="button" role="menuitem">
+                <i class="ph ph-download" aria-hidden="true"></i><span>导出 JSON</span>
+              </button>
+              <button id="exportPptMaterials" class="side-panel-more-tool" type="button" role="menuitem">
+                <span class="side-panel-tool-letter" aria-hidden="true">P</span><span>导出 PPT 材料包</span>
+              </button>
+              <button id="exportEnhancedSnapshotToZotero" class="side-panel-more-tool" type="button" role="menuitem">
+                <span class="side-panel-tool-letter" aria-hidden="true">Z</span><span>导出到 Zotero</span>
+              </button>
+              <button id="clearArticleWorkspace" class="side-panel-more-tool is-danger" type="button" role="menuitem">
+                <i class="ph ph-trash" aria-hidden="true"></i><span>删除本地资料…</span>
+              </button>
+            </div>
+          </details>
       </header>
       <span id="sidebarFocusAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
 
@@ -84,14 +126,34 @@
             data-workspace-tools="navigation" aria-label="标题层级展开控制" hidden>
             <button id="collapseAllOutlineLevels" class="side-panel-tool-button" type="button"
               aria-label="选择大纲展开层级；双击全部收起" title="单击选择层级 · 双击收至最高层级"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m6 3 6 6 6-6M6 21l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button id="translateNavigationTitles" class="side-panel-tool-button" type="button"
+            data-workspace-tools="navigation"
+            aria-label="本地翻译导航标题" title="本地翻译导航标题" aria-busy="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 5h12M9 3v2M12 5c-1 5-4 8-8 10M5 8c1 3 3 5 6 7M13 21l4-10 4 10M14.5 17h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+            <button id="refreshArticleNavigation" class="side-panel-tool-button" type="button"
+            data-workspace-refresh data-workspace-tools="navigation" hidden
+            aria-label="刷新论文导航" title="刷新论文导航">
+            <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
+          </button>
+            <button id="batchOutline" type="button" class="side-panel-tool-button" data-batch-shortcut="navigation" title="AI 解读全部大纲" aria-label="AI 解读全部大纲"></button>
           </div>
           <div id="highlightsModuleTools" class="module-action-tools" data-workspace-tools="highlights"
             role="group" aria-label="摘句工具" hidden>
+            <fieldset id="readingViewControl" class="reading-view-control">
+              <legend class="visually-hidden">阅读情境</legend>
+              <div id="readingViewOptions" class="reading-view-options"></div>
+            </fieldset>
+            <button id="openHighlightSettings" type="button" class="side-panel-tool-button" title="高亮设置" aria-label="高亮设置" aria-controls="highlightControls" aria-expanded="false"></button>
+            <button id="toggleAnalysisEngine" type="button" class="side-panel-tool-button reading-engine">RE</button>
             <button id="applyHighlight" class="side-panel-tool-button module-primary-action" type="button"
-              data-module-action aria-label="应用高亮" title="应用高亮" hidden>高亮</button>
+              data-module-action aria-label="应用高亮" title="应用高亮">高亮</button>
+            <button id="batchHighlights" data-batch-shortcut="highlights" type="button" class="side-panel-tool-button" title="AI 全文高亮" aria-label="AI 全文高亮"></button>
           </div>
           <div id="figuresModuleTools" class="module-action-tools" data-workspace-tools="figures"
             role="group" aria-label="图解工具" hidden>
+            <span id="figureBoardToolSlot"></span>
+            <button id="pdfPanelWorkspaceOpen" type="button" class="side-panel-tool-button" title="核对 Figure 与 Panel 图像" aria-label="核对 Figure 与 Panel 图像" hidden></button>
             <button id="collapseAllFigureLevels" class="side-panel-tool-button" type="button"
               aria-label="收起全部 Figure 与 Panel" title="收起全部 Figure 与 Panel">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="m6 3 6 6 6-6M6 21l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -100,6 +162,12 @@
               data-module-action aria-label="全部解图" title="全部解图" hidden>解图</button>
             <button id="openSupplementalFigureImport" class="side-panel-tool-button" type="button"
               aria-label="添加补图" title="添加补图"><i class="ph ph-image" aria-hidden="true"></i></button>
+            <button id="refreshFigureInventory" class="side-panel-tool-button" type="button"
+            data-workspace-refresh data-workspace-tools="figures" hidden
+            aria-label="刷新图表目录" title="刷新图表目录">
+            <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
+          </button>
+            <button id="batchFigures" type="button" class="side-panel-tool-button" data-batch-shortcut="figures" title="AI 解读全部图表" aria-label="AI 解读全部图表"></button>
           </div>
           <div id="notesModuleTools" class="module-action-tools" data-workspace-tools="notes"
             role="group" aria-label="笔记工具" hidden>
@@ -118,9 +186,12 @@
               <i class="ph ph-file-magnifying-glass" aria-hidden="true"></i>
               <span class="visually-hidden">AI 读取全文填写本模板</span>
             </button>
+            <button id="batchNotes" type="button" class="side-panel-tool-button" data-batch-shortcut="note" title="AI 填写全文笔记" aria-label="AI 填写全文笔记"></button>
           </div>
           <div id="chatModuleTools" class="module-action-tools" data-workspace-tools="chat"
             role="group" aria-label="问答工具" hidden>
+            <button id="chatDisplayMode" type="button" class="side-panel-tool-button" title="调整网页显示" aria-label="调整网页显示" aria-pressed="false"></button>
+            <button id="sidePanelSavedScripts" type="button" class="side-panel-tool-button" title="我的脚本" aria-label="我的脚本" ></button>
             <button id="clearArticleChat" class="side-panel-tool-button" type="button"
               aria-label="清空对话" title="清空对话">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -128,56 +199,9 @@
           </div>
           <span id="bilingualTranslationAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
           <span id="navigationTitleTranslationAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
-          <button id="translateNavigationTitles" class="side-panel-tool-button" type="button"
-            data-workspace-tools="navigation"
-            aria-label="本地翻译导航标题" title="本地翻译导航标题" aria-busy="false">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 5h12M9 3v2M12 5c-1 5-4 8-8 10M5 8c1 3 3 5 6 7M13 21l4-10 4 10M14.5 17h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <button id="showArticleAbbreviations" class="side-panel-tool-button" type="button"
-            aria-label="查看全文缩写表" title="查看全文缩写表">
-            <span class="side-panel-tool-letter" aria-hidden="true">A</span>
-          </button>
-          <button id="saveCurrentArticleWorkspace" class="side-panel-tool-button" type="button"
-            aria-label="保存到本地文件夹" title="保存到本地文件夹">
-            <i class="ph ph-floppy-disk" aria-hidden="true"></i>
-          </button>
-          <button id="refreshArticleNavigation" class="side-panel-tool-button" type="button"
-            data-workspace-refresh data-workspace-tools="navigation" hidden
-            aria-label="刷新论文导航" title="刷新论文导航">
-            <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
-          </button>
-          <button id="refreshFigureInventory" class="side-panel-tool-button" type="button"
-            data-workspace-refresh data-workspace-tools="figures" hidden
-            aria-label="刷新图表目录" title="刷新图表目录">
-            <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
-          </button>
-          <details id="sidePanelMoreTools" class="side-panel-more-tools"
-            data-sidebar-focus-escape-priority>
-            <summary id="sidePanelMoreToolsSummary" class="side-panel-tool-button"
-              aria-label="更多论文工具" title="更多论文工具">
-              <span class="side-panel-more-glyph" aria-hidden="true">•••</span>
-            </summary>
-            <div class="side-panel-more-tools-menu" role="menu" aria-label="更多论文工具">
-              <button id="scanArticleWorkspace" class="side-panel-more-tool" type="button" role="menuitem">
-                <i class="ph ph-folder-open" aria-hidden="true"></i><span>扫描并恢复本地工作区</span>
-              </button>
-              <button id="importCurrentArticleArchiveButton" class="side-panel-more-tool" type="button" role="menuitem">
-                <i class="ph ph-upload" aria-hidden="true"></i><span>导入 JSON</span>
-              </button>
-              <button id="exportCurrentArticleArchive" class="side-panel-more-tool" type="button" role="menuitem">
-                <i class="ph ph-download" aria-hidden="true"></i><span>导出 JSON</span>
-              </button>
-              <button id="exportPptMaterials" class="side-panel-more-tool" type="button" role="menuitem">
-                <span class="side-panel-tool-letter" aria-hidden="true">P</span><span>导出 PPT 材料包</span>
-              </button>
-              <button id="exportEnhancedSnapshotToZotero" class="side-panel-more-tool" type="button" role="menuitem">
-                <span class="side-panel-tool-letter" aria-hidden="true">Z</span><span>导出到 Zotero</span>
-              </button>
-              <button id="clearArticleWorkspace" class="side-panel-more-tool is-danger" type="button" role="menuitem">
-                <i class="ph ph-trash" aria-hidden="true"></i><span>删除本地资料…</span>
-              </button>
-            </div>
-          </details>
+          
+          
+          
           <input id="importCurrentArticleArchive" type="file" accept="application/json,.json" hidden>
         </div>
       </div>
@@ -227,15 +251,15 @@
           <button id="pauseHighlightAnalysis" class="btn btn-secondary" type="button">暂停分析</button>
           <button id="cancelHighlightAnalysis" class="btn btn-danger-outline" type="button">取消分析</button>
         </div>
-        <details id="highlightControls" class="highlight-controls" open>
+        <details id="highlightControls" class="highlight-controls">
           <summary><i class="ph ph-list-magnifying-glass" aria-hidden="true"></i><span>高亮设置与应用</span></summary>
       <div class="container">
         <!-- 识别引擎选择 -->
         <div class="section analysis-engine-section">
           <div class="r21-highlight-mode-row">
            <div class="r21-engine-control">
-            <h3>识别引擎</h3>
-            <button id="toggleAnalysisEngine" type="button" class="btn btn-secondary">正则模式</button>
+            <button id="editReadingScenarios" type="button" class="text-button" title="编辑情境与类别" aria-label="编辑情境与类别"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L21 7l-5-5L4 14Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button>
+            
             <div class="mode-selector engine-selector" hidden>
                 <label>
                     <input type="radio" name="analysisMode" value="regex" checked>
@@ -248,11 +272,7 @@
             </div>
            </div>
             <div id="llmAdaptiveControls" class="llm-adaptive-controls">
-                <fieldset id="readingViewControl" class="reading-view-control">
-                    <legend class="adaptive-label">阅读情境</legend>
-                    <div id="readingViewOptions" class="reading-view-options"></div>
-                    <button id="editReadingScenarios" type="button" class="text-button" title="编辑情境与类别" aria-label="编辑情境与类别"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L21 7l-5-5L4 14Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button>
-                </fieldset>
+                
                 <div id="highlightPresentationControls" class="highlight-presentation-controls" hidden>
                     <div id="highlightFamilyLegend" class="highlight-family-legend"
                         aria-label="高亮视觉家族"></div>
@@ -332,8 +352,7 @@
         </div>
 
       </div>
-        </details>
-        <details class="article-chat-highlight-section" id="semanticHighlightControls">
+                <details class="article-chat-highlight-section" id="semanticHighlightControls">
           <summary><i class="ph ph-list-magnifying-glass" aria-hidden="true"></i><span>智能检索高亮</span></summary>
           <p id="articleSemanticHighlightHelp">输入想查找的内容，在正文中生成可编辑高亮；不会发送问答或改动问答草稿。</p>
           <label class="visually-hidden" for="articleSemanticHighlightQuery">检索内容</label>
@@ -355,6 +374,8 @@
             </button>
           </div>
         </details>
+        </details>
+
         <section id="highlightDistribution" class="side-panel-result-card" aria-label="高亮分布">
           <h3>高亮分布</h3>
           <div class="workspace-empty">当前页面还没有可归类的高亮。</div>
@@ -362,6 +383,7 @@
       </section>
 
       <section id="workspace-figures" class="workspace-view" data-workspace-view="figures" role="tabpanel" aria-labelledby="workspace-tab-figures" hidden>
+        
         <p id="figureWorkspaceSummary" class="module-task-status" aria-live="polite"></p>
         <p id="figureHeaderTaskStatus" class="module-task-status" role="status" aria-live="polite" hidden></p>
           <div id="figureTaskControls" class="analysis-task-controls" hidden>
@@ -371,15 +393,6 @@
         <div id="figureWorkspace" class="figure-workspace">
           <div class="workspace-empty">正在从网页结构读取 Figure 与 Panel 目录…</div>
         </div>
-        <details id="supplementalFigureCoverage" class="supplemental-figure-coverage" hidden>
-          <summary class="supplemental-coverage-toggle">
-            <span class="supplemental-coverage-title">补充材料覆盖</span>
-            <span id="supplementalFigureCoverageSummary" class="supplemental-coverage-toggle-summary"
-              aria-live="polite">等待解析</span>
-          </summary>
-          <div id="supplementalFigureCoverageBody" class="supplemental-coverage-body"></div>
-        </details>
-        <nav id="figureQuickNav" class="figure-quick-nav" aria-label="Figure 与 Panel 快速跳转" hidden></nav>
       </section>
 
       <section id="workspace-mechanism" class="workspace-view workspace-mechanism-view"
@@ -394,7 +407,6 @@
         </div>
         <div class="workspace-mechanism-toolbar" role="toolbar" aria-label="图表梳理工具">
           <div class="workspace-mechanism-toolbar-actions">
-            <button id="documentAgentConnection" class="btn btn-secondary" type="button">Agent 连接</button>
             <button id="addMechanismChainNode" class="btn btn-primary" type="button">新增</button>
             <button id="focusMechanismPath" class="btn btn-secondary" type="button"
               aria-pressed="false">聚焦路径</button>
@@ -459,7 +471,7 @@
               <textarea id="articleChatQuestion" rows="3" maxlength="4000"
                 aria-controls="articleChatCommandMenu" aria-autocomplete="list"
                 aria-describedby="articleChatSearchOption"
-                placeholder="直接提问；输入 @ 限定章节，输入 / 插入快捷提示词"></textarea>
+                placeholder="直接提问或者试试输入 / 或者 @ 或者@@"></textarea>
               <div id="articleChatCommandMenu" class="article-chat-command-menu"
                 role="listbox" aria-label="问答输入建议"
                 data-sidebar-focus-escape-priority hidden></div>
@@ -472,7 +484,7 @@
                   aria-pressed="false" aria-label="为下一轮开启联网搜索"
                   aria-describedby="articleChatSearchOption"
                   title="联网搜索已关闭；点击后下一轮将检索网络">
-                  <i class="ph ph-magnifying-glass" aria-hidden="true"></i><span>联网</span>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/></svg>
                 </button>
                 <label class="article-chat-model-picker" for="articleChatProfile" title="本轮模型">
                   <span class="visually-hidden">本轮模型</span>
@@ -497,6 +509,7 @@
         </form>
       </section>
       </main>
+      <nav id="figureQuickNav" class="figure-quick-nav" aria-label="Figure 与 Panel 快速跳转" tabindex="0" hidden></nav>
 
       <nav class="workspace-bottom-nav" role="tablist" aria-label="论文工作区">
         <button id="workspace-tab-navigation" class="workspace-nav-button" type="button" data-workspace-target="navigation" role="tab" aria-controls="workspace-navigation" tabindex="0" aria-selected="true" aria-label="导航" title="导航"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4V20"/><path class="nav-icon-shape" d="M9 6H20M9 12H18M9 18H16"/><g class="nav-icon-motion"><circle cx="5" cy="6" r="1.5"/></g></svg></button>
@@ -508,6 +521,15 @@
       </nav>
     </div>
 
+    <dialog id="quickPromptDialog" class="quick-prompt-dialog" aria-labelledby="quickPromptTitle">
+      <form id="quickPromptForm">
+        <h3 id="quickPromptTitle"></h3>
+        <label>名称<input id="quickPromptName" type="text" maxlength="80" required></label>
+        <label>提示词<textarea id="quickPromptBody" rows="6" maxlength="4000" required></textarea></label>
+        <p id="quickPromptFeedback" role="alert"></p>
+        <footer><button id="quickPromptCancel" type="button">取消</button><button id="quickPromptSave" type="submit">保存</button></footer>
+      </form>
+    </dialog>
     <dialog id="articleAbbreviationDialog" class="abbreviation-dialog"
       aria-labelledby="articleAbbreviationTitle">
       <form method="dialog" class="abbreviation-dialog-content">
@@ -520,16 +542,11 @@
             aria-label="关闭缩写表" title="关闭">×</button>
         </header>
         <div class="abbreviation-dialog-actions" aria-label="缩略词表操作">
-          <button id="importArticleAbbreviationsToGlobal" type="button">
-            存入本地词库
-          </button>
-          <button id="configureAbbreviationLookup" type="button">
-            查词链接
-          </button>
-          <button id="exportGlobalAbbreviationMemory" type="button">
-            导出词库
-          </button>
-          <p class="abbreviation-gesture-hint">单击缩写看含义并定位 · 双击行内 AI 补空白 · 长按缩写 1 秒查词（Alt+Enter）</p>
+          <button id="importArticleAbbreviationsToGlobal" type="button" class="side-panel-tool-button" title="存入本地词库" aria-label="存入本地词库" ></button>
+          <button id="configureAbbreviationLookup" type="button" class="side-panel-tool-button" title="查词链接" aria-label="查词链接" ></button>
+          <button id="addArticleAbbreviationEntry" type="button" class="side-panel-tool-button" title="新增词条" aria-label="新增词条" ></button>
+          <button id="removeArticleAbbreviationEntry" type="button" class="side-panel-tool-button" title="删除选中词条" aria-label="删除选中词条" ></button>
+          <button id="translateArticleAbbreviations" type="button" class="side-panel-tool-button" title="一键获取空白中文全称和含义" aria-label="一键获取空白中文全称和含义" ></button>
         </div>
         <div class="abbreviation-table-shell">
           <div id="articleAbbreviationTableWrap" class="abbreviation-table-wrap">
@@ -538,19 +555,8 @@
                 <tr>
                   <th scope="col">缩写</th>
                   <th scope="col">英文全称</th>
-                  <th scope="col">
-                    <span class="abbreviation-meaning-heading">
-                      <span>中文全称</span>
-                      <button id="translateArticleAbbreviations" type="button"
-                        title="使用缩写释义与翻译模型，仅补齐空白中文全称">
-                        一键获取
-                      </button>
-                    </span>
-                  </th>
-                  <th scope="col"><span class="abbreviation-meaning-heading"><span>含义</span>
-                    <button id="defineArticleAbbreviations" type="button" title="使用缩写释义与翻译模型，仅补齐空白含义">一键获取</button>
-                  </span></th>
-                  <th scope="col"><span class="visually-hidden">操作</span></th>
+                  <th scope="col">中文全称</th>
+                  <th scope="col">含义</th>
                 </tr>
               </thead>
               <tbody id="articleAbbreviationTableBody"></tbody>
@@ -565,6 +571,15 @@
       </form>
     </dialog>
 
+    <dialog id="addAbbreviationDialog" class="abbreviation-small-dialog" aria-labelledby="addAbbreviationHeading">
+      <form id="addAbbreviationForm" class="abbreviation-dialog-content">
+        <h2 id="addAbbreviationHeading">新增词条</h2>
+        <label>缩写<input name="abbreviation" maxlength="32" required></label>
+        <label>英文全称<input name="fullName" maxlength="240" required></label>
+        <label>中文全称<input name="meaningZh" maxlength="240"></label>
+        <p role="status"></p><footer><button type="button" data-dismiss>取消</button><button type="submit">添加</button></footer>
+      </form>
+    </dialog>
     <dialog id="abbreviationDetailDialog" class="abbreviation-small-dialog" aria-labelledby="abbreviationDetailTitle">
       <form method="dialog">
         <header><div><p class="abbreviation-dialog-kicker">缩写释义</p><h2 id="abbreviationDetailTitle"></h2></div>
@@ -679,6 +694,7 @@
           <section data-supplemental-source-pane="pdf" aria-label="PDF 来源">
             <strong>用 MinerU 在后台解析补充 PDF</strong>
             <p>在这里选择已下载的补充 PDF。解析期间不会切换或覆盖当前正文页面。</p>
+            <div id="supplementalFigureImportSources" hidden></div>
             <label for="supplementalFigurePdfFile">选择补充材料 PDF</label>
             <input id="supplementalFigurePdfFile" type="file"
               accept="application/pdf,.pdf">
@@ -813,6 +829,11 @@
     
     
     
+    
+    
+    
+    
+    
   
   
   
@@ -834,60 +855,6 @@
     
     
     
-
-
-
-
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     
     
     
@@ -896,11 +863,66 @@
 
 
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 
 
 
 
 
-<script defer src="../fast/bundles/runtime-22874c50d05bcf2c.js"></script><script defer src="core/abbreviation-extractor.js"></script><script defer src="../fast/bundles/runtime-33cd8599e3b4cde7.js"></script><script defer src="core/local-translator.js"></script><script defer src="../fast/bundles/runtime-9da2601345082160.js"></script><script defer src="core/evidence-first-mechanism.js"></script><script defer src="../fast/bundles/runtime-a962acd113211304.js"></script><script defer src="core/pdf-workspace.js"></script><script defer src="../fast/bundles/runtime-362c08da339933a3.js"></script><script defer src="core/i18n.js"></script><script defer src="../fast/bundles/runtime-d1c80e0ae0c78a99.js"></script><script defer src="core/i18n-reader.js"></script><script defer src="core/i18n-reader-extra.js"></script><script defer src="core/i18n-system.js"></script><script defer src="core/i18n-tools.js"></script><script defer src="../fast/bundles/runtime-cadb4efac83f9ba9.js"></script><script defer src="core/mechanism-canvas-model.js"></script><script defer src="../fast/bundles/runtime-bcfceb2c25f91c71.js"></script><script defer src="core/figure-workspace.js"></script><script defer src="../fast/bundles/runtime-4d9642e1fd9edcae.js"></script><script defer src="core/category-store.js"></script><script defer src="core/adaptive-catalog.js"></script><script defer src="../fast/bundles/runtime-c66dfb1a6559cb73.js"></script><script defer src="core/i18n-builtins.js"></script><script defer src="../fast/bundles/runtime-fb6b27d1356b2ce1.js"></script><script defer src="popup.js"></script><script defer src="../fast/bundles/runtime-61957ef0d099993a.js"></script></body>
+
+
+
+
+
+
+
+<script defer src="../fast/bundles/runtime-0b097d632aca823c.js"></script><script defer src="core/abbreviation-extractor.js"></script><script defer src="../fast/bundles/runtime-f068d90164bfbbc5.js"></script><script defer src="core/local-translator.js"></script><script defer src="../fast/bundles/runtime-9da2601345082160.js"></script><script defer src="core/evidence-first-mechanism.js"></script><script defer src="../fast/bundles/runtime-fd0a82fd73f876df.js"></script><script defer src="core/pdf-workspace.js"></script><script defer src="../fast/bundles/runtime-ecc630967605d466.js"></script><script defer src="core/i18n.js"></script><script defer src="../fast/bundles/runtime-d1c80e0ae0c78a99.js"></script><script defer src="core/i18n-reader.js"></script><script defer src="core/i18n-reader-extra.js"></script><script defer src="core/i18n-system.js"></script><script defer src="core/i18n-tools.js"></script><script defer src="../fast/bundles/runtime-3e9ceaa870645f6b.js"></script><script defer src="core/mechanism-canvas-model.js"></script><script defer src="../fast/bundles/runtime-d6343caa411e78a8.js"></script><script defer src="core/figure-workspace.js"></script><script defer src="../fast/bundles/runtime-f7fa26a75f388205.js"></script><script defer src="core/category-store.js"></script><script defer src="core/adaptive-catalog.js"></script><script defer src="../fast/bundles/runtime-ca238f930cf04abc.js"></script><script defer src="core/i18n-builtins.js"></script><script defer src="../fast/bundles/runtime-ce72a4d803b0f056.js"></script><script defer src="popup.js"></script><script defer src="../fast/bundles/runtime-724242bf6632b9b6.js"></script></body>
 </html>

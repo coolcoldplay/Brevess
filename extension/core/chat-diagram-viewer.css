@@ -1,14 +1,14 @@
 /* r16: retain the diagram's native text size inside a bounded interactive view. */
 .article-chat-mermaid-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:4px; padding:4px 0; }
-.article-chat-mermaid-toolbar button { display:inline-flex; align-items:center; justify-content:center; min-width:30px; min-height:30px; padding:3px 8px; border:1px solid var(--color-border,#d8d8d8); border-radius:5px; background:var(--color-bg-primary,#fff); color:var(--color-text,#202020); font:inherit; font-size:12px; line-height:1.4; cursor:pointer; }
-.article-chat-mermaid-toolbar button:focus-visible, .article-chat-mermaid-viewport:focus-visible { outline:2px solid var(--color-primary,#285879); outline-offset:2px; }
-.article-chat-mermaid-zoom { min-width:42px; text-align:center; font-size:11px; color:var(--color-text-muted,#646464); font-variant-numeric:tabular-nums; }
-.article-chat-mermaid-viewport { position:relative; width:100%; height:280px; overflow:hidden; border:1px solid var(--color-border,#ddd); border-radius:5px; background:var(--color-bg-primary,#fff); cursor:grab; touch-action:none; contain:layout paint; }
+.article-chat-mermaid-toolbar button { display:inline-flex; align-items:center; justify-content:center; min-width:30px; min-height:30px; padding:3px 8px; border:1px solid var(--bv-line, var(--color-border,#d8d8d8)); border-radius:5px; background:var(--bv-surface, var(--color-bg-primary,#fff)); color:var(--bv-text, var(--color-text,#202020)); font:inherit; font-size:12px; line-height:1.4; cursor:pointer; }
+.article-chat-mermaid-toolbar button:focus-visible, .article-chat-mermaid-viewport:focus-visible { outline:2px solid var(--bv-focus, var(--color-primary,#285879)); outline-offset:2px; }
+.article-chat-mermaid-zoom { min-width:42px; text-align:center; font-size:11px; color:var(--bv-muted, var(--color-text-muted,#646464)); font-variant-numeric:tabular-nums; }
+.article-chat-mermaid-viewport { position:relative; width:100%; height:280px; overflow:hidden; border:1px solid var(--bv-line, var(--color-border,#ddd)); border-radius:5px; background:var(--bv-surface, var(--color-bg-primary,#fff)); cursor:grab; touch-action:none; contain:layout paint; }
 .article-chat-mermaid-viewport.is-dragging { cursor:grabbing; }
 .article-chat-mermaid-viewport .article-chat-mermaid { position:absolute; left:0; top:0; max-width:none; overflow:visible; transform-origin:0 0; user-select:none; }
 .article-chat-mermaid-viewport .article-chat-mermaid svg { display:block; max-width:none; pointer-events:none; }
 
 .article-chat-mermaid-toolbar .article-chat-mermaid-expand { margin-left:4px; }
 .article-chat-mermaid-expand svg, .article-chat-mermaid-copy svg { width:17px; height:17px; pointer-events:none; }
-.article-chat-mermaid-status { font-size:12px; color:#86612d; }
+.article-chat-mermaid-status { font-size:12px; color:var(--bv-amber, #86612d); }
 .article-chat-mermaid-status:empty { display:none; }

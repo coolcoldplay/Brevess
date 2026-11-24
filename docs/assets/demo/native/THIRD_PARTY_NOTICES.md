@@ -3,6 +3,14 @@
 Brevess is licensed under the GNU Affero General Public License,
 version 3 or any later version. See [LICENSE](LICENSE).
 
+## panel-extract
+
+The PDF reader includes the local Figure and Panel editor from
+[panel-extract](https://github.com/coolcoldplay/panel-extract), revision `8f90c70`,
+under AGPL-3.0-or-later. BREVESS supplies its existing PDF.js runtime and author
+caption parsers. The PPTX template uses python-pptx (MIT) and the editor icons
+use Lucide (ISC/MIT). License texts are included in `vendor/panel-extract/`.
+
 ## Phosphor Icons
 
 The packaged extension includes the Phosphor icon font and its CSS under

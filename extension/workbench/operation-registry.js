@@ -51,7 +51,7 @@
   const catalogQuerySchema = { type: 'object', properties: {
     page: { type: 'integer', minimum: 1, default: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 40 },
     query: { type: 'string', maxLength: 4000 }, field: { enum: catalogQueryFields }, operator: { enum: ['exact', 'contains', 'before', 'after'] }, groupId: catalogId('group'),
-    scope: { enum: ['all', 'local', 'radar', 'metadata-only', 'complete', 'partial', 'missing', 'unknown'] },
+    scope: { enum: ['all', 'literature', 'web', 'research-session', 'local', 'radar', 'metadata-only', 'complete', 'partial', 'missing', 'unknown'] },
     tags: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 4096 } }, tagMode: { enum: ['any', 'all'] },
     includeRadarRead: { type: 'boolean', default: true }, includeRemoved: { type: 'boolean', default: false },
     conditions: { type: 'array', maxItems: 50, items: catalogCondition }, match: { enum: ['all', 'any'] }, sort: catalogSort
@@ -61,6 +61,9 @@
   const catalogAliases = { type: 'array', minItems: 1, maxItems: 256, uniqueItems: true, items: { type: 'string', maxLength: 800 } };
   const commandSchemas = [];
   const catalogCommand = (type, properties, required = []) => commandSchemas.push({ type: 'object', properties: { type: { const: type }, ...properties }, required: ['type', ...required], additionalProperties: false });
+  catalogCommand('entry.types.fill', { rows: { type: 'array', minItems: 1, maxItems: 40, items: {
+    type: 'object', properties: { aliases: catalogAliases, tagId: catalogId('tag'), addedAt: catalogDate },
+    required: ['aliases', 'tagId'], additionalProperties: false } } }, ['rows']);
   catalogCommand('entry.create', { aliases: catalogAliases, fields: catalogFieldSchema, addedAt: catalogDate }, ['aliases']);
   catalogCommand('entry.update', { entryId: catalogId('entry'), fields: catalogFieldSchema, addedAt: catalogDate, clearOverrides: { type: 'array', maxItems: 6, uniqueItems: true, items: { enum: catalogFields } } }, ['entryId']);
   catalogCommand('entry.aliases.add', { entryId: catalogId('entry'), aliases: catalogAliases }, ['entryId', 'aliases']);

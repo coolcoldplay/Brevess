@@ -1,0 +1,13 @@
+/* Shared by extension-owned documents only. Do not inject this into publisher pages. */
+html[data-brevess-focus="pointer"] body :is(button,input,select,textarea,summary,a,[tabindex],[contenteditable]):focus {
+  outline: none !important; box-shadow: none !important;
+}
+html[data-brevess-focus="pointer"] body :is(input:not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable]):focus {
+  border-color: var(--bv-line, #c8cdd2) !important;
+}
+html[data-brevess-focus="pointer"] body :is(.article-chat-model-picker,.field,.literature-note-editor,.literature-note-editor-color-label,.wfg-composer-deck):focus-within {
+  outline: none !important; box-shadow:none !important;
+}
+html[data-brevess-focus="keyboard"] body :is(button,input,select,textarea,summary,a,[tabindex],[contenteditable]):focus {
+  outline: 2px solid var(--bv-focus, #54749a) !important; outline-offset: 2px !important; box-shadow:none !important;
+}

@@ -74,7 +74,10 @@ importScripts(
   'core/article-chat-stream.js',
   'core/article-chat-attachments.js',
   'core/article-chat-research.js',
+  'core/agent-setup-prompt.js',
+  'core/article-presentation.js',
   'core/article-chat.js',
+  'core/article-presentation-background.js',
   'core/research-evidence.js',
   'core/research-logic-pipeline.js',
   'core/panel-ledger.js',
@@ -119,8 +122,9 @@ importScripts(
   'providers/provider-registry.js',
   'core/provider-model-discovery.js',
   'core/task-profile-router.js',
+  'core/pdf-panel-evidence.js',
   'core/translation-checkpoint.js',
-  'core/local-translator.js',
+  'core/translation-glossary.js', 'core/local-translator.js',
   'core/translation-task-service.js',
   'core/operation-control.js',
   'core/analysis-pipeline.js',
@@ -239,8 +243,21 @@ async function configureSidePanelAction() {
   await setGlobalSidePanelAvailability(true);
 }
 
-function r20WorkbenchTab(tab){try{const u=new URL(tab?.url||''),base=new URL(chrome.runtime.getURL('/'));return u.protocol===base.protocol&&u.host===base.host&&u.pathname==='/workbench/index.html';}catch{return false;}}
-async function r20PanelPath(){const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});return r20WorkbenchTab(tab)?'workbench/agent-sidebar.html?windowId='+tab.windowId:'popup.html';}
+function r20WorkbenchTab(tab){try{const u=new URL(tab?.url||''),base=new URL(chrome.runtime.getURL('/'));return u.protocol===base.protocol&&u.host===base.host&&['/workbench/index.html','/options.html'].includes(u.pathname);}catch{return false;}}
+async function r20ResolveWorkbenchTab(tab) {
+  if (!tab || tab.url || !Number.isInteger(tab.id) || !chrome.runtime.getContexts) return tab;
+  // activeTab may omit the URL even for our own extension pages.
+  const frame = await r20WorkbenchContext(tab.id).catch(() => null);
+  return frame ? {...tab,url:frame.documentUrl,windowId:frame.windowId} : tab;
+}
+function r20SurfacePanelPath(tab){
+  return 'workbench/agent-sidebar.html?windowId='+tab.windowId+'&tabId='+tab.id;
+}
+async function r20PanelPath(){
+  const [active]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+  const tab=await r20ResolveWorkbenchTab(active);
+  return r20WorkbenchTab(tab)?r20SurfacePanelPath(tab):'popup.html';
+}
 async function r20WorkbenchContext(tabId){const rows=await chrome.runtime.getContexts({contextTypes:['TAB']});const own=rows.filter(c=>c.tabId===tabId&&c.frameId===0&&r20WorkbenchTab({url:c.documentUrl}));return own.length===1?own[0]:null;}
 async function setGlobalSidePanelAvailability(enabled) {
   if (!chrome.sidePanel?.setOptions) return;
@@ -268,7 +285,8 @@ async function repairLegacyTabSidePanelOptions(tabOrId) {
   const current = chrome.sidePanel?.getOptions
     ? await chrome.sidePanel.getOptions({ tabId }).catch(() => null)
     : null;
-  const r20Path=typeof tabOrId==='object'&&r20WorkbenchTab(tabOrId)?'workbench/agent-sidebar.html?windowId='+tabOrId.windowId:'popup.html';
+  const resolved=await r20ResolveWorkbenchTab(typeof tabOrId==='object'?tabOrId:{id:tabId});
+  const r20Path=r20WorkbenchTab(resolved)?r20SurfacePanelPath(resolved):'popup.html';
   if (current?.enabled === true && current?.path === r20Path) return false;
   // Builds before 2.4.10 wrote disabled tab-specific options. Those overrides
   // survive an unpacked-extension update and take precedence over the new
@@ -378,7 +396,7 @@ async function actionPopupPublicState(sender, popupWindowId) {
   if (!Number.isInteger(ownerWindowId) || ownerWindowId < 0 ||
       (popupWindowId !== undefined && popupWindowId !== ownerWindowId)) throw unavailable();
   const tabs = await chrome.tabs.query({ active: true, windowId: ownerWindowId });
-  const tab = tabs[0] || null;
+  const tab = await r20ResolveWorkbenchTab(tabs[0] || null);
   const readable = actionPopupReadableTab(tab);
   const activatedBefore = readable && (
     activatedSidePanelTabIds.has(tab.id) ||
@@ -491,8 +509,9 @@ function beginToolbarSidePanelOpen(tab) {
   if (!tab?.id || !tab?.windowId) return;
   // Both extension API calls must start before the toolbar listener yields;
   // Edge invalidates the sidePanel.open user gesture after an awaited storage read.
-  const enablePromise = setGlobalSidePanelAvailability(true);
-  const openPromise = chrome.sidePanel.open({ windowId: tab.windowId });
+  const isWorkbench = r20WorkbenchTab(tab);
+  const enablePromise = isWorkbench ? chrome.sidePanel.setOptions({tabId:tab.id,enabled:true,path:r20SurfacePanelPath(tab)}) : setGlobalSidePanelAvailability(true);
+  const openPromise = chrome.sidePanel.open(isWorkbench ? {tabId:tab.id} : {windowId:tab.windowId});
   // Attach rejection observers immediately. The activation flow below still
   // receives the original promises and reports either failure.
   enablePromise.catch(() => {});
@@ -653,7 +672,7 @@ async function openOnboardingForTab(tab) {
 }
 
 async function handleToolbarAction(tab, panelOpen, expectedDocumentId) {
-  if(r20WorkbenchTab(tab)){const current=await chrome.tabs.get(tab.id);const frame=await r20WorkbenchContext(tab.id);if(!r20WorkbenchTab(current)||!frame?.documentId||expectedDocumentId&&frame.documentId!==expectedDocumentId)throw Error('WORKBENCH_AGENT_OWNER_CHANGED');await panelOpen?.enablePromise;await repairLegacyTabSidePanelOptions(current);await panelOpen?.openPromise;return {agent:true};}
+  if(r20WorkbenchTab(tab)){const current=await r20ResolveWorkbenchTab(await chrome.tabs.get(tab.id));const frame=await r20WorkbenchContext(tab.id);if(!r20WorkbenchTab(current)||!frame?.documentId||expectedDocumentId&&frame.documentId!==expectedDocumentId)throw Error('WORKBENCH_AGENT_OWNER_CHANGED');await panelOpen?.enablePromise;await repairLegacyTabSidePanelOptions(current);await panelOpen?.openPromise;return {agent:true};}
 
   if (SciLLM.isLikelyPdfUrl(tab?.url || tab?.pendingUrl, tab?.title)) {
     await activatePdfReaderAndOpenSidePanel(tab, panelOpen);
@@ -680,6 +699,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     generation = ++nextTabSidePanelNavigationGeneration;
     tabSidePanelNavigationGenerations.set(tabId, generation);
     SciLLM.forgetContentScriptState?.(tabId);
+  }
+  // The controls follow the visible tab even if it has never been activated
+  // for reading. A new tab can become a settings or workbench document in place.
+  if (changeInfo.url || changeInfo.status === 'complete') {
+    chrome.tabs.get(tabId).then(async current => {
+      if (tabSidePanelNavigationGenerations.get(tabId) !== generation) return;
+      await repairLegacyTabSidePanelOptions(current);
+      if (current.active && tabSidePanelNavigationGenerations.get(tabId) === generation) {
+        await ensureGlobalSidePanelAvailability();
+      }
+    }).catch(() => {});
   }
   syncActivatedTabAfterUpdate(tabId, generation, tab, {
     warm: changeInfo.status === 'complete' ||
@@ -3353,8 +3383,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if(message?.type==='R20_OPEN_WORKBENCH_AGENT'){
-    if(sender?.id!==chrome.runtime.id||sender.frameId!==0||!sender.tab||!r20WorkbenchTab({url:sender.url})){sendResponse({success:false,error:{code:'WORKBENCH_AGENT_OWNER_INVALID'}});return false;}
-    const opening=beginToolbarSidePanelOpen(sender.tab);handleToolbarAction(sender.tab,opening,sender.documentId).then(()=>sendResponse({success:true})).catch(e=>sendResponse({success:false,error:{code:e.code||'WORKBENCH_AGENT_OPEN_FAILED'}}));return true;
+    const tabId=sender.tab?.id??message.tabId, windowId=sender.tab?.windowId??message.windowId;
+    if(sender?.id!==chrome.runtime.id||sender.frameId!==undefined&&sender.frameId!==0||!r20WorkbenchTab({url:sender.url})||!Number.isInteger(tabId)||tabId<0||!Number.isInteger(windowId)||windowId<0){sendResponse({success:false,error:{code:'WORKBENCH_AGENT_OWNER_INVALID'}});return false;}
+    const ownerTab={id:tabId,windowId,url:sender.url};
+    const opening=beginToolbarSidePanelOpen(ownerTab);handleToolbarAction(ownerTab,opening,sender.documentId).then(()=>sendResponse({success:true})).catch(e=>sendResponse({success:false,error:{code:e.code||'WORKBENCH_AGENT_OPEN_FAILED'}}));return true;
   }
   if (message?.type === 'ACTION_POPUP_GET_STATE') {
     actionPopupPublicState(sender, message.windowId)
@@ -3566,6 +3598,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'WEB_FIGURE_PANEL_EDITS') {
+    const {figureId,fingerprint}=message.binding || {};
+    const {labels,edit}=message;
+    if (sender?.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 ||
+        !/^(?:https?|file):/.test(sender.url || '') || !/^[a-z0-9_-]{1,100}$/i.test(figureId || '') ||
+        !/^[a-f0-9]{64}-[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$/.test(fingerprint || '') ||
+        !Array.isArray(labels) || labels.length>26 || !labels.every(l=>/^[A-Z]$/.test(l))) {
+      sendResponse({error:'网页 Panel 校正来源无效'}); return false;
+    }
+    const readEdits=async()=>{
+      // The content script never receives extension storage access. Derive
+      // the namespace from Chrome's sender and store only normalized boxes.
+      const url=new URL(sender.url); url.hash='';
+      if (url.href !== message.binding.pageUrl) throw Error('当前网页已切换');
+      const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(url.href))),
+        n=>n.toString(16).padStart(2,'0')).join('');
+      const prefix='webPanelRect.v1:'+hash+':'+figureId+':'+fingerprint+':';
+      if (edit) {
+        const {x,y,width,height}=edit.rect || {};
+        if (!labels.includes(edit.label) || ![x,y,width,height].every(Number.isFinite) || x<0 || y<0 ||
+            width<=0 || height<=0 || x+width>1.000001 || y+height>1.000001) throw Error('网页 Panel 边界无效');
+        const cuts=edit.cuts || [];
+        if (!SciLLM.PdfPanelEvidence.validCuts(cuts)) throw Error('网页 Panel 剪除范围无效');
+        await chrome.storage.local.set({[prefix+edit.label]:{x,y,width,height,cuts:cuts.map(({x,y,width,height})=>({x,y,width,height})),preserveMask:edit.preserveMask===true}});
+      }
+      const stored=await chrome.storage.local.get(labels.map(l=>prefix+l));
+      return {rects:Object.fromEntries(labels.filter(l=>stored[prefix+l]).map(l=>[l,stored[prefix+l]]))};
+    };
+    readEdits().then(sendResponse,e=>sendResponse({error:e.message})); return true;
+  }
+
+  if (message?.type === 'WEB_FIGURE_PANEL_ANALYZE') {
+    const job = message.job;
+    if (sender?.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 ||
+        !/^(?:https?|file):/.test(sender.url || '') || !job ||
+        typeof job.raster !== 'string' || !job.raster.startsWith('data:image/png;base64,') ||
+        job.raster.length > 17 * 1024 * 1024 ||
+        !Array.isArray(job.expected) || job.expected.length > 26 || !job.expected.every(x => /^[A-Z]$/.test(x)) ||
+        !['', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].includes(job.direct) ||
+        ![job.sourceWidth,job.sourceHeight].every(n => Number.isSafeInteger(n) && n > 0 && n <= 65535)) {
+      sendResponse({error:'网页图像来源或尺寸无效'}); return false;
+    }
+    SciLLM.keepAliveUntil(providerFetch.ensureDocument().then(() =>
+      chrome.runtime.sendMessage({target:'brevess-web-panel-worker',job})), chrome)
+      .then(result => sendResponse(result || {error:'Panel 分析器不可用'}), e => sendResponse({error:e.message}));
+    return true;
+  }
+
   if (message?.type === 'FIGURE_RESOLVE_IMAGE_CANDIDATES') {
     SciLLM.keepAliveUntil(resolveFigureImageCandidates(message), chrome)
       .then(data => sendResponse({ success: true, data }))
@@ -3638,7 +3718,7 @@ const BrevessMultiController=WFGMulti.install({browser:chrome,broker:BrevessGene
 const BrevessUXController=WFGUX.install({browser:chrome,broker:BrevessGeneralBroker,multi:BrevessMultiController,createTask:options=>llmRouter.createWebReadingTask(options)});
 globalThis.BrevessReadingModulesController=WFGReadingBackground.install({browser:chrome,getLegacy:()=>BrevessUXController.legacy});
 
-importScripts('core/r20-agent-broker.js');
+importScripts('core/r20-agent-broker.js','core/workbench-agent-connections.js','core/workbench-agent-api.js');
 importScripts('core/reading-agent-tools.js','core/reading-job-controller.js','core/reading-pack.js','core/export-bundle.js','core/reading-agent-background.js');
 const readingAgentController = BrevessReadingAgent.installReadingAgentBackground({
   browser: chrome, authorize: sender => getRuntimeWorkbenchBridge().authorize(sender),

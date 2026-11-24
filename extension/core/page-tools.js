@@ -76,7 +76,7 @@
       await frameFor(target.tabId, target.frame.documentId, target.frame.url);
       await ensureContent(target.tabId, { expectedUrl: target.frame.url, expectedDocumentId: target.frame.documentId,
         deferArticlePreindex: true, contextKey: 'page-tools:' + target.frame.documentId });
-      await send(target, { action: 'configurePageTools', preferences });
+      await send(target, { action: 'configurePageTools', preferences: await read() });
     }
     async function translationState(target) {
       return send(target, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null);
@@ -85,16 +85,22 @@
       if ((await translationState(target))?.success) return;
       await chromeApi.scripting.insertCSS({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] }, files: ['bilingual-translation.css'] });
       await chromeApi.scripting.executeScript({ target: { tabId: target.tabId, documentIds: [target.frame.documentId] }, files: [
-        'core/translation-source.js', 'core/translation-checkpoint.js', 'core/local-translator.js',
+        'core/translation-source.js', 'core/translation-checkpoint.js', 'core/translation-glossary.js', 'core/local-translator.js',
         'core/bilingual-translation-controller.js', 'bilingual-translation-content.js'
       ] });
       await frameFor(target.tabId, target.frame.documentId, target.frame.url);
     }
     async function publicState(tab) {
       const supported = pageToolsSupportedUrl(tab?.url);
-      let translation = null;
-      if (supported) translation = await chromeApi.tabs.sendMessage(tab.id, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null);
-      return { supported, preferences: await read(), shortcut: await getShortcutKey(), translation: translation?.state || null };
+      const preferences = read(), shortcut = getShortcutKey();
+      let timer, translation;
+      try {
+        if (supported) translation = await Promise.race([
+          chromeApi.tabs.sendMessage(tab.id, { action: 'BREVESS_TRANSLATION_GET_STATE' }).catch(() => null),
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), 250); })
+        ]);
+      } finally { clearTimeout(timer); }
+      return { supported, preferences: await preferences, shortcut: await shortcut, translation: translation?.state || null };
     }
     async function handle(message, sender) {
       try {

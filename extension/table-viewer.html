@@ -1,2 +1,6 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>表格阅读 · Brevess</title><link rel="stylesheet" href="table-viewer.css"></head>
+<!doctype html><html data-brevess-ui lang="zh-CN"><head><meta charset="utf-8">
+<meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1"><title>表格阅读 · Brevess</title><link rel="stylesheet" href="table-viewer.css"><link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
+<script src="ui-focus.js" defer></script>
+</head>
 <body><header><div><small>BREVESS · 表格阅读</small><h1 id="title">正在打开表格…</h1></div><div class="tools"><button id="smaller" aria-label="缩小表格文字" title="缩小文字">A−</button><button id="larger" aria-label="放大表格文字" title="放大文字">A＋</button><button id="wrap" aria-pressed="true">自动换行</button><button id="copy">复制表格</button><button id="close" aria-label="关闭表格阅读" title="关闭 · Esc">✕</button></div></header><p id="status" role="status"></p><main id="table" tabindex="0" aria-label="完整表格，可横向和纵向滚动"></main><script src="core/chat-table-viewer.js"></script><script src="table-viewer.js"></script></body></html>

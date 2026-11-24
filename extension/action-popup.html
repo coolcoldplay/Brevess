@@ -1,12 +1,16 @@
 <!doctype html>
-<html lang="zh-CN">
+<html data-brevess-ui lang="zh-CN">
 <head>
   <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Brevess</title>
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
   <link rel="stylesheet" href="action-popup.css">
   <link rel="stylesheet" href="ui-swiss.css">
+<link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
+<script src="ui-focus.js" defer></script>
 </head>
 <body data-ui-surface="action">
   <main class="action-popup" aria-labelledby="popupTitle">
@@ -17,6 +21,7 @@
         <p id="pageTitle">正在读取当前页面…</p>
       </div>
       
+      <button id="dismissPopup" type="button" aria-label="关闭">×</button>
     </header>
 
     <div class="action-popup__actions">
@@ -25,13 +30,11 @@
         <span class="action-popup__button-copy"><strong>侧栏打开工作台</strong><small>在侧栏打开当前文献</small></span>
       </button>
     </div>
-    <section class="page-tools" aria-labelledby="pageToolsTitle">
-      <div class="page-tools__heading"><h2 id="pageToolsTitle">网页工具</h2><span>无需打开侧栏</span></div>
-      <p class="page-tools__hint">开关会记住并应用于之后打开的网页</p>
-      <div class="page-tools__row"><label for="toolSelection">划句弹窗 · 翻译与高亮</label><input id="toolSelection" type="checkbox" role="switch" disabled></div>
-      <div class="page-tools__row"><label for="toolSemantic">页面语义检索 <kbd id="semanticShortcut">J</kbd></label><button id="openPageSearch" class="page-tools__icon" type="button" aria-label="打开页面语义检索" title="打开页面语义检索" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></button><input id="toolSemantic" type="checkbox" role="switch" disabled></div>
-      <div class="page-tools__row"><label for="toolTranslation">整页翻译 <small>含 Alt 段落翻译</small></label><button id="translatePage" class="page-tools__icon" type="button" aria-label="翻译当前页" title="翻译当前页" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h12M9 2v3M5 5c1 6 5 9 10 11M13 5c-1 6-5 9-10 11M14 21l4-11 4 11M15.5 17h5"/></svg></button><input id="toolTranslation" type="checkbox" role="switch" disabled></div>
-      <p id="pageToolsStatus" class="page-tools__hint" role="status" aria-live="polite">正在读取工具设置…</p>
+    <section class="page-tools" aria-label="网页工具">
+      <div class="page-tools__row"><label for="toolSelection">划句弹窗</label><input id="toolSelection" type="checkbox" role="switch" disabled></div>
+      <div class="page-tools__row"><label for="toolSemantic">语义检索 <kbd id="semanticShortcut">J</kbd></label><button id="openPageSearch" class="page-tools__icon" type="button" aria-label="打开页面语义检索" title="打开页面语义检索" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></button><input id="toolSemantic" type="checkbox" role="switch" disabled></div>
+      <div class="page-tools__row"><label for="toolTranslation">整页翻译</label><button id="translatePage" class="page-tools__icon" type="button" aria-label="翻译当前页" title="翻译当前页" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h12M9 2v3M5 5c1 6 5 9 10 11M13 5c-1 6-5 9-10 11M14 21l4-11 4 11M15.5 17h5"/></svg></button><input id="toolTranslation" type="checkbox" role="switch" disabled></div>
+      <p id="pageToolsStatus" class="page-tools__hint" role="status" aria-live="polite" hidden></p>
     </section>
     <div class="action-popup__actions action-popup__actions--secondary">
       <button id="openPdf" class="action-popup__button" type="button">

@@ -2,6 +2,10 @@
   'use strict';
 
   globalThis.SciLLM?.registerInterfaceTranslations?.({
+    '基线起始日期':'Baseline start date','按发表日期纳入，留空包括全部年份。':'Include papers by publication date. Leave blank for all years.',
+    '年度文献分布':'Publications by year','检索年度分布':'Search by publication year','取消检索':'Cancel search','选择年份可设置基线起点。':'Select a year to set the baseline start.',
+    '正在检索年度分布…':'Searching publication years…','请先填写所选来源的检索式。':'Enter a query for each selected source.',
+    '无匹配文献':'No matching publications','篇':'papers','全部年份':'All years','首次基线':'Initial baseline',
     '补充历史基线':'Add historical baseline','追加历史基线':'Add historical baseline','历史基线已补充。':'Historical baseline added.',
     '从（含当日）':'From (inclusive)','至（含当日）':'To (inclusive)',
     '只追加所选日期内的基线文献，不计为新增。已有文献、已读状态和当前增量检查进度保持不变。':'Append baseline papers within these dates. Existing papers, read states and incremental progress are preserved.',
@@ -71,8 +75,14 @@
     $('radar-name').setAttribute('translate', 'no'); $('query-preview').setAttribute('translate', 'no');
     const history=Array.isArray(revision.baselineHistory)?revision.baselineHistory:[],lastHistory=history.at(-1);
     text('scan-state', mine ? '正在检查来源…' : latest.error ? (latest.error.code==='RADAR_PARTIAL_FAILURE'?'部分来源失败 · 已成功的结果保留':'最近检查失败 · 原进度已保留') : !latest.baselineAt ? '待建立首次基线' : !latest.articles.length ? T('检索完成 · 本窗口无匹配文献') : '已建立基线 · 持续追踪新增');
+    const pubmedQuery=sourceRows.find(row=>row.source==='pubmed')?.query;
+    const historyLink=$('pubmed-history-link');historyLink.hidden=!pubmedQuery;
+    if(pubmedQuery){
+      const href='https://pubmed.ncbi.nlm.nih.gov/?term='+encodeURIComponent(pubmedQuery);
+      if(historyLink.href!==href){const next=historyLink.cloneNode(true);next.href=href;historyLink.replaceWith(next);}
+    }
     $('history-baseline').hidden=!!revision.sourceQueries||!['biorxiv','medrxiv','europepmc'].includes(radar.source)||revision!==latest;
-    $('history-baseline').disabled=!!active||!!batch||!latest.baselineAt;
+    $('history-baseline').disabled=!!active||!!batch||!latest.baselineAt||latest.windowStart==='0001-01-01';
     $('baseline-history').hidden=!lastHistory;
     text('baseline-history',lastHistory?T(`最近历史补充：${lastHistory.startDay} — ${lastHistory.endDay} · 匹配 ${lastHistory.matched} 篇，追加 ${lastHistory.added} 篇。`):'');
     text('toggle-radar', radar.enabled ? '暂停自动检查' : '启用自动检查');
@@ -82,7 +92,7 @@
     $('last-attempt').parentElement.hidden=sameAttempt;
     $('last-success').previousElementSibling.textContent=T(sameAttempt?'最近检查':'最近成功检查');
     text('interval', !radar.enabled ? '已暂停（可手动检查）' : radar.intervalHours ? `每 ${radar.intervalHours} 小时` : '仅手动');
-    text('scan-window', revision.lastWindow ? T(`${radar.source==='asta'?'上次检索发表日期：':'上次成功覆盖：'}${revision.lastWindow.startDay} — ${revision.lastWindow.endDay}（含去重重叠窗口）`) : `首次回溯 ${revision.baselineDays} 天；检查成功后开始累计新增。`);
+    text('scan-window', revision.lastWindow ? T(`${radar.source==='asta'?'上次检索发表日期：':'上次成功覆盖：'}${revision.lastWindow.startDay==='0001-01-01'?T('全部年份'):revision.lastWindow.startDay} — ${revision.lastWindow.endDay}（含去重重叠窗口）`) : Object.hasOwn(revision,'baselineStartDay') ? T('首次基线')+' · '+(revision.baselineStartDay||T('全部年份')) : `首次回溯 ${revision.baselineDays} 天；检查成功后开始累计新增。`);
     $('scan-error').hidden = !latest.error;
     text('scan-error', latest.error ? `${latest.error.message} 最近成功时间：${dateTime(latest.lastSuccessAt)}。可手动重试。` : '');
     const translated=revision.queryTranslation&&revision.queryTranslation.trim()!==revision.query.trim();
@@ -107,7 +117,7 @@
       const title = element('h3'), link = element('a', '', paper.title || '未提供标题');
       if (paper.title) title.setAttribute('translate', 'no');
       link.href = R.radarPaperUrl((paper.source||radar.source),paper); link.target = '_blank'; link.rel = 'noopener noreferrer'; title.append(link);
-      if(paper.preprint||R.RADAR_SOURCES[(paper.source||radar.source)].preprint)label.append(element('span','badge preprint','预印本 · 请核对评审状态'));
+      if(R.isRadarPreprint(paper,paper.source||radar.source))label.append(element('span','badge preprint','预印本 · 请核对评审状态'));
       const heading = element('div', 'paper-heading'), publication = element('div', 'paper-publication');
       publication.setAttribute('translate', 'no');
       if (paper.journal) publication.append(element('strong', '', paper.journal));
@@ -122,23 +132,98 @@
       if (paper.doi) { const doi = element('a', '', 'DOI ↗'); doi.href = 'https://doi.org/' + encodeURIComponent(paper.doi); doi.target = '_blank'; doi.rel = 'noopener noreferrer'; links.append(doi); }
       const read = element('button', '', paper.read ? '标为未读' : '标为已读'); read.type = 'button';
       read.addEventListener('click', () => safe(async () => { await store.markRead(radar.id, revision.number, [paper.id], !paper.read); await refresh(true); }));
+      if(window.parent!==window && typeof window.parent.BrevessProjectReadingQueue?.add==='function'){
+        const add=element('button','','加入课题待读');add.type='button';
+        add.addEventListener('click',()=>safe(async()=>{
+          add.disabled=true;
+          try{const name=await window.parent.BrevessProjectReadingQueue.add(radar.id,revision.number,paper.id,enrichment.scoreFor(paper)?.score);
+            notice('已加入「'+name+'」的课题待读');add.textContent='已加入课题';}
+          finally{add.disabled=false;}
+        }));
+        links.append(add);
+      }
       footer.append(links, read); article.append(footer); enrichment.decorate(article, paper); feed.append(article);
     }
     $('load-more').hidden = articles.length <= limit;
   }
   async function safe(fn) { try { return await fn(); } catch (error) { notice(error.message || '操作失败，请重试。'); } }
+  let initialBaseline='', yearSearch=null;
+  function resetYears(){
+    yearSearch?.abort();yearSearch=null;
+    $('preview-years').textContent=T('检索年度分布');
+    $('years-results').replaceChildren();text('years-status','');
+  }
+  function renderYearChart(target,counts) {
+    if(!Array.isArray(counts)||counts.some(([y,n])=>!Number.isInteger(y)||y<1||y>9999||!Number.isSafeInteger(n)||n<0))throw Error(T('来源返回的数据不完整'));
+    const years=new Map(counts.filter(([,n])=>n>0).sort((a,b)=>a[0]-b[0]));
+    if(!years.size){target.append(element('p','hint',T('无匹配文献')));return;}
+    const first=years.keys().next().value,last=[...years.keys()].at(-1),max=Math.max(...years.values());
+    const plot=element('div','year-plot'),detail=element('output','year-readout',T('选择年份可设置基线起点。'));
+    for(let year=first;year<=last;year++){
+      const count=years.get(year)||0,bar=element('button','year-bar');
+      bar.type='button';bar.dataset.year=year;
+      const date=String(year).padStart(4,'0')+'-01-01',label=year+' · '+count.toLocaleString()+' '+T('篇');
+      bar.title=label;bar.setAttribute('aria-label',label);
+      const fill=element('span','year-fill');fill.style.height=(count/max*100)+'%';bar.append(fill);
+      const inspect=()=>{detail.textContent=label;};bar.onfocus=inspect;bar.onpointerenter=inspect;
+      bar.disabled=date>$('baseline').max;
+      bar.onclick=()=>{$('baseline').value=date;$('baseline').dispatchEvent(new Event('input'));inspect();};
+      plot.append(bar);
+    }
+    const axis=element('div','year-axis');axis.append(element('span','',String(first)),element('span','',String(last)));
+    target.append(plot,axis,detail);
+  }
+  $('preview-years').addEventListener('click',async()=>{
+    if(yearSearch){resetYears();return;}
+    resetYears();let rows;
+    try{rows=R.validateRadarSourceQueries(sourceQueries.values());}catch{ text('years-status',T('请先填写所选来源的检索式。'));return; }
+    const controller=new AbortController();yearSearch=controller;
+    $('preview-years').textContent=T('取消检索');text('years-status',T('正在检索年度分布…'));
+    const jobs=rows.map(async({source,query})=>{
+      const group=element('section','year-source');group.append(element('strong','',R.RADAR_SOURCES[source].name));$('years-results').append(group);
+      try{
+        const counts=await adapters[source].publicationYears(query,{signal:controller.signal});
+        if(yearSearch===controller)renderYearChart(group,counts);
+      }catch(e){if(yearSearch===controller)group.append(element('p','hint',e.message));}
+    });
+    await Promise.all(jobs);
+    if(yearSearch===controller){yearSearch=null;text('preview-years',T('检索年度分布'));text('years-status','');}
+  });
+  $('query').addEventListener('input',resetYears);
+  $('editor').addEventListener('close',resetYears);
   function edit(radar) {
     editing = radar ? structuredClone(radar) : null;
     text('editor-title', radar ? '编辑文献追踪任务' : '新建文献追踪任务');
     $('name').value = radar?.name || ''; $('query').value = radar?.query || '';
     $('source').value=radar?.source||'pubmed';$('source').disabled=false;sourceQueries.reset(radar);enrichment.editorOpened(radar?.query || '');updateSource();
-    $('frequency').value = radar?.intervalHours ?? 24; $('baseline').value = radar?.baselineDays || 30; $('enabled').checked = radar?.enabled ?? true;
+    $('frequency').value = radar?.intervalHours ?? 24;
+    const latest=radar&&R.radarRevision(radar);
+    const legacyDate=latest&&!Object.hasOwn(latest,'baselineStartDay')&&(latest.windowStart||R.radarScanWindow(R.radarBaseline(latest),latest.createdAt||radar.createdAt||Date.now()).startDay);
+    initialBaseline=radar?.baselineStartDay??legacyDate??'';
+    $('baseline').max=R.radarDay(Date.now());$('baseline').value=initialBaseline; $('enabled').checked = radar?.enabled ?? true;
     text('edit-note', radar ? '修改检索式或回溯范围后，会建立新的基线版本；旧文献记录保留在历史版本中。' : '启用后，在运行条件允许时检查到期任务。');
     text('form-error', ''); preview(); $('editor').showModal(); $('name').focus();
   }
   function sourceHint(id){const def=R.RADAR_SOURCES[id];return T(id==='asta'?'Asta 官方文献检索：输入关键词，按发表日期追踪。不是网页 Deep search；可能含预印本，晚到索引可能漏检。API Key 可在来源连接中配置。':['biorxiv','medrxiv'].includes(id)?'通过 Europe PMC 预印本索引检索。':id==='crossref'?'输入关键词；不使用 PubMed 字段标签或布尔语法。':def.credential?'需要 API Key；可用范围由服务商和机构授权决定。':'使用该来源原生检索语法。')+' '+T('日期口径：')+def.date;}
-  function updateSource(){const id=$('source').value,def=R.RADAR_SOURCES[id];$('query').placeholder=def.example;text('source-hint',sourceHint(id));$('validate-query').hidden=id!=='pubmed';$('baseline').options[0].textContent=T(id==='asta'?'今天发表':'今天入库');preview();}
-  function preview(){const id=$('source').value,q=encodeURIComponent($('query').value),urls={asta:'https://asta.allen.ai/',pubmed:'https://pubmed.ncbi.nlm.nih.gov/?term='+q,europepmc:'https://europepmc.org/search?query='+q,biorxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:bioRxiv'),medrxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:medRxiv'),arxiv:'https://arxiv.org/search/?query='+q+'&searchtype=all',crossref:'https://search.crossref.org/?q='+q,wos:'https://www.webofscience.com/wos/woscc/advanced-search',scopus:'https://www.scopus.com/search/form.uri?display=advanced'};$('preview-query').href=urls[id];text('preview-query',id==='asta'?'打开 Asta 网页 ↗':'打开来源检索 ↗');}
+  function updateSource(){const id=$('source').value,def=R.RADAR_SOURCES[id];$('query').placeholder=def.example;text('source-hint',sourceHint(id));$('validate-query').hidden=id!=='pubmed';preview();}
+  function previewPubmed(){
+    const query=$('query').value.trim(),isPubmed=$('source').value==='pubmed';
+    $('pubmed-check').hidden=!isPubmed;if(!isPubmed)return;
+    // Keep the publisher's actual precedence. Only split a top-level operation.
+    let depth=0,quoted=false;
+    $('boolean-preview').textContent=query.replace(/"|\(|\)|\b(?:AND|OR|NOT)\b/gi,token=>{
+      if(token==='"')quoted=!quoted;
+      else if(!quoted){if(token==='(')depth++;else if(token===')')depth--;else if(depth===0)return '\n'+token+' ';}
+      return token;
+    });
+    const raw=$('seed-pmids').value.trim(),ids=raw?raw.split(/[\s,，、;；]+/):[];
+    const valid=ids.length>0&&ids.length<=20&&ids.every(value=>/^[1-9]\d{0,8}$/.test(value));
+    const link=$('seed-preview');link.hidden=!query||!valid;link.removeAttribute('href');
+    if(query&&valid)link.href='https://pubmed.ncbi.nlm.nih.gov/?term='+encodeURIComponent('('+query+') AND ('+ids.map(id=>id+'[PMID]').join(' OR ')+')');
+    $('seed-error').textContent=raw&&!valid?'请输入最多 20 个数字 PMID。':'';
+  }
+  $('seed-pmids').addEventListener('input',previewPubmed);
+  function preview(){previewPubmed();const id=$('source').value,q=encodeURIComponent($('query').value),urls={asta:'https://asta.allen.ai/',pubmed:'https://pubmed.ncbi.nlm.nih.gov/?term='+q,europepmc:'https://europepmc.org/search?query='+q,biorxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:bioRxiv'),medrxiv:'https://europepmc.org/search?query='+encodeURIComponent('('+ $('query').value+') AND SRC:PPR AND PUBLISHER:medRxiv'),arxiv:'https://arxiv.org/search/?query='+q+'&searchtype=all',crossref:'https://search.crossref.org/?q='+q,wos:'https://www.webofscience.com/wos/woscc/advanced-search',scopus:'https://www.scopus.com/search/form.uri?display=advanced'};$('preview-query').href=urls[id];text('preview-query',id==='asta'?'打开 Asta 网页 ↗':'打开来源检索 ↗');}
   $('source').addEventListener('change',updateSource);
   async function connectionState(){const id=$('connection-source').value,connection=await R.loadRadarConnection(id);if(id!==$('connection-source').value)return;text('connection-state',connection.apiKey?'本机已配置；填写新值可替换。':id==='asta'?'尚未配置 Asta Key；将尝试匿名访问，访问范围和限流由来源决定。':'尚未配置');$('connection-help').href=R.RADAR_SOURCES[id].help;$('institution-token').hidden=id!=='scopus';$('connection-key').value='';$('connection-token').value='';text('connection-message','');}
   $('connections').addEventListener('click',()=>safe(async()=>{await connectionState();$('connections-dialog').showModal();}));
@@ -153,7 +238,7 @@
   $('radar-form').addEventListener('submit', async event => {
     event.preventDefault();
     try {
-      const radar = await store.save({ id: editing?.id, name: $('name').value, sourceQueries:sourceQueries.values(), query:sourceQueries.values()[0]?.query||'', source:editing?.source||sourceQueries.values()[0]?.source||'pubmed', intervalHours: Number($('frequency').value), baselineDays: Number($('baseline').value), enabled: $('enabled').checked }, editing?.editVersion);
+      const radar = await store.save({ id: editing?.id, name: $('name').value, ...(editing&&!editing.sourceQueries&&sourceQueries.values().length===1&&sourceQueries.values()[0].source===editing.source?{}:{sourceQueries:sourceQueries.values()}), query:sourceQueries.values()[0]?.query||'', source:editing?.source||sourceQueries.values()[0]?.source||'pubmed', intervalHours: Number($('frequency').value), ...(editing&&!Object.hasOwn(editing,'baselineStartDay')&&$('baseline').value===initialBaseline?R.radarBaseline(editing):{baselineStartDay:$('baseline').value}), enabled: $('enabled').checked }, editing?.editVersion);
       selected = radar.id; revisionNumber = null; filter = 'new'; limit = 40; $('editor').close(); notice('追踪任务已保存。'); await refresh(true); void tick();
     } catch (error) { text('form-error', error.message); }
   });
@@ -171,8 +256,8 @@
   const historyStartFor=source=>source==='biorxiv'?'2013-01-01':source==='medrxiv'?'2019-01-01':'1900-01-01';
   $('history-baseline').addEventListener('click',()=>safe(async()=>{
     const radar=current(),revision=R.radarRevision(radar);
-    if(!revision.baselineAt)return;
-    const initialStart=revision.windowStart||R.radarScanWindow({baselineDays:revision.baselineDays},revision.baselineAt).startDay;
+    if(!revision.baselineAt||revision.windowStart==='0001-01-01')return;
+    const initialStart=revision.windowStart||R.radarScanWindow(R.radarBaseline(revision),revision.baselineAt).startDay;
     historyTarget={id:radar.id,version:revision.number};
     text('history-query',R.RADAR_SOURCES[radar.source].name+' · '+revision.query);
     text('history-date-basis',T('日期口径：')+R.RADAR_SOURCES[radar.source].date);

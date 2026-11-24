@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html data-brevess-ui lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Brevess 设置</title>
   <link rel="stylesheet" href="vendor/phosphor/icons.css">
@@ -11,11 +12,14 @@
   <link rel="stylesheet" href="ui-swiss.css">
 <link rel="stylesheet" href="web-filters-general/reading-options.css">
 <script src="core/translation-checkpoint.js"></script>
-<script src="core/local-translator.js"></script>
+<script src="core/translation-glossary.js"></script><script src="core/local-translator.js"></script>
 <script src="core/input-tools.js"></script>
   <link rel="stylesheet" href="settings-focus.css">
   <link rel="stylesheet" href="quick-setup.css">
   <script src="quick-setup.js"></script>
+<link rel="stylesheet" href="ui-focus.css">
+<link rel="stylesheet" href="ui-theme.css">
+<script src="ui-focus.js" defer></script>
 </head>
 <body data-ui-surface="settings">
   <header class="topbar">
@@ -1068,6 +1072,7 @@
           <p>许可证、源代码和问题反馈统一放在这里。</p>
         </div>
       </div>
+      <nav class="about-project-links" aria-label="项目链接"><a href="https://coolcoldplay.github.io/Brevess/" target="_blank" rel="noopener noreferrer">BREVESS 官网 ↗</a><a href="https://github.com/coolcoldplay/Brevess" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
         <section id="support" class="settings-section support-contact" aria-labelledby="supportHeading">
           <div class="section-heading local-data-heading">
             <div>
@@ -1302,5 +1307,8 @@
   
   
 <script src="web-filters-general/reading-options.js"></script>
+<script src="core/codex-native-client.js"></script><script src="core/harness-native-client.js"></script>
+<script src="core/workbench-agent-connections.js"></script><script src="core/r20-agent-bridge.js"></script>
+<script src="workbench/r20-agent-permissions.js"></script><script src="workbench/agent-conversations.js"></script><script src="workbench/agent-runner.js"></script><script src="core/settings-agent-host.js"></script>
 </body>
 </html>

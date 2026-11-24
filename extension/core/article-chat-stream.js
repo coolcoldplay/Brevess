@@ -521,6 +521,7 @@
       try{options.onPreview?.({text:draft,blockId:readArticleChatDraftString(buffer,'block_id')||''});}catch{}
     }
     let summary = '';
+    let agentQuestion = null;
     let final = null;
     let usage = null;
 
@@ -532,7 +533,15 @@
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw invalidStreamResponse();
       }
+      if (value.type === 'ask_user') {
+        const parsed=options.normalizeQuestion?.(value);
+        if (!parsed || blocks.length || final || (agentQuestion && JSON.stringify(parsed)!==JSON.stringify(agentQuestion))) {
+          throw invalidStreamResponse('Unexpected reader question');
+        }
+        agentQuestion=parsed;return parsed;
+      }
       if (value.type === 'answer_block') {
+        if(agentQuestion)throw invalidStreamResponse('A reader question must be answered before the response continues');
         const block = validateArticleChatAnswerBlock(
           bindUnambiguousPriorEvidence(bindSelectedSources(value), blocks), snapshot, options
         );
@@ -681,7 +690,7 @@
         const records = roots.flatMap(compatibleRecords);
         if (!records.length) return false;
         records.forEach(processRecord);
-        return Boolean(final && blocks.length);
+        return Boolean(final && (blocks.length || agentQuestion));
       },
       discardPending() {
         const discarded = buffer.length;
@@ -691,11 +700,13 @@
       },
       clearFinalRecord() {
         final = null;
+        agentQuestion = null;
       },
       hasPending() { return Boolean(buffer); },
       snapshot() {
         return {
           blocks: blocks.map(cloneRecord),
+          ...(agentQuestion ? {agentQuestion:cloneRecord(agentQuestion)} : {}),
           summary,
           usage: usage ? { ...usage } : null,
           final: final ? { ...final } : null,

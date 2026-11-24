@@ -866,6 +866,7 @@ class CodexAppServer {
       return;
     }
     if (Object.prototype.hasOwnProperty.call(message, 'id') && message.method) {
+      if (message.method === 'item/tool/requestUserInput' && this.readerRequest?.(message)) return;
       this.write({
         id: message.id,
         error: { code: -32601, message: 'Client-side tool requests are disabled' }
@@ -2507,6 +2508,18 @@ class CodexBridgeHost {
     this.unsubscribe = this.server.onNotification(message =>
       this.handleServerNotification(message)
     );
+    this.server.readerRequest = message => {
+      const context=this.contextFor(message.params);
+      if(!context?.reader || context.reader.pending || context.reader.controller.signal.aborted) return false;
+      const reader=context.reader;reader.pending=true;
+      Promise.resolve().then(()=>require('./reader-input.cjs').answerCodexQuestion(message.params,{
+        documentHash:reader.documentHash, signal:reader.controller.signal,
+        publish:job=>{if(this.active.get(context.requestId)===context)this.send({type:'turn.readerInput',requestId:context.requestId,job});}
+      })).then(result=>{if(this.active.get(context.requestId)===context)this.server.write({id:message.id,result});},
+        ()=>{if(this.active.get(context.requestId)===context)this.server.write({id:message.id,error:{code:-32000,message:'Reader input unavailable'}});})
+        .catch(()=>{}).finally(()=>{reader.pending=false;});
+      return true;
+    };
   }
 
   async health(requestId) {
@@ -2613,6 +2626,7 @@ class CodexBridgeHost {
       'You are the text-generation engine embedded in a scientific paper reader.',
       'Do not use shell commands, files, web search, MCP tools, apps, or code-editing tools.',
       'Return only the payload requested by the supplied instructions.',
+      ...(message.readerInput===true ? ['For a genuine user choice call request_user_input when available. Return the requested answer format after the reader responds.'] : []),
       String(message.systemPrompt || '')
     ].filter(Boolean).join('\n\n');
     const developerInstructions = [
@@ -2627,6 +2641,7 @@ class CodexBridgeHost {
       cwd: stateDirectory(),
       approvalPolicy: 'never',
       sandbox: 'read-only',
+      ...(message.readerInput===true && message.responseMode!=='json' ? {config:{'features.default_mode_request_user_input':true}} : {}),
       baseInstructions,
       developerInstructions
     };
@@ -2680,6 +2695,8 @@ class CodexBridgeHost {
         usage: null,
         cancelPending: message.responseMode === 'json' && this.pendingCancellations.has(requestId),
         startedSent: false,
+        reader:message.readerInput===true && message.responseMode!=='json' && typeof message.conversationKey==='string' && message.conversationKey.length<=160 && message.conversationKey
+          ? {documentHash:message.conversationKey,controller:new AbortController(),pending:false} : null,
         imageLease,
         jsonResponse: message.responseMode === 'json' ? {
           items: new Map(),
@@ -2731,7 +2748,7 @@ class CodexBridgeHost {
         await this.interruptContext(context);
       }
     } catch (error) {
-      if (context) this.active.delete(requestId);
+      if (context) {context.reader?.controller.abort();this.active.delete(requestId);}
       if (!context?.jsonResponse?.resourceTerminated) {
         this.imageStore.cleanup(context?.imageLease || imageLease);
         this.send({ type: 'turn.error', requestId, error: publicError(error) });
@@ -2911,6 +2928,12 @@ class CodexBridgeHost {
       return;
     }
     if (!context) return;
+    if (context.reader && method === 'error' && params.willRetry === true) {
+      const capacity = /at capacity|overloaded/i.test(String(params.error?.message || ''));
+      this.send({type:'turn.readerStatus',requestId:context.requestId,
+        text:capacity ? 'Codex 所选模型目前繁忙，客户端正在重试。' : 'Codex 正在重新连接本轮会话。'});
+      return;
+    }
     if (method === 'item/started' && params.item?.type === 'agentMessage') {
       if (context.jsonResponse) {
         this.recordJsonItem(context, params.item.id, params.item.phase, 'started', params.item.text);
@@ -2940,7 +2963,11 @@ class CodexBridgeHost {
       }
       const itemId = String(params.item.id || '');
       const phase = params.item.phase || context.phases.get(itemId);
-      if (phase === 'commentary') return;
+      if (phase === 'commentary') {
+        const text=typeof params.item.text==='string' ? params.item.text.trim().slice(0,2000) : '';
+        if(context.reader && text)this.send({type:'turn.readerStatus',requestId:context.requestId,text});
+        return;
+      }
       const fullText = String(params.item.text || '');
       const sent = String(context.sentByItem.get(itemId) || '');
       if (fullText && fullText.startsWith(sent) && fullText.length > sent.length) {
@@ -2990,12 +3017,13 @@ class CodexBridgeHost {
         });
       }
       this.imageStore.cleanup(context.imageLease);
-      this.active.delete(context.requestId);
+      context.reader?.controller.abort();this.active.delete(context.requestId);
       this.pendingCancellations.delete(context.requestId);
     }
   }
 
   async interruptContext(context) {
+    context.reader?.controller.abort();
     if (!context?.threadId || !context?.turnId) return;
     try {
       await this.server.request('turn/interrupt', {
@@ -3169,6 +3197,7 @@ class CodexBridgeHost {
     this.unsubscribe?.();
     this.harness.close();
     for (const context of this.active.values()) {
+      context.reader?.controller.abort();
       this.imageStore.cleanup(context.imageLease);
     }
     this.active.clear();

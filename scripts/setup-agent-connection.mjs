@@ -157,7 +157,7 @@ export function createPlan(options = {}) {
   const extensionIds = extensionIdsFromManifest(path.join(sourceRoot, 'manifest.json'));
   const extensionId = options.extensionId;
   if (!/^[a-p]{32}$/u.test(extensionId || '') || !extensionIds.includes(extensionId)) fail('EXTENSION_MISMATCH', 'The extension ID does not match this source package. Use the installed extension version.');
-  const files = [...new Set([...runtimeFiles(sourceRoot), 'native-host/host.js', 'native-host/entry.cjs'])].sort();
+  const files = [...new Set([...runtimeFiles(sourceRoot), 'native-host/host.js', 'native-host/entry.cjs', 'native-host/workbench-agents.cjs'])].sort();
   const hash = crypto.createHash('sha256'); for (const f of files) hash.update(f).update(fs.readFileSync(path.join(sourceRoot, f)));
   const revision = hash.digest('hex').slice(0, 20), payloadRoot = path.join(root, 'agent', 'versions', revision);
   const activePath = path.join(root, 'agent', 'active.json'), beforeActive = readOptional(activePath);
@@ -175,20 +175,35 @@ export function createPlan(options = {}) {
   };
   const owns = value => Array.isArray(value?.args) && value.args[0]?.startsWith(path.join(root, 'agent', 'versions') + path.sep) && value.args[0]?.endsWith(path.join('mcp', 'server.js'));
   for (const client of clients) {
+    const registration = {command:node, args:[path.join(payloadRoot,'mcp','presentation-client.cjs'),client]};
+    const managedPresenter = val => val?.args?.[1]===client && val.args[0]?.startsWith(path.join(root,'agent','versions')+path.sep) && val.args[0].endsWith(path.join('mcp','presentation-client.cjs'));
+    if (client === 'workbuddy') {
+      const file = path.join(home, '.workbuddy', 'mcp.json');
+      const old = readOptional(file)?.toString('utf8') || '';
+      const base = mergeJsonc(old, ['mcpServers','brevess'], { type:'stdio', ...entry }, owns);
+      add(file, mergeJsonc(base, ['mcpServers','brevess-presentations'], {type:'stdio',...registration}, managedPresenter));
+      continue;
+    }
     const file = clientConfigPath(client, home, env), old = file ? readOptional(file)?.toString('utf8') || '' : '';
-    if (client === 'codex') add(file, mergeBlock(old, '[mcp_servers.brevess]\ncommand = ' + JSON.stringify(node) + '\nargs = ' + JSON.stringify(args) + '\nstartup_timeout_sec = 30\ntool_timeout_sec = 120', 'toml'));
-    else if (client === 'dsh') add(file, mergeBlock(old, '- insert:\n    - id: brevess-mcp\n      name: "@deepseek-ai/dsh-mcp-client"\n      config:\n        serverName: brevess\n        transport: stdio\n        command: ' + JSON.stringify(node) + '\n        args: ' + JSON.stringify(args) + '\n        env: {}\n        cwd: ' + JSON.stringify(payloadRoot), 'yaml'));
-    else if (file) add(file, mergeJsonc(old, ['mcpServers', 'brevess'], client === 'copilot' ? { type: 'local', ...entry, tools: ['*'] } : entry, owns));
+    if (client === 'codex') add(file, mergeBlock(old, '[mcp_servers.brevess]\ncommand = ' + JSON.stringify(node) + '\nargs = ' + JSON.stringify(args) + '\nstartup_timeout_sec = 30\ntool_timeout_sec = 120\n\n[mcp_servers.brevess_presentations]\ncommand = ' + JSON.stringify(node) + '\nargs = ' + JSON.stringify([path.join(payloadRoot,'mcp','presentation-client.cjs'),'codex']) + '\ntool_timeout_sec = 120', 'toml'));
+    else if (client === 'dsh') add(file, mergeBlock(old, '- insert:\n    - id: brevess-mcp\n      name: "@deepseek-ai/dsh-mcp-client"\n      config:\n        serverName: brevess\n        transport: stdio\n        command: ' + JSON.stringify(node) + '\n        args: ' + JSON.stringify(args) + '\n        env: {}\n        cwd: ' + JSON.stringify(payloadRoot) + '\n    - id: brevess-presentations\n      name: "@deepseek-ai/dsh-mcp-client"\n      config:\n        serverName: brevess-presentations\n        transport: stdio\n        command: ' + JSON.stringify(node) + '\n        args: ' + JSON.stringify([path.join(payloadRoot,'mcp','presentation-client.cjs'),'dsh']) + '\n        env: {}\n        cwd: ' + JSON.stringify(payloadRoot), 'yaml'));
+    else if (file) {
+      const entryFor = data => client === 'copilot' ? {type:'local',...data,tools:['*']} : data;
+      const base=mergeJsonc(old,['mcpServers','brevess'],entryFor(entry),owns);
+      add(file,mergeJsonc(base,['mcpServers','brevess-presentations'],entryFor(registration),managedPresenter));
+    }
     else {
       const file = path.join(root, 'agent', 'client-configs', client + '.json');
-      add(file, json({ mcpServers: { brevess: entry } }));
+      add(file, json({ mcpServers: { brevess: entry, 'brevess-presentations':registration } }));
       recipes.push({ client, state: 'client-setup-required', configurationFile: file,
         next: client === 'opencode' ? 'Detect installed OpenCode version. Use its official mcp add --global command; V1 and V2 config schemas differ. Pass command and args from this file without a shell.'
           : 'Add the generated stdio server in this client official MCP settings. Do not mark complete until actual tools/call succeeds.' });
     }
   }
   for (const f of files) add(path.join(payloadRoot, f), fs.readFileSync(path.join(sourceRoot, f)));
-  add(activePath, json({ version: 1, payloadRoot, stateDir, nativeStateDir: root, port, allowWrite }));
+  const configuredClients=[...new Set([...(Array.isArray(active?.configuredClients)?active.configuredClients:[]),
+    ...clients.filter(id=>!recipes.some(recipe=>recipe.client===id))])];
+  add(activePath, json({ version: 1, payloadRoot, stateDir, nativeStateDir: root, port, allowWrite, configuredClients }));
   const launcher = path.join(root, 'agent', platform === 'win32' ? 'native-host.cmd' : 'native-host');
   add(launcher, launcherText(platform, node, path.join(payloadRoot, 'native-host/entry.cjs')), 0o700);
   const manifest = { name: HOST, description: 'BREVESS local Agent connection', path: launcher, type: 'stdio', allowed_origins: extensionIds.map(id => `chrome-extension://${id}/`) };

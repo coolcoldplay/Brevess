@@ -11,11 +11,11 @@
   gap: 10px;
   padding: 12px;
   overflow: auto;
-  border: 1px solid #d5d5d5;
+  border: 1px solid var(--bv-line, #d5d5d5);
   border-radius: 0;
-  color: #202020;
-  background: #fff;
-  accent-color: #202020;
+  color: var(--bv-text, #202020);
+  background: var(--bv-surface, #fff);
+  accent-color: var(--bv-focus, #202020);
   font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
   box-shadow: none;
 }
@@ -51,10 +51,10 @@
   min-height: 32px;
   margin: 0;
   padding: 0;
-  border: 1px solid #d5d5d5;
+  border: 1px solid var(--bv-line, #d5d5d5);
   border-radius: 0;
   color: inherit;
-  background: #fff;
+  background: var(--bv-surface, #fff);
   font: inherit;
   text-transform: none;
   letter-spacing: normal;
@@ -63,21 +63,21 @@
 }
 
 .sci-semantic-find button { padding: 5px 9px; cursor: pointer; }
-.sci-semantic-find button:is(:hover, :focus, :active) { color: #202020; background: #f4f4f4; box-shadow: none; }
+.sci-semantic-find button:is(:hover, :focus, :active) { color: var(--bv-text, #202020); background: var(--bv-hover, #f4f4f4); box-shadow: none; }
 .sci-semantic-find button:focus:not(:focus-visible) { outline: none; }
 .sci-semantic-find button:disabled { cursor: default; opacity: .48; }
 .sci-semantic-find input[type="search"] { padding: 5px 9px; }
 .sci-semantic-find button:focus-visible,
-.sci-semantic-find input:focus-visible { outline: 2px solid #202020; outline-offset: 1px; }
+.sci-semantic-find input:focus-visible { outline: 2px solid var(--bv-focus, #202020); outline-offset: 1px; }
 
-.sci-semantic-find__threshold { display: grid; grid-template-columns: auto minmax(56px, 1fr) 58px; margin: 0; padding: 0; max-width: none; color: #646464; }
+.sci-semantic-find__threshold { display: grid; grid-template-columns: auto minmax(56px, 1fr) 58px; margin: 0; padding: 0; max-width: none; color: var(--bv-muted, #646464); }
 .sci-semantic-find__threshold input[type="range"] { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; appearance: auto; overflow: visible; }
 .sci-semantic-find__threshold input[type="number"] { width: 100%; min-width: 0; padding: 4px 6px; }
 /* Host sites may globally restyle native sliders; reset only our own parts. */
 .sci-semantic-find input[type="range"]::-webkit-slider-runnable-track { all: revert; }
 .sci-semantic-find input[type="range"]::-webkit-slider-thumb { all: revert; }
 
-.sci-semantic-find__legend { color: #646464; font-size: 12px; }
+.sci-semantic-find__legend { color: var(--bv-muted, #646464); font-size: 12px; }
 .sci-semantic-find__legend-bar {
   width: 54px;
   height: 10px;
@@ -91,13 +91,13 @@
 .sci-semantic-find [data-semantic-find-role="scope"],
 .sci-semantic-find [data-semantic-find-role="status"] {
   overflow-wrap: anywhere;
-  color: #646464;
+  color: var(--bv-muted, #646464);
   font-size: 12px;
 }
 
-.sci-semantic-find [data-semantic-find-role="status"][data-state="error"] { color: #a13434; }
-.sci-semantic-find [data-semantic-find-role="status"][data-state="success"] { color: #28724b; }
-.sci-semantic-find [data-semantic-find-role="status"][data-state="working"] { color: #646464; }
+.sci-semantic-find [data-semantic-find-role="status"][data-state="error"] { color: var(--bv-red, #a13434); }
+.sci-semantic-find [data-semantic-find-role="status"][data-state="success"] { color: var(--bv-green, #28724b); }
+.sci-semantic-find [data-semantic-find-role="status"][data-state="working"] { color: var(--bv-muted, #646464); }
 
 @media (max-width: 460px) {
   .sci-semantic-find {

@@ -17,7 +17,7 @@
   function notice(text) { if (current) current.notice = text; render(); }
   function errorText(e) {
     const code = String(e?.message || e);
-    return ({ MODEL_JSON_INVALID: '模型返回格式不完整，请重试。', MODEL_TIMEOUT: '模型响应超时，请稍后重试。', TOOL_ARGUMENT_INVALID: '模型请求的原文位置无效，请重试。', PDF_SOURCE_NOT_READY: '这份 PDF 还在读取文字，请稍后重试。',
+    return ({ BODY_CITATIONS_MISSING:'已读取正文，但模型没有给出能核对的引用。请重试或切换模型。', SOURCE_BODY_UNAVAILABLE:'所选来源没有可读取的正文。请在原标签页打开全文，再重新发送。', BODY_REVIEW_INVALID:'模型未能完成分批阅读，请重试或切换模型。', MODEL_JSON_INVALID: '模型返回格式不完整，请重试。', MODEL_TIMEOUT: '模型响应超时，请稍后重试。', TOOL_ARGUMENT_INVALID: '模型请求的原文位置无效，请重试。', PDF_SOURCE_NOT_READY: '这份 PDF 还在读取文字，请稍后重试。',
       SOURCE_CLOSED_OR_NAVIGATED: '所选网页已关闭或跳转，请重新选择后发送。',
       SOURCE_DOCUMENT_CHANGED: '所选内容发生了变化，请重新发送以使用最新正文。',
       PAGE_NOT_PERMITTED: '这个页面暂时不能读取，请改选普通网页或 BREVESS PDF 阅读器。',
@@ -65,7 +65,8 @@
       const box = el('section', 'brevess-compare-picker'); picker = box;
       box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', '选择网页或 PDF');
       const head = el('div', 'brevess-compare-picker-head');
-      head.append(el('strong', '', '选择网页或 PDF'), button('完成', () => { closePicker(true); void history(s); }));
+      const dismiss=button('×', () => { closePicker(true); void history(s); });
+      dismiss.setAttribute('aria-label','关闭');head.append(el('strong', '', '选择网页或 PDF'),dismiss);
       const search = el('input'); search.type = 'search'; search.placeholder = '搜索已打开的标签页'; search.setAttribute('aria-label', search.placeholder);
       const rows = el('div', 'brevess-compare-rows');
       const hint = el('small', '', '最多 6 篇 · 提问时可写“网页 1”和“网页 2”');
@@ -132,7 +133,8 @@
     const card = el('article', 'article-chat-turn');
     card.dataset.compareTurn = turn.turnId;
     card.append(el('div', 'article-chat-message is-user article-chat-question', turn.question));
-    const answer = el('div', 'article-chat-message is-assistant article-chat-answer');
+    card.append(createSaveQuestionButton(() => turn.question));
+    const answer = el('div', 'article-chat-message is-assistant article-chat-answer');if(typeof articleChatResponseModelLabel==='function')answer.append(el('div','article-chat-answer-heading',articleChatResponseModelLabel(turn)));
     const sources = payload(s);
     const refs = (turn.multiSources || []).map(c => ({ ...c, marker: String(c.citation) }));
     const renderer = BrevessChatMessageUI.createRenderer({ createCitation: ref => {
@@ -142,6 +144,10 @@
     const markdown = String(turn.answer || '').replace(/\[(\d+)\]/g, '[[$1]]');
     answer.append(renderer.renderArticleChatMarkdown(markdown || (turn.status === 'pending' ? '正在读取所选文献…' : errorText(turn.error || turn.status)), { evidence: refs }));
     const footer = el('div', 'brevess-compare-meta', '多文献问答' + (turn.model ? ' · ' + turn.model : ''));
+    if (turn.coverage?.some(c=>Number.isInteger(c.availablePassages))) {
+      const details=el('details','article-chat-source-details'), summary=el('summary','','正文来源 · '+turn.coverage.length);
+      details.append(summary);for(const c of turn.coverage)details.append(el('div','',c.title+' · 已读 '+(c.reviewedPassages??c.readElements)+' / '+c.availablePassages+' 段'+((c.reviewedPassages||0)>c.readElements?' · 本轮作答选用 '+c.readElements+' 段':'')+(c.indexTruncated?' · 部分内容不可读':'')));answer.append(details);
+    }
     if (turn.status === 'failed' || turn.status === 'cancelled') footer.append(button('重试', () => { input().value = turn.question; input().focus(); }));
     if (turn.status === 'complete') footer.append(button('复制', () => navigator.clipboard.writeText(turn.answer).catch(e => notice(e.message))));
     answer.append(footer); card.append(answer); return card;

@@ -6,7 +6,7 @@
   const LITERATURE_NOTE_FORMAT_LIMITS = Object.freeze({ maxLength: 12000, maxDepth: 16, maxNodes: 2048, maxWork: 200000 });
   const LITERATURE_NOTE_COLORS = Object.freeze(['black', 'red', 'orange', 'green', 'blue', 'purple']);
   const COLOR_OPEN = /^<span data-brevess-color="(black|red|orange|green|blue|purple)">/;
-  const ESCAPABLE = /[\\`*_{}[\]()#+.!<>-]/;
+  const ESCAPABLE = /[\\`*_{}[\]()#+.!<>|-]/;
 
   function linesOf(source) {
     const lines = [];
@@ -141,6 +141,13 @@
           remove(offset + cursor, offset + cursor + 1);
           literal(children, text[cursor + 1], depth); cursor += 2; continue;
         }
+        if (char === '!') {
+          const image = /^!\[([^\]\n]{0,240})\]\(brevess-image:([a-f0-9]{64})\)/.exec(text.slice(cursor));
+          if (image) {
+            children.push(make('image', { alt: image[1], id: image[2] }, depth));
+            cursor += image[0].length; continue;
+          }
+        }
         if (char === '`') {
           const marker = /^`+/.exec(text.slice(cursor))[0];
           const end = codeEnd(text, cursor, marker);
@@ -200,6 +207,47 @@
     function paragraph(start, end, depth) {
       return make('paragraph', { children: inline(source.slice(start, end), start, depth + 1) }, depth);
     }
+    function cells(line) {
+      if (!line?.text.includes('|')) return null;
+      const text = line.text.trim(), leading = line.text.indexOf(text);
+      const parts = []; let start = text.startsWith('|') ? 1 : 0, code = '';
+      const add = end => {
+        const raw = text.slice(start,end), value = raw.trim();
+        parts.push({ text:value, offset:line.start + leading + start + (value ? raw.indexOf(value) : 0) });
+      };
+      for (let i = start; i < text.length; i++) {
+        if (text[i] === '\\') { i++; continue; }
+        if (text[i] === '`') {
+          let end = i + 1;
+          while (text[end] === '`') end++;
+          const mark = text.slice(i,end);
+          if (mark === code) code = ''; else if (!code && text.indexOf(mark,end) !== -1) code = mark;
+          i = end - 1; continue;
+        }
+        if (!code && text[i] === '|') { add(i); start = i + 1; }
+      }
+      if (start < text.length) add(text.length);
+      return parts.length ? parts : null;
+    }
+    function tableHeader(index) {
+      if (!lines[index + 1] || !/^\s*\|?\s*:?-{3,}/.test(lines[index + 1].text)) return null;
+      const header = cells(lines[index]), delimiter = cells(lines[index + 1]);
+      if (!header || header.length !== delimiter?.length || !delimiter.every(v => /^:?-{3,}:?$/.test(v.text))) return null;
+      return { header, delimiter };
+    }
+    function table(index, header, delimiter) {
+      const row = (parts, type) => make('tr', {children:header.map((_, i) => {
+        const cell = parts[i], mark = delimiter[i].text;
+        const align = mark.endsWith(':') ? (mark.startsWith(':') ? 'center' : 'right') : 'left';
+        return make(type,{align, children:cell ? inline(cell.text,cell.offset,4) : []},3);
+      })},2);
+      const head = row(header,'th'), body = []; index += 2;
+      while (index < lines.length && lines[index].text.trim()) {
+        const parts = cells(lines[index]); if (!parts) break;
+        body.push(row(parts,'td')); index++;
+      }
+      return { node: make('table',{children:[make('thead',{children:[head]},1), make('tbody',{children:body},1)]},1), index };
+    }
     function list(index, depth) {
       const first = listMarker(lines[index]);
       const items = [];
@@ -236,12 +284,15 @@
       let index = 0;
       while (index < lines.length) {
         if (!lines[index].text.trim()) { index += 1; continue; }
-        if (listMarker(lines[index])) {
+        const header = tableHeader(index);
+        if (header) {
+          const result = table(index,header.header,header.delimiter); children.push(result.node); index=result.index;
+        } else if (listMarker(lines[index])) {
           const result = list(index, 1); children.push(result.node); index = result.index;
         } else {
           const start = lines[index].start;
           let end = lines[index++].end;
-          while (index < lines.length && lines[index].text.trim() && !listMarker(lines[index])) end = lines[index++].end;
+          while (index < lines.length && lines[index].text.trim() && !listMarker(lines[index]) && !tableHeader(index)) end = lines[index++].end;
           children.push(paragraph(start, end, 1));
         }
       }

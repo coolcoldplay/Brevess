@@ -3591,7 +3591,7 @@ function articleWorkspaceSaveStageDetail(stage, status, progress = {}) {
     if (status !== 'done') return '等待';
     if (stage === 'permission') return '文件夹可写';
     if (stage === 'sync') return '已写入目录';
-    if (stage === 'offline' && progress.disabled === true) return '设置中未启用';
+    if (stage === 'offline' && progress.disabled === true) return '本次跳过';
     if (stage === 'offline' && progress.reused === true) return '复用快照并写入';
     const completed = Math.max(0, Number(progress.completedCount) || 0);
     const total = Math.max(completed, Number(progress.totalCount) || 0);
@@ -3622,7 +3622,7 @@ function renderArticleWorkspaceSaveProgress(progress = {}) {
         row.dataset.status = nextStatus;
         row.className = `article-workspace-save-stage is-${nextStatus}`;
         const detail = row.querySelector('.article-workspace-save-stage-detail');
-        if (detail) {
+        if (detail && (item.id === stage || detail.textContent === '等待')) {
             detail.textContent = item.id === stage
                 ? articleWorkspaceSaveStageDetail(item.id, nextStatus, progress)
                 : articleWorkspaceSaveStageDetail(item.id, nextStatus);
@@ -3975,6 +3975,7 @@ const navigationViewportState = new WeakMap();
 const outlineTitleTranslations = new Map();
 let outlineTitleTranslator = null;
 let outlineTitleTranslatorAvailability = null;
+let outlineTitleGlossary = null;
 let outlineTitleTranslatorError = null;
 let outlineTitleTranslatorContext = null;
 let outlineTitleTranslatorPrimeSequence = 0;
@@ -4391,7 +4392,6 @@ let currentArticleAbbreviationSnapshot = {
 };
 let globalAbbreviationMemoryEntryCount = 0;
 let abbreviationTranslationPending = false;
-let abbreviationButtonFeedbackSequence = 0;
 let abbreviationDialogRequestSequence = 0;
 let abbreviationDialogSession = 0;
 let abbreviationDraftDocument = "";
@@ -4451,6 +4451,19 @@ let tabContextRequestSequence = 0;
 let tabContextBindingRequestSequence = 0;
 let pendingTabContextTransition = null;
 let tabContextSyncTimer = null;
+let panelOwnerWindowId = null;
+let pendingPanelTabId = null;
+let pendingForcedPanelSync = false;
+
+function indicatePanelTabChange(tabId) {
+    pendingPanelTabId = tabId;
+    document.getElementById('sidePanelApp')?.setAttribute('data-switching-paper', '');
+}
+function revealBoundPanel(tabId) {
+    if (pendingPanelTabId !== null && pendingPanelTabId !== tabId) return;
+    pendingPanelTabId = null;
+    document.getElementById('sidePanelApp')?.removeAttribute('data-switching-paper');
+}
 let inactiveTabActivationPromise = null;
 
 let bilingualTranslationState = { enabled: false, phase: 'idle' };
@@ -4758,14 +4771,13 @@ async function togglePublisherReaderLayout() {
 }
 
 async function queryPanelTargetTab() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query(panelOwnerWindowId === null
+        ? { active: true, currentWindow: true }
+        : { active: true, windowId: panelOwnerWindowId });
     if (!tab?.id || tab.url || tab.pendingUrl) return tab || null;
 
-    // Browsers may omit url/title for the extension-owned PDF reader even
-    // though it is the active tab. Recover only a previously activated reader
-    // URL and verify that the live tab still hosts the PDF workspace before
-    // using it, so a stale activation cannot be applied to another extension
-    // page in the same tab.
+    // Without a tabs permission Chrome can omit our own reader URL, including
+    // on the very first visit. Verify ownership with the live reader.
     const activation = await SciLLM.readTabActivation(
         chrome.storage.session,
         tab.id
@@ -4775,21 +4787,18 @@ async function queryPanelTargetTab() {
         const receipt = await chrome.tabs.sendMessage(tab.id, { action: 'validateLibraryHtmlReader' }).catch(() => null);
         if (receipt?.success && receipt.navigationIdentity === activation.url) return { ...tab, url: activation.url, pendingUrl: '', title: activation.title || '文献 HTML' };
     }
-    const readerUrl = SciLLM.isPdfReaderUrl?.(activation?.url)
-        ? activation.url
-        : '';
-    if (!readerUrl) return tab;
     const pdfWorkspace = await SciLLM.sendTabMessageIfPresent(
-        chrome,
-        tab.id,
-        { action: 'getPdfWorkspaceState' }
+        chrome, tab.id, { action: 'getPdfWorkspaceState' }
     ).catch(() => null);
     if (!pdfWorkspace?.success || pdfWorkspace.pdfMode !== true) return tab;
+    const readerUrl = pdfWorkspace.readerUrl || activation?.url;
+    if (!readerUrl?.startsWith(chrome.runtime.getURL('pdf-reader.html')) ||
+        !SciLLM.isPdfReaderUrl?.(readerUrl)) return tab;
     return {
         ...tab,
         url: readerUrl,
         pendingUrl: readerUrl,
-        title: String(activation?.title || '文献 PDF')
+        title: String(pdfWorkspace.title || activation?.title || '文献 PDF')
     };
 }
 
@@ -4929,6 +4938,7 @@ function isCurrentParagraphSummaryTask(panelContext) {
 }
 
 function panelTabDocumentKey(tab = {}) {
+    if (!tab) return '';
     const tabId = Number(tab.id);
     const url = SciLLM.normalizeTabDocumentUrl(tab.url || tab.pendingUrl);
     return Number.isInteger(tabId) && url ? `${tabId}|${url}` : '';
@@ -5294,6 +5304,7 @@ function setupSidePanelMoreTools() {
     const summary = document.getElementById('sidePanelMoreToolsSummary');
     const menu = details?.querySelector('.side-panel-more-tools-menu');
     if (!details || !summary || !menu) return;
+    document.getElementById('sidePanelSavedScripts')?.addEventListener('click', () => globalThis.BrevessUnifiedComposer?.showSavedScripts());
     document.addEventListener('pointerdown', event => {
         if (details.open && !details.contains(event.target)) details.open = false;
     });
@@ -5340,7 +5351,7 @@ function cacheCurrentPanelTabState() {
     }
 }
 
-function resetPanelArticleState() {
+function resetPanelArticleState(viewAfterReset = 'navigation') {
     confidenceDistributionState = null;
     confidenceDistributionRequest += 1;
     mechanismDrawingPanel?.close();
@@ -5472,7 +5483,7 @@ function resetPanelArticleState() {
         unresolvedCount: 0
     };
     matchCounts = {};
-    activeWorkspaceView = 'navigation';
+    activeWorkspaceView = viewAfterReset;
     workspaceGeneration = 1;
     clearTimeout(workspaceUiSaveTimer);
     workspaceUiSaveTimer = null;
@@ -5509,7 +5520,7 @@ function resetPanelArticleState() {
     renderManualAnnotationSummary();
     renderCategories();
     updateApplyButton();
-    switchWorkspaceView('navigation', { persist: false });
+    switchWorkspaceView(viewAfterReset, { persist: false });
     return true;
 }
 
@@ -5639,6 +5650,7 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     const tab = await queryPanelTargetTab();
     if (lookupId !== tabContextLookupSequence) return null;
     const key = panelTabDocumentKey(tab);
+    if (key !== activePanelTabContext.key) indicatePanelTabChange(tab?.id ?? null);
     const activated = Boolean(key &&
         await SciLLM.isTabActivated(chrome.storage.session, tab));
     if (lookupId !== tabContextLookupSequence) return null;
@@ -5651,6 +5663,7 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     if (!force && activePanelTabContext.key === key &&
         activePanelTabContext.activated === activated &&
         tabContextBindingRequestSequence === tabContextRequestSequence) {
+        revealBoundPanel(tab?.id ?? null);
         void publishSidePanelShortcutScope(tab?.id, activated);
         return activePanelTabContext;
     }
@@ -5673,7 +5686,10 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     const previousTabId = activePanelTabContext.tabId;
     const previousActivated = activePanelTabContext.activated;
     cacheCurrentPanelTabState();
-    if (!resetPanelArticleState()) {
+    // A refresh of the same paper can finish after the reader has already picked a module.
+    const retainedView = activated && key && previousPanelKey === key && unifiedWorkspaceViewChoice?.key === key
+        ? unifiedWorkspaceViewChoice.view : 'navigation';
+    if (!resetPanelArticleState(retainedView)) {
         void scheduleContextSyncAfterDrain({
             drain: literatureNotePersistenceCoordinator.whenDrained(),
             generation: requestId,
@@ -5693,6 +5709,9 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         tabContextSequence
     };
     tabContextBindingRequestSequence = requestId;
+    const title = document.getElementById('sidePanelPaperTitle');
+    if (title) title.textContent = tab?.title || '正在连接当前页面…';
+    revealBoundPanel(tab?.id ?? null);
     // A transient notice belongs to its source page; the original per-page
     // notification history was cached before changing the active binding.
     if (previousPanelKey !== key) {
@@ -5782,10 +5801,17 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
 }
 
 function scheduleActiveTabContextSync(options = {}) {
+    pendingForcedPanelSync ||= options.force === true;
     clearTimeout(tabContextSyncTimer);
     tabContextSyncTimer = setTimeout(() => {
         tabContextSyncTimer = null;
-        void synchronizeActiveTabContext(options);
+        const force = pendingForcedPanelSync;
+        pendingForcedPanelSync = false;
+        void synchronizeActiveTabContext({ force }).catch(error => {
+            if (pendingPanelTabId === null) return;
+            renderArticleConnectionFailure(error);
+            revealBoundPanel(pendingPanelTabId);
+        });
     }, 0);
 }
 
@@ -5813,9 +5839,43 @@ function ensureArticleStructureRefreshCoordinator() {
 }
 
 function setupActiveTabSynchronization() {
-    chrome.tabs.onActivated.addListener(() => scheduleActiveTabContextSync());
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-        if (changeInfo.url) {
+    void chrome.windows.getCurrent().then(owner => { panelOwnerWindowId = owner.id; });
+    function onActiveTab({tabId, windowId}) {
+        if (panelOwnerWindowId !== null && windowId !== panelOwnerWindowId) return;
+        if (tabId !== activePanelTabContext.tabId || pendingPanelTabId !== null) indicatePanelTabChange(tabId);
+        globalThis.BrevessUnifiedComposer?.observeActiveTab(tabId, windowId);
+        scheduleActiveTabContextSync();
+    }
+    chrome.tabs.onActivated.addListener(onActiveTab);
+    chrome.runtime.onMessage.addListener((message, sender) => {
+        if (sender.id === chrome.runtime.id && !sender.tab && message?.type === 'BREVESS_PANEL_ACTIVE_TAB') onActiveTab(message);
+    });
+    // A restored panel can become visible after both activation notifications.
+    // Query only tab identity while visible. Parsing resumes only on a change.
+    let checking = false;
+    const checkVisibleTab = async () => {
+        if (checking || !panelUiReady || document.hidden || panelOwnerWindowId === null) return;
+        checking = true;
+        try {
+            const [tab] = await chrome.tabs.query({active:true, windowId:panelOwnerWindowId});
+            if (!tab) return;
+            globalThis.BrevessUnifiedComposer?.observeActiveTab(tab.id, tab.windowId);
+            if (tab.id !== activePanelTabContext.tabId && pendingPanelTabId !== tab.id) onActiveTab({tabId:tab.id, windowId:tab.windowId});
+        } catch { /* The browser window can close while this query is in flight. */ }
+        finally { checking = false; }
+    };
+    const watchdog = setInterval(checkVisibleTab, 1500);
+    document.addEventListener('pointerenter', checkVisibleTab);
+    window.addEventListener('pagehide', () => clearInterval(watchdog), {once:true});
+    const reconcile = () => {
+        if (document.visibilityState !== 'hidden') scheduleActiveTabContextSync();
+    };
+    window.addEventListener('pageshow', reconcile);
+    window.addEventListener('focus', reconcile);
+    document.addEventListener('visibilitychange', reconcile);
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.url && tab?.active && (panelOwnerWindowId === null || tab.windowId === panelOwnerWindowId)) {
+            indicatePanelTabChange(tabId);
             scheduleActiveTabContextSync();
         } else if (changeInfo.status === 'complete' &&
             tabId === activePanelTabContext.tabId) {
@@ -5956,8 +6016,10 @@ function setupActiveTabSynchronization() {
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
             showStatus(
-                `PDF 已建立统一索引：${Number(message.paragraphCount) || 0} 个段落、` +
-                    `${Number(message.figureCount) || 0} 张完整 Figure；五个模块现在共用同一份正文`,
+                message.source === 'pdf-native'
+                    ? 'PDF 文字索引已就绪，可继续阅读和使用侧栏'
+                    : `PDF 已建立统一索引：${Number(message.paragraphCount) || 0} 个段落、` +
+                        `${Number(message.figureCount) || 0} 张完整 Figure；五个模块现在共用同一份正文`,
                 'success'
             );
             scheduleActiveTabContextSync({ force: true });
@@ -6244,6 +6306,9 @@ function switchWorkspaceView(viewId, { persist = true, loadNotes = true, restori
     }
     // A cross-page display task owns the composer while cached tab UI restores.
     if (!persist && globalThis.BrevessUnifiedComposer?.isEditing?.()) target = 'chat';
+    if (target === 'chat' && (persist || activeWorkspaceView !== 'chat')) {
+        void globalThis.BrevessPresentationUI?.discoverClients(true);
+    }
     literatureNoteOpenSequence += 1;
     activeWorkspaceView = target;
     if (viewId === 'analysis') {
@@ -6281,6 +6346,13 @@ function switchWorkspaceView(viewId, { persist = true, loadNotes = true, restori
     document.querySelectorAll('[data-workspace-tools]').forEach(tools => {
         tools.hidden = tools.dataset.workspaceTools !== target;
     });
+    if (target === 'navigation' && navigationRenderPending) renderArticleNavigationTree(currentWorkspaceSnapshot);
+    if (target === 'highlights' && highlightRenderPending) {
+        renderEvidenceLedger(currentWorkspaceSnapshot);
+        renderHighlightDistributionSnapshot(currentWorkspaceSnapshot);
+    }
+    if (target === 'figures' && figurePaneRenderPending) renderFigureWorkspaceSnapshot(currentWorkspaceSnapshot);
+    if (target === 'chat' && articleChatPaneRenderPending) renderArticleChatSnapshot(currentWorkspaceSnapshot);
     if (target === 'mechanism' && mechanismChainRenderPending) {
         if (figureWorkspaceRenderCoordinator.getState().editing) {
             figureWorkspaceRenderCoordinator.request(currentWorkspaceSnapshot);
@@ -6704,6 +6776,29 @@ async function openAbbreviationLookup(entry, binding) {
     } catch (error) { showStatus('查词失败：' + error.message, 'error'); }
 }
 
+let abbreviationSelectedPair = null;
+async function removeSelectedAbbreviation() {
+    const entry = currentArticleAbbreviationSnapshot?.entries?.find(item => abbreviationPairKey(item) === abbreviationSelectedPair);
+    if (!entry) return;
+    const binding = abbreviationBinding();
+    const remove = document.getElementById('removeArticleAbbreviationEntry');
+    if (!isCurrentAbbreviationBinding(binding, true)) return;
+    remove.disabled = true;
+    try {
+        const response = await sendTabMessage(binding.context.tabId, {
+            action: 'removeArticleAbbreviation', abbreviation: entry.abbreviation,
+            expectedDocumentIdentity: binding.documentIdentity,
+            expectedNavigationIdentity: SciLLM.normalizeTabDocumentUrl(binding.context.url)
+        }, abbreviationMessageOptions(binding));
+        if (!isCurrentAbbreviationBinding(binding, true)) return;
+        if (!response?.success) throw new Error(response?.error || '移除失败');
+        for (const field of ['meaningZh', 'definitionZh']) abbreviationDrafts.delete(abbreviationPairKey(entry) + ':' + field);
+        const next = await loadArticleAbbreviationSnapshot();
+        renderArticleAbbreviationTable(next);
+        showStatus('已移除 ' + entry.abbreviation, 'success');
+    } catch (error) { remove.disabled = false; showStatus('移除失败：' + error.message, 'error'); }
+}
+
 function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSnapshot) {
     const dialog = document.getElementById('articleAbbreviationDialog');
     const body = document.getElementById('articleAbbreviationTableBody');
@@ -6713,6 +6808,7 @@ function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSna
     if (abbreviationDraftDocument !== docKey) {
         abbreviationDrafts.clear();
         abbreviationDraftDocument = docKey;
+        abbreviationSelectedPair = null;
     }
     abbreviationGestureDisposers.splice(0).forEach(dispose => dispose());
     const entries = Array.isArray(snapshot?.entries) ? snapshot.entries : [];
@@ -6723,6 +6819,7 @@ function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSna
         start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd
     } : null;
     body.replaceChildren();
+    document.getElementById('removeArticleAbbreviationEntry').disabled = true;
     entries.forEach(entry => {
         const row = document.createElement('tr');
         row.className = 'abbreviation-table-row';
@@ -6787,30 +6884,19 @@ function renderArticleAbbreviationTable(snapshot = currentArticleAbbreviationSna
             });
             editor.append(input, save); cell.append(editor); row.append(cell);
         }
-        const deleteCell = createWorkspaceElement('td', 'abbreviation-delete-cell');
-        const remove = createWorkspaceElement('button', 'abbreviation-row-delete', '×');
-        remove.type = 'button';
-        remove.title = '从本文缩略词表移除';
-        remove.setAttribute('aria-label', '从本文缩略词表移除 ' + entry.abbreviation);
-        remove.addEventListener('click', async () => {
-            if (!confirm(t('从本文缩略词表移除 {0}？').replace('{0}', entry.abbreviation))) return;
+        const radio = document.createElement('input');
+        radio.type = 'radio'; radio.name = 'selectedAbbreviationEntry'; radio.className = 'abbreviation-row-select';
+        radio.setAttribute('aria-label','选择词条 '+entry.abbreviation);
+        row.firstElementChild.prepend(radio);
+        const choose = () => {
             if (!isCurrentAbbreviationBinding(binding, true)) return;
-            remove.disabled = true;
-            try {
-                const response = await sendTabMessage(binding.context.tabId, {
-                    action: 'removeArticleAbbreviation', abbreviation: entry.abbreviation,
-                    expectedDocumentIdentity: binding.documentIdentity,
-                    expectedNavigationIdentity: SciLLM.normalizeTabDocumentUrl(binding.context.url)
-                }, abbreviationMessageOptions(binding));
-                if (!isCurrentAbbreviationBinding(binding, true)) return;
-                if (!response?.success) throw new Error(response?.error || '移除失败');
-                for (const field of ['meaningZh', 'definitionZh']) abbreviationDrafts.delete(abbreviationPairKey(entry) + ':' + field);
-                const next = await loadArticleAbbreviationSnapshot();
-                renderArticleAbbreviationTable(next);
-                showStatus('已移除 ' + entry.abbreviation, 'success');
-            } catch (error) { remove.disabled = false; showStatus('移除失败：' + error.message, 'error'); }
-        });
-        deleteCell.append(remove); row.append(deleteCell);
+            body.querySelector('[data-selected="true"]')?.removeAttribute('data-selected');
+            radio.checked = true; row.dataset.selected = 'true'; abbreviationSelectedPair = row.dataset.pair;
+            document.getElementById('removeArticleAbbreviationEntry').disabled = false;
+        };
+        row.addEventListener('focusin', choose);
+        row.addEventListener('click', choose);
+        if (row.dataset.pair === abbreviationSelectedPair) choose();
         row.addEventListener('dblclick', event => {
             if (event.target.closest('.abbreviation-row-delete, .abbreviation-meaning-save')) return;
             event.preventDefault();
@@ -6900,7 +6986,7 @@ async function importCurrentArticleAbbreviationsToGlobal() {
     }
     if (button) {
         button.disabled = true;
-        button.textContent = '正在存入…';
+        button.setAttribute('aria-busy','true');
     }
     try {
         const binding = abbreviationBinding();
@@ -6927,7 +7013,7 @@ async function importCurrentArticleAbbreviationsToGlobal() {
     } finally {
         if (button) {
             button.disabled = false;
-            button.textContent = '存入本地词库';
+            button.removeAttribute('aria-busy');
         }
     }
 }
@@ -6979,13 +7065,8 @@ async function enrichArticleAbbreviations({ entry = null, fields = ['meaningZh']
     if (!entries.length) {
         showStatus('所选内容已填写；AI 仅补齐空白格。', 'success'); return;
     }
-    const buttons = ['translateArticleAbbreviations', 'defineArticleAbbreviations'].map(id => document.getElementById(id));
-    const progress = document.getElementById(fields.length === 1 && fields[0] === 'definitionZh'
-        ? 'defineArticleAbbreviations' : 'translateArticleAbbreviations');
-    abbreviationTranslationPending = true;
-    const sequence = ++abbreviationButtonFeedbackSequence;
-    buttons.forEach(button => { button.disabled = true; button.setAttribute('aria-busy', 'true'); });
-    progress.textContent = '获取中…';
+    const progress = document.getElementById('translateArticleAbbreviations');
+    abbreviationTranslationPending = true; progress.disabled = true; progress.setAttribute('aria-busy','true');
     showStatus('正在补齐 ' + entries.length + ' 项空白内容…', 'info');
     try {
         const response = await sendLlmMessage({
@@ -7015,25 +7096,18 @@ async function enrichArticleAbbreviations({ entry = null, fields = ['meaningZh']
         renderArticleAbbreviationTable(next);
         showStatus(patches.length ? '已补齐 ' + patches.length + ' 项空白内容；保留已有内容和正在编辑的内容。'
             : '没有新增内容：已有内容与编辑已保留，无法确定的释义保持空白。', 'success', response.notificationUsage);
-        progress.textContent = patches.length ? '已保存' : '无新增';
     } catch (error) {
         if (isCurrentAbbreviationBinding(binding, true)) {
-            progress.textContent = '重试';
-            showStatus('AI 补全失败：' + error.message, 'error');
+                showStatus('AI 补全失败：' + error.message, 'error');
         }
     } finally {
         abbreviationTranslationPending = false;
-        buttons.forEach(button => { button.disabled = false; button.removeAttribute('aria-busy'); });
-        setTimeout(() => {
-            if (!abbreviationTranslationPending && sequence === abbreviationButtonFeedbackSequence) {
-                buttons.forEach(button => { button.textContent = '一键获取'; });
-            }
-        }, 2400);
+        progress.disabled = false; progress.removeAttribute('aria-busy');
     }
 }
 
 async function translateArticleAbbreviationsWithSummaryModel() {
-    return enrichArticleAbbreviations({ fields: ['meaningZh'] });
+    return enrichArticleAbbreviations({ fields: ['meaningZh','definitionZh'] });
 }
 
 function appendAbbreviationLookupSite(site, selected = false) {
@@ -7144,8 +7218,35 @@ function setupAbbreviationDialogs() {
         } catch (error) { document.getElementById('abbreviationLookupStatus').textContent = error.message; }
         finally { button.disabled = false; }
     });
-    document.getElementById('defineArticleAbbreviations').addEventListener('click', () =>
-        void enrichArticleAbbreviations({ fields: ['definitionZh'] }));
+    const addDialog = document.getElementById('addAbbreviationDialog');
+    const form = document.getElementById('addAbbreviationForm');
+    let addBinding;
+    document.getElementById('removeArticleAbbreviationEntry').addEventListener('click', removeSelectedAbbreviation);
+    document.getElementById('addArticleAbbreviationEntry').addEventListener('click', () => {
+        addBinding = abbreviationBinding(); form.reset(); form.querySelector('[role="status"]').textContent = '';
+        addDialog.showModal(); form.elements.abbreviation.focus();
+    });
+    form.querySelector('[data-dismiss]').onclick = () => addDialog.close();
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const binding = addBinding;
+        if (!isCurrentAbbreviationBinding(binding, true)) { addDialog.close(); return; }
+        const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+        try {
+            const entry = Object.fromEntries(new FormData(form));
+            const result = await sendTabMessage(binding.context.tabId, { action: 'addArticleAbbreviation', entry,
+                expectedDocumentIdentity: binding.documentIdentity,
+                expectedNavigationIdentity: SciLLM.normalizeTabDocumentUrl(binding.context.url)
+            }, abbreviationMessageOptions(binding));
+            if (!isCurrentAbbreviationBinding(binding, true)) { addDialog.close(); return; }
+            if (!result?.success) throw Error(result?.error || '添加失败');
+            abbreviationSelectedPair = abbreviationPairKey(entry);
+            const latest = await loadArticleAbbreviationSnapshot();
+            if (!isCurrentAbbreviationBinding(binding, true)) { addDialog.close(); return; }
+            renderArticleAbbreviationTable(latest); addDialog.close(); showStatus('已添加词条','success');
+        } catch (error) { form.querySelector('[role="status"]').textContent=error.message; }
+        finally { submit.disabled=false; }
+    });
 }
 
 
@@ -7427,6 +7528,11 @@ function renderSidebarBatchActions() {
         button.setAttribute('aria-busy', String(Boolean(active)));
         button.dataset.taskRunning = String(generating);
         button.dataset.taskStatus = phase;
+        const shortcut=document.querySelector(`[data-batch-shortcut="${module}"]`);
+        if (shortcut) {
+            shortcut.setAttribute('aria-busy',String(Boolean(active)));
+            shortcut.title = active ? '停止当前 AI 任务' : shortcut.getAttribute('aria-label');
+        }
         const bar = button.querySelector('.workspace-nav-task-progress');
         if (!bar) return;
         bar.hidden = !task && !intent?.busy && !pendingStop && !cleanupPending;
@@ -7662,6 +7768,19 @@ async function performSidebarModuleBatch(
 }
 
 function setupSidebarBatchActions() {
+    document.querySelectorAll('[data-batch-shortcut]').forEach(button => {
+        button.addEventListener('click', event => {
+            const module = button.dataset.batchShortcut;
+            if (module === 'note') void generateSelectedLiteratureNoteFields(event.isTrusted === true);
+            else if (module === 'highlights' && analysisMode !== 'llm' && button.getAttribute('aria-busy') !== 'true') {
+                const context = capturePanelContext();
+                const trusted = event.isTrusted === true;
+                void queueAnalysisModeMutation('llm').then(() => {
+                    if (analysisMode === 'llm' && isCurrentPanelContext(context)) return performSidebarModuleBatch(module, trusted);
+                }).catch(error => showStatus(error.message, 'error'));
+            } else void performSidebarModuleBatch(module, event.isTrusted === true);
+        });
+    });
     const labels = { navigation: '导航', highlights: '摘句', figures: '图解', note: '笔记' };
     document.querySelectorAll('[data-workspace-target]').forEach(button => {
         globalThis.BrevessIcons?.decorate(button, button.dataset.workspaceTarget);
@@ -7742,7 +7861,7 @@ function setupWorkspaceNavigation() {
     setupFigureResultEditor();
     setupFigureKeyboardNavigation();
     setupGlobalKeyboardShortcuts();
-    switchWorkspaceView(activeWorkspaceView);
+    switchWorkspaceView(activeWorkspaceView, { persist: false });
 }
 
 async function runWorkspaceRefreshButton(button) {
@@ -8038,9 +8157,10 @@ function restoreNavigationUiState(uiState = {}) {
 }
 
 function navigationTitleDisplayNode(node, sourceKind) {
-    const saved = outlineTitleTranslations.get(outlineExpansionKey(sourceKind, node.sectionId));
-    return saved?.[2] === String(node.title || '')
-        ? { ...node, displayTitle: `${node.title}\n${saved[3]}` } : node;
+    const source=node.translationSource || node;
+    const saved = outlineTitleTranslations.get(outlineExpansionKey(sourceKind, source.sectionId));
+    return saved?.[2] === String(source.title || '')
+        ? { ...node, displayTitle: `${node.title}\n${globalThis.BrevessTranslationGlossary?.academicHeading(node.title) || saved[3]}` } : node;
 }
 
 function collectNavigationTitleTranslationTargets(snapshot = currentWorkspaceSnapshot) {
@@ -8066,7 +8186,7 @@ function collectNavigationTitleTranslationTargets(snapshot = currentWorkspaceSna
                 inResults || resultsSection));
     };
     (navigation ? (navigation.outlineSections?.length ? navigation.outlineSections : navigation.sections)
-        : (Array.isArray(snapshot?.nodes) ? snapshot.nodes : [])).forEach(node => visit(node));
+        : (snapshot?.readingTranslationSourceNodes || snapshot?.nodes || [])).forEach(node => visit(node));
     return targets;
 }
 
@@ -8160,6 +8280,7 @@ function resetNavigationTitleTranslator() {
     outlineTitleTranslator = null;
     outlineTitleTranslatorContext = null;
     outlineTitleTranslatorAvailability = null;
+    outlineTitleGlossary = null;
     outlineTitleTranslatorError = null;
     updateNavigationTitleTranslationButton();
 }
@@ -8179,7 +8300,13 @@ function primeNavigationTitleTranslator({ force = false } = {}) {
     const identity = captureNavigationTitleTranslationIdentity();
     const isCurrent = () => sequence === outlineTitleTranslatorPrimeSequence &&
         provider === outlineTitleTranslator && isCurrentNavigationTitleTranslationIdentity(identity);
-    return Promise.resolve().then(() => {
+    const glossary = globalThis.BrevessTranslationGlossary;
+    const loadGlossary = glossary ? Promise.resolve(glossary.read()).then(async index => {
+        const signature = await glossary.signature(index);
+        if (isCurrent()) outlineTitleGlossary = {index,signature};
+    }) : Promise.resolve();
+    return Promise.resolve().then(async () => {
+        await loadGlossary;
         if (!isCurrent()) return;
         if (!provider) throw Object.assign(new Error('翻译任务服务不可用。'), { code: 'TRANSLATION_BRIDGE_UNAVAILABLE' });
         return provider.availability();
@@ -8220,7 +8347,7 @@ function setupNavigationTitleTranslation() {
     // Prime availability before a click. initialize() can then call native
     // create() synchronously while the button's user activation is still live.
     chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName === 'local' && changes.sciLlmSettingsV2) {
+        if (areaName === 'local' && (changes.sciLlmSettingsV2 || changes.sciGlobalAbbreviationMemoryV1)) {
             primeNavigationTitleTranslator({ force: true });
         }
     });
@@ -8298,18 +8425,24 @@ async function runNavigationTitleTranslation() {
         return;
     }
     const provider = ensureNavigationTitleTranslator();
-    if (!provider || outlineTitleTranslatorAvailability === 'unavailable') {
-        showStatus(navigationTitleTranslationErrorMessage(outlineTitleTranslatorError || { code: 'API_UNAVAILABLE' }), 'warning');
-        if (provider?.getState?.().mode === 'local') showNavigationTranslationRecovery();
-        return;
-    }
     const targets = collectNavigationTitleTranslationTargets();
     if (!targets.length) {
         showStatus('当前没有可翻译的导航标题。', 'warning');
         return;
     }
-    const engineSignature = provider.getState().engineSignature;
+    const engineSignature = provider?.getState()?.engineSignature || '';
+    const known = new Map();
+    for (const target of targets) {
+        const fixed = globalThis.BrevessTranslationGlossary?.academicHeading(target.sourceTitle);
+        if (fixed) known.set(target, [fixed,'browser-translator:en:zh:validated-prefix-v2']);
+        else if (outlineTitleGlossary) {
+            const terms = outlineTitleGlossary.index.find(target.sourceTitle);
+            if (terms.length === 1 && terms[0].text === target.sourceTitle.trim())
+                known.set(target,[terms[0].target,outlineTitleGlossary.signature]);
+        }
+    }
     const pending = targets.filter(target => {
+        if (known.has(target)) return false;
         const saved = outlineTitleTranslations.get(outlineExpansionKey(target.sourceKind, target.sectionId));
         const savedEngine = saved?.[4] || 'browser-translator:en:zh:validated-prefix-v2';
         return saved?.[2] !== target.sourceTitle || savedEngine !== engineSignature;
@@ -8322,23 +8455,42 @@ async function runNavigationTitleTranslation() {
     const isCurrent = () => outlineTitleTranslationRun === run &&
         run.sequence === outlineTitleTranslationSequence && !run.controller.signal.aborted &&
         isCurrentNavigationTitleTranslationIdentity(run.context) &&
-        provider === outlineTitleTranslator && provider.getState().engineSignature === engineSignature &&
+        provider === outlineTitleTranslator && (provider?.getState()?.engineSignature || '') === engineSignature &&
         run.sourceSignature === navigationTitleSourceSignature();
     let completed = 0, failed = 0, firstError = null;
     try {
         // Keep this before the first await; it owns a popup-only provider.
-        const initialization = pending.length ? provider.initialize({ signal: run.controller.signal }) : Promise.resolve();
-        await initialization;
+        const available = provider && outlineTitleTranslatorAvailability !== 'unavailable';
+        // Start native initialization within the click, then persist dictionary translations even if it fails.
+        const initialization = pending.length && available
+            ? provider.initialize({signal:run.controller.signal}).then(() => null, error => error) : Promise.resolve(null);
         if (!isCurrent()) return;
         await persistNavigationTitleWorkspaceRequest('NAVIGATION_TRANSLATION_ADMIT', run.context);
         if (!isCurrent()) return;
         // Capture the translation owner only after its first durable admission.
         // Native initialize() above still runs synchronously in the user click.
         run.context = captureNavigationTitleTranslationIdentity();
+        if (known.size) {
+            for (const [target, [zh,signature]] of known) {
+                outlineTitleTranslations.set(outlineExpansionKey(target.sourceKind, target.sectionId),
+                    [target.sourceKind, target.sectionId, target.sourceTitle, zh, signature]);
+            }
+            renderArticleNavigationTree();
+        }
+        if (known.size && pending.length) await persistNavigationTitleWorkspaceRequest('NAVIGATION_TRANSLATION_SAVE', run.context, currentActiveWorkspaceUiState());
+        const initError = await initialization;
+        if (!isCurrent()) return;
+        if (initError) throw initError;
+        if (pending.length && !available) {
+            showStatus((known.size ? '已翻译常见章节标题。' : '') + navigationTitleTranslationErrorMessage(outlineTitleTranslatorError || {code:'API_UNAVAILABLE'}), 'warning');
+            if (provider?.getState?.().mode === 'local') showNavigationTranslationRecovery();
+            return;
+        }
         if (!pending.length) {
             await persistNavigationTitleWorkspaceRequest('NAVIGATION_TRANSLATION_SAVE', run.context, currentActiveWorkspaceUiState());
             if (!isCurrent()) return;
             renderArticleNavigationTree();
+            updateNavigationTitleTranslationButton('导航标题译文已就绪。');
             showStatus('导航标题译文已就绪。', 'success');
             return;
         }
@@ -9557,9 +9709,12 @@ function renderSearchOutlineMetadata(jump, node) {
     }
 }
 
+let navigationRenderPending = false;
 function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
-    snapshot=globalThis.BrevessUnifiedReading?.projectOutline(snapshot)||snapshot;
+    if (snapshot && activeWorkspaceView !== 'navigation') { navigationRenderPending = true; return; }
+    navigationRenderPending = false;
     if (snapshot === currentWorkspaceSnapshot) primeNavigationTitleTranslator();
+    snapshot=globalThis.BrevessUnifiedReading?.projectOutline(snapshot)||snapshot;
     if (outlineTitleTranslationRun && outlineTitleTranslationRun.sourceSignature !==
         navigationTitleSourceSignature(snapshot)) cancelNavigationTitleTranslation();
     const container = document.getElementById('articleNavigationTree');
@@ -9811,7 +9966,9 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
     restoreViewport();
 }
 
+let highlightRenderPending = false;
 function renderEvidenceLedger(snapshot = currentWorkspaceSnapshot) {
+    if (snapshot && activeWorkspaceView !== 'highlights') { highlightRenderPending = true; return; }
     const container = document.getElementById('evidenceLedger');
     if (!container) return;
     container.replaceChildren(createWorkspaceElement('h3', '', '论文证据台账'));
@@ -9849,6 +10006,8 @@ function renderEvidenceLedger(snapshot = currentWorkspaceSnapshot) {
 }
 
 function renderHighlightDistributionSnapshot(snapshot = currentWorkspaceSnapshot) {
+    if (snapshot && activeWorkspaceView !== 'highlights') { highlightRenderPending = true; return; }
+    highlightRenderPending = false;
     const container = document.getElementById('highlightDistribution');
     if (!container) return;
     container.replaceChildren(createWorkspaceElement('h3', '', '高亮分布'));
@@ -10468,6 +10627,7 @@ function appendFigureWorkspaceOverview(parent, view, snapshot = currentWorkspace
         }
     });
     parent.appendChild(overview);
+    return body;
 }
 
 const FIGURE_RESULT_EDITOR_OVERVIEW_FIELDS = Object.freeze([
@@ -11633,7 +11793,7 @@ function summarizeFigureEvidenceLabel(value, fallback = '') {
     const primitiveText = input => {
         if (!['string', 'number', 'boolean', 'bigint'].includes(typeof input)) return '';
         try {
-            return String(input).normalize('NFKC').replace(/\s+/gu, ' ').trim();
+            return String(input).normalize('NFC').replace(/\s+/gu, ' ').trim();
         } catch (_) {
             return '';
         }
@@ -11889,6 +12049,7 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
     previousBlock = null,
     incomingTransitions = [],
     panelCount = 0,
+    singlePanel = null,
     paperQuestion = null,
     groupingSource = null
 } = {}) {
@@ -11897,11 +12058,14 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
     const blockId = String(block?.id || '');
     details.dataset.evidenceBlockId = blockId;
     const parts = figureEvidenceSummaryParts(block);
-    const headingPart = ['groupConclusion', 'established', 'groupGoal']
-        .map(field => parts.find(part => part.fields.includes(field))).find(Boolean);
+    const part = field => parts.find(item => item.fields.includes(field))?.value;
+    const heading = SciLLM.figureEvidenceHeading({
+        conclusion: part('groupConclusion'), goal: part('groupGoal'),
+        readout: singlePanel?.phenotypeName, established: part('established')
+    });
     const label = summarizeFigureEvidenceLabel(
         block?.provenance === 'manual' ? (block.title || block.conclusion || '') :
-            (headingPart?.value || (block?.sourceType === 'bridge' ? block?.transitionToNext : '')),
+            (heading || (block?.sourceType === 'bridge' ? block?.transitionToNext : '')),
         block?.sourceType === 'bridge' ? '\u672a\u5339\u914d\u7684\u7ec4\u95f4\u8fde\u63a5' : '暂无证据小结'
     );
     const summary = createWorkspaceElement(
@@ -11921,7 +12085,7 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
     }
     summary.appendChild(createWorkspaceElement('span', 'workspace-evidence-block-separator', '：'));
     const description = createWorkspaceElement('span', 'workspace-evidence-block-description', label);
-    description.title = block?.provenance === 'manual' ? (block.title || block.conclusion || label) : (headingPart?.value || label);
+    description.title = label;
     const manualName = block?.displayName?.humanReviewed === true || block?.displayName?.editedAt > 0;
     const editName = manualName ? block.displayName.value : description.title;
     if (manualName) {
@@ -11945,6 +12109,10 @@ function createFigureEvidenceBlockDetails(figureId, block, index, {
     const summaryState = block?.fieldStates?.groupConclusion;
     const summaryValue = summaryState?.humanReviewed === true ? summaryState.value : block?.groupConclusion || block?.conclusion || '';
     appendFigureEvidenceEditableField(core, '模块小结', figureId, block, 'groupConclusion', 'evidence-block', summaryValue);
+    const established = part('established');
+    if (established && established !== summaryValue) {
+        appendFigureEvidenceEditableField(core, '直接证据', figureId, block, 'established');
+    }
     body.appendChild(core);
     appendFigureEvidenceEditableField(body, '证据类型', figureId, block, 'evidenceLevel', 'evidence-block');
     if (panelCount > 0) {
@@ -12071,6 +12239,8 @@ function appendFigurePanelCatalog(parent, figure, result, view) {
                 previousBlock: evidenceBlocks[blockIndex - 1] || null,
                 incomingTransitions: transitionsIntoBlock.get(block.id) || [],
                 panelCount: panelCountByBlock.get(block.id) || 0,
+                singlePanel: block.panelIds?.length === 1
+                    ? resultPanels.find(panel => panel.panel === block.panelIds[0]) : null,
                 paperQuestion: blockIndex === 0 ? paperQuestion : null,
                 groupingSource: (result?.panelGroups || []).find(group =>
                     group.panels?.length === block.panelIds?.length &&
@@ -12646,7 +12816,11 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
     const cancelledPhaseText = phase === 'cancelled'
         ? t('本批 Figure 解读已取消') : '';
     const recoveryPhaseText = figureRecoveryPhaseText(phase);
-    const phaseText = cancelledPhaseText || recoveryPhaseText || t({
+    const savedAllPanels = expectedPanelCount > 0 && progress.savedPanelCount >= expectedPanelCount &&
+        progress.validatedPanelCount >= expectedPanelCount && !progress.missingPanels?.length && !progress.unresolvedPanels?.length;
+    const partialPhaseText = phase === 'failed' && progress.errorCode === 'INVALID_RESPONSE' && savedAllPanels
+        ? t('Panel 已保存，整图解读待补全') : '';
+    const phaseText = cancelledPhaseText || partialPhaseText || recoveryPhaseText || t({
         queued: '等待前面的 Figure 完成',
         paused: '已暂停，当前请求结束后不再发送新请求',
         preparing: '正在准备图片与正文上下文',
@@ -12680,6 +12854,7 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
         output_compact_retry: '输出过长，正改用紧凑 JSON 重试'
     }[phase] || '正在处理 Figure');
     const details = [];
+    if (phase === 'failed' && progress.errorDetail) details.push(progress.errorDetail);
     const totalFigures = Math.max(0, Number(progress.totalFigures) || 0);
     if (totalFigures) {
         details.push(`${t('批次进度')}：${Math.min(totalFigures,
@@ -12701,7 +12876,7 @@ function formatFigureProgress(progress = {}, now = Date.now()) {
     if (recognizedPanelCount !== null && !wholeFigure) {
         details.push(`${t('已识别')} ${recognizedPanelCount} ${t('个 Panel')}`);
     }
-    if (batchRecognizedPanelCount !== null && !wholeFigure) {
+    if (batchRecognizedPanelCount !== null && !wholeFigure && !partialPhaseText) {
         details.push(`${t('本批有效 Panel')}：${batchRecognizedPanelCount}`);
     }
     const missingPanels = normalizeFigureRecoveryPanelLabels(progress.missingPanels);
@@ -12789,7 +12964,7 @@ function figureSummaryPresentation(result, figure, view = null) {
     const extracted = SciLLM.extractFigureTitle?.(figureSourceCaption(figure), figure?.figureLabel);
     const sourceTitle = explicitTitle || text(extracted?.title || extracted?.translatedTitle)
         .split(/(?<=[.!?。])\s+/u)[0];
-    if (sourceTitle) return render(sourceTitle, 'figureTitle');
+    if (sourceTitle) return render(sourceTitle.replace(/^[|:]\s*/u, ''), 'figureTitle');
     return { text: '暂无图标题', fullText: '', source: '', state: 'missing' };
 }
 
@@ -13514,6 +13689,7 @@ function setupGlobalKeyboardShortcuts() {
         void sendLlmMessage({ type: 'LLM_GET_SETTINGS' })
             .then(nextState => {
                 llmSettingsState = nextState;
+                if (document.getElementById('articleChatCommandMenu')?.hidden === false) updateArticleChatCommandMenu();
                 renderArticleChatProfileOptions();
                 renderArticleSemanticHighlightControls();
                 return publishSidePanelShortcutScope();
@@ -13702,12 +13878,13 @@ function renderFigureQuickNav(figures) {
     }
     const labels = items.map((figure, index) => {
         const number = compactFigureDisplayNumber(figure);
-        return /^(?:S|ED)/i.test(number) ? number : `F${number || index + 1}`;
+        return /^(?:S|ED)/i.test(number) ? 'FS' + number.replace(/^(?:S|ED)/i,'') :
+            (figure.isSupplemental ? 'FS' : 'F') + (number || index + 1);
     });
     // Reserve space for the longest hovered label, with no dead strip to its right.
     const longest = Math.max(...labels.map(label => label.length));
     const railWidth = longest <= 3 ? 28 : Math.ceil(longest * 7.5 + 6);
-    document.getElementById('workspace-figures')?.style.setProperty('--figure-nav-width', `${railWidth}px`);
+    nav.style.setProperty('--figure-nav-width', `${railWidth + 5}px`);
     if (!items.some(figure => figure.figureId === figureQuickNavActiveId)) {
         figureQuickNavActiveId = items.find(figure => figure.standard || figure.deep)?.figureId ||
             items[0].figureId;
@@ -13717,7 +13894,7 @@ function renderFigureQuickNav(figures) {
         const item = createWorkspaceElement('div', 'figure-quick-nav-item');
         item.dataset.figureId = figure.figureId;
         item.dataset.figureKind = figure.isSupplemental === true ? 'supplemental' : 'main';
-        item.classList.toggle('is-supplemental', figure.isSupplemental === true);
+        item.classList.toggle('is-supplemental', labels[index].startsWith('FS'));
         const marker = createWorkspaceElement('button', 'figure-quick-nav-marker');
         marker.type = 'button';
         marker.setAttribute('aria-label', `跳转到 ${figure.figureLabel || figure.figureId}`);
@@ -13725,7 +13902,10 @@ function renderFigureQuickNav(figures) {
         marker.textContent = labels[index];
         marker.title = figure.figureLabel || figure.figureId;
         marker.setAttribute('aria-expanded', 'false');
-        marker.addEventListener('click', () => navigateFigureQuickAnchor(figure.figureId));
+        marker.addEventListener('click', () => {
+            void handleFigureWorkspaceJump(figure,marker);
+            if (!document.getElementById('workspace-figures').hidden) void navigateFigureQuickAnchor(figure.figureId);
+        });
 
         const flyout = createWorkspaceElement('div', 'figure-quick-nav-flyout');
         const modelResult = figure.activeDepth === 'standard' ? (figure.standard || figure.deep) : (figure.deep || figure.standard);
@@ -13751,9 +13931,13 @@ function renderFigureQuickNav(figures) {
                 'button', 'figure-quick-nav-panel-button', viewPanel.displayId
             );
             panelButton.type = 'button';
+            panelButton.dataset.figureId = figure.figureId;
+            panelButton.dataset.panelId = panelId;
             panelButton.addEventListener('click', event => {
                 event.stopPropagation();
-                navigateFigureQuickAnchor(figure.figureId, panelId);
+                switchWorkspaceView('figures');
+                void handleFigureWorkspaceJump(figure,panelButton);
+                void navigateFigureQuickAnchor(figure.figureId, panelId);
             });
             panelPopover.appendChild(panelButton);
         });
@@ -14955,17 +15139,11 @@ async function locateMechanismDrawingEvidence({ figureId, blockId = '', panelIds
     });
 }
 
-let documentAgentChat = null;
-let documentAgentHost = null, documentAgentConnection = null, documentAgentConnected = false, pptAgentAccess = null;
+let documentAgentHost = null, documentAgentConnection = null, pptAgentAccess = null;
 function setupDocumentAgentConnection() {
     if (documentAgentHost) return;
-    const button = document.getElementById('documentAgentConnection');
-    if (!button || !SciLLM.createDocumentAgentHost) return;
-    const refresh = () => {
-        let writable = false;
-        try { writable = Boolean(documentAgentHost.execute('mechanism.read_context').scope); } catch (_) {}
-        button.textContent = writable ? 'Agent · 本篇已授权' : 'Agent 连接';
-    };
+    if (!SciLLM.createDocumentAgentHost) return;
+    const refresh = () => window.dispatchEvent(new CustomEvent('brevess:mcp-status'));
     documentAgentHost = SciLLM.createDocumentAgentHost({
         shared: SciLLM, getContext: captureFigureWorkspaceEditContext, getDraft: mechanismWorkspaceDraft,
         getTitle: () => currentWorkspaceSnapshot?.title || currentWorkspaceSnapshot?.article?.title || preparedDocumentState?.title || '当前文献',
@@ -14983,36 +15161,11 @@ function setupDocumentAgentConnection() {
     documentAgentConnection = SciLLM.createDocumentAgentConnection({
         host: documentTransportHost, runtime: chrome.runtime, captureOwner: captureFigureUiOwnerBinding,
         sourceTarget: () => supplementalFigureImportTools.buildTarget(currentWorkspaceSnapshot, activePanelTabContext.tabId),
-        onConnection: connected => { documentAgentConnected = connected; refresh(); window.dispatchEvent(new CustomEvent('brevess:mcp-status')); },
+        onConnection: refresh,
         onState: () => window.dispatchEvent(new CustomEvent('brevess:mcp-status'))
     });
     const connect = () => documentAgentConnection.connect();
-    documentAgentChat = SciLLM.createDocumentAgentChat({document,host:documentAgentHost,capture:captureFigureWorkspaceEditContext});
-    button.addEventListener('click', () => { void documentAgentChat.open().catch(error=>showStatus('请先准备当前文献图表：'+(error.code||'尚未就绪'),'error')); });
-    const settingsButton=document.createElement('button');settingsButton.type='button';settingsButton.className='btn btn-secondary';settingsButton.textContent='连接设置';button.after(settingsButton);
-    settingsButton.addEventListener('click', async () => {
-        void connect().catch(() => {});
-        const workbenches = async () => (await chrome.tabs.query({url:chrome.runtime.getURL('workbench/index.html')+'*'})).filter(tab=>{try{return new URL(tab.url).pathname==='/workbench/index.html';}catch(_){return false;}});
-        SciLLM.showAgentConnectionCenter({document,readmeUrl:chrome.runtime.getURL('mcp/README.md'),
-            async status(){
-                let context=null;try{context=documentAgentHost.execute('mechanism.read_context');}catch(_){}
-                let bridge={state:'unknown'};
-                try{
-                    const tabs=await workbenches();
-                    if(tabs.length===1)bridge=await chrome.tabs.sendMessage(tabs[0].id,{type:'BREVESS_AGENT_CONNECTION_STATUS'})||{state:'unknown',message:'工作台尚未返回连接状态，请前往工作台检测。'};
-                    else bridge.message=tabs.length?'存在多个工作台连接，请保留一个后刷新。':'尚未打开独立工作台，请前往工作台连接。';
-                }catch(_){bridge={state:'unknown',message:'无法读取工作台连接状态，请前往工作台检测。'};}
-                const registration=documentAgentConnection.status();
-                return{module:'文献机制图',target:context?.title||'请打开并保存文献解图',bridge,
-                    document:{state:context?registration.state:'unavailable',message:!context?'请先在当前侧栏准备文献。':registration.state==='unavailable'?'登记未完成，请点击检测连接重试。':''},
-                    permission:context?.scope?'本篇已授权；到期 '+new Date(context.scope.expiresAt).toLocaleTimeString():'只读',capabilities:documentAgentConnected&&context?['读取机制图','枚举证据','申请节点/联系/绑定写入']:[]};
-            },
-            check:connect,
-            revoke:()=>documentTransportHost.revoke(),
-            async openWorkbench(){const tabs=await workbenches();if(tabs.length>1)throw Error('请保留一个工作台连接');const tab=tabs[0]||await chrome.tabs.create({url:chrome.runtime.getURL('workbench/index.html')+'?mcpBridge=1'});await chrome.tabs.update(tab.id,{active:true});if(tab.windowId>=0)await chrome.windows.update(tab.windowId,{focused:true});for(let attempt=0;attempt<12;attempt++){try{const result=await chrome.tabs.sendMessage(tab.id,{type:'BREVESS_OPEN_AGENT_CONNECTION'});if(result?.success)return;}catch(_){}await new Promise(resolve=>setTimeout(resolve,250));}throw Error('工作台连接入口尚未就绪，请打开工作台后重试');}
-        });
-    });
-    window.addEventListener('pagehide', () => { documentAgentChat?.destroy();documentAgentConnection.close(); documentAgentHost.close(); pptAgentAccess.close(); }, { once: true });
+    window.addEventListener('pagehide', () => { documentAgentConnection.close(); documentAgentHost.close(); pptAgentAccess.close(); }, { once: true });
     void connect().catch(() => {});
 }
 
@@ -15036,7 +15189,6 @@ function ensureMechanismDrawingPanel() {
             }
             return SciLLM.sendTabMessageWithRecovery(chrome, tabId, message);
         },
-        onAgent: () => document.getElementById('documentAgentConnection')?.click(),
         locateEvidence: locateMechanismDrawingEvidence,
         makeId: () => crypto.randomUUID(),
         status: message => showStatus(message, 'warning')
@@ -15102,6 +15254,7 @@ async function openMechanismChainWorkspace() {
         }
         if (intentContextKey !== SciLLM.mechanismDrawingContextKey(captureFigureWorkspaceEditContext())) return;
         await ensureMechanismDrawingPanel().open();
+        if (intentContextKey === SciLLM.mechanismDrawingContextKey(captureFigureWorkspaceEditContext())) selectMechanismChatAgent();
     } catch (error) {
         showStatus(error?.message === 'FIGURE_WORKSPACE_ACTIVE_EDIT_NOT_SAVED'
             ? '请先完成当前证据编辑，再打开机制图。'
@@ -15183,7 +15336,7 @@ function setupMechanismNetworkResizeRendering() {
 function appendMechanismSvgMarkers(svg) {
     const namespace = 'http://www.w3.org/2000/svg';
     const defs = document.createElementNS(namespace, 'defs');
-    [['neutral', '#52778b'], ['positive', '#b4413d'], ['negative', '#2866a5']]
+    [['positive', '#b4413d'], ['negative', '#2866a5']]
         .forEach(([polarity, color]) => {
             const marker = document.createElementNS(namespace, 'marker');
             marker.id = `mechanism-arrow-${polarity}`;
@@ -15194,8 +15347,10 @@ function appendMechanismSvgMarkers(svg) {
             marker.setAttribute('markerHeight', '7');
             marker.setAttribute('orient', 'auto-start-reverse');
             const arrow = document.createElementNS(namespace, 'path');
-            arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
-            arrow.setAttribute('fill', color);
+            arrow.setAttribute('d', polarity === 'negative' ? 'M8 0V10' : 'M0 0L9 5L0 10');
+            arrow.setAttribute('fill', 'none');
+            arrow.setAttribute('stroke', color);
+            arrow.setAttribute('stroke-width', '1.6');
             marker.appendChild(arrow);
             defs.appendChild(marker);
         });
@@ -15258,7 +15413,7 @@ function renderLegacyMechanismNetwork(chain, host, options = {}) {
             ...(focus && !focus.edgeIds.has(edge.id) ? ['is-dimmed'] : [])
         );
         visible.setAttribute('d', edgeLayout.path);
-        visible.setAttribute('marker-end', `url(#mechanism-arrow-${polarity})`);
+        if (polarity !== 'neutral') visible.setAttribute('marker-end', `url(#mechanism-arrow-${polarity})`);
         const hit = document.createElementNS(namespace, 'path');
         hit.classList.add('workspace-mechanism-edge-hit');
         hit.dataset.edgeId = edge.id;
@@ -17118,7 +17273,7 @@ function renderMechanismNetwork(chain, host, options = {}) {
     if (auditGraph && !auditGraph.edges.length) return {
         width: host.clientWidth || 0, height: host.scrollHeight || 0
     };
-    if (!globalThis.mermaid?.run) {
+    if (!SciLLM.renderMechanismDiagramInMeasurableHost) {
         diagram.classList.remove('mermaid');
         diagram.textContent = t('机制图组件尚未就绪，请刷新后重试。');
         return { width: host.clientWidth || 0, height: host.scrollHeight || 0 };
@@ -17381,25 +17536,17 @@ function renderMechanismChainWorkspace(
 }
 
 function renderResearchLogicMapSnapshot(container, snapshot) {
-    const card = createWorkspaceElement('section', 'workspace-logic-map-card');
-    const header = createWorkspaceElement('div', 'workspace-logic-map-card-header');
-    const copy = createWorkspaceElement('div');
-    copy.append(createWorkspaceElement('h3', '', t('图表梳理')));
+    const actions = document.getElementById('figureBoardToolSlot');
+    if (!actions) return;
+    actions.replaceChildren();
     const draft = mechanismWorkspaceDraft(snapshot);
-    const count = Array.isArray(draft?.mechanismChain?.nodes)
-        ? draft.mechanismChain.nodes.length : 0;
-    header.append(copy, createWorkspaceElement(
-        'span', 'workspace-logic-map-count', `${count} 节点`
-    ));
-    const hasResult = count > 0 || Boolean(snapshot?.figures?.crossFigureLogic?.result ||
-        snapshot?.figures?.crossFigureLogic?.pendingResult);
-    const actions = createWorkspaceElement('div', 'workspace-logic-map-actions');
-    const button = createWorkspaceElement(
-        'button', 'workspace-logic-map-open', t('打开画板')
-    );
+    const hasResult = Boolean(draft?.mechanismChain?.nodes?.length || snapshot?.figures?.crossFigureLogic?.result || snapshot?.figures?.crossFigureLogic?.pendingResult);
+    const button = createWorkspaceElement('button', 'side-panel-tool-button');
+    button.id = 'figureBoardOpen';
+    button.setAttribute('aria-label', t('图表梳理'));
     button.type = 'button';
     button.dataset.mechanismGenerate = 'true';
-    button.title = '单击手动编辑 · 双击 AI 生成 · Shift+Enter AI 生成';
+    button.title = t('图表梳理 · 单击打开画板，双击或 Shift+Enter 用 AI 生成');
     button.setAttribute('aria-keyshortcuts', 'Enter Shift+Enter');
     button.setAttribute('aria-busy', String(crossFigureLogicRunning));
     const context = captureFigureWorkspaceEditContext();
@@ -17422,25 +17569,14 @@ function renderResearchLogicMapSnapshot(container, snapshot) {
     });
     supplementalPlacementBindingCleanups.add(dispose);
     actions.append(button);
-    const chatMap = createWorkspaceElement('button', 'workspace-logic-map-open', '问答生成草图');
-    chatMap.type = 'button';
-    chatMap.title = '使用已解读图表的关键证据生成草图，再选择添加到画板';
-    chatMap.addEventListener('click', () => {
-        const evidence = SciLLM.r16FigureMap.evidence(mechanismWorkspaceDraft());
-        if (!evidence?.rows?.length) { showStatus('请先解读至少一个 Figure 或 Panel。', 'info'); return; }
-        switchWorkspaceView('chat');
-        const input = document.getElementById('articleChatQuestion');
-        if (input) { input.value = SciLLM.r16FigureMap.prompt; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
-    });
-    actions.append(chatMap);
     if (snapshot?.figures?.crossFigureLogic?.pendingResult) {
-        const review = createWorkspaceElement('button', 'workspace-logic-map-open', '查看待审生成结果');
+        const review = createWorkspaceElement('button', 'side-panel-tool-button');
+        review.id='figureBoardReview'; review.title='查看待审生成结果'; review.setAttribute('aria-label',review.title);
         review.type = 'button';
         review.addEventListener('click', () => switchWorkspaceView('mechanism'));
         actions.appendChild(review);
     }
-    card.append(header, actions);
-    container.appendChild(card);
+
 }
 
 function persistFigureWorkspaceMetaMutation(
@@ -18171,94 +18307,11 @@ function syncFigureQuickNavFromScroll() {
     });
 }
 
-function renderSupplementalFigureCoverage(snapshot = currentWorkspaceSnapshot) {
-    const container = document.getElementById('supplementalFigureCoverage');
-    const body = document.getElementById('supplementalFigureCoverageBody');
-    const toggleSummary = document.getElementById('supplementalFigureCoverageSummary');
-    if (!container || !body || !toggleSummary) return;
-    let importTarget = null;
-    try {
-        importTarget = supplementalFigureImportTools.buildTarget(
-            snapshot,
-            activePanelTabContext.tabId,
-            preparedDocumentState?.documentHash || manualAnnotationState.documentHash
-        );
-    } catch (_) {}
-    const supplemental = snapshot?.figures?.supplemental || {};
-    const coverage = supplemental.coverage || null;
-    const materials = Array.isArray(supplemental.materials)
-        ? supplemental.materials : [];
-    const references = Array.isArray(supplemental.references)
-        ? supplemental.references : [];
-    const shouldShow = Boolean(
-        supplemental.binding || materials.length || references.length ||
-        Number(coverage?.foundFigureCount) > 0
-    );
-    container.hidden = !shouldShow;
+function renderSupplementalImportSources(snapshot, importTarget) {
+    const body = document.getElementById('supplementalFigureImportSources');
+    if (!body) return;
     body.replaceChildren();
-    if (!shouldShow) return;
-
-    const status = String(coverage?.status || 'unparsed');
-    const found = Number(coverage?.foundFigureCount) || 0;
-    const analyzed = Number(coverage?.analyzedFigureCount) || 0;
-    const statusLabels = {
-        complete: '覆盖完整',
-        found: found > 0 && found === analyzed && coverage?.uninspectedMaterialIds?.length
-            ? '已收录补图均已解读，附件待核对' : '已找到，待补全解读',
-        partial: '仍有缺失',
-        unparsed: '等待解析',
-        none: '未发现引用'
-    };
-    const missingCount = Array.isArray(coverage?.missingFigureLabels)
-        ? coverage.missingFigureLabels.length : 0;
-    toggleSummary.textContent = supplemental.binding
-        ? (statusLabels[status] || '等待解析')
-        : `${statusLabels[status] || '等待解析'}${missingCount ? ` · 缺 ${missingCount} 张` : ''}`;
-    const badge = createWorkspaceElement(
-        'span',
-        `supplemental-coverage-badge is-${status}`,
-        statusLabels[status] || '等待解析'
-    );
-    const expandedStatus = createWorkspaceElement('div', 'supplemental-coverage-header');
-    expandedStatus.appendChild(badge);
-    body.appendChild(expandedStatus);
-
-    if (supplemental.binding) {
-        const sync = supplemental.parentSync || {};
-        body.appendChild(createWorkspaceElement(
-            'p',
-            `supplemental-coverage-summary${sync.status === 'error' ? ' is-error' : ''}`,
-            sync.status === 'synced'
-                ? '补充图目录已同步回原论文；后续解图结果也会持续更新。'
-                : sync.status === 'error'
-                    ? `同步回原论文失败：${sync.error || '请重试保存'}`
-                    : 'PDF 解析完成后，补充图会自动同步回原论文工作区。'
-        ));
-        return;
-    }
-
-    const expected = Number(coverage?.expectedFigureCount) || 0;
-    body.appendChild(createWorkspaceElement(
-        'p',
-        'supplemental-coverage-summary',
-        `正文提及 ${expected} 张补充图；已纳入 ${found} 张，其中 ${analyzed} 张已解读。`
-    ));
-    if (Array.isArray(coverage?.missingFigureLabels) &&
-        coverage.missingFigureLabels.length) {
-        body.appendChild(createWorkspaceElement(
-            'p',
-            'supplemental-coverage-missing',
-            `尚缺：${coverage.missingFigureLabels.join('、')}`
-        ));
-    }
-    if (supplemental.logicRefreshRequired) {
-        body.appendChild(createWorkspaceElement(
-            'p',
-            'supplemental-coverage-hint is-action',
-            supplemental.logicRefreshRequired
-        ));
-    }
-
+    const materials = snapshot?.figures?.supplemental?.materials || [];
     const pdfMaterials = materials.filter(material =>
         (['pdf', 'attachment'].includes(material?.kind) || /^(?:docx?|word)$/i.test(material?.sourceFormat || '')) && material?.url
     );
@@ -18283,27 +18336,8 @@ function renderSupplementalFigureCoverage(snapshot = currentWorkspaceSnapshot) {
             list.appendChild(row);
         });
         body.appendChild(list);
-    } else if (expected > found) {
-        body.appendChild(createWorkspaceElement(
-            'p',
-            'supplemental-coverage-hint',
-            '若补充材料为 PDF，可选择本地文件导入。'
-        ));
-        const localAction = createWorkspaceElement(
-            'button',
-            'btn btn-secondary supplemental-material-local-action',
-            '选择本地补充 PDF'
-        );
-        localAction.type = 'button';
-        localAction.addEventListener('click', () =>
-            void openSupplementalMaterialPdf({
-                materialId: `manual-supplement-${Date.now()}`,
-                title: '本地补充材料 PDF',
-                url: ''
-            }, importTarget).catch(error => showStatus(error.message, 'error'))
-        );
-        body.appendChild(localAction);
     }
+    body.hidden = !body.childElementCount;
 }
 
 function disposeSupplementalPlacementBindings() {
@@ -18860,8 +18894,9 @@ async function handleFigureWorkspaceJump(figure, button, panelContext = captureP
         }, panelContext);
         if (!isCurrentPanelContext(panelContext)) return null;
         if (!response?.success || !response?.focused) {
+            const reason = response?.error?.message || (typeof response?.error === 'string' && response.error);
             showStatus(
-                `无法跳转到 ${figure.figureLabel || figure.figureId}：当前原文图注或图片位置不可用，请刷新论文后重试。`,
+                `无法跳转到 ${figure.figureLabel || figure.figureId}：${reason || '当前页面未找到对应图像位置。'}`,
                 'error'
             );
         }
@@ -18894,11 +18929,14 @@ function bindFigureWorkspaceCardBody(card, renderBody) {
     if (card.open) ensureBody();
 }
 
+let figurePaneRenderPending = false;
 function renderFigureWorkspaceSnapshot(
     snapshot = currentWorkspaceSnapshot,
     { coordinated = false } = {}
 ) {
     if (!coordinated) return figureWorkspaceRenderCoordinator.request(snapshot);
+    if (snapshot && activeWorkspaceView !== 'figures') { figurePaneRenderPending = true; return; }
+    figurePaneRenderPending = false;
     const container = document.getElementById('figureWorkspace');
     if (!container) return;
     if (figureCaptionSidebarState.visible) {
@@ -18930,7 +18968,6 @@ function renderFigureWorkspaceSnapshot(
             : snapshot?.figures?.inventoryReady === false
                 ? '正在读取论文图片目录…' : '当前原文未发现图片目录';
     }
-    renderSupplementalFigureCoverage(snapshot);
     // 论文级提取已移至文献笔记；解图页只保留 Figure、Panel 与机制内容。
     renderResearchLogicMapSnapshot(container, snapshot);
     appendHistoricalFigureRecords(container, { figures: snapshot?.figures?.historicalFigures || [], draft: figureWorkspaceDraft });
@@ -19055,7 +19092,7 @@ function renderFigureWorkspaceSnapshot(
             const visualPages = result?.pdfEvidenceBinding?.visualEvidenceSet?.requiredArtworkPageNumbers ||
                 result?.pdfEvidenceBinding?.assetProof?.pageNumbers || figure.artworkPageNumbers || [figure.sourcePage];
             const sourceNote = result?.basis === 'caption_context'
-                ? '文字依据：图注与相关正文（未读取图片）。'
+                ? '文字依据：已读图注和正文。图内数值、显著性标记需核对原图。'
                 : result?.basis === 'vision_text'
                     ? `图像依据：PDF 第 ${visualPages.join('、')} 页原页。`
                     : figure.artworkCoverage === 'complete'
@@ -19122,7 +19159,7 @@ function renderFigureWorkspaceSnapshot(
         // hidden Panel editors. Keep each body bound to this verified snapshot.
         bindFigureWorkspaceCardBody(details, () => {
             renderFigureProgress(details, progress, result, figure, view);
-            appendFigureWorkspaceOverview(details, view, snapshot, figure);
+            const overviewBody = appendFigureWorkspaceOverview(details, view, snapshot, figure);
             // Original captions remain in the figure source; omit only this redundant UI.
             appendFigurePanelCatalog(details, figure, result, view);
             appendHistoricalFigureRecords(details, { panels: view.historicalPanels || [], evidenceBlocks: view.historicalEvidenceBlocks || [] });
@@ -19134,7 +19171,7 @@ function renderFigureWorkspaceSnapshot(
                     ));
                 }
                 if (result.unlabeledOverview === true) {
-                    details.appendChild(createWorkspaceElement(
+                    overviewBody.appendChild(createWorkspaceElement(
                         'p', 'workspace-figure-coverage',
                         figure.sourceKind === 'pdf-page-caption'
                             ? 'PDF 图注未提供稳定的 Panel 标签；以下为整图证据概览，未臆造 Panel 编号。'
@@ -19151,7 +19188,7 @@ function renderFigureWorkspaceSnapshot(
                             : incomplete.length
                                 ? `Panel 覆盖待补：${formatFigurePanelReferences(view, incomplete)}`
                                 : 'Panel 覆盖待核：返回的标签存在重复或与原图目录不一致。';
-                    details.appendChild(createWorkspaceElement(
+                    overviewBody.appendChild(createWorkspaceElement(
                         'p', coverage.status !== 'complete' ? 'workspace-figure-coverage is-incomplete' : 'workspace-figure-coverage', coverageText
                     ));
                 }
@@ -19318,17 +19355,9 @@ function renderArticleWorkspaceSnapshot(snapshot) {
     const title = document.getElementById('sidePanelPaperTitle');
     const statusText = document.getElementById('sidePanelDocumentStatusText');
     if (title) { title.textContent = snapshot?.title || t('当前页面'); title.setAttribute('translate', 'no'); }
-    const diagnostics = snapshot?.diagnostics || {};
     const publisher = t(({ 'pdf-workspace': 'PDF 文献', generic: '网页文献' })[snapshot?.publisherFamily]
         || snapshot?.publisherFamily || '网页文献');
-    const semanticNavigation = normalizePopupPdfSemanticNavigation(currentPdfSemanticNavigation, snapshot);
-    const semanticCounts = popupPdfSemanticNavigationCounts(semanticNavigation);
-    const summary = `${publisher} · ` +
-        `${semanticNavigation ? semanticCounts.sectionCount : diagnostics.headingCount || 0} 个标题 · ` +
-        `${semanticNavigation ? semanticCounts.paragraphCount : diagnostics.paragraphCount || 0} 段` +
-        (snapshot?.access?.status === 'public_preview' ? '页面内容（含参考文献等公开资料）' : '正文');
-    const warning = (snapshot?.warnings || []).map(item => item.message).filter(Boolean).join(' ');
-    if (status) status.textContent = warning ? `${summary} · ${warning}` : summary;
+    if (status) status.textContent = (snapshot?.warnings || []).map(item => item.message).filter(Boolean).join(' ');
     if (statusText) {
         statusText.dataset.layoutStatusBase = snapshot?.access?.status === 'public_preview'
             ? `已激活 · 仅公开预览 · ${publisher}` : `已激活 · ${publisher}`;
@@ -19415,53 +19444,84 @@ function resolveConfiguredTaskProfile(settings, taskId, usableProfiles = []) {
     return [profileId, profiles[profileId]];
 }
 
+function selectMechanismChatAgent() {
+    const profiles = getArticleChatProfiles();
+    const agents = profiles.filter(([, profile]) => ['codex-local', 'deepseek-harness'].includes(profile.providerId));
+    const selected = agents.find(([id]) => id === articleChatSelectedProfileId) ||
+        resolveConfiguredTaskProfile(llmSettingsState?.settings, 'article_chat', agents) || agents[0];
+    if (!selected) {
+        showStatus('图表梳理可在问答中使用 Agent；请先在设置中接入 Codex 或 DeepSeek Harness。', 'info');
+        return false;
+    }
+    articleChatSelectedProfileId = selected[0];
+    renderArticleChatProfileOptions();
+    return true;
+}
+
 function renderArticleChatModelStatus(profiles = getArticleChatProfiles()) {
     const status = document.getElementById('articleChatModelStatus');
     const label = status?.querySelector('span');
     const settingsButton = document.getElementById('openArticleChatModelSettings');
     if (!status || !label) return;
-    const ready = hasUsableLlm() && profiles.length > 0;
+    const localAgent = globalThis.BrevessPresentationUI?.externalId(articleChatSelectedProfileId);
+    const ready = !!localAgent || hasUsableLlm() && profiles.length > 0;
     const selected = profiles.find(([profileId]) => profileId === articleChatSelectedProfileId)
         || profiles[0];
     status.classList.toggle('is-ready', ready);
     status.hidden = ready;
     if (status.parentElement?.classList.contains('article-chat-context-bar')) status.parentElement.hidden = ready;
     label.textContent = ready
-        ? `${t('本轮模型')}：${selected?.[1]?.name || t('当前模型')}`
+        ? `${t('本轮模型')}：${(localAgent && SciLLM.articlePresentation.agents[localAgent]) || selected?.[1]?.name || t('当前模型')}`
         : profiles.length
             ? t('模型已配置；尚未授予正文发送许可。')
             : t('尚未连接可用于全文问答的模型。');
     if (settingsButton) settingsButton.hidden = ready;
 }
 
+let articleChatProfileOptionsSignature = null;
 function renderArticleChatProfileOptions() {
     const select = document.getElementById('articleChatProfile');
     if (!select) return;
+    const desktop=globalThis.BrevessPresentationUI;
+    if (document.getElementById('workspace-chat')?.hidden === false) void desktop?.discoverClients();
+    const local=[...(desktop?.configured||[])];
     const profiles = getArticleChatProfiles();
     const preferred = articleChatSelectedProfileId ||
         (llmSettingsState?.settings?.taskPolicies?.article_chat?.mode === 'profile'
             ? llmSettingsState.settings.taskPolicies.article_chat.profileId : '') ||
         llmSettingsState?.settings?.globalProfileId || profiles[0]?.[0] || '';
-    select.replaceChildren();
-    profiles.forEach(([profileId, profile]) => {
-        const option = document.createElement('option');
-        option.value = profileId;
-        const taskPolicy = llmSettingsState?.settings?.taskPolicies?.article_chat;
-        const taskModel = SciLLM.taskModelForProfile?.(taskPolicy, profile, profileId);
-        option.textContent = `${profile?.name || '未命名模型'} · ${taskModel || profile?.config?.model || ''}`;
-        select.appendChild(option);
-    });
-    if (!profiles.length) {
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = t('尚未配置可用模型');
-        select.appendChild(option);
+    const signature = local.join(',')+JSON.stringify(profiles.map(([id, profile]) => [id, profile.name,
+        SciLLM.taskModelForProfile?.(llmSettingsState?.settings?.taskPolicies?.article_chat, profile, id) || profile.config?.model || '']));
+    if (articleChatProfileOptionsSignature !== signature || !select.options.length) {
+        articleChatProfileOptionsSignature = signature;
+        select.replaceChildren();
+        profiles.forEach(([profileId, profile]) => {
+            const option = document.createElement('option');
+            option.value = profileId;
+            const taskPolicy = llmSettingsState?.settings?.taskPolicies?.article_chat;
+            const taskModel = SciLLM.taskModelForProfile?.(taskPolicy, profile, profileId);
+            option.textContent = `${profile?.name || '未命名模型'} · ${taskModel || profile?.config?.model || ''}`;
+            select.appendChild(option);
+        });
+        if(local.length){
+            const group=document.createElement('optgroup');
+            group.label=document.documentElement.lang.startsWith('en')?'Local Agent tasks':'本机 Agent 委托';
+            for(const id of local)group.append(new Option(SciLLM.articlePresentation.agents[id], 'local_agent:'+id));
+            select.appendChild(group);
+        }
+        if (!profiles.length && !local.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = t('尚未配置可用模型');
+            select.appendChild(option);
+        }
     }
-    articleChatSelectedProfileId = profiles.some(([profileId]) => profileId === preferred)
-        ? preferred : (profiles[0]?.[0] || '');
+    articleChatSelectedProfileId = (profiles.some(([profileId]) => profileId === preferred) || desktop?.externalId(preferred))
+        ? preferred : (profiles[0]?.[0] || (local.length?'local_agent:'+local[0]:''));
     select.value = articleChatSelectedProfileId;
-    select.disabled = profiles.length === 0;
+    select.disabled = profiles.length === 0 && !local.length;
     renderArticleChatModelStatus(profiles);
+    void globalThis.BrevessChatAgentControls?.refresh();
 }
 
 function renderArticleChatHighlightCategoryOptions() {
@@ -19596,18 +19656,99 @@ function selectedWorkspaceAnalysisSectionIds(snapshot = currentWorkspaceSnapshot
 }
 
 function articleChatQuickPrompts() {
-    const builtIn = { id: SciLLM.r16FigureMap.promptId, name: SciLLM.r16FigureMap.promptName, prompt: SciLLM.r16FigureMap.prompt };
-    const settings = SciLLM.localizeBuiltinSettings?.(llmSettingsState?.settings || {},
-        SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language) || llmSettingsState?.settings || {};
-    const stored = Array.isArray(settings.articleChatQuickPrompts) ? settings.articleChatQuickPrompts : [];
-    return (stored.some(item => item?.id === builtIn.id) ? stored : [builtIn, ...stored])
-        .filter(item => item?.id && item?.name && item?.prompt)
-        .map(item => ({
-            id: String(item.id),
-            name: String(item.name),
-            detail: String(item.prompt),
-            prompt: String(item.prompt)
-        }));
+    return localizedQuickPromptRows('articleChatQuickPrompts');
+}
+
+function rawQuickPromptRows(key) {
+    return llmSettingsState?.settings?.[key] ?? (key === 'displayQuickPrompts'
+        ? SciLLM.DEFAULT_DISPLAY_QUICK_PROMPTS : SciLLM.DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS);
+}
+
+function localizedQuickPromptRows(key) {
+    const raw = rawQuickPromptRows(key);
+    const language = SciLLM.getInterfaceLanguage?.() || llmSettingsState?.settings?.language;
+    const shown = SciLLM.localizeBuiltinSettings?.({ [key]: raw }, language)?.[key] || raw;
+    return shown.map(item => ({ ...item, detail: item.prompt }));
+}
+
+async function persistQuickPrompt(key, original, edited) {
+    const state = await sendLlmMessage({
+        type: 'LLM_UPDATE_PREFERENCES',
+        quickPromptBases: { [key]: original ? [original] : [] },
+        preferences: { [key]: edited ? [edited] : [] }
+    });
+    llmSettingsState = state;
+    if (!document.getElementById('articleChatCommandMenu').hidden) updateArticleChatCommandMenu();
+}
+
+function openQuickPromptEditor(key, item, question = '') {
+    const dialog = document.getElementById('quickPromptDialog');
+    if (dialog.open) return;
+    const original = item && rawQuickPromptRows(key).find(row => row.id === item.id);
+    const name = document.getElementById('quickPromptName');
+    const body = document.getElementById('quickPromptBody');
+    const feedback = document.getElementById('quickPromptFeedback');
+    const save = document.getElementById('quickPromptSave');
+    const fromMenu = !document.getElementById('articleChatCommandMenu').hidden && !question;
+    const title = original ? '编辑提示词' : (key === 'displayQuickPrompts' ? '存为网页滤镜指令' : '存为问答提示词');
+    document.getElementById('quickPromptTitle').textContent = t(title);
+    name.value = item?.name || question.replace(/\s+/gu, ' ').trim().slice(0, 28);
+    body.value = item?.prompt || question;
+    feedback.textContent = '';
+    save.disabled = false;
+    document.getElementById('quickPromptCancel').onclick = () => dialog.close();
+    document.getElementById('quickPromptForm').onsubmit = async event => {
+        event.preventDefault();
+        if (save.disabled) return;
+        const nameText = name.value.trim(), promptText = body.value.trim();
+        if (!nameText || !promptText || promptText.length > 4000) {
+            feedback.textContent = t('请填写名称和提示词，正文最多 4000 字。');
+            return;
+        }
+        const edited = {
+            id: original?.id || crypto.randomUUID(),
+            name: original && nameText === item.name ? original.name : nameText,
+            prompt: original && promptText === item.prompt ? original.prompt : promptText
+        };
+        save.disabled = true;
+        try {
+            await persistQuickPrompt(key, original, edited);
+            dialog.close();
+            if (fromMenu) document.getElementById('articleChatQuestion').focus({ preventScroll: true });
+            showStatus(t('提示词已保存'), 'success');
+        } catch (error) {
+            feedback.textContent = t(error.message);
+        } finally { save.disabled = false; }
+    };
+    dialog.showModal();
+    name.focus();
+    name.select();
+}
+
+function createSaveQuestionButton(getQuestion, key = 'articleChatQuickPrompts') {
+    const label = key === 'displayQuickPrompts' ? '存为网页滤镜指令' : '存为问答提示词';
+    const button = createWorkspaceElement('button', 'quick-prompt-history', t(label));
+    button.type = 'button';
+    button.onclick = () => {
+        const question = String(getQuestion() || '').trim();
+        if (!question) return;
+        const existing = localizedQuickPromptRows(key).find(row =>
+            row.prompt.normalize('NFKC') === question.normalize('NFKC'));
+        openQuickPromptEditor(key, existing, question);
+    };
+    return button;
+}
+
+function createQuickPromptAction(label, icon, item, action) {
+    const button = createWorkspaceElement('button', 'quick-prompt-action');
+    button.type = 'button';
+    button.title = t(label) + ' · ' + item.name;
+    button.setAttribute('aria-label', button.title);
+    const glyph = createWorkspaceElement('i', 'ph ph-' + icon);
+    glyph.setAttribute('aria-hidden', 'true');
+    button.append(glyph);
+    button.onclick = action;
+    return button;
 }
 
 function renderArticleChatContextScopes() {
@@ -19675,10 +19816,18 @@ function preflightArticleChatContextScope(contextScope,
     return { success: true, contextScope: resolution.contextScope };
 }
 
+function displayQuickPrompts() {
+    return localizedQuickPromptRows('displayQuickPrompts');
+}
+
 function articleChatInputTrigger(input) {
     const caret = Math.max(0, Number(input?.selectionStart) || 0);
     const prefix = String(input?.value || '').slice(0, caret);
-    const match = prefix.match(/(^|\s)([@/])([^\s@/]*)$/u);
+    const display = globalThis.WFGWorkflow?.isDisplay(input.form);
+    const match = display
+        ? (prefix.match(/(^|[\s\p{Script=Han}])(@@)([^\n@/]*)$/u) ||
+            prefix.match(/(^|[\s\p{Script=Han}])([@/])([^\s@/]*)$/u))
+        : prefix.match(/(^|\s)([@/])([^\s@/]*)$/u);
     if (!match) return null;
     return {
         symbol: match[2],
@@ -19720,18 +19869,19 @@ function updateArticleChatCommandMenu() {
         closeArticleChatCommandMenu();
         return;
     }
-    const source = trigger.symbol === '@'
-        ? articleChatOutlineScopes()
-        : articleChatQuickPrompts();
+    const workflow = globalThis.WFGWorkflow;
+    const display = workflow?.isDisplay(input.form);
+    const refreshTabs = display && trigger.symbol === '@@' && articleChatCommandTrigger?.symbol !== '@@';
+    const source = display
+        ? (trigger.symbol === '/' ? displayQuickPrompts() : workflow.targetCommands(input.form, trigger.symbol))
+        : (trigger.symbol === '@' ? articleChatOutlineScopes() : articleChatQuickPrompts());
     const filteredItems = source.filter(item => {
         if (!trigger.query) return true;
         return `${item.name} ${item.detail}`.normalize('NFKC').toLowerCase()
             .includes(trigger.query);
     });
-    const items = trigger.symbol === '@'
-        ? filteredItems
-        : filteredItems.slice(0, 20);
-    if (!items.length) {
+    const items = filteredItems;
+    if (!items.length && !display && trigger.symbol !== '/') {
         closeArticleChatCommandMenu();
         return;
     }
@@ -19752,27 +19902,77 @@ function updateArticleChatCommandMenu() {
         meta.textContent = trigger.symbol === '@' ? item.detail : '快捷提示';
         const detail = document.createElement('small');
         detail.textContent = item.detail;
-        button.append(name, meta, detail);
-        menu.appendChild(button);
+        if (display || trigger.symbol === '/') button.append(name, detail);
+        else button.append(name, meta, detail);
+        if (trigger.symbol === '/') {
+            const key = display ? 'displayQuickPrompts' : 'articleChatQuickPrompts';
+            const original = rawQuickPromptRows(key).find(row => row.id === item.id);
+            const row = createWorkspaceElement('div', 'quick-prompt-menu-row');
+            row.append(button,
+                createQuickPromptAction('编辑提示词', 'note-pencil', item, () => openQuickPromptEditor(key, item)),
+                createQuickPromptAction('删除提示词', 'trash', item, async event => {
+                    const remove = event.currentTarget;
+                    remove.disabled = true;
+                    try {
+                        await persistQuickPrompt(key, original, null);
+                        input.focus();
+                    } catch (error) {
+                        remove.disabled = false;
+                        showStatus(t(error.message), 'error');
+                    }
+                }));
+            menu.append(row);
+        } else if (item.referenceAction) {
+            const row = document.createElement('div');
+            row.className = 'article-chat-tab-option';
+            const reference = document.createElement('button');
+            reference.type = 'button';
+            reference.className = 'article-chat-reference-action';
+            reference.dataset.referenceIndex = String(index);
+            reference.textContent = t(item.referenceLabel);
+            reference.setAttribute('aria-label', t(item.referenceLabel) + ' · ' + item.name);
+            row.append(button, reference);
+            menu.append(row);
+        } else menu.append(button);
     });
+    if (!items.length) {
+        const empty = document.createElement('small');
+        empty.className = 'article-chat-command-empty';
+        empty.textContent = trigger.symbol === '@@' ? '没有匹配的其他网页' :
+            trigger.symbol === '/' ? '没有匹配的指令，可在设置中添加' : '没有可用的选取操作';
+        menu.append(empty);
+    }
     menu.hidden = false;
+    if (refreshTabs) {
+        void workflow.refreshTabs(input.form).then(() => {
+            if (!menu.hidden && articleChatCommandTrigger?.symbol === '@@' && workflow.isDisplay(input.form)) {
+                updateArticleChatCommandMenu();
+            }
+        }).catch(() => {});
+    }
 }
 
-function selectArticleChatCommand(index = articleChatCommandActiveIndex) {
+function selectArticleChatCommand(index = articleChatCommandActiveIndex, useReference = false) {
     const item = articleChatCommandItems[index];
     const trigger = articleChatCommandTrigger;
     const input = document.getElementById('articleChatQuestion');
     if (!item || !trigger || !input) return false;
-    if (trigger.symbol === '@') {
+    if (item.action) {
+        input.setRangeText('', trigger.start, trigger.end, 'end');
+    } else if (trigger.symbol === '@') {
         articleChatContextScopes.set(item.id, item);
         input.setRangeText('', trigger.start, trigger.end, 'end');
         renderArticleChatContextScopes();
     } else {
+        if (item.id === SciLLM.articlePresentation?.preset) input.dataset.presentationPreset = item.prompt;
+        else delete input.dataset.presentationPreset;
         const replacement = `${item.prompt} `;
         input.setRangeText(replacement, trigger.start, trigger.end, 'end');
     }
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     closeArticleChatCommandMenu();
     input.focus();
+    if (item.action) void (useReference ? item.referenceAction : item.action)();
     return true;
 }
 
@@ -20381,23 +20581,56 @@ function r16ChatMapPreviewRevision(block, turn, snapshot) {
         SciLLM.normalizeR16FigureMapProof(turn.inputContext?.figureMapEvidence),
         draft?.binding || null, context?.sourceDigest || '']);
 }
+function createR16ChatMapGraph(chain) {
+    const layout = SciLLM.createMechanismNetworkLayout(chain, { viewportWidth: 700 });
+    const ns = 'http://www.w3.org/2000/svg';
+    const node = (tag, attributes, text) => { const el = document.createElementNS(ns, tag); for (const [key, value] of Object.entries(attributes || {})) el.setAttribute(key, String(value)); if (text !== undefined) el.textContent = text; return el; };
+    const svg = node('svg', { viewBox: `0 0 ${layout.width} ${layout.height}`, role: 'img', 'aria-label': '机制草图：箭头表示促进，T 端表示抑制，无向虚线表示关联' });
+    const defs = node('defs'); const prefix = 'chat-map-' + crypto.randomUUID();
+    for (const [kind, path] of [['positive', 'M1 1L9 5L1 9'], ['negative', 'M8 0V10']]) {
+        const marker = node('marker', { id: prefix + kind, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, orient: 'auto' });
+        marker.append(node('path', { d: path, fill: 'none', stroke: '#555', 'stroke-width': 1.6 })); defs.append(marker);
+    }
+    svg.append(defs);
+    const edges = new Map(chain.edges.map(edge => [edge.id, edge]));
+    for (const placed of layout.edges) {
+        const edge = edges.get(placed.id); if (!edge) continue;
+        const attrs = { d: placed.path, fill: 'none', stroke: '#75757e', 'stroke-width': 1.6, 'data-polarity': edge.polarity };
+        if (edge.polarity === 'neutral') attrs['stroke-dasharray'] = '5 4'; else attrs['marker-end'] = `url(#${prefix + edge.polarity})`;
+        const line = node('path', attrs); line.append(node('title', {}, edge.label)); svg.append(line);
+        svg.append(node('text', { x: placed.labelX, y: placed.labelY - 5, 'text-anchor': 'middle', 'font-size': 11, fill: '#73737c' }, { positive: '促进', negative: '抑制', neutral: '关联' }[edge.polarity]));
+    }
+    const labels = new Map(chain.nodes.map(item => [item.id, item.label]));
+    for (const placed of layout.nodes) {
+        const label = String(labels.get(placed.id) || '');
+        const group = node('g'); group.append(node('title', {}, label), node('rect', { x: placed.x, y: placed.y, width: placed.width, height: placed.height, rx: 10, fill: '#f5f5f7', stroke: '#dddde3' }));
+        const chars = Array.from(label), size = Math.max(8, Math.floor(placed.width / 13)), lines = [];
+        for (let i = 0; i < chars.length; i += size) lines.push(chars.slice(i, i + size).join(''));
+        const visible = lines.slice(0, 3); if (lines.length > 3) visible[2] += '…';
+        visible.forEach((text, index) => group.append(node('text', { x: placed.x + placed.width / 2, y: placed.y + placed.height / 2 + (index - (visible.length - 1) / 2) * 18 + 4, 'text-anchor': 'middle', 'font-size': 12, fill: '#33343a' }, text)));
+        svg.append(group);
+    }
+    const wrap = createWorkspaceElement('div', 'article-chat-map-graph'); wrap.append(svg); return wrap;
+}
 function createR16ChatMapPreview(jsonText, turn, snapshot) {
     const host = createWorkspaceElement('section', 'article-chat-map-preview');
     let parsed;
     try { parsed = SciLLM.r16FigureMap.parse(jsonText, SciLLM.r16FigureMapContextForProof(
         SciLLM.r16FigureMap.evidence(mechanismWorkspaceDraft(snapshot)), turn.inputContext?.figureMapEvidence)); }
     catch (error) {
-        host.append(createWorkspaceElement('p', '', '草图待核对：缺少本轮证据记录、图表证据已变化或输出格式无效，请重新生成。'));
+        const reason = { CHAT_MAP_EVIDENCE_MISSING: '本轮没有可核对的图表证据记录。请先解读相关图表，再生成草图。', CHAT_MAP_SOURCE_CHANGED: '图表证据已更新。这份草图保留在下方，暂不写入画板；请用当前证据重新核对。', CHAT_MAP_EVIDENCE_INVALID: '部分联系引用了无法核对的证据。请让模型修正这些引用后再添加。', CHAT_MAP_FORMAT_INVALID: '草图结构格式有误。结构数据已保留，可在问答中要求修正格式，无需重做解图。' }[error.code] || '草图暂不能添加，结构数据已保留。';
+        host.append(createWorkspaceElement('p', '', reason));
         const oldSource = createWorkspaceElement('details', '');
         oldSource.append(createWorkspaceElement('summary', '', '结构数据'), createWorkspaceElement('pre', '', jsonText));
         host.append(oldSource); return host;
     }
     const details = createWorkspaceElement('details', ''); details.open = true;
     details.append(createWorkspaceElement('summary', '', '图表草图 · ' + parsed.chain.nodes.length + ' 节点 · ' + parsed.chain.edges.length + ' 联系'));
+    try { details.append(createR16ChatMapGraph(parsed.chain)); } catch { /* Text relations remain available if layout fails. */ }
     const labels = new Map(parsed.data.nodes.map(node => [node.id, node.label]));
     const list = createWorkspaceElement('ul', ''); list.style.paddingInlineStart = '20px';
-    for (const edge of parsed.data.edges) list.append(createWorkspaceElement('li', '', labels.get(edge.from) + ' → ' + labels.get(edge.to) + (edge.label ? '：' + edge.label : '') + ' [' + edge.evidenceKeys.join('、') + ']'));
-    details.append(list); host.append(details);
+    for (const edge of parsed.data.edges) list.append(createWorkspaceElement('li', '', labels.get(edge.from) + ({positive:' →（促进） ',negative:' ⊣（抑制） ',neutral:' ┄（关联） '}[edge.polarity]) + labels.get(edge.to) + (edge.label ? '：' + edge.label : '') + ' [' + edge.evidenceKeys.join('、') + ']'));
+    const relations = createWorkspaceElement('details', 'article-chat-map-evidence'); relations.append(createWorkspaceElement('summary', '', '联系与证据'), list); details.append(relations); host.append(details);
     const source = createWorkspaceElement('details', ''); source.append(createWorkspaceElement('summary', '', '结构数据'), createWorkspaceElement('pre', '', jsonText)); host.append(source);
     const add = createWorkspaceElement('button', 'article-chat-turn-action', '添加到图表梳理'); add.type = 'button';
     add.dataset.chatMapAdd = 'true';
@@ -20427,13 +20660,18 @@ function createR16ChatMapPreview(jsonText, turn, snapshot) {
     host.append(add); return host;
 }
 function createArticleChatTurnAction(action, label, turnId) {
-    const button = createWorkspaceElement('button', 'article-chat-turn-action', action === 'copy-answer' ? '' : label);
+    const icons = {
+        'copy-answer': 'M8 8h12v13H8zM16 8V3H3v13h5',
+        regenerate: 'M20 4v6h-6M4 20v-6h6M20 10a8 8 0 0 0-14-4M4 14a8 8 0 0 0 14 4',
+        more: 'M5 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2M19 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2'
+    };
+    const button = createWorkspaceElement('button', 'article-chat-turn-action', icons[action] ? '' : label);
     button.type = 'button';
     button.dataset.articleChatAction = action;
     button.dataset.turnId = turnId;
     button.setAttribute('aria-label', `${label}：本轮问答`);
     button.title = label;
-    if (action === 'copy-answer') {
+    if (icons[action]) {
         const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         icon.setAttribute('viewBox', '0 0 24 24');
         icon.setAttribute('width', '16');
@@ -20442,13 +20680,55 @@ function createArticleChatTurnAction(action, label, turnId) {
         icon.setAttribute('stroke', 'currentColor');
         icon.setAttribute('stroke-width', '1.6');
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', 'M8 8h12v13H8zM16 8V3H3v13h5');
+        path.setAttribute('d', icons[action]);
+        icon.setAttribute('stroke-linecap', 'round');
+        icon.setAttribute('stroke-linejoin', 'round');
         icon.appendChild(path);
         icon.setAttribute('aria-hidden', 'true');
         button.appendChild(icon);
-        button.classList.add('is-copy');
+        button.classList.add('is-icon');
+        if (action === 'copy-answer') button.classList.add('is-copy');
     }
     return button;
+}
+
+function arrangeArticleChatTurnActions(actions, turnId) {
+    const deletions = [...actions.children].filter(button =>
+        ['delete-answer', 'delete-turn', 'delete-queued'].includes(button.dataset.articleChatAction));
+    if (!deletions.length) return;
+    const more = createArticleChatTurnAction('more', '更多操作', turnId);
+    delete more.dataset.articleChatAction;
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    const menu = document.createElement('div');
+    menu.className = 'article-chat-turn-menu';
+    menu.popover = 'auto';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '本轮问答操作');
+    for (const button of deletions) { button.setAttribute('role', 'menuitem'); menu.append(button); }
+    more.popoverTargetElement = menu;
+    menu.addEventListener('beforetoggle', event => {
+        more.setAttribute('aria-expanded', String(event.newState === 'open'));
+        menu.toggleAttribute('data-sidebar-focus-escape-priority', event.newState === 'open');
+        if (event.newState !== 'open') return;
+        const rect = more.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(innerWidth - 168, rect.right - 160)) + 'px';
+        menu.style.top = Math.max(8, rect.top - deletions.length * 34 - 12) + 'px';
+    });
+    menu.addEventListener('toggle', event => { if (event.newState === 'open') deletions[0]?.focus({preventScroll:true}); });
+    more.addEventListener('keydown', event => {
+        if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+        event.preventDefault(); if (!menu.matches(':popover-open')) menu.showPopover();
+        deletions[event.key === 'ArrowUp' ? deletions.length - 1 : 0].focus();
+    });
+    menu.addEventListener('keydown', event => {
+        const index = deletions.indexOf(document.activeElement);
+        if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+            event.preventDefault(); deletions[(index + (event.key === 'ArrowDown' ? 1 : deletions.length - 1)) % deletions.length].focus();
+        } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.hidePopover(); more.focus(); }
+    });
+    menu.addEventListener('click', event => { if (event.target.closest('[data-article-chat-action]')) menu.hidePopover(); });
+    actions.append(more, menu);
 }
 
 function articleChatInputReceiptText(turn) {
@@ -20463,7 +20743,11 @@ function articleChatInputReceiptText(turn) {
     else if (context.imageStatus === 'requested_image_unavailable') labels.push('未读取所询问的图片，仅参考可用文字');
     else if (context.imageStatus === 'partially_sent') labels.push('仅部分图片已传入模型');
     else if (context.imageStatus === 'sent') labels.push(`已传入 ${context.images?.length || 0} 张图片`);
-    if (context.unavailableFigures?.length) labels.push(`未读取图：${context.unavailableFigures.join('、')}`);
+    for(const item of context.figureCoverage || []){
+        const parts=[item.image?'原图':'未读原图',item.caption?'图注':'',item.body?'正文引用':''].filter(Boolean);
+        labels.push(`Fig. ${item.figure.toUpperCase()} · ${parts.join('、')}`);
+    }
+    if (context.unavailableFigures?.length) labels.push('可切换视觉模型或用回形针附图后重问');
     if (context.omittedImageCount > 0) labels.push(`另有 ${context.omittedImageCount} 张图片未传入`);
     return labels.map(label => t(label)).join(' · ');
 }
@@ -20495,10 +20779,10 @@ function updateArticleChatProcess(event, turn) {
     return changed;
 }
 
-function renderArticleChatProcess(element, turn, snapshot) {
+function renderArticleChatProcess(element, turn, snapshot, waitingForReader) {
     let panel=element.querySelector('.article-chat-process');
     const state=articleChatProcessStates.get(articleChatProcessKey(turn,snapshot));
-    const active=['queued','generating'].includes(turn.status);
+    const active=!waitingForReader && ['queued','generating'].includes(turn.status);
     const matching=state&&(state.operationId===turn.operationId||(!active&&!turn.operationId&&state.sealed))?state:null;
     if(!panel&&(active||matching?.items.length)){
         panel=createWorkspaceElement('section','article-chat-process');
@@ -20536,13 +20820,21 @@ function renderArticleChatDraft(element,turn,text){
     node.dataset.operationId=String(turn.operationId||'');node.querySelector('.article-chat-draft-text').textContent=text;
 }
 
+function articleChatResponseModelLabel(turn = {}) {
+    const route = turn.route || turn;
+    const model = String(turn.model || route.model || turn.profileName || route.effectiveProfileName || '模型未记录').slice(0,200);
+    const levels = {auto:'自动',minimal:'极低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高',ultra:'Ultra',enabled:'开启',disabled:'关闭',none:'关闭',off:'关闭'};
+    const effort = route.reasoningEnabled === false ? '关闭' : levels[route.reasoningEffort] || (route.reasoningEffort ? String(route.reasoningEffort).slice(0,64) : '未记录');
+    return (model === 'auto' ? '默认模型' : model) + ' · 推理：' + effort;
+}
+
 function renderArticleChatTurn(turn, snapshot = currentWorkspaceSnapshot) {
 function r17ChatTurnMetadata(turn = {}) {
     const text = value => typeof value === 'string' ? value.trim().slice(0,200) : '';
     const actualModel = value => ['configured','simulation'].includes(text(value)) ? '' : text(value);
     const model = actualModel(turn.model) || actualModel(turn.route?.model);
     const profile = text(turn.profileName) || text(turn.route?.effectiveProfileName);
-    const labels = [...new Set([profile,model].filter(Boolean))], details = [];
+    const labels = [], details = [...new Set([profile,model].filter(Boolean))];
     const coverage = turn.coverage;
     const count = value => Number.isSafeInteger(value) && value >= 0;
     if (Array.isArray(coverage) && coverage.length) {
@@ -20579,12 +20871,13 @@ function r17ChatTurnMetadata(turn = {}) {
         footer.append(createWorkspaceElement('span', 'article-chat-message-meta'),
             createWorkspaceElement('div', 'article-chat-turn-actions'));
         answer.append(
+            createWorkspaceElement('div', 'article-chat-answer-heading'),
             createWorkspaceElement('p', 'article-chat-provenance'),
             createWorkspaceElement('p', 'article-chat-input-receipt'),
             createWorkspaceElement('div', 'article-chat-answer-blocks'),
             createWorkspaceElement('p', 'article-chat-turn-status'), footer
         );
-        element.append(question, answer);
+        element.append(question, createSaveQuestionButton(() => question.querySelector('.article-chat-message-content').textContent), answer);
         articleChatTurnElements.set(turnId, element);
     }
 
@@ -20597,6 +20890,8 @@ function r17ChatTurnMetadata(turn = {}) {
         questionContent.textContent = String(turn.question || '');
     }
     const meta = element.querySelector('.article-chat-message-meta');
+    const heading = element.querySelector('.article-chat-answer-heading');
+    if (heading) { heading.textContent = articleChatResponseModelLabel(turn); heading.title = '本轮请求记录；自动强度由模型决定，旧记录缺失的档位不会猜测。'; }
     const receipt = element.querySelector('.article-chat-input-receipt');
     if (receipt) {
         receipt.textContent = articleChatInputReceiptText(turn);
@@ -20668,21 +20963,36 @@ function r17ChatTurnMetadata(turn = {}) {
 
     element.querySelectorAll('[data-chat-map-add]').forEach(button => { button.disabled = button.dataset.added === 'true' || button.dataset.busy === 'true' || turn.status !== 'completed' || isUnverifiedArticleChatTurn(turn); });
     const status = element.querySelector('.article-chat-turn-status');
-    const processVisible = renderArticleChatProcess(element, turn, snapshot);
+    const waitingForReader = globalThis.BrevessPresentationUI?.renderQuestion(element, turn);
+    const processVisible = renderArticleChatProcess(element, turn, snapshot, waitingForReader);
     const statusText = articleChatStatusText(turn);
     if (status) {
         status.textContent = statusText;
-        status.hidden = !statusText || processVisible && ['queued', 'generating'].includes(turn.status);
+        status.hidden = waitingForReader || !statusText || processVisible && ['queued', 'generating'].includes(turn.status);
         status.classList.toggle('is-error', turn.status === 'error');
     }
     element.classList.toggle('is-queued', turn.status === 'queued');
-    element.classList.toggle('is-generating', turn.status === 'generating');
+    element.classList.toggle('is-generating', turn.status === 'generating' && !waitingForReader);
     element.classList.toggle('is-interrupted',
         ['interrupted', 'cancelled', 'truncated', 'incomplete', 'error'].includes(turn.status));
 
     const actions = element.querySelector('.article-chat-turn-actions');
     if (actions) {
         actions.replaceChildren();
+        if (turn.presentation) {
+            const state = turn.presentation.state;
+            if (state === 'ready') actions.appendChild(turn.presentation.kind==='chat'
+                ? createArticleChatTurnAction('copy-answer','复制回答',turnId) : createArticleChatTurnAction('ppt-download', t('下载 PPT'), turnId));
+            if (['pending','working'].includes(state)) actions.append(createArticleChatTurnAction('ppt-copy', t('复制给 Agent'), turnId), createArticleChatTurnAction('ppt-cancel', turn.presentation.kind==='chat'?t('取消'):t('取消制作'), turnId));
+            if (!['preparing','pending','working'].includes(state)) actions.appendChild(createArticleChatTurnAction('delete-turn', t('删除本轮'), turnId));
+            arrangeArticleChatTurnActions(actions, turnId);
+            return element;
+        }
+        if (turn.agentDialogue?.interaction?.state==='waiting') {
+            actions.appendChild(createArticleChatTurnAction('delete-turn','删除本轮',turnId));
+            arrangeArticleChatTurnActions(actions, turnId);
+            return element;
+        }
         if (blocks.length) actions.appendChild(createArticleChatTurnAction('copy-answer', '复制回答', turnId));
         if (turn.status === 'queued') {
             actions.appendChild(createArticleChatTurnAction(
@@ -20702,6 +21012,7 @@ function r17ChatTurnMetadata(turn = {}) {
                 createArticleChatTurnAction('delete-turn', '删除本轮', turnId)
             );
         }
+        arrangeArticleChatTurnActions(actions, turnId);
     }
     return element;
 }
@@ -20840,6 +21151,7 @@ function syncArticleChatWebSearchToggle(
     if (!supported) { articleChatWebSearchEnabled = false; articleChatWebSearchMode = 'off'; }
     const enabled = articleChatWebSearchMode !== 'off';
     const label = { off: '联网关闭', on: '联网开启', deep: '深度检索', auto: '按需联网' }[articleChatWebSearchMode] || '联网关闭';
+    webSearchToggle.hidden = !supported;
     webSearchToggle.disabled = !supported;
     webSearchToggle.setAttribute('aria-pressed', String(enabled));
     webSearchToggle.setAttribute(
@@ -20852,6 +21164,7 @@ function syncArticleChatWebSearchToggle(
     if (text) text.textContent = label;
 }
 
+let articleChatPaneRenderPending = false;
 function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
     if (snapshot && globalThis.WFGChatTimeline?.acceptNativeContext &&
         !globalThis.WFGChatTimeline.acceptNativeContext(activePanelTabContext, snapshot)) return null;
@@ -20887,29 +21200,33 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
     );
     const visibleTurns = turns;
     const visibleIds = new Set(visibleTurns.map(turn => String(turn.turnId || '')));
-    const wasNearBottom = isArticleChatNearBottom(container);
+    const renderMessages = !snapshot || activeWorkspaceView === 'chat';
+    articleChatPaneRenderPending = !renderMessages;
+    const wasNearBottom = renderMessages && isArticleChatNearBottom(container);
 
-    container.querySelectorAll(':scope > .workspace-empty').forEach(node => node.remove());
-    container.querySelectorAll(':scope > [data-turn-id]').forEach(node => {
-        if (!visibleIds.has(node.dataset.turnId)) {
-            articleChatTurnElements.delete(node.dataset.turnId);
-            node.remove();
+    if (renderMessages) {
+        container.querySelectorAll(':scope > .workspace-empty').forEach(node => node.remove());
+        container.querySelectorAll(':scope > [data-turn-id]').forEach(node => {
+            if (!visibleIds.has(node.dataset.turnId)) {
+                articleChatTurnElements.delete(node.dataset.turnId);
+                node.remove();
+            }
+        });
+        visibleTurns.forEach((turn, index) => {
+            const element = renderArticleChatTurn(turn, snapshot);
+            const current = container.children[index];
+            if (element && current !== element) container.insertBefore(element, current || null);
+        });
+        globalThis.WFGChatTimeline?.reconcile(container);
+        container.querySelectorAll(':scope > .article-chat-load-status').forEach(node => node.remove());
+        if (!turns.length && !container.querySelector('[data-wfg-turn]') && (chat.loading || chat.error)) {
+            const notice = createWorkspaceElement('div', 'workspace-status article-chat-load-status',
+                t(chat.error ? '问答记录载入失败，请重试。' : '正在加载问答记录…'));
+            notice.setAttribute('role', chat.error ? 'alert' : 'status');
+            container.appendChild(notice);
         }
-    });
-    visibleTurns.forEach((turn, index) => {
-        const element = renderArticleChatTurn(turn, snapshot);
-        const current = container.children[index];
-        if (element && current !== element) container.insertBefore(element, current || null);
-    });
-    globalThis.WFGChatTimeline?.reconcile(container);
-    container.querySelectorAll(':scope > .article-chat-load-status').forEach(node => node.remove());
-    if (!turns.length && !container.querySelector('[data-wfg-turn]') && (chat.loading || chat.error)) {
-        const notice = createWorkspaceElement('div', 'workspace-status article-chat-load-status',
-            t(chat.error ? '问答记录载入失败，请重试。' : '正在加载问答记录…'));
-        notice.setAttribute('role', chat.error ? 'alert' : 'status');
-        container.appendChild(notice);
-    }
 
+    }
     coverage.textContent = '';
     coverage.hidden = true;
     const loading = chat.loading === true;
@@ -20929,7 +21246,7 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
     const clear = document.getElementById('clearArticleChat');
     const loadEarlier = document.getElementById('articleChatLoadEarlier');
     if (send) {
-        send.disabled = loading ? false : !articleChatSelectedProfileId;
+        send.disabled = loading ? false : !articleChatSelectedProfileId && !globalThis.BrevessPresentationUI?.isRequest(document.getElementById('articleChatQuestion'));
         send.dataset.mode = loading ? 'cancel' : 'send';
         send.classList.toggle('is-llm-pending', loading);
         send.setAttribute('aria-busy', String(loading));
@@ -20948,6 +21265,7 @@ function renderArticleChatSnapshot(snapshot = currentWorkspaceSnapshot) {
             ? `加载更早对话（还有 ${visibleStart} 轮）` : '已显示全部对话';
     }
 
+    if (!renderMessages) return;
     if (articleChatFollowLatest && wasNearBottom) {
         requestAnimationFrame(() => scrollArticleChatToLatest());
     } else {
@@ -20971,7 +21289,10 @@ async function admitArticleChatStateEvent(event, sender) {
         (sender.frameId !== undefined && sender.frameId !== 0) || !url || normalize(sender.url) !== url || !current()) return false;
     const key = JSON.stringify([tabId,sequence,url,senderDocumentId]);
     if (articleChatEventDocumentCheck?.key !== key) {
-        const proof = context.offlineMode
+        const proof = context.pdfMode
+            ? chrome.tabs.sendMessage(tabId, {action:'getPdfReaderNotices'}, {frameId:0,documentId:senderDocumentId}).then(result =>
+                result?.success === true && normalize(result.readerUrl) === url && result.documentHash === documentHash)
+            : context.offlineMode
             ? chrome.tabs.sendMessage(tabId, {action:'validateSavedArticleReader'}, {frameId:0,documentId:senderDocumentId}).then(result =>
                 result?.success === true && normalize(result.navigationIdentity) === url &&
                 result.binding?.workspaceId === snapshot.localWorkspace?.workspaceId &&
@@ -21055,7 +21376,14 @@ async function submitArticleChat(event) {
     }
     const input = document.getElementById('articleChatQuestion');
     const question = String(input?.value || '').trim();
-    const profileId = document.getElementById('articleChatProfile')?.value || '';
+    const external=globalThis.BrevessPresentationUI?.externalId(document.getElementById('articleChatProfile')?.value);
+    let agentChoice;
+    try { agentChoice = await globalThis.BrevessChatAgentControls?.choice(); }
+    catch(error) { showStatus(error.message,'error'); return; }
+    if (question && globalThis.BrevessPresentationUI?.isRequest(input)) return BrevessPresentationUI.submit(input,external);
+    if (question && agentChoice && !agentChoice.profileId) return BrevessChatAgentControls.submitConnected(input,agentChoice);
+    const profileId = agentChoice?.profileId || document.getElementById('articleChatProfile')?.value || '';
+    const agentOptions = agentChoice ? {model:agentChoice.model,reasoningEffort:agentChoice.reasoningEffort} : undefined;
     const webSearch = Object.freeze({
         mode: articleChatWebSearchMode,
         enabled: ['on', 'deep'].includes(articleChatWebSearchMode)
@@ -21093,6 +21421,7 @@ async function submitArticleChat(event) {
         const response = await sendTabMessage(panelContext.tabId, {
             action: 'askArticleWithLLM', question, profileId,
             selectedProfileId: profileId,
+            agentOptions,
             contextScope,
             attachments: submittedAttachments,
             webSearch
@@ -21215,6 +21544,7 @@ async function submitArticleSemanticHighlight(event) {
 }
 
 async function cancelArticleChat() {
+    if (globalThis.BrevessChatAgentControls?.cancel()) return;
     if (!currentWorkspaceSnapshot?.chat?.loading) return;
     const panelContext = capturePanelContext();
     const response = await sendTabMessage(panelContext.tabId, {
@@ -21236,7 +21566,10 @@ async function mutateArticleChatTurn(action, turnId) {
     const panelContext = capturePanelContext();
     const message = { action, turnId };
     if (action === 'regenerateArticleChatTurn') {
-        message.profileId = document.getElementById('articleChatProfile')?.value || '';
+        const choice = await globalThis.BrevessChatAgentControls?.choice();
+        if (choice && !choice.profileId) throw Error('此客户端请在输入框重新发送问题。');
+        message.profileId = choice?.profileId || document.getElementById('articleChatProfile')?.value || '';
+        message.agentOptions = choice ? {model:choice.model,reasoningEffort:choice.reasoningEffort} : null;
         message.webSearch = {
             mode: articleChatWebSearchMode, enabled: ['on', 'deep'].includes(articleChatWebSearchMode)
         };
@@ -21305,6 +21638,7 @@ async function loadEarlierArticleChatHistory() {
 function handleArticleChatTurnAction(event) {
     const button = event.target.closest('[data-article-chat-action]');
     if (!button) return;
+    if (button.dataset.articleChatAction?.startsWith('ppt-')) { void BrevessPresentationUI.act(button); return; }
     if (button.dataset.articleChatAction === 'copy-answer') {
         const turn = currentWorkspaceSnapshot?.chat?.turns?.find(item =>
             String(item.turnId) === button.dataset.turnId);
@@ -21573,7 +21907,7 @@ async function performArticleWorkspaceRefresh({
             await SciLLM.ensureCompatibleContentRevision(chrome, panelContext.tabId);
             if (!isCurrent()) return null;
         }
-        if ((announce || !currentWorkspaceSnapshot) &&
+        if ((announce || forceRefresh) &&
             panelContext.pdfMode !== true && panelContext.offlineMode !== true &&
             typeof SciLLM.refreshFigureExtractorInTab === 'function') {
             figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(
@@ -24419,7 +24753,7 @@ function syncLiteratureNoteTextarea(textarea) {
 function renderLiteratureNoteViewToggle() {
     const button = document.getElementById('toggleLiteratureNoteMarkdown');
     if (!button) return;
-    const label = t(literatureNotePreviewing ? '查看 Markdown 源码' : '查看渲染后的笔记');
+    const label = t(literatureNotePreviewing ? '查看 Markdown 源码' : '普通编辑');
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
     button.setAttribute('aria-pressed', String(literatureNotePreviewing));
@@ -24441,7 +24775,7 @@ function initializeLiteratureNoteView(templateId) {
         // content or persist a template selection merely by opening the drawer.
         const generated = Object.keys(values).some(id => String(values[id] || '').trim() &&
             ['supported', 'partial'].includes(statuses[id]));
-        literatureNoteViewModes.set(key, { previewing: generated, explicit: false });
+        literatureNoteViewModes.set(key, { previewing: true, explicit: false });
     }
     literatureNotePreviewing = literatureNoteViewModes.get(key).previewing;
 }
@@ -24482,6 +24816,17 @@ function decorateLiteratureNoteReferences(textarea, projection, createButton) {
     const preview = textarea.closest('.literature-note-field')?.querySelector('.literature-note-editor-preview');
     if (!preview || preview.hidden) return new Set();
     const placed = new Set();
+    const numbers = new Map();
+    for (const ref of projection.references || []) ref.sourceIds.forEach((id,i) => numbers.set(id,ref.sourceNumbers[i]));
+    for (const old of preview.querySelectorAll('[data-note-source-id]')) {
+        const id = old.dataset.noteSourceId;
+        if (numbers.has(id)) {
+            const button = createButton(numbers.get(id), id, true);
+            button.contentEditable = 'false';
+            (old.closest('[data-note-citation-chip]') || old).replaceWith(button);
+            placed.add(id);
+        }
+    }
     const textNodes = [];
     const visit = node => {
         if (node.nodeType === 3) textNodes.push(node);
@@ -24528,8 +24873,7 @@ function resolveLiteratureNoteSourceFocus(textarea, id, noteContext) {
         const storedEvidence = literatureNoteDocumentState?.fieldEvidenceByTemplate
             ?.[literatureNoteDocumentState?.templateId]?.[textarea.dataset.literatureNoteField];
         const evidence = SciLLM.normalizeLiteratureNoteEvidenceRecord?.(storedEvidence);
-        if (storedEvidence != null) {
-            if (evidence?.status !== 'verified') return null;
+        if (evidence?.status === 'verified' && evidence.locators.some(locator => locator.paragraphId === id)) {
             const matches = evidence.locators.map((locator, index) => ({ locator, index }))
                 .filter(value => value.locator.paragraphId === id);
             if (matches.length !== 1) return null;
@@ -24539,7 +24883,7 @@ function resolveLiteratureNoteSourceFocus(textarea, id, noteContext) {
             if (!documentId || !documentHash || locator.documentId !== documentId ||
                 locator.documentHash !== documentHash) return null;
             const target = createLiteratureNoteEvidenceFocusTarget(evidence, index);
-            return target ? { target, verified: true, sectionTitle: `PDF 第 ${locator.pageNumber || '?'} 页` } : null;
+            return target ? { target, verified: true, sectionTitle: locator.pageNumber || locator.ranges?.[0]?.pageNumber ? `PDF 第 ${locator.pageNumber || locator.ranges[0].pageNumber} 页` : 'PDF 原文' } : null;
         }
         const navigation = currentPdfSemanticNavigation;
         if (!navigation || navigation.documentId !== currentWorkspaceSnapshot?.documentId ||
@@ -24612,7 +24956,26 @@ function renderLiteratureNoteSourceList(textarea, projection) {
                 if (button.isConnected) button.disabled = !findTarget(id);
             }
         });
-        return button;
+        if (!inline) return button;
+        const chip = document.createElement('span');
+        chip.className = 'literature-note-citation-chip';
+        chip.dataset.noteCitationChip = '';
+        chip.contentEditable = 'false';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'literature-note-citation-remove';
+        remove.dataset.noteEditorUi = 'remove-citation';
+        remove.title = t('移除此处引文') + ' ' + number;
+        remove.setAttribute('aria-label', remove.title);
+        remove.append(SciLLM.createLiteratureNoteFormatIcon(document, 'remove'));
+        remove.addEventListener('mousedown', event => event.preventDefault());
+        remove.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            literatureNoteEditors.get(textarea)?.removeCitation(chip);
+        });
+        chip.append(button, remove);
+        return chip;
     };
     const placed = decorateLiteratureNoteReferences(textarea, projection, createSourceButton);
     ids.forEach((number, id) => {
@@ -24658,8 +25021,10 @@ async function copyLiteratureNote() {
     if (isCurrentLiteratureNoteContext(noteContext)) showStatus('已复制当前模板笔记，来源状态一并保留。', 'success');
 }
 
-function exportLiteratureNoteMarkdown() {
-    const text = currentLiteratureNoteExport('markdown');
+async function exportLiteratureNoteMarkdown() {
+    const context = captureLiteratureNoteContext();
+    const text = await BrevessNoteInserts.portable(currentLiteratureNoteExport('markdown'),context);
+    if (!isCurrentLiteratureNoteContext(context)) return;
     downloadBlob(new Blob([text], { type: 'text/markdown;charset=utf-8' }), 'BREVESS-文献笔记.md');
     showStatus('已生成 Markdown 文件；颜色使用笔记的受控标记。', 'success');
 }
@@ -24849,7 +25214,13 @@ function renderLiteratureNoteDrawer() {
         }
         if (typeof SciLLM.attachLiteratureNoteEditor === 'function') {
             const editor = SciLLM.attachLiteratureNoteEditor({ textarea, translate: t,
-                initialPreview: literatureNotePreviewing, showToggle: false });
+                initialPreview: literatureNotePreviewing, showToggle: false,
+                sourceEditor: literatureNoteSourceEditors.get(textarea),
+                fieldAction: action => BrevessNoteInserts.action(textarea,action),
+                renderMedia: preview => {
+                    void globalThis.BrevessNoteInserts?.hydrate(preview);
+                    renderLiteratureNoteSourceList(textarea, literatureNoteSourceEditors.get(textarea)?.projection);
+                } });
             editor.element.style.gridColumn = '1 / -1';
             label.insertBefore(editor.element, textarea);
             literatureNoteEditors.set(textarea, editor);
@@ -24876,6 +25247,7 @@ function renderLiteratureNoteDrawer() {
         literatureNoteFieldActivationControllers.push(activation);
         fields.appendChild(label);
         renderLiteratureNoteSourceList(textarea, literatureNoteSourceEditors.get(textarea)?.projection);
+        globalThis.BrevessNoteInserts?.bind(textarea);
         resizeLiteratureNoteTextarea(textarea);
     });
     renderLiteratureNoteViewToggle();
@@ -25695,7 +26067,9 @@ function setModuleActionLabel(button, fullLabel, shortLabel, statusElementId = '
 
 function updateApplyButton() {
     const applyButton = document.getElementById('applyHighlight');
-    applyButton.hidden = true;
+    applyButton.hidden = analysisMode === 'llm';
+    const aiButton = document.getElementById('batchHighlights');
+    if (aiButton) aiButton.disabled = regexApplyPending || preferenceMutationCoordinator.isPending();
     const setLabel = (fullLabel, shortLabel) => {
         if (applyButton.dataset.moduleAction !== undefined) {
             setModuleActionLabel(applyButton, fullLabel, shortLabel, 'highlightHeaderTaskStatus');
@@ -27014,7 +27388,7 @@ function renderConfidenceControl() {
 function updateAnalysisModeUi() {
     const isLlm = analysisMode === 'llm';
     const toggle = document.getElementById('toggleAnalysisEngine');
-    if (toggle) { toggle.textContent = t(isLlm ? 'LLM 精确模式' : '正则模式'); toggle.setAttribute('aria-label', t(isLlm ? '当前 LLM 精确模式，点击切换正则模式' : '当前正则模式，点击切换 LLM 精确模式')); }
+    if (toggle) { toggle.textContent = isLlm ? 'LLM' : 'RE'; toggle.title = t(isLlm ? '切换到正则模式' : '切换到 LLM 模式'); toggle.setAttribute('aria-label', t(isLlm ? '当前 LLM 精确模式，点击切换正则模式' : '当前正则模式，点击切换 LLM 精确模式')); }
 
     document.getElementById('spanModeSection').hidden = isLlm;
     document.getElementById('llmAdaptiveControls').hidden = false;
@@ -28280,6 +28654,7 @@ function openSupplementalFigureImportDialog() {
         return;
     }
     resetSupplementalFigureImportForm();
+    renderSupplementalImportSources(currentWorkspaceSnapshot, supplementalFigureImportTarget);
     dialog?.showModal();
 }
 
@@ -29512,7 +29887,8 @@ function requestFigureInputModeChoice({ allFigures = false, figureLabel = '' } =
         const actions = createWorkspaceElement('div', 'workspace-figure-input-actions');
         const imageButton = createWorkspaceElement('button', 'btn btn-primary', '使用 Figure 图像');
         const textButton = createWorkspaceElement('button', 'btn btn-secondary', '仅用图注与正文');
-        const cancelButton = createWorkspaceElement('button', 'btn btn-ghost', '取消');
+        const cancelButton = createWorkspaceElement('button', '', '×');
+        cancelButton.setAttribute('aria-label', '关闭');
         [imageButton, textButton, cancelButton].forEach(button => { button.type = 'button'; });
         imageButton.dataset.figureInputMode = 'vision';
         textButton.dataset.figureInputMode = 'text';
@@ -29529,8 +29905,8 @@ function requestFigureInputModeChoice({ allFigures = false, figureLabel = '' } =
         cancelButton.addEventListener('click', () => finish(null));
         dialog.addEventListener('cancel', event => { event.preventDefault(); finish(null); });
         dialog.addEventListener('close', () => { if (!settled) finish(null); });
-        actions.append(imageButton, textButton, cancelButton);
-        dialog.append(title, description, actions);
+        actions.append(imageButton, textButton);
+        dialog.append(title, description, actions, cancelButton);
         document.body.appendChild(dialog);
         try { dialog.showModal(); } catch (_) { finish('vision'); return; }
         requestAnimationFrame(() => imageButton.focus());
@@ -29684,6 +30060,15 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                 return SciLLM.figureBulkSourceDependencyIds(figure, figureSourcePreflight.declaredSources || [])
                     .some(materialId => recoveryMaterialIds.includes(materialId));
             });
+            if (selectedFigureInputMode === 'vision' && activePanelTabContext.pdfMode) {
+                const unconfirmed = inventory.find(figure => figureIds.includes(figure.figureId) &&
+                    figure.sourceKind === 'pdf-page-caption' && figure.artworkCoverage !== 'complete');
+                if (unconfirmed) {
+                    showStatus('请先核对完整图像页，保存后重新启动解图；尚未调用模型。', 'warning');
+                    openPdfFigureArtworkDialog(unconfirmed, document.activeElement || document.body);
+                    return { cancelled: true, notStarted: true };
+                }
+            }
             if (!figureIds.length) continue;
             if (sourcePhase === 1 && phaseResponses.length) {
                 // Resume intents are immutable per backend operation ID. A new
@@ -31301,8 +31686,8 @@ function setupEventListeners() {
     document.getElementById('copyLiteratureNote')?.addEventListener('click', () => {
         void copyLiteratureNote().catch(error => showStatus(`复制失败：${error.message}`, 'error'));
     });
-    document.getElementById('exportLiteratureNoteMarkdown')?.addEventListener('click', () => {
-        try { exportLiteratureNoteMarkdown(); }
+    document.getElementById('exportLiteratureNoteMarkdown')?.addEventListener('click', async () => {
+        try { await exportLiteratureNoteMarkdown(); }
         catch (error) { showStatus(`导出失败：${error.message}`, 'error'); }
     });
     document.getElementById('toggleLiteratureNoteMarkdown')?.addEventListener('click', () => {
@@ -31403,7 +31788,11 @@ function setupEventListeners() {
     document.getElementById('paragraphNoteDialog')?.addEventListener('close', () => {
         paragraphNoteEditorTarget = null;
     });
-    document.getElementById('articleChatProfile')?.addEventListener('change', event => {
+    const chatModelSelect = document.getElementById('articleChatProfile');
+    const refreshChatModels = () => { void globalThis.BrevessPresentationUI?.discoverClients(true); };
+    chatModelSelect?.addEventListener('focus', refreshChatModels);
+    chatModelSelect?.closest('label')?.addEventListener('pointerdown', refreshChatModels, true);
+    chatModelSelect?.addEventListener('change', event => {
         articleChatSelectedProfileId = event.target.value;
         renderArticleChatSnapshot(currentWorkspaceSnapshot);
     });
@@ -31462,7 +31851,11 @@ function setupEventListeners() {
     document.getElementById('articleChatReturnLatest')?.addEventListener('click', () => {
         scrollArticleChatToLatest({ smooth: true });
     });
-    document.getElementById('articleChatQuestion')?.addEventListener('input', () => {
+    document.getElementById('articleChatQuestion')?.addEventListener('input', event => {
+        const send = document.getElementById('sendArticleChat');
+        if (send?.dataset.mode === 'send') {
+            send.disabled = !articleChatSelectedProfileId && !globalThis.BrevessPresentationUI?.isRequest(event.currentTarget);
+        }
         updateArticleChatCommandMenu();
     });
     document.getElementById('articleChatQuestion')?.addEventListener('click', () => {
@@ -31493,15 +31886,19 @@ function setupEventListeners() {
         }
     });
     document.getElementById('articleChatCommandMenu')?.addEventListener('click', event => {
-        const option = event.target.closest('[data-command-index]');
-        if (option) selectArticleChatCommand(Number(option.dataset.commandIndex));
+        const reference = event.target.closest('[data-reference-index]');
+        if (reference) selectArticleChatCommand(Number(reference.dataset.referenceIndex), true);
+        else {
+            const option = event.target.closest('[data-command-index]');
+            if (option) selectArticleChatCommand(Number(option.dataset.commandIndex));
+        }
     });
     document.addEventListener('pointerdown', event => {
         const menu = document.getElementById('articleChatCommandMenu');
         if (!menu || menu.hidden) return;
         const input = document.getElementById('articleChatQuestion');
         const scopes = document.getElementById('articleChatContextScopes');
-        if (menu.contains(event.target) || input?.contains(event.target) ||
+        if (event.target.closest('#quickPromptDialog') || menu.contains(event.target) || input?.contains(event.target) ||
             scopes?.contains(event.target)) return;
         closeArticleChatCommandMenu();
     });
@@ -31545,6 +31942,10 @@ function setupEventListeners() {
         });
     });
 
+    const highlightSettings = document.getElementById('highlightControls');
+    const highlightSettingsButton = document.getElementById('openHighlightSettings');
+    highlightSettingsButton.addEventListener('click', () => { highlightSettings.open = !highlightSettings.open; });
+    highlightSettings.addEventListener('toggle', () => highlightSettingsButton.setAttribute('aria-expanded', String(highlightSettings.open)));
     document.getElementById('toggleAnalysisEngine')?.addEventListener('click', async () => {
         try { await queueAnalysisModeMutation(analysisMode === 'llm' ? 'regex' : 'llm'); }
         catch (error) { showStatus(`无法切换识别模式：${error.message}`, 'error'); }
@@ -31752,3 +32153,5 @@ function renderWebMediaWorkspace(container,snapshot) {
         }
     });
 }
+
+document.getElementById('dismissNotificationHistory')?.addEventListener('click', event => { const menu = event.currentTarget.closest('details'); menu.open = false; menu.querySelector('summary').focus(); });

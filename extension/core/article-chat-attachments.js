@@ -188,6 +188,12 @@
       ? candidates.slice(0, Math.max(0, 4 - attachments.length)).map(item => item.image) : [];
     const images = [...attachments, ...chosen].map(item => ({ dataUrl: item.dataUrl, mediaType: item.mediaType }));
     const sentFigures = new Set(candidates.filter(item => chosen.includes(item.image)).flatMap(item => item.numbers));
+    for (const item of attachments) {
+      const panel = /^pdf-panel:([a-f0-9]{64}):figure-((?:s|ed)?\d+):[A-Z0-9_-]+$/u.exec(item.attachmentId || '');
+      if (panel && panel[1] === input.document.documentHash) sentFigures.add(panel[2]);
+      const webPanel = /^web-panel:([A-Za-z0-9._-]{1,64}):figure-((?:s|ed)?\d+):[A-Z]:[a-f0-9]{16}$/u.exec(item.attachmentId || '');
+      if (webPanel && webPanel[1] === String(input.document.documentHash || '').replace(/[^A-Za-z0-9._-]/g,'_').slice(0,64)) sentFigures.add(webPanel[2]);
+    }
     const unavailableFigures = [...requestedFigures].filter(number => !sentFigures.has(number));
     const metadata = [...attachments.map(item => ({ origin: 'attachment', attachmentId: item.attachmentId,
       name: item.name, contentHash: item.contentHash })), ...chosen.map(item => ({ origin: 'article',

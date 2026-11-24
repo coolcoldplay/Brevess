@@ -161,14 +161,8 @@
     function parseCompletedJson(content, messagesJson, usage, model) {
       const promptTokens = usage?.estimated !== true && Number.isSafeInteger(usage?.prompt_tokens) && usage.prompt_tokens > 0
         ? usage.prompt_tokens : null;
-      try { return shared.parseJsonText(content, { captureFormatFailure: true,
-        formatFailureInput: promptTokens === null ? null : { model, messagesJson, promptTokens } }); }
-      catch (error) {
-        // The complete HTTP body has arrived. Invalid model JSON is a known
-        // response outcome; it must not leave a paid-request receipt unsealed.
-        if (error?.code === 'INVALID_RESPONSE') error.diagnosticStage = 'provider-completion';
-        throw error;
-      }
+      return shared.parseCompletedJsonText(content,
+        promptTokens === null ? null : { model, messagesJson, promptTokens });
     }
 
     function assertJsonCompletion(finishReason) {

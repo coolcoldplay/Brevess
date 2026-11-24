@@ -195,10 +195,26 @@
     sample_information: ['Sample information', 'Explain only the samples, species, tissues, cells, cohorts and replicates explicitly supported by the input. Do not guess missing details.']
   };
   const CHAT_EN = {
-    core_claim: ['Core conclusion', 'Summarize the paper’s central conclusion and explain the key original evidence supporting each point.'],
-    evidence_chain: ['Evidence chain', 'Trace the complete evidence chain supporting the authors’ central mechanism and identify its weakest link.'],
-    limitations: ['Limitations', 'Using evidence from the article, summarize its main limitations, unresolved questions and conditions that may constrain generalization of its conclusions.'],
-    section_compare: ['Compare sections', 'Compare the arguments, evidence and conclusions in the selected sections, identifying agreement, differences and potential contradictions.']
+    agent_journal_club_ppt: ["Create a journal club PPT with an Agent", "Ask my connected Agent to create and download an editable .pptx for a 10-minute journal club with colleagues new to this paper. Open with the knowledge gap and research question. Build the story from question to experiment and controls to observation and supported claim, then discuss limits and open questions. Use each evidence block as the smallest layout unit. Map one claim to its comparisons, controls and original figures or panels. Keep the design, representative images and quantitative panels for that block together wherever legible. Split only when projection would make labels unreadable. Repeat the block ID and essential control on continuation slides. Title each results slide with its supported claim and cite the figure, panel and page or passage. Fit each verified original inside its frame at its original aspect ratio. Allow whitespace and check all four edges against the source so axes, legends, scale bars and panel letters stay visible. Keep panels and text independently editable. Mark missing or uncertain evidence for review and never invent experimental data. Use only the Q&A, highlights, annotations, notes and figure analyses I authorize for this paper. Distinguish reported observations, author interpretations and my inferences. In each slide’s speaker notes, explain where to look, how to read the comparison and how it leads to the next slide. Check citations, panel-to-claim correspondence and projected legibility before delivery."],
+    team_prior_work: ["Trace the team’s prior work", "Verify the authors’ identities and trace up to three directly related earlier studies by this team. For each, give the year, finding, open question and the experiment in this paper that takes it further. Include verified DOIs or PMIDs and say whether this paper cites each study. Without web access, use the available material and flag what needs checking."],
+    changed_judgment: ["What judgment should change?", "Write the same scientific judgment as a cautious colleague might state it before and after reading this paper. Identify the words that changed, the result behind the change and the limit of what it supports. Say when the earlier view is reconstructed from the introduction."],
+    read_each_panel: ["Read a figure panel by panel", "Start with the selected figure, or the first main figure if none is specified. For each panel explain what is compared, where to look, the observation and the narrowest conclusion it supports. Distinguish visible evidence from caption-only information and flag missing images."],
+    distinguishing_figure: ["Which figure separates two explanations?", "Before revealing the results, give two plausible explanations and their predictions for the same experiment. Identify the panel that best distinguishes them. If both predict the observed result, explain what the experiment resolves and what remains open."],
+    shared_evidence: ["Which evidence could fail together?", "Choose one central claim supported by multiple figures. Check for shared samples, measurements or analytical assumptions. Explain which evidence could fail together and which independent result offers the strongest reassurance. Mark unreported details as unknown."],
+    transferable_decision: ["Learn from the authors’ best decision", "Pick one research decision worth borrowing. Describe the obstacle, an intuitive approach and what the authors actually did. Explain what extra information they gained and extract one principle that could transfer to another project."],
+    pi_guided_reading: ["Guided reading with a PI", "Ask one question at a time and wait for my answer. Have me predict a key experiment, interpret the result and judge the limits of the conclusion. In feedback, identify evidence I used well, any overreach and a panel to revisit. Start with just the first question."],
+    journal_club_outline: ["10-minute journal club outline", "Design a 10-minute talk of up to eight slides for colleagues who have not read the paper. For each slide provide a usable title, an original figure or other material, a transition and speaking time. Reserve the most time for the experiment that determines the conclusion."],
+    three_panels: ["Present just three panels", "You have five minutes and can show only three panels. Choose and order them for the audience. For each, identify the control to point out and the link in the argument that would be lost without it. Pick one additional figure to keep for questions."],
+    audit_talk: ["Fact-check my presentation", "Check the claims in my script or slides against the paper. Tabulate the original statement, supporting passage or panel, verdict and a suggested revision. Prioritize wrong numbers or directions, changes in study population and causal claims based on correlation. If no draft is available, ask me to paste it."]
+  };
+  const DISPLAY_EN = {
+    publisher_clean: ["Clean publisher article", "Identify the article column, center it, and limit it to 82ch with natural wrapping on narrow screens. Hide ads, site navigation, peripheral recommendations and the site footer. Preserve the title, authors, text, figures, captions, citation links and supplementary material links. Check the visible text and its actual width in the preview."],
+    text_width: ["Set text width", "Set the article text width to 720px."],
+    large_type: ["Larger body text", "Set article paragraphs to 20px with a line height of 1.75. Preserve superscripts, subscripts, inline equations and citation numbers, and keep headings distinct."],
+    hd_figure: ["Load a full-resolution figure", "Load the full-resolution image for Figure 1."],
+    captions: ["Read figures with captions", "Keep captions close to their figures, at 16px with a line height of 1.6. Preserve panel letters, legends, scale bars, original image links and each figure’s aspect ratio."],
+    wide_table: ["Scroll wide tables", "Let tables wider than the text scroll horizontally within their own area. Preserve every row, column and table note, and keep the surrounding article at its existing width."],
+    section_headings: ["Clarify section headings", "Distinguish the first three article heading levels with type size, weight and spacing. Preserve their wording, numbering and anchor links."]
   };
   const ACTION_EN = {
     translate: ['Translate', 'Translate the selected passage accurately into the current interface language. Preserve technical terms, gene/protein names, numerical values, statistics and uncertainty; retain the original technical term in parentheses when helpful.'],
@@ -265,6 +281,7 @@
       figurePanelFollowupPrompts: clone(api.DEFAULT_PANEL_FOLLOWUP_PROMPTS || Object.fromEntries(
         (api.DEFAULT_PANEL_FOLLOWUP_PRESETS || []).map(row => [row.topic, row.prompt]))),
       figurePanelFollowupPresets: clone(api.DEFAULT_PANEL_FOLLOWUP_PRESETS || []),
+      displayQuickPrompts: clone(api.DEFAULT_DISPLAY_QUICK_PROMPTS || []),
       articleChatQuickPrompts: clone(api.DEFAULT_ARTICLE_CHAT_QUICK_PROMPTS || []),
       literatureNoteTemplates: clone(api.DEFAULT_LITERATURE_NOTE_TEMPLATES || []),
       selectionLlmActions: clone(api.DEFAULT_SELECTION_ACTIONS || [])
@@ -287,6 +304,7 @@
     output.settings.figurePanelFollowupPrompts = Object.fromEntries(Object.entries(base.settings.figurePanelFollowupPrompts)
       .map(([topic, value]) => [topic, PANEL_EN[topic]?.[1] || value]));
     output.settings.articleChatQuickPrompts = promptRows(base.settings.articleChatQuickPrompts, CHAT_EN);
+    output.settings.displayQuickPrompts = promptRows(base.settings.displayQuickPrompts, DISPLAY_EN);
     output.settings.selectionLlmActions = promptRows(base.settings.selectionLlmActions, ACTION_EN);
     output.settings.literatureNoteTemplates = base.settings.literatureNoteTemplates.map(template => ({
       ...template, name: TEMPLATE_EN[template.id] || template.name,

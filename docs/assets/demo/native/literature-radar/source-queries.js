@@ -4,7 +4,7 @@
   let selected=new Set(['pubmed']),drafts=new Map(),epoch=0;
   source.hidden=true;query.hidden=true;query.required=false;doc.querySelector('label[for=source]').hidden=true;doc.querySelector('label[for=query]').hidden=true;doc.getElementById('source-hint').hidden=true;doc.getElementById('preview-query').parentElement.hidden=true;
   const values=()=>[...selected].map(id=>({source:id,query:drafts.get(id)||''}));
-  function sync(){const first=values()[0];if(first){source.value=first.source;query.value=first.query;}}
+  function sync(){const first=values()[0];if(first){source.value=first.source;query.value=first.query;}query.dispatchEvent(new Event('input'));}
   function render(){choices.replaceChildren();fields.replaceChildren();for(const [id,def]of Object.entries(R.RADAR_SOURCES)){
     const label=doc.createElement('label'),check=doc.createElement('input');check.type='checkbox';check.value=id;check.checked=selected.has(id);check.dataset.radarSource=id;label.append(check,def.name);choices.append(label);
     check.onchange=()=>{if(check.checked)selected.add(id);else selected.delete(id);epoch++;render();source.dispatchEvent(new Event('change'));};

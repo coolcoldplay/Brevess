@@ -17,14 +17,27 @@
         } catch (_) { /* An extension reload requires the article to be refreshed. */ }
     }
     void refreshShortcut();
-    async function refreshPageTools() {
-        try {
-            const stored = await SciLLM.publicPageStorage.get('sciPageToolsV1');
-            globalThis.__brevessPageToolsPreferences = SciLLM.normalizePageToolsSettings(stored.sciPageToolsV1);
-            await chrome.runtime.sendMessage({ type: 'PAGE_TOOLS_BOOTSTRAP' });
-        } catch (_) { /* Restricted documents stay untouched. */ }
+    let pageToolsReady = false, pendingBootstrap = null, retryAfter = 0;
+    function refreshPageTools() {
+        if (pendingBootstrap) return pendingBootstrap;
+        pendingBootstrap = (async () => {
+            try {
+                const stored = await SciLLM.publicPageStorage.get('sciPageToolsV1');
+                globalThis.__brevessPageToolsPreferences = SciLLM.normalizePageToolsSettings(stored.sciPageToolsV1);
+                const result = await chrome.runtime.sendMessage({ type: 'PAGE_TOOLS_BOOTSTRAP' });
+                pageToolsReady = result?.success === true;
+            } catch { pageToolsReady = false; }
+            finally { pendingBootstrap = null; retryAfter = Date.now() + 750; }
+        })();
+        return pendingBootstrap;
     }
     void refreshPageTools();
+    // A first selection can arrive while the worker is waking or during prerender.
+    document.addEventListener('selectionchange', () => {
+        if (!pageToolsReady && Date.now() >= retryAfter && globalThis.__brevessPageToolsPreferences?.selection !== false &&
+            !document.getSelection()?.isCollapsed) void refreshPageTools();
+    });
+    window.addEventListener('pageshow', e => { if (e.persisted || !pageToolsReady) void refreshPageTools(); });
     SciLLM.onPublicPreferencesChanged((changes, area) => {
         if (area === 'local' && (changes.sciLlmSettingsV2 || changes.sciPageToolsV1)) void refreshShortcut();
         if (area === 'local' && changes.sciPageToolsV1) void refreshPageTools();
@@ -34,7 +47,7 @@
         const notice = document.createElement('div');
         notice.dataset.sciPluginUi = 'true';
         notice.setAttribute('role', 'alert');
-        notice.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;background:#fff;color:#222;border:1px solid #555;padding:12px;font:14px/1.5 sans-serif;max-width:320px';
+        notice.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;background:var(--bv-surface,#fff);color:var(--bv-text,#222);border:1px solid var(--bv-line,#555);padding:12px;font:14px/1.5 sans-serif;max-width:320px';
         notice.textContent = '语义检索暂时无法启动，请刷新页面后重试。';
         const close = document.createElement('button');
         close.textContent = '×';

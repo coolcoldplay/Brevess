@@ -1003,6 +1003,7 @@
         'rawLength 和 normalizedLength 是本地实测的 Unicode 码点数，limit 是该字段硬上限。计数包含每个英文/ASCII字母、数字、希腊字母、符号、空格和标点；不是只数汉字或英文单词。ME-Macs 为7，3KL为3，αS为2，LAMP1+为6，每个空格计1。原始值和NFKC规范化后的值均须合格。',
         '中文标题目标40个码点以内，整图标题优先18–30，组标题优先12–24；所有语言标题的数据硬上限均为80个码点。含汉字的原标题应继续使用中文，不能删科学限定或改语言求短。返回前逐字符自查。',
         '只选一个最主要且有证据支持的结论，保留研究对象、否定、比较和关键限定。不要串接多个独立结果；次要结果已保存在详细证据中。不得机械截断、加省略号、虚构短结论或用通用标签替换。',
+        '证据块的标题须单独读得懂。对多条件消融，点明比较对象和测量指标；多条轨迹，点明横轴、纵轴及比较对象。曲线中途的变化、各组方向与数值留在观察和详细证据。不要把某个条件的方向推广到其他条件。图注只足以界定测量内容时，使用准确的描述性标题。',
         '先选一个有证据支持的局部结论，再重新拟定标题；不要只从超长原标题中删除几个字，或保留“且/但/同时”连接的两条发现。title_length_budget 给出计数预算；含汉字的组标题优先控制在24个总码点以内，为英文基因名、型号与限定留出余量。可将可翻译的普通英文名词或亚型名称译成中文，必须保留的基因符号、模型编号不能改写或擅自缩写。若关键限定使标题超过40的目标，可在80的数据硬上限内完整表达，不能删限定求短。',
         ...figureEvidenceCertaintyRules(),
         'The program retains every non-target field unchanged. Return title patches only, not rewritten details or a complete synthesis.'
@@ -2099,6 +2100,8 @@
         'evidence_steps[].established_zh 保留各来源支持的详细证据与限制，author_assembly_zh 保留组图逻辑，claim_boundary_zh 保留推断边界；不要因为 core_conclusion_zh 凝练而丢失这些内容。'
       ] : [
         `panel_groups[].group_conclusion_zh 用作证据块标题：用一句精要的中文短标题（优先名词短语，中文目标不超过${GENERATED_CHINESE_FIGURE_TITLE_TARGET_LENGTH}个Unicode字符；所有语言标题的数据硬上限均为${GENERATED_FIGURE_TITLE_MAX_LENGTH}个Unicode字符，并校验NFKC后的长度）写出本块具体支持或限定的局部结论，使读者知道本块起什么作用；不要串列每个 Panel 或技术步骤，不要只写技术名称、“结果分析”或“综合验证”，也不要复制整图结论。只概括本块实际证据，不用笼统肯定盖过阴性或相反结果；存在混合结果时保留关键差异及必要 Panel 标识。`,
+        '证据块的标题须单独读得懂。对多条件消融，点明比较对象和测量指标；多条轨迹，点明横轴、纵轴及比较对象。曲线中途的变化、各组方向与数值留在观察和详细证据。不要把某个条件的方向推广到其他条件。图注只足以界定测量内容时，使用准确的描述性标题。',
+        'group_goal_zh 同时供导航使用，用一个紧凑、具体的短语概括这个证据块在比较或测量什么，保留必要的对象与读出。避免罗列组别和重复本块结论。',
         '证据块标题目标12–24个中文字符，概括本块所回答的一个局部实验问题及主要结果；若混合或阴性结果决定解释，优先保留该差异。不要把整图的所有结论搬进每个块标题。',
         '模块小结使用 panel_groups[].group_conclusion_zh：只写精炼的定性结论和必要限定，不写具体数值、百分比、P值、置信区间或逐项实验数据；这些细节完整保留在 argument_chain[].established_zh 与各 Panel 观察字段。',
         'panel_groups[].group_goal_zh 说明本块局部实验问题；与本块一一对应的 argument_chain[].established_zh 保留详细证据，含具体比较、各 Panel 的结果、已知定量或统计说明及限制。group_conclusion_zh 是其忠实提炼，不能让两个字段都只剩同一句短标题；Panel 的设计、观察和推断以及 author_assembly_zh、claim_boundary_zh 继续完整保留各自信息。'
@@ -2896,6 +2899,20 @@
         `Figure response copied a multi-assay group list across Panels: ${duplicatedAssays.join(', ')}`
       );
     }
+  }
+
+  // Old analyses sometimes store a complete results paragraph as the heading.
+  // Select a complete, source-backed alternative. Never cut a scientific claim.
+  function figureEvidenceHeading({ conclusion, goal, readout, established } = {}) {
+    const clean = text => typeof text === 'string' ? text.trim().replace(/[^\S\r\n]+/gu, ' ') : '';
+    const candidates = [conclusion, goal, readout, established].map(clean);
+    const compact = text => {
+      if (!text || /[;；\r\n]|[。！？!?]\s*\S/u.test(text) || /(?:[、，,][^、，,]+){3}/u.test(text)) return false;
+      if (/\p{Script=Han}/u.test(text)) return [...text].length <= 40;
+      return text.length <= 100 && text.split(/\s+/u).length <= 14;
+    };
+    const heading = candidates.find(compact) || candidates.find(Boolean) || '';
+    return heading.replace(/\s+/gu, ' ').replace(/。$/u, '').trim();
   }
 
   function figureTitleMetrics(value) {
@@ -4444,6 +4461,7 @@
     compileFigurePanelInterpretationPrompt,
     compilePanelFollowupPrompt,
     classifyFigureAnalysisFailure,
+    figureEvidenceHeading,
     compileFigureSchemaRepairInstructions,
     collectFigureTitleViolations,
     compileFigureTitleRepairPrompt,

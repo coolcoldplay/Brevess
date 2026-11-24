@@ -1,0 +1,93 @@
+/* Only our documents opt into canvas and native control theming. On a publisher
+   page the palette is inherited by BREVESS controls, never by the article. */
+html[data-brevess-ui] { color-scheme: light dark; }
+
+@media screen and (prefers-color-scheme: dark) {
+  :where(html[data-brevess-ui], [data-sci-plugin-ui]:not([data-sci-translation]),
+    [data-brevess-interface]:not([data-sci-translation]),
+    [data-brevess-figure-surface], [data-brevess-sharing], [data-wfg-owned="selection"],
+    .sci-semantic-find,
+    #sci-manual-toolbar, #sci-manual-status, #sci-reading-panel, #sci-side-panel-restore,
+    #sci-highlight-tooltip, #sci-highlight-context-popover, #sci-llm-feedback,
+    #sci-article-navigator-host, #sci-review-outline-host, #sci-figure-image-viewer) {
+    color-scheme: dark;
+    --bv-canvas: #202124;
+    --bv-surface: #292a2d;
+    --bv-raised: #303134;
+    --bv-hover: #383b40;
+    --bv-selected: #354760;
+    --bv-selected-hover: #415570;
+    --bv-on-selected: #e2edff;
+    --bv-text: #e8eaed;
+    --bv-muted: #bdc1c6;
+    --bv-subtle: #a4aab2;
+    --bv-line: #494c52;
+    --bv-line-soft: #3b3e43;
+    --bv-line-strong: #727981;
+    --bv-focus: #a8c7fa;
+    --bv-blue: #a8c7fa;
+    --bv-blue-bg: #293a52;
+    --bv-green: #93d4a7;
+    --bv-green-bg: #233c31;
+    --bv-teal: #8cd7d2;
+    --bv-teal-bg: #213c3e;
+    --bv-amber: #f5cb86;
+    --bv-amber-bg: #433724;
+    --bv-red: #f6aaa4;
+    --bv-red-bg: #472e30;
+    --bv-violet: #cfb9fa;
+    --bv-violet-bg: #3a314b;
+  }
+  :where(#sci-manual-toolbar, #sci-reading-panel, #sci-highlight-context-popover,
+    #sci-highlight-tooltip, #sci-manual-status) {
+    --sci-manual-navy: var(--bv-blue);
+    --sci-manual-navy-strong: var(--bv-focus);
+    --sci-manual-pearl: var(--bv-raised);
+    --sci-manual-paper: var(--bv-surface);
+    --sci-manual-graphite: var(--bv-text);
+    --sci-manual-muted: var(--bv-muted);
+    --sci-manual-line: var(--bv-line);
+    --sci-manual-danger: var(--bv-red);
+  }
+  /* Older tools inherit these shared surface tokens when they run in a
+     standalone viewer, the side panel or the workbench. */
+  :where(html[data-brevess-ui]) {
+    --color-bg-primary: var(--bv-surface);
+    --color-bg-secondary: var(--bv-raised);
+    --color-surface: var(--bv-surface);
+    --color-text: var(--bv-text);
+    --color-text-muted: var(--bv-muted);
+    --color-border: var(--bv-line);
+    --surface: var(--bv-surface);
+    --border: var(--bv-line);
+    --line: var(--bv-line);
+  }
+  html[data-brevess-ui] {
+    color: var(--bv-text);
+    background-color: var(--bv-canvas);
+  }
+  html[data-brevess-ui] ::placeholder { color: var(--bv-subtle); opacity: 1; }
+
+  /* Native editing commands and saved notes use the same six named ink colors.
+     Change their screen paint only, including text just formatted at the caret. */
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="black"], font[color="#242424" i]) { color: var(--bv-text) !important; }
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="red"], font[color="#b42318" i]) { color: var(--bv-red) !important; }
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="orange"], font[color="#995700" i]) { color: var(--bv-amber) !important; }
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="green"], font[color="#216e39" i]) { color: var(--bv-green) !important; }
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="blue"], font[color="#175cd3" i]) { color: var(--bv-blue) !important; }
+  html[data-brevess-ui] .literature-note-rich :is([data-brevess-color="purple"], font[color="#6938a8" i]) { color: var(--bv-violet) !important; }
+
+  html[data-brevess-ui] :is(.brand-mark, .action-popup__header > img, .pdf-reader-mark, img[src="../icons/icon128.png"]) {
+    content: url("icons/Brevess-logo.svg");
+  }
+
+  /* Preserve the PDF and SVG documents' own paper and ink. */
+  html[data-brevess-ui] .article-chat-mermaid-viewport .article-chat-mermaid svg {
+    background-color: white;
+    color-scheme: only light;
+  }
+  html[data-brevess-ui] .pdf-native-page { color-scheme: only light; }
+}
+@media print {
+  html[data-brevess-ui] { color-scheme: light; }
+}

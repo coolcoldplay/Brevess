@@ -2111,6 +2111,20 @@ async function readPageArtworkHints(pageNumber) {
     ...globalThis.SciLLM.measureNativePdfArtwork(operators, page.view, OPS) });
 }
 
+async function renderPanelCrop(pageNumber, rect, pageSize, documentHash, edge = 1200, mask) {
+  const source = pdfDocument, generation = nativeDocumentGeneration;
+  if (!source || !nativeDocumentOwnerMatches(source,documentHash,generation) ||
+      !Number.isSafeInteger(pageNumber) || pageNumber < 1 || pageNumber > source.numPages)
+    throw Error('PDF_PANEL_SOURCE_CHANGED');
+  return imageRenderQueue.schedule(async ({signal}) => {
+    const page = await source.getPage(pageNumber);
+    const image = await globalThis.SciLLM.PdfPanelEvidence.renderCrop(page,rect,pageSize,edge,signal,false,mask);
+    if (signal.aborted || !nativeDocumentOwnerMatches(source,documentHash,generation))
+      throw Error('PDF_PANEL_SOURCE_CHANGED');
+    return {...image,documentHash};
+  });
+}
+
 async function renderPageImage(pageNumber, options = {}) {
   const sourceDocument = pdfDocument;
   if (!sourceDocument || !active || disposed || lifecycle.isTerminal()) {
@@ -3103,7 +3117,7 @@ async function initializeNativePdf() {
       activate, deactivate, dispose, replaceDocument,
       setScale, zoomBy, fitWidth, updatePageWindow,
       ensurePageIndexed: ensureNativePdfPageIndexed,
-      getPageProjection, readPageTextContent, readPageArtworkHints, renderPageImage, installOcrTextLayer,
+      getPageProjection, readPageTextContent, readPageArtworkHints, renderPageImage, renderPanelCrop, installOcrTextLayer,
       getState: () => notifyState(), getCurrentPageNumber: () => currentPageRecord()?.pageNumber || 0,
       focusPage, focusSemanticTarget: focusPdfSemanticTarget,
       cancelOwnedSemanticFocus,
@@ -3177,7 +3191,7 @@ globalThis.addEventListener('pointerup', event => {
 }, true);
 
 document.addEventListener('brevess:focus-native-pdf-page', event => {
-  focusPage(event?.detail?.pageNumber);
+  focusPage(event?.detail?.pageNumber, { targetTop: event?.detail?.targetTop });
 });
 document.addEventListener('brevess:pdf-page-unmounted',event=>clearNativeSelectionPaint(event.detail?.pageNumber));
 document.addEventListener('brevess:pdf-source-changing',cancelNativeSelectionPaint);

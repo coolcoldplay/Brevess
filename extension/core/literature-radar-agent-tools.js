@@ -7,10 +7,10 @@
 })(globalThis, function(m) {
   'use strict';
   const str = { type: 'string' }, int = { type: 'integer', minimum: 1 }, bool = { type: 'boolean' };
-  const configSchema = { type: 'object', additionalProperties: false, required: ['name', 'source', 'query', 'intervalHours', 'baselineDays', 'enabled'], properties: {
+  const configSchema = { type: 'object', additionalProperties: false, required: ['name', 'source', 'query', 'intervalHours', 'enabled'], properties: {
     sourceQueries:{type:'array',minItems:1,maxItems:9,items:{type:'object',additionalProperties:false,required:['source','query'],properties:{source:{enum:Object.keys(m.RADAR_SOURCES)},query:{...str,minLength:1,maxLength:4000}}}},
     name: { ...str, minLength: 1, maxLength: 120 }, source: { enum: Object.keys(m.RADAR_SOURCES) }, query: { ...str, minLength: 1, maxLength: 4000 },
-    intervalHours: { type: 'integer', minimum: 0, maximum: 720 }, baselineDays: { enum: [1, 7, 30, 90] }, enabled: bool
+    intervalHours: { type: 'integer', minimum: 0, maximum: 720 }, baselineStartDay: {type:'string',maxLength:10,description:'Inclusive publication date (YYYY-MM-DD), or an empty string for all years.'}, baselineDays: { type:'integer', minimum:1 }, enabled: bool
   } };
   const definition = (name, description, properties, required = []) => ({ name, description,
     inputSchema: { type: 'object', properties, required, additionalProperties: false } });
@@ -35,8 +35,8 @@
     const revision = m.radarRevision(radar);
     const { articles, aiRuns, ...scan } = revision;
     return { ...(radar.sourceQueries?{sourceQueries:radar.sourceQueries}:{}), id: radar.id, name: radar.name, source: radar.source, query: radar.query, enabled: radar.enabled,
-      intervalHours: radar.intervalHours, baselineDays: radar.baselineDays, editVersion: radar.editVersion,
-      scan, revision: revision.number, history: radar.revisions.map(v => ({ number: v.number, query: v.query, baselineDays: v.baselineDays, count: v.articles.length })),
+      intervalHours: radar.intervalHours, ...m.radarBaseline(radar), editVersion: radar.editVersion,
+      scan, revision: revision.number, history: radar.revisions.map(v => ({ number: v.number, query: v.query, ...m.radarBaseline(v), count: v.articles.length })),
       total: articles.length, unreadNew: articles.filter(p => !p.isBaseline && !p.read).length };
   }
   function createRadarAgentTools({ store = m.createRadarStore(), service } = {}) {

@@ -60,7 +60,7 @@
       }, timeoutMs);
       try {
         const result = await Promise.race([adapters[snapshot.radar.source].discover({
-          query: snapshot.revision.query, ...snapshot.window, signal: controller.signal
+          query: snapshot.revision.query, ...snapshot.window, publication: !snapshot.revision.lastSuccessAt && Object.hasOwn(snapshot.revision,'baselineStartDay'), signal: controller.signal
         }), deadline]);
         if (!Array.isArray(result?.articles) || result.articles.length > 5000) throw m.radarError('RADAR_RESULT_INVALID');
         return await store.transact(state => {
@@ -115,10 +115,10 @@
       try {
         for(const entry of snapshot.queries){
           await store.transact(state=>{signal?.throwIfAborted();if(state.active?.owner!==owner||m.radarRevision(store.find(state,id)).number!==snapshot.revision.number)throw m.radarError('RADAR_STALE');state.active.source=entry.source;});
-          signal?.throwIfAborted();const prior=snapshot.revision.sourceStates?.[entry.source]||{},window=m.radarScanWindow({...prior,baselineDays:snapshot.revision.baselineDays},startedAt);
+          signal?.throwIfAborted();const prior=snapshot.revision.sourceStates?.[entry.source]||{},window=m.radarScanWindow({...prior,...m.radarBaseline(snapshot.revision)},startedAt);
           try {
             controller.signal.throwIfAborted();if(!adapters[entry.source]?.discover)throw m.radarError('RADAR_SOURCE_UNAVAILABLE');
-            const result=await new Promise((resolve,reject)=>{const aborted=()=>reject(controller.signal.reason||m.radarError('RADAR_TIMEOUT'));controller.signal.addEventListener('abort',aborted,{once:true});Promise.resolve().then(()=>adapters[entry.source].discover({query:entry.query,...window,signal:controller.signal})).then(resolve,reject).finally(()=>controller.signal.removeEventListener('abort',aborted));});
+            const result=await new Promise((resolve,reject)=>{const aborted=()=>reject(controller.signal.reason||m.radarError('RADAR_TIMEOUT'));controller.signal.addEventListener('abort',aborted,{once:true});Promise.resolve().then(()=>adapters[entry.source].discover({query:entry.query,...window,publication:!prior.lastSuccessAt && Object.hasOwn(snapshot.revision,'baselineStartDay'),signal:controller.signal})).then(resolve,reject).finally(()=>controller.signal.removeEventListener('abort',aborted));});
             if(!Array.isArray(result?.articles)||result.articles.length>5000||result.articles.some(p=>!m.radarPaperUrl(entry.source,p)||typeof p.title!=='string'))throw m.radarError('RADAR_RESULT_INVALID');
             results.push({...entry,result,window,baseline:!prior.baselineAt});
           } catch(error){signal?.throwIfAborted();results.push({...entry,window,error:{code:String(error.code||'RADAR_CHECK_FAILED'),message:String(error.message||error).slice(0,1200),at:startedAt}});}
@@ -183,18 +183,18 @@
     const backfillBaseline=(...args)=>exclusive(()=>backfillBaselineOne(...args));
     async function backfillBaselineOne(id, version, {startDay,endDay,signal}={}) {
       const validDay=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
-      if(!validDay(startDay)||!validDay(endDay)||startDay>endDay||startDay<'1900-01-01')throw m.radarError('RADAR_HISTORY_RANGE','请填写有效的历史基线日期范围。');
+      if(!validDay(startDay)||!validDay(endDay)||startDay>endDay||startDay<'0001-01-01')throw m.radarError('RADAR_HISTORY_RANGE','请填写有效的历史基线日期范围。');
       signal?.throwIfAborted();const startedAt=now(),owner=crypto.randomUUID();
       const snapshot=await store.transact(state=>{
         if(state.active?.expiresAt>startedAt)throw m.radarError('RADAR_BUSY');
         const radar=store.find(state,id),revision=m.radarRevision(radar);
         if(revision.sourceQueries)throw m.radarError('RADAR_HISTORY_RANGE','多来源策略请分别使用来源检索式建立历史策略；原历史基线保留。');
         if(!revision.baselineAt||revision.number!==version)throw m.radarError('RADAR_STALE','请先完成当前版本的首次检查，再补充历史基线。');
-        const initialStart=revision.windowStart||m.radarScanWindow({baselineDays:revision.baselineDays},revision.baselineAt).startDay;
+        const initialStart=revision.windowStart||m.radarScanWindow(m.radarBaseline(revision),revision.baselineAt).startDay;
         if(endDay>=initialStart)throw m.radarError('RADAR_HISTORY_RANGE','历史范围须早于首次基线窗口；当前增量检查范围保持不变。');
         if(!adapters[radar.source]?.discover)throw m.radarError('RADAR_SOURCE_UNAVAILABLE');
         state.active={owner,id,revision:version,expiresAt:startedAt+timeoutMs+30000};
-        return {source:radar.source,query:revision.query};
+        return {source:radar.source,query:revision.query,publication:Object.hasOwn(revision,'baselineStartDay')};
       });
       const controller=new AbortController();let rejectDeadline;
       const deadline=new Promise((_,reject)=>{rejectDeadline=reject;});
@@ -202,7 +202,7 @@
       signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
       const timer=setTimeout(()=>{const error=m.radarError('RADAR_TIMEOUT','历史基线检索超时，原数据与进度已保留。请缩小日期范围后重试。');controller.abort(error);rejectDeadline(error);},timeoutMs);
       try {
-        const result=await Promise.race([adapters[snapshot.source].discover({query:snapshot.query,startDay,endDay,signal:controller.signal}),deadline]);
+        const result=await Promise.race([adapters[snapshot.source].discover({query:snapshot.query,startDay,endDay,publication:snapshot.publication,signal:controller.signal}),deadline]);
         if(!Array.isArray(result?.articles)||result.articles.length>5000)throw m.radarError('RADAR_RESULT_INVALID');
         return await store.transact(state=>{
           signal?.throwIfAborted();controller.signal.throwIfAborted();const radar=store.find(state,id),revision=m.radarRevision(radar);

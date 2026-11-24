@@ -166,7 +166,17 @@
       const url=sourceUrl(workspace.canonicalUrl);
       if(!url)throw fault('WORKBENCH_SOURCE_URL_UNAVAILABLE');
       const tabs=await chromeApi.tabs.query({});
-      let tab=tabs.find(item=>item.url===url);
+      const matching=tabs.filter(item=>{
+        if(!item.url)return false;
+        try{const candidate=new URL(item.url),stored=new URL(url);
+          candidate.hash='';stored.hash='';
+          if(candidate.href===stored.href)return true;
+          return stored.hostname==='pmc.ncbi.nlm.nih.gov'&&candidate.origin===stored.origin&&
+            /^\/articles\/PMC\d+\/?$/.test(stored.pathname)&&candidate.search===stored.search&&
+            candidate.pathname.replace(/\/$/,'')===stored.pathname.replace(/\/$/,'');
+        }catch{return false;}
+      });
+      let tab=matching.find(item=>item.id===message.sourceTabId)||matching.find(item=>item.active)||matching[0];
       if(!tab)tab=await chromeApi.tabs.create({url,active:true});
       else await chromeApi.tabs.update(tab.id,{active:true});
       let ready;
@@ -194,7 +204,7 @@
         JSON.stringify(receipt.target)!==JSON.stringify(message.target)||
         JSON.stringify(receipt.documentIdentity)!==JSON.stringify(ready.documentIdentity)||
         JSON.stringify(receipt.navigationIdentity)!==JSON.stringify(ready.navigationIdentity)||
-        !['figure','page','paragraph'].includes(receipt.precision))throw fault('WORKBENCH_LOCATE_RECEIPT_MISMATCH');
+        !['figure','page','paragraph','panel','panel-caption'].includes(receipt.precision))throw fault('WORKBENCH_LOCATE_RECEIPT_MISMATCH');
       return receipt;
     }
     async function handle(message,sender) {

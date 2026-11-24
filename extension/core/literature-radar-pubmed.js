@@ -137,14 +137,14 @@
       return {count:Number(result.count),queryTranslation:String(result.querytranslation||''),
         warnings:Object.values(result.warninglist||{}).flat().map(String),errors:Object.values(result.errorlist||{}).flat().map(String).concat(result.ERROR?[String(result.ERROR)]:[])};
     }
-    async function discover({ query, startDay, endDay, signal }) {
+    async function discover({ query, startDay, endDay, publication=false, signal }) {
       if (typeof query !== 'string' || !query.trim() || query.length > 4000 ||
           ![startDay, endDay].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && m.radarDay(Date.parse(d)) === d) || startDay > endDay) throw m.radarError('RADAR_ARGUMENT');
       const ids = new Set(), warnings = new Set(); let queries = 0, queryTranslation = '';
       async function searchRange(start, end) {
         signal?.throwIfAborted();
         if (++queries > 64) throw m.radarError('RADAR_QUERY_TOO_BROAD', '检索范围过大，请缩小检索式或首次回溯范围。');
-        const term = `(${query}) AND (${start.replaceAll('-', '/')}:${end.replaceAll('-', '/')}[crdt])`;
+        const term = `(${query}) AND (${start.replaceAll('-', '/')}:${end.replaceAll('-', '/')}[${publication?'dp':'crdt'}])`;
         // Official ceiling is 10,000; the live 2026-10-13 service clips retmax to 9,999.
         const body = await request('esearch', { term, retmax: '9999', retstart: '0', sort: 'pub_date' }, signal);
         const result = body?.esearchresult;
@@ -186,7 +186,28 @@
       if (abstracts.some(p=>p.abstractStatus==='error')) warnings.add('部分摘要获取失败，文献已保留；可点击“补齐摘要”重试。');
       return { articles, warnings: [...warnings], queryTranslation };
     }
-    return { source: 'pubmed', discover, fetchAbstracts, previewQuery };
+    async function publicationYears(query,{signal}={}) {
+      // PubMed embeds the same numeric year/count table that powers its results timeline.
+      const url=new URL('https://pubmed.ncbi.nlm.nih.gov/');url.searchParams.set('term',query);
+      const scoped=signal?AbortSignal.any([signal,AbortSignal.timeout(requestTimeoutMs)]):AbortSignal.timeout(requestTimeoutMs);
+      try {
+        const response=await fetch(url,{signal:scoped,credentials:'omit',referrerPolicy:'no-referrer'});
+        if(response.ok){
+          const html=await response.text();
+          const table=/<table\b[^>]*\bid=["']timeline-table["'][^>]*>([\s\S]*?)<\/table>/i.exec(html)?.[1];
+          const years=table&&Array.from(table.matchAll(/<tr[^>]*>\s*<td[^>]*>\s*(\d{4})\s*<\/td>\s*<td[^>]*>\s*([\d,]+)\s*<\/td>\s*<\/tr>/gi),m=>[Number(m[1]),Number(m[2].replaceAll(',',''))]);
+          if(years?.length)return years;
+        }
+      } catch(error){if(signal?.aborted)throw signal.reason;}
+      // Single hits and some results views omit the timeline. Use ESearch counts in that case.
+      return m.radarCountYears(async(start,end)=>{
+        const q='('+query+') AND ('+start+'/01/01:'+end+'/12/31[dp])';
+        const value=await previewQuery(q,{signal});
+        if(value.errors.length)throw m.radarError('RADAR_QUERY_ERROR',value.errors.join(' · '));
+        return value.count;
+      },signal);
+    }
+    return { source: 'pubmed', discover, fetchAbstracts, previewQuery, publicationYears };
   }
   return { createPubMedRadarAdapter, parseRadarPubMedAbstracts };
 });

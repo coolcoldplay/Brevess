@@ -249,7 +249,7 @@
     assert(plain(request) && Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 0 && boundedString(request.idempotencyKey, 200, false) && plain(request.command),
       'LIBRARY_CATALOG_REQUEST_INVALID');
     const commandKeys = {
-      'entry.create': ['aliases', 'addedAt', 'fields'], 'entry.aliases.add': ['entryId', 'aliases'],
+      'entry.types.fill': ['rows'], 'entry.create': ['aliases', 'addedAt', 'fields'], 'entry.aliases.add': ['entryId', 'aliases'],
       'entry.update': ['entryId', 'fields', 'clearOverrides', 'addedAt'], 'entry.remove': ['entryId'], 'entry.restore': ['entryId'],
       'group.create': ['name', 'mode'], 'group.update': ['groupId', 'name', 'mode'], 'group.remove': ['groupId'], 'group.restore': ['groupId'],
       'tag.create': ['groupId', 'name'], 'tag.update': ['groupId', 'tagId', 'name'], 'tag.remove': ['groupId', 'tagId'], 'tag.restore': ['groupId', 'tagId'],
@@ -279,6 +279,31 @@
     };
     let targetId = null;
     switch (command.type) {
+      case 'entry.types.fill': {
+        const group = state.groups.find(item => item.id === 'group:document-type' && !item.removedAt);
+        assert(group, 'LIBRARY_CATALOG_GROUP_NOT_FOUND');
+        assert(Array.isArray(command.rows) && command.rows.length > 0 && command.rows.length <= 40, 'LIBRARY_CATALOG_COMMAND_INVALID');
+        const seen = new Set(), activeTags = new Set(group.tags.filter(tag => !tag.removedAt).map(tag => tag.id));
+        for (const row of command.rows) {
+          onlyKeys(row, ['aliases', 'tagId', 'addedAt'], 'LIBRARY_CATALOG_COMMAND_INVALID');
+          const aliases = normalizeAliases(row.aliases);
+          assert(activeTags.has(row.tagId), 'LIBRARY_CATALOG_TAG_NOT_FOUND');
+          const matches = state.entries.filter(entry => entry.aliases.some(alias => aliases.includes(alias)));
+          assert(matches.length <= 1, 'LIBRARY_CATALOG_IDENTITY_CONFLICT');
+          let entry = matches[0];
+          if (!entry) {
+            entry = {id: id(createId('entry'), 'entry'), aliases, addedAt: own(row, 'addedAt') ? timestamp(row.addedAt) : at,
+              fields: {}, tagIds: [], attachments: [], removedAt: null};
+            state.entries.push(entry);
+          }
+          assert(!seen.has(entry.id), 'LIBRARY_CATALOG_IDENTITY_CONFLICT');
+          seen.add(entry.id);
+          assert(!entry.removedAt && !entry.tagIds.some(tag => activeTags.has(tag)), 'LIBRARY_CATALOG_TYPE_ALREADY_SET');
+          entry.tagIds.push(row.tagId);
+        }
+        targetId = group.id;
+        break;
+      }
       case 'entry.create': {
         const aliases = normalizeAliases(command.aliases);
         assert(!state.entries.some(entry => entry.aliases.some(alias => aliases.includes(alias))), 'LIBRARY_CATALOG_IDENTITY_CONFLICT');
@@ -393,7 +418,7 @@
     }
     // Original source identity/CAS stays nested and never becomes aggregate write authority.
     const sourceDocuments = (Array.isArray(record.sourceDocuments) ? record.sourceDocuments : []).filter(plain).map(document => {
-      const allowed = ['contentType', 'hasSavedWebContent', 'workspaceId', 'workspaceGeneration', 'sourceKind', 'title', 'url', 'canonicalUrl', 'documentHash',
+      const allowed = ['contentType', 'crossPageSession', 'hasSavedWebContent', 'workspaceId', 'workspaceGeneration', 'sourceKind', 'title', 'url', 'canonicalUrl', 'documentHash',
         'sourceUrl', 'fileName', 'mimeType', 'publisherUrl', 'doiUrl', 'savedAt', 'offlineSavedAt',
         'offlineMissingResourceCount', 'lastSaveAttemptStatus', 'lastSaveAttemptAt',
         'hasOfflineSnapshot', 'offlineSnapshotStatus', 'tagRevision', 'tagContentHash', 'tagState', 'inventoryOnly'];

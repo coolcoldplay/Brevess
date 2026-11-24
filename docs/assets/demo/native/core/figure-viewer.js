@@ -822,7 +822,9 @@
         let installedEntry = null;
         try {
           const decoded = new windowRef.Image(); decoded.src = objectUrl; await decoded.decode();
-          if (!valid()) { windowRef.URL.revokeObjectURL(objectUrl); return false; }
+          if (!valid() || decoded.naturalWidth !== resource.pixelWidth || decoded.naturalHeight !== resource.pixelHeight) {
+            windowRef.URL.revokeObjectURL(objectUrl); return false;
+          }
           remove(image);
           const before = image.getBoundingClientRect(), style = windowRef.getComputedStyle(image);
           const fit = style.objectFit, position = style.objectPosition;
@@ -850,7 +852,10 @@
           installedEntry = entry;
           await new Promise(resolve => windowRef.requestAnimationFrame(resolve));
           const after = image.getBoundingClientRect();
-          if (!valid() || !current(image, entry) || Math.abs(after.width - before.width) > .5 || Math.abs(after.height - before.height) > .5) {
+          const painted = windowRef.getComputedStyle(image);
+          if (!valid() || !current(image, entry) || !after.width || !after.height ||
+              !painted.backgroundImage.includes(objectUrl) || painted.objectPosition !== appliedStyles['object-position'] ||
+              Math.abs(after.width - before.width) > .5 || Math.abs(after.height - before.height) > .5) {
             remove(image, entry); return false;
           }
           return true;

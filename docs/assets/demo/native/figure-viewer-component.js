@@ -21,6 +21,7 @@ async function showFigureImageViewer(figureId, {
 
     const viewer = document.createElement('section');
     viewer.id = FIGURE_IMAGE_VIEWER_ID;
+    viewer.dataset.sciPluginUi = 'true';
     viewer.dataset.figureId = figure.figureId || figureId;
     viewer.dataset.loading = 'true';
     viewer.dataset.captionVisible = String(captionVisible === true);
@@ -163,6 +164,7 @@ async function showFigureImageViewer(figureId, {
     close.addEventListener('click', closeFigureImageViewer);
     viewer.append(header, canvas, controls);
     document.documentElement.appendChild(viewer);
+    globalThis.SciLLM?.decorateActionIcons?.(viewer);
     figureImageViewerViewportCleanup = SciLLM.bindFigureViewerViewport(viewer);
     publishFigureImageViewerState({
         open: true,

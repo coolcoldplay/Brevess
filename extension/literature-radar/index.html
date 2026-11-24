@@ -1,10 +1,14 @@
 <!doctype html>
-<html lang="zh-CN">
+<html data-brevess-ui lang="zh-CN">
 <head>
   <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>文献雷达 · Brevess</title>
   <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="../workbench/focus.css">
+<link rel="stylesheet" href="../ui-focus.css">
+<link rel="stylesheet" href="../ui-theme.css">
+<script src="../ui-focus.js" defer></script>
 </head>
 <body>
   <header class="masthead">
@@ -52,7 +56,7 @@
     <div class="editor-heading"><h2 id="history-title">补充历史基线</h2><button id="close-history" type="button" aria-label="关闭">×</button></div>
     <p id="history-query" class="query" translate="no"></p><p id="history-date-basis" class="hint"></p>
     <p class="hint">只追加所选日期内的基线文献，不计为新增。已有文献、已读状态和当前增量检查进度保持不变。</p>
-    <div class="form-grid"><div><label for="history-start">从（含当日）</label><input id="history-start" type="date" min="1900-01-01" required></div><div><label for="history-end">至（含当日）</label><input id="history-end" type="date" required></div></div>
+    <div class="form-grid"><div><label for="history-start">从（含当日）</label><input id="history-start" type="date" required></div><div><label for="history-end">至（含当日）</label><input id="history-end" type="date" required></div></div>
     <p class="hint">完整检索成功后才保存；超过5,000篇、超时或分页失败均不保存本次结果。可缩小日期范围分次补充。</p>
     <p id="history-error" role="status" aria-live="polite"></p><div class="form-actions"><button id="cancel-history" type="button">取消</button><button id="confirm-history" class="primary" type="submit">确认检索并追加</button></div>
   </form></dialog>
@@ -74,7 +78,8 @@
         <a id="seed-preview" target="_blank" rel="noopener noreferrer" hidden>在 PubMed 核对命中的种子论文 ↗</a>
         <span id="seed-error" role="status"></span>
       </details>
-      <div class="form-grid"><div><label for="frequency">监测间隔（小时）</label><input id="frequency" name="frequency" type="number" min="0" max="720" step="1" value="24" required><p class="hint">1–720 小时；0 表示仅手动检查。</p></div><div><label for="baseline">首次回溯</label><select id="baseline" name="baseline"><option value="1">今天入库</option><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option></select><p class="hint">首次结果单列为基线，不计为新增。</p></div></div>
+      <div class="form-grid"><div><label for="frequency">监测间隔（小时）</label><input id="frequency" name="frequency" type="number" min="0" max="720" step="1" value="24" required><p class="hint">1–720 小时；0 表示仅手动检查。</p></div><div><label for="baseline">基线起始日期</label><input id="baseline" name="baseline" type="date"><p class="hint">按发表日期纳入，留空包括全部年份。</p></div></div>
+      <section class="radar-years" aria-label="年度文献分布"><button type="button" id="preview-years">检索年度分布</button><span id="years-status" role="status"></span><div id="years-results"></div></section>
       <label class="checkbox-label"><input id="enabled" name="enabled" type="checkbox" checked> 启用自动检查</label>
       <p id="edit-note" class="hint">启用后，在运行条件允许时检查到期任务。</p><p id="form-error" role="alert"></p>
       <div class="form-actions"><button id="cancel-editor" type="button">取消</button><button class="primary" type="submit">保存雷达</button></div>
@@ -95,7 +100,7 @@
 <script src="../core/i18n-system.js"></script>
 <script src="../core/i18n-tools.js"></script>
 <script src="../core/i18n-workbench.js"></script>
-<script src="../core/i18n-reader-patterns.js"></script><script src="../core/literature-radar-model.js"></script><script src="../core/literature-radar-store.js"></script><script src="../core/literature-radar-pubmed.js"></script><script src="../core/literature-radar-asta.js"></script><script src="../core/literature-radar-sources.js"></script><script src="../core/literature-radar-service.js"></script><script src="../core/literature-radar-agent-tools.js"></script><script src="../core/literature-radar-ai.js"></script><script src="../core/translation-checkpoint.js"></script><script src="../core/local-translator.js"></script><script src="enrichment.js"></script><script src="../core/literature-radar-trend.js"></script><script src="trend.js"></script><script src="source-queries.js"></script><script src="app.js"></script>
+<script src="../core/i18n-reader-patterns.js"></script><script src="../core/literature-radar-model.js"></script><script src="../core/literature-radar-store.js"></script><script src="../core/literature-radar-pubmed.js"></script><script src="../core/literature-radar-asta.js"></script><script src="../core/literature-radar-sources.js"></script><script src="../core/literature-radar-service.js"></script><script src="../core/literature-radar-agent-tools.js"></script><script src="../core/literature-radar-ai.js"></script><script src="../core/translation-checkpoint.js"></script><script src="../core/translation-glossary.js"></script><script src="../core/local-translator.js"></script><script src="enrichment.js"></script><script src="../core/literature-radar-trend.js"></script><script src="trend.js"></script><script src="source-queries.js"></script><script src="app.js"></script>
 
 <script src="../core/input-tools.js"></script>
 </body>

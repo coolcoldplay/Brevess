@@ -42,7 +42,9 @@
         if(inventory){if(typeof projection.createFigureWorkspaceView!=='function')throw s.wbError('WORKBENCH_SOURCE_PROJECTION_UNAVAILABLE');const context=projection.prepareFigureWorkspaceViewContext?.(draft);
           for(const figure of inventory.content.figures || []){const view=projection.createFigureWorkspaceView({figure,modelResult:figure.analysis || null,draft,context});const figureId=String(view.figureId);const asset=draftAsset || inventory;
             const row=add(asset,'figure',figureId,view,{figureId,sourceMismatch:figure.sourceMismatch===true,sourceSnapshot:s.wbClone({inventory:figure,draft:draft?.figures?.[figureId] || null}),bindings:[{...sourceIdentity(snapshot),...assetToken(inventory)},...(draftAsset?[{...sourceIdentity(snapshot),...assetToken(draftAsset)}]:[])]});
-            for(const panel of view.panels || [])add(asset,'panel',`${figureId}::panel:${panel.panelId}`,panel,{figureId,panelId:panel.panelId,parentResourceId:row.id,sourceMismatch:figure.sourceMismatch===true,bindings:row.bindings});
+            const pdfHash = /^pdf-/u.test(figure.sourceKind || '') && !figure.sourceExternal &&
+              /^[a-f0-9]{64}$/u.test(figure.sourceFingerprint) ? figure.sourceFingerprint : '';
+            for(const panel of view.panels || [])add(asset,'panel',`${figureId}::panel:${panel.panelId}`,panel,{figureId,panelId:panel.panelId,parentResourceId:row.id,...(pdfHash?{pdfPanelHash:pdfHash}:{}),sourceMismatch:figure.sourceMismatch===true,bindings:row.bindings});
             for(const block of view.evidenceBlocks || [])add(asset,'block',`${figureId}::${block.id}`,block,{figureId,blockId:block.id,parentResourceId:row.id,sourceMismatch:figure.sourceMismatch===true,bindings:row.bindings});
             for(const panel of view.historicalPanels || [])add(asset,'panel',`${figureId}::historical-panel:${panel.panelId}`,panel,{figureId,panelId:panel.panelId,sourceMismatch:true});
             for(const block of view.historicalEvidenceBlocks || [])add(asset,'block',`${figureId}::historical:${block.id}`,block,{figureId,blockId:block.id,sourceMismatch:true});

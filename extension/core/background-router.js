@@ -6128,6 +6128,8 @@
         name: route.publicProfile.name,
         providerId: route.providerId,
         model: route.model,
+        reasoningEnabled: route.config?.reasoningEnabled === true,
+        reasoningEffort: String(route.config?.reasoningEffort || 'auto').slice(0, 64),
         outputLanguage: route.outputLanguage || 'zh-CN',
         capabilityMode: route.capabilityMode,
         concurrency: TASK_CONCURRENCY[runtimeClass] || 1,
@@ -6572,6 +6574,8 @@
         reasoningProviderId: route.providerId,
         reasoningEnabled: route.effectiveReasoning?.enabled === true,
         reasoningEffort: route.effectiveReasoning?.effort || 'auto',
+        activeChatMaxMs: taskId === 'article_chat' && ['codex-local', 'deepseek-harness'].includes(route.providerId)
+          ? 15 * 60 * 1000 : 0,
         requestTimeoutMs: Number.isFinite(adapterOptions.requestTimeoutMs) &&
           adapterOptions.requestTimeoutMs > 0
           ? adapterOptions.requestTimeoutMs
@@ -8263,7 +8267,7 @@
               recoveredContentSha256: await digest(repaired) } };
           };
           try {
-            for (let phase = 0; phase < 2; phase += 1) {
+            for (;;) { // Each new candidate is validated; only one schema repair is allowed.
               let failure;
               try { return await withAudit(validateStrict(candidate), candidate); }
               catch (error) { if (error?.code !== 'INVALID_RESPONSE') throw error; failure = error; }
@@ -8361,7 +8365,6 @@
               candidate = schemaResponse.raw;
               formatRepairUsed ||= schemaResponse.formatRepairUsed;
             }
-            throw figureContractError('INVALID_RESPONSE');
           } catch (error) {
             if (error && typeof error === 'object') nonVisualErrors.add(error);
             if (terminal || schemaUsed || quoteUsed || titleUsed || error?.figureRootProjectionRejected) {
@@ -8391,7 +8394,7 @@
         }
         let savedRejectedPanels = null;
         const acknowledgedPanelSynthesis = (recovered, response, issue) => {
-          const synthesisIssue = ['group_group_count', 'group_empty_group',
+          const synthesisIssue = ['schema_shape', 'group_group_count', 'group_empty_group',
             'group_unknown_panel', 'group_overlap', 'group_missing_panels',
             'group_basis_missing', 'group_basis_shape', 'group_basis_panel_scope',
             'group_basis_source', 'group_basis_differences', 'empty_overview'].includes(issue);
@@ -8456,7 +8459,10 @@
           // Replace the existing full-object repair, without adding a schema
           // pass. Only durably saved, complete Panel evidence may be reused.
           const panelSynthesis = acknowledgedPanelSynthesis(independentlyValidated, raw, issue);
-          if (usePartialClosure && !panelSynthesis) throw error;
+          if (usePartialClosure && !panelSynthesis) {
+            validationError.figureSavedPanelCount = durableSavedPanelCount;
+            throw validationError;
+          }
           const repairSourceRequest = panelSynthesis ? {
             ...panelSynthesis.prompt, images: [],
             outputUnits: Math.max(1, independentlyValidated.panels.length)
@@ -8950,6 +8956,7 @@
           // This exact checkpoint has already passed source, policy and receipt validation.
           // Writing its normalized form again can conflict at the same coverage rank.
           durableSavedPanelCount = recovered.panels.length;
+          durableCheckpointSaved = true;
           for (const panel of recovered.panels) {
             acknowledgedFactPanels.set(panel.panel, JSON.stringify([visualInput, panel]));
           }
@@ -9635,6 +9642,15 @@
                 strictIssue = shared.classifyFigureAnalysisFailure(error).issue;
               }
               if (strictIssue !== originalIssue) return null;
+              if (strictIssue === 'schema_shape') {
+                // A non-Panel shape error can hide valid evidence. Validate the
+                // untouched Panel array before reusing it for text-only synthesis.
+                try {
+                  shared.validateFigurePanelBatch({ figure_id: original.figure_id,
+                    analysis_depth: original.analysis_depth, basis: original.basis, panels: original.panels },
+                    batchFigure, { visualInput, analysisDepth, repairResponse: false, requireCompletePanels: true });
+                } catch { return null; }
+              }
               return {
                 evidence: { figure: batchFigure, panels: recovered.panels, visualInput },
                 prompt: shared.compileFigureSynthesisPrompt(batchFigure, recovered.panels,
@@ -9736,13 +9752,13 @@
             }
           }
         }
-        if (!result && useVisualInput && analysisDepth === 'standard' && panelHints.length &&
+        if (!result && analysisDepth === 'standard' && panelHints.length &&
             !durableCheckpointSaved && failedWholeFormatRepairs.has(lastError)) {
           // One alternate composition within the existing operation budget;
-          // retain pixels, ACK Panels first, then use the strict synthesis closure.
+          // retain the requested input mode, save Panels, then synthesize.
           failedWholeFormatRepairs.delete(lastError);
           await waitForOperation(operation);
-          result = await runCompactTwoPass(true);
+          result = await runCompactTwoPass(useVisualInput);
         }
         if (!result && panelHints.length && visualTextFallbackReason(lastError)) {
           const canUseCaption = !useVisualInput || await beginTextFallback(lastError);
@@ -11911,6 +11927,27 @@
       };
     }
 
+    async function settingsForArticleAgentChoice(settings, profileId, choice, taskId = 'article_chat') {
+      if (choice == null) return settings;
+      const profile = settings.profiles?.[profileId];
+      if (!isPlainObject(choice) || !['codex-local','deepseek-harness'].includes(profile?.providerId) ||
+          typeof choice.model !== 'string' || choice.model.length > 256 ||
+          typeof choice.reasoningEffort !== 'string') throw invalidSettings(['agentOptions']);
+      const client = profile.providerId === 'codex-local' ? nativeClient : harnessClient;
+      const result = await client.listModels({timeoutMs:20000});
+      const rows = Array.isArray(result.models) ? result.models : [];
+      const row = rows.find(m=>m.id===choice.model) || (choice.model==='auto' ? rows.find(m=>m.isDefault) : null);
+      if (!row) throw invalidSettings(['agentOptions.model'],'所选 Agent 模型已不可用，请重新连接。');
+      const config = {...profile.config, model:choice.model,
+        modelCapabilityCatalog:shared.buildModelCapabilityCatalog(profile.providerId, profile.config, rows, Date.now())};
+      const capability=shared.getProviderReasoningCapabilities(profile.providerId,config);
+      if(choice.reasoningEffort!=='auto' && !capability.levels?.includes(choice.reasoningEffort))
+        throw invalidSettings(['agentOptions.reasoningEffort'],'所选推理强度已不可用，请重新选择。');
+      return {...settings, profiles:{...settings.profiles,[profileId]:{...profile,config}},
+        taskPolicies:{...settings.taskPolicies,[taskId]:{...settings.taskPolicies[taskId],
+          model:choice.model,modelProfileId:profileId,reasoningEnabled:!['off','none','disabled'].includes(choice.reasoningEffort),reasoningEffort:choice.reasoningEffort}}};
+    }
+
     function taskMessageWithWebDefault(settings, message, taskId) {
       if (message.webSearch !== undefined || settings?.taskPolicies?.[taskId]?.webSearchEnabled !== true) return message;
       const routed = settingsForExplicitProfile(settings, message.profileId, taskId);
@@ -11981,7 +12018,7 @@
         ? resolveLlmTaskId('LLM_ASK_ARTICLE', 'selection')
         : resolveLlmTaskId('LLM_ASK_ARTICLE', 'article');
       const routedSettings = settingsForExplicitProfile(
-        settings, input.profileId, taskId
+        await settingsForArticleAgentChoice(settings, input.profileId, message.agentOptions, taskId), input.profileId, taskId
       );
       const task = createTaskAdapter(
         routedSettings,
@@ -19118,8 +19155,33 @@
             // renamed or emptied; selecting it must never restore default text.
             return publicState(settings);
           }
-          const preferences = message.preferences && typeof message.preferences === 'object'
-            ? message.preferences : {};
+          const preferences = { ...message.preferences };
+          for (const key of ['articleChatQuickPrompts', 'displayQuickPrompts']) {
+            if (!Object.hasOwn(preferences, key)) continue;
+            const limit = key === 'displayQuickPrompts' ? 30 : 40;
+            const updated = preferences[key];
+            if (!Array.isArray(updated) || updated.length > limit) {
+              throw invalidSettings([key], '提示词数量已达上限，请先删除不需要的提示词。');
+            }
+            const base = message.quickPromptBases?.[key];
+            if (base === undefined) continue; // Older clients replace the whole list.
+            if (!Array.isArray(base) || base.length > limit) throw invalidSettings([key]);
+            const current = new Map(settings[key].map(row => [row.id, row]));
+            const before = new Map(base.map(row => [row.id, row]));
+            const after = new Map(updated.map(row => [row.id, row]));
+            const same = (a, b) => a?.name === b?.name && a?.prompt === b?.prompt;
+            for (const id of new Set([...before.keys(), ...after.keys()])) {
+              const old = before.get(id), next = after.get(id), latest = current.get(id);
+              if (same(old, next) || same(latest, next)) continue;
+              if (!same(old, latest)) throw invalidSettings([key], '这条提示词已在其他窗口更改，请重新打开后再编辑。');
+              if (next) current.set(id, next);
+              else current.delete(id);
+            }
+            if (current.size > limit) throw invalidSettings([key], '提示词数量已达上限，请先删除不需要的提示词。');
+            const wholeList = base.length === settings[key].length &&
+              base.every((row, index) => row.id === settings[key][index].id);
+            preferences[key] = wholeList ? updated.map(row => current.get(row.id)) : [...current.values()];
+          }
           if (preferences.literatureUrlWhitelist !== undefined) {
             const parsed = shared.parseLiteratureUrlWhitelist(preferences.literatureUrlWhitelist);
             if (parsed.errors.length) throw invalidSettings(['literatureUrlWhitelist']);
@@ -20390,7 +20452,7 @@
       // Conservative UTF-8 byte bound: one byte cannot require more than one text token.
       const maxCharacters=Math.min(120000,Math.floor(input.available/4));
       if(maxCharacters<1000)throw Error('WEB_CONTEXT_TOO_SMALL');
-      return{adapter:task.adapter,maxCharacters,maxOutputTokens:output.initial,supportsVision:task.route.capabilities?.supportsVision===true,actualRoute:{providerId:String(task.route.providerId||''),model:String(task.route.model||''),profileName:String(task.route.publicProfile?.name||'')}};
+      return{adapter:task.adapter,maxCharacters,maxTextBytes:Math.floor(input.available),maxOutputTokens:output.initial,supportsVision:task.route.capabilities?.supportsVision===true,actualRoute:{providerId:String(task.route.providerId||''),model:String(task.route.model||''),profileName:String(task.route.publicProfile?.name||''),reasoningEnabled:task.route.config.reasoningEnabled===true,reasoningEffort:task.route.config.reasoningEffort||'auto'}};
     }
     return { handle, commitTrustedDocument, retireTrustedTab, createWebReadingTask };
   }
