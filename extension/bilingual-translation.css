@@ -31,6 +31,17 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+[data-sci-plugin-ui].sci-bilingual-source-tip {
+    position: fixed; inset: auto; z-index: 2147483646; box-sizing: border-box;
+    margin: 0; padding: 9px 12px; overflow: auto; overscroll-behavior: contain;
+    border: 1px solid #d4d7db; border-radius: 9px; background: #fff; color: #24272a;
+    box-shadow: 0 4px 16px #10182024; font: 400 14px/1.5 system-ui, sans-serif;
+    text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; text-transform: none;
+}
+[data-sci-plugin-ui].sci-bilingual-with-gutter { padding-right: var(--sci-original-gutter) !important; }
+@media (prefers-color-scheme: dark) {
+    [data-sci-plugin-ui].sci-bilingual-source-tip { color: #e8eaed; background: #292a2d; border-color: #55575d; }
+}
 ::highlight(brevess-bilingual-pair) {
     background-color: #ffe29a;
     color: #282114;

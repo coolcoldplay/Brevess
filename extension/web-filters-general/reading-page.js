@@ -1,7 +1,7 @@
 (function(g){'use strict';
 function create({document:doc,loadAbstract,cancelAbstract=()=>{},onChange=()=>{}}){
  const M=g.WFGReadingModules,P=g.WFGReadingPubmed,win=doc.defaultView;
- const own='[data-wfg-owned],[data-wfg-reading-owned]',interactive='input,textarea,select,[contenteditable]:not([contenteditable="false"]),canvas,[role="application"]',media='img,svg,math,video,audio,iframe,table';
+ const own='[data-wfg-owned],[data-wfg-reading-owned],[data-sci-translation],[data-sci-plugin-ui]',interactive='input,textarea,select,[contenteditable]:not([contenteditable="false"]),canvas,[role="application"]',media='img,svg,math,video,audio,iframe,table';
  const abstractStyles=new Map();
  let previewAbstracts=false;
  let originalView=false,originalViewState=null,outlineDefault=false;

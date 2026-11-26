@@ -1245,20 +1245,25 @@
       });
     }
 
-    async function readChatRestoreSnapshot(value) {
+    async function readChatRestoreSnapshot(value, {withDeletedTurns = false} = {}) {
       const id = workspaceId(value);
       // One read transaction is the linearization point. Later cross-tab writes
       // belong to a subsequent snapshot; same-page mutations are rejected by the client epoch.
-      return run([WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME,WORKSPACE_TURN_STORE_NAME], 'readonly', async transaction => {
+      const stores = [WORKSPACE_STORE_NAME,WORKSPACE_ASSET_STORE_NAME,WORKSPACE_TURN_STORE_NAME];
+      if (withDeletedTurns) stores.push(WORKSPACE_TOMBSTONE_STORE_NAME);
+      return run(stores, 'readonly', async transaction => {
         const assets = transaction.objectStore(WORKSPACE_ASSET_STORE_NAME);
-        const [workspace,source,index,turns] = await Promise.all([
+        const [workspace,source,index,turns,tombstones] = await Promise.all([
           request(transaction.objectStore(WORKSPACE_STORE_NAME).get(id)),
           request(assets.get(assetKey(id,'article/structure.json'))),
           request(assets.get(assetKey(id,'chat/index.json'))),
-          readRestoreRows(transaction,WORKSPACE_TURN_STORE_NAME,id,MAX_PAGE_SIZE)
+          readRestoreRows(transaction,WORKSPACE_TURN_STORE_NAME,id,MAX_PAGE_SIZE),
+          withDeletedTurns ? readRestoreRows(transaction,WORKSPACE_TOMBSTONE_STORE_NAME,id,MAX_PAGE_SIZE) : []
         ]);
         return cloneValue({workspace:workspace||null,source:source||null,index:index||null,
-          turns:turns.sort((a,b)=>a.sequence-b.sequence)});
+          turns:turns.sort((a,b)=>a.sequence-b.sequence),
+          ...(withDeletedTurns ? {deletedTurns:tombstones.filter(t => t.entityType === 'turn' &&
+            Number(t.workspaceGeneration || 1) === Number(workspace?.workspaceGeneration || 1)).map(t=>t.entityId)} : {})});
       });
     }
 
@@ -1302,7 +1307,7 @@
       };
     }
 
-    async function deleteTurn(value, turnIdValue) {
+    async function deleteTurn(value, turnIdValue, {paperTurn = false} = {}) {
       const id = workspaceId(value);
       const idOfTurn = boundedId(turnIdValue, 'INVALID_TURN_ID');
       const key = turnKey(id, idOfTurn);
@@ -1315,9 +1320,9 @@
           const owner = await request(workspaces.get(id));
           if (owner?.deletionPending) fail('WORKSPACE_DELETION_PENDING');
           const current = await request(turns.get(key));
-          if (!current) return null;
+          if (!current && (!paperTurn || !owner)) return null;
           const tombstone = newTombstone(id, 'turn', idOfTurn,
-            Number(current.workspaceGeneration || 1));
+            Number(current?.workspaceGeneration || owner.workspaceGeneration || 1));
           await request(transaction.objectStore(WORKSPACE_TOMBSTONE_STORE_NAME).put(tombstone));
           await request(turns.delete(key));
           if (owner) {
@@ -1326,9 +1331,9 @@
               updatedAt: tombstone.deletedAt,
               summary: {
                 ...normalizeWorkspaceSummary(owner.summary),
-                turnCount: Math.max(0, nonNegativeCount(owner.summary?.turnCount) - 1),
+                turnCount: Math.max(0, nonNegativeCount(owner.summary?.turnCount) - (current ? 1 : 0)),
                 turnBytes: Math.max(0,
-                  nonNegativeCount(owner.summary?.turnBytes) - byteSize(current))
+                  nonNegativeCount(owner.summary?.turnBytes) - (current ? byteSize(current) : 0))
               }
             }));
           }

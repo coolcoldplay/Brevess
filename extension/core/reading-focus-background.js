@@ -75,14 +75,18 @@
       let snapshot = { readable: false };
       if (/^(https?:|file:)/i.test(tab.url || '')) {
         try {
-          const results = await browser.scripting.executeScript({ target: { tabId: tab.id }, func: model.extractPageSnapshot });
+          const results = await browser.scripting.executeScript({ target: { tabId: tab.id }, injectImmediately: true, func: model.extractPageSnapshot });
           snapshot = results[0]?.result || snapshot;
         } catch (_) {}
       }
       const value = model.classify(snapshot);
       const doi=String(snapshot.meta?.doi||'').trim().toLowerCase(); if (/^10\.\d{4,9}\//.test(doi)) value.doi=doi;
       // The preview is ephemeral. It contains heading text, never persisted browsing history.
-      previews.set(tab.id, { key, at: now(), value });
+      // A shell is not evidence of a finished ordinary webpage. Classify
+      // again when the body arrives during this navigation.
+      if (tab.status !== 'loading' && (snapshot.textChars || snapshot.meta?.doi || snapshot.meta?.scholarly)) {
+        previews.set(tab.id, { key, at: now(), value });
+      }
       while (previews.size > 12) previews.delete(previews.keys().next().value);
       return value;
     }

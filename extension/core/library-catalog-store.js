@@ -92,8 +92,45 @@
         return { catalog: model.normalizeLibraryCatalog(catalog), result: { revision: catalog.revision, restored: true } };
       });
     }
+    // Resolve the paper and register its verified original in one IDB transaction.
+    // Two reader tabs can save concurrently without creating a second library entry.
+    function attachReaderPdf({ aliases, attachment }, options) {
+      return transaction('readwrite', initial => {
+        let catalog = initial;
+        const matches = catalog.entries.filter(entry => entry.aliases.some(alias => aliases.includes(alias)));
+        if (matches.length > 1) throw error('LIBRARY_CATALOG_IDENTITY_CONFLICT');
+        if (matches[0]?.removedAt) throw error('LIBRARY_CATALOG_ENTRY_REMOVED');
+        const apply = command => {
+          const update = model.applyLibraryCatalogCommand(catalog, {
+            expectedRevision: catalog.revision, idempotencyKey: globalThis.crypto.randomUUID(), command
+          }, { now, createId });
+          catalog = update.catalog;
+          return update.result.targetId;
+        };
+        // Source metadata stays in the paper workspaces. A PDF filename must never
+        // override the publisher title or any user-edited catalog fields.
+        const entry = matches[0];
+        const entryId = entry?.id || apply({ type: 'entry.create', aliases });
+        if (entry && aliases.some(alias => !entry.aliases.includes(alias))) {
+          apply({ type: 'entry.aliases.add', entryId, aliases });
+        }
+        const sameOriginal = (entry?.attachments || []).filter(item => item.assetId === attachment.assetId &&
+          item.kind === 'pdf' && item.locator.type === 'pdf-source');
+        const existing = sameOriginal.find(item => !item.removedAt) || sameOriginal[0];
+        if (!existing) {
+          apply({ type: 'attachment.add', entryId, attachment });
+        } else {
+          if (existing.removedAt) apply({ type: 'attachment.restore', entryId, attachmentId: existing.id });
+          if (existing.availability !== 'available') apply({ type: 'attachment.setAvailability',
+            entryId, attachmentId: existing.id, availability: 'available' });
+        }
+        return { catalog, result: { entryId, attachmentId: existing?.id || attachment.id,
+          replayed: initial === catalog } };
+      }, options);
+    }
+
     async function close() { if (dbPromise) { const db = await dbPromise; db.close(); dbPromise = null; } }
-    return { read, execute, restoreBackup, close, databaseName, version: LIBRARY_CATALOG_DATABASE_VERSION };
+    return { read, execute, attachReaderPdf, restoreBackup, close, databaseName, version: LIBRARY_CATALOG_DATABASE_VERSION };
   }
   return { LIBRARY_CATALOG_DATABASE_NAME, LIBRARY_CATALOG_DATABASE_VERSION, LIBRARY_CATALOG_STORE_NAME,
     LIBRARY_CATALOG_STATE_KEY, createLibraryCatalogStore };

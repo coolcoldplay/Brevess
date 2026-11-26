@@ -246,7 +246,7 @@ Panel 追问	Panel follow-ups
     agent.hidden = true; summary.append(agent);
     const agentGroup = group('Agent', summary);
     const agents = element('div','focus-connections'); agents.id='focus-agent-connections'; agentGroup.append(agents);
-    const agentEntry = row('连接你的 Agent', '选择客户端、复制配置提示词、连接测试。', () => $('externalAgentManage').click());
+    const agentEntry = row('连接你的 Agent', '选择本机客户端，在这里完成配置和问答测试。', () => {delete $('externalAgentManage').dataset.client;$('externalAgentManage').click();});
     agentEntry.id = 'focus-agent-entry'; agentGroup.append(agentEntry);
     usage.before(agentGroup);
     const consentRow = row('正文发送许可', '决定模型能否读取论文正文、图注与图片。', () => api.navigate('privacy')); consentRow.id = 'focus-consent-row'; permission.append(consentRow);
@@ -333,7 +333,7 @@ Panel 追问	Panel follow-ups
       const pencil = element('span'); pencil.innerHTML = icon('edit'); b.append(glyph, text, state, pencil); (['codex-local','deepseek-harness'].includes(profile.providerId)?agents:list).append(b);
     }
     const stamp=String(++agentDiscovery);agents.dataset.discovery=stamp;
-    void chrome.runtime.sendMessage({type:'BREVESS_ARTICLE_PRESENTATION',op:'clients'}).then(r=>{if(agents.dataset.discovery!==stamp||!r?.success)return;for(const id of r.data||[]){const client=root.SciLLM?.getAgentSetupClients?.().find(c=>c.id===id);if(!client||client.modelAdapter&&order.some(key=>settings.profiles[key]?.providerId===client.modelAdapter))continue;agents.append(row(client.label,'本机连接器已登记',()=>$('externalAgentManage').click()));}}).catch(()=>{});
+    void chrome.runtime.sendMessage({type:'BREVESS_ARTICLE_PRESENTATION',op:'clients'}).then(r=>{if(agents.dataset.discovery!==stamp||!r?.success)return;for(const id of r.data||[]){const client=root.SciLLM?.getAgentSetupClients?.().find(c=>c.id===id);if(!client||client.modelAdapter&&order.some(key=>settings.profiles[key]?.providerId===client.modelAdapter))continue;agents.append(row(client.label,'已配置 · 查看或测试连接',()=>{$('externalAgentManage').dataset.client=id;$('externalAgentManage').click();}));}}).catch(()=>{});
     if (!list.childNodes.length) list.append(element('p', 'focus-empty', '尚未配置 API。'));
     const profile = settings.profiles?.[settings.globalProfileId];
     $('focus-default-model').querySelector('.focus-row-value').textContent = profile ? (profile.config?.model || profile.name) : '未配置';
@@ -342,6 +342,12 @@ Panel 追问	Panel follow-ups
     updateProviderIdentity();
     compactEditors();
   }
+  window.addEventListener('brevess:agent-configured',event=>{
+    const id=event.detail?.client, client=root.SciLLM?.getAgentSetupClients?.().find(item=>item.id===id);
+    const agents=$('focus-agent-connections');
+    if(!agents || !client || client.modelAdapter || [...agents.querySelectorAll('strong')].some(n=>n.textContent===client.label))return;
+    agents.append(row(client.label,'已配置 · 查看或测试连接',()=>{$('externalAgentManage').dataset.client=id;$('externalAgentManage').click();}));
+  });
   function setupSearch(input, results) {
     const entries = [
       ['模型与连接', 'API Key 密钥 DeepSeek 服务商', 'models'],

@@ -28,7 +28,7 @@
    if(current!==generation||closed)throw Error('CANCELLED');
    send({type:'receipt',id:message.id,ok:true,status:sanitized()});
   }catch{send({type:'receipt',id:message.id,ok:false,status:sanitized()});}});
-  port.onDisconnect.addListener(()=>{void chrome.runtime.lastError;if(!closed)setTimeout(register,1000);});send({type:'status',status:sanitized()});
+  port.onDisconnect.addListener(()=>{void chrome.runtime.lastError;++generation;stopRequested=true;void stopTransport().catch(()=>{}).finally(()=>{if(!closed)setTimeout(register,300);});});send({type:'status',status:sanitized()});
  }
  window.addEventListener('brevess:mcp-status',()=>send({type:'status',status:sanitized()}));window.addEventListener('pagehide',()=>{closed=true;port?.disconnect();},{once:true});register();
 })();

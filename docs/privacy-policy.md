@@ -1,6 +1,6 @@
 # Brevess Privacy Policy / 隐私政策
 
-Updated / 更新日期：2026-11-17
+Updated / 更新日期：2026-11-26
 
 Applies to / 适用产品：Brevess 1.0.2 for Google Chrome and Microsoft Edge.
 
@@ -43,6 +43,8 @@ Optional portable configuration backup includes model/API credentials and config
 - 翻译/朗读：浏览器 Translator API 按浏览器支持情况工作，可能下载语言模型。浏览器/系统音色可能在本地或联网处理。使用本地 Kokoro、DeepSeek 语音或配置的在线语音接口时，选区文本会发送至对应服务。“选中后自动朗读”默认关闭，遵循独立朗读设置。
 - Local integrations/source retrieval: optional Zotero, local model/speech services, Native Messaging companion and workbench MCP bridge exchange data needed for the selected feature. An enabled external-agent MCP connection gives that agent access to permitted workspace operations/data; also review the agent service's terms. Loading papers, figures and PDFs contacts publisher/storage hosts, using the site's browser session where needed to retrieve material you can access.
 - 本地集成/来源读取：可选 Zotero、本机模型/语音服务、Native Messaging 伴侣和工作台 MCP 桥交换所选功能需要的数据。启用外部 Agent 的 MCP 连接后，Agent 可使用获准的工作台操作/数据，也需查看 Agent 服务的条款。读取论文、图片和 PDF 会访问出版商/存储主机，必要时使用站点浏览器会话读取用户有权访问的材料。
+- When a local Agent is selected for Q&A, its CLI receives the question and relevant paper or conversation context and may send them to its model service. The connection check sends a short sample request. A paired Agent can query the permitted library while the browser is running, including when the workbench is closed. You can disconnect or remove pairing in Settings.
+- 使用本机 Agent 问答时，所选客户端会接收问题及相关论文或对话上下文，并可能将其发送给模型服务。连接检查会发送一条简短的示例请求。浏览器运行期间，已配对的 Agent 可以查询获准的文献总库，关闭工作台后也可查询。可在设置中断开连接或移除配对。
 
 Remote requests use HTTPS; configured loopback services may use HTTP. Recipients see normal request metadata such as IP address and timing. Third parties control their processing, retention, training and billing under their own terms. “Stored locally by Brevess” does not mean data you send to a service stays only on your device. Revoking a setting stops future requests governed by it, not copies already received; contact the recipient about deletion. Email/GitHub support also shares information you choose to submit with those platforms and the maintainer.
 

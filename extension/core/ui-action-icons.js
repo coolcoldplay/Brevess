@@ -215,7 +215,7 @@
     const doc=dialog.ownerDocument,scope=dialog.getRootNode();
     const ownedPage=/^(?:chrome|moz)-extension:$/.test(doc.location?.protocol)||doc.body?.hasAttribute('data-ui-surface');
     if(!ownedPage&&!dialog.closest('[data-sci-plugin-ui],[data-brevess-ui]')&&!scope.host?.matches('[data-sci-plugin-ui]'))return;
-    if(!dialog.childElementCount||dialog.closest('[data-i18n-user-content]'))return;
+    if(!dialog.childElementCount||dialog.id==='sci-manual-toolbar'||dialog.closest('[data-i18n-user-content]'))return;
     const controls=[...dialog.querySelectorAll('button')].filter(b=>b.closest(dialogSelector)===dialog);
     const label=b=>(b.textContent||'').trim();
     const cancel=b=>/^(取消|Cancel)$/i.test(label(b));

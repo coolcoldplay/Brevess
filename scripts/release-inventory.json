@@ -82,7 +82,6 @@
     "web-reading.css",
     "reading-focus-ui.js",
     "unified-reading-ui.js",
-    "same-paper-sidebar.js",
     "workspace-storage-choices.js",
     "table-viewer.html",
     "table-viewer.js",
@@ -92,7 +91,8 @@
     "diagram-viewer.css",
     "ui-focus.css",
     "ui-theme.css",
-    "ui-focus.js"
+    "ui-focus.js",
+    "docs/AGENT_QUICK_CONNECT.md"
   ],
   "browserDirectories": [
     "web-filters-general",
@@ -135,7 +135,8 @@
     "native-host/runtime-version.json",
     "native-host/entry.cjs",
     "native-host/reader-input.cjs",
-    "native-host/workbench-agents.cjs"
+    "native-host/workbench-agents.cjs",
+    "native-host/antigravity-runtime.cjs"
   ],
   "nativeHostDirectories": [
     "native-host/pdffigures2",
@@ -209,7 +210,6 @@
       "quick-setup.js",
       "reading-focus-ui.js",
       "reading-focus.css",
-      "same-paper-sidebar.js",
       "semantic-find-content.js",
       "semantic-find-controller.js",
       "semantic-find-launcher.js",

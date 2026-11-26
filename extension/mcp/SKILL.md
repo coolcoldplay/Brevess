@@ -7,9 +7,9 @@ description: Read or edit BREVESS literature, hypotheses, Figure/Panel plans and
 
 先使用 MCP 的 `brevess.status` 获取真实连接状态，再读 `tools/list` 和 `brevess.capabilities`。按用户指定目标读取：课题用 `workbench.read_context`，总库用 `library.query_global_library` / `library.catalog_read`，单篇文献用 `mechanism.read_context`。总库读取不要求先创建课题或申请项目 scope。只调用实际工具目录存在的工具，不猜测工具或对象 ID。
 
-若当前会话没有 BREVESS 工具，先检查客户端配置、重新加载和初始化错误。当前快速入口是「设置 → 模型与连接 → 连接你的 Agent」，选择实际客户端并复制配置提示词。使用匹配版本的 `scripts/setup-agent-connection.mjs`，先 `--dry-run`，再增量配置；详见 `docs/AGENT_QUICK_CONNECT.md`。支持 macOS 和 Windows，复用已有安装、保留其他 MCP 服务。安装器返回 `client-setup-required` 时，继续按对应客户端官方界面/CLI 完成，不能把生成文件当作已接通。
+若当前会话没有 BREVESS 工具，先检查客户端配置、重新加载和初始化错误。当前快速入口是「设置 → 模型与连接 → 连接你的 Agent」，选择客户端，点击「连接并测试」。首次安装或更新本机组件时，从高级选项复制配置提示词，使用匹配版本的 `scripts/setup-agent-connection.mjs`，先 `--dry-run`，再增量配置；详见 `docs/AGENT_QUICK_CONNECT.md`。支持 macOS 和 Windows，复用已有安装、保留其他 MCP 服务。安装器返回 `client-setup-required` 时，继续按对应客户端官方界面/CLI 完成，不能把生成文件当作已接通。
 
-完成后在同一窗口点击「连接并测试」，插件会自动打开工作台。再从客户端调用 `brevess.status`、`brevess.capabilities` 和文献查询，分别报告浏览器连接与客户端实际读取的结果。令牌仅在本机使用，不写入课题、聊天、截图或报告。此流程无需付费模型调用，也不代表 BREVESS 内的模型账号已登录。
+完成后在同一窗口点击「连接并测试」，即可在设置中完成配对。浏览器运行时，获准的总库查询可以在工作台关闭时继续。再从客户端调用 `brevess.status`、`brevess.capabilities` 和文献查询，分别报告浏览器连接与客户端实际读取的结果。令牌仅在本机使用，不写入课题、聊天、截图或报告。支持问答的客户端还会收到一条连接测试请求，模型调用按所选服务的条款计费。
 
 ## 网页阅读任务
 

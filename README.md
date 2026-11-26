@@ -2,8 +2,8 @@
 <h1 align="center">BREVESS · 布理维思</h1>
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
-<p align="center">Chrome / Edge · 免费开源 · 中文 / English · 自备模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r18"><strong>1.0.2 · r18</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
+<p align="center">Chrome / Edge · 免费开源 · 中文 / English · 本机 Agent / 模型 API</p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.1"><strong>1.0.2 · r23.1</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -73,7 +73,7 @@
 
 从手动整理开始，也可借助 AI 辅助完善研究思路。支持多套方案、本机保存、撤销重做与导入导出。
 
-以上工作台截图为**早期版本实录**。点击模块标题可进入使用最新版真实界面组件的[官网工作台](https://coolcoldplay.github.io/Brevess/#workbench)，体验材料引用、画布编辑和撤销。
+以上工作台截图为**早期版本实录**。点击模块标题可进入使用 r18 界面组件的[官网工作台](https://coolcoldplay.github.io/Brevess/#workbench)，体验材料引用、画布编辑和撤销。
 
 ## 不止论文
 
@@ -83,13 +83,13 @@
 
 ## 安装预览版
 
-1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-reader-r18/Brevess-v1.0.2-r18-Chrome.zip)，解压到独立文件夹。
+1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-reader-r23.1/Brevess-v1.0.2-r23.1-Chrome.zip)，解压到独立文件夹。
 2. 打开 `chrome://extensions/`（Edge 使用 `edge://extensions/`）→ 开发者模式 → 加载已解压的扩展程序，选择包含 `manifest.json` 的文件夹。
 3. 固定 BREVESS 图标，在论文全文页打开侧栏。首次打开设置时，可在快速配置中选择保存目录、确认隐私提示并连接默认模型。
 
 大纲导航、离线规则、手动高亮、笔记编辑和工作台无需 API Key。部分增强功能需要可选本机伴侣，当前浏览器 ZIP 不包含本机二进制。
 
-**这是预览版。**r18 的笔记支持直接排版、划选原文插入引文，以及增删表格行列或整张表。普通问答可选择 Agent 模型与推理强度，界面会随浏览器切换深浅外观。详见[发布记录](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r18)。
+**r23.1 公开预览版**支持在设置中连接 Google Antigravity 等本机 Agent，在普通问答中选择客户端提供的模型与推理强度。论文大纲随正文加载更新，识别为同一篇论文的网页与 PDF 可共用高亮、备注、问答和笔记，保存 PDF 时可将原文件附到该文献。[Agent 接入指南](docs/AGENT_QUICK_CONNECT.md) · [版本说明](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.1)。
 
 ## 源码与构建
 

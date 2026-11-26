@@ -3589,6 +3589,7 @@ function articleWorkspaceSaveStageDetail(stage, status, progress = {}) {
     if (status === 'error') return '失败';
     if (status === 'warning') return '已跳过或需重试';
     if (status !== 'done') return '等待';
+    if (progress.browserOnly && (stage === 'permission' || stage === 'sync')) return '使用浏览器文库';
     if (stage === 'permission') return '文件夹可写';
     if (stage === 'sync') return '已写入目录';
     if (stage === 'offline' && progress.disabled === true) return '本次跳过';
@@ -3609,6 +3610,10 @@ function renderArticleWorkspaceSaveProgress(progress = {}) {
         return;
     }
     const panel = ensureArticleWorkspaceSaveProgress();
+    if (progress.initialize) {
+        const label = panel.querySelector('[data-save-stage="offline"] > span:nth-child(2)');
+        if (label) label.textContent = activePanelTabContext.pdfMode ? 'PDF 原件附件' : '离线正文快照';
+    }
     panel.hidden = false;
     const stage = String(progress.stage || 'permission');
     const status = String(progress.status || 'active');
@@ -3966,6 +3971,8 @@ const literatureNoteLoadGuard = createContextRevisionGuard({
 let workspaceGeneration = 1;
 let workspaceUiSaveTimer = null;
 let currentWorkspaceSnapshot = null;
+let readingNavigationPreview = null;
+let activeReadingTicket = null;
 const outlineExpansionState = new Map();
 const outlineExpansionOwners = new WeakMap();
 const pdfContextRecoveryAttempts = new Map();
@@ -4428,6 +4435,7 @@ let paragraphSummaryTaskGeneration = 0;
 let workspaceRefreshSequence = 0;
 let articleSourceRefreshPending = null;
 let articleStructureRefreshCoordinator = null;
+let articleStructureRecoveryTimer = null;
 let currentArticleArchiveProbe = null;
 let articlePreparationSequence = 0;
 let articleInitializationState = null;
@@ -4465,6 +4473,7 @@ function revealBoundPanel(tabId) {
     document.getElementById('sidePanelApp')?.removeAttribute('data-switching-paper');
 }
 let inactiveTabActivationPromise = null;
+let inactiveTabActivationOwner = null;
 
 let bilingualTranslationState = { enabled: false, phase: 'idle' };
 let bilingualTranslationRequest = 0;
@@ -4917,6 +4926,7 @@ async function publishSidePanelShortcutScope(
 function capturePanelContext(taskToken = 0) {
     return {
         ...SciLLM.capturePanelContext(activePanelTabContext, taskToken),
+        browserDocumentId: activePanelTabContext.browserDocumentId,
         url: activePanelTabContext.url,
         pdfMode: activePanelTabContext.pdfMode === true,
         offlineMode: activePanelTabContext.offlineMode === true
@@ -5323,6 +5333,7 @@ function cacheCurrentPanelTabState() {
         ['preparing', 'analyzing'].includes(prepareState)) return;
     panelTabStateCache.delete(key);
     panelTabStateCache.set(key, {
+        browserDocumentId: activePanelTabContext.browserDocumentId,
         preparedDocumentState,
         currentArticleDocument,
         prepareState,
@@ -5405,6 +5416,8 @@ function resetPanelArticleState(viewAfterReset = 'navigation') {
     articlePreparationSequence += 1;
     workspaceRefreshSequence += 1;
     articleStructureRefreshCoordinator?.invalidate();
+    clearTimeout(articleStructureRecoveryTimer);
+    articleStructureRecoveryTimer = null;
     manualSummarySequence += 1;
     regexApplySequence += 1;
     preferenceMutationCoordinator.beginIntent();
@@ -5488,6 +5501,8 @@ function resetPanelArticleState(viewAfterReset = 'navigation') {
     clearTimeout(workspaceUiSaveTimer);
     workspaceUiSaveTimer = null;
     currentWorkspaceSnapshot = null;
+    readingNavigationPreview = null;
+    activeReadingTicket = null;
     currentPdfRuntimeBinding = null;
     updatePopupPdfSemanticNavigation(null, null);
     currentArticleAbbreviationSnapshot = {
@@ -5537,8 +5552,10 @@ function renderInactiveTabState(tab = null) {
     const navigationStatus = document.getElementById('articleNavigationStatus');
     const retry = document.getElementById('retryArticlePreparation');
     if (title) { title.textContent = tab?.title || t('当前页面'); title.setAttribute('translate', 'no'); }
-    if (statusText) statusText.textContent = '正在读取页面结构…';
-    if (navigationStatus) navigationStatus.textContent = '正在读取页面结构…';
+    const browserPage = /^(?:chrome|edge|about|devtools):/.test(tab?.url || tab?.pendingUrl || '');
+    const message = browserPage ? '浏览器内置页面无法读取。切换到网页后会自动提取。' : '正在读取页面结构…';
+    if (statusText) statusText.textContent = t(message);
+    if (navigationStatus) navigationStatus.textContent = t(message);
     status?.classList.remove('is-error', 'is-ready');
     status?.classList.add('is-idle');
     if (retry) retry.hidden = true;
@@ -5546,7 +5563,9 @@ function renderInactiveTabState(tab = null) {
 
 async function activateCurrentTabFromSidePanel() {
     if (activePanelTabContext.activated) return true;
-    if (inactiveTabActivationPromise) return inactiveTabActivationPromise;
+    const owner = activePanelTabContext;
+    if (inactiveTabActivationOwner === owner) return inactiveTabActivationPromise;
+    inactiveTabActivationOwner = owner;
     inactiveTabActivationPromise = (async () => {
         const panelKey = activePanelTabContext.key;
         const tab = await queryPanelTargetTab();
@@ -5575,17 +5594,23 @@ async function activateCurrentTabFromSidePanel() {
             url: activationUrl,
             confirmedNonLiterature: !recognized
         });
+        if (activePanelTabContext !== owner) return false;
         if (!response?.success) {
             throw new Error(response?.error?.message || '激活当前标签页失败');
         }
-        await synchronizeActiveTabContext({ force: true });
+        await synchronizeActiveTabContext();
         return true;
     })().catch(error => {
-        renderInactiveTabState();
-        showStatus(`激活当前标签页失败：${error.message}`, 'error');
+        if (activePanelTabContext === owner) {
+            renderInactiveTabState();
+            showStatus(`激活当前标签页失败：${error.message}`, 'error');
+        }
         return false;
     }).finally(() => {
-        inactiveTabActivationPromise = null;
+        if (inactiveTabActivationOwner === owner) {
+            inactiveTabActivationPromise = null;
+            inactiveTabActivationOwner = null;
+        }
     });
     return inactiveTabActivationPromise;
 }
@@ -5651,8 +5676,18 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     if (lookupId !== tabContextLookupSequence) return null;
     const key = panelTabDocumentKey(tab);
     if (key !== activePanelTabContext.key) indicatePanelTabChange(tab?.id ?? null);
-    const activated = Boolean(key &&
-        await SciLLM.isTabActivated(chrome.storage.session, tab));
+    const [activated, frame] = await Promise.all([
+        key ? SciLLM.isTabActivated(chrome.storage.session, tab) : false,
+        key && /^(https?|file):/.test(tab.url || '') ? chrome.webNavigation.getFrame({tabId: tab.id, frameId: 0}).catch(() => null) : null
+    ]);
+    if (lookupId !== tabContextLookupSequence) return null;
+    if (frame?.url && SciLLM.normalizeTabDocumentUrl(frame.url) !== SciLLM.normalizeTabDocumentUrl(tab.url)) {
+        scheduleActiveTabContextSync();
+        return null;
+    }
+    const browserDocumentId = frame?.documentId || '';
+    if (browserDocumentId && activePanelTabContext.key === key && activePanelTabContext.browserDocumentId &&
+        activePanelTabContext.browserDocumentId !== browserDocumentId) force = true;
     if (lookupId !== tabContextLookupSequence) return null;
     if (!force && pendingTabContextTransition?.requestId === tabContextRequestSequence &&
         pendingTabContextTransition.key === key &&
@@ -5700,7 +5735,7 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
     }
     tabContextSequence += 1;
     activePanelTabContext = {
-        tabId: tab?.id ?? null,
+        tabId: tab?.id ?? null, browserDocumentId,
         url: SciLLM.normalizeTabDocumentUrl(tab?.url || tab?.pendingUrl),
         key,
         activated,
@@ -5709,6 +5744,12 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         tabContextSequence
     };
     tabContextBindingRequestSequence = requestId;
+    globalThis.BrevessUnifiedReading?.watch?.(activePanelTabContext);
+    const saveButton = document.getElementById('saveCurrentArticleWorkspace');
+    if (saveButton) {
+        saveButton.title = activePanelTabContext.pdfMode ? '保存 PDF 到文献附件' : '保存到本地文件夹';
+        saveButton.setAttribute('aria-label', saveButton.title);
+    }
     const title = document.getElementById('sidePanelPaperTitle');
     if (title) title.textContent = tab?.title || '正在连接当前页面…';
     revealBoundPanel(tab?.id ?? null);
@@ -5785,7 +5826,7 @@ async function synchronizeActiveTabContext({ force = false } = {}) {
         }
     }
     const cached = !force && !activePanelTabContext.pdfMode ? panelTabStateCache.get(key) : null;
-    if (cached) {
+    if (cached && browserDocumentId && cached.browserDocumentId === browserDocumentId) {
         panelTabStateCache.delete(key);
         panelTabStateCache.set(key, cached);
         restorePanelTabState(cached);
@@ -5829,10 +5870,34 @@ function schedulePdfContextRecovery(key) {
 function ensureArticleStructureRefreshCoordinator() {
     if (articleStructureRefreshCoordinator) return articleStructureRefreshCoordinator;
     articleStructureRefreshCoordinator = createArticleStructureRefreshCoordinator({
-        refresh(_message, panelContext) {
+        async refresh(_message, panelContext) {
             if (!isCurrentPanelContext(panelContext)) return null;
-            return refreshArticleWorkspace({ panelContext,
-                sourceRecovery: !semanticArticleStructureEventSignature(_message, panelContext.tabId) });
+            clearTimeout(articleStructureRecoveryTimer);
+            articleStructureRecoveryTimer = null;
+            const initialization = articleInitializationState;
+            if (initialization && isCurrentPanelContext(initialization.context)) {
+                if (initialization.reading) {
+                    initialization.sourceChanged = true;
+                    initialization.wake?.();
+                    return initialization.promise;
+                }
+                if (!currentWorkspaceSnapshot && initialization.error) return initializeCurrentArticle();
+            }
+            try {
+                return await refreshArticleWorkspace({ panelContext, throwOnError: true,
+                    sourceRecovery: !semanticArticleStructureEventSignature(_message, panelContext.tabId) });
+            } catch (error) {
+                if (error?.code === 'ARTICLE_PAGE_LOADING' && isCurrentPanelContext(panelContext)) {
+                    clearTimeout(articleStructureRecoveryTimer);
+                    articleStructureRecoveryTimer = setTimeout(() => {
+                        articleStructureRecoveryTimer = null;
+                        if (isCurrentPanelContext(panelContext)) {
+                            ensureArticleStructureRefreshCoordinator().enqueue(_message, panelContext.tabId, panelContext);
+                        }
+                    }, 1500);
+                }
+                return null;
+            }
         }
     });
     return articleStructureRefreshCoordinator;
@@ -5877,9 +5942,20 @@ function setupActiveTabSynchronization() {
         if (changeInfo.url && tab?.active && (panelOwnerWindowId === null || tab.windowId === panelOwnerWindowId)) {
             indicatePanelTabChange(tabId);
             scheduleActiveTabContextSync();
-        } else if (changeInfo.status === 'complete' &&
-            tabId === activePanelTabContext.tabId) {
-            scheduleActiveTabContextSync({ force: true });
+        } else if (changeInfo.status === 'complete' && tabId === activePanelTabContext.tabId) {
+            // Finishing a slow image or script must not tear down the rail, focus or editors.
+            // A real navigation (including a same-URL reload) still receives a fresh binding.
+            const owner = activePanelTabContext;
+            void Promise.resolve(owner.activated && globalThis.BrevessUnifiedReading?.sameLoadedDocument?.(owner))
+                .then(same => { if (!same && activePanelTabContext === owner) scheduleActiveTabContextSync({ force:true }); });
+        }
+    });
+    chrome.webNavigation.onCommitted.addListener(details => {
+        const owner = activePanelTabContext;
+        if (details.frameId === 0 && details.tabId === owner.tabId && owner.browserDocumentId &&
+            details.documentId && details.documentId !== owner.browserDocumentId) {
+            indicatePanelTabChange(details.tabId);
+            scheduleActiveTabContextSync();
         }
     });
     chrome.tabs.onRemoved.addListener(tabId => {
@@ -6038,6 +6114,17 @@ function setupActiveTabSynchronization() {
             activePanelTabContext.activated) {
             runGlobalKeyboardShortcutKey(String(message.key || ''));
         }
+        if (message?.type === 'ARTICLE_READING_TEXT_READY' && sender.id === chrome.runtime.id && sender.frameId === 0 &&
+            message.ticket === activeReadingTicket && sender.tab?.id === activePanelTabContext.tabId &&
+            (!activePanelTabContext.browserDocumentId || activePanelTabContext.browserDocumentId === sender.documentId) &&
+            SciLLM.normalizeTabDocumentUrl(message.preview?.url) === activePanelTabContext.url &&
+            !currentWorkspaceSnapshot && message.preview?.paragraphs?.length) {
+            readingNavigationPreview = message.preview;
+            renderArticleNavigationTree(readingNavigationPreview);
+            renderArticleConnectionStage('正文已就绪，正在恢复阅读记录…', readingNavigationPreview.title);
+            const status = document.getElementById('articleNavigationStatus');
+            if (status) status.textContent = '';
+        }
         if (message?.type === 'ARTICLE_STRUCTURE_CHANGED' &&
             Number(sender?.tab?.id) === Number(activePanelTabContext.tabId) &&
             activePanelTabContext.activated) {
@@ -6046,6 +6133,16 @@ function setupActiveTabSynchronization() {
                 sender.tab.id,
                 capturePanelContext()
             );
+        }
+        if (message?.type === 'BREVESS_PAPER_VIEW_CHANGED' && sender.tab?.id === activePanelTabContext.tabId &&
+            currentWorkspaceSnapshot?.documentId === message.documentId) {
+            const panel=capturePanelContext();
+            void refreshArticleWorkspace({panelContext:panel}).then(async () => {
+                if (!isCurrentPanelContext(panel) || activeWorkspaceView !== 'notes' || literatureNoteDirtyRevisions.size ||
+                    literatureNoteTemplateSelection || document.activeElement?.closest('#literatureNoteFields')) return;
+                await loadLiteratureNoteDocumentState();
+                if (isCurrentPanelContext(panel)) renderLiteratureNoteDrawer();
+            }).catch(()=>{});
         }
         if (message?.type === 'ABBREVIATION_MEMORY_CHANGED') {
             const dialog = document.getElementById('articleAbbreviationDialog');
@@ -7529,7 +7626,9 @@ function renderSidebarBatchActions() {
         button.dataset.taskRunning = String(generating);
         button.dataset.taskStatus = phase;
         const shortcut=document.querySelector(`[data-batch-shortcut="${module}"]`);
-        if (shortcut) {
+        if (shortcut && (module === 'figures' || module === 'highlights')) {
+            renderAnalysisShortcut(shortcut, analysisShortcutAction(module, active, task));
+        } else if (shortcut) {
             shortcut.setAttribute('aria-busy',String(Boolean(active)));
             shortcut.title = active ? '停止当前 AI 任务' : shortcut.getAttribute('aria-label');
         }
@@ -7694,7 +7793,7 @@ async function performSidebarModuleBatch(
     intent = { module, context, operationId: retryNote ? pendingNote.operationId : `${prefix}-${crypto.randomUUID()}`, beforeEpoch: existing?.epoch ?? -1,
         documentId: record?.documentId || '', documentHash: record?.documentHash || '',
         busy: true, stopRequested: false, task: null,
-        ...(module === 'figures' ? { sourceController: new AbortController(), analysisDispatched: false } : {}) };
+        ...(['figures','highlights'].includes(module) ? { sourceController: new AbortController(), analysisDispatched: false } : {}) };
     sidebarBatchIntents.set(key, intent);
     renderSidebarBatchActions();
     let navigationDispatched = false;
@@ -7767,10 +7866,59 @@ async function performSidebarModuleBatch(
     }
 }
 
+let analysisMenuOwner = null;
+let closeAnalysisMenu = () => {};
+function showAnalysisMenu(event, button) {
+    if (!button.dataset.analysisAction) return;
+    event.preventDefault();
+    closeAnalysisMenu();
+    const context=capturePanelContext(), figure=button.dataset.batchShortcut==='figures';
+    const currentOperation=()=>figure ? figureAnalysisState.operationId : highlightTaskState.operationId;
+    const id=currentOperation();
+    const menu=document.createElement('div'), item=document.createElement('button');
+    menu.id='analysisShortcutMenu';menu.setAttribute('role','menu');
+    item.type='button';item.setAttribute('role','menuitem');
+    item.textContent=t(figure?'取消本次图解':'取消本次高亮');
+    menu.append(item);document.body.append(menu);
+    const rect=button.getBoundingClientRect();
+    menu.style.top=Math.min(rect.bottom+4,innerHeight-menu.offsetHeight-4)+'px';
+    menu.style.left=Math.max(4,Math.min(rect.right-menu.offsetWidth,innerWidth-menu.offsetWidth-4))+'px';
+    analysisMenuOwner=button;
+    button.setAttribute('aria-expanded','true');
+    const outside=e=>{if(!menu.contains(e.target)) closeAnalysisMenu();};
+    const keyboard=e=>{if(e.key==='Escape'){e.preventDefault();closeAnalysisMenu();button.focus();}else if(e.key==='Tab')closeAnalysisMenu();};
+    closeAnalysisMenu=()=>{
+        menu.remove();button.removeAttribute('aria-expanded');analysisMenuOwner=null;
+        document.removeEventListener('pointerdown',outside,true);document.removeEventListener('keydown',keyboard,true);
+        closeAnalysisMenu=()=>{};
+    };
+    document.addEventListener('pointerdown',outside,true);document.addEventListener('keydown',keyboard,true);
+    item.addEventListener('click',()=>{
+        closeAnalysisMenu();button.focus();
+        if (isCurrentPanelContext(context) && button.dataset.analysisAction && id===currentOperation())
+            void controlActiveAnalysis(figure?'figure':'highlight','cancel').catch(error=>showStatus(error.message,'error'));
+    });
+    item.focus();
+}
 function setupSidebarBatchActions() {
     document.querySelectorAll('[data-batch-shortcut]').forEach(button => {
+        if (['figures','highlights'].includes(button.dataset.batchShortcut)) {
+            button.addEventListener('contextmenu',event=>showAnalysisMenu(event,button));
+            button.addEventListener('keydown',event=>{
+                if (event.key==='ContextMenu' || event.shiftKey && event.key==='F10') showAnalysisMenu(event,button);
+            });
+        }
         button.addEventListener('click', event => {
             const module = button.dataset.batchShortcut;
+            const command = button.dataset.analysisAction;
+            if (command === 'pause' || command === 'resume') {
+                if (button.dataset.controlPending) return;
+                button.dataset.controlPending = 'true';
+                void controlActiveAnalysis(module === 'figures' ? 'figure' : 'highlight', command)
+                    .catch(error => showStatus(error.message, 'error'))
+                    .finally(() => { delete button.dataset.controlPending; renderSidebarBatchActions(); });
+                return;
+            }
             if (module === 'note') void generateSelectedLiteratureNoteFields(event.isTrusted === true);
             else if (module === 'highlights' && analysisMode !== 'llm' && button.getAttribute('aria-busy') !== 'true') {
                 const context = capturePanelContext();
@@ -9711,8 +9859,10 @@ function renderSearchOutlineMetadata(jump, node) {
 
 let navigationRenderPending = false;
 function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
+    snapshot ||= readingNavigationPreview;
     if (snapshot && activeWorkspaceView !== 'navigation') { navigationRenderPending = true; return; }
     navigationRenderPending = false;
+    const isReadingPreview = Boolean(snapshot && snapshot === readingNavigationPreview);
     if (snapshot === currentWorkspaceSnapshot) primeNavigationTitleTranslator();
     snapshot=globalThis.BrevessUnifiedReading?.projectOutline(snapshot)||snapshot;
     if (outlineTitleTranslationRun && outlineTitleTranslationRun.sourceSignature !==
@@ -9723,7 +9873,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         currentPdfSemanticNavigation, snapshot
     );
     absorbOutlineExpansionFromTree(container, snapshot, semanticNavigation);
-    const renderSignature = navigationTreeUiSignature(snapshot, semanticNavigation);
+    const renderSignature = (isReadingPreview ? 'preview:' : '') + navigationTreeUiSignature(snapshot, semanticNavigation);
     if (container.childElementCount && navigationTreeRenderState.get(container) === renderSignature) return;
     outlineRenderGeneration += 1;
     const restoreViewport = preserveNavigationViewport(container, snapshot, outlineRenderGeneration);
@@ -9766,7 +9916,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
             return;
         }
         container.appendChild(createWorkspaceElement(
-            'div', 'workspace-empty', '暂未识别到稳定的正文标题。可等待页面加载完成后刷新。'
+            'div', 'workspace-empty', '当前还没有可显示的标题。'
         ));
         restoreViewport();
         return;
@@ -9782,6 +9932,9 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
             sourceSignature === navigationTreeSourceSignature(globalThis.BrevessUnifiedReading?.projectOutline(currentWorkspaceSnapshot)||currentWorkspaceSnapshot)
     };
     function appendNode(node, parent, depth = 0) {
+        // Reading-layout headings scroll within the layout but use the matched
+        // original section for its paragraphs and analysis selection.
+        const sourceNode = node.unifiedFilterReference?.frameId === 0 && node.translationSource || node;
         const children = Array.isArray(node.children) ? node.children : [];
         const leaf = children.length === 0;
         const nodeKey = String(node.sectionId || node.sourceKey ||
@@ -9796,10 +9949,10 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
         const analysisToggle = document.createElement('input');
         analysisToggle.type = 'checkbox';
         analysisToggle.className = 'workspace-section-analysis-toggle';
-        analysisToggle.checked = node.analysisSelected === true;
-        analysisToggle.indeterminate = node.analysisIndeterminate === true;
-        analysisToggle.disabled = !Array.isArray(node.analysisSectionIds) ||
-            node.analysisSectionIds.length === 0;
+        analysisToggle.checked = sourceNode.analysisSelected === true;
+        analysisToggle.indeterminate = sourceNode.analysisIndeterminate === true;
+        analysisToggle.disabled = isReadingPreview || !Array.isArray(sourceNode.analysisSectionIds) ||
+            sourceNode.analysisSectionIds.length === 0;
         analysisToggle.setAttribute(
             'aria-label',
             `${node.displayTitle || node.title || '当前章节'}参与规则和 LLM 分析`
@@ -9814,7 +9967,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
             try {
                 const response = await sendTabMessage(panelContext.tabId, {
                     action: 'setArticleAnalysisSectionSelection',
-                    sectionIds: node.analysisSectionIds,
+                    sectionIds: sourceNode.analysisSectionIds,
                     selected: analysisToggle.checked
                 });
                 if (!isCurrentPanelContext(panelContext)) return;
@@ -9835,8 +9988,8 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                 showStatus(`无法更新章节分析范围：${error.message}`, 'error');
             } finally {
                 if (isCurrentPanelContext(panelContext)) {
-                    analysisToggle.disabled = !Array.isArray(node.analysisSectionIds) ||
-                        node.analysisSectionIds.length === 0;
+                    analysisToggle.disabled = !Array.isArray(sourceNode.analysisSectionIds) ||
+                        sourceNode.analysisSectionIds.length === 0;
                 }
                 selection?.finish();
             }
@@ -9845,7 +9998,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
             'button', 'workspace-tree-toggle'
         );
         toggle.type = 'button';
-        toggle.disabled = leaf && Number(node.paragraphCount || 0) === 0 && !String(node.unifiedOutlineFullText || '').trim();
+        toggle.disabled = leaf && Number(sourceNode.paragraphCount || 0) === 0 && !String(node.unifiedOutlineFullText || '').trim();
         const updateToggle = () => {
             toggle.setAttribute('aria-expanded', String(details.open));
             const action = details.open ? '收起' : '展开';
@@ -9876,20 +10029,25 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
             event.preventDefault();
             event.stopPropagation();
             if(node.unifiedFilterReference){void globalThis.BrevessUnifiedReading?.locateFilter(node.unifiedFilterReference,node.sectionId);return;}
+            if(node.unifiedLiveReference){globalThis.BrevessUnifiedReading?.liveLocate(node.unifiedLiveReference);return;}
             if(node.unifiedWebReference){void globalThis.BrevessUnifiedReading?.locate(node.unifiedWebReference);return;}
             void focusWorkspaceSource({
                 kind: 'section', sectionId: node.sectionId, sourceKey: node.sourceKey
             });
         });
-        const count = createWorkspaceElement(
-            'span', 'workspace-tree-count', `${node.paragraphCount || 0}`
-        );
-        count.setAttribute('aria-label', `${node.paragraphCount || 0} 段正文`);
-        count.title = `${node.paragraphCount || 0} 段正文`;
-        summary.append(analysisToggle, toggle, jump, count);
+        summary.append(analysisToggle, toggle, jump);
+        if (!node.unifiedLiveReference && !node.unifiedWebReference &&
+            (!node.unifiedFilterReference || sourceNode !== node)) {
+            const count = createWorkspaceElement(
+                'span', 'workspace-tree-count', `${sourceNode.paragraphCount || 0}`
+            );
+            count.setAttribute('aria-label', `${sourceNode.paragraphCount || 0} 段正文`);
+            count.title = `${sourceNode.paragraphCount || 0} 段正文`;
+            summary.append(count);
+        }
         details.appendChild(summary);
         appendUnifiedOutlineSource(details, node, nodeKey, expansionBinding);
-        const nodeParagraphs = workspaceParagraphsForNode(snapshot, node);
+        const nodeParagraphs = workspaceParagraphsForNode(snapshot, sourceNode);
         if (nodeParagraphs.length) {
             const list = createWorkspaceElement('div', 'workspace-paragraph-list');
             // Reuse the PDF outline's paragraph disclosure for headings that also
@@ -9921,6 +10079,20 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                     : String(
                         paragraph.displayText || paragraph.text || ''
                     ).replace(/<\/?(?:sup|sub)>/gi, '').slice(0, 96);
+                if (isReadingPreview) {
+                    const row = createWorkspaceElement('div', 'workspace-paragraph-row');
+                    const jump = createWorkspaceElement('button', 'workspace-paragraph-jump');
+                    jump.type = 'button';
+                    jump.title = paragraph.text || label;
+                    jump.append(createWorkspaceElement('span', 'workspace-paragraph-marker', `P${index + 1}`),
+                        createWorkspaceElement('span', 'workspace-paragraph-text', label));
+                    jump.addEventListener('click', () => void focusWorkspaceSource({
+                        kind: 'paragraph', paragraphId, sourceKey: paragraph.sourceKey
+                    }));
+                    row.append(jump);
+                    list.append(row);
+                    return;
+                }
                 const className = 'workspace-paragraph-jump' +
                     (task.loading ? ' is-loading' : '') +
                     (task.error ? ' is-error' : '');
@@ -9933,10 +10105,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                 button.setAttribute('aria-label', `第 ${index + 1} 段，单击编辑笔记`);
                 const paragraphTarget = { ...paragraph,
                     navigationRevision: Number(paragraph.navigationRevision || snapshot?.revision || 0) };
-                const gestureOptions = {
-                    sourceIsCurrent: () => !currentWorkspaceSnapshot || sourceSignature ===
-                        navigationTreeSourceSignature(currentWorkspaceSnapshot)
-                };
+                const gestureOptions = {sourceIsCurrent: expansionBinding.sourceIsCurrent};
                 bindParagraphNoteGestures(button, paragraphTarget, snapshot, gestureOptions);
                 const marker = createWorkspaceElement(
                     'button', 'workspace-paragraph-marker', `P${index + 1}`
@@ -9954,9 +10123,7 @@ function renderArticleNavigationTree(snapshot = currentWorkspaceSnapshot) {
                 row.append(button);
                 list.appendChild(row);
             });
-            bindLazyNavigationParagraphRows(paragraphOwner, appendParagraphRows,
-                () => !currentWorkspaceSnapshot || navigationTreeSourceSignature(snapshot) ===
-                navigationTreeSourceSignature(currentWorkspaceSnapshot));
+            bindLazyNavigationParagraphRows(paragraphOwner, appendParagraphRows, expansionBinding.sourceIsCurrent);
             paragraphOwner.appendChild(list);
         }
         children.forEach(child => appendNode(child, details, depth + 1));
@@ -13865,7 +14032,10 @@ function setupFigureKeyboardNavigation() {
     });
 }
 
+let quickNavGestures = [];
 function renderFigureQuickNav(figures) {
+    for (const dispose of quickNavGestures) dispose();
+    quickNavGestures = [];
     const nav = document.getElementById('figureQuickNav');
     if (!nav) return;
     clearTimeout(figureQuickNavHoverTimer);
@@ -13902,10 +14072,20 @@ function renderFigureQuickNav(figures) {
         marker.textContent = labels[index];
         marker.title = figure.figureLabel || figure.figureId;
         marker.setAttribute('aria-expanded', 'false');
-        marker.addEventListener('click', () => {
-            void handleFigureWorkspaceJump(figure,marker);
-            if (!document.getElementById('workspace-figures').hidden) void navigateFigureQuickAnchor(figure.figureId);
-        });
+        const owner = capturePanelContext();
+        quickNavGestures.push(SciLLM.SidebarUI.bindFigureGesture(marker, {
+            immediateLocate: true,
+            isCurrent: () => marker.isConnected && isCurrentPanelContext(owner),
+            onLocate: () => {
+                void handleFigureWorkspaceJump(figure, marker).catch(error => showStatus(error.message, 'error'));
+                if (!document.getElementById('workspace-figures').hidden) void navigateFigureQuickAnchor(figure.figureId);
+            },
+            onInspect: () => {
+                if (figure.sourceKind === 'pdf-page-caption') openPdfFigureArtworkDialog(figure, marker);
+                else void showFigureOriginalImage(figure.figureId, { preserveSidebarOnOpen:true }).catch(error => showStatus(error.message, 'error'));
+            }
+        }));
+        marker.title = (figure.figureLabel || figure.figureId) + ' · ' + t('长按查看原图');
 
         const flyout = createWorkspaceElement('div', 'figure-quick-nav-flyout');
         const modelResult = figure.activeDepth === 'standard' ? (figure.standard || figure.deep) : (figure.deep || figure.standard);
@@ -18970,6 +19150,13 @@ function renderFigureWorkspaceSnapshot(
     }
     // 论文级提取已移至文献笔记；解图页只保留 Figure、Panel 与机制内容。
     renderResearchLogicMapSnapshot(container, snapshot);
+    for (const other of snapshot?.figures?.paperUnmatched || []) {
+        const group=createWorkspaceElement('div','workspace-paper-figure');
+        appendHistoricalFigureRecords(group,{figures:[other.figure],draft:other.draft});
+        const summary=group.querySelector('summary');
+        if (summary) summary.textContent=(other.format==='pdf'?'PDF':'网页')+' · '+other.figure.figureLabel;
+        container.appendChild(group);
+    }
     appendHistoricalFigureRecords(container, { figures: snapshot?.figures?.historicalFigures || [], draft: figureWorkspaceDraft });
     if (!figures.length) {
         container.appendChild(createWorkspaceElement(
@@ -19347,6 +19534,8 @@ function reconcileArticleWorkspaceSnapshot(current, incoming) {
 function renderArticleWorkspaceSnapshot(snapshot) {
     snapshot = reconcileArticleWorkspaceSnapshot(currentWorkspaceSnapshot, snapshot);
     currentWorkspaceSnapshot = snapshot || null;
+    readingNavigationPreview = null;
+    activeReadingTicket = null;
     void syncSharedHighlightNoteControls();
     workspaceGeneration = Math.max(1,
         Number(snapshot?.localWorkspace?.workspaceGeneration) || workspaceGeneration || 1
@@ -19373,6 +19562,25 @@ function renderArticleWorkspaceSnapshot(snapshot) {
     const retry = document.getElementById('retryArticlePreparation');
     if (retry) retry.hidden = true;
     renderArticleNavigationTree(snapshot);
+    const prior=document.getElementById('paperEditionSummaries');
+    const open=prior?.open === true;
+    prior?.remove();
+    const summaries=(snapshot?.paperSources || []).flatMap(s=>(s.summaries || []).map(item=>({...item,sourceHash:s.documentHash})));
+    if (summaries.length) {
+        const section=createWorkspaceElement('details','workspace-historical-records');
+        section.id='paperEditionSummaries'; section.open=open;
+        section.append(createWorkspaceElement('summary','',t('同篇文献的逐段摘要')));
+        for (const item of summaries) {
+            const p=createWorkspaceElement('p','',item.summary);
+            if (item.quote) {
+                const button=createWorkspaceElement('button','btn btn-secondary',t('定位原文'));
+                button.type='button';button.onclick=()=>void focusWorkspaceSource({kind:'paper-quote',sourceHash:item.sourceHash,quote:item.quote});
+                p.append(button);
+            }
+            section.append(p);
+        }
+        document.getElementById('articleNavigationTree')?.after(section);
+    }
     renderEvidenceLedger(snapshot);
     renderHighlightDistributionSnapshot(snapshot);
     renderFigureWorkspaceSnapshot(snapshot);
@@ -20107,6 +20315,9 @@ function resolveArticleChatEvidenceTarget(
     snapshot,
     semanticNavigation = currentPdfSemanticNavigation
 ) {
+    if (item?.quote && snapshot?.paperSources?.some(s=>s.documentHash===item.documentHash || s.boundHash && s.boundHash===item.documentHash)) {
+        return {status:'cross-format', target:{kind:'paper-quote',sourceHash:item.documentHash,quote:item.quote}};
+    }
     const semanticVerification = resolvePopupPdfArticleChatEvidence(item, semanticNavigation);
     if (semanticVerification) return semanticVerification;
     return SciLLM.verifyArticleChatEvidence({
@@ -20116,6 +20327,7 @@ function resolveArticleChatEvidenceTarget(
 }
 
 function isArticleChatCitationFocusable(verification) {
+    if (verification?.status === 'cross-format') return Boolean(verification.target?.quote);
     if (verification?.semanticMigration === true) {
         return Boolean(
             (verification.status === 'verified' && verification.locator) ||
@@ -20128,6 +20340,7 @@ function isArticleChatCitationFocusable(verification) {
 
 function createArticleChatCitationFocusTarget(item, verification, snapshot) {
     if (!isArticleChatCitationFocusable(verification)) return null;
+    if (verification.status === 'cross-format') return verification.target;
     if (verification.semanticMigration === true) {
         const locator = verification.locator && { ...verification.locator };
         const pageAnchor = verification.pageAnchor
@@ -20178,6 +20391,7 @@ function articleChatCitationStatusText(
     precision = '',
     pageNumber = 0
 ) {
+    if (status === 'cross-format') return '在当前原文中定位引文';
     if (status === 'degraded' && precision === 'page-only') {
         return pageNumber > 0
             ? `待核验：仅可定位到第 ${pageNumber} 页（页级证据）`
@@ -21670,13 +21884,13 @@ function handleArticleChatTurnAction(event) {
     });
 }
 
-function withPreparationDeadline(promise, timeoutMs = 15000, onTimeout = () => {}) {
+function withPreparationDeadline(promise, timeoutMs = 60000, onTimeout = () => {}) {
     let timer;
     return Promise.race([
         promise,
         new Promise((_, reject) => {
             timer = setTimeout(() => {
-                const error = new Error('读取超时：15 秒内未完成文献与已保存进度读取');
+                const error = new Error('读取连接超时');
                 error.code = 'ARTICLE_PREPARATION_TIMEOUT';
                 onTimeout(error);
                 reject(error);
@@ -21732,24 +21946,26 @@ function renderArticleConnectionFailure(error) {
     const statusText = document.getElementById('sidePanelDocumentStatusText');
     const connectionStatus = document.getElementById('sidePanelDocumentStatus');
     const retry = document.getElementById('retryArticlePreparation');
-    if (paperTitle) { paperTitle.textContent = currentWorkspaceSnapshot?.title || t('当前论文'); paperTitle.setAttribute('translate', 'no'); }
+    const outline = globalThis.BrevessUnifiedReading?.liveVersion?.()?.state;
+    const updating = error?.code === 'ARTICLE_PAGE_LOADING';
+    if (paperTitle) { paperTitle.textContent = currentWorkspaceSnapshot?.title || outline?.title || t('当前论文'); paperTitle.setAttribute('translate', 'no'); }
     if (statusText) {
         const loadingMessage = {
             ARTICLE_BROWSER_LOADING: '页面正在加载，完成后自动更新',
             ARTICLE_BODY_UNSTABLE: '正文正在加载，稳定后自动更新',
             ARTICLE_SOURCE_CHANGED_DURING_READ: '正文已更新，正在重新读取',
-            ARTICLE_SOURCE_CONTEXT_CHANGED: '文献已切换，请重新读取当前论文'
+            ARTICLE_SOURCE_CONTEXT_CHANGED: '正文已更新，正在重新读取'
         }[error?.reasonCode] || '正文正在加载，完成后自动更新';
-        statusText.textContent = error?.code === 'ARTICLE_PAGE_LOADING'
+        statusText.textContent = updating
             ? loadingMessage
             : error?.code === 'ARTICLE_PREPARATION_TIMEOUT'
-            ? '提取超时：可重新提取，或直接导出适配诊断包'
+            ? (outline?.rows?.length ? '大纲可用，完整阅读数据连接超时' : '读取连接超时，可重新提取')
             : '提取失败：' + String(error?.message || '未识别到正文');
     }
     connectionStatus?.classList.remove('is-ready');
-    connectionStatus?.classList.toggle('is-error', error?.code !== 'ARTICLE_PAGE_LOADING');
+    connectionStatus?.classList.toggle('is-error', !updating);
     if (retry) {
-        retry.hidden = false;
+        retry.hidden = Boolean(updating);
         retry.disabled = false;
     }
     updateApplyButton();
@@ -21902,25 +22118,30 @@ async function performArticleWorkspaceRefresh({
     if (!isCurrent()) return null;
     try {
         let figureRefreshResult = null;
+        const readBinding = panelContext.browserDocumentId ? {
+            expectedUrl: panelContext.url, expectedDocumentId: panelContext.browserDocumentId,
+            contextKey: String(panelContext.tabContextSequence), isCurrent: () => isCurrent()
+        } : {};
         if (panelContext.pdfMode !== true && panelContext.offlineMode !== true &&
             typeof SciLLM.ensureCompatibleContentRevision === 'function') {
-            await SciLLM.ensureCompatibleContentRevision(chrome, panelContext.tabId);
+            await SciLLM.ensureCompatibleContentRevision(chrome, panelContext.tabId, readBinding);
             if (!isCurrent()) return null;
         }
         if ((announce || forceRefresh) &&
             panelContext.pdfMode !== true && panelContext.offlineMode !== true &&
             typeof SciLLM.refreshFigureExtractorInTab === 'function') {
-            figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(
-                chrome,
-                panelContext.tabId
-            );
+            figureRefreshResult = await SciLLM.refreshFigureExtractorInTab(chrome, panelContext.tabId, readBinding);
             if (!isCurrent()) return null;
         }
+        const outlineVersion = globalThis.BrevessUnifiedReading?.liveVersion?.();
+        const navigationTicket = /^https?:/u.test(panelContext.url || '') && !panelContext.pdfMode && !panelContext.offlineMode
+            ? crypto.randomUUID() : null;
+        if (navigationTicket) activeReadingTicket = navigationTicket;
         const response = await sendTabMessage(panelContext.tabId, {
-            action: 'getArticleWorkspaceSnapshot',
+            action: 'getArticleWorkspaceSnapshot', ...(navigationTicket ? {navigationTicket} : {}),
             forceRefresh: forceRefresh || announce || Boolean(figureRefreshResult),
             chatLimit: Math.max(articleChatHistoryPageSize, articleChatVisibleTurnCount)
-        });
+        }, readBinding);
         if (!isCurrent()) return null;
         if (!response?.success || !response.snapshot) {
             if (response?.code === 'ARTICLE_SOURCE_REFRESH_DEFERRED' && response.deferred === true) {
@@ -21961,6 +22182,7 @@ async function performArticleWorkspaceRefresh({
             refreshedSnapshot
         );
         articleSourceRefreshPending = null;
+        globalThis.BrevessUnifiedReading?.acceptVersion?.(outlineVersion);
         const snapshot = renderArticleWorkspaceSnapshot(refreshedSnapshot);
         if (!preserveUiState && navigationIntentRevision === workspaceNavigationIntentRevision) {
             restoreSnapshotSidePanelUiState(response.sidePanelUiState);
@@ -21992,11 +22214,22 @@ async function performArticleWorkspaceRefresh({
         if (!isCurrent()) {
             return null;
         }
+        // A document can be discarded, restored from the back/forward cache,
+        // or replaced between verifying its receiver and getting its reply.
+        const reconnect = error?.code === 'TAB_MESSAGE_NAVIGATION_STALE' ||
+            /message (?:channel|port) closed|receiving end does not exist|frame (?:was |has been )?removed|CONTENT_SCRIPT_(?:INJECTION_TIMEOUT|RECEIVER_UNAVAILABLE)/i.test(error?.message || '');
+        if (reconnect) {
+            scheduleActiveTabContextSync();
+            error = Object.assign(new Error('正在重新连接当前网页…'), {code: 'ARTICLE_PAGE_LOADING', reasonCode: 'ARTICLE_RECEIVER_RECONNECT'});
+        }
         const status = document.getElementById('articleNavigationStatus');
-        if (status) status.textContent = '读取失败：' + error.message;
-        if (error?.code === 'ARTICLE_PAGE_LOADING' && status) status.textContent = error.message;
-        if (error?.code === 'ARTICLE_PAGE_LOADING' || error?.code === 'ARTICLE_BODY_UNAVAILABLE') {
-            renderArticleConnectionFailure(error);
+        if (error?.code === 'ARTICLE_PAGE_LOADING') {
+            readingNavigationPreview = null;
+            if (status) status.textContent = t('正文正在更新，准备好后会自动显示。');
+            if (!currentWorkspaceSnapshot) renderArticleConnectionFailure(error);
+        } else if (status) {
+            status.textContent = '读取失败：' + error.message;
+            if (error?.code === 'ARTICLE_BODY_UNAVAILABLE') renderArticleConnectionFailure(error);
         }
         onError(error);
         if (announce) showStatus(error.message,
@@ -23023,7 +23256,8 @@ function directorySyncFailureMessage(result = {}) {
 async function saveCurrentArticleWorkspace() {
     const choiceContext=capturePanelContext();
     if(articleWorkspaceSaveGuard.isPending())return;
-    const storageChoice=await globalThis.BrevessWorkspaceChoices.choose('save');
+    const storageChoice = choiceContext.pdfMode ? { page: true }
+        : await globalThis.BrevessWorkspaceChoices.choose('save');
     if(!storageChoice||!isCurrentPanelContext(choiceContext))return;
     if (articleWorkspaceSaveGuard.isPending()) {
         return articleWorkspaceSaveGuard.run(() => undefined);
@@ -23038,54 +23272,85 @@ async function saveCurrentArticleWorkspace() {
     });
     return articleWorkspaceSaveGuard.run(async () => {
         const button = document.getElementById('saveCurrentArticleWorkspace');
-        const panelContext = capturePanelContext();
+        const panelContext = choiceContext;
+        const sourceTab = {
+            expectedUrl: panelContext.url,
+            contextKey: operationId,
+            isCurrent: () => panelContext.pdfMode
+                ? activePanelTabContext.activated && activePanelTabContext.key === panelContext.key
+                : isCurrentPanelContext(panelContext)
+        };
         let saved = null;
         let activeStage = 'permission';
-        if (!isCurrentPanelContext(panelContext)) return;
+        if (!sourceTab.isCurrent()) return;
         if (button) {
             button.disabled = true;
             button.setAttribute('aria-busy', 'true');
         }
         try {
+            if (panelContext.pdfMode) {
+                // A sidebar refresh may rebind to the same PDF while its bytes are being saved.
+                // Pin writes to the actual reader instance, including across a reload at the same URL.
+                const reader = await chrome.tabs.sendMessage(panelContext.tabId,
+                    { action: 'getContentScriptRevision' }, { frameId: 0 });
+                if (!reader?.documentIdentity || reader.navigationIdentity !== sourceTab.expectedUrl) {
+                    throw new Error('当前 PDF 已切换，请重新保存');
+                }
+                sourceTab.expectedContentDocumentIdentity = reader.documentIdentity;
+            }
             const directPermission = await resolveArticleWorkspaceDirectoryPermission(
                 permissionTicket
             );
-            if (directPermission !== 'granted') {
+            if (!panelContext.pdfMode && directPermission !== 'granted') {
                 throw new Error(directPermission === 'unconfigured'
                     ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
                     : '未获得本地文件夹读写权限；请再次点击保存并允许访问');
             }
-            const initialDirectoryStatus = await sendLlmMessage({ type: 'USER_DATA_SYNC_STATUS' });
+            const initialDirectoryStatus = directPermission === 'granted'
+                ? await sendLlmMessage({ type: 'USER_DATA_SYNC_STATUS' }) : {};
             const ensured = await sendTabMessage(panelContext.tabId, {
                 action: 'ensureArticleWorkspace', forceRefresh: true, persist: true
-            });
+            }, sourceTab);
             if (!ensured?.success || !ensured.workspace) {
                 throw new Error(ensured?.error || '无法识别当前论文的本地工作区');
             }
-            const permission = await sendLlmMessage({
+            const permission = directPermission === 'granted' ? await sendLlmMessage({
                 type: 'ARTICLE_WORKSPACE_SCAN_RESTORE',
                 identity: ensured.workspace,
                 requestPermission: false,
                 permissionOnly: true
-            });
-            if (permission.permission !== 'granted') {
+            }) : { permission: directPermission };
+            const browserOnly = permission.permission !== 'granted';
+            if (browserOnly && !panelContext.pdfMode) {
                 throw new Error(permission.permission === 'unconfigured'
                     ? '尚未设置本地保存文件夹，请先到设置页面选择文件夹'
                     : '未获得本地文件夹读写权限，请再次点击并允许访问');
             }
             renderArticleWorkspaceSaveProgress({
                 operationId,
-                stage: 'permission',
-                status: 'done'
+                stage: 'permission', status: 'done', browserOnly
             });
+            if (!sourceTab.isCurrent()) return;
             activeStage = 'content';
             saved = await sendTabMessage(panelContext.tabId, {
                 action: 'saveArticleWorkspaceNow',
                 includePage: storageChoice.page,
                 operationId
-            });
+            }, sourceTab);
             if (!saved?.success) {
                 throw new Error(saved?.error || '当前论文工作区保存失败');
+            }
+            if (browserOnly) {
+                if (!sourceTab.isCurrent()) return;
+                const attached = saved.offlineSnapshot?.source === 'pdf-attachment' && saved.offlineSnapshot.saved;
+                const incomplete = !attached || !!saved.warnings?.length;
+                renderArticleWorkspaceSaveProgress({ operationId, stage: 'sync', status: incomplete ? 'warning' : 'done', browserOnly });
+                const folderDenied = permission.permission !== 'unconfigured';
+                if (!attached) showStatus('阅读记录已保存。PDF 附件保存失败，请重试。', 'error');
+                else if (saved.warnings?.length) showStatus('PDF 原件已存入文献附件。部分阅读记录有较新的修改。', 'warning');
+                else showStatus(folderDenied ? 'PDF 原件已存入文献附件。本地文件夹需要重新授权。'
+                    : 'PDF 原件已存入文献附件，可在文献库离线打开。', folderDenied ? 'warning' : 'success');
+                return;
             }
             activeStage = 'sync';
             renderArticleWorkspaceSaveProgress({
@@ -23095,6 +23360,7 @@ async function saveCurrentArticleWorkspace() {
             });
             const mirrorResult = await sendLlmMessage({
                 type: 'ARTICLE_WORKSPACE_MIRROR_ALL',
+                includePdfAttachments: true, documentId: saved.documentId,
                 workspaceId: saved.workspace?.workspaceId,
                 workspaceGeneration: Number(saved.workspace?.workspaceGeneration) || 1,
                 transaction: saved.transaction || null
@@ -23115,15 +23381,17 @@ async function saveCurrentArticleWorkspace() {
                 stage: 'sync',
                 status: 'done'
             });
-            if (!isCurrentPanelContext(panelContext)) return;
+            if (!sourceTab.isCurrent()) return;
             const offline = saved.offlineSnapshot;
             const conflictWarningCount = Array.isArray(saved.warnings)
                 ? saved.warnings.length : 0;
             const finalDirectoryStatus = await sendLlmMessage({ type: 'USER_DATA_SYNC_STATUS' });
-            if (!isCurrentPanelContext(panelContext)) return;
+            if (!sourceTab.isCurrent()) return;
             const directoryConflicts = Math.max(Number(syncResult.conflicts) || 0,
                 (Number(finalDirectoryStatus.conflictCount) || 0) - (Number(initialDirectoryStatus.conflictCount) || 0));
-            const offlineMessage = offline?.complete === true && offline?.saved === true
+            const offlineMessage = offline?.source === 'pdf-attachment'
+                ? '，PDF 原件已存入文献附件'
+                : offline?.complete === true && offline?.saved === true
                 ? `，含离线网页、样式和 ${offline.embeddedImageCount || 0} 张阅读图片`
                 : offline?.warning === true
                     ? `；本次离线网页不完整（${offline.missingResources?.length || 0} 项资源未保存）` +
@@ -23131,7 +23399,7 @@ async function saveCurrentArticleWorkspace() {
                 : offline?.disabled === true
                     ? (offline?.userChoice ? '；本次未保存网页正文' : '；设置中已关闭离线正文保存')
                     : offline?.error
-                        ? '；工作区已保存，但离线正文快照失败，请重试'
+                        ? (panelContext.pdfMode ? '；PDF 附件保存失败，请重试' : '；工作区已保存，但离线正文快照失败，请重试')
                         : '';
             showStatus(directoryConflicts
                 ? '文件写入已结束。检测到版本冲突，目录原文件保持不变；浏览器版本已另存到 conflicts 文件夹。请核对后再合并。'
@@ -23152,6 +23420,7 @@ async function saveCurrentArticleWorkspace() {
                 });
             }
         } catch (error) {
+            if (!sourceTab.isCurrent()) return;
             renderArticleWorkspaceSaveProgress({
                 operationId,
                 stage: activeStage,
@@ -23776,37 +24045,69 @@ async function initializeCurrentArticle({ retry = false } = {}) {
         retry ? (currentWorkspaceSnapshot?.title || '当前论文') : '正在连接当前论文…'
     );
     try {
-        const snapshot = await withPreparationDeadline((async () => {
-            renderArticleConnectionStage('正在生成本地标题层级与段落索引…');
-            let workspace = null;
-            let lastRefreshError = null;
-            const readinessDelays = retry ? [0, 250, 600] : [0, 250, 750, 1400];
-            for (const delay of readinessDelays) {
-                if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-                if (!isCurrent()) return null;
+        let snapshot = null;
+        let retries = 0;
+        let timeouts = 0;
+        let reconnects = 0;
+        initialization.reading = true;
+        const slowNotice = setTimeout(() => {
+            if (isCurrent() && !currentWorkspaceSnapshot && !readingNavigationPreview) {
+                const rows = globalThis.BrevessUnifiedReading?.liveVersion?.()?.state?.rows;
+                renderArticleConnectionStage(rows?.length ? '已读取大纲，正在准备正文与阅读记录…' : '正在读取正文，页面加载后会自动更新…');
+            }
+        }, 1500);
+        try {
+            while (isCurrent() && !snapshot) {
+                initialization.sourceChanged = false;
+                const attempt = new AbortController();
+                const attemptSignal = AbortSignal.any([signal, attempt.signal]);
                 try {
-                    workspace = await refreshArticleWorkspace({ throwOnError: true, forceRefresh: retry,
-                        panelContext: initialization.context, signal });
+                    snapshot = await withPreparationDeadline(refreshArticleWorkspace({
+                        throwOnError: true, forceRefresh: retry && retries === 0,
+                        panelContext: initialization.context, signal: attemptSignal
+                    }), 60000, error => attempt.abort(error));
                 } catch (error) {
-                    lastRefreshError = error;
-                    if (error?.code !== 'ARTICLE_PAGE_LOADING') throw error;
+                    if (!isCurrent()) return null;
+                    if (error?.code === 'ARTICLE_PREPARATION_TIMEOUT') {
+                        if (++timeouts > 1) throw error;
+                    } else if (error?.code !== 'ARTICLE_PAGE_LOADING') throw error;
+                    if (error?.reasonCode === 'ARTICLE_RECEIVER_RECONNECT') {
+                        if (++reconnects >= 4) throw new Error('网页读取连接已断开，可重新连接。');
+                    } else reconnects = 0;
                 }
-                if (!isCurrent()) return null;
-                if (workspace) break;
-                renderArticleConnectionStage('正文页面仍在加载，正在等待页面结构稳定…');
+                if (!snapshot && isCurrent()) {
+                    if (!currentWorkspaceSnapshot) renderArticleConnectionStage('正在读取正文，页面加载后会自动更新…');
+                    // A real source change wakes this attempt. The bounded backoff
+                    // also recovers when an update occurred just before subscribing.
+                    await new Promise(resolve => {
+                        const wake = () => {
+                            clearTimeout(timer);
+                            signal.removeEventListener('abort', wake);
+                            initialization.wake = null;
+                            resolve();
+                        };
+                        const timer = setTimeout(wake, Math.min(6000, 250 * 2 ** Math.min(retries++, 5)));
+                        initialization.wake = wake;
+                        signal.addEventListener('abort', wake, { once: true });
+                    });
+                }
             }
-            if (!workspace) throw lastRefreshError || new Error('当前页面结构不可用');
-            if (analysisMode !== 'llm') {
-                await refreshManualAnnotationSummary(initialization.context.tabId, { signal });
-                if (!isCurrent()) return null;
-                requestMatchCounts();
-            }
-            return workspace;
-        })(), 15000, error => controller.abort(error));
+        } finally {
+            initialization.reading = false;
+            clearTimeout(slowNotice);
+        }
         if (!isCurrent()) return null;
         // refreshArticleWorkspace already publishes this snapshot and restores
         // its UI state. A second render repeats Figure work and background reads.
         const panelContext = initialization.context;
+        if (initialization.sourceChanged) ensureArticleStructureRefreshCoordinator().enqueue(
+            {type: 'ARTICLE_STRUCTURE_CHANGED'}, panelContext.tabId, panelContext
+        );
+        if (analysisMode !== 'llm') {
+            void refreshManualAnnotationSummary(panelContext.tabId, { signal }).then(() => {
+                if (isCurrent()) requestMatchCounts();
+            }).catch(() => {});
+        }
         let pristineBaselineProof = null;
         const restored = await awaitArticlePreparationOperation(tryAutoRestoreCurrentArticleWorkspace(panelContext, {
             signal,
@@ -23849,14 +24150,12 @@ async function initializeCurrentArticle({ retry = false } = {}) {
         initialization.error = error;
         if (requestId !== articlePreparationSequence ||
             !isCurrentPanelContext(initialization.context)) return null;
-        renderArticleConnectionFailure(error);
-        showStatus(error?.code === 'ARTICLE_PAGE_LOADING'
-            ? '正文正在加载，完成后自动更新。'
-            :
-            `${error?.code === 'ARTICLE_PREPARATION_TIMEOUT' ? '正文提取超时' : '正文提取失败'}：` +
-            '可重新提取，或导出适配诊断包用于修复',
-            error?.code === 'ARTICLE_PAGE_LOADING' ? 'info' : 'error'
-        );
+        if (!currentWorkspaceSnapshot?.paragraphs?.length && !readingNavigationPreview) renderArticleConnectionFailure(error);
+        if (error?.code !== 'ARTICLE_BODY_UNAVAILABLE') {
+            const message = error?.code === 'ARTICLE_PREPARATION_TIMEOUT'
+                ? '完整阅读数据连接超时，可重新提取。' : String(error?.message || '当前页面结构不可用');
+            showStatus(message, 'error');
+        }
         return null;
     } finally {
         finishInitialization(initialization.ready && isCurrent());
@@ -24115,6 +24414,7 @@ function captureLiteratureNoteContext() {
         workspaceId,
         workspaceGeneration,
         target: target ? { ...target } : null,
+        paperSources: currentWorkspaceSnapshot?.paperSources || [],
         legacyKey: String(preparedDocumentState?.documentHash || '').trim().slice(0, 128)
     };
 }
@@ -24398,6 +24698,10 @@ async function loadLiteratureNoteDocumentState() {
         : mergeLiteratureNoteDocumentState(
             workspaceState, localState, new Set()
         );
+    for (const peer of loadContext.paperSources || []) {
+        const other = SciLLM.reconcileLiteratureNoteDocumentStates(peer.note, entries[peer.workspaceId] || entries[peer.documentHash]);
+        resolvedState = SciLLM.reconcileLiteratureNoteDocumentStates(other,resolvedState);
+    }
     if (!literatureNoteLoadGuard.isCurrent(loadIntent)) {
         return literatureNoteDocumentState;
     }
@@ -24521,6 +24825,8 @@ async function commitLiteratureNoteDocumentDelta({ delta, dirtyFields, context }
             });
             return {
                 ...workspaceResult,
+                state: (context.paperSources || []).reduce((state,peer)=>
+                    SciLLM.reconcileLiteratureNoteDocumentStates(peer.note,state),workspaceResult.state),
                 localState: committedState,
                 templateSelectionBase: localResponse.data.templateSelectionBase,
                 localPendingDelta: Object.freeze({
@@ -24869,6 +25175,12 @@ function decorateLiteratureNoteReferences(textarea, projection, createButton) {
 
 function resolveLiteratureNoteSourceFocus(textarea, id, noteContext) {
     if (!isCurrentLiteratureNoteContext(noteContext)) return null;
+    const peer = noteContext.paperSources?.find(s=>s.noteCitations?.[id]);
+    if (peer) {
+        const quote=peer.noteCitations[id];
+        return {verified:false,sectionTitle:peer.format === 'pdf' ? 'PDF 原文' : '网页原文',
+            target:{kind:'paper-quote',sourceHash:peer.documentHash,quote}};
+    }
     if (/^pdf-paragraph:[0-9a-f]{16}$/.test(id)) {
         const storedEvidence = literatureNoteDocumentState?.fieldEvidenceByTemplate
             ?.[literatureNoteDocumentState?.templateId]?.[textarea.dataset.literatureNoteField];
@@ -25849,7 +26161,9 @@ async function openLiteratureNoteDrawer({ activate = true } = {}) {
             Object.keys(values || {}).length) &&
         !literatureNoteDirtyFields.size && !literatureNoteDirtyRevisions.size &&
         !literatureNoteTemplateSelection;
-    if (!literatureNoteDocumentState || unloadedPlaceholder) await loadLiteratureNoteDocumentState();
+    const reloadPaper = currentWorkspaceSnapshot?.paperSources?.length && !literatureNoteDirtyFields.size &&
+        !literatureNoteDirtyRevisions.size && !literatureNoteTemplateSelection;
+    if (!literatureNoteDocumentState || unloadedPlaceholder || reloadPaper) await loadLiteratureNoteDocumentState();
     if (requestSequence !== literatureNoteOpenSequence || activeWorkspaceView !== 'notes' ||
         panelKey !== activePanelTabContext.key) return;
     renderLiteratureNoteDrawer();
@@ -26126,11 +26440,21 @@ function updateApplyButton() {
 }
 
 async function controlActiveAnalysis(scope, command) {
+    const context=capturePanelContext();
     const tab = await queryPanelTargetTab();
-    if (!tab?.id) throw new Error('无法获取当前论文页面');
+    if (!tab?.id || !isCurrentPanelContext(context) || tab.id !== context.tabId) throw new Error('论文已切换');
+    const pending = scope==='highlight' && sidebarBatchIntents.get(sidebarBatchKey('highlights',context));
+    if (pending?.busy && pending.analysisDispatched === false) {
+        pending.sourcePaused=command==='pause';
+        if (command==='cancel') {pending.stopRequested=true;pending.sourceController?.abort();}
+        if (!pending.sourcePaused) pending.sourceResume?.();
+        highlightTaskState={...highlightTaskState,running:command!=='cancel',paused:pending.sourcePaused,cancelled:command==='cancel'};
+        updateHighlightTaskControls();
+        return {success:true,active:command!=='cancel'};
+    }
     const sourceIntent = scope === 'figure'
         ? sidebarBatchIntents.get(sidebarBatchKey('figures', capturePanelContext())) : null;
-    if (sourceIntent && (sourceIntent.sourcePreparing || sourceIntent.sourcePhasePending)) {
+    if (sourceIntent && (sourceIntent.sourcePreparing || sourceIntent.sourcePhasePending || sourceIntent.busy && !sourceIntent.analysisDispatched)) {
         if (command === 'cancel') {
             await stopSidebarBatchIntent(sourceIntent);
         } else {
@@ -26182,7 +26506,8 @@ async function controlActiveAnalysis(scope, command) {
     try {
         response = await Promise.race([
             sendTabMessage(tab.id, {
-                action: 'controlLlmOperation', scope, command
+                action: 'controlLlmOperation', scope, command,
+                engine:scope==='highlight' ? highlightTaskState.engine : undefined
             }),
             new Promise(resolve => {
                 timer = setTimeout(() => resolve({
@@ -26228,29 +26553,34 @@ async function controlActiveAnalysis(scope, command) {
     return response;
 }
 
-function updateHighlightTaskControls() {
-    const controls = document.getElementById('highlightTaskControls');
-    const pause = document.getElementById('pauseHighlightAnalysis');
-    const cancel = document.getElementById('cancelHighlightAnalysis');
-    if (!controls || !pause || !cancel) return;
-    const active = highlightTaskState.running && !highlightTaskState.cancelled;
-    controls.hidden = !active;
-    pause.textContent = highlightTaskState.paused ? '继续分析' : '暂停分析';
-    pause.disabled = !active;
-    cancel.disabled = !active;
+function analysisShortcutAction(module, batchActive = false, task = null) {
+    if (module !== 'figures' && module !== 'highlights') return '';
+    const figure = module === 'figures';
+    const state = figure ? figureAnalysisState : highlightTaskState;
+    const active = figure ? hasRunningFigureProgress(state) : state.running && !state.cancelled;
+    if (!active && !batchActive) return '';
+    return state.paused || task?.status === 'paused' ? 'resume' : 'pause';
 }
 
-function updateFigureTaskControls() {
-    const controls = document.getElementById('figureTaskControls');
-    const pause = document.getElementById('pauseFigureAnalysis');
-    const cancel = document.getElementById('cancelFigureAnalysis');
-    if (!controls || !pause || !cancel) return;
-    const active = hasRunningFigureProgress(figureAnalysisState);
-    controls.hidden = !active;
-    pause.textContent = figureAnalysisState.paused ? '继续图解' : '暂停图解';
-    pause.disabled = !active;
-    cancel.disabled = !active;
+function renderAnalysisShortcut(button, action) {
+    const figure = button.dataset.batchShortcut === 'figures';
+    const label = action ? (action === 'pause' ? '暂停' : '继续') + (figure ? '图解' : '全文高亮')
+        : figure ? 'AI 解读全部图表' : 'AI 全文高亮';
+    if (!figure) button.disabled = !action && (regexApplyPending || preferenceMutationCoordinator.isPending());
+    button.dataset.analysisAction = action;
+    button.setAttribute('aria-busy', String(Boolean(action)));
+    button.setAttribute('aria-label', t(label));
+    button.title = action ? t(label) + ' · ' + t('右键可取消任务') : t(label);
+    if (action) button.setAttribute('aria-haspopup','menu');
+    else {
+        button.removeAttribute('aria-haspopup');
+        if (analysisMenuOwner === button) closeAnalysisMenu();
+    }
+    globalThis.BrevessAnalysisIcon?.(button, action);
 }
+
+function updateHighlightTaskControls() { renderSidebarBatchActions(); }
+function updateFigureTaskControls() { renderSidebarBatchActions(); }
 
 function updateFigureButton() {
     const figureButton = document.getElementById('analyzeFiguresFromFigures') ||
@@ -27720,6 +28050,12 @@ async function applyRegexOnTab(tabId, operationId = '') {
     const context = capturePanelContext();
     const categories = await fetchCurrentRegexRules(tabId);
     if (!isCurrentPanelContext(context) || isSidebarOperationStopping(operationId)) return { cancelled: true, notStarted: true };
+    const intent=sidebarBatchIntents.get(sidebarBatchKey('highlights',context));
+    await waitForAnalysisPreparationResume(intent);
+    if (!isCurrentPanelContext(context) || isSidebarOperationStopping(operationId)) return {cancelled:true,notStarted:true};
+    if (intent) intent.analysisDispatched=true;
+    highlightTaskState={operationId,engine:'regex',running:true,paused:false,cancelled:false};
+    updateHighlightTaskControls();
     return sendTabMessage(tabId, {
         action: 'applyHighlight',
         operationId,
@@ -29801,12 +30137,12 @@ async function prepareFigureAnalysisDeclaredSources({ operationId, submittedCont
     }
 }
 
-async function waitForFigureSourceResume(intent) {
+async function waitForAnalysisPreparationResume(intent) {
     if (!intent?.sourcePaused) return;
     const controller = intent.sourceController;
     const check = () => {
         if (intent.stopRequested || !isCurrentPanelContext(intent.context) ||
-            sidebarBatchIntents.get(sidebarBatchKey('figures', intent.context)) !== intent) controller?.abort();
+            sidebarBatchIntents.get(sidebarBatchKey(intent.module, intent.context)) !== intent) controller?.abort();
     };
     const onHide = () => controller?.abort();
     const monitor = setInterval(check, 150);
@@ -30047,7 +30383,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                 figureSourcePreflight = await prepareFigureAnalysisDeclaredSources({ operationId, submittedContext, taskToken, tab,
                     recoveryMaterialIds, expectedTarget, expectedDeclaredSources });
             }
-            await waitForFigureSourceResume(outerIntent);
+            await waitForAnalysisPreparationResume(outerIntent);
             if (!isCurrentPanelContext(submittedContext) || !isCurrentFigureTask(taskToken, tab.id) ||
                 isSidebarOperationStopping(operationId) || outerIntent?.sourceController?.signal.aborted ||
                 outerIntent && sidebarBatchIntents.get(sidebarBatchKey('figures', submittedContext)) !== outerIntent)
@@ -30087,7 +30423,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                             throw Object.assign(new Error('图解已取消，已完成结果会保留'), { code: 'CANCELLED' });
                     }
                 });
-                await waitForFigureSourceResume(outerIntent);
+                await waitForAnalysisPreparationResume(outerIntent);
                 if (!binding) throw Object.assign(new Error('文献绑定不可用，请刷新文献后重新解图'), {
                     code: 'FIGURE_DOCUMENT_BINDING_STALE', reasonCode: 'BINDING_UNAVAILABLE', stage: 'figure_runtime_binding', retryable: true });
                 if (!isCurrentFigureTask(taskToken, tab.id) || isSidebarOperationStopping(operationId) ||
@@ -30106,7 +30442,7 @@ async function runFigureAnalysis({ allFigures = false, operationId = '', trusted
                     { code: authorization?.error?.code });
                 figureUserResumeIntent = authorization.data?.figureUserResumeIntent || '';
             }
-            await waitForFigureSourceResume(outerIntent);
+            await waitForAnalysisPreparationResume(outerIntent);
             if (!isCurrentPanelContext(submittedContext) || !isCurrentFigureTask(taskToken, tab.id) ||
                 isSidebarOperationStopping(operationId) || outerIntent?.sourceController?.signal.aborted)
                 throw Object.assign(new Error('图解已取消，已完成结果会保留'), { code: 'CANCELLED' });
@@ -31569,14 +31905,18 @@ async function handleWorkspaceHighlightAnalysis({ operationId = '' } = {}) {
             }
             try {
                 prepareState = 'analyzing';
+                const intent=sidebarBatchIntents.get(sidebarBatchKey('highlights',submittedContext));
                 highlightTaskState = {
-                    running: true, paused: false, cancelled: false,
+                    operationId, running: true, paused: Boolean(intent?.sourcePaused), cancelled: false,
                     phase: 'preparing', completed: 0, total: 0
                 };
                 updateApplyButton();
                 showStatus('正在提取并分析全文，可在页面右下角查看进度', 'success');
                 await applyHighlightPresentationToPage({ persist: false });
                 if (!isCurrentPanelContext(submittedContext) || isSidebarOperationStopping(operationId)) return { notStarted: true, cancelled: true };
+                await waitForAnalysisPreparationResume(intent);
+                if (!isCurrentPanelContext(submittedContext) || isSidebarOperationStopping(operationId)) return {notStarted:true,cancelled:true};
+                if (intent) intent.analysisDispatched=true;
                 const response = await sendTabMessage(tab.id, {
                     action: 'analyzeArticleWithLLM',
                     documentId: preparedDocumentState.documentId,
@@ -31911,24 +32251,6 @@ function setupEventListeners() {
     document.getElementById('clearArticleChat')?.addEventListener('click', () => {
         void clearArticleChatHistory().catch(error =>
             showStatus('无法清空全文问答：' + error.message, 'error'));
-    });
-    document.getElementById('pauseHighlightAnalysis')?.addEventListener('click', () => {
-        const command = highlightTaskState.paused ? 'resume' : 'pause';
-        void controlActiveAnalysis('highlight', command)
-            .catch(error => showStatus('无法控制全文分析：' + error.message, 'error'));
-    });
-    document.getElementById('cancelHighlightAnalysis')?.addEventListener('click', () => {
-        void controlActiveAnalysis('highlight', 'cancel')
-            .catch(error => showStatus('无法取消全文分析：' + error.message, 'error'));
-    });
-    document.getElementById('pauseFigureAnalysis')?.addEventListener('click', () => {
-        const command = figureAnalysisState.paused ? 'resume' : 'pause';
-        void controlActiveAnalysis('figure', command)
-            .catch(error => showStatus('无法控制 Figure 解读：' + error.message, 'error'));
-    });
-    document.getElementById('cancelFigureAnalysis')?.addEventListener('click', () => {
-        void controlActiveAnalysis('figure', 'cancel')
-            .catch(error => showStatus('无法取消 Figure 解读：' + error.message, 'error'));
     });
     document.getElementById('generateReviewOutline')?.addEventListener('click', () => {
         void runReviewOutlineAnalysis({ forceRefresh: reviewOutlineState.hasOutline });

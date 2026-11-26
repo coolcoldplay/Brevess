@@ -4,6 +4,9 @@
   const open = document.getElementById('pdfPanelWorkspaceOpen');
   let target, timer, closeTimer, selection, gallery;
   const sizeKey = 'brevessFigurePreviewSize';
+  let previewSize;
+  chrome.storage.local.get(sizeKey).then(values=>{if(previewSize===undefined)previewSize=values[sizeKey];}).catch(()=>{});
+  chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local' && sizeKey in changes)previewSize=changes[sizeKey].newValue;});
   function validSize(value) {
     return value && [value.width, value.height].every(n => Number.isInteger(n) && n > 0 && n <= 16384);
   }
@@ -128,7 +131,7 @@
     target = badge;
     selection = selected;
     try {
-      const size = (await chrome.storage.local.get(sizeKey))[sizeKey];
+      const size = previewSize;
       if (selection !== selected || !scopeValid(scope)) return;
       await request(scope, 'showArticleFigurePreview', {
         size: validSize(size) ? size : null,
@@ -149,7 +152,7 @@
     if (target === info.badge) return;
     hide();
     target = info.badge;
-    timer = setTimeout(() => show(info), 160);
+    timer = setTimeout(() => show(info), 75);
   }
   function leave(e) {
     if (!target?.contains(e.target) || (e.relatedTarget instanceof Node && target.contains(e.relatedTarget)))

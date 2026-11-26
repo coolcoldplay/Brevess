@@ -70,6 +70,7 @@
     'core/manual-annotations.js',
     'core/web-reading-page.js',
     'core/cross-format-anchors.js',
+    'core/paper-reading.js',
     'core/cross-format-view.js',
     'core/pdf-native-document.js',
     'core/reading-tools.js',
@@ -117,8 +118,12 @@
   ];
   const CONTENT_STYLE_FILES = ['content.css', 'semantic-find.css', 'bilingual-translation.css', 'ui-theme.css'];
   const CONTENT_SCRIPT_REVISION =
-    '1.0.2-reading-tools-r10';
+    '1.0.2-reading-tools-r14';
   const CONTENT_SCRIPT_RELOADABLE_PREDECESSORS = new Set([
+    '1.0.2-reading-tools-r13',
+    '1.0.2-reading-tools-r12',
+    '1.0.2-reading-tools-r11',
+    '1.0.2-reading-tools-r10',
     '1.0.2-reading-tools-r9',
     '1.0.2-reading-tools-r8',
     '1.0.2-agent-input-r6',
@@ -335,6 +340,9 @@
     const documentIdentity = sameNavigationBinding(verified?.binding, binding)
       ? String(verified.documentIdentity || '') : '';
     if (!documentIdentity) throw receiverDocumentIdentityError();
+    if (options.expectedContentDocumentIdentity && options.expectedContentDocumentIdentity !== documentIdentity) {
+      throw staleNavigationError();
+    }
     return {
       ...message,
       expectedNavigationIdentity: binding.expectedUrl,
@@ -403,7 +411,7 @@
   async function inspectLiveContentRevision(chromeApi, tabId) {
     try {
       const results = await chromeApi.scripting.executeScript({
-        target: { tabId },
+        target: { tabId }, injectImmediately: true,
         func: () => String(
           document.documentElement?.dataset?.sciLlmContentRevision || ''
         )
@@ -459,6 +467,17 @@
         }
         return;
       }
+      // Reloading the extension leaves DOM attributes in existing tabs. A
+      // fresh isolated world can take over without reloading the user's page.
+      if (liveRevision === '1.0.2-reading-tools-r13') {
+        const [world] = await chromeApi.scripting.executeScript({
+          target: options.expectedDocumentId ? {tabId, documentIds: [options.expectedDocumentId]} : {tabId},
+          injectImmediately: true,
+          func: () => typeof readArticleWorkspaceSnapshot === 'undefined'
+        });
+        await assertMessageCurrent(chromeApi, tabId, guardedOptions);
+        if (world?.result === true) return;
+      }
       if (!CONTENT_SCRIPT_RELOADABLE_PREDECESSORS.has(liveRevision) ||
           typeof chromeApi.tabs.reload !== 'function') {
         // Minimal test/browser shims may omit reload. The subsequent business
@@ -488,41 +507,58 @@
 
   async function inspectContentInjection(chromeApi, target, claim, binding, owner = '', deferArticlePreindex = false) {
     const results = await chromeApi.scripting.executeScript({
-      target,
+      target, injectImmediately: true,
       func: (shouldClaim, claimKey, readyKey, bindingKeyName, expectedRevision,
         expectedBinding, expectedUrl, ownerKey, expectedOwner, deferPreindex) => {
-        const root = document.documentElement;
-        if (!root) return 'waiting';
-        let liveUrl = String(globalThis.location?.href || '');
-        try {
-          const parsed = new URL(liveUrl);
-          parsed.hash = '';
-          liveUrl = parsed.href;
-        } catch (_) {
-          liveUrl = liveUrl.replace(/#.*/, '');
+        // Content features mount UI in the body. A parser-blocking script later
+        // in the page should not hold an already readable article until idle.
+        if (shouldClaim && !document.body && document.readyState === 'loading') {
+          return new Promise(resolve => {
+            const mounted = new MutationObserver(() => { if (document.body) finish(); });
+            function finish() {
+              mounted.disconnect();
+              document.removeEventListener('DOMContentLoaded', finish);
+              resolve();
+            }
+            mounted.observe(document, { childList: true, subtree: true });
+            document.addEventListener('DOMContentLoaded', finish, { once: true });
+          }).then(inspect);
         }
-        if (expectedUrl && liveUrl !== expectedUrl) return 'stale';
-        if (!shouldClaim) {
-          return root.dataset[readyKey] === expectedRevision ? 'ready' : 'waiting';
+        return inspect();
+        function inspect() {
+          const root = document.documentElement;
+          if (!root) return 'waiting';
+          let liveUrl = String(globalThis.location?.href || '');
+          try {
+            const parsed = new URL(liveUrl);
+            parsed.hash = '';
+            liveUrl = parsed.href;
+          } catch (_) {
+            liveUrl = liveUrl.replace(/#.*/, '');
+          }
+          if (expectedUrl && liveUrl !== expectedUrl) return 'stale';
+          if (!shouldClaim) {
+            return root.dataset[readyKey] === expectedRevision ? 'ready' : 'waiting';
+          }
+          // ensureContentScript is reached only after a real message-receiver
+          // failure. A DOM revision marker can outlive an invalidated extension
+          // world after reload/update, so it must never suppress reinjection.
+          // The sidebar and worker have independent JS maps and caller bindings,
+          // but share this document. Neither may replace the other's active claim.
+          if (root.dataset[claimKey] === expectedRevision) {
+            return 'waiting';
+          }
+          delete root.dataset[readyKey];
+          delete root.dataset[bindingKeyName];
+          root.dataset[claimKey] = expectedRevision;
+          root.dataset[bindingKeyName] = expectedBinding;
+          root.dataset[ownerKey] = expectedOwner;
+          // A standalone search uses its own DOM index. Do not block its first
+          // paint on the unrelated full article preindex; explicit reader actions
+          // still use the existing warm/extract paths when needed.
+          globalThis.__brevessDeferArticlePreindex = deferPreindex === true;
+          return 'claimed';
         }
-        // ensureContentScript is reached only after a real message-receiver
-        // failure. A DOM revision marker can outlive an invalidated extension
-        // world after reload/update, so it must never suppress reinjection.
-        // The sidebar and worker have independent JS maps and caller bindings,
-        // but share this document. Neither may replace the other's active claim.
-        if (root.dataset[claimKey] === expectedRevision) {
-          return 'waiting';
-        }
-        delete root.dataset[readyKey];
-        delete root.dataset[bindingKeyName];
-        root.dataset[claimKey] = expectedRevision;
-        root.dataset[bindingKeyName] = expectedBinding;
-        root.dataset[ownerKey] = expectedOwner;
-        // A standalone search uses its own DOM index. Do not block its first
-        // paint on the unrelated full article preindex; explicit reader actions
-        // still use the existing warm/extract paths when needed.
-        globalThis.__brevessDeferArticlePreindex = deferPreindex === true;
-        return 'claimed';
       },
       args: [
         claim === true,
@@ -557,7 +593,7 @@
 
   async function setContentInjectionState(chromeApi, target, ready, binding, owner) {
     const results = await chromeApi.scripting.executeScript({
-      target,
+      target, injectImmediately: true,
       func: (isReady, claimKey, readyKey, bindingKeyName, expectedRevision,
         expectedBinding, expectedUrl, ownerKey, expectedOwner, documentPinned) => {
         const root = document.documentElement;
@@ -681,7 +717,7 @@
         await assertMessageCurrent(chromeApi, tabId, guardedOptions);
         await chromeApi.scripting.insertCSS({ target, files: CONTENT_STYLE_FILES });
         await assertMessageCurrent(chromeApi, tabId, guardedOptions);
-        await chromeApi.scripting.executeScript({ target, files: CONTENT_SCRIPT_FILES });
+        await chromeApi.scripting.executeScript({ target, injectImmediately: true, files: CONTENT_SCRIPT_FILES });
         await assertMessageCurrent(chromeApi, tabId, guardedOptions);
         await setContentInjectionState(chromeApi, target, true, binding, owner);
         await assertMessageCurrent(chromeApi, tabId, guardedOptions);
@@ -788,20 +824,23 @@
     }
   }
 
-  async function refreshFigureExtractorInTab(chromeApi, tabId) {
+  async function refreshFigureExtractorInTab(chromeApi, tabId, options = {}) {
     const numericTabId = Number(tabId);
     if (!Number.isInteger(numericTabId) || numericTabId < 0) {
       throw new Error('INVALID_TAB_ID');
     }
     if (chromeApi?.tabs && typeof chromeApi.tabs.get === 'function') {
-      await ensureCompatibleContentRevision(chromeApi, numericTabId);
+      await ensureCompatibleContentRevision(chromeApi, numericTabId, options);
     }
+    const target = options.expectedDocumentId ? {tabId: numericTabId, documentIds: [options.expectedDocumentId]} : {tabId: numericTabId};
+    await assertMessageCurrent(chromeApi, numericTabId, options);
     await chromeApi.scripting.executeScript({
-      target: { tabId: numericTabId },
+      target, injectImmediately: true,
       files: ['core/supplemental-materials.js', 'core/figure-extractor.js']
     });
+    await assertMessageCurrent(chromeApi, numericTabId, options);
     const results = await chromeApi.scripting.executeScript({
-      target: { tabId: numericTabId },
+      target, injectImmediately: true,
       func: expectedRevision => {
         const root = document.documentElement;
         if (root) root.dataset.sciLlmFigureExtractorRevision = expectedRevision;

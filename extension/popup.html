@@ -239,6 +239,7 @@
 
       <main class="workspace-main">
       <section id="workspace-navigation" class="workspace-view active" data-workspace-view="navigation" role="tabpanel" aria-labelledby="workspace-tab-navigation">
+        <div id="articleOutlineLoading" class="outline-loading" role="status" hidden></div>
         <div id="articleNavigationStatus" class="workspace-status">等待读取当前论文结构…</div>
         <div id="articleNavigationFocusStatus" class="workspace-navigation-focus-status"
           role="status" aria-live="polite" aria-atomic="true"></div>
@@ -247,10 +248,6 @@
 
       <section id="workspace-highlights" class="workspace-view" data-workspace-view="highlights" role="tabpanel" aria-labelledby="workspace-tab-highlights" hidden>
         <p id="highlightHeaderTaskStatus" class="module-task-status" role="status" aria-live="polite" hidden></p>
-        <div id="highlightTaskControls" class="analysis-task-controls" hidden>
-          <button id="pauseHighlightAnalysis" class="btn btn-secondary" type="button">暂停分析</button>
-          <button id="cancelHighlightAnalysis" class="btn btn-danger-outline" type="button">取消分析</button>
-        </div>
         <details id="highlightControls" class="highlight-controls">
           <summary><i class="ph ph-list-magnifying-glass" aria-hidden="true"></i><span>高亮设置与应用</span></summary>
       <div class="container">
@@ -386,10 +383,6 @@
         
         <p id="figureWorkspaceSummary" class="module-task-status" aria-live="polite"></p>
         <p id="figureHeaderTaskStatus" class="module-task-status" role="status" aria-live="polite" hidden></p>
-          <div id="figureTaskControls" class="analysis-task-controls" hidden>
-            <button id="pauseFigureAnalysis" class="btn btn-secondary" type="button">暂停图解</button>
-            <button id="cancelFigureAnalysis" class="btn btn-danger-outline" type="button">取消图解</button>
-          </div>
         <div id="figureWorkspace" class="figure-workspace">
           <div class="workspace-empty">正在从网页结构读取 Figure 与 Panel 目录…</div>
         </div>
@@ -914,7 +907,6 @@
 <script src="core/reading-focus-model.js"></script>
 <script src="reading-focus-ui.js"></script>
 <script src="unified-reading-ui.js"></script>
-<script src="same-paper-sidebar.js"></script>
 <script src="workspace-storage-choices.js"></script>
 <script src="web-filters-general/ux-context.js"></script>
 <script src="providers/provider-registry.js"></script>

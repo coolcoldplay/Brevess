@@ -14,6 +14,10 @@
   async function readImage(context,id) {
     const stored = await fromWorkspace(context.target,id);
     if (raster(stored)) return stored;
+    for (const peer of context.paperSources || []) {
+      const image = await fromWorkspace({workspaceId:peer.workspaceId,workspaceGeneration:peer.workspaceGeneration},id);
+      if (raster(image)) return image;
+    }
     const key = fallbackKey(id);
     const local = (await chrome.storage.local.get(key))[key];
     if (!raster(local)) throw Error('此笔记图片不可用');

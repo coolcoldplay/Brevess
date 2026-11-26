@@ -3848,6 +3848,26 @@
     const figureDispatchScheduler = figureConcurrency.createFigureDispatchScheduler();
     let memorySessionCategories = [];
     const documentIdsByHash = new Map();
+    const archivedPaperHighlights = new Map();
+    async function readArchivedPaperHighlights(source) {
+      if (!directorySync?.readCommittedArticleArchive) return null;
+      const key = source.documentId, cached=archivedPaperHighlights.get(key);
+      if (cached?.hash === source.documentHash && cached.expires > Date.now()) return cached.pending;
+      const pending = (async () => {
+        const saved = await directorySync.readCommittedArticleArchive(source);
+        if (!saved || saved.documentId !== key || saved.documentRecord?.documentId !== key ||
+            !(saved.documentHash === source.documentHash || source.sourceFormat === 'html' &&
+              source.documentHashes?.includes(saved.documentHash))) return null;
+        const workspace = saved.workspace;
+        if (!Array.isArray(workspace?.highlightDistribution?.rows)) return null;
+        return {updatedAt: Date.parse(saved.savedAt) || 0,
+          highlights: shared.paperHighlightSources(workspace.highlightDistribution, workspace.llm?.paragraphs || [])};
+      })().catch(() => null);
+      archivedPaperHighlights.delete(key);
+      archivedPaperHighlights.set(key,{hash:source.documentHash,expires:Date.now()+60000,pending});
+      if (archivedPaperHighlights.size>12) archivedPaperHighlights.delete(archivedPaperHighlights.keys().next().value);
+      return pending;
+    }
     let documentMutationTail = Promise.resolve();
     const operationRegistry = shared.createOperationRegistry?.();
     const runtimeOperations = shared.createOwnedRuntimeOperationBridge?.({ registry: operationRegistry, runtimeExtensionId });
@@ -6808,7 +6828,8 @@
       if(!isPlainObject(metadata))return null;
       let path='';try{path=new URL(document.canonicalUrl||document.url).pathname;}catch(_){}
       const title=String(metadata.title||document.title||'');
-      if(/supplement(?:ary|al)?|supporting[\s_-]+(?:information|material)|\b(?:esm|si[_-]file)\b|补充材料|补充信息/iu.test(title+' '+path+' '+String(metadata.opening||'')))return null;
+      if(/supplement(?:ary|al)?|supporting[\s_-]+(?:information|material)|\b(?:esm|si[_-]file)\b|补充材料|补充信息/iu.test(title+' '+path) ||
+         /^(?:(?:nature|science|cell)\s+)?(?:online\s+)?(?:supplement(?:ary|al)?\s+(?:information|material|appendix|methods|figures?|tables?)|supporting\s+(?:information|material)|补充材料|补充信息)\b/iu.test(String(metadata.opening||'').trim()))return null;
       let evidence='';
       if(nativeIdentity){
         const p=metadata.pdfDoiEvidence;
@@ -6896,9 +6917,13 @@
       }
       documentIdsByHash.set(documentHash, documentId);
       const legacyStudyType = settings.studyTypeOverrides?.[documentHash]?.studyType;
+      const verifiedPaper = automaticPaperIdentity(document,documentHash,nativeIdentity,htmlIdentity);
+      const paperWorkspace = verifiedPaper && await shared.createArticleWorkspaceIdentity({
+        canonicalUrl:document.canonicalUrl || document.url,doi:verifiedPaper.doi});
       const input = {
         schemaVersion: 1,
         documentId,
+        ...(paperWorkspace ? {paperWorkspaceId:paperWorkspace.workspaceId} : {}),
         title: document?.title || '',
         ...(annotationSourceUrl ? { annotationSourceUrl } : {}),
         canonicalUrl: document?.canonicalUrl || document?.url || '',
@@ -6910,7 +6935,7 @@
         documentHashes: [...new Set([documentHash, paragraphDocumentHash])],
         ...(shared.normalizeCrossFormatPaperDoi?.(document?.doi) ? { doi: shared.normalizeCrossFormatPaperDoi(document.doi) } : {}),
         sourceFormat: nativeIdentity ? 'pdf' : 'html',
-        automaticPaperIdentity: automaticPaperIdentity(document,documentHash,nativeIdentity,htmlIdentity),
+        automaticPaperIdentity: verifiedPaper,
         ...(htmlIdentity ? { sourceIdentity: `library-html:sha256:${documentHash}` } : {}),
         ...(nativeIdentity ? { nativePdfRevision: nativeIdentity.revision } : {}),
         legacyStudyTypeMigrated: true
@@ -16417,8 +16442,10 @@
           if (!page.hasMore || Number(page.nextSequence) <= afterSequence) break;
           afterSequence = Number(page.nextSequence);
         }
+        const pdfAttachments = message.includePdfAttachments === true
+          ? await context.mirrorReaderPdfAttachments(workspace, message.documentId) : [];
         return {
-          mirrored: true,
+          mirrored: true, pdfAttachments,
           permission: overview.permission,
           queued,
           unchanged
@@ -17189,7 +17216,7 @@
         }
         assertWorkspaceMutationGeneration(workspace, message);
         const tombstone = await articleWorkspaceStore.deleteTurn(
-          workspace.workspaceId, message.turnId
+          workspace.workspaceId, message.turnId, {paperTurn: message.paperTurn === true}
         );
         if (typeof directorySync?.enqueueWorkspaceAsset === 'function') {
           const filename = encodeURIComponent(String(message.turnId || '')).slice(0, 240);
@@ -18395,6 +18422,7 @@
         await runtimeOperation?.runtimeAssertCurrent();
         archiveWriteStarted = true;
         await directorySync.enqueueJson(relativePath, archive);
+        archivedPaperHighlights.delete(archive.documentId);
         await runtimeOperation?.runtimeAssertCurrent();
         if (runtimeOperation) runtimeOperations.update(runtimeOperation,'completed',{
           committedIds:runtimeOperation.runtimeTask.capture().scopeIds,saveConfirmed:true});
@@ -19474,9 +19502,11 @@
         // The browser sender owns the URL; a web page cannot request another
         // conversation's annotations by putting its URL into a message.
         const sourceUrl = await verifiedAnnotationSourceUrl(context, message.sourceUrl, 'sourceUrl');
-        const record = await documentStore.findAnnotatedSource(sourceUrl);
+        const doi = shared.normalizeCrossFormatPaperDoi?.(message.paperDoi);
+        const result = doi && documentStore.findPageAnnotations ? await documentStore.findPageAnnotations(sourceUrl, doi) :
+          { record: await documentStore.findAnnotatedSource(sourceUrl) };
         await verifiedAnnotationSourceUrl(context, sourceUrl, 'sourceUrl');
-        return { record };
+        return result;
       }
 
       if (message.type === 'DOCUMENT_GET') {
@@ -19486,18 +19516,40 @@
       }
 
       if (message.type === 'DOCUMENT_PAPER_SOURCES') {
-        return { records: await documentStore.listPaperDocuments(String(message.documentId || '')) };
+        const id = String(message.documentId || '');
+        const records = await documentStore.listPaperDocuments(id);
+        if (message.includeReading !== true) return {records};
+        const target = await documentStore.getDocument(id);
+        if (!target || target.documentHash !== message.documentHash) return {records:[],editions:[]};
+        if (!context.trustedExtensionSender || typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings(['owner']);
+        await context.assertTrustedOwnerCurrent();
+        const readAsset = async (id,relativePath) => {
+          const candidates=await articleWorkspaceStore.readPublicAssetCandidates(id,{relativePath});
+          return publicWorkspaceAssets(candidates).find(a=>a.relativePath===relativePath) || null;
+        };
+        const editions = await shared.readPaperEditions(target,records,{workspaceStore:articleWorkspaceStore,publicTurn:publicStoredArticleChatTurn,readAsset,readArchivedHighlights:readArchivedPaperHighlights});
+        await context.assertTrustedOwnerCurrent();
+        return {records,editions};
       }
 
-      if (['CROSS_FORMAT_LINK', 'CROSS_FORMAT_NOTE_EDIT', 'CROSS_FORMAT_SOURCE_ROLE'].includes(message.type)) {
+      if (['CROSS_FORMAT_LINK', 'CROSS_FORMAT_NOTE_EDIT', 'CROSS_FORMAT_NOTE_DELETE', 'CROSS_FORMAT_SOURCE_ROLE'].includes(message.type)) {
         return serializeDocumentMutation(async () => {
           if (!isPlainObject(message.input)) throw invalidSettings(['input']);
           if (typeof context.assertTrustedOwnerCurrent !== 'function') throw invalidSettings(['owner']);
           await context.assertTrustedOwnerCurrent();
-          const input = { ...message.input, operation: message.type === 'CROSS_FORMAT_SOURCE_ROLE' ? 'role' : message.type === 'CROSS_FORMAT_NOTE_EDIT' ? 'edit'
+          const input = { ...message.input, operation: message.type === 'CROSS_FORMAT_SOURCE_ROLE' ? 'role' : message.type === 'CROSS_FORMAT_NOTE_EDIT' ? 'edit' : message.type === 'CROSS_FORMAT_NOTE_DELETE' ? 'delete'
             : message.input.operation === 'state' ? 'state' : 'link' };
+          if (input.operation === 'edit' && input.categoryId) {
+            const { categoryMap } = await loadAllCategories(await shared.loadSettings(storageArea));
+            const category = categoryMap[input.categoryId];
+            if (!category) throw invalidSettings(['categoryId']);
+            input.categorySnapshot = shared.makeCategorySnapshot(category);
+          }
           const result = await documentStore.crossFormatOperation(input, context.assertTrustedOwnerCurrent);
-          if (result.changedRecord) await mirrorDocumentRecord(result.changedRecord);
+          if (result.changedRecord) {
+            if (['edit', 'delete'].includes(input.operation)) context.onAnnotationCommitted?.(result.changedRecord);
+            await mirrorDocumentRecord(result.changedRecord);
+          }
           return { association: result.association, ...(result.record ? { record: result.record } : {}) };
         });
       }
@@ -19521,7 +19573,8 @@
             const identity = await context.assertLibraryHtmlCurrent();
             if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
           }
-          const record = await documentStore.upsertAnnotation(documentId, trustedAnnotation);
+          const record = await documentStore.upsertAnnotation(documentId, trustedAnnotation, undefined, message.expectedUpdatedAt);
+          context.onAnnotationCommitted?.(record);
           await mirrorDocumentRecord(record);
           return {
             record,
@@ -19544,7 +19597,8 @@
             const identity = await context.assertLibraryHtmlCurrent();
             if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
           }
-          const record = await documentStore.deleteAnnotation(documentId, annotationId);
+          const record = await documentStore.deleteAnnotation(documentId, annotationId, message.expectedUpdatedAt);
+          context.onAnnotationCommitted?.(record);
           await mirrorDocumentRecord(record);
           return { record };
         });
@@ -19559,6 +19613,7 @@
             if (identity.documentId !== documentId) throw invalidSettings(['documentId']);
           }
           const record = await documentStore.clearAnnotations(documentId);
+          context.onAnnotationCommitted?.(record);
           await mirrorDocumentRecord(record);
           return { record };
         });

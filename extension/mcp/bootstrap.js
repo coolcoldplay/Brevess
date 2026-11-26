@@ -97,6 +97,19 @@ async function verifyService(port, options) {
   return { ...status, port };
 }
 
+async function verifyInstalledService(port, options, root, descriptor) {
+  try { return await verifyService(port, options); }
+  catch (error) {
+    if (error.code !== 'SERVICE_RESTART_REQUIRED' || !descriptor) throw error;
+    let active;
+    try { active = JSON.parse(fs.readFileSync(path.resolve(root,'../../active.json'),'utf8')); } catch { throw error; }
+    const pin=active.retiringService;
+    if (active.payloadRoot!==root || !pin || pin.pid!==descriptor.pid || pin.port!==port ||
+        pin.revision!==descriptor.revision || !/^[a-f0-9]{64}$/.test(pin.revision)) throw error;
+    return verifyService(port, {...options,revision:pin.revision});
+  }
+}
+
 function writeDescriptor(file, value) {
   const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
@@ -124,7 +137,7 @@ async function ensureService(parsed) {
       try { descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
       const port = parsed.port || descriptor?.port;
       if (Number.isInteger(port) && port > 0 && port <= 65535) {
-        try { return { ...await verifyService(port, options), token: options.token, stateDir: parsed.stateDir, created: !!child }; }
+        try { return { ...await verifyInstalledService(port, options, root, descriptor), token: options.token, stateDir: parsed.stateDir, created: !!child }; }
         catch (error) {
           if (error.code !== 'ECONNREFUSED') throw error;
         }
@@ -179,4 +192,4 @@ async function selfCheck(connection) {
 }
 
 module.exports = { IDENTITY, BOOTSTRAP_VERSION, runtimeFiles, runtimeRevision, proofFor, statusFields,
-  requestJson, verifyService, ensureService, selfCheck, writeDescriptor };
+  requestJson, verifyService, verifyInstalledService, ensureService, selfCheck, writeDescriptor };

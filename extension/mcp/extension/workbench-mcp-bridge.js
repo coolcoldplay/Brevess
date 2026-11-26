@@ -202,7 +202,9 @@
   async function request(pathname, body, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs || NORMAL_POLL_TIMEOUT_MS);
-    options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    const abort = () => controller.abort();
+    options.signal?.addEventListener('abort', abort, {once:true});
+    if (options.signal?.aborted) abort();
     try {
       const response = await fetch(`${config.server}${pathname}`, {
         method: 'POST',
@@ -228,13 +230,14 @@
       return value;
     } finally {
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abort);
     }
   }
 
   function bridgeMeta(extensionVersion) {
     return {
       clientId,
-      name: 'BREVESS Workbench',
+      name: host()?.name || 'BREVESS Workbench',
       extensionVersion,
       protocolVersion: PROTOCOL_VERSION,
       platform: navigator.platform || root.navigator?.platform || ''
@@ -308,7 +311,9 @@
     const started = Date.now();
     try {
       let result;
-      if (['ppt.prepare', 'ppt.status', 'ppt.get_manifest', 'ppt.read_chunk', 'ppt.cancel', 'mechanism.read_context', 'mechanism.list_evidence', 'mechanism.apply_commands', 'mechanism.read_receipt',
+      if (!root.document) {
+        result = await hostApi.execute(job.name, job.args, {signal:controller.signal});
+      } else if (['ppt.prepare', 'ppt.status', 'ppt.get_manifest', 'ppt.read_chunk', 'ppt.cancel', 'mechanism.read_context', 'mechanism.list_evidence', 'mechanism.apply_commands', 'mechanism.read_receipt',
         'brevess.request_document_write_scope', 'brevess.revoke_document_write_scope'].includes(job.name)) {
         const response = await chrome.runtime.sendMessage({ type: 'BREVESS_DOCUMENT_AGENT_CALL', name: job.name,
           args: job.args || {}, meta: job.hostOptions || {} });
@@ -451,7 +456,7 @@
     let backoff = 1000;
     while (!signal.aborted && generation === myGeneration) {
       try {
-        const job = await request('/bridge/poll', bridgeMeta(extensionVersion), { signal });
+        const job = await request('/bridge/poll', {...bridgeMeta(extensionVersion), ...(firstPoll ? {hello:true} : {})}, { signal });
         if (signal.aborted || generation !== myGeneration) return;
         if (!['idle', 'call', 'reconnect'].includes(job?.type) || job?.bridge?.id !== clientId || job?.bridge?.protocolVersion !== PROTOCOL_VERSION) {
           throw error('MCP_BRIDGE_RECEIPT_INVALID', 'The extension registration receipt is invalid.');
@@ -554,7 +559,8 @@
         const aborted = () => reject(error('CANCELLED', 'The MCP bridge was stopped.'));
         signal.addEventListener('abort', aborted, { once: true });
         const finish = fn => value => { signal.removeEventListener('abort', aborted); fn(value); };
-        void workLoop(myGeneration, extensionVersion, { resolve: finish(resolve), reject: finish(reject) });
+        const loop = workLoop(myGeneration, extensionVersion, { resolve: finish(resolve), reject: finish(reject) });
+        if (!root.document) void root.SciLLM.keepAliveUntil(loop, chrome);
       });
       void controlLoop(myGeneration, extensionVersion);
       await ready;
@@ -605,6 +611,5 @@
   const api = { connect, disconnect, status, probe, configKey: CONFIG_KEY };
   root.BrevessMcpBridge = api;
   emitStatus('unpaired');
-  ensureClientId().catch(() => {});
-  connect().catch(() => {});
+  if (root.document) connect().catch(() => {});
 })(globalThis);

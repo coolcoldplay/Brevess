@@ -164,10 +164,30 @@
         'repeat(' + Math.ceil(Math.sqrt(images.length)) + ',minmax(0,1fr))';
       for (const item of images) {
         const img = document.createElement('img');
+        img.decoding = 'async';
         img.alt = [data.name, item.label].filter(Boolean).join(' ');
+        const current = () => preview === v && v.owner === page() && img.isConnected;
         img.onload = place;
+        img.onerror = async () => {
+          if (!current()) return;
+          img.onerror = null;
+          const original = !label && !item.original && images.length === 1 &&
+            await reader.fallbackPreviewOriginal?.(figureId).catch(() => null);
+          if (!current()) return;
+          if (original) img.src = original.dataUrl;
+          else { img.remove(); caption.textContent = '预览图片未能加载'; }
+        };
         img.src = item.dataUrl;
         v.el('section').append(img);
+        if (!label && !item.original && images.length === 1) {
+          reader.restorePreviewOriginal?.(figureId).then(async original => {
+            if (!original || !current() || img.src === original.dataUrl) return;
+            const decoded = new Image();
+            decoded.src = original.dataUrl;
+            await decoded.decode();
+            if (current()) img.src = original.dataUrl;
+          }).catch(() => {});
+        }
       }
       ask.disabled = false;
       place();

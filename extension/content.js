@@ -12,7 +12,7 @@
 
 // 内容脚本 - 在网页上执行高亮
 document.documentElement.dataset.sciLlmContentRevision =
-    '1.0.2-reading-tools-r10';
+    '1.0.2-reading-tools-r14';
 
 function canonicalArticlePreindexUrl(value = globalThis.location?.href || '') {
     return String(value || '').replace(/#.*/, '');
@@ -376,6 +376,8 @@ class SciPaperHighlighter {
         const operation = this.regexOperation;
         if (!operation || operation.task.snapshot().terminal) return;
         operation.cancelled = true;
+        operation.paused = false;
+        operation.waiters.splice(0).forEach(resume => resume());
         if (!operation.task.snapshot().cancelRequested) operation.task.requestCancel(operation.task.capture());
     }
 
@@ -398,7 +400,7 @@ class SciPaperHighlighter {
             module:'highlights',documentId:contentDocumentIdentity,documentGeneration:native?.documentGeneration || 0,
             workspaceLifecycle:lifecycle,scopeIds,
             inputSignature:hashArticleChatParagraphText(JSON.stringify(categories)),configSignature:String(options.analysisModeId || 'regex-default')});
-        const operation = {operationId:task.capture().operationId,epoch,workspaceLifecycle:lifecycle,cancelled:false,startedAt:Date.now(),task};
+        const operation = {operationId:task.capture().operationId,epoch,workspaceLifecycle:lifecycle,cancelled:false,paused:false,waiters:[],startedAt:Date.now(),task};
         this.regexOperation = operation;
         const guard = () => {
             assertCurrentArticleWorkspaceLifecycle(lifecycle);
@@ -409,6 +411,7 @@ class SciPaperHighlighter {
         try {
             update('running');let step,index=0;
             do {
+                while (operation.paused) await waitForLocalOperation(operation);
                 guard();step=iterator.next();
                 if(!step.done && ++index % 24===0) {await new Promise(resolve=>setTimeout(resolve,0));guard();}
             } while(!step.done);
@@ -4416,7 +4419,17 @@ async function sendLlmOperationControlWithDeadline(operationOrId, command, timeo
     }
 }
 
-async function controlLlmOperation(scope, command) {
+async function controlLlmOperation(scope, command, engine = '') {
+    const regex = scope === 'highlight' && highlighter.regexOperation;
+    if (engine === 'regex' || regex && !regex.task.snapshot().terminal && !llmOperationState.active) {
+        if (!regex || regex.task.snapshot().terminal || regex.workspaceLifecycle !== articleWorkspaceLifecycleGeneration) return {success:true,active:false};
+        if (command === 'cancel') highlighter.cancelRegexOperation();
+        else {
+            regex.paused = command === 'pause';
+            if (!regex.paused) regex.waiters.splice(0).forEach(resume => resume());
+        }
+        return {success:true,active:!regex.cancelled,paused:regex.paused};
+    }
     const operation = scope === 'figure'
         ? figureOperationState.active : llmOperationState.active;
     if (!operation) return { success: true, active: false };
@@ -6661,7 +6674,7 @@ document.addEventListener('brevess:reading-sources-changed', () => {
     }, 180);
 });
 
-function getManualDocumentInputAndBlocks() {
+function getManualDocumentInputAndBlocks({forceRefresh = false} = {}) {
     const saved = activeSavedArticleDocument();
     if (saved) return { input: { ...saved.source, savedWorkspaceIdentity: { ...saved.binding },
         paragraphs: saved.structure.paragraphs.map(({element, ...record}) => record) },
@@ -6708,7 +6721,7 @@ function getManualDocumentInputAndBlocks() {
             blocks
         };
     }
-    const extracted = extractArticleWithTrace('manual_annotations');
+    const extracted = extractArticleWithTrace('manual_annotations', {forceRefresh});
     const paragraphs = extracted.map(({ sourceIndex, ...paragraph }) => paragraph);
     const blocks = paragraphs.map(paragraph => {
         const element = findManualBlockElement(paragraph.paragraphId);
@@ -6765,7 +6778,7 @@ async function sendManualMessage(message, options = {}) {
             message.annotation?.sourceType !== 'regex') await admitArticleWorkspacePersistence();
         const response = await chrome.runtime.sendMessage(message);
         if (!response?.success) {
-            const error = new Error(response?.error?.message || '手动标注操作失败');
+            const error = new Error(response?.error?.code === 'STALE_ANNOTATION' ? '原批注已在另一处修改，请重新打开后编辑' : response?.error?.message || '手动标注操作失败');
             error.code = String(response?.error?.code || 'MANUAL_MESSAGE_FAILED');
             throw error;
         }
@@ -7008,7 +7021,8 @@ function syncNativePdfAnnotationSources(records = currentManualDocument?.record?
 document.addEventListener('brevess:pdf-page-rendered', () => syncNativePdfAnnotationSources());
 
 function updateCurrentManualRecord(record) {
-    if (!currentManualDocument || !record) return;
+    if (!currentManualDocument || !record || record.documentId !== currentManualDocument.documentId ||
+        record.revision < currentManualDocument.record?.revision) return;
     currentManualDocument = { ...currentManualDocument, documentCreationToken: undefined, record };
     scheduleArticleWorkspaceArtifactsSave({ immediate: true });
     notifyManualAnnotationStateChanged('mutated');
@@ -7732,17 +7746,16 @@ function releaseSelectionAfterManualAction() {
     clearManualBrowserSelection();
 }
 
-async function saveManualAnnotation(annotation, { openNote = false } = {}) {
+async function saveManualAnnotation(annotation, { openNote = false, expectedUpdatedAt } = {}) {
     const documentId = currentManualDocument?.documentId;
     if (!documentId) return null;
     const response = await sendManualMessage({
         type: 'ANNOTATION_UPSERT',
-        documentId,
-        annotation
+        documentId, annotation, expectedUpdatedAt
     });
     if (currentManualDocument?.documentId !== documentId) return null;
     updateCurrentManualRecord(response.record);
-    restoreManualAnnotations(response.record.annotations);
+    restoreManualAnnotations(currentManualDocument.record.annotations);
     scheduleCurrentArticleArchiveSave();
     const mark = document.querySelector(
         `.sci-manual-highlight[data-annotation-id="${manualCssEscape(annotation.annotationId)}"],` +
@@ -7911,7 +7924,7 @@ async function createManualAnnotation(category, openNote = false) {
                     annotationId
                 });
                 updateCurrentManualRecord(response.record);
-                restoreManualAnnotations(response.record.annotations);
+                restoreManualAnnotations(currentManualDocument.record.annotations);
             } catch (_) {
                 // Preserve the original failure; a later reload reconciles the saved record.
             }
@@ -8143,6 +8156,16 @@ async function runManualSelectionLlmAction(action, descriptor, controls = []) {
 async function saveSelectionSurfaceAnnotations(surface, category, note) {
     if (!surface.canMutate() || !category) throw new Error('页面正文已变化或标注尚未就绪，请重新选择文字');
     const descriptor = surface.descriptor;
+    if (descriptor.paperRow) {
+        const row = descriptor.paperRow;
+        const record = await crossFormatNoteAction('edit', row, { note,
+            ...(category.categoryId !== row.source.categoryId ? { categoryId:category.categoryId } : {}) });
+        const updated = record?.annotations.find(item => item.annotationId === row.annotationId);
+        if (!updated || !surface.current()) throw Error('当前文献已变化');
+        descriptor.paperRow = { ...row, source:{...row.source,...updated}, text:updated.note };
+        surface.annotations = [updated];
+        return;
+    }
     const segments = descriptor.anchorSegments?.length
         ? descriptor.anchorSegments : [{ blockId: descriptor.blockId, anchor: descriptor.anchor }];
     const now = new Date().toISOString();
@@ -8159,13 +8182,14 @@ async function saveSelectionSurfaceAnnotations(surface, category, note) {
     // Retain these IDs on partial failure: retry updates the same anchors, never duplicates them.
     for (const annotation of surface.annotations) {
         if (!surface.validSource()) throw new Error('页面正文已变化，请重新选择文字');
-        Object.assign(annotation, {
+        const input = { ...annotation,
             categoryId: category.categoryId,
             categorySnapshot: { name: category.name, color: category.color },
             note, updatedAt: now
-        });
-        const saved = await saveManualAnnotation(annotation);
+        };
+        const saved = await saveManualAnnotation(input, { expectedUpdatedAt:annotation.updatedAt });
         if (!saved || !surface.current()) throw new Error('当前文献已变化，已停止保存');
+        Object.assign(annotation, saved);
     }
 }
 
@@ -8226,15 +8250,16 @@ function locateSharedHighlightNote(source, { scroll = true } = {}) {
     return block;
 }
 
-const crossFormatLocalView = { sequence: 0, generation: 0, rows: [], documentId: '', navigation: '', panel: null, view: null };
+const crossFormatLocalView = { sequence: 0, generation: 0, rows: [], documentId: '', navigation: '', view: null, sourceReads: new Map(), sourceRevisions: new Map() };
 
 function stopCrossFormatLocalView() {
     crossFormatLocalView.sequence++;
     crossFormatLocalView.generation++;
     crossFormatLocalView.rows = [];
     crossFormatLocalView.documentId = '';
+    crossFormatLocalView.textIndex = null;
     crossFormatLocalView.view?.destroy(); crossFormatLocalView.view = null;
-    crossFormatLocalView.panel?.destroy(); crossFormatLocalView.panel = null;
+    crossFormatLocalView.sourceReads.clear(); crossFormatLocalView.sourceRevisions.clear();
 }
 
 function currentCrossFormatTarget() {
@@ -8247,14 +8272,37 @@ function currentCrossFormatTarget() {
 async function crossFormatTargetBlocks() {
     const native = globalThis.__brevessNativePdfDocument;
     if (activeNativePdfStructure()) return native.readCrossFormatBlocks();
+    if (currentManualBlocks.some(block => block.element && !block.element.isConnected)) {
+        currentManualBlocks = getManualDocumentInputAndBlocks({forceRefresh:true}).blocks;
+        manualUiLifecycle.retain({blocks:currentManualBlocks});
+    }
     const seen = new Set();
     const blocks = currentManualBlocks.filter(block => block.element?.isConnected && !seen.has(block.element) && seen.add(block.element));
-    return blocks.filter(block => !blocks.some(other => other !== block && block.element.contains(other.element)))
+    const containers = new Set();
+    for (const {element} of blocks) {
+        for (let parent=element.parentElement;parent;parent=parent.parentElement) {
+            if (containers.has(parent)) break;
+            if (seen.has(parent)) containers.add(parent);
+        }
+    }
+    return blocks.filter(block => !containers.has(block.element))
         .sort((a, b) => a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
         .map(block => ({ ...block, text: manualReadableText(block.element), separatorBefore: '\n\n' }));
 }
 
-async function resolveCrossFormatRow(row, blocks, relations = new Map()) {
+function paperTextIndex(blocks) {
+    const owner = currentManualDocument?.documentId;
+    const cached = crossFormatLocalView.textIndex;
+    if (cached && cached.owner === owner && cached.blocks.length === blocks.length &&
+        cached.blocks.every((old,i)=>old.blockId===blocks[i].blockId && old.text===blocks[i].text && old.separatorBefore===blocks[i].separatorBefore)) {
+        return cached.index;
+    }
+    const index = SciLLM.prepareCrossFormatText(blocks);
+    crossFormatLocalView.textIndex = {owner,index,blocks:blocks.map(({blockId,text,separatorBefore})=>({blockId,text,separatorBefore}))};
+    return index;
+}
+
+async function resolveCrossFormatRow(row, blocks, relations = new Map(), index = null, previous = null) {
     try {
         const normalize = hash => String(hash || '').replace(/^sha256:/iu, '').toLowerCase();
         if (normalize(row.source.documentHash) === normalize(sharedNoteDocumentHash())) {
@@ -8275,45 +8323,242 @@ async function resolveCrossFormatRow(row, blocks, relations = new Map()) {
         const key = JSON.stringify(row.linkInput);
         if (!relations.has(key)) relations.set(key, await sendManualMessage({ type: 'CROSS_FORMAT_LINK', input: row.linkInput }));
         row.association = relations.get(key).association;
+        if (row.source.truncated) {row.reason='旧记录只保留了引文的开头';row.location=null;return row;}
+        // A note or palette change does not move a quotation. Reuse the resolved
+        // offsets only for the same text index, anchors and still-active link.
+        row.textIndex = index;
+        if (previous && index && previous.textIndex === index && previous.location &&
+            row.association.state === 'active' && previous.association?.state === 'active' &&
+            row.association.revision === previous.association.revision &&
+            previous.source.documentHash === row.source.documentHash && previous.source.truncated === row.source.truncated &&
+            manualAnnotationSourceIdentity(previous.source) === manualAnnotationSourceIdentity(row.source)) {
+            row.location = previous.location; row.reason = previous.reason;
+            return row;
+        }
         row.location = SciLLM.locateCrossFormatAnnotation({ association: row.association, expectedRevision: row.association.revision,
-            source, target, scope: row.scope, annotation: row.source, blocks });
+            source, target, scope: row.scope, annotation: row.source, blocks },index || (blocks.length ? paperTextIndex(blocks) : null));
         row.reason = row.association.state === 'revoked' ? '已停止跨原件显示' : row.location.status !== 'located' ? '引文不唯一或在当前原件中未找到' : '';
     } catch (error) { row.reason = '来源身份尚未确认，不能跨原件定位'; row.location = null; }
     return row;
 }
 
-async function refreshLocalCrossFormatNotes() {
-    const record = currentManualDocument?.record;
-    if (!record) return;
-    const state = crossFormatLocalView, sequence = ++state.sequence;
-    if (state.documentId !== record.documentId || state.navigation !== contentNavigationIdentity()) {
-        state.rows = []; state.view?.clear(); state.panel?.clear();
+let paperReadingCache = null;
+let paperReadingRefreshTimer = null;
+let projectedChatIds = new Set();
+
+async function currentPaperReading(record = currentManualDocument?.record) {
+    const empty = {records:[],editions:[]};
+    if (!record || !SciLLM.paperReadingKey?.(record)) return empty;
+    const key = JSON.stringify([record.documentId,record.documentHash,articleWorkspaceLifecycleGeneration,contentNavigationIdentity()]);
+    if (paperReadingCache?.key === key) return paperReadingCache.pending;
+    const entry = {key};
+    entry.pending = sendManualMessage({type:'DOCUMENT_PAPER_SOURCES', documentId:record.documentId,
+        documentHash:record.documentHash,includeReading:true}).then(result => {
+        if (paperReadingCache !== entry) return currentPaperReading(currentManualDocument?.record);
+        entry.data=result;
+        return result;
+    }).catch(() => { if (paperReadingCache === entry) paperReadingCache=null; return empty; });
+    paperReadingCache=entry;
+    return entry.pending;
+}
+
+// Do not block reading this original on another edition's disk archive.
+function availablePaperReadingForSidebar(record) {
+    if (!record || !SciLLM.paperReadingKey?.(record)) return {records: [], editions: []};
+    const pending = currentPaperReading(record);
+    const entry = paperReadingCache;
+    if (entry && !entry.data && !entry.notifySidebar) {
+        entry.notifySidebar = true;
+        void pending.then(reading => {
+            if (paperReadingCache === entry && currentManualDocument?.documentId === record.documentId &&
+                currentManualDocument.record.documentHash === record.documentHash && reading.editions?.length) {
+                publishPaperViewChanged();
+            }
+        }).catch(() => {});
     }
-    state.documentId = record.documentId; state.navigation = contentNavigationIdentity();
-    const current = () => sequence === state.sequence && state.documentId === currentManualDocument?.documentId && state.navigation === contentNavigationIdentity();
-    const latest = await sendManualMessage({ type: 'DOCUMENT_GET', documentId: record.documentId });
-    if (!current() || !latest.record) return;
-    currentManualDocument.record = latest.record;
-    renderCrossFormatNotes();
-    const result = await sendManualMessage({ type: 'DOCUMENT_PAPER_SOURCES', documentId: record.documentId });
-    if (!current()) return;
-    let blocks = [];
-    try { blocks = await crossFormatTargetBlocks(); } catch (_) { state.message = '原件文字暂不可用，保留笔记列表供查阅。'; }
-    if (!current()) return;
-    const rows = [], relations = new Map();
-    for (const sourceRecord of result.records || []) {
-        for (const annotation of sourceRecord.annotations || []) {
-            const row = { key: `local:${sourceRecord.documentId}:${annotation.annotationId}`, local: true,
-                sourceDocumentId: sourceRecord.documentId, annotationId: annotation.annotationId,
-                source: { ...annotation, documentHash: sourceRecord.documentHash, doi: sourceRecord.doi, format: sourceRecord.sourceFormat, role: SciLLM.automaticCrossFormatRole(sourceRecord) },
-                text: annotation.note, scope: { kind: 'local' } };
-            await resolveCrossFormatRow(row, blocks, relations);
-            if (!current()) return;
-            rows.push(row);
+    return entry?.data || null;
+}
+
+function restorePaperChat(reading, record) {
+    if (articleChatState.loading || articleChatClearInFlight || articleChatMutationLocks.size || articleWorkspaceSaveFrozen) return;
+    const editions = reading.editions || [];
+    if (!editions.length && !projectedChatIds.size) return;
+    const {removed,chosen} = SciLLM.mergePaperTurns(editions,record.documentId);
+    const turns = new Map(articleChatState.turns.filter(turn=>!removed.has(turn.turnId) && !projectedChatIds.has(turn.turnId))
+        .map(turn=>[turn.turnId,turn]));
+    const projected = new Set();
+    for (const [id,{turn,createdAt,edition,remote}] of chosen) {
+        const live = turns.get(id);
+        if (live && live.updatedAt >= turn.updatedAt) continue;
+        // A model job belongs to the document that started it. The other edition
+        // displays its saved answer without adopting execution or page offsets.
+        const restored = publicArticleChatTurn({...turn,createdAt});
+        if (remote) {
+            projected.add(id);
+            for (const block of restored.answerBlocks) {
+                block.evidence = block.evidence.map(item=>({...item,documentHash:item.documentHash || edition.documentHash}));
+            }
+            delete restored.presentation; delete restored.readerJob;
         }
+        if (['generating','queued','waiting_agent'].includes(restored.status) && (remote || restored.status!=='waiting_agent')) {
+            restored.status='interrupted';
+            restored.operationId='';
+        }
+        turns.set(id,restored);
     }
+    projectedChatIds=projected;
+    articleChatState={...articleChatState,turns:[...turns.values()].sort((a,b)=>a.createdAt-b.createdAt || a.turnId.localeCompare(b.turnId))};
+}
+
+function projectPaperSnapshot(snapshot, reading) {
+    const id = currentManualDocument?.documentId;
+    const editions = reading?.editions || [];
+    if (!editions.some(e=>e.documentId!==id) && !crossFormatLocalView.rows.length) return snapshot;
+    const figures = SciLLM.projectPaperFigures(snapshot.figures,editions,id);
+    const projected = crossFormatLocalView.documentId === id ? crossFormatLocalView.rows.filter(r=>r.association?.state==='active') : [];
+    if (projected.length) {
+        const local = snapshot.highlightDistribution || {};
+        const occurrences=[...(local.unresolved || []),...(local.rows || []).flatMap(r=>Object.values(r.cells || {}).flatMap(c=>c.items || []))];
+        const pdf=activeNativePdfStructure() ? currentNativePdfHighlightSnapshot()?.structure : null;
+        const structure=pdf || {nodes:snapshot.nodes,paragraphs:snapshot.paragraphs};
+        const byId=new Map();
+        for (const p of snapshot.paragraphs || []) {byId.set(p.paragraphId,p); if(p.sourceKey) byId.set(p.sourceKey,p);}
+        for (const row of projected) {
+            const f=row.location?.fragments?.[0] || {}, page=/^pdf-source-(\d+)-item-/u.exec(f.blockId)?.[1];
+            const p=byId.get(f.blockId), source=row.source;
+            occurrences.push({highlightId:'paper:'+row.key,paragraphId:p?.paragraphId || '',
+                sectionId:page ? 'pdf-highlight-page:'+page : p?.sectionId || '',quote:source.quote,note:row.text,
+                source:source.engine || 'manual',categoryId:source.categoryId || 'note',
+                categoryName:source.categorySnapshot?.name || source.categoryName || '备注',
+                color:source.categorySnapshot?.color || source.color || '#e3b83b'});
+        }
+        snapshot.highlightDistribution=SciLLM.buildHighlightDistribution(structure,occurrences);
+    }
+    return {...snapshot,figures,figureWorkspaceDraft:figures?.draft,
+        paperSources:editions.filter(e=>e.documentId!==id).map(e=>({documentHash:e.documentHash,
+            documentId:e.documentId,workspaceId:e.workspaceId,workspaceGeneration:e.workspaceGeneration,note:e.note,format:e.format,
+            noteCitations:e.noteCitations || {},boundHash:e.boundHash,summaries:e.summaries || []}))};
+}
+
+async function focusPaperQuote(target) {
+    const current = captureCrossFormatActionCurrent(null);
+    const reading = await currentPaperReading();
+    const edition = reading.editions?.find(e=>e.documentId!==currentManualDocument?.documentId && [e.documentHash,e.boundHash].includes(target.sourceHash));
+    const source = reading.records.find(r=>r.documentId===edition?.documentId);
+    if (!current() || !source || !reading.editions.some(e=>e.documentId===source.documentId) || !target.quote) return false;
+    const row = {local:true,sourceDocumentId:source.documentId,scope:{kind:'local'},source:{quote:target.quote,
+        prefix:target.prefix || '',suffix:target.suffix || '',documentHash:source.documentHash,doi:source.doi,
+        format:source.sourceFormat,role:SciLLM.automaticCrossFormatRole(source)}};
+    await resolveCrossFormatRow(row,await crossFormatTargetBlocks());
+    if (!current() || row.location?.status!=='located') return false;
+    await focusCrossFormatRow(row,current);
+    const ranges = crossFormatRowParts(row).map(p=>p.range);
+    if (ranges.length && globalThis.Highlight && CSS.highlights) {
+        const name='brevess-paper-citation', highlight=new Highlight(...ranges);
+        let style=document.getElementById('sci-paper-citation-style');
+        if (!style) {style=document.createElement('style');style.id='sci-paper-citation-style';style.textContent='::highlight(brevess-paper-citation){background:#f3d779;color:#171717}';document.head.append(style);}
+        CSS.highlights.set(name,highlight);
+        setTimeout(()=>{if(CSS.highlights.get(name)===highlight) CSS.highlights.delete(name);},2400);
+    }
+    return true;
+}
+
+function acceptCurrentAnnotationRecord(record) {
+    const previous = currentManualDocument?.record;
+    if (!previous || record?.documentId !== previous.documentId || record.revision < previous.revision) return;
+    currentManualDocument.record = record;
+    if (previous.revision !== record.revision && JSON.stringify(previous.annotations) !== JSON.stringify(record.annotations)) {
+        restoreManualAnnotations(record.annotations);
+        notifyManualAnnotationStateChanged('mutated');
+    }
+}
+
+async function paperAnnotationRows(record, annotations, blocks, relations, index, derived = false) {
+    const role = SciLLM.automaticCrossFormatRole(record);
+    const previous = new Map(crossFormatLocalView.rows.filter(row => row.sourceDocumentId === record.documentId)
+        .map(row => [row.annotationId, row]));
+    const rows = [];
+    for (const annotation of annotations) {
+        const row = { derived, key: `local:${record.documentId}:${annotation.annotationId}`, local: true,
+            sourceDocumentId: record.documentId, annotationId: annotation.annotationId,
+            source: { ...annotation, documentHash: record.documentHash, doi: record.doi, format: record.sourceFormat, role },
+            text: annotation.note || (derived ? annotation.categoryName : '') || '', scope: { kind: 'local' } };
+        rows.push(await resolveCrossFormatRow(row, blocks, relations, index, previous.get(row.annotationId)));
+    }
+    return rows;
+}
+
+async function refreshPaperAnnotationSource(documentId, { record, force = false } = {}) {
+    const target = currentManualDocument?.record, state = crossFormatLocalView;
+    if (!target || !documentId) return;
+    const currentOwner = captureCrossFormatActionCurrent();
+
+    record ||= (await sendManualMessage({type:'DOCUMENT_GET', documentId})).record;
+    if (!record || !currentOwner()) return;
+    if (target.documentId === documentId) {
+        acceptCurrentAnnotationRecord(record);
+        return;
+    }
+    const doi = SciLLM.paperReadingKey(target);
+    if (!doi || SciLLM.paperReadingKey(record) !== doi || record.sourceFormat === target.sourceFormat) return;
+    const previous = state.sourceRevisions.get(documentId);
+    if (previous > record.revision || !force && previous === record.revision ||
+        state.sourceReads.get(documentId)?.revision > record.revision) return;
+    const ticket = { revision:record.revision };
+    state.sourceReads.set(documentId, ticket);
+    const current = () => currentOwner() && state.sourceReads.get(documentId) === ticket;
+    const blocks = record.annotations?.length ? await crossFormatTargetBlocks() : [];
     if (!current()) return;
-    state.rows = rows; renderCrossFormatNotes();
+    const rows = await paperAnnotationRows(record, record.annotations || [], blocks, new Map(), blocks.length ? paperTextIndex(blocks) : null);
+    if (!current() || state.sourceRevisions.get(documentId) > record.revision) return;
+    state.sourceRevisions.set(documentId, record.revision);
+    state.rows = [...state.rows.filter(row => row.derived || row.sourceDocumentId !== documentId), ...rows];
+    renderCrossFormatNotes();
+}
+
+async function refreshLocalCrossFormatNotes() {
+    const record = currentManualDocument?.record, state = crossFormatLocalView;
+    if (!record) return;
+    if (state.documentId !== record.documentId || state.navigation !== contentNavigationIdentity()) stopCrossFormatLocalView();
+    state.documentId = record.documentId;
+    state.navigation = contentNavigationIdentity();
+    const owner = captureCrossFormatActionCurrent(), sequence = ++state.sequence;
+    const current = () => owner() && state.sequence === sequence;
+    if (!SciLLM.paperReadingKey(record)) {
+        state.rows = []; state.sourceRevisions.clear(); state.sourceReads.clear(); state.view?.clear();
+        return;
+    }
+    const [own, peers] = await Promise.all([
+        sendManualMessage({type:'DOCUMENT_GET',documentId:record.documentId}),
+        sendManualMessage({type:'DOCUMENT_PAPER_SOURCES',documentId:record.documentId})
+    ]);
+    if (!current()) return;
+    acceptCurrentAnnotationRecord(own.record);
+    // Unmounted or revoked editions must lose their projections. Use each
+    // edition's newest committed revision if a live update overtakes discovery.
+    const doi = SciLLM.paperReadingKey(currentManualDocument.record);
+    const records = peers.records.filter(peer => doi && SciLLM.paperReadingKey(peer) === doi && peer.sourceFormat !== record.sourceFormat);
+    const ids = new Set(records.map(peer => peer.documentId));
+    state.rows = state.rows.filter(row => ids.has(row.sourceDocumentId));
+    await Promise.all(records.map(peer => refreshPaperAnnotationSource(peer.documentId, { record: peer, force: true })));
+    if (!current()) return;
+    renderCrossFormatNotes();
+    const reading = await currentPaperReading(currentManualDocument.record);
+    if (!current()) return;
+    const editions = new Map((reading.editions || []).map(edition => [edition.documentId, edition]));
+    const sources = records.filter(peer => editions.get(peer.documentId)?.highlights?.length);
+    const blocks = sources.length ? await crossFormatTargetBlocks() : [];
+    if (!current()) return;
+    const index = blocks.length ? paperTextIndex(blocks) : null, relations = new Map();
+    const projected = [];
+    for (const peer of sources) {
+        const nativeIds = new Set(peer.annotations.map(annotation => annotation.annotationId));
+        const auto = editions.get(peer.documentId).highlights.filter(item => !nativeIds.has(item.nativeAnnotationId));
+        projected.push(...await paperAnnotationRows(peer, auto, blocks, relations, index, true));
+        if (!current()) return;
+    }
+    state.rows = [...state.rows.filter(row => !row.derived), ...projected];
+    renderCrossFormatNotes();
 }
 
 function crossFormatRowParts(row) {
@@ -8322,7 +8567,7 @@ function crossFormatRowParts(row) {
         const match = /^pdf-source-(\d+)-item-\d+$/u.exec(fragment.blockId || '');
         let range;
         if (match) {
-            const layer = document.querySelector(`[data-pdf-page-number="${Number(match[1])}"]`);
+            const layer = globalThis.__brevessPdfReaderBridge?.command?.('getPageProjection',Number(match[1]))?.textLayer;
             range = SciLLM.pdfCrossFormatFragmentRange(layer, { pageNumber: Number(match[1]), fragment });
         } else {
             const block = currentManualBlocks.find(item => item.blockId === fragment.blockId);
@@ -8335,19 +8580,25 @@ function crossFormatRowParts(row) {
 function renderCrossFormatNotes() {
     document.getElementById('sci-cross-format-notes')?.remove();
     const state = crossFormatLocalView, record = currentManualDocument?.record;
-    if (!record || !SciLLM.createCrossFormatNotesPanel) return;
-    const rows = [...state.rows, ...(sharedHighlightNoteView.rows || [])];
+    if (!record || !SciLLM.createCrossFormatHighlightView) return;
     const current = () => state.documentId === currentManualDocument?.documentId && state.navigation === contentNavigationIdentity();
     if (!current()) return;
-    state.panel ||= SciLLM.createCrossFormatNotesPanel({ document, onReveal: () => {
-      try { return chrome.runtime.sendMessage({type:'BREVESS_SAME_PAPER_REVEAL',url:location.href,contentWorldNonce}).catch(()=>{}); } catch (_) {}
-    } });
+    const rows = [...state.rows, ...(sharedHighlightNoteView.rows || [])].filter(row =>
+        (typeof visibleHighlightSources === 'undefined' || visibleHighlightSources.has(
+            row.source.engine || (row.source.sourceType === 'regex' ? 'regex' : 'manual'))));
     state.view ||= SciLLM.createCrossFormatHighlightView({ document, name: 'brevess-cross-notes', isCurrent: current,
-        onOpen: row => row.local ? state.panel.reveal() : crossFormatNoteAction('thread', row) });
-    state.panel.show({ rows, role: SciLLM.automaticCrossFormatRole(record),
-        needsRole: Boolean(SciLLM.normalizeCrossFormatPaperDoi(record.doi) && !SciLLM.automaticCrossFormatRole(record)),
-        message: state.message || (record.sourceRole === 'supplement' ? '当前原件已标为补充材料，保留独立批注。' :
-            !state.view.available ? '当前浏览器不支持文中高亮；仍可从此列表阅读笔记和评论。' : '') });
+        pastelColor: pastelManualColor, rewrite: withArticleStructureInternalRewriteRoots, readParts: crossFormatRowParts,
+        onOpen: (row, location, rect) => {
+            if (!row.local) return crossFormatNoteAction('thread', row);
+            const live = state.rows.find(item => item.key === row.key);
+            if (!live || live.association?.state !== 'active') return;
+            if (live.derived) {
+                showManualStatus(live.text || live.source.quote, 'info');
+                return;
+            }
+            openManualAnnotationSurface(live.source, {getBoundingClientRect: () => rect}, null, live);
+        }
+    });
     state.view.show(rows.map(row => ({ row, location: row.location, parts: crossFormatRowParts(row) })));
 }
 
@@ -8370,7 +8621,7 @@ function captureCrossFormatActionCurrent(row) {
 async function crossFormatNoteAction(action, row, value) {
     const state = crossFormatLocalView, documentId = currentManualDocument?.documentId;
     const current = captureCrossFormatActionCurrent(row);
-    if (row && ![...state.rows, ...(sharedHighlightNoteView.rows || [])].some(item => action === 'edit' ? item.key === row.key : item === row)) throw Error('笔记已刷新，请重新选择');
+    if (row && ![...state.rows, ...(sharedHighlightNoteView.rows || [])].some(item => ['edit', 'delete'].includes(action) ? item.key === row.key : item === row)) throw Error('笔记已刷新，请重新选择');
     if (!current()) throw Error('文献已变化');
     if (action === 'role') {
         const { record } = await sendManualMessage({ type: 'DOCUMENT_GET', documentId });
@@ -8380,13 +8631,24 @@ async function crossFormatNoteAction(action, row, value) {
     } else if (action === 'association') {
         await sendManualMessage({ type: 'CROSS_FORMAT_LINK', input: { ...row.linkInput, operation: 'state',
             state: row.association.state === 'active' ? 'revoked' : 'active', expectedAssociationRevision: row.association.revision } });
-    } else if (action === 'edit') {
+    } else if (action === 'edit' || action === 'delete') {
+        if (!row.local || row.derived || row.association?.state !== 'active') throw Error('当前标注无法修改');
         const latest = await sendManualMessage({ type: 'DOCUMENT_GET', documentId: row.sourceDocumentId });
         if (!current()) return;
         const original = latest.record?.annotations.find(item => item.annotationId === row.annotationId);
-        if (!original || original.note !== row.text || original.quote !== row.source.quote || original.updatedAt !== row.source.updatedAt) throw Error('原批注已被修改，请刷新后重新编辑');
-        await sendManualMessage({ type: 'CROSS_FORMAT_NOTE_EDIT', input: { ...row.linkInput, annotationId: row.annotationId,
-            expectedDocumentRevision: latest.record.revision, expectedAssociationRevision: row.association.revision, note: value } });
+        if (!original || manualAnnotationSourceIdentity(original) !== manualAnnotationSourceIdentity(row.source) ||
+            original.note !== row.text || original.categoryId !== row.source.categoryId || original.updatedAt !== row.source.updatedAt)
+            throw Error('原批注已被修改，请重新打开后编辑');
+        const change = typeof value === 'string' ? {note:value} : value;
+        const {record} = await sendManualMessage({ type: action === 'delete' ? 'CROSS_FORMAT_NOTE_DELETE' : 'CROSS_FORMAT_NOTE_EDIT',
+            input: { ...row.linkInput, annotationId: row.annotationId, expectedDocumentRevision: latest.record.revision,
+                expectedAssociationRevision: row.association.revision, ...change } });
+        if (current()) {
+            paperReadingCache = null;
+            await refreshPaperAnnotationSource(record.documentId, {record, force:true});
+            publishPaperViewChanged();
+        }
+        return record;
     } else if (action === 'thread') {
         const auth = await globalThis.BrevessSharingClient.getSession();
         if (!current() || !sharedHighlightNoteView.enabled || JSON.stringify([auth.endpoint, auth.user?.id]) !== row.account) throw Error('来源或账号已变化');
@@ -8410,6 +8672,7 @@ async function crossFormatNoteAction(action, row, value) {
         return focusCrossFormatRow(fresh, current);
     }
     if (!current()) return;
+    paperReadingCache = null;
     await refreshLocalCrossFormatNotes();
     if (current() && sharedHighlightNoteView.enabled) await refreshSharedHighlightNotes(sharedHighlightNoteView.generation);
 }
@@ -8625,6 +8888,11 @@ function appendManualNoteSharingControls(host, surface, note, announce, translat
 
 function selectionSurfaceExistingAnnotationCurrent(descriptor) {
     const original = descriptor.existingAnnotation;
+    if (descriptor.paperRow) {
+        const live = crossFormatLocalView.rows.find(row => row.key === descriptor.paperRow.key);
+        return live?.association?.state === 'active' && live.location?.status === 'located' &&
+            manualAnnotationSourceIdentity(live.source) === manualAnnotationSourceIdentity(original);
+    }
     const current = original && manualAnnotationById(original.annotationId);
     if (!current || manualAnnotationSourceIdentity(current) !== manualAnnotationSourceIdentity(original)) return false;
     if (!original.pdfAnchor) return true;
@@ -8633,10 +8901,12 @@ function selectionSurfaceExistingAnnotationCurrent(descriptor) {
         SciLLM.pdfAnchorMatchesDocument?.(original.pdfAnchor, native?.structure?.documentHash || '') === true;
 }
 
-function openManualAnnotationSurface(annotation, mark, llmMark) {
+function openManualAnnotationSurface(annotation, mark, llmMark, paperRow = null) {
+    const fragment = paperRow?.location?.fragments?.[0];
     showManualSelectionToolbar({
         documentId: currentManualDocument?.documentId || '', existingAnnotation: { ...annotation },
-        text: annotation.quote || '', anchor: { ...annotation }, openNote: true, llmMark,
+        text: annotation.quote || '', anchor: fragment ? { ...fragment, quote:annotation.quote } : { ...annotation },
+        blockId:fragment?.blockId, openNote: true, llmMark, paperRow,
         pdfDocumentGeneration: Number(globalThis.__brevessNativePdfDocument?.documentGeneration) || 0,
         rect: mark.getBoundingClientRect(), validation: { valid: true }
     });
@@ -8663,7 +8933,7 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
     const speechLease = Object.freeze({ selectionId: automaticAnnotationId('selection'),
         documentId: toolbarDescriptor.documentId, navigationIdentity, workspaceLifecycle });
     const existingAnnotation = toolbarDescriptor.existingAnnotation;
-    const draftKey = existingAnnotation && manualAnnotationDraftKey(toolbarDescriptor.documentId, existingAnnotation.annotationId);
+    const draftKey = existingAnnotation && manualAnnotationDraftKey(toolbarDescriptor.paperRow?.sourceDocumentId || toolbarDescriptor.documentId, existingAnnotation.annotationId);
     let selectedCategory = existingAnnotation ? manualCategoryById(existingAnnotation.categoryId) || {
         categoryId: existingAnnotation.categoryId, ...existingAnnotation.categorySnapshot
     } : toolbarDescriptor.initialCategory || null;
@@ -8860,8 +9130,6 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
         if (toolbarDescriptor.readOnly && !toolbarDescriptor.pendingAnnotation && mode !== 'translation') tab.disabled = true;
         tab.addEventListener('click', () => switchMode(mode));
     }
-    const close = button('×', 'sci-selection-close', '关闭选区工具');
-    close.addEventListener('click', closeManualSelectionToolbar); rail.appendChild(close);
     body.append(content, rail); toolbar.append(top, speechStatus, body, status);
 
     const translationResult = node('div', 'sci-selection-translation-result', '仅翻译所选文字，论文文本在本机处理。');
@@ -8971,8 +9239,15 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
             if (saving || !surface.validSource()) return;
             saving = true; remove.disabled = true; save.disabled = true;
             try {
+                if (toolbarDescriptor.paperRow) {
+                    await crossFormatNoteAction('delete', toolbarDescriptor.paperRow);
+                    manualAnnotationDrafts.delete(draftKey);
+                    if (surface.current()) closeManualSelectionToolbar();
+                    return;
+                }
                 const response = await sendManualMessage({ type: 'ANNOTATION_DELETE',
-                    documentId: toolbarDescriptor.documentId, annotationId: existingAnnotation.annotationId });
+                    documentId: toolbarDescriptor.documentId, annotationId: existingAnnotation.annotationId,
+                    expectedUpdatedAt:surface.annotations[0].updatedAt });
                 // A durable ACK belongs to the document, not the transient editor.
                 // Closing/replacing the surface must not leave a deleted mark locally.
                 if (currentManualDocument?.documentId !== toolbarDescriptor.documentId ||
@@ -8982,7 +9257,7 @@ function showManualSelectionToolbar(descriptor, { event: selectionEvent } = {}) 
                 updateCurrentManualRecord(response.record);
                 if (surface.current() || currentManualSelectionUi?.descriptor.existingAnnotation?.annotationId ===
                     existingAnnotation.annotationId) closeManualSelectionToolbar();
-                restoreManualAnnotations(response.record.annotations); scheduleCurrentArticleArchiveSave();
+                restoreManualAnnotations(currentManualDocument.record.annotations); scheduleCurrentArticleArchiveSave();
                 showManualStatus('手动标注已删除', 'success');
             } catch (error) { announce('删除失败：' + error.message, true, 'note'); }
             finally { saving = false; remove.disabled = false; save.disabled = false; }
@@ -9479,7 +9754,7 @@ function appendManualEditor(popover, annotation, mark, focusNote) {
             });
             if (currentManualDocument?.documentId !== documentId) return;
             updateCurrentManualRecord(response.record);
-            restoreManualAnnotations(response.record.annotations);
+            restoreManualAnnotations(currentManualDocument.record.annotations);
             scheduleCurrentArticleArchiveSave();
             showManualStatus('手动标注已删除', 'success');
         } catch (error) {
@@ -9980,7 +10255,7 @@ function startManualPageRestoreObserver() {
     if (manualPageRestoreObserver || !document.body) return;
     manualPageRestoreObserver = new MutationObserver(records => {
         if (manualPageRestoreCheckedHref === effectiveArticlePageUrl() &&
-            !manualPageRestoreHint && !currentManualDocument?.record?.annotations?.length) return;
+            !manualPageRestoreHint && !currentManualDocument?.record?.annotations?.length && !crossFormatLocalView.rows.length) return;
         if (!records.some(record => !manualClosest(record.target, MANUAL_UI_SELECTOR + ',' + MANUAL_BLOCKED_SELECTOR))) return;
         clearTimeout(manualPageRestoreTimer);
         manualPageRestoreTimer = setTimeout(() => {
@@ -9995,8 +10270,14 @@ function startManualPageRestoreObserver() {
                     void prepareManualDocument({ force: true }).catch(() => {});
                 return;
             }
-            if (manualPointerSelecting || currentManualSelectionUi?.current() ||
-                !currentManualDocument?.record?.annotations?.length) return;
+            if (manualPointerSelecting || currentManualSelectionUi?.current()) return;
+            if (crossFormatLocalView.rows.length && (crossFormatLocalView.view?.needsRebind() ||
+                currentManualBlocks.some(block => block.element && !block.element.isConnected))) {
+                currentManualBlocks = getManualDocumentInputAndBlocks({forceRefresh:true}).blocks;
+                manualUiLifecycle.retain({blocks:currentManualBlocks});
+                void refreshLocalCrossFormatNotes().catch(() => {});
+            }
+            if (!currentManualDocument?.record?.annotations?.length) return;
             // Appending an answer or moving a cursor must not scan the whole
             // conversation. Rebind only if React removed/changed a saved mark.
             const missing = currentManualDocument.record.annotations.some(annotation => {
@@ -10031,10 +10312,11 @@ async function restoreSavedPageAnnotations() {
         manualPreparedHref = '';
     }
     try {
-        const response = await sendManualMessage({ type: 'DOCUMENT_FIND_ANNOTATED_SOURCE', sourceUrl: href });
+        const paperDoi = pageMetadataPaperDoi();
+        const response = await sendManualMessage({ type: 'DOCUMENT_FIND_ANNOTATED_SOURCE', sourceUrl: href, paperDoi });
         if (effectiveArticlePageUrl() !== href || manualPageRestoreCheckedHref !== href) return;
-        if (!response?.record?.annotations?.length) return;
-        manualPageRestoreHint = { href, record: response.record };
+        if (!response?.record?.annotations?.length && !response?.hasPaperAnnotations) return;
+        if (response.record) manualPageRestoreHint = { href, record: response.record };
         await prepareManualDocument({ force: true, throwOnError: true });
         if (effectiveArticlePageUrl() === href) startManualPageRestoreObserver();
     } catch (_) { /* Read-only lookup failure never blocks the selection tools. */ }
@@ -13926,12 +14208,19 @@ function figureOriginalResourceScope(figure) {
     return { pageIdentity, figureId: figure.figureId, originalImages, current, key };
 }
 
-async function readStoredOriginalForFigure(figure,original) {
+async function readStoredOriginalForFigure(figure,original,previewReceipt = null) {
     const index=await getWorkspaceAssetCheckpoint('figures/originals/index.json');
     const imageIndex=Array.from(figure.imageElements||[]).indexOf(original.image);
     const entry=index?.content?.entries?.find(item=>item.figureId===figure.figureId&&item.imageIndex===imageIndex);
-    if(!entry||!await SciLLM.matchFigureOriginalAsset(entry,{pageUrl:figureOriginalDisplaySourceUrl(),
-        documentHash:getCanonicalArticleSnapshot().documentHash,figureId:figure.figureId,imageIndex,
+    const pageUrl = figureOriginalDisplaySourceUrl();
+    // View-only previews can outlive a text revision (e.g. a publisher consent banner).
+    // Require the very same saved bytes, page, source and slot before using that revision.
+    const sameViewedImage = previewReceipt && entry && previewReceipt.sha256 === entry.sha256 &&
+        previewReceipt.pageUrl === pageUrl && previewReceipt.figureId === figure.figureId &&
+        previewReceipt.imageIndex === imageIndex && previewReceipt.sourceIdentity === original.sourceIdentity;
+    const documentHash = sameViewedImage ? previewReceipt.documentHash : getCanonicalArticleSnapshot().documentHash;
+    if(!entry||!await SciLLM.matchFigureOriginalAsset(entry,{pageUrl,
+        documentHash,figureId:figure.figureId,imageIndex,
         sourceIdentity:original.sourceIdentity,candidates:SciLLM.collectFigureImageCandidates(original.image,document.baseURI),
         savedReader:!!activeSavedArticleDocument()}))return null;
     const asset=await getWorkspaceAssetCheckpoint(entry.assetPath);
@@ -14362,10 +14651,15 @@ async function showFigureImageViewer(figureId, {
     label.setAttribute('aria-live', 'polite');
     const qualityLabel = document.createElement('span');
     qualityLabel.className = 'sci-figure-viewer-quality';
+    let displayBlob = null;
     const revealLoadedImage = () => {
         if (generation !== figureImageViewerGeneration) return;
         viewer.dataset.loading = 'false';
         stage.replaceChildren(image);
+        if (loaded.current()) SciLLM.webPanelReader?.rememberOriginal(figure, {
+            blob:displayBlob, url:image.currentSrc || image.src, width:image.naturalWidth, height:image.naturalHeight,
+            sourceUrl:loaded.resource?.requestedSourceUrl || image.currentSrc || image.src
+        });
         controls.hidden = false;
         imageControls.hidden = false;
         applyScale(1);
@@ -14487,10 +14781,8 @@ async function showFigureImageViewer(figureId, {
         return { success: false, code: 'VIEWER_SUPERSEDED' };
     }
     if (resource?.bytes?.length) {
-        const blob = new Blob([resource.bytes], {
-            type: resource.contentType || 'application/octet-stream'
-        });
-        figureImageViewerObjectUrl = URL.createObjectURL(blob);
+        displayBlob = new Blob([resource.bytes], { type:resource.contentType || 'application/octet-stream' });
+        figureImageViewerObjectUrl = URL.createObjectURL(displayBlob);
         image.src = figureImageViewerObjectUrl;
         const annotationStatus = makeControl('正在准备标注…', '准备图片标注', () => { void prepareAnnotations(); });
         annotationStatus.disabled = true; controls.append(annotationStatus);
@@ -23345,8 +23637,8 @@ function publicArticleChatTurn(turn = {}) {
         operationId: String(turn.operationId || '').slice(0, 100),
         error: publicError,
         errorCode: publicErrorCode,
-        createdAt: Math.max(0, Number(turn.createdAt) || Date.now()),
-        updatedAt: Math.max(0, Number(turn.updatedAt) || Date.now())
+        createdAt: Math.max(0, Number(turn.createdAt) || Date.parse(turn.createdAt) || Date.now()),
+        updatedAt: Math.max(0, Number(turn.updatedAt) || Date.parse(turn.updatedAt) || Date.now())
     };
 }
 
@@ -29339,7 +29631,7 @@ function maintainArticleStructureObserverAfterWorkspaceSnapshot() {
 function isBilingualDisplayOnlyMutation(mutation) {
     const isDisplay = (node, boundary = null) => {
         const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-        const owner = element?.closest?.('[data-sci-translation]');
+        const owner = element?.closest?.('[data-sci-translation],[data-brevess-translation-ui]');
         return Boolean(owner && (!boundary || owner === boundary || boundary.contains?.(owner)));
     };
     if (isDisplay(mutation?.target)) return true;
@@ -29397,6 +29689,8 @@ function isArticleStructureMutation(mutation) {
             'blockquote,dd,[role="paragraph"],div[class*="paragraph" i],div[class*="para" i],.sci-shared-note-sentence';
         const selectors = [selector, ...(sourceAdapter?.headingSelectors || []),
             ...(sourceAdapter?.paragraphSelectors || [])];
+        // A text edit often targets a span or em nested inside a source paragraph or heading.
+        if (!pluginRewrite && !boundary && element.closest?.('h1,h2,h3,h4,h5,h6,[role="heading"],p,li,caption,blockquote,dd,[role="paragraph"]')) return true;
         const candidates = [element];
         while (candidates.length) {
             const candidate = candidates.pop();
@@ -29482,14 +29776,12 @@ function startArticleStructureObserver() {
                 document.getElementById('sci-article-navigator-host')) {
                 renderArticleNavigator(next);
             }
-            if (next.revision !== previousRevision || articleStructureWaiting) {
-                articleStructureWaiting = false;
-                chrome.runtime.sendMessage({
-                    type: 'ARTICLE_STRUCTURE_CHANGED',
-                    revision: Number(next.revision) || 0,
-                    paragraphCount: next.paragraphs?.length || 0
-                }).catch(() => {});
-            }
+            articleStructureWaiting = false;
+            chrome.runtime.sendMessage({
+                type: 'ARTICLE_STRUCTURE_CHANGED',
+                revision: Number(next.revision) || 0,
+                paragraphCount: next.paragraphs?.length || 0
+            }).catch(() => {});
         }, 450);
     });
     const roots = getArticleStructureObserveRoots();
@@ -29500,21 +29792,24 @@ function startArticleStructureObserver() {
             characterData: true,
             subtree: true
         });
-        const parent = root.parentElement;
-        if (!parent || articleStructureObservedRoots.has(parent)) return;
-        const ownedRoots = articleStructureBoundaryRoots.get(parent) || new Set();
-        ownedRoots.add(root);
-        articleStructureBoundaryRoots.set(parent, ownedRoots);
+        // An SPA can replace the article's enclosing layout rather than
+        // the article element itself. Only observe the path to our roots.
+        for (let child = root, parent = child.parentElement; parent; child = parent, parent = parent.parentElement) {
+            if (articleStructureObservedRoots.has(parent)) break;
+            const ownedRoots = articleStructureBoundaryRoots.get(parent) || new Set();
+            ownedRoots.add(child);
+            articleStructureBoundaryRoots.set(parent, ownedRoots);
+        }
     });
     articleStructureBoundaryRoots.forEach((ownedRoots, parent) => {
         if (ownedRoots.size) articleStructureObserver.observe(parent, { childList: true });
     });
 }
 
-async function waitForArticleStructureReady({ maxWaitMs = 1500 } = {}) {
+async function waitForArticleStructureReady({ maxWaitMs = 1500, allowParsedBody = false } = {}) {
     if (activeNativePdfStructure()) return;
     if (!articleStructureObserver) {
-        articleStructureLastMutationAt = Date.now();
+        articleStructureLastMutationAt = document.readyState === 'loading' ? Date.now() : 0;
         startArticleStructureObserver();
     }
     const getIdentity = () => JSON.stringify([canonicalArticlePreindexUrl(), articleWorkspaceLifecycleGeneration]);
@@ -29532,7 +29827,12 @@ async function waitForArticleStructureReady({ maxWaitMs = 1500 } = {}) {
         }
     });
     try {
-        await SciLLM.waitForArticleSourceStable({ getReadyState: () => document.readyState,
+        // document.readyState also waits for parser-blocking publisher widgets.
+        // Index a readable body while they load, under the usual DOM-epoch guards.
+        const parsedBody = allowParsedBody && document.readyState === 'loading' &&
+            document.body && extractCurrentArticleStructure().paragraphs?.length > 0;
+        await SciLLM.waitForArticleSourceStable({
+            getReadyState: () => parsedBody && document.readyState === 'loading' ? 'interactive' : document.readyState,
             getIdentity, getMutationTime: () => articleStructureLastMutationAt, maxWaitMs });
     } catch (error) {
         if (error?.code === 'ARTICLE_WORKSPACE_CONTEXT_CHANGED') {
@@ -29770,7 +30070,8 @@ async function hydrateSavedArticleChatCheckpoint(workspace, manual) {
         documentHash === getCanonicalArticleSnapshot()?.documentHash &&
         workspaceId === currentArticleWorkspace?.workspaceId && contentHash === currentArticleWorkspace?.contentHash &&
         workspaceGeneration === Number(currentArticleWorkspace?.workspaceGeneration || 1) &&
-        canonicalUrl === currentArticleWorkspace?.canonicalUrl && canonicalUrl === manual?.record?.canonicalUrl;
+        canonicalUrl === currentArticleWorkspace?.canonicalUrl && (canonicalUrl === manual?.record?.canonicalUrl ||
+            manual?.record?.sourceFormat === 'pdf' && manual.record.paperWorkspaceId === workspaceId);
     const key = JSON.stringify([lifecycle,generation,workspaceId,workspaceGeneration,contentHash,documentId,documentHash,url]);
     if (!workspaceId || !documentId || !documentHash || !canonicalUrl || !current() || articleChatCheckpointHydration === key) return false;
     try {
@@ -29808,12 +30109,12 @@ async function hydrateSavedArticleChatCheckpoint(workspace, manual) {
     } catch (_) { return false; }
 }
 
-async function readArticleWorkspaceSnapshot(request = {}) {
+async function readArticleWorkspaceSnapshot(request = {}, onReadable = null) {
     if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
     if (!activeNativePdfStructure() && !activeLibraryHtmlDocument() && !activeFigureSourceLease()) {
         await SciLLM.prepareArticleFigureCaptions?.(document);
     }
-    await waitForArticleStructureReady();
+    await waitForArticleStructureReady({ allowParsedBody: true });
     if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
     const url = currentArticleWorkspaceReadUrl();
     const sequence = articleStructureChangeSequence;
@@ -29828,12 +30129,23 @@ async function readArticleWorkspaceSnapshot(request = {}) {
         const pending = isArticleEmptyBodyPending();
         const error = new Error(pending
             ? '正文正在加载，准备好后将自动更新。'
-            : '当前页面没有可读取的正文。请确认已打开全文，并完成页面的登录或访问验证后重新提取。');
+            : '当前页面没有可读取的正文。打开全文或完成登录后，侧栏会自动更新。');
         error.code = pending ? 'ARTICLE_PAGE_LOADING' : 'ARTICLE_BODY_UNAVAILABLE';
         error.reasonCode = pending ? 'ARTICLE_BODY_PENDING' : 'ARTICLE_BODY_UNAVAILABLE';
         throw error;
     }
     clearArticleEmptyBodyWait();
+    // Navigation uses the paragraphs already present in this document, even if
+    // preparing its saved identity or opening the archive is still pending.
+    if (onReadable) onReadable(() => {
+        if (url !== currentArticleWorkspaceReadUrl() || sequence !== articleStructureChangeSequence) return null;
+        const prepared = canonicalArticlePreindexUrl(manualPreparedHref) === url && currentManualDocument;
+        return {
+            url, title: document.title, documentId: prepared?.documentId || '',
+            revision: structure.revision, publisherFamily: structure.publisherFamily,
+            ...serializeArticleReadingNavigation({structure, paragraphs: structure.paragraphs})
+        };
+    });
     if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
     const manual = await prepareManualDocument({
         force: request.forceRefresh === true,
@@ -29891,6 +30203,9 @@ async function readArticleWorkspaceSnapshot(request = {}) {
         error.reasonCode = 'ARTICLE_SOURCE_CHANGED_DURING_READ';
         throw error;
     }
+    let paper = onReadable ? availablePaperReadingForSidebar(manual.record) : await currentPaperReading(manual.record);
+    assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
+    if (manual !== currentManualDocument) throw articleWorkspaceLifecycleError();
     await hydrateSavedArticleChatCheckpoint(localWorkspace, manual);
     await hydrateSavedHtmlHighlightCheckpoint(localWorkspace, manual);
     if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
@@ -29934,6 +30249,8 @@ async function readArticleWorkspaceSnapshot(request = {}) {
             throw articleWorkspaceLifecycleError();
         }
         const seeded = figureWorkspaceInventorySeedPromise;
+        if (onReadable && !paper) paper = availablePaperReadingForSidebar(manual.record);
+        if (paper) restorePaperChat(paper, manual.record);
         snapshot = buildArticleWorkspaceSnapshot(options);
         if (inventoryEpoch === figureWorkspaceInventoryEpoch &&
             seeded === figureWorkspaceInventorySeedPromise) { settled = true; break; }
@@ -29972,7 +30289,7 @@ async function readArticleWorkspaceSnapshot(request = {}) {
     if (typeof rememberCoherentFigureSource === 'function' && !figureOperationState.active) {
         rememberCoherentFigureSource(getCanonicalArticleSnapshot());
     }
-    return { ...snapshot, localWorkspace };
+    return projectPaperSnapshot({ ...snapshot, localWorkspace },paper);
 }
 
 function articlePublicPreviewNotice(structure) {
@@ -30394,6 +30711,12 @@ function collectPageHighlightOccurrences(structure) {
             ? String(mark.dataset.categories || mark.dataset.categoryId || '')
                 .split(',').filter(Boolean)
             : [mark.dataset.categoryId || mark.dataset.category || 'uncategorized'];
+        const quote = normalizeArticleNavigatorText(mark.textContent);
+        const original = paragraph?.text || '';
+        const offset = Number.isInteger(sourceStart) && original.slice(sourceStart, sourceStart+quote.length)===quote
+            ? sourceStart : -1;
+        const context = source !== 'manual' && offset>=0
+            ? {prefix:original.slice(Math.max(0,offset-64),offset),suffix:original.slice(offset+quote.length,offset+quote.length+64)} : {};
         categoryIds.forEach(categoryId => {
             const category = categoryMap[categoryId] || {};
             occurrences.push({
@@ -30405,7 +30728,9 @@ function collectPageHighlightOccurrences(structure) {
                 color: mark.dataset.categoryColor || category.color ||
                     mark.style.borderBottomColor || '#D9D6CE',
                 source,
-                quote: normalizeArticleNavigatorText(mark.textContent).slice(0, 240),
+                ...(manualAnnotation ? {annotationId:manualAnnotation.annotationId} : {}),
+                quote: quote.slice(0,240),
+                ...(source !== 'manual' && quote.length>240 ? {fullQuote:quote} : {}), ...context,
                 sourceStart,
                 sourceEnd: Number.isInteger(sourceStart)
                     ? sourceStart + String(mark.textContent || '').length : null,
@@ -30897,11 +31222,15 @@ function getPublicArticleAbbreviationSnapshot({ forceRefresh = false } = {}) {
     const paragraphs = canonicalSnapshot.paragraphs.filter(paragraph =>
         String(paragraph?.sectionKind || '').toLowerCase() !== 'reference');
     const automaticEntries = SciLLM.extractArticleAbbreviations(paragraphs);
+    const peers = paperReadingCache?.data?.editions?.filter(e=>e.documentId!==currentManualDocument?.documentId && e.abbreviations) || [];
+    const states=[...peers.map(e=>e.abbreviations),articleAbbreviationState];
+    const articleState=peers.length ? Object.fromEntries(['manualEntries','excludedKeys','translations']
+        .map(key=>[key,states.flatMap(s=>s?.[key] || [])])) : articleAbbreviationState;
     const snapshot = SciLLM.composeArticleAbbreviations({
         paragraphs,
         automaticEntries,
         globalMemory: globalAbbreviationMemory,
-        articleState: articleAbbreviationState
+        articleState
     });
     const native = globalThis.__brevessNativePdfDocument;
     const documentGeneration = native?.structure?.documentHash === canonicalSnapshot.documentHash
@@ -31395,14 +31724,7 @@ async function updateCurrentArticleAbbreviationTranslations(values = [], options
     ), 'translation_updated', options);
 }
 
-function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } = {}) {
-    if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
-    // Refresh the live Figure DOM before taking the canonical article snapshot.
-    // Publisher pages can materialize Extended Data captions while the Figure
-    // extractor walks the page; taking both views in the opposite order mixes
-    // two DOM epochs and makes already discovered ED Figures appear unreferenced.
-    if (forceRefresh) getFigureWorkspaceInventory({ forceRefresh: true });
-    const canonicalSnapshot = getCanonicalArticleSnapshot({ forceRefresh });
+function serializeArticleReadingNavigation(canonicalSnapshot) {
     const structure = canonicalSnapshot.structure;
     const paragraphCounts = new Map();
     const sectionKinds = new Map();
@@ -31417,6 +31739,46 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } =
             semantic.counts.forEach((count, id) => paragraphCounts.set(id, count));
             semantic.kinds.forEach((kind, id) => sectionKinds.set(id, kind));
     }
+    return {
+        nodes: (semantic?.nodes || structure.nodes || []).map(node =>
+            serializeArticleWorkspaceNode(node, paragraphCounts, sectionKinds, structure?.adapterId === 'pdf-native')),
+        analysisSelectionCustomized: deriveArticleAnalysisSelectionCustomized(
+            articleNavigatorState.analysisSectionSelection,
+            sectionKinds
+        ),
+        paragraphs: canonicalSnapshot.paragraphs.map(paragraph => ({
+            paragraphId: String(paragraph.paragraphId || ''),
+            sourceKey: String(paragraph.sourceKey || ''),
+            sourceIdentity: String(
+                paragraph.sourceIdentity || paragraph.sourceKey || paragraph.paragraphId || ''
+            ).slice(0, 360),
+            textHash: String(paragraph.textHash || ''),
+            navigationRevision: Number(structure.revision) || 0,
+            sectionId: String(paragraph.sectionId || ''),
+            sectionKind: String(paragraph.sectionKind || ''),
+            sectionTitle: normalizeArticleNavigatorText(paragraph.sectionTitle),
+            displaySectionTitle: String(
+                paragraph.displaySectionTitle || paragraph.sectionTitle || ''
+            ).replace(/\s+/g, ' ').trim().slice(0, 1000),
+            sectionPath: (Array.isArray(paragraph.headingPath) ? paragraph.headingPath : [])
+                .map(item => normalizeArticleNavigatorText(item?.title)).filter(Boolean),
+            text: normalizeArticleNavigatorText(paragraph.text).slice(0, 4000),
+            displayText: String(paragraph.displayText || paragraph.text || '')
+                .replace(/\s+/g, ' ').trim().slice(0, 4000)
+        }))
+    };
+}
+
+function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } = {}) {
+    if (typeof deferChangedFigureSourceRead === 'function') deferChangedFigureSourceRead();
+    // Refresh the live Figure DOM before taking the canonical article snapshot.
+    // Publisher pages can materialize Extended Data captions while the Figure
+    // extractor walks the page; taking both views in the opposite order mixes
+    // two DOM epochs and makes already discovered ED Figures appear unreferenced.
+    if (forceRefresh) getFigureWorkspaceInventory({ forceRefresh: true });
+    const canonicalSnapshot = getCanonicalArticleSnapshot({ forceRefresh });
+    const structure = canonicalSnapshot.structure;
+    const navigation = serializeArticleReadingNavigation(canonicalSnapshot);
     const highlightDistribution = buildPageHighlightDistribution(structure);
     return {
         title: document.title,
@@ -31440,37 +31802,12 @@ function buildArticleWorkspaceSnapshot({ forceRefresh = false, chatLimit = 0 } =
             referenceCount: Number(structure.diagnostics?.referenceCount) || 0,
             warnings: [...(structure.diagnostics?.warnings || [])]
         },
-        nodes: (semantic?.nodes || structure.nodes || []).map(node =>
-            serializeArticleWorkspaceNode(node, paragraphCounts, sectionKinds, structure?.adapterId === 'pdf-native')),
-        analysisSelectionCustomized: deriveArticleAnalysisSelectionCustomized(
-            articleNavigatorState.analysisSectionSelection,
-            sectionKinds
-        ),
+        ...navigation,
         literatureNoteCaptionSources: literatureNoteCaptionSourceRecords(canonicalSnapshot),
         chatCitationRecords: articleChatCitationSnapshot(canonicalSnapshot).paragraphs
             .filter(record => record.recordType === 'figure-caption' || record.recordType === 'table-caption')
             .map(({ paragraphId, sourceKey, textHash, recordType, sectionId, sectionTitle, text }) =>
                 ({ paragraphId, sourceKey, textHash, recordType, sectionId, sectionTitle, text })),
-        paragraphs: canonicalSnapshot.paragraphs.map(paragraph => ({
-            paragraphId: String(paragraph.paragraphId || ''),
-            sourceKey: String(paragraph.sourceKey || ''),
-            sourceIdentity: String(
-                paragraph.sourceIdentity || paragraph.sourceKey || paragraph.paragraphId || ''
-            ).slice(0, 360),
-            textHash: String(paragraph.textHash || ''),
-            navigationRevision: Number(structure.revision) || 0,
-            sectionId: String(paragraph.sectionId || ''),
-            sectionKind: String(paragraph.sectionKind || ''),
-            sectionTitle: normalizeArticleNavigatorText(paragraph.sectionTitle),
-            displaySectionTitle: String(
-                paragraph.displaySectionTitle || paragraph.sectionTitle || ''
-            ).replace(/\s+/g, ' ').trim().slice(0, 1000),
-            sectionPath: (Array.isArray(paragraph.headingPath) ? paragraph.headingPath : [])
-                .map(item => normalizeArticleNavigatorText(item?.title)).filter(Boolean),
-            text: normalizeArticleNavigatorText(paragraph.text).slice(0, 4000),
-            displayText: String(paragraph.displayText || paragraph.text || '')
-                .replace(/\s+/g, ' ').trim().slice(0, 4000)
-        })),
         highlightDistribution,
         ledger: lastLlmAnalysis?.rawAnalysis?.ledger || null,
         readingViewId: lastLlmAnalysis?.rawAnalysis?.readingViewId || '',
@@ -33702,6 +34039,7 @@ async function persistWorkspaceTurnCheckpoint(turn, { append = false, force = fa
             error.code = response?.error?.code || 'ARTICLE_WORKSPACE_TURN_SAVE_FAILED';
             throw error;
         }
+        paperReadingCache=null; projectedChatIds.delete(publicTurn.turnId);
         if (fingerprint) articleWorkspaceAssetFingerprints.set(turnPath, fingerprint);
         return response.data;
     });
@@ -33725,18 +34063,20 @@ function deleteWorkspaceTurnCheckpoint(turnId, options = {}) {
             return { deleted: false, stale: true };
         }
         if (articleWorkspaceSaveFrozen) return { deleted: false, frozen: true };
-        const workspace = await ensureCurrentArticleWorkspace();
+        const workspace = await ensureCurrentArticleWorkspace({persist:projectedChatIds.has(normalizedTurnId)});
         assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         const response = await chrome.runtime.sendMessage({
             type: 'ARTICLE_WORKSPACE_DELETE_TURN',
             workspaceId: workspace.workspaceId,
             workspaceGeneration: Number(workspace.workspaceGeneration) || 1,
-            turnId: normalizedTurnId
+            turnId: normalizedTurnId,
+            paperTurn: projectedChatIds.has(normalizedTurnId)
         });
         assertCurrentArticleWorkspaceLifecycle(workspaceLifecycle);
         if (!response?.success) {
             throw new Error(response?.error?.message || 'ARTICLE_WORKSPACE_TURN_DELETE_FAILED');
         }
+        paperReadingCache=null; projectedChatIds.delete(normalizedTurnId);
         articleWorkspaceAssetFingerprints.delete(
             `chat/turns/${encodeURIComponent(normalizedTurnId).slice(0, 240)}.json`
         );
@@ -35214,7 +35554,8 @@ async function saveCurrentArticleWorkspaceNow(operationId = '', storageChoice = 
             collected: collectCompleteExportFigures()
         };
         // Clone source DOM/styles/translation state before the first save await.
-        try { if (!activeSavedArticleDocument()) offlineCapture = captureOfflineArticleSnapshot(offlineCapture); }
+        const pdfBridge = SciLLM.isPdfReaderUrl?.(location.href) && globalThis.__brevessPdfReaderBridge;
+        try { if (!pdfBridge && !activeSavedArticleDocument()) offlineCapture = captureOfflineArticleSnapshot(offlineCapture); }
         catch (captureError) { offlineCapture.captureError = captureError; }
         offlineCapture.userIncludePage=storageChoice.includePage;
         const transaction = SciLLM.createWorkspaceSaveTransactionContext({
@@ -35318,7 +35659,23 @@ async function saveCurrentArticleWorkspaceNow(operationId = '', storageChoice = 
         reportArticleWorkspaceSaveProgress(operationId, 'offline', 'active');
         let offlineSnapshot = null;
         try {
-            offlineSnapshot = await persistOfflineArticleSnapshot(offlineCapture);
+            if (pdfBridge) {
+                const nativeHash = globalThis.__brevessNativePdfDocument?.structure?.documentHash;
+                let record = currentManualDocument?.record;
+                if (nativeHash && record?.documentHash !== nativeHash) {
+                    record = (await sendManualMessage({type:'DOCUMENT_GET',documentId:'sha256:' + nativeHash})).record;
+                }
+                const doi = record?.sourceFormat === 'pdf' && record.documentHash === nativeHash ? SciLLM.paperReadingKey(record) : '';
+                const peers = doi ? (await sendManualMessage({ type:'DOCUMENT_PAPER_SOURCES', documentId:record.documentId })).records : [];
+                const webWorkspaces = peers.filter(peer => peer.sourceFormat === 'html' && SciLLM.paperReadingKey(peer) === doi)
+                    .map(peer => peer.paperWorkspaceId).filter(Boolean);
+                const attachment = await pdfBridge.attachOriginalToLibrary({ workspaceId: workspace.workspaceId, doi, webWorkspaces,
+                    guard: () => lifecycle === articleWorkspaceLifecycleGeneration &&
+                        workspace.workspaceId === currentArticleWorkspace?.workspaceId });
+                offlineSnapshot = { source: 'pdf-attachment', saved: true, complete: true, attachment };
+            } else {
+                offlineSnapshot = await persistOfflineArticleSnapshot(offlineCapture);
+            }
             reportArticleWorkspaceSaveProgress(operationId, 'offline', offlineSnapshot.warning ? 'warning' : 'done', {
                 completedCount: offlineSnapshot.saved ? 1 : 0,
                 totalCount: offlineSnapshot.disabled ? 0 : 1,
@@ -35358,6 +35715,7 @@ async function saveCurrentArticleWorkspaceNow(operationId = '', storageChoice = 
             localSaved: true,
             workspace: { ...currentArticleWorkspace },
             transaction,
+            documentId: currentManualDocument?.documentId || '',
             assetCount: artifactCount,
             turnCount: turnResults.length,
             warnings,
@@ -37103,6 +37461,7 @@ async function resetArticleWorkspaceState({ workspaceGeneration = 1, prepareDocu
     reviewOutlineStatus = createInitialReviewOutlineStatus();
     restoredWorkspaceLlmTask = null;
     restoredFigureWorkspaceSnapshot = null;
+    paperReadingCache=null; projectedChatIds.clear(); clearTimeout(paperReadingRefreshTimer); paperReadingRefreshTimer=null;
     figureWorkspaceDraft = SciLLM.createFigureWorkspaceDraft([]);
     figureWorkspaceDraftController = null;
     figureWorkspaceDraftControllerPromise = null;
@@ -38398,6 +38757,7 @@ async function focusHtmlFigureWorkspaceSource(target = {}) {
 }
 
 async function focusArticleWorkspaceSource(target = {}, options = {}) {
+    if (target.kind === 'paper-quote') return focusPaperQuote(target);
     if (typeof hasPendingFigureSourceRefresh === 'function' && hasPendingFigureSourceRefresh() && !activeNativePdfStructure()) return false;
     if (target.kind === 'pdf-semantic-outline-heading') {
         return focusPdfSemanticOutlineHeading(target);
@@ -38411,6 +38771,14 @@ async function focusArticleWorkspaceSource(target = {}, options = {}) {
         return verifyAndFocusArticleChatCitation(target);
     }
     if (target.kind === 'highlight') {
+        if (String(target.highlightId).startsWith('paper:')) {
+            const row=crossFormatLocalView.rows.find(r=>'paper:'+r.key===target.highlightId);
+            if (!row || row.location?.status!=='located') return false;
+            await crossFormatNoteAction('locate',row);
+            const part = crossFormatRowParts(row)[0];
+            if (!row.derived && part) openManualAnnotationSurface(row.source, part.range, null, row);
+            return true;
+        }
         return focusHighlightOccurrence({ highlightId: target.highlightId });
     }
     if (target.kind === 'section' && String(target.sectionId || '').startsWith('pdf-highlight-page:')) {
@@ -41756,6 +42124,7 @@ function setHighlightSourceVisibility(sources = []) {
             `sciShow${source[0].toUpperCase()}${source.slice(1)}`
         ] = String(visibleHighlightSources.has(source));
     });
+    if (crossFormatLocalView.rows.length) renderCrossFormatNotes();
     return [...visibleHighlightSources];
 }
 
@@ -41974,12 +42343,29 @@ function applyAndPublishFigureProgressEvent(progress = {}) {
 }
 
 chrome.runtime.onMessage.addListener(function handleArticleMessage(request, sender, sendResponse, admitted = false) {
-    if (request?.type === 'BREVESS_SAME_PAPER_SIDEBAR') {
-      void handleSamePaperSidebar(request,sender).then(data=>sendResponse({success:true,data}),error=>sendResponse({success:false,error:error.message}));return true;
+    if (request?.type === 'BREVESS_PAPER_ANNOTATIONS_CHANGED') {
+        if (sender?.id === chrome.runtime.id) void receivePaperAnnotationChange(request).catch(() => {});
+        sendResponse({success:sender?.id === chrome.runtime.id}); return false;
+    }
+    if (request?.type === 'BREVESS_PAPER_READING_CHANGED') {
+        const record=currentManualDocument?.record;
+        const peers=paperReadingCache?.data?.editions || [];
+        const peer=peers.find(e=>e.documentId!==record?.documentId && (e.workspaceId===request.workspaceId || e.documentId===request.documentId));
+        if (sender?.id === chrome.runtime.id && record && (peer || request.doi && SciLLM.paperReadingKey(record)===request.doi)) {
+            paperReadingCache=null;
+            paperReadingRefreshTimer ||= setTimeout(async()=>{
+                paperReadingRefreshTimer=null;
+                if (record.documentId!==currentManualDocument?.documentId) return;
+                await refreshLocalCrossFormatNotes().catch(()=>{});
+                void chrome.runtime.sendMessage({type:'BREVESS_PAPER_VIEW_CHANGED',documentId:record.documentId}).catch(()=>{});
+            },140);
+        }
+        sendResponse({success:true}); return false;
     }
     if (request?.type === 'BREVESS_CROSS_FORMAT_CHANGED') {
+        paperReadingCache=null;
         if (sender?.id !== chrome.runtime.id) { sendResponse({ success: false }); return false; }
-        crossFormatLocalView.view?.clear(); crossFormatLocalView.panel?.clear();
+        crossFormatLocalView.view?.clear();
         const epoch = sharedHighlightNoteView.generation;
         void refreshLocalCrossFormatNotes().then(() => sharedHighlightNoteView.enabled && epoch === sharedHighlightNoteView.generation
             ? refreshSharedHighlightNotes(epoch) : undefined).catch(() => {});
@@ -42634,7 +43020,18 @@ chrome.runtime.onMessage.addListener(function handleArticleMessage(request, send
     } else if (request.action === 'getArticleWorkspaceSnapshot') {
         Promise.resolve().then(async () => {
             await ensureGlobalAbbreviationMemory().catch(() => globalAbbreviationMemory);
-            const snapshot = await readArticleWorkspaceSnapshot(request);
+            const progressive = typeof request.navigationTicket === 'string' && request.navigationTicket.length <= 80 &&
+                /^https?:$/u.test(location.protocol);
+            let previewTimer;
+            const onReadable = progressive ? getPreview => {
+                previewTimer = setTimeout(() => {
+                    const preview = getPreview();
+                    if (preview) void chrome.runtime.sendMessage({type:'ARTICLE_READING_TEXT_READY',
+                        ticket:request.navigationTicket, preview}).catch(() => {});
+                }, 160);
+            } : null;
+            const snapshot = await readArticleWorkspaceSnapshot(request, onReadable)
+                .finally(() => clearTimeout(previewTimer));
             scheduleArticleParagraphNoteMarkers();
             maintainArticleStructureObserverAfterWorkspaceSnapshot();
             // This request is read-only. Scheduling a full checkpoint here
@@ -42648,10 +43045,13 @@ chrome.runtime.onMessage.addListener(function handleArticleMessage(request, send
                 pendingParagraphNoteReveal: readPendingArticleParagraphNoteReveal()
             });
         }).then(sendResponse).catch(error => {
-            sendResponse({ success: false, error: error.message, code: error.code,
+            const contextChanged = error?.message === 'ARTICLE_WORKSPACE_LIFECYCLE_CHANGED' ||
+                error?.message === 'WORKSPACE_SOURCE_CHANGED';
+            sendResponse({ success: false, error: error.message, code: contextChanged ? 'ARTICLE_PAGE_LOADING' : error.code,
                 deferred: error.deferred === true, operationId: error.operationId,
                 epoch: error.epoch, workspaceLifecycle: error.workspaceLifecycle,
-                reasonCode: error.reasonCode || '', retryable: error.code === 'ARTICLE_PAGE_LOADING' });
+                reasonCode: contextChanged ? 'ARTICLE_SOURCE_CONTEXT_CHANGED' : error.reasonCode || '',
+                retryable: contextChanged || error.code === 'ARTICLE_PAGE_LOADING' });
         });
     } else if (request.action === 'acknowledgeArticleParagraphNoteReveal') {
         sendResponse(acknowledgeArticleParagraphNoteReveal(request));
@@ -42875,7 +43275,8 @@ chrome.runtime.onMessage.addListener(function handleArticleMessage(request, send
     } else if (request.action === 'getFigureWorkspaceSnapshot') {
         Promise.all((globalThis.__brevessNativePdfFigures?.figures || [])
             .map(figure => restoreNativePdfFigureArtworkSelection(figure).catch(() => undefined)))
-            .then(() => sendResponse({ success: true, snapshot: buildFigureWorkspaceSnapshot() }))
+            .then(() => sendResponse({ success: true, snapshot: SciLLM.projectPaperFigures(buildFigureWorkspaceSnapshot(),
+                paperReadingCache?.data?.editions,currentManualDocument?.documentId) }))
             .catch(error => sendResponse({ success: false, error: error.message }));
     } else if (request.action === 'focusPdfFigureArtworkCandidate') {
         if(sender?.id!==chrome.runtime.id)sendResponse({success:false,code:'PDF_FIGURE_OWNER_UNAVAILABLE'});
@@ -43123,7 +43524,7 @@ chrome.runtime.onMessage.addListener(function handleArticleMessage(request, send
     } else if (request.action === 'controlLlmOperation') {
         controlLlmOperation(
             request.scope === 'figure' ? 'figure' : 'highlight',
-            String(request.command || '')
+            String(request.command || ''), request.engine === 'regex' ? 'regex' : ''
         )
             .then(result => sendResponse(result))
             .catch(error => sendResponse({ success: false, error: error.message, code: error.code }));
@@ -43447,25 +43848,42 @@ console.log('Brevess 已加载');
       setInterval(schedule,1800);
     })();
 
-// Only the extension's original sidebar may read or operate these local rows.
-function samePaperSidebarBinding(){return JSON.stringify([currentManualDocument?.documentId||'',currentManualDocument?.record?.documentHash||'',contentWorldNonce,manualDocumentEpochState.documentEpoch,contentNavigationIdentity()]);}
-function samePaperSidebarRows(){return [...crossFormatLocalView.rows,...(sharedHighlightNoteView.rows||[])];}
-function samePaperSidebarToken(row){return JSON.stringify([row.key,row.text,row.source?.quote,row.source?.updatedAt,row.association?.revision,row.association?.state,row.account,row.epoch,crossFormatLocalView.generation]);}
-async function handleSamePaperSidebar(request,sender){
- const page=new URL(sender?.url||'https://invalid.invalid'),expected=new URL(chrome.runtime.getURL('popup.html'));
- if(sender?.id!==chrome.runtime.id||page.protocol!==expected.protocol||page.host!==expected.host||page.pathname!==expected.pathname)throw Error('SIDEBAR_SOURCE_REQUIRED');
- if(!currentManualDocument?.documentId||crossFormatLocalView.documentId!==currentManualDocument.documentId||crossFormatLocalView.navigation!==contentNavigationIdentity())throw Error('文献正在重新核验');
- if(typeof request.url!=='string'||!request.url||contentNavigationIdentity(request.url)!==contentNavigationIdentity())throw Error('文献已变化，请重新选择');
- const binding=samePaperSidebarBinding();
- if(request.command==='READ')return {binding,contentWorldNonce,documentId:currentManualDocument.documentId,rows:samePaperSidebarRows().map(row=>({key:row.key,token:samePaperSidebarToken(row),local:!!row.local,quote:row.source?.quote||'',text:row.text||'',located:row.location?.status==='located',reason:row.reason||'',association:row.association?.state||null}))};
- if(request.contentWorldNonce!==contentWorldNonce)throw Error('文献已变化，请重新选择');
- if(request.command!=='ACTION'||request.binding!==binding||!['locate','edit','association','thread'].includes(request.action))throw Error('文献已变化，请重新选择');
- const row=samePaperSidebarRows().find(row=>row.key===request.key);
- if(!row||samePaperSidebarToken(row)!==request.token)throw Error('原批注已变化，请重新打开后编辑');
- if(request.action==='edit'&&(!row.local||row.association?.state!=='active'||typeof request.value!=='string'||request.value.length>100000))throw Error('原批注当前不可编辑');
- await crossFormatNoteAction(request.action,row,request.value);
- return {completed:true};
+function publishPaperViewChanged() {
+    if (currentManualDocument) void chrome.runtime.sendMessage({type:'BREVESS_PAPER_VIEW_CHANGED',
+        documentId:currentManualDocument.documentId}).catch(() => {});
 }
+
+function pageMetadataPaperDoi() {
+    if (!document.querySelector('meta[name="citation_title"],meta[name="citation_journal_title"],meta[name="prism.publicationName"]')) return '';
+    const candidates = [...document.querySelectorAll('meta[name="citation_doi"],meta[name="dc.identifier" i],meta[name="prism.doi"]')]
+        .map(meta => SciLLM.normalizeCrossFormatPaperDoi?.(meta.content)).filter(Boolean);
+    return new Set(candidates).size === 1 ? candidates[0] : '';
+}
+
+async function receivePaperAnnotationChange(request) {
+    let record = currentManualDocument?.record;
+    if (!record && pageMetadataPaperDoi() === request.doi) {
+        await prepareManualDocument({throwOnError:true});
+        record = currentManualDocument?.record;
+    }
+    if (!record || SciLLM.paperReadingKey(record) !== request.doi) return;
+    paperReadingCache = null;
+    await refreshPaperAnnotationSource(request.documentId);
+    publishPaperViewChanged();
+}
+
+function reconcileVisiblePaper() {
+    if (document.hidden) return;
+    if (!currentManualDocument && pageMetadataPaperDoi()) {
+        manualPageRestoreCheckedHref = '';
+        void restoreSavedPageAnnotations();
+    } else if (SciLLM.paperReadingKey(currentManualDocument?.record)) {
+        paperReadingCache = null;
+        void refreshLocalCrossFormatNotes().catch(() => {});
+    }
+}
+document.addEventListener('visibilitychange', reconcileVisiblePaper);
+window.addEventListener('pageshow', event => { if (event.persisted) reconcileVisiblePaper(); });
 
 function isWebMediaPage() { return unifiedReadingKindUrl===location.href && unifiedReadingKind==='web' && !activeNativePdfStructure(); }
 function currentWebMediaFigure(id, identity) {

@@ -33,7 +33,7 @@
     const type = kind === 'font' ? '(?:font\/(?:woff2?|ttf|otf)|application\/(?:font-woff|x-font-woff|vnd.ms-fontobject|x-font-ttf|x-font-opentype))' : 'image\/(?:avif|gif|jpe?g|png|webp|bmp|tiff?)';
     return new RegExp(`^data:${type};base64,[a-z0-9+/]+={0,2}$`, 'i').test(String(value || ''));
   }
-  function isHighlight(node) { return /(?:^|\s)sci-(?:manual-|llm-)?highlight(?:\s|$)/.test(attr(node, 'class')); }
+  function isHighlight(node) { return /(?:^|\s)sci-(?:manual-|llm-|paper-)?highlight(?:\s|$)/.test(attr(node, 'class')); }
   function normalizedFontMime(mime) {
     return /^(?:application\/font-woff2|application\/x-font-woff2)$/.test(mime) ? 'font/woff2' : mime;
   }

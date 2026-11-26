@@ -44,7 +44,7 @@
   }
   function bridgeRequest(type,args,signal) {
     const port=type.startsWith('agent.sdk.')?chrome.runtime.connectNative('com.sci_reader.codex_bridge'):chrome.runtime.connect({name:'brevess-workbench-api'});
-    return exchange(port,{type,requestId:crypto.randomUUID(),args},signal,type.endsWith('.turn')?300000:18000);
+    return exchange(port,{type,requestId:crypto.randomUUID(),args},signal,type.endsWith('.turn')?300000:30000);
   }
   function transportFor(type, source) {
     return {async *streamTurn(input) {
@@ -103,5 +103,5 @@
     if(!rows.length)throw fault('WORKBENCH_AGENT_MODEL_UNAVAILABLE','连接器未返回可用模型。');
     return {transport,perModel,delegated,models:rows,model:rows.some(e=>e.id===model)?model:(rows.find(e=>e.isDefault)||rows[0]).id,config,profileId:profile?.[0]||source,label};
   }
-  return {sources,connect,modelsFor,apiRows,checkEffort};
+  return {sources,connect,modelsFor,apiRows,checkEffort,bridgeRequest};
 });

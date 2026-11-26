@@ -2,9 +2,9 @@
 
 ## 首次连接与文献机制图
 
-在「设置 → 模型与连接 → 连接你的 Agent」选择客户端，复制配置提示词给它执行。支持 macOS / Windows；国内入口包含 DeepSeek Harness、Qwen Code、Kimi Code、Qoder、CodeBuddy Code、TRAE，国际入口包含 Codex、Claude Code、Gemini CLI、Cursor、Copilot CLI、OpenCode。具体支持方向与配置差异见 [快速接入](../docs/AGENT_QUICK_CONNECT.md)。
+从 BREVESS「设置 → 模型与连接 → 连接你的 Agent」选择客户端并连接。首次安装本机组件可使用高级选项里的配置提示词。各客户端的配置、模型通道与官方资料见[快速接入](../docs/AGENT_QUICK_CONNECT.md)。
 
-配置完成后点击「连接并测试」，自动完成启动、配对、打开工作台与浏览器连接检查。已连接时可复制「试读指令」，让所选客户端调用 `brevess.status`、`brevess.capabilities` 和 `library.query_global_library`；只有拿到真实工具结果，才算该客户端已读通。手动配对、断开与移除入口收在「高级选项」。账号登录和 BREVESS 内的模型调用分别验证，不用 MCP 连接成功替代。
+点击「连接并测试」会在设置中完成配对和探测。状态、能力与文献总库查询在关闭工作台后仍可用。课题操作使用对应工作台的授权。模型连接另以合成问答验证。
 
 安装器 `scripts/setup-agent-connection.mjs` 先运行 `--dry-run`，保留其他配置并备份；不将令牌放进聊天。配套源码缺失时获取匹配版本，不猜测下载 URL。已有安装复用稳定 payload，不另开第二个服务。Windows 旧配套安装器仍保留，具体参数见 [客户端说明](config/README.md)。
 

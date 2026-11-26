@@ -1100,6 +1100,39 @@
       });
     }
 
+    // A PDF original may exceed the image queue size. Stream its verified Blob
+    // into a content-addressed file and commit the writable only for the same paper.
+    async function writeWorkspacePdfAttachment(workspace, attachment, getBlob, checkCurrent) {
+      const hash = attachment.sha256;
+      if (!/^[a-f0-9]{64}$/u.test(hash) || attachment.kind !== 'pdf') fail('INVALID_BINARY_HASH');
+      const stem = Array.from(attachment.name.normalize('NFKC').replace(/\.pdf$/iu, '')
+        .replace(/[\x00-\x1f\x7f<>:"/\\|?*]/gu,'_')).slice(0,40).join('').trim() || 'article';
+      const path = 'attachments/' + stem + '-' + hash + '.pdf';
+      const location = workspaceAssetPath(workspace, path);
+      const handle = await handleStore.load();
+      if (await permissionState(handle) !== 'granted') fail('DIRECTORY_PERMISSION_REQUIRED');
+      const root = await getRootDirectory(handle, true);
+      const write = async () => {
+        await checkCurrent();
+        const fileHandle = await getFileHandle(root, location.fullPath, true);
+        const existing = await fileHandle.getFile();
+        if (existing.size) {
+          if (existing.size !== attachment.size) fail('PDF_ATTACHMENT_FILE_CONFLICT');
+          const digest = await cryptoRef.subtle.digest('SHA-256', await existing.arrayBuffer());
+          if (Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('') !== hash)
+            fail('PDF_ATTACHMENT_FILE_CONFLICT');
+          return { relativePath:path, unchanged:true };
+        }
+        const bytes = await getBlob();
+        await checkCurrent();
+        const writable = await fileHandle.createWritable();
+        try { await writable.write(bytes); await checkCurrent(); await writable.close(); }
+        catch (error) { await writable.abort().catch(() => {}); throw error; }
+        return { relativePath:path, saved:true };
+      };
+      return globalThis.navigator?.locks ? navigator.locks.request('brevess:pdf-attachment:'+location.fullPath, write) : write();
+    }
+
     async function readWorkspaceBinary(workspaceInput, relativePath) {
       const location = workspaceAssetPath(workspaceInput, relativePath);
       const handle = await handleStore.load();
@@ -2199,12 +2232,15 @@
       flush,
       status,
       readJson,
+      // An article archive can be committed to the local queue even when the
+      // reader has not selected a directory for its optional disk copy.
+      readCommittedArticleArchive: identity => readQueuedOrDiskJson(shared.articleArchiveRelativePath(identity)),
       enqueueWorkspaceAsset,
       clearWebReadingBackup,
       removeSelectedWorkspaceFiles,
       enqueueWorkspaceBinary,
       readWorkspaceAsset,
-      readWorkspaceBinary,
+      readWorkspaceBinary, writeWorkspacePdfAttachment,
       listWorkspaceChatAssets,
       listWorkspaceSupplementalAssets,
       listWorkspaceManifests,

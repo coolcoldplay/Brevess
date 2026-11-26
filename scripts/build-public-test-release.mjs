@@ -32,7 +32,7 @@ if (decoded.size !== files.size || [...files].some(([name, bytes]) => !decoded.g
 }
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const revision = { sourceCommit: git(['rev-parse', 'HEAD']), sourceDirty: Boolean(git(['status', '--porcelain'])) };
-const label = manifest.version_name?.match(/\br\d+\b/)?.[0];
+const label = manifest.version_name?.match(/\br\d+(?:\.\d+)*\b/)?.[0];
 const flavor = manifest.version_name?.match(/(Adaptive Figures|Workbench Evidence) (r\d+)$/);
 const revisionLabel = flavor && (flavor[1] === 'Adaptive Figures' ? 'adaptive-' : 'workbench-') + flavor[2];
 const name = ['Brevess-v' + manifest.version, label, revisionLabel, 'Chrome.zip'].filter(Boolean).join('-');

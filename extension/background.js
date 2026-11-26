@@ -135,6 +135,7 @@ importScripts(
   'core/pdf-annotations.js',
   'core/manual-annotations.js',
   'core/cross-format-anchors.js',
+  'core/paper-reading.js',
   'core/user-data-database.js',
   'core/figure-image-cache.js',
   'core/figure-viewer.js',
@@ -165,11 +166,21 @@ importScripts(
   'core/research-workbench-resources.js',
   'core/runtime-workbench-bridge.js',
   'core/document-agent-bridge.js',
+  'workbench/global-library.js',
+  'workbench/library-import-store.js',
+  'workbench/library-catalog-reader.js',
+  'workbench/operation-registry.js',
+  'workbench/library-catalog-mcp.js',
+  'core/agent-library-host.js',
+  'mcp/extension/workbench-mcp-bridge.js',
   'core/agent-connection-manager.js',
   'core/background-router.js'
 );
 
-const agentConnectionManager = SciLLM.createAgentConnectionManager(chrome);
+const agentLibraryHost = SciLLM.createAgentLibraryHost(async options =>
+  SciLLM.queryLocalReadingLibrary(await loadLocalReadingLibrary(), {...options, kind:'articles'}));
+const agentConnectionManager = SciLLM.createAgentConnectionManager(chrome, {libraryHost:agentLibraryHost});
+void agentConnectionManager.restore().catch(() => {});
 chrome.runtime.onConnect.addListener(port => agentConnectionManager.onConnect(port));
 
 const documentAgentBroker = SciLLM.createDocumentAgentBroker({
@@ -924,6 +935,46 @@ const workspaceDirectoryController = SciLLM.createWorkspaceDirectoryController({
 });
 let libraryHtmlCatalogStore = null;
 let libraryHtmlAttachmentStore = null;
+async function mirrorReaderPdfAttachments(workspace, documentId, sender) {
+  if (sender?.id !== chrome.runtime.id || String(sender.url || '').split(/[?#]/u)[0] !== chrome.runtime.getURL('popup.html')) {
+    throw Error('LIBRARY_READER_SAVE_OWNER_REQUIRED');
+  }
+  const record = documentId && await documentStore.getDocument(documentId);
+  const doi = record?.paperWorkspaceId === workspace.workspaceId ? SciLLM.paperReadingKey(record) : '';
+  libraryHtmlCatalogStore ||= BrevessLibraryCatalog.createLibraryCatalogStore();
+  const catalog = await libraryHtmlCatalogStore.read();
+  const entries = catalog.entries.filter(entry => !entry.removedAt && (entry.aliases.includes(workspace.workspaceId) ||
+    doi && entry.aliases.includes('doi:' + doi)));
+  if (entries.length > 1) throw Error('LIBRARY_CATALOG_IDENTITY_CONFLICT');
+  const entry = entries[0];
+  const attachments = entry?.attachments.filter(a => !a.removedAt && a.kind === 'pdf' &&
+    a.locator.type === 'pdf-source' && a.availability === 'available' &&
+    (a.id === 'attachment:' + a.sha256 || record?.documentHash === a.sha256)) || [];
+  if (!attachments.length) return [];
+  let target = workspace;
+  if (doi && record.sourceFormat === 'pdf') {
+    const peers = (await documentStore.listPaperDocuments(record.documentId)).filter(peer =>
+      peer.sourceFormat === 'html' && SciLLM.paperReadingKey(peer) === doi && peer.paperWorkspaceId);
+    for (const peer of peers.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt))) {
+      const web = await articleWorkspaceStore.getWorkspace(peer.paperWorkspaceId);
+      if (web && !web.deletionPending) { target = web; break; }
+    }
+  }
+  libraryHtmlAttachmentStore ||= BrevessLibraryAttachments.createLibraryAttachmentStore();
+  const copies = [];
+  for (const attachment of attachments) {
+    const checkCurrent = async () => {
+      const [fresh, library] = await Promise.all([articleWorkspaceStore.getWorkspace(target.workspaceId), libraryHtmlCatalogStore.read()]);
+      const item = library.entries.find(e => e.id === entry.id && !e.removedAt)?.attachments.find(a => a.id === attachment.id);
+      if (!fresh || fresh.deletionPending || fresh.workspaceGeneration !== target.workspaceGeneration ||
+          !item || item.removedAt || item.assetId !== attachment.assetId) throw Error('LIBRARY_ATTACHMENT_SAVE_STALE');
+    };
+    copies.push(await directorySync.writeWorkspacePdfAttachment(target, attachment,
+      () => libraryHtmlAttachmentStore.load(attachment), checkCurrent));
+  }
+  return copies;
+}
+
 function libraryHtmlOwnerGuard(sender) {
   libraryHtmlCatalogStore ||= BrevessLibraryCatalog.createLibraryCatalogStore();
   libraryHtmlAttachmentStore ||= BrevessLibraryAttachments.createLibraryAttachmentStore();
@@ -1193,6 +1244,7 @@ const ROUTED_MESSAGE_TYPES = new Set([
   'DOCUMENT_PAPER_SOURCES',
   'CROSS_FORMAT_LINK',
   'CROSS_FORMAT_NOTE_EDIT',
+  'CROSS_FORMAT_NOTE_DELETE',
   'CROSS_FORMAT_SOURCE_ROLE',
   'ANNOTATION_UPSERT',
   'ANNOTATION_DELETE',
@@ -2076,6 +2128,30 @@ function createFigureSourceTargetAuthority(sender, chromeApi = chrome, initialUi
   };
 }
 
+const paperDocumentOwners = new Map();
+const paperNotifications = new Map();
+function notifyPaperReaders(owner, senderTabId) {
+  if (!owner) return;
+  const key=owner.workspaceId || owner.documentId;
+  const next={...owner,senderTabId};
+  const previous=paperNotifications.get(key);
+  if (previous) {
+    previous.senderTabId=previous.senderTabId===senderTabId ? senderTabId : null;
+    Object.assign(previous,owner);
+    return;
+  }
+  paperNotifications.set(key,next);
+  setTimeout(async()=>{
+    paperNotifications.delete(key);
+    const {senderTabId:origin,...identity}=next;
+    try {
+      const tabs=await chrome.tabs.query({});
+      await Promise.all(tabs.filter(t=>Number.isInteger(t.id) && t.id!==origin).map(t=>
+        chrome.tabs.sendMessage(t.id,{type:'BREVESS_PAPER_READING_CHANGED',...identity}).catch(()=>{})));
+    } catch (_) {}
+  },180);
+}
+
 async function handleRoutedMessage(
   message, sender, onProgress, reverseState = {}, onFigureCheckpoint = null,
   onWorkspaceCommitGuard = null
@@ -2212,7 +2288,7 @@ async function handleRoutedMessage(
     }
     return frame.url;
   };
-  const runtimeOwnerRequired=['CROSS_FORMAT_LINK','CROSS_FORMAT_NOTE_EDIT','CROSS_FORMAT_SOURCE_ROLE','LLM_ANALYZE_DOCUMENT','LLM_ANALYZE_REVIEW_OUTLINE','LLM_AUTOFILL_LITERATURE_NOTE','LLM_LITERATURE_NOTE_CHECKPOINT_GET','RUNTIME_TASK_CONFIRM_SAVE'].includes(message?.type) || message?.operationScope==='runtime' || message?.runtimeCommit===true;
+  const runtimeOwnerRequired=['CROSS_FORMAT_LINK','CROSS_FORMAT_NOTE_EDIT','CROSS_FORMAT_NOTE_DELETE','CROSS_FORMAT_SOURCE_ROLE','LLM_ANALYZE_DOCUMENT','LLM_ANALYZE_REVIEW_OUTLINE','LLM_AUTOFILL_LITERATURE_NOTE','LLM_LITERATURE_NOTE_CHECKPOINT_GET','RUNTIME_TASK_CONFIRM_SAVE'].includes(message?.type) || message?.operationScope==='runtime' || message?.runtimeCommit===true;
   const assertTrustedOwnerCurrent = () => assertOwnerCurrent(runtimeOwnerRequired);
   const assertDocumentCreationOwnerCurrent = () => assertOwnerCurrent(true);
   let response = await llmRouter.handle(message, {
@@ -2296,13 +2372,46 @@ async function handleRoutedMessage(
     readTrustedFrameUrl,
     assertDocumentCreationOwnerCurrent,
     senderUrl: String(sender?.url || ''),
+    mirrorReaderPdfAttachments: (workspace, documentId) => mirrorReaderPdfAttachments(workspace, documentId, sender),
+    onAnnotationCommitted: record => {
+      const doi = SciLLM.paperReadingKey?.(record);
+      if (!doi) return;
+      // No excerpt or note leaves the owning document. Readers check their own
+      // paper identity and fetch the committed record after the IDB write.
+      void chrome.tabs.query({}).then(tabs => Promise.all(tabs.filter(tab =>
+        Number.isInteger(tab.id) && tab.id !== sender.tab?.id).map(tab =>
+        chrome.tabs.sendMessage(tab.id, { type: 'BREVESS_PAPER_ANNOTATIONS_CHANGED',
+          documentId: record.documentId, doi, revision: record.revision }, { frameId: 0 }).catch(() => {})))).catch(() => {});
+    },
     runtimeBaseUrl: chrome.runtime.getURL('')
   }).catch(error => ({ success: false, error: {
     code: /^[A-Z][A-Z0-9_]{2,100}$/u.test(error?.code || '') ? error.code : 'LLM_TASK_FAILED',
     message: error?.code === 'CANCELLED' ? '任务已取消' : '任务未完成，请查看服务设置和诊断'
   } }));
   const taskFinishedAt = Date.now();
-  if (response?.success && (['CROSS_FORMAT_NOTE_EDIT', 'CROSS_FORMAT_SOURCE_ROLE'].includes(message?.type) ||
+  if (response?.success) {
+    const record=response.data?.record;
+    if (message.type==='DOCUMENT_PREPARE' && SciLLM.paperReadingKey?.(record)) {
+      const id=record.paperWorkspaceId || (await SciLLM.createArticleWorkspaceIdentity({canonicalUrl:record.canonicalUrl,doi:record.doi})).workspaceId;
+      const owner={doi:record.doi,documentId:record.documentId,workspaceId:id};
+      if (paperDocumentOwners.get(id)?.doi !== owner.doi) notifyPaperReaders(owner,sender.tab?.id);
+      paperDocumentOwners.delete(id);
+      paperDocumentOwners.set(id,owner);
+      if (paperDocumentOwners.size>256) paperDocumentOwners.delete(paperDocumentOwners.keys().next().value);
+    } else if (message.type==='ARTICLE_ARCHIVE_SAVE' && SciLLM.paperReadingKey?.(message.archive?.documentRecord)) {
+      notifyPaperReaders({doi:message.archive.documentRecord.doi,documentId:message.archive.documentId},sender.tab?.id);
+    } else {
+      const path=message.relativePath;
+      const changed = message.type==='ARTICLE_WORKSPACE_SAVE_ASSET' && ['annotations/literature-note.json','figures/inventory.json',
+        'figures/workspace-draft.json','annotations/paragraph-notes.json','annotations/highlights.json'].includes(path) ||
+        message.type==='ARTICLE_WORKSPACE_DELETE_TURN' ||
+        ['ARTICLE_WORKSPACE_SAVE_TURN','ARTICLE_WORKSPACE_UPDATE_TURN'].includes(message.type) && !['queued','generating'].includes(message.turn?.status) ||
+        message.type==='LITERATURE_NOTE_COMMIT_DELTA';
+      const id=message.workspaceId || message.documentKey;
+      if (changed && id) notifyPaperReaders(paperDocumentOwners.get(id) || {workspaceId:id},sender.tab?.id);
+    }
+  }
+  if (response?.success && (message?.type === 'CROSS_FORMAT_SOURCE_ROLE' ||
       message?.type === 'CROSS_FORMAT_LINK' && message.input?.operation === 'state')) {
     // Invalidate projections in open readers; no annotations or account data
     // are broadcast. Each reader re-reads its own current record and ACLs.

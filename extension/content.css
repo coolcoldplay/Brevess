@@ -484,6 +484,7 @@ html[data-sci-reader-single-column="true"] :is(
     to { opacity: 1; transform: translate(0, -50%) scale(1); }
 }
 
+.sci-paper-highlight,
 .sci-manual-highlight {
     display: inline;
     padding: 0 .08em;
@@ -497,6 +498,7 @@ html[data-sci-reader-single-column="true"] :is(
     -webkit-box-decoration-break: clone;
 }
 
+.sci-paper-highlight:hover,
 .sci-manual-highlight:hover {
     filter: saturate(1.04) brightness(.985);
 }
@@ -557,6 +559,7 @@ html[data-sci-reader-single-column="true"] :is(
     -webkit-box-decoration-break: clone;
 }
 
+.sci-paper-highlight:focus-visible,
 .sci-manual-highlight:focus-visible,
 .sci-manual-note-marker:focus-visible,
 #sci-manual-toolbar button:focus-visible,
@@ -2164,7 +2167,6 @@ html[data-sci-reader-single-column="true"] :is(
 #sci-manual-toolbar.sci-selection-surface .sci-selection-rail svg { display: block; position: static; width: 18px; height: 18px; flex: 0 0 18px; margin: 0; padding: 0; transform: none; }
 #sci-manual-toolbar .sci-selection-rail button[aria-selected="true"] { color: var(--bv-text, #252922); background: var(--bv-raised, #edf0e9); border-color: var(--bv-line, #c9d0c3); }
 #sci-manual-toolbar .sci-selection-rail .ph { font-size: 18px; }
-#sci-manual-toolbar .sci-selection-rail .sci-selection-close { margin-top: auto; font-size: 19px; }
 #sci-manual-toolbar .side-panel-tool-letter { display: inline-grid; width: 15px; height: 15px; place-items: center; border: 1.25px solid currentColor; border-radius: 3px; font: 700 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
 #sci-manual-toolbar .sci-selection-pane textarea,
 #sci-manual-toolbar .sci-selection-pane select { display: block; width: 100%; min-width: 0; max-width: 100%; margin: 0; padding: 6px 8px; border: 1px solid var(--bv-line, #d9dcd5); border-radius: 0; color: var(--bv-text, #262724); background: var(--bv-surface, #fff); font: inherit; }

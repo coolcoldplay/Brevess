@@ -79,6 +79,7 @@
     return { ...association, revision: association.revision + 1, state: 'revoked' };
   }
 
+  const graphemes = typeof Intl?.Segmenter === 'function' ? new Intl.Segmenter(undefined, {granularity:'grapheme'}) : null;
   function normalizedText(text, joinLineHyphens = false) {
     const omitted = new Set();
     if (joinLineHyphens) {
@@ -88,8 +89,8 @@
         for (let i = match.index + match[1].length; i < match.index + match[0].length; i++) omitted.add(i);
       }
     }
-    const segments = typeof Intl?.Segmenter === 'function'
-      ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)
+    const segments = graphemes
+      ? graphemes.segment(text)
       : (function* () { let index = 0; for (const segment of text) { yield { segment, index }; index += segment.length; } })();
     const chars = [], starts = [], ends = [];
     for (const { segment, index } of segments) {
@@ -103,7 +104,30 @@
     }
     return { text: chars.join(''), starts, ends };
   }
-  function locateCrossFormatAnnotation(input = {}) {
+  function prepareCrossFormatText(items) {
+      if (!Array.isArray(items) || !items.length || items.length > 10000) fail('INVALID_TARGET_BLOCKS');
+      const ids = new Set(), blocks = [];
+      let text = '';
+      for (const item of items) {
+        const blockId = string(item?.blockId || item?.paragraphId, 300, 'INVALID_TARGET_BLOCKS');
+        if (ids.has(blockId) || typeof item.text !== 'string' || item.text.length > 500000) fail('INVALID_TARGET_BLOCKS');
+        const separator = item.separatorBefore === undefined ? '\n' : item.separatorBefore;
+        if (!['', ' ', '\n', '\n\n'].includes(separator)) fail('INVALID_TARGET_BLOCKS');
+        ids.add(blockId);
+        // PDF source items can split one word. Only a caller-supplied real
+        // line boundary may turn an item-ending hyphen into a line-end hyphen.
+        if (blocks.length) text += separator;
+        const start = text.length;
+        text += item.text;
+        if (text.length > 2000000) fail('TARGET_TEXT_TOO_LARGE');
+        blocks.push({ blockId, blockFingerprint: String(item.blockFingerprint || item.fingerprint || blockId),
+          text: item.text, start, end: text.length });
+      }
+      const plain=normalizedText(text,false);
+      const joined=/\p{L}[-\u2010][ \t]*(?:\r\n|\r|\n)[ \t]*(?=\p{L})/u.test(text) ? normalizedText(text,true) : plain;
+      return {text,blocks,normalized:[plain,joined]};
+  }
+  function locateCrossFormatAnnotation(input = {}, index = null) {
     try {
       const association = normalizeAssociation(input.association);
       if (association.state !== 'active') fail('ASSOCIATION_REVOKED');
@@ -120,27 +144,11 @@
       if (!needles[0]) fail('INVALID_QUOTE');
       const shortQuote = needles.every(value => value.length < 16);
       if (shortQuote && prefix.length + suffix.length < 32) fail('INSUFFICIENT_CONTEXT');
-      if (!Array.isArray(input.blocks) || !input.blocks.length || input.blocks.length > 10000) fail('INVALID_TARGET_BLOCKS');
-      const ids = new Set(), blocks = [];
-      let text = '';
-      for (const item of input.blocks) {
-        const blockId = string(item?.blockId || item?.paragraphId, 300, 'INVALID_TARGET_BLOCKS');
-        if (ids.has(blockId) || typeof item.text !== 'string' || item.text.length > 500000) fail('INVALID_TARGET_BLOCKS');
-        const separator = item.separatorBefore === undefined ? '\n' : item.separatorBefore;
-        if (!['', ' ', '\n', '\n\n'].includes(separator)) fail('INVALID_TARGET_BLOCKS');
-        ids.add(blockId);
-        // PDF source items can split one word. Only a caller-supplied real
-        // line boundary may turn an item-ending hyphen into a line-end hyphen.
-        if (blocks.length) text += separator;
-        const start = text.length;
-        text += item.text;
-        if (text.length > 2000000) fail('TARGET_TEXT_TOO_LARGE');
-        blocks.push({ blockId, blockFingerprint: String(item.blockFingerprint || item.fingerprint || blockId),
-          text: item.text, start, end: text.length });
-      }
+      const prepared = index || prepareCrossFormatText(input.blocks);
+      const {text,blocks} = prepared;
       const candidates = new Map();
       for (const join of [false, true]) {
-        const normalized = normalizedText(text, join);
+        const normalized = prepared.normalized[Number(join)];
         for (const needle of needles) {
           let at = normalized.text.indexOf(needle);
           while (at >= 0) {
@@ -194,6 +202,6 @@
        !((p.format==='html'&&p.evidence==='article-meta-doi')||(p.format==='pdf'&&p.evidence==='pdf-own-doi')))return '';
     return 'main';
   }
-  return { automaticCrossFormatRole, createCrossFormatAssociation, revokeCrossFormatAssociation, locateCrossFormatAnnotation,
+  return { prepareCrossFormatText, automaticCrossFormatRole, createCrossFormatAssociation, revokeCrossFormatAssociation, locateCrossFormatAnnotation,
     normalizeCrossFormatPaperDoi, normalizeCrossFormatSource: normalizeSource };
 });

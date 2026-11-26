@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, extensionIdsFromManifest } = require('./server.js');
-const { ensureService, verifyService, selfCheck, runtimeRevision } = require('./bootstrap.js');
+const { ensureService, verifyInstalledService, selfCheck, runtimeRevision } = require('./bootstrap.js');
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 
 async function control(request, options = {}) {
@@ -25,7 +25,7 @@ async function control(request, options = {}) {
     let descriptor, token;
     try { descriptor = JSON.parse(fs.readFileSync(path.join(active.stateDir, 'service.json'), 'utf8')); token = fs.readFileSync(parsed.tokenFile, 'utf8').trim(); }
     catch { return { ok: true, phase: 'component-ready', service: 'not-started', clientToolRead: 'not-tested', extensionId }; }
-    try { connection = { ...await verifyService(descriptor.port, { token, revision: runtimeRevision(payloadRoot), extensionId: extensionIds[0], extensionIds, allowWrite: active.allowWrite }), token }; }
+    try { connection = { ...await verifyInstalledService(descriptor.port, { token, revision: runtimeRevision(payloadRoot), extensionId: extensionIds[0], extensionIds, allowWrite: active.allowWrite },payloadRoot,descriptor), token }; }
     catch (error) {
       if (error.code === 'ECONNREFUSED') return { ok: true, phase: 'component-ready', service: 'not-started', clientToolRead: 'not-tested', extensionId };
       throw error;

@@ -46,6 +46,12 @@
       if (old) old.replaceWith(svg); else button.prepend(svg);
     }
   }
+  globalThis.BrevessAnalysisIcon = (button, action) => {
+    const path = button.querySelector('[data-toolbar-icon] path');
+    if (!path) return;
+    const d = action === 'pause' ? 'M8 5v14M16 5v14' : action === 'resume' ? 'M7 4l13 8-13 8z' : batch;
+    if (path.getAttribute('d') !== d) path.setAttribute('d', d);
+  };
   apply();
   for (const id of ['sidePanelHeader','sidePanelDocumentStatus']) {
     const root = document.getElementById(id); if (root) new MutationObserver(apply).observe(root,{childList:true,subtree:true});

@@ -3356,8 +3356,46 @@
     showUnparsedPdfPrompt();
   }
 
+  let readerPdfAttachments, readerPdfCatalog;
+  async function attachOriginalToLibrary({ workspaceId, doi, webWorkspaces, guard }) {
+    const source = capturePdfParseSource(), native = globalThis.__brevessNativePdfDocument;
+    let hash = native?.structure?.documentHash || SciLLM.localPdfSourceHash(source.source);
+    const generation = native?.documentGeneration;
+    const current = () => {
+      source.assertCurrent();
+      const live = globalThis.__brevessNativePdfDocument;
+      return guard() && (generation === undefined || live?.documentGeneration === generation) &&
+        (!live?.structure?.documentHash || !hash || live.structure.documentHash === hash);
+    };
+    const assertCurrent = () => { if (!current()) throw Error('PDF_ORIGINAL_CHANGED'); };
+    assertCurrent();
+    const name = (source.fileName || 'article.pdf').replace(/[\\/:*?"<>|\u0000-\u001f\u007f\ud800-\udfff]/gu, '_')
+      .replace(/\.pdf$/iu, '').trim().slice(0, 220) || 'article';
+    const blob = source.file instanceof Blob ? source.file : new Blob([await pdfBytesForNativeFigures()], { type: 'application/pdf' });
+    assertCurrent();
+    // Original bytes can be saved before text indexing finishes, including scans.
+    if (!hash) hash = await BrevessLibraryAttachments.libraryAttachmentSha256(blob);
+    assertCurrent();
+    readerPdfAttachments ||= BrevessLibraryAttachments.createLibraryAttachmentStore();
+    const attachment = await readerPdfAttachments.save({ blob, kind: 'pdf', name: name + '.pdf',
+      expectedHash: hash, attachmentId: 'attachment:' + hash });
+    assertCurrent();
+    const aliases = BrevessLibraryCatalog.libraryCatalogIdentityAliases({ doi,
+      sourceDocuments: [workspaceId, ...webWorkspaces].map(workspaceId => ({ workspaceId })) });
+    aliases.push('source:pdf:' + hash);
+    readerPdfCatalog ||= BrevessLibraryCatalog.createLibraryCatalogStore();
+    const link = await readerPdfCatalog.attachReaderPdf({ aliases, attachment }, { guard: current });
+    if (!link.replayed && typeof BroadcastChannel === 'function') {
+      const updates = new BroadcastChannel('brevess-library-attachments');
+      updates.postMessage('saved');
+      updates.close();
+    }
+    return { ...link, name: attachment.name, sha256: hash, size: blob.size };
+  }
+
   globalThis.__brevessPdfReaderBridge = Object.freeze({
     getBytes: () => pdfBytesForNativeFigures(),
+    attachOriginalToLibrary,
     originalUrl: () => originalPdfViewUrl(),
     focusPage: pageNumber => focusOriginalPdfPage(pageNumber),
     ensureFigureInventory: () => ensureNativeFigureInventory(),

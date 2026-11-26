@@ -77,7 +77,7 @@ class BridgeHub {
         {
           bridge: publicBridge(this.bridge),
           connectUrl: this.connectUrl || null,
-          correction: 'Open the BREVESS Workbench from the MCP connect page and leave the tab open.'
+          correction: 'Open BREVESS Settings, choose your Agent, then select Connect and test.'
         },
         {
           retryable: true,
@@ -141,6 +141,7 @@ class BridgeHub {
       });
     }
     const bridge = this.register(meta);
+    if (meta.hello === true) return Promise.resolve({type:'idle', bridge, waitMs:0});
     if (this.waiter) {
       clearTimeout(this.waiter.timer);
       this.waiter.resolve({ type: 'reconnect', bridge });

@@ -24,6 +24,12 @@
       }finally{button.disabled=false;}});
     };
   }
+  if (typeof window.BroadcastChannel === 'function') {
+    const updates = new BroadcastChannel('brevess-library-attachments');
+    updates.onmessage = event => {
+      if (event.data === 'saved' && rt()?.ui.library) run(rt().loadGlobalLibrary);
+    };
+  }
   window.addEventListener('brevess-catalog-detail',event=>run(()=>render(event.detail.entry)));
   window.addEventListener('brevess-catalog-action',event=>{
     const {action,entry}=event.detail;if(!rt()?.catalogActions)return;

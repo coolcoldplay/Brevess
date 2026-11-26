@@ -93,10 +93,11 @@
       pdfWriteQueues.set(hash, pending);
       try { return await pending; } finally { if (pdfWriteQueues.get(hash) === pending) pdfWriteQueues.delete(hash); }
     }
-    async function save({ blob, name, kind, attachmentId } = {}) {
+    async function save({ blob, name, kind, attachmentId, expectedHash } = {}) {
       const safeName = attachmentName(name);
       await validateBytes(blob, kind);
       const hash = await libraryAttachmentSha256(blob, crypto);
+      if (expectedHash !== undefined) check(hash === expectedHash, 'LIBRARY_ATTACHMENT_HASH_MISMATCH');
       const mime = kind === 'pdf' ? 'application/pdf' : kind === 'html' ? 'text/html' : 'application/octet-stream';
       const descriptor = model.normalizeCatalogAttachment({ id: attachmentId, assetId: `sha256:${hash}`, name: safeName,
         mime, size: blob.size, sha256: hash, kind, availability: 'available',

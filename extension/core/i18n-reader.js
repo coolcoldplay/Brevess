@@ -1,6 +1,30 @@
 (function(root) {
   const api = root.SciLLM || (typeof module === 'object' ? require('./i18n.js') : {});
   const entries = Object.fromEntries(`
+长按查看原图	Hold to view original
+保存 PDF 到文献附件	Save PDF to paper attachments
+当前 PDF 已切换，请重新保存	The PDF changed. Open the intended PDF and save again.
+PDF 原件附件	Original PDF attachment
+使用浏览器文库	Saved in the browser library
+，PDF 原件已存入文献附件	, including the original PDF in paper attachments
+；PDF 附件保存失败，请重试	. The PDF attachment could not be saved. Try again.
+PDF 原件已存入文献附件，可在文献库离线打开。	PDF attached. You can open it offline from the library.
+PDF 原件已存入文献附件。本地文件夹需要重新授权。	PDF attached. Allow access to the local folder to save a copy there.
+PDF 原件已存入文献附件。部分阅读记录有较新的修改。	PDF attached. Some reading records have newer edits.
+阅读记录已保存。PDF 附件保存失败，请重试。	Reading records saved. The PDF attachment could not be saved. Try again.
+原批注已在另一处修改，请重新打开后编辑	This annotation changed in another reader. Reopen it to edit the latest version.
+原批注已被修改，请重新打开后编辑	This annotation was changed. Reopen it to edit the latest version.
+正文已就绪，正在恢复阅读记录…	Text is ready. Restoring reading history…
+已读取大纲，正在准备正文与阅读记录…	The outline is ready. Loading the text and reading history…
+正在读取正文，页面加载后会自动更新…	Reading the text. It will update as the page loads…
+正文正在更新，准备好后会自动显示。	The text is updating and will appear automatically.
+大纲可用，完整阅读数据连接超时	The outline is ready. The reading data connection timed out.
+读取连接超时，可重新提取	The connection timed out. Retry reading the page.
+完整阅读数据连接超时，可重新提取。	The reading data connection timed out. Retry reading the page.
+浏览器内置页面无法读取。切换到网页后会自动提取。	Browser internal pages are unavailable. Switch to a webpage to start reading.
+正在读取大纲…	Reading the outline…
+页面正在更新，大纲会自动同步…	Updating the outline as the page changes…
+当前还没有可显示的标题。	No headings are available yet.
 编辑已中止；未保存内容仍需重新填写	Editing stopped; unsaved content must be entered again
 论文上下文已切换，未发送编辑内容	The article context changed. Your edits were not sent.
 字段无法安全保存	This field cannot be saved safely
@@ -794,6 +818,13 @@ PDF 正文	PDF article text
 来源已变化，请重新核对当前论文。	The source changed. Check the current article again.
 未附可定位来源	No locatable source attached
 AI 全文高亮	AI full-text highlighting
+暂停全文高亮	Pause highlighting
+继续全文高亮	Resume highlighting
+取消本次高亮	Cancel highlighting
+取消本次图解	Cancel figure analysis
+右键可取消任务	Right-click to cancel the task
+同篇文献的逐段摘要	Paragraph summaries from the other edition
+在当前原文中定位引文	Locate this quotation in the current edition
 表格操作	Table actions
 在上方插入行	Insert row above
 在下方插入行	Insert row below
@@ -1354,7 +1385,9 @@ Figure 写入结果尚未确认：	Figure write results unconfirmed:
 正文已变化，请重新搜索。	Article text changed. Search again.
 上次全文分析在浏览器关闭或页面离开时中断，请手动重新开始。	The previous full-text analysis was interrupted when the browser closed or the page was left. Restart it manually.
 页面正文仍在加载，请等待页面加载完成后重新提取。	Article text is still loading. Wait for the page to finish loading and extract again.
-当前页面没有可读取的正文。请确认已打开全文，并完成页面的登录或访问验证后重新提取。	No readable article text is available. Open the full text and complete any sign-in or access verification before extracting again.
+当前页面没有可读取的正文。打开全文或完成登录后，侧栏会自动更新。	No readable text is available yet. The sidebar will update when you open the full text or finish signing in.
+正在重新连接当前网页…	Reconnecting to the current page…
+网页读取连接已断开，可重新连接。	The page disconnected. Retry to reconnect.
 文献工作区在读取期间发生变化，请重新读取。	The article workspace changed while reading. Read it again.
 页面正文在读取期间发生变化，请等待加载稳定后重新提取。	Article text changed while reading. Wait for loading to stabilize and extract again.
 正文已识别，但文献身份准备失败，请重新提取。	Article text was identified, but article identity preparation failed. Extract again.

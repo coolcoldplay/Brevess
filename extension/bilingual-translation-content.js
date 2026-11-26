@@ -479,6 +479,7 @@
                 notice.className = 'sci-translation-notice';
                 notice.setAttribute('data-brevess-interface', '');
                 notice.setAttribute('data-sci-plugin-ui', '');
+                notice.dataset.brevessTranslationUi = '';
                 notice.setAttribute('aria-label', 'Brevess 双语阅读');
                 const text = document.createElement('span');
                 text.className = 'sci-translation-notice-text';
@@ -729,9 +730,89 @@
             await provider?.confirmStopped?.();
             return getState();
         }
+        function removeSentenceTip(pair) {
+            if (!pair) return;
+            clearTimeout(pair.leaveTimer);
+            pair.tip?.remove();
+            pair.tip = null;
+            if (pair.gutter) {
+                pair.record.translation.style.removeProperty('--sci-original-gutter');
+                pair.record.translation.classList.remove('sci-bilingual-with-gutter');
+                pair.gutter = false;
+            }
+        }
+        function leaveSentencePair(event) {
+            const pair = readingPair;
+            if (!pair || pair.tip?.contains(event.relatedTarget) || pair.record.translation.contains(event.relatedTarget)) return;
+            clearTimeout(pair.leaveTimer);
+            pair.leaveTimer = setTimeout(() => { if (readingPair === pair) clearSentencePair(); }, 180);
+        }
+        function showSentenceTip(pair, originalText, chineseRanges, pointer) {
+            const tip = document.createElement('div');
+            tip.className = 'sci-bilingual-source-tip';
+            tip.dataset.sciPluginUi = '';
+            tip.dataset.brevessTranslationUi = '';
+            tip.lang = 'en'; tip.dir = 'auto'; tip.translate = false;
+            tip.setAttribute('role', 'tooltip');
+            tip.textContent = originalText;
+            if (!tip.textContent.trim()) return;
+            pair.tip = tip;
+            tip.addEventListener('pointerenter', () => clearTimeout(pair.leaveTimer));
+            tip.addEventListener('pointerleave', leaveSentencePair);
+            const viewport = view.visualViewport;
+            const left = (viewport?.offsetLeft || 0) + 8, top = (viewport?.offsetTop || 0) + 8;
+            const right = left + (viewport?.width || view.innerWidth) - 16;
+            const bottom = top + (viewport?.height || view.innerHeight) - 16;
+            const rects = chineseRanges.flatMap(range => [...range.getClientRects()]).filter(r =>
+                r.bottom > top && r.top < bottom && r.right > left && r.left < right);
+            if (!rects.length) { pair.tip = null; return; }
+            const bounds = {top:Math.min(...rects.map(r=>r.top)), bottom:Math.max(...rects.map(r=>r.bottom)),
+                left:Math.min(...rects.map(r=>r.left)), right:Math.max(...rects.map(r=>r.right))};
+            const gap = 7;
+            const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
+            tip.style.width = Math.min(420, right-left) + 'px';
+            tip.setAttribute('popover','manual');
+            document.documentElement.append(tip);
+            tip.showPopover?.();
+            const need = Math.min(tip.scrollHeight + 2, (bottom-top)*0.42);
+            const above = bounds.top-gap-top, below = bottom-bounds.bottom-gap;
+            const position = (x,y,h) => {
+                tip.style.maxHeight = Math.max(1, h) + 'px';
+                tip.style.left = x + 'px'; tip.style.top = y + 'px';
+            };
+            const width = tip.getBoundingClientRect().width;
+            const x = clamp(pointer.clientX-width/3, left, right-width);
+            if (below >= need || below >= 56 && below >= above) {
+                position(x,bounds.bottom+gap,Math.min(need,below));
+            } else if (above >= 56 || above >= need) {
+                tip.style.maxHeight = Math.min(need,above) + 'px';
+                position(x,bounds.top-gap-tip.getBoundingClientRect().height,Math.min(need,above));
+            } else {
+                let spaceRight = right-bounds.right-gap, spaceLeft = bounds.left-left-gap;
+                let side = spaceRight >= spaceLeft ? bounds.right+gap : left;
+                let space = Math.max(spaceRight,spaceLeft);
+                if (space < 128) {
+                    // A sentence can fill the entire viewport. Reserve a column beside the
+                    // translation so the English never covers the line being read.
+                    const block = pair.record.translation, blockRect = block.getBoundingClientRect();
+                    const gutter = Math.min(230, Math.max(72, blockRect.width*0.34));
+                    block.style.setProperty('--sci-original-gutter', gutter + 'px');
+                    block.classList.add('sci-bilingual-with-gutter'); pair.gutter = true;
+                    side = Math.min(blockRect.right,right)-gutter+gap;
+                    space = gutter-gap;
+                }
+                tip.style.width = Math.min(420,space) + 'px';
+                const height = Math.min(tip.scrollHeight+2,(bottom-top)*0.5);
+                position(clamp(side,left,right-tip.getBoundingClientRect().width),clamp(pointer.clientY-height/2,top,bottom-height),height);
+            }
+        }
+        function dismissMovedPair(event) {
+            if (readingPair && !readingPair.tip?.contains(event.target?.nodeType ? event.target : null)) clearSentencePair();
+        }
         function clearSentencePair() {
             if (!readingPair) return;
             readingPair.observer?.disconnect();
+            removeSentenceTip(readingPair);
             view.CSS?.highlights?.delete(pairColor);
             readingPair = null;
         }
@@ -774,13 +855,14 @@
         }
         function hoverTranslationSentence(record, event) {
             if (event.pointerType === 'touch' || !view.CSS?.highlights || !view.Highlight || !sentenceApi?.alignSentences) return;
-            if (event.buttons || !record.element.isConnected || record.translation.hidden) { clearSentencePair(); return; }
+            if (event.buttons || record.translation.isContentEditable || !record.element.isConnected || record.translation.hidden) { clearSentencePair(); return; }
             if (readingPair?.record !== record) {
                 clearSentencePair();
                 readingPair = indexSentencePair(record);
             }
             const pair = readingPair;
             if (!pair) return;
+            clearTimeout(pair.leaveTimer);
             const x = event.clientX, y = event.clientY;
             const caret = document.caretPositionFromPoint?.(x, y) || document.caretRangeFromPoint?.(x, y);
             const node = caret?.offsetNode || caret?.startContainer;
@@ -800,20 +882,24 @@
             }
             if (match === pair.active) return;
             view.CSS.highlights.delete(pairColor);
+            removeSentenceTip(pair);
             pair.active = match;
             if (!match) return;
-            const ranges = (match.sourceSpans || [{start: match.sourceStart, end: match.sourceEnd}])
-                .flatMap(span => sentenceApi.sourceRanges(document, pair.segments, span.start, span.end));
-            if (!ranges.some(r => r.getClientRects().length)) return;
+            const sourceSpans = match.sourceSpans || [{start: match.sourceStart, end: match.sourceEnd}];
+            const ranges = sourceSpans.flatMap(span => sentenceApi.sourceRanges(document, pair.segments, span.start, span.end));
+            if (!ranges.length) return;
+            const chineseRanges = [];
             for (const [textNode, base] of pair.nodes) {
                 const left = Math.max(0, match.start - base), right = Math.min(textNode.length, match.end - base);
                 if (right <= left) continue;
                 const range = document.createRange();
-                range.setStart(textNode, left); range.setEnd(textNode, right); ranges.push(range);
+                range.setStart(textNode, left); range.setEnd(textNode, right); ranges.push(range); chineseRanges.push(range);
             }
             const highlight = new view.Highlight();
             for (const range of ranges) highlight.add(range);
             view.CSS.highlights.set(pairColor, highlight);
+            const original = sourceSpans.map(span => record.text.slice(span.start, span.end).trim()).filter(Boolean).join(' ');
+            showSentenceTip(pair, original, chineseRanges, event);
         }
         function paintTranslation(record, translatedText, { partial = false } = {}) {
             const confirmed = confirmedEntry(record);
@@ -835,7 +921,7 @@
                 });
                 record.translation.addEventListener('pointermove', event => hoverTranslationSentence(record, event), {passive: true});
                 record.translation.addEventListener('pointerover', event => hoverTranslationSentence(record, event), {passive: true});
-                record.translation.addEventListener('pointerleave', clearSentencePair, {passive: true});
+                record.translation.addEventListener('pointerleave', leaveSentencePair, {passive: true});
                 displaySources.set(record.translation, record.element);
             }
             const sourceEnd = partial ? confirmed?.sourceEnd : record.text.length;
@@ -1554,6 +1640,7 @@
             return interactive(event.target) || interactive(document.activeElement) || event.composedPath?.().some(interactive);
         }
         function onKeyDown(event) {
+            if (event.key === 'Escape' && readingPair) clearSentencePair();
             if (!standaloneTranslationAllowed()) { resetShortcut(); return; }
             if (event.key !== 'Alt') { resetShortcut(); return; }
             if (event.repeat) return;
@@ -1676,6 +1763,8 @@
         document.addEventListener?.('keyup', onKeyUp, true);
         view.addEventListener('blur', leaveDocument);
         document.addEventListener?.('visibilitychange', clearSentencePair);
+        document.addEventListener?.('scroll', dismissMovedPair, true);
+        view.addEventListener?.('resize', clearSentencePair);
         // SPA pushState has no DOM event; a cheap URL check also cancels quiet navigations.
         const navigationTimer = view.setInterval(() => { if (state.active || records.size || selectionTasks.size || selectionPreparation) checkNavigation(); }, 500);
         // A reopened document may display saved output without enabling translation.
@@ -1701,6 +1790,8 @@
             document.removeEventListener?.('keyup', onKeyUp, true);
             view.removeEventListener('blur', leaveDocument);
             document.removeEventListener?.('visibilitychange', clearSentencePair);
+            document.removeEventListener?.('scroll', dismissMovedPair, true);
+            view.removeEventListener?.('resize', clearSentencePair);
         }
         return { setEnabled, getState, pause, resume, confirmStopped, hideTranslations, dismissNotice, captureExportSnapshot, captureSavedTranslations, restoreSavedTranslations,
             validateTranslationContext,

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  if(globalThis.BrevessWebReadingPage?.version===5)return;
+  if(globalThis.BrevessWebReadingPage?.version===6)return;
   globalThis.BrevessWebReadingPage?.stop();
   // Native annotation marks are interactive wrappers around original text.
   // Their button role must not erase that text from snapshots or anchor reads.
@@ -11,20 +11,46 @@
   const url=()=>{const u=new URL(location.href);u.hash='';return u.href;};
   const hash=text=>{let a=2166136261,b=2246822519;for(let i=0;i<text.length;i++){a=Math.imul(a^text.charCodeAt(i),16777619);b=Math.imul(b^text.charCodeAt(i),3266489917);}return(a>>>0).toString(16)+(b>>>0).toString(16);};
   const clean=value=>String(value||'').replace(/\r\n/g,'\n').trim();
-  function eligible(e){if(!e||e.closest(excluded))return false;for(let n=e;n;n=n.parentElement){const s=getComputedStyle(n);if(s.display==='none'||s.visibility==='hidden'||s.visibility==='collapse'||s.contentVisibility==='hidden')return false;}return true;}
-  function text(e){if(!e)return'';const copy=e.cloneNode(true),original=e.querySelectorAll('*'),cloned=copy.querySelectorAll('*');for(let i=original.length-1;i>=0;i--)if(!eligible(original[i]))cloned[i].remove();return clean(copy.textContent);}
+  let visibility, outlineTextCache;
+  function eligible(e) {
+    if (!e) return false;
+    if (visibility?.has(e)) return visibility.get(e);
+    let ok = !e.matches(excluded) && (!e.parentElement || eligible(e.parentElement));
+    if (ok) {
+      const style = getComputedStyle(e);
+      ok = style.display !== 'none' && !['hidden','collapse'].includes(style.visibility) && style.contentVisibility !== 'hidden';
+    }
+    visibility?.set(e,ok);
+    return ok;
+  }
+  function text(e) {
+    if (!e) return '';
+    if (outlineTextCache?.has(e)) return outlineTextCache.get(e);
+    const parts = [];
+    const walker = document.createTreeWalker(e,NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,{
+      acceptNode(n) {
+        if (n.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+        return eligible(n) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_REJECT;
+      }
+    });
+    while (walker.nextNode()) parts.push(walker.currentNode.data);
+    const value = clean(parts.join(''));
+    outlineTextCache?.set(e,value);
+    return value;
+  }
   function mainRoot(){return Array.from(document.querySelectorAll('main,[role="main"],article')).find(eligible)||document.body;}
   function chatRoots(){
     const modern=Array.from(document.querySelectorAll('[data-chatgpt-search-unit-key]')).filter(e=>/:(user|assistant)$/.test(e.getAttribute('data-chatgpt-search-unit-key')||'')&&eligible(e));
-    if(modern.length)return modern.map(e=>{
+    const messages=modern.map(e=>{
       const role=e.getAttribute('data-chatgpt-search-unit-key').split(':').pop();
       const ids=[...new Set((e.getAttribute('data-chatgpt-search-message-ids')||'').split(/\s+/).filter(Boolean))];
       const selected=e.querySelector('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id');
       const id=selected||(ids.length===1?ids[0]:'');
       const node=role==='assistant'?e.querySelector('[data-markdown-text-style="assistant-message"]'):e;
-      return{node,role,id,turnId:e.closest('[data-turn-key]')?.getAttribute('data-turn-key')||''};
+      return{node,owner:e,role,id,turnId:e.closest('[data-turn-key]')?.getAttribute('data-turn-key')||''};
     }).filter(x=>x.node);
-    return Array.from(document.querySelectorAll('[data-message-author-role]')).filter(eligible).map(e=>({node:e.querySelector('.markdown')||e,role:e.getAttribute('data-message-author-role'),id:e.getAttribute('data-message-id')||'',turnId:e.closest('[data-turn-key]')?.getAttribute('data-turn-key')||''})).filter(x=>['user','assistant'].includes(x.role));
+    const legacy=Array.from(document.querySelectorAll('[data-message-author-role]')).filter(e=>eligible(e)&&!messages.some(m=>m.owner.contains(e)||e.contains(m.owner))).map(e=>({node:e.querySelector('.markdown')||e,role:e.getAttribute('data-message-author-role'),id:e.getAttribute('data-message-id')||'',turnId:e.closest('[data-turn-key]')?.getAttribute('data-turn-key')||''})).filter(x=>['user','assistant'].includes(x.role));
+    return [...messages,...legacy].sort((a,b)=>a.node.compareDocumentPosition(b.node)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1);
   }
   function r18SiteInfo(value) {
   let u; try { u = new URL(value); } catch { return { family: '', conversation: false, saved: false }; }
@@ -131,7 +157,12 @@
     return site.conversation ? r18MessageRoots(site.family).map(message=>message.node) : null;
   }
 
-  function collect(){
+  function collect(outlineOnly=false, textCache=null) {
+    outlineTextCache = textCache;
+    visibility = new WeakMap();
+    try { return collectPage(outlineOnly); } finally { visibility = null; outlineTextCache = null; }
+  }
+  function collectPage(outlineOnly){
     const sourceUrl=url(),site=r18SiteInfo(sourceUrl),isChat=site.conversation,isFeed=site.feed,main=mainRoot();
     if(r18IdentityUrl!==sourceUrl){r18NodeIds=new WeakMap();r18NodeSequence=0;r18IdentityUrl=sourceUrl;}
     const scholarly=!!document.querySelector('meta[name="citation_doi"],meta[name="citation_journal_title"]');
@@ -147,13 +178,13 @@
     };
     function body(node,prefix,role,turnId,messageId,parentId){
       const sectionStack=[];let sectionId=parentId||'';
-      let nodes=Array.from(node.querySelectorAll(headingSelector+',p,li,pre,table,blockquote')).filter(eligible);
+      let nodes=Array.from(node.querySelectorAll(outlineOnly ? headingSelector : headingSelector+',p,li,pre,table,blockquote')).filter(eligible);
       nodes=nodes.filter(e=>{
         if(e.closest('pre,table,blockquote')!==e&&e.closest('pre,table,blockquote')&&node.contains(e.closest('pre,table,blockquote')))return false;
         if(e.matches('li')&&e.querySelector('p,li'))return false;
         return true;
       });
-      if(!nodes.length&&text(node))nodes=[node];
+      if(!outlineOnly&&!nodes.length&&text(node))nodes=[node];
       for(const e of nodes){
         const isHeading=e.matches(headingSelector),level=Number(e.getAttribute('aria-level')||e.tagName.slice(1))||2;
         if(isHeading){while(sectionStack.length&&sectionStack.at(-1).level>=level)sectionStack.pop();}
@@ -190,7 +221,11 @@
           outline.push({...child,title:label+child.text.replace(/\s+/g,' ').slice(0,140),field:part.field,level:2,parentId:id});blocks.push(child);
         }
       }
-    }else if(main){body(main,'article','author','','',null);}
+    }else if(main){body(outlineOnly && scholarly ? document.querySelector('article') || main : main,'article','author','','',null);}
+    if (outlineOnly) return {...base, map, outline:outline.map(r => ({
+      id:r.id, title:r.title.slice(0,1000), text:r.text.slice(0,24000), textTruncated:r.text.length>24000,
+      level:r.level, parentId:r.parentId, role:r.role
+    }))};
     for(const entry of map.values())entry.ambiguous=!entry.stable&&ids.get(entry.uniqueKey)>1;
     const images=Array.from(new Set((isFeed?r18FeedRoots():isChat?r18MessageRoots(site.family).map(m=>m.node):[main||document.body]).flatMap(root=>Array.from(root.querySelectorAll('img'))))).filter(eligible).map((node,i)=>{const src=node.currentSrc||node.src;if(!/^https?:|^data:image\//.test(src))return null;const row={id:'image:'+hash(src)+':'+i,src,title:node.alt||'图片 '+(i+1),caption:text(node.closest('figure')?.querySelector('figcaption'))||node.alt||'',sourceUrl};map.set(row.id,{node,row,stable:true});return row;}).filter(Boolean);
     refs=map;
@@ -247,17 +282,128 @@
   let positionTimer=null;
   function positionChanged(){clearTimeout(positionTimer);positionTimer=setTimeout(()=>{if(cached)chrome.runtime.sendMessage({type:'BREVESS_WEB_READING_CHANGED',documentToken:token,sourceUrl:url(),position:true,currentId:position()}).catch(()=>stop());},200);}
   function stop(){observer?.disconnect();observer=null;clearTimeout(lease);clearTimeout(debounce);clearTimeout(positionTimer);document.removeEventListener('scroll',positionChanged,true);}
+  function displayOnlyChange(record) {
+    const owner = '[data-sci-plugin-ui],[data-sci-translation],[data-wfg-reading-owned]';
+    const owned = node => (node.nodeType === 1 ? node : node.parentElement)?.closest(owner);
+    if (owned(record.target)) return true;
+    if (record.type !== 'childList') return false;
+    const changed = [...record.addedNodes, ...record.removedNodes];
+    return changed.length > 0 && changed.every(owned);
+  }
   function renew(){
     if(!globalThis.chrome?.runtime?.id)return;
     clearTimeout(lease);lease=setTimeout(stop,90000);
     if(observer)return;
     document.addEventListener('scroll',positionChanged,{capture:true,passive:true});
     observer=new MutationObserver(records=>{
-      if(!records.some(r=>!r.target?.parentElement?.closest(excluded)))return;
+      if(!records.some(r=>!displayOnlyChange(r) && !r.target?.parentElement?.closest(excluded)))return;
       dirty=true;clearTimeout(debounce);debounce=setTimeout(()=>chrome.runtime.sendMessage({type:'BREVESS_WEB_READING_CHANGED',documentToken:token,sourceUrl:url()}).catch(()=>stop()),450);
     });
     observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['id','data-did','data-conv-id','data-virtual-list-item-key','data-testid','data-foundation-type','data-message-author-role','data-turn-key','data-chatgpt-search-unit-key','data-message-id','data-chatgpt-selection-message-id','data-chatgpt-search-message-ids','hidden','aria-hidden','style','class']});
   }
+  function connectOutline(port) {
+    if (port.name !== 'brevess-live-outline' || port.sender?.id !== chrome.runtime.id ||
+        port.sender.url?.split(/[?#]/)[0] !== chrome.runtime.getURL('popup.html')) return;
+    let map = new Map(), scheduled, quietTimer, closed = false, lastRead = 0, lastChange = 0;
+    let textCache = new WeakMap(), began = 0, hydrationTimer;
+    let lastUrl = '', lastRevision = '', lastBusy, lastPosition = '', positionFrame;
+    const chatStop = 'button[aria-label="停止"],button[aria-label="停止生成"],button[aria-label="Stop" i],button[aria-label="Stop generating" i],button[aria-label="Stop streaming" i],[data-testid="stop-button"]';
+    const busySelector = 'main[aria-busy="true"],article[aria-busy="true"],[role="main"][aria-busy="true"],[data-message-author-role][aria-busy="true"],[data-testid="stop-button"],[data-is-streaming="true"]';
+    const send = message => { if (!closed) { try { port.postMessage(message); } catch (_) { close(); } } };
+    function publish() {
+      scheduled = null;
+      const sourceUrl = url(), site = r18SiteInfo(sourceUrl);
+      if (site.feed) { send({type:'unsupported',sourceUrl}); return; }
+      if (sourceUrl !== lastUrl) { lastRevision = ''; lastBusy = undefined; lastUrl = sourceUrl; textCache = new WeakMap(); began = performance.now(); }
+      const result = document.body ? collect(true,textCache) : {outline:[],map:new Map(),kind:site.conversation?'conversation':'article'};
+      map = result.map;
+      lastRead = performance.now();
+      const root = document.querySelector('main,[role="main"],article') || document.body;
+      const emptyShell = !result.outline.length && (!root || !root.innerText?.trim() ||
+        root.querySelector('[role="progressbar"],[data-loading="true"],[data-testid*="skeleton" i]') ||
+        site.saved && !root.querySelector('[data-message-author-role],[data-chatgpt-search-unit-key]'));
+      const hydrating = Boolean(emptyShell && lastRead-began<8000);
+      clearTimeout(hydrationTimer);
+      if (hydrating) hydrationTimer=setTimeout(schedule,Math.max(1,8010-(lastRead-began)));
+      const busy = document.readyState !== 'complete' || hydrating || lastRead - lastChange < 380 ||
+        [...document.querySelectorAll(site.family==='chatgpt' ? busySelector+','+chatStop : busySelector)].some(e => e.getClientRects().length && !e.closest('[hidden],[aria-hidden="true"],[data-sci-plugin-ui]'));
+      const revision = hash(JSON.stringify(result.outline.map(r => [r.id,r.title,r.text,r.textTruncated,r.parentId,r.level])));
+      if (lastRevision !== revision || lastBusy !== busy) {
+        send({type:'outline',sourceUrl,documentToken:token,title:document.title,kind:result.kind,revision,busy,
+          ...(lastRevision === revision ? {} : {outline:result.outline})});
+      }
+      lastRevision = revision; lastBusy = busy;
+    }
+    function schedule() {
+      if (closed || scheduled != null) return;
+      scheduled = setTimeout(publish, Math.max(0, 160 - (performance.now() - lastRead)));
+    }
+    function changed() {
+      lastChange = performance.now();
+      schedule(); clearTimeout(quietTimer); quietTimer = setTimeout(schedule, 405);
+    }
+    const watch = new MutationObserver(records => {
+      let relevant = false;
+      for (const r of records) {
+        if (!affectsOutline(r)) continue;
+        relevant = true;
+        let node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+        while (node) { textCache.delete(node); node=node.parentElement; }
+        // A previously hidden or detached subtree may have changed before it returned.
+        if (r.type==='attributes' || [...r.addedNodes].some(n => n.nodeType===1 && n.childElementCount)) textCache=new WeakMap();
+      }
+      if (relevant || url() !== lastUrl) changed();
+      function affectsOutline(r) {
+        if (displayOnlyChange(r)) return false;
+        const target = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+        if (!target) return false;
+        if (r18SiteInfo(lastUrl).family==='chatgpt' &&
+            (target.closest(chatStop) || r.attributeName==='aria-label' && target.tagName==='BUTTON' ||
+             r.type==='childList' && [...r.addedNodes,...r.removedNodes].some(n=>n.nodeType===1 && (n.matches(chatStop)||n.querySelector(chatStop))))) return true;
+        if (target.closest(excluded) && !(r.type==='attributes' && ['hidden','aria-hidden'].includes(r.attributeName) && !target.parentElement?.closest(excluded))) return target.matches('[data-testid="stop-button"]');
+        if (r.type === 'childList' && ![...r.addedNodes,...r.removedNodes].some(n =>
+          n.nodeType === 3 || n.nodeType === 1 && (!n.matches(excluded) || n.matches('[data-testid="stop-button"]')))) return false;
+        if (r.type === 'attributes' && !target.matches(headingSelector+',main,article,[role="main"],[data-testid],[data-message-author-role],[data-chatgpt-search-unit-key],[data-is-streaming]') &&
+            !target.querySelector(headingSelector+',[data-message-author-role]')) return false;
+        const main = document.querySelector('main,[role="main"],article');
+        return !main || main.contains(target) || target.contains(main);
+      }
+    });
+    function scrollPosition() {
+      if (positionFrame != null || !map.size || !r18SiteInfo(lastUrl).conversation) return;
+      positionFrame = setTimeout(() => {
+        positionFrame = null;
+        let id = '', nearest = Infinity;
+        for (const [key,entry] of map) {
+          const rect = entry.node.getBoundingClientRect();
+          if (rect.bottom <= 0 || rect.top > innerHeight || Math.abs(rect.top) >= nearest) continue;
+          nearest = Math.abs(rect.top); id = key;
+        }
+        if (id && id !== lastPosition) { lastPosition = id; send({type:'position',id,sourceUrl:url(),documentToken:token}); }
+      },150);
+    }
+    const events = [[document,'readystatechange',schedule],[window,'load',schedule],[window,'pageshow',changed],
+      [window,'popstate',changed],[window.navigation,'currententrychange',changed],[document,'scroll',scrollPosition]];
+    function close() {
+      closed = true; watch.disconnect(); clearTimeout(scheduled); clearTimeout(quietTimer); clearTimeout(hydrationTimer); clearTimeout(positionFrame);
+      for (const [target,event,handler] of events) target?.removeEventListener(event,handler,true);
+      window.removeEventListener('pagehide',disconnect); map.clear();
+    }
+    function disconnect() { close(); try { port.disconnect(); } catch (_) {} }
+    port.onDisconnect.addListener(close);
+    port.onMessage.addListener(m => {
+      if (m?.type !== 'locate') return;
+      const node = m.documentToken === token && m.sourceUrl === url() && map.get(m.id)?.node;
+      if (node?.isConnected) node.scrollIntoView({behavior:'smooth',block:'center'});
+      send({type:'located',id:m.id,found:Boolean(node?.isConnected),sourceUrl:url(),documentToken:token});
+    });
+    for (const [target,event,handler] of events) target?.addEventListener(event,handler,{capture:true,passive:true});
+    window.addEventListener('pagehide',disconnect,{once:true});
+    watch.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,
+      attributeFilter:['class','style','hidden','aria-hidden','aria-label','aria-level','role','aria-busy','data-is-streaming','data-message-author-role','data-message-id','data-testid','data-chatgpt-search-unit-key','data-markdown-text-style']});
+    lastChange = performance.now(); publish(); quietTimer = setTimeout(schedule,405);
+  }
+  if (globalThis.chrome?.runtime?.id) chrome.runtime.onConnect?.addListener(connectOutline);
   // Local tests can call read/locate directly; the real content endpoint only
   // serves the extension's background, never website postMessage events.
   if(globalThis.chrome?.runtime?.id)chrome.runtime.onMessage.addListener((m,sender,respond)=>{
@@ -267,5 +413,5 @@
   });
   // Pure DOM tests do not have chrome, but still need mutation invalidation.
   if(!globalThis.chrome?.runtime?.id){observer=new MutationObserver(()=>{dirty=true;});observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});}
-  globalThis.BrevessWebReadingPage={version:5,read,locate,stop,capture,restore,locateAnchor,redactSnapshot,manualSourceRoots};
+  globalThis.BrevessWebReadingPage={version:6,read,locate,stop,capture,restore,locateAnchor,redactSnapshot,manualSourceRoots};
 })();

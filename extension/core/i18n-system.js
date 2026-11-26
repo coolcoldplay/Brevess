@@ -22,7 +22,57 @@ API Key 保存在本机扩展存储中；调用模型、测试连接或获取模
 正在读取状态…	Loading status…
 管理配对与连接	Manage pairing and connections
 内部模型 · 任务调用	Internal models · Task calls
-macOS / Windows：在模型与连接页复制接入提示词，让 Agent 自动配置。	macOS / Windows — Copy the connection prompt from Models and connections and let your Agent configure it.
+在「模型与连接」选择客户端，即可配置并测试 Agent。	Choose a client in Models & connections to set up and test your Agent.
+连接 Agent	Connect an Agent
+选择你的 Agent	Choose your Agent
+高级选项	Advanced options
+重新测试	Test again
+连接并测试	Connect and test
+常用	Common
+国内 Agent	Chinese agents
+其他 Agent	Other agents
+复制配置提示词	Copy setup instructions
+复制试读指令	Copy library test prompt
+选择本机客户端，在这里完成配置和问答测试。	Choose a local client to configure its connection and test a reply.
+配置客户端后，可在问答侧栏调用 Agent，也可从客户端读取文献。	Connect your client to chat in the sidebar or read papers from the client.
+已配置 · 查看或测试连接	Configured · View or test connection
+尚未连接	Disconnected
+浏览器已配对	Browser paired
+浏览器连接测试通过	Browser connection verified
+浏览器与问答连接测试通过	Browser connection and test reply verified
+浏览器已连接，问答尚未就绪	Browser connected, model not ready
+正在测试 Agent 问答	Testing a model reply
+正在配置所选客户端	Configuring the selected client
+将 BREVESS 添加到本机 MCP 配置。	Adding BREVESS to the local MCP configuration.
+选择客户端，点击连接并测试。首次安装本机组件可使用配置提示词。	Choose a client and select Connect and test. Setup instructions are available for the first companion installation.
+点击连接并测试，验证选中的 Agent。	Select Connect and test to verify this Agent.
+配置本机 MCP，用于读取文献和接收任务。	Configure local MCP to read papers and receive tasks.
+配置本机 MCP，并用一条简短消息验证问答。模型与推理强度由客户端提供。	Set up local MCP and test a short reply. Your client supplies its models and reasoning levels.
+使用 Google 账号登录	Sign in with Google
+正在打开 Google 登录	Opening Google sign-in
+请在 Google 官方页面完成授权。	Complete authorization on the Google sign-in page.
+等待 Google 授权	Waiting for Google authorization
+将官方页面显示的授权码粘贴到这里。	Paste the authorization code from Google here.
+粘贴 Google 返回的一次性授权码	Paste the one-time code from Google
+一次性授权码	One-time authorization code
+完成登录	Finish sign-in
+Google 登录已完成	Google sign-in complete
+安装官方 Antigravity CLI	Install the official Antigravity CLI
+正在下载 Antigravity CLI	Downloading the Antigravity CLI
+点击下方安装 Google 官方 CLI，再使用 Google 账号登录。	Install the official Google CLI below, then sign in with Google.
+点击下方按钮，用 Google 账号登录。	Use the button below to sign in with Google.
+客户端还需导入 MCP 配置	Import the configuration in your MCP client
+复制 MCP 配置	Copy MCP configuration
+正在确认账号	Verifying the account
+支持问答的客户端会收到一条测试消息。读取总库可在工作台关闭时使用，修改课题需打开对应工作台并授权。	Supported clients receive a short test message. The library is available with the workbench closed. Open the project to approve changes.
+MCP 待配置 · 已检测到命令行	MCP setup pending · CLI detected
+MCP 待配置 · 尚未检测到命令行	MCP setup pending · CLI not detected
+MCP 待配置 · 支持账号问答	MCP setup pending · Account chat supported
+MCP 待配置 · 支持客户端接单	MCP setup pending · Client tasks supported
+MCP 已配置 · 已检测到命令行	MCP configured · CLI detected
+MCP 已配置 · 尚未检测到命令行	MCP configured · CLI not detected
+MCP 已配置 · 支持账号问答	MCP configured · Account chat supported
+MCP 已配置 · 支持客户端接单	MCP configured · Client tasks supported
 Token 预算根据任务与模型容量自动分配。	Token budgets are allocated automatically for each task and model capacity.
 API Key 不放入论文页面、浏览器同步存储或普通语料导出；含凭据的迁移导出会先弹窗确认。	API keys are excluded from paper pages, browser sync storage and ordinary corpus exports. Exports containing credentials require confirmation.
 添加通用网页模板	Add a general webpage template
@@ -416,6 +466,7 @@ AI 请求字段无效。	Invalid AI request fields.
   });
   entries['确定清除“{0}”的本地工作区吗？\n包含 {1} 轮问答、{2} 个 Figure 结果和{3} 段正文索引。此操作不可撤销。']='Delete the local workspace for “{0}”?\nThis includes {1} Q&A turns, {2} Figure results and {3} indexed paragraphs. This cannot be undone.';
   const templates=[
+    ['已加入问答模型：{0}。可在问答中直接切换。','Available in the chat model menu: {0}.'],
     ['整页翻译完成 {0}/{1} · 悬停译句可对照原文','Page translated {0}/{1} · Hover over a translated sentence to see its source'],
     ['整页翻译中 {0}/{1}','Translating page {0}/{1}'],
     ['整页翻译部分完成 {0}/{1}','Page partially translated {0}/{1}'],

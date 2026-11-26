@@ -175,6 +175,80 @@
   function encode(source,panel,edge) {
     return encodeFigureImageVariant(source,edge,{...panel.rect,reliable:true},true,panel.mask);
   }
+  const viewedPreviews = new Map();
+  let previewBytes = 0;
+  const previewKey = figure => JSON.stringify([currentPage(), figure.figureId, figure.sourceMaterialId,
+    figure.sourceFingerprint, figure.imageAssetPath, figure.nativeTiffSource?.sourceUrl,
+    Array.from(figure.imageElements || [], el => [SciLLM.figureOriginalDisplaySourceIdentity(el), el.closest?.('a[href]')?.href])]);
+  function forgetOriginal(key) {
+    const entry = viewedPreviews.get(key);
+    if (!entry) return;
+    viewedPreviews.delete(key);
+    previewBytes -= entry.size;
+    if (entry.blob) URL.revokeObjectURL(entry.picture.dataUrl);
+  }
+  addEventListener('pagehide', () => { for (const key of viewedPreviews.keys()) forgetOriginal(key); });
+  function rememberOriginal(figure, {blob, url, width, height, sourceUrl}) {
+    if (!width || !height || (!blob && !/^https?:\/\//i.test(url))) return;
+    const key = previewKey(figure);
+    const picture = {dataUrl:blob ? URL.createObjectURL(blob) : url, width, height, original:true, sourceUrl};
+    forgetOriginal(key);
+    const size = (blob?.size || 0) + key.length * 2;
+    viewedPreviews.set(key,{picture,blob:!!blob,size}); previewBytes += size;
+    while (viewedPreviews.size > 1 && (viewedPreviews.size > 32 || previewBytes > 48*1024*1024)) {
+      forgetOriginal(viewedPreviews.keys().next().value);
+    }
+    return picture;
+  }
+  function linkedThumbnail(el) {
+    const source = el.getAttribute('data-supp-info-image') || el.currentSrc || el.getAttribute('data-src') ||
+      el.getAttribute('data-lazy-src') || el.getAttribute('src');
+    return source && SciLLM.safeFigureSource(source,document.baseURI);
+  }
+  function blobOriginal(figure,resource) {
+    if (!resource?.bytes?.length) return null;
+    return rememberOriginal(figure,{blob:new Blob([resource.bytes],{type:resource.contentType}),
+      width:resource.pixelWidth,height:resource.pixelHeight,sourceUrl:resource.requestedSourceUrl});
+  }
+  async function previewLinkedOriginal(figure) {
+    const original = await loadSharedFigureOriginalResource(figure);
+    if (!original.current()) throw Error('当前文献已切换');
+    const picture = blobOriginal(figure,original.resource);
+    if (picture) return picture;
+    for (const src of original.sources) {
+      let image;
+      try { image = await loadFigureImage(src); } catch (_) { continue; }
+      try {
+        if (!original.current()) throw Error('当前文献已切换');
+        const result = rememberOriginal(figure,{url:src,width:image.naturalWidth,height:image.naturalHeight,sourceUrl:src});
+        if (result) return result;
+      } finally { releaseFigureImage(image); }
+    }
+    throw Error('这幅 Figure 暂无可预览的原图');
+  }
+  // The reader shows the publisher thumbnail immediately. A previously saved
+  // original may upgrade it after a local lookup, without a network request.
+  async function restorePreviewOriginal(figureId) {
+    const figure = findFigureAnalysisTarget(figureId);
+    if (!figure || figure.imageElements?.length !== 1) return null;
+    const key = previewKey(figure), known = viewedPreviews.get(key);
+    if (known) return known.picture;
+    const scope = figureOriginalResourceScope(figure);
+    const original = scope.originalImages[0];
+    const storeKey = 'sciFigureOriginalDisplayV1:' + figureOriginalDisplaySourceUrl();
+    const stored = await SciLLM.publicPageStorage.get(storeKey);
+    const receipt = stored[storeKey]?.find(item => item.figureId === figureId && item.imageIndex === 0 &&
+      item.sourceIdentity === original.sourceIdentity && /^[a-f0-9]{64}$/.test(item.sha256 || ''));
+    if (!receipt || !scope.current()) return null;
+    let resource = await readStoredOriginalForFigure(figure,original,receipt).catch(()=>null);
+    if (!resource) {
+      resource = await fetchExportImageSource(receipt.cacheKey, {cacheMode:'read-only',requireExactSource:true});
+      if (resource.cacheReceipt?.sha256 !== receipt.sha256) return null;
+      resource = {...resource,pixelWidth:receipt.pixelWidth,pixelHeight:receipt.pixelHeight,requestedSourceUrl:receipt.cacheKey};
+    }
+    if (!scope.current() || key !== previewKey(figure)) return null;
+    return viewedPreviews.get(key)?.picture || blobOriginal(figure,resource);
+  }
   async function preview(figureId, requestedEdge = 900) {
     const maxEdge = Math.max(256, Math.min(2400, Number(requestedEdge) || 900));
     const savedPage = typeof activeSavedArticleDocument === 'function' && activeSavedArticleDocument();
@@ -193,23 +267,20 @@
     }
     const figure = findFigureAnalysisTarget(figureId);
     if (!figure) throw Error('当前文献没有这幅 Figure');
-    const images = sources(figure);
-    if (!images.length) {
-      const saved = figure.sourceExternal ? await preparePersistedFigureImages(figure) : [];
-      if (!saved.length) throw Error('这幅 Figure 暂无可预览的原图');
-      return {name:figure.figureLabel, caption:figure.title, images:saved};
+    const result = pictures => ({name:figure.figureLabel, caption:figure.title, images:pictures});
+    const elements = Array.from(figure.imageElements || []).filter(el=>el.isConnected);
+    const remembered = viewedPreviews.get(previewKey(figure))?.picture;
+    if (remembered && elements.length <= 1) return result([remembered]);
+    if (!figure.sourceExternal && elements.length) {
+      const images = elements.map(el=>{
+        if (remembered && SciLLM.collectFigureImageCandidates(el,document.baseURI).includes(remembered.sourceUrl)) return remembered;
+        const dataUrl = linkedThumbnail(el);
+        return dataUrl ? {dataUrl,label:directLabel(el)} : null;
+      });
+      if (images.every(Boolean)) return result(images);
     }
-    const page = currentPage();
-    const edge = Math.max(256, Math.ceil(maxEdge / Math.sqrt(images.length)));
-    const previews = [];
-    for (const img of images) {
-      if (currentPage() !== page) throw Error('当前文献已切换');
-      previews.push(await withSource(figure, img, source => ({
-        ...encode(source, {rect:whole}, edge), label:directLabel(img)
-      })));
-    }
-    if (currentPage() !== page || images.some(img => !img.isConnected)) throw Error('网页原图已切换');
-    return {name:figure.figureLabel, caption:figure.title, images:previews};
+    const saved = figure.sourceExternal ? await preparePersistedFigureImages(figure) : [];
+    return result(saved.length ? saved : [await previewLinkedOriginal(figure)]);
   }
   async function picture(id,rawLabel,edge,index) {
     const label=letter(rawLabel), fig=getFigure(id);
@@ -274,7 +345,8 @@
     if(!img.isConnected || signature(figure,img)!==sig)return null;
     return data.panels.find(p=>p.label===letter(label) && !p.needsReview) || null;
   }
-  globalThis.SciLLM = Object.assign(globalThis.SciLLM || {}, {webPanelReader:{list, labels, inspect, picture, preview, geometry, warm, drawOriginal,
+  globalThis.SciLLM = Object.assign(globalThis.SciLLM || {}, {webPanelReader:{list, labels, inspect, picture, preview, rememberOriginal, restorePreviewOriginal,
+    async fallbackPreviewOriginal(id) { const f=findFigureAnalysisTarget(id);return f && f.imageElements?.length <= 1 ? previewLinkedOriginal(f) : null; }, geometry, warm, drawOriginal,
     resolveSource(figure,label) {
       const img=panelImage(figure,letter(label));
       return {img,dedicated:directLabel(img)===letter(label)};

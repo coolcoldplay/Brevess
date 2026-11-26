@@ -8,11 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
-const require = createRequire(import.meta.url);
-const { runtimeFiles } = require('../extension/mcp/bootstrap.js');
-const { extensionIdsFromManifest } = require('../extension/mcp/server.js');
-const { getAgentSetupClients } = require('../extension/core/agent-setup-prompt.js');
-const SOURCE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension');
+const installerFile = fileURLToPath(import.meta.url);
+const parent = path.resolve(path.dirname(installerFile), '..');
+// The repository keeps its runtime in extension/. An installed payload is flat.
+const SOURCE = fs.existsSync(path.join(parent, 'manifest.json')) ? parent : path.join(parent, 'extension');
+const require = createRequire(path.join(SOURCE, 'scripts', 'setup-agent-connection.mjs'));
+const { runtimeFiles, runtimeRevision, BOOTSTRAP_VERSION } = require('../mcp/bootstrap.js');
+const { extensionIdsFromManifest } = require('../mcp/server.js');
+const { getAgentSetupClients } = require('../core/agent-setup-prompt.js');
 export const HOST = 'com.sci_reader.codex_bridge';
 const BEGIN = '# BEGIN BREVESS MANAGED MCP';
 const END = '# END BREVESS MANAGED MCP';
@@ -123,6 +126,7 @@ export function clientConfigPath(client, home, env = process.env) {
   const candidates = {
     codex: [path.join(dir(env.CODEX_HOME, '.codex'), 'config.toml')],
     dsh: [path.join(dir(env.DSH_HOME, '.dsh'), 'cordis.patch.yml')],
+    antigravity: [path.join(home, '.gemini', 'config', 'mcp_config.json')],
     claude: [path.join(home, '.claude.json')], gemini: [path.join(home, '.gemini', 'settings.json')],
     cursor: [path.join(home, '.cursor', 'mcp.json')], copilot: [path.join(home, '.copilot', 'mcp-config.json')],
     qwen: [path.join(home, '.qwen', 'settings.json')], kimi: [path.join(dir(env.KIMI_CODE_HOME, '.kimi-code'), 'mcp.json')],
@@ -130,6 +134,10 @@ export function clientConfigPath(client, home, env = process.env) {
     codebuddy: [path.join(codebuddy, '.mcp.json'), path.join(codebuddy, 'mcp.json'), path.join(home, '.codebuddy.json')]
   }[client];
   return candidates?.find(exists) || candidates?.[0] || null;
+}
+
+function dirForOpenCode(home, env) {
+  return path.join(env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(home,'.config'), 'opencode');
 }
 
 export function nativeTargets(platform, home, root) {
@@ -148,6 +156,24 @@ export function launcherText(platform, node, entry) {
   return '@echo off\r\n"' + node + '" "' + entry + '" %*\r\n';
 }
 
+// A live service can finish its existing sessions during a companion upgrade.
+// Pin only the exact already-installed server and process reported at upgrade.
+function runningPreviousService(active, root, payloadRoot, allowWrite) {
+  if (!active || active.allowWrite !== allowWrite) return null;
+  try {
+    const prior=fs.realpathSync(active.payloadRoot);
+    if (path.dirname(prior)!==fs.realpathSync(path.join(root,'agent','versions'))) return null;
+    const live=JSON.parse(fs.readFileSync(path.join(active.stateDir,'service.json'),'utf8'));
+    if (live.bootstrapVersion!==BOOTSTRAP_VERSION || live.port!==active.port || live.allowWrite!==allowWrite ||
+        !Number.isInteger(live.pid) || live.pid<=0) return null;
+    const pin={revision:live.revision,pid:live.pid,port:live.port};
+    if (active.retiringService?.pid===pin.pid && active.retiringService?.port===pin.port && active.retiringService?.revision===pin.revision) return pin;
+    if (prior===payloadRoot || runtimeRevision(prior)!==pin.revision) return null;
+    process.kill(pin.pid,0);
+    return pin;
+  } catch { return null; }
+}
+
 export function createPlan(options = {}) {
   const sourceRoot = options.sourceRoot || SOURCE, home = options.home || os.homedir();
   const platform = options.platform || process.platform, env = options.env || process.env;
@@ -157,11 +183,17 @@ export function createPlan(options = {}) {
   const extensionIds = extensionIdsFromManifest(path.join(sourceRoot, 'manifest.json'));
   const extensionId = options.extensionId;
   if (!/^[a-p]{32}$/u.test(extensionId || '') || !extensionIds.includes(extensionId)) fail('EXTENSION_MISMATCH', 'The extension ID does not match this source package. Use the installed extension version.');
-  const files = [...new Set([...runtimeFiles(sourceRoot), 'native-host/host.js', 'native-host/entry.cjs', 'native-host/workbench-agents.cjs'])].sort();
-  const hash = crypto.createHash('sha256'); for (const f of files) hash.update(f).update(fs.readFileSync(path.join(sourceRoot, f)));
-  const revision = hash.digest('hex').slice(0, 20), payloadRoot = path.join(root, 'agent', 'versions', revision);
+  const files = options.registerOnly ? [] : [...new Set([...runtimeFiles(sourceRoot), 'native-host/host.js', 'native-host/entry.cjs', 'native-host/workbench-agents.cjs', 'native-host/antigravity-runtime.cjs', 'scripts/setup-agent-connection.mjs'])].sort();
+  const sourceBytes = name => fs.readFileSync(name === 'scripts/setup-agent-connection.mjs'
+    ? installerFile : path.join(sourceRoot, name));
+  const hash = crypto.createHash('sha256');
+  for (const name of files) hash.update(name).update(sourceBytes(name));
+  const revision = options.registerOnly ? path.basename(sourceRoot) : hash.digest('hex').slice(0, 20);
+  const payloadRoot = path.join(root, 'agent', 'versions', revision);
   const activePath = path.join(root, 'agent', 'active.json'), beforeActive = readOptional(activePath);
   let active; try { active = beforeActive ? JSON.parse(beforeActive) : null; } catch { fail('CONFIG_PARSE_FAILED', 'Active companion descriptor is invalid.'); }
+  if (options.registerOnly && (!active || fs.realpathSync(payloadRoot) !== fs.realpathSync(sourceRoot) ||
+      fs.realpathSync(active.payloadRoot) !== fs.realpathSync(sourceRoot))) fail('AGENT_INSTALLATION_MISMATCH', 'Reload the current BREVESS companion.');
   const stateDir = active?.stateDir || options.stateDir || defaults.stateDir;
   const allowWrite = options.allowWrite === undefined ? active?.allowWrite === true : options.allowWrite === true;
   const port = active?.port || 9537, node = options.node || process.execPath;
@@ -177,6 +209,22 @@ export function createPlan(options = {}) {
   for (const client of clients) {
     const registration = {command:node, args:[path.join(payloadRoot,'mcp','presentation-client.cjs'),client]};
     const managedPresenter = val => val?.args?.[1]===client && val.args[0]?.startsWith(path.join(root,'agent','versions')+path.sep) && val.args[0].endsWith(path.join('mcp','presentation-client.cjs'));
+    if (client === 'opencode') {
+      const cli = require('../native-host/workbench-agents.cjs').locate(client);
+      const version = options.openCodeMajor ?? (cli && Number(/^v?([12])\./m.exec(spawnSync(cli.cmd,
+        [...cli.args.slice(0,-1), '--version'], {encoding:'utf8', timeout:4000, windowsHide:true}).stdout || '')?.[1]));
+      if ([1,2].includes(version)) {
+        const configDir = dirForOpenCode(home, env);
+        const candidates = ['opencode.jsonc','opencode.json'].map(name => path.join(configDir, name));
+        const file = candidates.find(exists) || candidates[0], old = readOptional(file)?.toString('utf8') || '';
+        const parents = version === 2 ? ['mcp','servers'] : ['mcp'];
+        const entryFor = item => ({type:'local', command:[item.command, ...item.args]});
+        const managed = (fn, value) => Array.isArray(value?.command) && fn({args:value.command.slice(1)});
+        const base = mergeJsonc(old, [...parents,'brevess'], entryFor(entry), value => managed(owns,value));
+        add(file, mergeJsonc(base, [...parents,'brevess-presentations'], entryFor(registration), value => managed(managedPresenter,value)));
+        continue;
+      }
+    }
     if (client === 'workbuddy') {
       const file = path.join(home, '.workbuddy', 'mcp.json');
       const old = readOptional(file)?.toString('utf8') || '';
@@ -200,10 +248,13 @@ export function createPlan(options = {}) {
           : 'Add the generated stdio server in this client official MCP settings. Do not mark complete until actual tools/call succeeds.' });
     }
   }
-  for (const f of files) add(path.join(payloadRoot, f), fs.readFileSync(path.join(sourceRoot, f)));
+  for (const f of files) add(path.join(payloadRoot, f), sourceBytes(f));
   const configuredClients=[...new Set([...(Array.isArray(active?.configuredClients)?active.configuredClients:[]),
     ...clients.filter(id=>!recipes.some(recipe=>recipe.client===id))])];
-  add(activePath, json({ version: 1, payloadRoot, stateDir, nativeStateDir: root, port, allowWrite, configuredClients }));
+  const retiringService=runningPreviousService(active,root,payloadRoot,allowWrite);
+  add(activePath, json({ version: 1, payloadRoot, stateDir, nativeStateDir: root, port, allowWrite, configuredClients,
+    ...(retiringService ? {retiringService} : {}) }));
+  if (options.registerOnly) return {root, clients, platform, revision, payloadRoot, node, extensionId, stateDir, allowWrite, changes, recipes, registry:[]};
   const launcher = path.join(root, 'agent', platform === 'win32' ? 'native-host.cmd' : 'native-host');
   add(launcher, launcherText(platform, node, path.join(payloadRoot, 'native-host/entry.cjs')), 0o700);
   const manifest = { name: HOST, description: 'BREVESS local Agent connection', path: launcher, type: 'stdio', allowed_origins: extensionIds.map(id => `chrome-extension://${id}/`) };
@@ -282,6 +333,34 @@ export function restoreReceipt(receiptFile) {
   for (const r of [...receipt.files].reverse()) { if (r.backup) writeAtomic(r.file, fs.readFileSync(r.backup), r.beforeMode); else fs.unlinkSync(r.file); }
   receipt.state = 'restored'; writeAtomic(receiptFile, json(receipt), 0o600);
   return { status: 'restored', files: receipt.files.length, researchDataRemoved: false };
+}
+
+export function registerInstalledClient({payloadRoot, extensionId, client}) {
+  const root = path.resolve(payloadRoot, '../../..');
+  const directory = path.join(root, 'agent', 'client-settings-locks');
+  fs.mkdirSync(directory, {recursive:true, mode:0o700});
+  // Publish our own marker before checking for another writer. A stale marker
+  // has a unique name and can never be acquired by a new settings request.
+  const marker = process.pid + '-' + crypto.randomUUID();
+  const lockPath = path.join(directory, marker);
+  fs.writeFileSync(lockPath, '', {flag:'wx', mode:0o600});
+  try {
+    for (const name of fs.readdirSync(directory)) {
+      const match = /^(\d+)-[a-f0-9-]{36}$/.exec(name);
+      if (!match || name === marker) continue;
+      try { process.kill(Number(match[1]), 0); }
+      catch (error) {
+        if (error.code === 'ESRCH') { fs.rmSync(path.join(directory, name), {force:true}); continue; }
+      }
+      fail('AGENT_CONNECTION_BUSY', 'Another client setup is in progress.');
+    }
+    const plan = createPlan({sourceRoot:payloadRoot, root, clients:[client], extensionId, registerOnly:true});
+    const result = applyPlan(plan);
+    return {client, registered:plan.recipes.length === 0, state:result.status,
+      ...(plan.recipes.length ? {configuration:JSON.parse(fs.readFileSync(plan.recipes[0].configurationFile,'utf8'))} : {})};
+  } finally {
+    fs.rmSync(lockPath, {force:true});
+  }
 }
 
 export function parseArgs(args) {

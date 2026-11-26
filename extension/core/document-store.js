@@ -257,7 +257,14 @@
       : finishMutation(next, current.revision, current.updatedAt);
   }
 
-  function upsertIntoRecord(current, input, metadata) {
+  function assertAnnotationVersion(record, annotationId, expectedUpdatedAt) {
+    if (expectedUpdatedAt === undefined) return;
+    const annotation = record?.annotations.find(item => item.annotationId === annotationId);
+    if (!annotation || (annotation.updatedAt || '') !== expectedUpdatedAt) fail('STALE_ANNOTATION');
+  }
+
+  function upsertIntoRecord(current, input, metadata, expectedUpdatedAt) {
+    assertAnnotationVersion(current, input.annotationId, expectedUpdatedAt);
     const annotation = shared.normalizeManualAnnotation(input);
     const record = mergeMetadata(current, metadata);
     const existingIndex = record.annotations.findIndex(item =>
@@ -327,6 +334,11 @@
       documentHash: record.documentHash, doi: record.doi, format: record.sourceFormat, role: shared.automaticCrossFormatRole(record) });
   }
 
+  function hasPdfAnnotationsForPage(record, doi) {
+    return Boolean(doi && record?.sourceFormat === 'pdf' && record.annotations?.length &&
+      shared.automaticCrossFormatRole(record) === 'main' && record.doi === doi);
+  }
+
   function paperDocuments(records, documentId) {
     let target;
     try { target = crossFormatRecordSource(records.find(row => row.documentId === documentId)); }
@@ -354,7 +366,7 @@
     }
     const target = crossFormatRecordSource(targetRecord);
     const local = input.scope?.kind === 'local';
-    if ((!local && input.sourceDocumentId) || (input.operation === 'edit' && !local)) fail('LOCAL_SOURCE_REQUIRED');
+    if ((!local && input.sourceDocumentId) || (['edit', 'delete'].includes(input.operation) && !local)) fail('LOCAL_SOURCE_REQUIRED');
     const sourceRecord = local ? await getRecord(normalizeDocumentId(input.sourceDocumentId)) : null;
     const source = local ? crossFormatRecordSource(sourceRecord) : shared.normalizeCrossFormatSource(input.source);
     const ordered = [source, target].sort((a, b) => a.documentHash.localeCompare(b.documentHash));
@@ -372,19 +384,23 @@
     }
     let association = previous || candidate;
     const operation = input.operation || 'link';
-    if (!['link', 'state', 'edit'].includes(operation)) fail('INVALID_ASSOCIATION_OPERATION');
+    if (!['link', 'state', 'edit', 'delete'].includes(operation)) fail('INVALID_ASSOCIATION_OPERATION');
     if (operation !== 'link' && (!previous || input.expectedAssociationRevision !== previous.revision)) fail('STALE_ASSOCIATION');
-    if (operation === 'edit') {
+    if (operation === 'edit' || operation === 'delete') {
       if (association.state !== 'active') fail('ASSOCIATION_REVOKED');
       if (!Number.isSafeInteger(input.expectedDocumentRevision) || sourceRecord.revision !== input.expectedDocumentRevision) fail('STALE_DOCUMENT');
       const annotation = sourceRecord.annotations.find(row => row.annotationId === input.annotationId);
-      if (!annotation || typeof input.note !== 'string') fail('INVALID_ANNOTATION');
-      // Only the note can change. Original quote, offsets, category and IDs are
-      // obtained here, never from a projected location or caller-supplied clone.
-      if (annotation.note === input.note) return { association, record: sourceRecord };
+      if (!annotation) fail('INVALID_ANNOTATION');
       const next = cloneJsonLike(sourceRecord);
-      next.annotations = next.annotations.map(row => row.annotationId === annotation.annotationId
-        ? shared.normalizeManualAnnotation({ ...row, note: input.note, updatedAt: nextTimestamp(row.updatedAt) }) : row);
+      if (operation === 'delete') {
+        next.annotations = next.annotations.filter(row => row.annotationId !== annotation.annotationId);
+      } else {
+        if (typeof input.note !== 'string') fail('INVALID_ANNOTATION');
+        if (annotation.note === input.note && (!input.categoryId || input.categoryId === annotation.categoryId)) return { association, record: sourceRecord };
+        next.annotations = next.annotations.map(row => row.annotationId === annotation.annotationId
+          ? shared.normalizeManualAnnotation({ ...row, note: input.note, updatedAt: nextTimestamp(row.updatedAt),
+            ...(input.categoryId ? {categoryId:input.categoryId, categorySnapshot:input.categorySnapshot} : {}) }) : row);
+      }
       const record = finishMutation(next, sourceRecord.revision, sourceRecord.updatedAt);
       return { association, record, changedRecord: record };
     }
@@ -462,21 +478,22 @@
       });
     }
 
-    async function upsertAnnotation(documentId, annotation, metadata) {
+    async function upsertAnnotation(documentId, annotation, metadata, expectedUpdatedAt) {
       return serialize(async () => {
         const id = normalizeDocumentId(documentId);
         const current = records.get(id) || baseRecord(id, metadata);
-        const next = upsertIntoRecord(cloneJsonLike(current), annotation, metadata);
+        const next = upsertIntoRecord(cloneJsonLike(current), annotation, metadata, expectedUpdatedAt);
         const saved = finishMutation(next, current.revision, current.updatedAt);
         records.set(id, saved);
         return cloneJsonLike(saved);
       });
     }
 
-    async function deleteAnnotation(documentId, annotationId) {
+    async function deleteAnnotation(documentId, annotationId, expectedUpdatedAt) {
       return serialize(async () => {
         const id = normalizeDocumentId(documentId);
         const current = records.get(id) || baseRecord(id);
+        assertAnnotationVersion(current, annotationId, expectedUpdatedAt);
         const next = cloneJsonLike(current);
         next.annotations = next.annotations.filter(item => item.annotationId !== String(annotationId));
         const saved = finishMutation(next, current.revision, current.updatedAt);
@@ -502,11 +519,17 @@
       return [...records.values()].map(cloneJsonLike);
     }
 
-    async function findAnnotatedSource(sourceUrl) {
+    async function findPageAnnotations(sourceUrl, doi) {
       await settled();
-      let found = null;
-      for (const record of records.values()) found = newerAnnotatedSource(found, record, sourceUrl);
-      return found ? cloneJsonLike(found) : null;
+      let found = null, hasPaperAnnotations = false;
+      for (const record of records.values()) {
+        found = newerAnnotatedSource(found, record, sourceUrl);
+        hasPaperAnnotations ||= hasPdfAnnotationsForPage(record, doi);
+      }
+      return { record: found ? cloneJsonLike(found) : null, hasPaperAnnotations };
+    }
+    async function findAnnotatedSource(sourceUrl) {
+      return (await findPageAnnotations(sourceUrl)).record;
     }
 
     async function listDocumentIndex() {
@@ -546,7 +569,7 @@
       upsertAnnotation,
       deleteAnnotation,
       clearAnnotations,
-      listDocumentIndex, findAnnotatedSource,
+      listDocumentIndex, findAnnotatedSource, findPageAnnotations,
       exportAll,
       countCategoryReferences, listPaperDocuments, crossFormatOperation
     };
@@ -658,20 +681,21 @@
       });
     }
 
-    async function upsertAnnotation(documentId, annotation, metadata) {
+    async function upsertAnnotation(documentId, annotation, metadata, expectedUpdatedAt) {
       return mutateDocument(documentId, (current, id) => {
         const base = current || baseRecord(id, metadata);
         return finishMutation(
-          upsertIntoRecord(cloneJsonLike(base), annotation, metadata),
+          upsertIntoRecord(cloneJsonLike(base), annotation, metadata, expectedUpdatedAt),
           base.revision,
           base.updatedAt
         );
       });
     }
 
-    async function deleteAnnotation(documentId, annotationId) {
+    async function deleteAnnotation(documentId, annotationId, expectedUpdatedAt) {
       return mutateDocument(documentId, (current, id) => {
         const base = current || baseRecord(id);
+        assertAnnotationVersion(base, annotationId, expectedUpdatedAt);
         const next = cloneJsonLike(base);
         next.annotations = next.annotations.filter(item =>
           item.annotationId !== String(annotationId)
@@ -697,15 +721,19 @@
     }
 
     async function findAnnotatedSource(sourceUrl) {
+      return (await findPageAnnotations(sourceUrl)).record;
+    }
+    async function findPageAnnotations(sourceUrl, doi) {
       // A cursor keeps memory bounded; never materialize every saved annotation
       // just to restore one page. This lookup does not create browsing records.
       return runTransaction('readonly', store => new Promise((resolve, reject) => {
-        let found = null;
+        let found = null, hasPaperAnnotations = false;
         const request = store.openCursor();
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const cursor = request.result;
-          if (!cursor) { resolve(found ? cloneJsonLike(found) : null); return; }
+          if (!cursor) { resolve({record:found ? cloneJsonLike(found) : null, hasPaperAnnotations}); return; }
+          hasPaperAnnotations ||= hasPdfAnnotationsForPage(cursor.value, doi);
           found = newerAnnotatedSource(found, cursor.value, sourceUrl);
           cursor.continue();
         };
@@ -736,7 +764,7 @@
       upsertAnnotation,
       deleteAnnotation,
       clearAnnotations,
-      listDocumentIndex, findAnnotatedSource,
+      listDocumentIndex, findAnnotatedSource, findPageAnnotations,
       exportAll,
       countCategoryReferences, listPaperDocuments, crossFormatOperation
     };
