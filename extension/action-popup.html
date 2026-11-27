@@ -25,6 +25,10 @@
     </header>
 
     <div class="action-popup__actions">
+      <button id="resumeQuickSetup" class="action-popup__button action-popup__button--primary" type="button" hidden>
+        <i class="ph ph-plugs-connected action-popup__button-icon" aria-hidden="true"></i>
+        <span class="action-popup__button-copy"><strong>开始配置</strong><small>连接 AI 或本机应用，也可以先阅读</small></span>
+      </button>
       <button id="startReading" class="action-popup__button action-popup__button--primary" type="button">
         <i class="ph ph-compass action-popup__button-icon" aria-hidden="true"></i>
         <span class="action-popup__button-copy"><strong>侧栏打开工作台</strong><small>在侧栏打开当前文献</small></span>
@@ -54,7 +58,6 @@
         <span class="action-popup__button-copy"><strong>打开设置</strong><small>管理模型与阅读工具</small></span>
       </button>
     </div>
-    <button id="resumeQuickSetup" class="action-popup__setup" data-action-icon="none" type="button" hidden>完成首次配置 →</button>
     <p id="pageStatus" class="action-popup__status" role="status" aria-live="polite" hidden></p>
   </main>
   <script src="core/ui-action-icons.js"></script><script src="core/i18n.js"></script>

@@ -42,8 +42,8 @@ test('toolbar setup entry follows real configuration, including first use and re
   const source = fs.readFileSync(require.resolve('../extension/background.js'), 'utf8');
   const start = source.indexOf('async function actionPopupSetupPending()');
   const end = source.indexOf('async function actionPopupPublicState(', start);
-  let directory = null, profiles = {};
-  const scope = { indexedDB: {}, portableSettingsStorage: {}, SciLLM: {
+  let directory = null, profiles = {}, steps = {};
+  const scope = { indexedDB: {}, portableSettingsStorage: {}, onboardingController: { get: async () => ({steps}) }, SciLLM: {
     async loadDirectoryHandle() { return directory; },
     async loadSettings() { return { profiles }; }, isConfiguredProfile
   } };
@@ -65,6 +65,10 @@ test('toolbar setup entry follows real configuration, including first use and re
   assert.equal(await pending(), false);
   directory = null;
   assert.equal(await pending(), true, 'clearing the saved folder restores the entry');
+  steps = {storage: 'skipped', api: 'completed'};
+  assert.equal(await pending(), false, 'a verified browser-only choice is complete');
+  profiles = {};
+  assert.equal(await pending(), true, 'removing the connection makes setup available');
 });
 
 test('storage and API complete or skip independently and acknowledge only at both terminals', () => {

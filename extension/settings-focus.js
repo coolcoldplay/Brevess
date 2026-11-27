@@ -70,6 +70,7 @@ PDF 解析与增强识别	PDF parsing & enhanced recognition
 论文工作区与占用	Article workspaces & storage usage
 旧版数据迁移	Legacy data migration
 反馈语料与离线规则	Feedback corpus & offline rules
+已在本机登记 · 点击验证能否问答	Registered locally · Test Q&A
 已配置	Configured
 未配置	Not configured
 已允许	Allowed
@@ -315,6 +316,36 @@ Panel 追问	Panel follow-ups
     const risk = $('focus-risk-status');
     if (risk) risk.textContent = $('aiPrivacyAcknowledged')?.checked ? '' : '配置模型前，请先在隐私与权限中确认数据隐私风险。';
   }
+  const lastTestPrefix = 'brevessAgentLastTest.';
+  async function showLastAgentTests() {
+    const rows = [...($('focus-agent-connections')?.querySelectorAll('[data-tested-client]') || [])];
+    if (!rows.length) return;
+    const keys = rows.flatMap(row => ['desktop','cli'].map(mode => lastTestPrefix + row.dataset.testedClient + '.' + mode));
+    const saved = await chrome.storage.local.get(keys);
+    const labels = {passed:'通过', login:'需登录', region:'账号地区受限', incomplete:'未通过'};
+    for (const row of rows) {
+      if (!row.isConnected) continue;
+      const client = row.dataset.testedClient;
+      const history = (client === 'workbuddy' ? ['desktop','cli'] : ['cli']).flatMap(mode => {
+        const test = saved[lastTestPrefix + client + '.' + mode];
+        if (!test?.checkedAt || !labels[test.result]) return [];
+        const name = client === 'workbuddy' ? (mode === 'desktop' ? '桌面' : '命令行') : '问答';
+        return [name + labels[test.result]];
+      });
+      if (history.length) row.querySelector('small').textContent = '上次测试 · ' + history.join('，');
+    }
+  }
+  chrome.storage.onChanged.addListener((changes,area) => {
+    if (area === 'local' && Object.keys(changes).some(key => key.startsWith(lastTestPrefix))) void showLastAgentTests().catch(() => {});
+  });
+  function agentRow(client) {
+    const item = row(client.label, '已在本机登记 · 点击验证能否问答', () => {
+      $('externalAgentManage').dataset.client = client.id;
+      $('externalAgentManage').click();
+    });
+    item.dataset.testedClient = client.id;
+    return item;
+  }
   let agentDiscovery=0;
   function sync(data) {
     if (!mounted || !data?.settings) return;
@@ -330,10 +361,12 @@ Panel 追问	Panel follow-ups
       const name = element('strong', '', profile.name || provider); name.dataset.i18nIgnore = '';
       text.append(name, element('small', '', provider + (profile.config?.hasApiKey ? ' · 密钥已设置' : '')));
       const state = element('span', 'focus-connection-state', profile.config?.hasApiKey ? '已配置' : '编辑');
+      const linked = root.SciLLM?.getAgentSetupClients?.().find(client => client.modelAdapter === profile.providerId);
+      if (linked) b.dataset.testedClient = linked.id;
       const pencil = element('span'); pencil.innerHTML = icon('edit'); b.append(glyph, text, state, pencil); (['codex-local','deepseek-harness'].includes(profile.providerId)?agents:list).append(b);
     }
     const stamp=String(++agentDiscovery);agents.dataset.discovery=stamp;
-    void chrome.runtime.sendMessage({type:'BREVESS_ARTICLE_PRESENTATION',op:'clients'}).then(r=>{if(agents.dataset.discovery!==stamp||!r?.success)return;for(const id of r.data||[]){const client=root.SciLLM?.getAgentSetupClients?.().find(c=>c.id===id);if(!client||client.modelAdapter&&order.some(key=>settings.profiles[key]?.providerId===client.modelAdapter))continue;agents.append(row(client.label,'已配置 · 查看或测试连接',()=>{$('externalAgentManage').dataset.client=id;$('externalAgentManage').click();}));}}).catch(()=>{});
+    void chrome.runtime.sendMessage({type:'BREVESS_ARTICLE_PRESENTATION',op:'clients'}).then(r=>{if(agents.dataset.discovery!==stamp||!r?.success)return;for(const id of r.data||[]){const client=root.SciLLM?.getAgentSetupClients?.().find(c=>c.id===id);if(!client||client.modelAdapter&&order.some(key=>settings.profiles[key]?.providerId===client.modelAdapter))continue;agents.append(agentRow(client));}void showLastAgentTests().catch(()=>{});}).catch(()=>{});
     if (!list.childNodes.length) list.append(element('p', 'focus-empty', '尚未配置 API。'));
     const profile = settings.profiles?.[settings.globalProfileId];
     $('focus-default-model').querySelector('.focus-row-value').textContent = profile ? (profile.config?.model || profile.name) : '未配置';
@@ -346,7 +379,8 @@ Panel 追问	Panel follow-ups
     const id=event.detail?.client, client=root.SciLLM?.getAgentSetupClients?.().find(item=>item.id===id);
     const agents=$('focus-agent-connections');
     if(!agents || !client || client.modelAdapter || [...agents.querySelectorAll('strong')].some(n=>n.textContent===client.label))return;
-    agents.append(row(client.label,'已配置 · 查看或测试连接',()=>{$('externalAgentManage').dataset.client=id;$('externalAgentManage').click();}));
+    agents.append(agentRow(client));
+    void showLastAgentTests().catch(()=>{});
   });
   function setupSearch(input, results) {
     const entries = [

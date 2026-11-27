@@ -10,10 +10,13 @@
 | --- | --- | --- |
 | Codex、DeepSeek Harness | 设置中增量配置 | 官方 app-server 或 Harness SDK |
 | Google Antigravity、Cursor、Gemini CLI、Copilot CLI、Qwen Code、Kimi Code | 设置中增量配置 | 官方 CLI 的 ACP 接口 |
-| Claude Code、WorkBuddy、CodeBuddy Code | 设置中增量配置 | 本机客户端的流式 JSON 接口 |
+| Claude Code、CodeBuddy Code | 设置中增量配置 | 本机客户端的流式 JSON 接口 |
 | OpenCode | 识别本机 CLI 的主版本，按 v1 或 v2 配置结构写入 | 本机 ACP 接口 |
+| WorkBuddy | 设置中增量配置 | 桌面客户端接单，或使用已登录的命令行直连 |
 | Qoder | 设置中增量配置 | 客户端接单 |
 | TRAE、通用 MCP 客户端，或版本无法识别的 OpenCode | 从设置复制配置，到客户端导入 | 取决于客户端已启用的工具 |
+
+使用 WorkBuddy 桌面版时，在连接器管理中信任并启用 `brevess` 和 `brevess-presentations`。回到 BREVESS 选择「桌面客户端接单」，点击「连接并测试」，将页面上的接单指令复制到 WorkBuddy 新会话并发送。收到回复后，BREVESS 会自动更新连接状态。
 
 Antigravity 使用 `agy acp`。设置可复用已有 CLI，也可按需下载并校验 Google 官方发布的 CLI。登录按钮打开 Google 官方页面，一次性授权码只交给正在等待的 CLI。模型和推理强度由客户端当前会话返回。只安装桌面 App 时，MCP 配置和 CLI 模型登录分别显示。参考 [Google ACP 说明](https://antigravity.google/docs/cli/acp/) 和 [T3 Code 的 Provider 实现](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-antigravity.md)。
 
@@ -21,7 +24,7 @@ MCP 当前开放文献总库查询、阅读素材、课题、假说梳理和组�
 
 ## 给接入 Agent 的操作说明
 
-要求 Node.js 22+，复用已安装的运行时。安装器无需 npm 依赖、不下载软件、不接触密码库。先确认正在加载的插件源码及扩展 ID，从[本版源码](https://github.com/coolcoldplay/Brevess/archive/refs/tags/v1.0.2-r27-reader-r23.1.zip)解压后的仓库根目录运行以下命令，将占位符替换为扩展管理页显示的 ID。
+要求 Node.js 22+，复用已安装的运行时。安装器无需 npm 依赖、不下载软件、不接触密码库。先确认正在加载的插件源码及扩展 ID，从[本版源码](https://github.com/coolcoldplay/Brevess/archive/refs/tags/v1.0.2-r27-reader-r23.2.zip)解压后的仓库根目录运行以下命令，将占位符替换为扩展管理页显示的 ID。
 
 ```sh
 node scripts/setup-agent-connection.mjs --client qwen --extension-id <扩展ID> --dry-run

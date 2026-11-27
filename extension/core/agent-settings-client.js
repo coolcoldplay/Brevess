@@ -44,8 +44,34 @@
     const answer=await bridgeRequest('agent.sdk.turn',{source:id,model:catalog.model,reasoningEffort:'auto',
       directOnly:true,systemPrompt:'This is a BREVESS connection check. Respond with the requested short text. Do not use tools.',
       userPrompt:'Reply with BREVESS_OK.',images:[]},signal);
-    if(typeof answer!=='string' || !answer.includes('BREVESS_OK'))throw Object.assign(Error(),{code:'AGENT_MODEL_TEST_FAILED'});
+    if (id === 'antigravity' && typeof answer === 'string' &&
+        /not eligible for Gemini Code Assist for individuals because it is not currently available in your location/i.test(answer)) {
+      throw Object.assign(new Error('Google account region unavailable'), { code: 'AGENT_ACCOUNT_REGION_UNAVAILABLE' });
+    }
+    if (typeof answer !== 'string' || !answer.includes('BREVESS_OK')) throw Object.assign(Error(), { code: 'AGENT_MODEL_TEST_FAILED' });
     return {name:root.SciLLM.getAgentSetupClients().find(c=>c.id===id).label,model:catalog.model,models:catalog.models};
   }
-  root.BrevessAgentSetup = {request,testClient};
+  async function testDesktop(client, signal, onProgress) {
+    if (client !== 'workbuddy') throw Object.assign(new Error(), {code:'AGENT_MODEL_TEST_FAILED'});
+    await root.BrevessRiskGate.requireAcknowledgement();
+    return new Promise((resolve,reject) => {
+      const port = chrome.runtime.connect({name:'brevess-workbuddy-setup-test'});
+      let settled = false;
+      const finish = (value,code) => {
+        if (settled) return;
+        settled = true; signal?.removeEventListener('abort',abort); port.disconnect();
+        if (code) reject(Object.assign(new Error(code),{code})); else resolve(value);
+      };
+      const abort = () => finish(null,'CANCELLED');
+      port.onDisconnect.addListener(() => {void chrome.runtime.lastError;finish(null,'AGENT_CONNECTOR_UNAVAILABLE');});
+      port.onMessage.addListener(msg => {
+        if (['pending','working'].includes(msg.stage)) { onProgress?.(msg); return; }
+        if (msg.stage === 'passed') finish({name:'WorkBuddy',model:'client-default',desktop:true});
+        if (msg.stage === 'error') finish(null,msg.code);
+      });
+      signal?.addEventListener('abort',abort,{once:true});
+      if (signal?.aborted) abort();
+    });
+  }
+  root.BrevessAgentSetup = {request, testClient, testDesktop};
 })(globalThis);

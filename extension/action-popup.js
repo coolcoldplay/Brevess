@@ -98,7 +98,7 @@ chrome.runtime.onMessage?.addListener((message, sender) => {
 });
 
 async function runtimeMessage(message) {
-  if (message.type === 'ACTION_POPUP_GET_STATE') {
+  if (['ACTION_POPUP_GET_STATE', 'QUICK_SETUP_OPEN'].includes(message.type)) {
     const owner = await chrome.windows.getCurrent();
     message = { ...message, windowId: owner.id };
   }
@@ -151,6 +151,7 @@ async function loadState() {
     currentState = next;
     pageTitle.textContent = next.title || '当前页面';
     document.getElementById('resumeQuickSetup').hidden = !next.setupPending;
+    startButton.classList.toggle('action-popup__button--primary', !next.setupPending);
     updatePrimaryLabel('侧栏打开工作台');
     startButton.disabled = !next.readable;
     if (next.pageTools?.supported && !next.pageDocumentId) {
@@ -243,7 +244,7 @@ async function initializeActionPopup() {
 }
 
 document.getElementById('resumeQuickSetup').addEventListener('click', () => {
-  runtimeMessage({ type: 'QUICK_SETUP_OPEN' }).then(() => window.close()).catch(() => setStatus('无法打开快速配置，请稍后重试。', 'error'));
+  runtimeMessage({ type: 'QUICK_SETUP_OPEN' }).then(() => window.close()).catch(() => setStatus('请点击下方「打开设置」，再选「快速配置」。', 'error'));
 });
 
 document.getElementById('dismissPopup').addEventListener('click', () => window.close());

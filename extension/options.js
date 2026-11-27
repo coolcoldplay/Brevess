@@ -292,6 +292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   activateSettingsPage(settingsPageFromHash(), { updateHash: false, animate: false });
   await refreshSettings({ replaceTaskPolicyDrafts: true });
   focusTaskPolicyFromHash({ behavior: 'auto' });
+  if (new URLSearchParams(location.hash.slice(1)).get('connect') === 'apps') document.getElementById('externalAgentManage')?.click();
   await loadPdfMineruSettings();
   await loadCategoryFromHash();
   await refreshCorpusStatus();
@@ -486,7 +487,21 @@ function bindEvents() {
     renderPanelFollowupPresetEmptyState();
     markProfileEditorDirty('panelFollowupPresetList');
   });
+  // Load the public settings snapshot after a quick-setup save in another window.
+  // applyState preserves open editor drafts and never receives raw credentials.
+  let setupRefresh = Promise.resolve();
   chrome.storage.onChanged?.addListener((changes, area) => {
+    const change = changes.sciLlmSettingsV2;
+    const routeChanged = change && (change.oldValue?.globalProfileId !== change.newValue?.globalProfileId ||
+      change.oldValue?.consentGranted !== change.newValue?.consentGranted);
+    if (area === 'local' && (changes.onboardingState || routeChanged) && state) {
+      setupRefresh = setupRefresh.catch(() => {}).then(async () => {
+        const guide = await callBackground({ type: 'ONBOARDING_GET' });
+        onboardingUi.state = guide;
+        await refreshPortableSettings();
+        await refreshUserDataStatus();
+      }).catch(() => {});
+    }
     const saved = changes.sciLlmSettingsV2?.newValue;
     if (area !== 'local' || !saved || !state) return;
     for (const editor of quickPromptEditors) {

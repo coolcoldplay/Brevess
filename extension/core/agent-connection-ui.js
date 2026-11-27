@@ -88,24 +88,28 @@
       }
       alive();
     }
-    const waitForHost = async () => {
+    const waitForHost = async (allowOfflineGrace = false) => {
       for (let i = 0; i < (options.pollAttempts ?? 60); i++) {
         status = await options.status(); alive();
-        if (!['waiting', 'connecting'].includes(status?.bridge?.state) && !(status?.bridge?.configured && ['unpaired', 'unknown'].includes(status?.bridge?.state))) break;
+        const state = status?.bridge?.state;
+        const wakingUp = allowOfflineGrace && i < 6 && state === 'offline';
+        if (!wakingUp && !['waiting', 'connecting'].includes(state) &&
+            !(status?.bridge?.configured && ['unpaired', 'unknown'].includes(state))) break;
         progress('正在连接本机服务…'); await sleep(500); alive();
       }
     };
-    await waitForHost();
+    await waitForHost(!options.manualPairing);
     if (status?.bridge?.state === 'offline' && !options.manualPairing) {
       progress('正在恢复本机服务…');
       const receipt = await native('pair'); alive();
       const config = { server: receipt.serverUrl, token: receipt.pairing.token }; delete receipt.pairing;
       try { await options.pair(config); } finally { config.token = ''; }
-      alive(); await waitForHost();
+      alive(); await waitForHost(true);
     }
     if (status?.bridge?.state === 'connected') {
       progress('正在测试连接…'); await options.check(); alive();
       status = await options.status();
+      if (status?.bridge?.state === 'offline' && !options.manualPairing) await waitForHost(true);
     }
     return status;
   }
@@ -129,7 +133,8 @@
       .brevess-agent-connection .agent-subtitle {color:var(--bv-muted, #787b80);font-size:13px;margin-bottom:24px}
       .brevess-agent-connection .agent-label {display:block;font-size:12px;font-weight:600;color:var(--bv-muted, #64686d);margin-bottom:8px}
       dialog.brevess-agent-connection :is(select,input) {box-sizing:border-box;display:block;width:100%;height:44px;padding:9px 12px;border:1px solid var(--bv-line, #dddfe2);border-radius:10px;background:var(--bv-surface, #fff);color:var(--bv-text, #222);font:inherit}
-      .brevess-agent-connection .agent-capability {font-size:12px;color:var(--bv-muted, #777b81);margin-top:8px;min-height:18px}
+      .brevess-agent-connection label[for="agentWorkBuddyMode"] {margin-top:14px}
+      .brevess-agent-connection .agent-capability {font-size:13px;color:var(--bv-muted, #777b81);margin-top:8px;min-height:18px}
       .brevess-agent-connection .agent-primary-actions {display:flex;gap:10px;margin-top:22px}
       dialog.brevess-agent-connection button {box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:auto;height:auto;min-height:38px;margin:0;padding:9px 14px;gap:6px;border:1px solid var(--bv-line, #e2e3e5);border-radius:10px;background:var(--bv-surface, #fff);color:var(--bv-text, #25272b);font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer;box-shadow:none}
       dialog.brevess-agent-connection .agent-primary-actions button {flex:1;min-height:42px;white-space:nowrap}
@@ -146,7 +151,7 @@
       .brevess-agent-connection .agent-result[data-state="warning"] .agent-result-icon,.brevess-agent-connection .agent-result[data-state="error"] .agent-result-icon {color:var(--bv-amber, #a46b17)}
       .brevess-agent-connection .agent-result[data-state="busy"] .agent-result-icon {animation:agent-connect-spin 1.2s linear infinite}
       .brevess-agent-connection .agent-result-title {font-size:13px;font-weight:600;line-height:1.5}
-      .brevess-agent-connection .agent-result-detail {color:var(--bv-muted, #72767c);font-size:12px;line-height:1.6;margin-top:4px}
+      .brevess-agent-connection .agent-result-detail {color:var(--bv-muted, #72767c);font-size:14px;line-height:1.6;margin-top:4px}
       dialog.brevess-agent-connection .agent-text-action {padding:0;min-height:24px;border:0;background:none;color:var(--bv-text, #30343a);font-size:12px;text-decoration:underline;text-underline-offset:3px;margin-top:8px}
       .brevess-agent-connection details {border-top:1px solid var(--bv-line, #ededee);padding-top:14px;margin-top:18px}
       .brevess-agent-connection summary {font-size:12px;color:var(--bv-muted, #7a7e83);cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
@@ -159,6 +164,8 @@
       .brevess-agent-connection .agent-diagnostic {font-size:11px;color:var(--bv-muted, #85898e);white-space:pre-wrap;overflow-wrap:anywhere}
       .brevess-agent-connection .agent-manual {margin-top:18px}
       .brevess-agent-connection a {color:inherit;font-size:12px;text-underline-offset:3px}
+      .brevess-agent-connection .agent-help {display:inline-block;padding:5px 0;font-size:14px}
+      .brevess-agent-connection .agent-head {position:sticky;top:0;background:var(--bv-surface,#fff);z-index:1}
       .brevess-agent-connection .agent-login-code input {box-sizing:border-box;width:100%;margin-top:8px;padding:8px;border:1px solid var(--bv-line,#ddd);border-radius:6px;background:transparent;color:inherit}
       @keyframes agent-connect-spin {to {transform:rotate(360deg)}}
       @media(max-width:420px) {dialog.brevess-agent-connection {padding:22px;width:calc(100vw - 24px)}.brevess-agent-connection .agent-primary-actions {gap:8px}dialog.brevess-agent-connection .agent-primary-actions button {padding:10px 8px;font-size:12px}}
@@ -179,15 +186,43 @@
     let preferred = options.client;
     try { preferred ||= doc.defaultView.sessionStorage?.getItem('brevess-agent-setup-client'); } catch {}
     if (clients.some(c => c.id === preferred)) select.value = preferred;
+    const modeLabel = add('label', 'WorkBuddy 问答方式', dialog, 'agent-label');
+    modeLabel.htmlFor = 'agentWorkBuddyMode';
+    const mode = add('select'); mode.id = 'agentWorkBuddyMode';
+    for (const [id, name] of [['desktop','桌面客户端接单（推荐）'], ['cli','命令行直连']]) {
+      const item = add('option', name, mode); item.value = id;
+    }
+    const workbuddyHint = add('p', '', dialog, 'agent-capability');
+    const workbuddyCopy = add('button', '复制给 WorkBuddy 的接单指令', dialog, 'agent-text-action');
+    workbuddyCopy.type = 'button';
+    let desktopTask = ''; workbuddyCopy.hidden = true;
+    const copyStatus = add('p', '', dialog, 'agent-capability');
+    copyStatus.setAttribute('role','status'); copyStatus.hidden = true;
+    workbuddyCopy.onclick = async () => {
+      if (!desktopTask) return;
+      const pickupPrompt = '请用已信任的 brevess-presentations 连接器，仅领取 BREVESS 聊天任务 ' + desktopTask +
+        '（brevess_claim_task），按该任务材料中的说明回答，并用 brevess_complete_task 把答案交回浏览器。';
+      try {
+        await doc.defaultView.navigator.clipboard.writeText(pickupPrompt);
+        copyStatus.textContent = '已复制。粘贴到 WorkBuddy 的新会话并发送，再回到这里等回答。';
+      } catch { copyStatus.textContent = pickupPrompt; }
+      copyStatus.hidden = false;
+    };
     const capability = add('p', '', dialog, 'agent-capability');
     let inspection=0;
     const updateClient = () => {
       const attempt=++inspection;
+      mode.hidden = modeLabel.hidden = workbuddyHint.hidden = select.value !== 'workbuddy';
+      desktopTask = ''; workbuddyCopy.hidden = true;
+      copyStatus.hidden = true;
+      workbuddyHint.textContent = mode.value === 'desktop'
+        ? '在 WorkBuddy 的「连接器 → 自定义连接器」信任 brevess 和 brevess-presentations，再打开一个会话接收测试。'
+        : '命令行使用单独的登录。平时只用 WorkBuddy 桌面版，可切回「桌面客户端接单」。';
       const client = clients.find(c => c.id === select.value);
       capability.textContent = client?.modelAdapter || client?.transport ? '配置本机 MCP，并用一条简短消息验证问答。模型与推理强度由客户端提供。' : '配置本机 MCP，用于读取文献和接收任务。';
       if(options.setupClient)void options.setupClient('inspect',select.value).then(info=>{
         if(!dialog.isConnected || attempt!==inspection)return;
-        capability.textContent=[info.registered?'MCP 已配置':'MCP 待配置',
+        capability.textContent=[info.registered?'本机连接器已登记':'本机连接器待登记',
           info.cliAvailable===true?'已检测到命令行':info.cliAvailable===false?'尚未检测到命令行':client?.modelAdapter?'支持账号问答':'支持客户端接单'].join(' · ');
       }).catch(()=>{});
       try { doc.defaultView.sessionStorage?.setItem('brevess-agent-setup-client', select.value); } catch {}
@@ -197,6 +232,9 @@
     const result = add('div', '', dialog, 'agent-result'); result.setAttribute('role', 'status'); result.setAttribute('aria-live', 'polite'); result.setAttribute('aria-atomic', 'true');
     const glyph = add('span', '', result, 'agent-result-icon'); glyph.setAttribute('aria-hidden', 'true');
     const resultCopy = add('div', '', result); const title = add('div', '', resultCopy, 'agent-result-title'); const detail = add('p', '', resultCopy, 'agent-result-detail');
+    if (options.readmeUrl) {
+      const link = add('a', '查看连接步骤', dialog, 'agent-help'); link.href = options.readmeUrl; link.target = '_blank'; link.rel = 'noopener';
+    }
     const advanced = add('details'); add('summary', '高级选项', advanced); const advancedBody = add('div', '', advanced, 'agent-advanced-body');
     const diagnostic = add('p', '', advancedBody, 'agent-diagnostic');
     const controller = new AbortController(); const actions = []; let busy = false, latest = null, tested = false, epoch = 0, loginAction = null, installAction = null;
@@ -234,12 +272,13 @@
       const view = agentConnectionView(status, tested);
       report(view.title, view.detail, view.tone);
       connectButton.textContent = view.state === 'connected' ? '重新测试' : '连接并测试';
+      privacyAction.hidden = true;
       readButton.hidden = view.state !== 'connected';
       diagnostic.textContent = ['连接：' + view.state, '权限：' + (status?.permission || '由任务单独确认')].join('\n');
       disconnectButton.hidden = ['unpaired', 'paused', 'unknown'].includes(view.state);
       forgetButton.hidden = view.state === 'unpaired';
     };
-    select.onchange = () => { updateClient(); manualRecipe=null;recipeButton.hidden=true; tested = false; if (latest) render(latest); };
+    mode.onchange = select.onchange = () => { updateClient(); manualRecipe=null;recipeButton.hidden=true; tested = false; if (latest) render(latest); };
     const refresh = async () => {
       const version = ++epoch; const status = await options.status();
       if (dialog.isConnected && version === epoch && !busy && (!latest || status?.bridge?.state !== latest?.bridge?.state)) { tested = false; render(status); }
@@ -249,9 +288,9 @@
       const node = add('button', text, parent, cls); node.type = 'button'; actions.push(node);
       node.onclick = async () => {
         if (busy) return;
-        busy = true; epoch++; select.disabled = true; actions.forEach(a => { a.disabled = true; }); node.setAttribute('aria-busy', 'true');
+        busy = true; epoch++; select.disabled = mode.disabled = true; actions.forEach(a => { a.disabled = true; }); node.setAttribute('aria-busy', 'true');
         try { await handler(); } catch (error) { if (dialog.isConnected) errorView(error); }
-        finally { busy = false; node.removeAttribute('aria-busy'); select.disabled = false; actions.forEach(a => { a.disabled = false; }); }
+        finally { busy = false; node.removeAttribute('aria-busy'); select.disabled = mode.disabled = false; actions.forEach(a => { a.disabled = false; }); }
       };
       return node;
     };
@@ -299,6 +338,9 @@
       },'agent-text-action');
       installAction.id='installAgentRuntime';installAction.hidden=true;
     }
+    const privacyAction = add('button', '打开隐私与权限', resultCopy, 'agent-text-action');
+    privacyAction.type = 'button'; privacyAction.hidden = true;
+    privacyAction.onclick = () => { dialog.close(); options.openPrivacy?.(); };
     const connectModel = async () => {
       if (loginAction) loginAction.hidden = true;
       if (!tested || !dialog.isConnected || !options.connectModel ) return;
@@ -306,18 +348,33 @@
       if(!client?.modelAdapter && !client?.transport){
         report('浏览器已连接，MCP 已配置','在客户端刷新 MCP 工具后，可使用下方试读指令。','success');return;
       }
-      report('正在测试 Agent 问答', '使用一条简短测试消息；通过后自动加入模型列表。', 'busy');
+      const desktop = select.value === 'workbuddy' && mode.value === 'desktop';
+      privacyAction.hidden = true;
+      connectButton.textContent = desktop ? '等待桌面回复…' : '正在测试问答…';
+      report(desktop ? '等待 WorkBuddy 桌面回复' : '正在测试 Agent 问答', desktop
+        ? '点上方「复制给 WorkBuddy 的接单指令」，粘贴到 WorkBuddy 的新会话并发送。收到回复后这里会自动更新，关闭此窗口可停止测试。'
+        : '使用一条简短测试消息，收到有效回复后确认。', 'busy');
       try {
-        const profile = await options.connectModel(select.value,controller.signal);
+        const profile = await options.connectModel(select.value,controller.signal,desktop ? 'desktop' : 'cli', progress => {
+          if (!dialog.isConnected || controller.signal.aborted) return;
+          desktopTask = progress.id;
+          workbuddyCopy.hidden = progress.stage !== 'pending';
+          report(progress.stage === 'working' ? 'WorkBuddy 已领取测试' : '等待 WorkBuddy 桌面回复',
+            progress.stage === 'working' ? '客户端正在处理，回答会自动回到这里。' : '点「复制给 WorkBuddy 的接单指令」，粘贴到 WorkBuddy 新会话并发送。指令只领取本次测试。', 'busy');
+        });
         if(!dialog.isConnected || controller.signal.aborted)return;
-        if (profile) report('浏览器与问答连接测试通过', `已加入问答模型：${profile.name} · ${profile.model}。可在问答中直接切换。`, 'success');
+        if (profile && options.recordTest) void options.recordTest(select.value, desktop ? 'desktop' : 'cli', 'passed').catch(() => {});
+        if (profile?.desktop) report('WorkBuddy 桌面问答已通过', '已收到这次测试的回答。在侧栏选择 WorkBuddy 和「桌面客户端接单」即可提问。', 'success');
+        else if (profile) report('浏览器与问答连接测试通过', `已加入问答模型：${profile.name} · ${profile.model}。可在问答中直接切换。`, 'success');
       } catch (error) {
         const help = {
           CODEX_NOT_AUTHENTICATED: loginAction ? 'Codex 尚未登录。点击下方“登录 Codex”，完成后回来重新测试。' : 'Codex 尚未登录插件专用会话，请到模型连接中完成登录后重试。',
           AGENT_LOGIN_UNCONFIRMED:'账号验证尚未返回。可重新测试，或通过官方登录确认账号。',
           AGENT_CLI_MISSING:select.value==='antigravity'?'点击下方安装 Google 官方 CLI，再使用 Google 账号登录。':'此客户端的命令行尚未安装。MCP 配置已完成，可在客户端刷新工具。',
-          AGENT_CLIENT_LOGIN_REQUIRED:select.value==='antigravity'?'点击下方按钮，用 Google 账号登录。':'请在所选客户端完成官方登录，再回来重新测试。',
+          AGENT_CLIENT_LOGIN_REQUIRED:select.value==='antigravity'?'点击下方按钮，用 Google 账号登录。':select.value==='workbuddy'?'WorkBuddy 命令行需要单独登录。也可以在上方选择「桌面客户端接单」。':'请在所选客户端完成官方登录，再回来重新测试。',
+          AGENT_ACCOUNT_REGION_UNAVAILABLE:'Google 提示当前账号所在地区暂不支持个人版 Gemini Code Assist。可继续使用已连接的其他模型。',
           AGENT_ACCOUNT_ACCESS_DENIED:'服务方拒绝了当前账号或地区的模型访问。',
+          REQUEST_TIMEOUT:desktop?'桌面回复超时。请检查 WorkBuddy 的两个连接器已信任，再打开会话重新测试。':'等待回复超时，请重新测试。',
           AGENT_CLIENT_TURN_FAILED:'客户端未返回有效回复，请检查账号及模型权限后重试。',
           HARNESS_NOT_AUTHENTICATED: '请先在官方 DeepSeek Harness 中登录，再回来重新测试。',
           HARNESS_MODEL_UNAVAILABLE: '已保存的 Harness 模型当前不可用，请在模型连接中更换后重试。',
@@ -329,8 +386,16 @@
           loginAction.hidden = !(error.code === 'CODEX_NOT_AUTHENTICATED' && select.value==='codex' || ['AGENT_CLIENT_LOGIN_REQUIRED','AGENT_LOGIN_UNCONFIRMED'].includes(error.code) && select.value==='antigravity');
           loginAction.textContent = select.value==='antigravity'?'使用 Google 账号登录':'登录 Codex';
         }
+        privacyAction.hidden = error.code !== 'AI_PRIVACY_ACK_REQUIRED' || !options.openPrivacy;
         if (installAction) installAction.hidden = select.value!=='antigravity' || error.code!=='AGENT_CLI_MISSING';
-        report('浏览器已连接，问答尚未就绪', help[error.code] || '模型调用未通过测试；请检查官方账号登录和本机组件后重试。', 'warning');
+        const outcome = error.code === 'AGENT_ACCOUNT_REGION_UNAVAILABLE' ? 'region'
+          : ['AGENT_CLIENT_LOGIN_REQUIRED','CODEX_NOT_AUTHENTICATED','HARNESS_NOT_AUTHENTICATED'].includes(error.code) ? 'login' : 'incomplete';
+        if (options.recordTest && error.code !== 'CANCELLED') void options.recordTest(select.value, desktop ? 'desktop' : 'cli', outcome).catch(() => {});
+        const headline = error.code === 'AGENT_ACCOUNT_REGION_UNAVAILABLE' ? '浏览器已连接，Google 账号地区受限' : '浏览器已连接，问答尚未就绪';
+        report(headline, help[error.code] || '没有收到有效测试回复。请查看连接步骤后重新测试。', 'warning');
+      } finally {
+        desktopTask = ''; workbuddyCopy.hidden = true; copyStatus.hidden = true;
+        if (dialog.isConnected) connectButton.textContent = '重新测试';
       }
     };
     const connectButton = button('连接并测试', primaryRow, async () => {
@@ -384,7 +449,6 @@
       });
     }
     add('p', '支持问答的客户端会收到一条测试消息。读取总库可在工作台关闭时使用，修改课题需打开对应工作台并授权。', advancedBody);
-    if (options.readmeUrl) { const link = add('a', '接入说明', advancedBody); link.href = options.readmeUrl; link.target = '_blank'; link.rel = 'noopener'; }
     const onStatus = () => { if (!busy) void refresh().catch(errorView); };
     doc.defaultView.addEventListener('brevess:mcp-status', onStatus);
     const timer = setInterval(() => { if (!busy && dialog.open && doc.visibilityState !== 'hidden') void refresh().catch(errorView); }, 5000);

@@ -113,7 +113,13 @@ function articleChatInlineMarkdownTokenAt(text, start) {
     ];
     for (const [delimiter, kind] of delimiters) {
         if (!text.startsWith(delimiter, start)) continue;
-        const end = text.indexOf(delimiter, start + delimiter.length);
+        const underscore = delimiter.startsWith('_');
+        const word = /[\p{L}\p{N}_]/u;
+        if (underscore && word.test(text[start - 1] || '')) continue;
+        let end = text.indexOf(delimiter, start + delimiter.length);
+        while (underscore && end >= 0 && word.test(text[end + delimiter.length] || '')) {
+            end = text.indexOf(delimiter, end + delimiter.length);
+        }
         if (end > start + delimiter.length && !text.slice(start, end).includes('\n')) {
             return {
                 kind,

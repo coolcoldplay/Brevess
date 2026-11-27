@@ -18878,6 +18878,7 @@
           }
         };
         const requireDirectory = async () => {
+          if (message.storageMode === 'browser') return;
           requireDirectorySync('status');
           if ((await directorySync.status()).permission !== 'granted') {
             throw Object.assign(new Error('请授权保存文件夹。'), { code: 'QUICK_SETUP_DIRECTORY_REQUIRED' });

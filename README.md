@@ -3,7 +3,7 @@
 <p align="center"><strong>Brevity · Evidence · Essence</strong></p>
 <p align="center">快速凝练真实、有用的信息，构建知识结构，推动科学研究。</p>
 <p align="center">Chrome / Edge · 免费开源 · 中文 / English · 本机 Agent / 模型 API</p>
-<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.1"><strong>1.0.2 · r23.1</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
+<p align="center"><a href="https://coolcoldplay.github.io/Brevess/"><strong>官网 · 交互体验</strong></a> · <a href="https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.2"><strong>1.0.2 · r23.2</strong></a> · <a href="docs/使用教程.md">使用教程</a></p>
 
 **大部分功能支持手动完成，也可由 AI 辅助。** 从大纲、标注和笔记，到证据整理、假说与组图规划，按自己的节奏积累知识。
 
@@ -83,13 +83,13 @@
 
 ## 安装预览版
 
-1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-reader-r23.1/Brevess-v1.0.2-r23.1-Chrome.zip)，解压到独立文件夹。
+1. [下载浏览器 ZIP](https://github.com/coolcoldplay/Brevess/releases/download/v1.0.2-r27-reader-r23.2/Brevess-v1.0.2-r23.2-Chrome-Edge.zip)，解压到独立文件夹。
 2. 打开 `chrome://extensions/`（Edge 使用 `edge://extensions/`）→ 开发者模式 → 加载已解压的扩展程序，选择包含 `manifest.json` 的文件夹。
-3. 固定 BREVESS 图标，在论文全文页打开侧栏。首次打开设置时，可在快速配置中选择保存目录、确认隐私提示并连接默认模型。
+3. 点击 BREVESS 图标 →「开始配置」。粘贴 DeepSeek API Key、确认发送给服务商的数据范围，再点「测试连接并完成」。保存文件夹可稍后选择，也可以直接点「连接本机应用」或「暂不配置，先手动阅读」。
 
 大纲导航、离线规则、手动高亮、笔记编辑和工作台无需 API Key。部分增强功能需要可选本机伴侣，当前浏览器 ZIP 不包含本机二进制。
 
-**r23.1 公开预览版**支持在设置中连接 Google Antigravity 等本机 Agent，在普通问答中选择客户端提供的模型与推理强度。论文大纲随正文加载更新，识别为同一篇论文的网页与 PDF 可共用高亮、备注、问答和笔记，保存 PDF 时可将原文件附到该文献。[Agent 接入指南](docs/AGENT_QUICK_CONNECT.md) · [版本说明](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.1)。
+**r23.2 公开预览版**简化了首次配置。连接暂时中断时可保留输入并重试。本机应用设置提供 WorkBuddy、DeepSeek Harness、Codex 和 Google Antigravity 的连接指引，并区分模型列表与实际问答的验证结果。[Agent 接入指南](docs/AGENT_QUICK_CONNECT.md) · [版本说明](https://github.com/coolcoldplay/Brevess/releases/tag/v1.0.2-r27-reader-r23.2)。
 
 ## 源码与构建
 

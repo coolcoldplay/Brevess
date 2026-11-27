@@ -383,10 +383,13 @@ async function actionPopupSetupPending() {
     SciLLM.loadDirectoryHandle(indexedDB),
     SciLLM.loadSettings(portableSettingsStorage)
   ]);
-  return !directory || !Object.values(settings.profiles || {}).some(SciLLM.isConfiguredProfile);
+  if (!Object.values(settings.profiles || {}).some(SciLLM.isConfiguredProfile)) return true;
+  if (directory) return false;
+  const guide = await onboardingController.get();
+  return guide.steps.storage !== 'skipped' || guide.steps.api !== 'completed';
 }
 
-async function actionPopupPublicState(sender, popupWindowId) {
+async function actionPopupOwnerWindow(sender, popupWindowId) {
   // A service worker's currentWindow can belong to another extension view.
   // Resolve the browser-owned popup context before issuing a tab receipt.
   const popupUrl = chrome.runtime.getURL('action-popup.html');
@@ -406,6 +409,11 @@ async function actionPopupPublicState(sender, popupWindowId) {
   const ownerWindowId = owners[0].windowId >= 0 ? owners[0].windowId : popupWindowId;
   if (!Number.isInteger(ownerWindowId) || ownerWindowId < 0 ||
       (popupWindowId !== undefined && popupWindowId !== ownerWindowId)) throw unavailable();
+  return ownerWindowId;
+}
+
+async function actionPopupPublicState(sender, popupWindowId) {
+  const ownerWindowId = await actionPopupOwnerWindow(sender, popupWindowId);
   const tabs = await chrome.tabs.query({ active: true, windowId: ownerWindowId });
   const tab = await r20ResolveWorkbenchTab(tabs[0] || null);
   const readable = actionPopupReadableTab(tab);
@@ -3361,12 +3369,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'QUICK_SETUP_OPEN') {
     const page = String(sender?.url || '').split(/[?#]/)[0];
-    if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 ||
-        !['options.html', 'action-popup.html', 'popup.html'].some(path => page === chrome.runtime.getURL(path))) {
+    const fromAction = page === chrome.runtime.getURL('action-popup.html');
+    if (!fromAction && (sender?.id !== chrome.runtime.id || sender.frameId !== 0 ||
+        !['options.html', 'popup.html'].some(path => page === chrome.runtime.getURL(path)))) {
       sendResponse({ success: false, error: { code: 'QUICK_SETUP_OWNER_INVALID' } }); return false;
     }
-    chrome.tabs.query({ active: true, lastFocusedWindow: true })
-      .then(tabs => openOnboardingForTab(tabs[0]))
+    const tabs = fromAction
+      ? actionPopupOwnerWindow(sender, message.windowId).then(windowId => chrome.tabs.query({ active: true, windowId }))
+      : chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tabs.then(found => openOnboardingForTab(found[0]))
       .then(data => sendResponse({ success: true, data }))
       .catch(() => sendResponse({ success: false, error: { message: '无法打开快速配置。' } }));
     return true;

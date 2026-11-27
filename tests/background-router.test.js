@@ -13,6 +13,23 @@ test('quick setup rejects missing consent and directory permission before any pr
   }
 });
 
+test('browser-only quick setup verifies an API without requesting folder access and still requires consent', async () => {
+  const storageArea = createMemoryStorage({});
+  let probes = 0;
+  const router = createBackgroundRouter({ storageArea,
+    fetchImpl: async () => { probes++; return jsonResponse({ choices: [{ message: {content:'OK'} }] }); }
+  });
+  const request = { type:'LLM_QUICK_SETUP_SAVE', storageMode:'browser', consentGranted:true,
+    profile:{ id:'profile_quick_browser', providerId:'openai', config:{apiKey:'fixture-key', model:'fixture-model'} } };
+  assert.equal((await router.handle(request)).error.code, 'AI_PRIVACY_ACK_REQUIRED');
+  assert.equal(probes, 0);
+  storageArea.values.brevessAiPrivacyAcknowledgementV1 = {version:1, acknowledged:true, updatedAt:1};
+  const saved = await router.handle(request);
+  assert.equal(saved.success, true);
+  assert.equal(saved.data.settings.globalProfileId, request.profile.id);
+  assert.equal(probes, 1);
+});
+
 test('quick setup tests a private draft then atomically saves the global route without changing specialized settings', async () => {
   const original = SciLLM.createDefaultSettings();
   original.tts.provider = 'kokoro';

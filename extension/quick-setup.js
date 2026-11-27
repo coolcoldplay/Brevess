@@ -33,19 +33,20 @@
       <header class="qs-brand"><img src="icons/icon128.png" alt=""><span>BREVESS</span></header>
       <form id="qsForm">
         <h1>准备好，开始阅读。</h1>
-        <p class="qs-intro">保存位置与 AI 连接，在这里一次设好。</p>
+        <p class="qs-intro">粘贴密钥即可连接 AI。论文和笔记可以先存在这个浏览器。</p>
         <section class="qs-section" aria-labelledby="qsFolderTitle">
-          <div class="qs-heading"><span class="qs-number" aria-hidden="true">1</span><h2 id="qsFolderTitle">保存到哪里</h2></div>
+          <div class="qs-heading"><span class="qs-number" aria-hidden="true">1</span><h2 id="qsFolderTitle">保存位置（可选）</h2></div>
           <div class="qs-directory"><div><p id="qsDirectoryName">尚未选择文件夹</p><p class="qs-hint" id="qsDirectoryHint">论文、笔记与课题保存在此处。</p></div><div class="qs-directory-actions"><button id="qsChooseDirectory" type="button" class="qs-secondary">选择文件夹</button><button id="qsOtherDirectory" type="button" class="qs-text" hidden>另选文件夹</button></div></div>
         </section>
         <section class="qs-section" aria-labelledby="qsApiTitle">
-          <div class="qs-heading"><span class="qs-number" aria-hidden="true">2</span><h2 id="qsApiTitle">全局默认 AI</h2></div>
+          <div class="qs-heading"><span class="qs-number" aria-hidden="true">2</span><h2 id="qsApiTitle">连接 AI</h2></div>
           <div class="qs-fields">
             <label class="qs-field">服务商<span class="qs-provider"><img id="qsProviderIcon" alt="" hidden><select id="qsProvider" aria-label="服务商" disabled></select></span></label>
             <label class="qs-field">模型<input id="qsModel" class="qs-input" list="qsModels" required autocomplete="off" spellcheck="false" placeholder="选择或输入模型名称"><datalist id="qsModels"></datalist></label>
             <label class="qs-field qs-wide" id="qsEndpointField" hidden>API 地址<input id="qsEndpoint" class="qs-input" type="url" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false"></label>
             <label class="qs-field qs-wide">API Key<span class="qs-key"><input id="qsKey" class="qs-input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key"><button id="qsToggleKey" type="button" aria-label="显示 API Key" aria-pressed="false">显示</button></span></label>
           </div>
+          <p class="qs-hint qs-key-help" id="qsKeyHelp" hidden>API Key 是 DeepSeek 提供的调用密钥。<a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">去 DeepSeek 获取密钥 ↗</a></p>
           <p class="qs-hint qs-destination" id="qsDestination"></p>
         </section>
         <section class="qs-section" aria-labelledby="qsPrivacyTitle">
@@ -58,18 +59,20 @@
           </details>
         </section>
         <p id="qsStatus" class="qs-status" role="status" aria-live="polite">正在读取配置…</p>
+        <p class="qs-hint qs-app-path">想使用已安装的 WorkBuddy、Codex 等应用？<button type="button" class="qs-inline" id="qsAppsOnly">连接本机应用</button></p>
         <footer class="qs-footer"><button id="qsLater" type="button" class="qs-text">暂不配置，先手动阅读</button><button id="qsSubmit" type="submit" class="qs-primary" disabled>测试连接并完成</button></footer>
       </form>
       <section id="qsSuccess" class="qs-success" hidden aria-labelledby="qsSuccessTitle">
         <div class="qs-check" aria-hidden="true">✓</div><h1 id="qsSuccessTitle">可以开始了。</h1><p class="qs-intro">配置已保存，之后可随时在设置中修改。</p>
         <dl class="qs-summary"><div><dt>保存位置</dt><dd id="qsSavedFolder"></dd></div><div><dt>默认模型</dt><dd id="qsSavedModel"></dd></div></dl>
         <p class="qs-hint">支持的 AI 功能将使用此连接；各功能仍可单独指定模型。AI 任务由你发起。</p>
+        <button id="qsOpenAgents" class="qs-secondary qs-agent-link" type="button">连接本机应用</button>
         <p id="qsFinishStatus" class="qs-status" role="status" aria-live="polite"></p>
         <footer class="qs-footer"><button id="qsFullSettings" class="qs-text" type="button">查看完整设置</button><button id="qsStart" class="qs-primary" type="button">开始使用</button></footer>
       </section>`;
     document.body.append(host);
     const $ = id => document.getElementById(id);
-    let busy = false, ready = false, directory = null, directoryReady = false;
+    let busy = false, ready = false, retry = false, directory = null, directoryReady = false;
     let settings, choices = [], selected = '', sourceTab = {}, prepared = false;
     let profileId = '', existing = null;
     const drafts = new Map();
@@ -77,13 +80,13 @@
     function setBusy(value) {
       busy = value;
       host.querySelectorAll('#qsForm button, #qsForm input, #qsForm select').forEach(el => { el.disabled = value || !ready; });
-      $('qsSubmit').textContent = value ? '正在处理…' : '测试连接并完成';
+      $('qsSubmit').textContent = value ? '正在处理…' : retry ? '重新测试' : '测试连接并完成';
       $('qsForm').setAttribute('aria-busy', String(value));
     }
     function renderDirectory() {
-      $('qsDirectoryName').textContent = directory?.name || '尚未选择文件夹';
+      $('qsDirectoryName').textContent = directory?.name || '当前浏览器';
       $('qsDirectoryName').title = directory?.name || '';
-      $('qsDirectoryHint').textContent = directoryReady ? '已授权 · 文件保存到此目录的 Brevess 文件夹' : directory ? '需要重新授权此文件夹的读写权限。' : '论文、笔记与课题保存在此处。';
+      $('qsDirectoryHint').textContent = directoryReady ? '已授权 · 文件保存到此目录的 Brevess 文件夹' : directory ? '需要重新授权此文件夹的读写权限。' : '如需同步到文件夹，可在「文稿」新建一个资料夹。';
       $('qsChooseDirectory').textContent = directoryReady ? '更改' : directory ? '授权文件夹' : '选择文件夹';
       $('qsOtherDirectory').hidden = !directory || directoryReady;
     }
@@ -94,6 +97,7 @@
     function renderProvider() {
       const item = choice(); if (!item) return;
       selected = item.id;
+      $('qsKeyHelp').hidden = selected !== 'deepseek';
       const draft = drafts.get(selected);
       existing = draft?.existing || null;
       profileId = draft?.profileId || `profile_setup_${crypto.randomUUID().replaceAll('-', '_')}`;
@@ -165,7 +169,7 @@
     $('qsOtherDirectory').addEventListener('click', () => chooseDirectory(true));
     $('qsForm').addEventListener('submit', async event => {
       event.preventDefault(); if (busy || !ready) return;
-      if (!directoryReady) { notice('请先选择并授权保存文件夹。', 'error'); $('qsChooseDirectory').focus(); return; }
+      if (directory && !directoryReady) { notice('请重新授权之前选择的保存文件夹。', 'error'); $('qsChooseDirectory').focus(); return; }
       if (!$('qsConsent').checked) { $('qsConsent').focus(); return; }
       const item = choice();
       const config = { ...(item.config || {}), model: $('qsModel').value.trim(), apiKey: $('qsKey').value.trim() };
@@ -177,27 +181,34 @@
           notice('API 地址请使用 HTTPS；本机接口可使用 localhost 或 127.0.0.1。地址不能包含密钥或查询参数。', 'error'); $('qsEndpoint').focus(); return;
         }
       }
-      setBusy(true); notice('正在测试连接… 通常需要几秒，最长约 30 秒。');
+      setBusy(true); notice('正在测试连接… 网络中断时会自动重试一次。');
       try {
         await saveRisk();
-        const result = await call({ type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true,
-          profile: { id: profileId, name: existing?.name || item.label, providerId: item.providerId, config } });
+        const request = { type: 'LLM_QUICK_SETUP_SAVE', consentGranted: true, storageMode: directoryReady ? 'folder' : 'browser',
+          profile: { id: profileId, name: existing?.name || item.label, providerId: item.providerId, config } };
+        const result = await call(request).catch(async error => {
+          if (error.code !== 'NETWORK_ERROR') throw error;
+          notice('暂时连不上服务，正在自动重试一次…');
+          await new Promise(resolve => setTimeout(resolve, 900));
+          return call(request);
+        });
         // The settings transaction is already complete. Retrying guide bookkeeping
         // must never re-test, duplicate or replace this saved connection.
         existing = result.settings.profiles[profileId]; settings = result.settings;
         $('qsKey').value = ''; drafts.clear();
-        $('qsSavedFolder').textContent = directory.name;
+        $('qsSavedFolder').textContent = directoryReady ? directory.name : '当前浏览器（可在设置中选择文件夹）';
         $('qsSavedModel').textContent = `${item.label} · ${config.model}`;
         $('qsForm').hidden = true; $('qsSuccess').hidden = false;
         try {
-          await progress('completed', 'completed');
+          await progress(directoryReady ? 'completed' : 'skipped', 'completed');
           const finish = await call({ type: 'ONBOARDING_PREPARE_FINISH', sourceTab });
           prepared = finish.prepared === true;
           if (!prepared) $('qsStart').textContent = '完成';
         } catch (_) { $('qsFinishStatus').textContent = '设置已保存；可关闭此窗口后，从工具栏打开 BREVESS。'; }
         $('qsStart').focus();
       } catch (error) {
-        const messages = { AI_PRIVACY_ACK_REQUIRED: '请重新确认隐私风险。', QUICK_SETUP_CHANGED: '此连接刚刚在另一窗口修改，请重新打开快速配置后再试。', QUICK_SETUP_DIRECTORY_REQUIRED: '文件夹权限已失效，请重新授权。', AUTH_INVALID: 'API Key 未通过验证，请检查密钥与服务商是否匹配。', UNAUTHORIZED: 'API Key 未通过验证，请检查密钥。', NETWORK_ERROR: '未能连接服务，请检查网络和 API 地址后重试。', REQUEST_TIMEOUT: '连接超时，已保留输入，请稍后重试。', QUOTA_EXHAUSTED: '账户额度不足，请充值或切换服务商后重试。', RATE_LIMITED: '服务暂时限流，已保留输入，请稍后重试。', QUICK_SETUP_OWNER_CLOSED: '配置窗口已关闭，设置未提交。' };
+        const messages = { AI_PRIVACY_ACK_REQUIRED: '请重新确认隐私风险。', QUICK_SETUP_CHANGED: '此连接刚刚在另一窗口修改，请重新打开快速配置后再试。', QUICK_SETUP_DIRECTORY_REQUIRED: '文件夹权限已失效，请重新授权。', AUTH_INVALID: 'API Key 未通过验证，请检查密钥与服务商是否匹配。', UNAUTHORIZED: 'API Key 未通过验证，请检查密钥。', NETWORK_ERROR: item.custom ? '当前地址未响应。请核对地址或网络，输入已保留。' : '服务暂时未响应。已保留密钥和模型，请检查网络后点「重新测试」。', REQUEST_TIMEOUT: '连接超时，已保留输入，请稍后重试。', QUOTA_EXHAUSTED: '账户额度不足，请充值或切换服务商后重试。', RATE_LIMITED: '服务暂时限流，已保留输入，请稍后重试。', QUICK_SETUP_OWNER_CLOSED: '配置窗口已关闭，设置未提交。' };
+        retry = true;
         notice(messages[error.code] || '连接或保存未完成。请检查密钥、模型名称、账户额度和网络后重试。', 'error');
       } finally { setBusy(false); }
     });
@@ -213,6 +224,12 @@
       try { await call({ type: 'ONBOARDING_FINISH', sourceTab }); window.close(); }
       catch (_) { $('qsFinishStatus').textContent = '设置已保存。请回到网页，点击工具栏中的 BREVESS 开始阅读。'; $('qsStart').disabled = false; prepared = false; $('qsStart').textContent = '完成'; }
     });
+    function openApps() {
+      chrome.tabs.create({ url: chrome.runtime.getURL('options.html#page=models&connect=apps') })
+        .then(() => window.close()).catch(() => notice('请在完整设置的「模型与连接」中打开「连接你的 Agent」。', 'error'));
+    }
+    $('qsOpenAgents').addEventListener('click', openApps);
+    $('qsAppsOnly').addEventListener('click', openApps);
     $('qsFullSettings').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('options.html#page=models') }).then(() => window.close()));
     try {
       const [data, handle, risk, state] = await Promise.all([

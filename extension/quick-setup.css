@@ -64,3 +64,8 @@ html.quick-setup-window body > :not(#quickSetup):not(script) { display: none !im
   #quickSetup .qs-fields { grid-template-columns: 1fr; gap: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { #quickSetup * { transition: none !important; } }
+
+#quickSetup .qs-key-help, #quickSetup .qs-app-path, #quickSetup .qs-agent-link { margin-top: 10px; }
+#quickSetup .qs-hint, #quickSetup .qs-status { font-size: 13px; }
+#quickSetup .qs-inline, #quickSetup .qs-key-help a { color: var(--bv-text, #202023); text-decoration: underline; text-underline-offset: 3px; }
+#quickSetup .qs-inline { background: transparent; padding: 4px; }

@@ -12,6 +12,62 @@
       port.postMessage({type:'presentation.'+op,requestId,args});
     });
   }
+  // A settings window owns one synthetic WorkBuddy test. Generate its task ID
+  // here so the desktop can claim exactly this task even when others are waiting.
+  chrome.runtime.onConnect.addListener(port => {
+    if (port.name !== 'brevess-workbuddy-setup-test') return;
+    const sender = port.sender;
+    if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 ||
+        sender.url?.split(/[?#]/)[0] !== chrome.runtime.getURL('options.html')) {
+      port.disconnect(); return;
+    }
+    let stopped = false;
+    port.onDisconnect.addListener(() => { stopped = true; });
+    const id = crypto.randomUUID(), marker = 'BREVESS_' + crypto.randomUUID();
+    const fail = code => Object.assign(new Error(code), {code});
+    const send = value => { if (!stopped) port.postMessage(value); };
+    const command = async (op, args = {}) => {
+      const reply = await native(op, {id, ...args});
+      if (!reply?.success) throw fail('AGENT_CONNECTOR_UNAVAILABLE');
+      return reply.data;
+    };
+    void (async () => {
+      let opened = false, finished = false;
+      try {
+        const riskKey = 'brevessAiPrivacyAcknowledgementV1';
+        const risk = (await chrome.storage.local.get(riskKey))[riskKey];
+        if (risk?.version !== 1 || risk.acknowledged !== true || !(risk.updatedAt > 0)) throw fail('AI_PRIVACY_ACK_REQUIRED');
+        if (stopped) return;
+        await command('open', {agent:'workbuddy', kind:'chat', documentHash:'setup:' + id,
+          instructions:'Read paper.json and return the requested echo using brevess_complete_task.',
+          materials:{systemPrompt:'BREVESS connection test. Return a JSON object with the requested marker as message and an empty calls array.', task:'Return this marker exactly: '+marker}});
+        opened = true;
+        if (stopped) return;
+        await command('publish');
+        send({stage:'pending',id});
+        const until = Date.now() + 180000;
+        let lastState = 'pending';
+        while (!stopped && Date.now() < until) {
+          const task = await command('status');
+          if (task.id !== id || task.agent !== 'workbuddy' || task.kind !== 'chat') throw fail('AGENT_MODEL_TEST_FAILED');
+          if (task.state === 'ready') {
+            let message = task.answer;
+            try { message = JSON.parse(message).message; } catch { /* Accept a plain text echo as well. */ }
+            if (typeof message !== 'string' || message.trim() !== marker) throw fail('AGENT_MODEL_TEST_FAILED');
+            finished = true; send({stage:'passed'}); return;
+          }
+          if (!['pending','working'].includes(task.state)) throw fail('AGENT_CLIENT_TURN_FAILED');
+          if (task.state !== lastState) { lastState = task.state; send({stage:lastState,id}); }
+          await new Promise(resolve => setTimeout(resolve, 850));
+        }
+        if (!stopped) throw fail('REQUEST_TIMEOUT');
+      } catch (error) {
+        send({stage:'error',code:error.code || 'AGENT_CONNECTOR_UNAVAILABLE'});
+      } finally {
+        if (opened && !finished) await command('cancel').catch(() => {});
+      }
+    })();
+  });
   chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
     if(msg?.type!==name)return;
     const popup=sender.url?.split(/[?#]/)[0]===chrome.runtime.getURL('popup.html');

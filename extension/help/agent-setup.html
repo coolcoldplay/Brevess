@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark"><title>连接本机应用 · BREVESS</title>
+<style>
+:root{color-scheme:light dark}*{box-sizing:border-box}body{font:16px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:720px;margin:auto;padding:32px 24px 60px;color:CanvasText;background:Canvas}h1{font-size:2rem;margin:.45em 0}h2{font-size:1.25rem;margin:1.7em 0 .3em;border-top:1px solid GrayText;padding-top:1em}p,ol{margin:.4em 0}a{color:LinkText;text-underline-offset:3px}li+li{margin-top:.4em}code{font-size:.94em;overflow-wrap:anywhere}a:focus-visible{outline:2px solid currentColor;outline-offset:4px}
+</style></head><body><main><a href="../options.html#page=models">返回模型与连接</a>
+<h1>连接本机应用</h1><p>在设置的「模型与连接」中，选择想使用的应用。每次测试只发送一条简短测试消息。看到问答测试通过后，就能在侧栏选择它。</p>
+<h2>WorkBuddy 桌面版</h2><ol><li>打开 WorkBuddy，进入「专家·技能·连接器 → 连接器 → 自定义连接器 → MCP 服务管理」。</li><li>找到 <code>brevess</code>，点「信任」并启用，以便 WorkBuddy 读取浏览器。对 <code>brevess-presentations</code> 执行相同操作，它也负责聊天任务。</li><li>回到 BREVESS，选择 WorkBuddy 和「桌面客户端接单」，点「连接并测试」。点「复制给 WorkBuddy 的接单指令」，粘贴到 WorkBuddy 的新会话并发送。它会接收测试，回答会回到浏览器。</li></ol><p>如果使用命令行，请选择「命令行直连」，并在该客户端的命令行中完成官方登录。</p>
+<h2>DeepSeek Harness 和 Codex</h2><p>先在对应应用中登录，再回到 BREVESS 选择应用并测试。问答通过后会出现在模型列表。DeepSeek Harness 使用本机应用会话；DeepSeek API 的密钥在快速配置中单独设置。</p>
+<h2>Google Antigravity</h2><p>选择 Antigravity 并测试。按提示安装官方 CLI 或进行 Google 账号登录。能够列出模型后仍需收到测试回答。如果 Google 提示账号地区受限，可以保留账号并使用其他服务。</p>
+<h2>首次安装本机组件</h2><p>连接界面提示找不到组件时，展开「高级选项」，点「复制配置提示词」，粘贴到要连接的应用中并按提示完成。配置完成后回到 BREVESS 重新测试。</p>
+</main></body></html>

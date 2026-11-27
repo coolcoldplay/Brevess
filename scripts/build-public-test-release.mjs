@@ -35,7 +35,7 @@ const revision = { sourceCommit: git(['rev-parse', 'HEAD']), sourceDirty: Boolea
 const label = manifest.version_name?.match(/\br\d+(?:\.\d+)*\b/)?.[0];
 const flavor = manifest.version_name?.match(/(Adaptive Figures|Workbench Evidence) (r\d+)$/);
 const revisionLabel = flavor && (flavor[1] === 'Adaptive Figures' ? 'adaptive-' : 'workbench-') + flavor[2];
-const name = ['Brevess-v' + manifest.version, label, revisionLabel, 'Chrome.zip'].filter(Boolean).join('-');
+const name = ['Brevess-v' + manifest.version, label, revisionLabel, 'Chrome-Edge.zip'].filter(Boolean).join('-');
 const keyHash = Buffer.from(sha256(Buffer.from(manifest.key, 'base64')), 'hex').subarray(0, 16);
 const extensionId = [...keyHash].map(b => String.fromCharCode(97 + (b >> 4), 97 + (b & 15))).join('');
 fs.mkdirSync(path.dirname(release), { recursive: true });
